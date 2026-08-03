@@ -30,6 +30,9 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
     // Parse configuration
     ResetControllerConfig config = parseResetConfig(resetNode);
 
+    if (!config.valid) {
+        return false;
+    }
     if (config.targets.isEmpty()) {
         QSocConsole::warn() << "Reset configuration must have at least one target";
         return false;
@@ -90,6 +93,21 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
 }
 
 QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
+    const YAML::Node &resetNode)
+{
+    /* A malformed shape reaches yaml-cpp as an exception, and an uncaught one
+       aborts the process instead of reporting the user's configuration. */
+    try {
+        return parseResetConfigUnguarded(resetNode);
+    } catch (const YAML::Exception &error) {
+        ResetControllerConfig config;
+        config.valid = false;
+        QSocConsole::error() << "Invalid reset configuration:" << error.what();
+        return config;
+    }
+}
+
+QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUnguarded(
     const YAML::Node &resetNode)
 {
     ResetControllerConfig config;

@@ -794,6 +794,36 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
+    /* A divider interface name reused across dividers reached the header
+       emitter as an uncaught throw; refuse it while the author is present. */
+    {
+        QSet<QString> dividerNames;
+        const auto    claimDividerName = [&config,
+                                          &dividerNames](const QString &signal, const char *role) {
+            if (signal.isEmpty()) {
+                return;
+            }
+            if (dividerNames.contains(signal)) {
+                QSocConsole::error() << "Duplicate divider" << role << "signal name:" << signal;
+                config.valid = false;
+                return;
+            }
+            dividerNames.insert(signal);
+        };
+        for (const auto &target : config.targets) {
+            claimDividerName(target.div.value, "value");
+            claimDividerName(target.div.valid, "valid");
+            claimDividerName(target.div.ready, "ready");
+            claimDividerName(target.div.count, "count");
+            for (const auto &link : target.links) {
+                claimDividerName(link.div.value, "value");
+                claimDividerName(link.div.valid, "valid");
+                claimDividerName(link.div.ready, "ready");
+                claimDividerName(link.div.count, "count");
+            }
+        }
+    }
+
     // One select port serves every target that names it, at the widest width
     QHash<QString, int> selectPortWidths;
     for (auto &target : config.targets) {

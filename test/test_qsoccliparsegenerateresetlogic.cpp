@@ -1193,6 +1193,40 @@ reset:
         // Should NOT have rst_apb_n as input since it's an output (check only in reset module)
         QVERIFY(!verifyVerilogContentNormalized(moduleHeader, "input  wire rst_apb_n"));
     }
+    /* A malformed scalar in the reset shape used to abort the process. */
+    void test_malformed_reset_shape_is_reported_not_fatal()
+    {
+        const QString netlistContent = R"(
+reset:
+  - name: guard_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      sys_rst_n:
+        active: low
+        async:
+          clock: clk
+          stage: abc
+        link:
+          por_n: ~
+)";
+        const QString netlistPath    = createTempFile("test_reset_guard.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_reset_guard.v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QCOMPARE(messageList.filter("Invalid reset configuration:").size(), 1);
+    }
 };
 
 QStringList Test::messageList;

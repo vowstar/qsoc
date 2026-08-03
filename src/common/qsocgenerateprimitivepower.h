@@ -69,12 +69,13 @@ public:
      */
     struct PowerControllerConfig
     {
-        QString            name;        /**< Controller instance name */
-        QString            moduleName;  /**< Module name */
-        QString            host_clock;  /**< Host clock (typically AO clock) */
-        QString            host_reset;  /**< Host reset (typically AO reset) */
-        QString            test_enable; /**< DFT test enable signal (optional) */
-        QList<PowerDomain> domains;     /**< Power domains */
+        bool               valid = true; /**< False when the configuration is rejected */
+        QString            name;         /**< Controller instance name */
+        QString            moduleName;   /**< Module name */
+        QString            host_clock;   /**< Host clock (typically AO clock) */
+        QString            host_reset;   /**< Host reset (typically AO reset) */
+        QString            test_enable;  /**< DFT test enable signal (optional) */
+        QList<PowerDomain> domains;      /**< Power domains */
     };
 
 public:
@@ -98,6 +99,13 @@ public:
      * @return Parsed configuration structure
      */
     PowerControllerConfig parsePowerConfig(const YAML::Node &powerNode);
+
+    /**
+     * @brief Parse power configuration without guarding YAML conversions
+     * @param powerNode YAML node containing power configuration
+     * @return Parsed configuration structure
+     */
+    PowerControllerConfig parsePowerConfigUnguarded(const YAML::Node &powerNode);
 
     /**
      * @brief Set force overwrite mode for power_cell.v file

@@ -105,6 +105,7 @@ public:
      */
     struct ResetControllerConfig
     {
+        bool               valid      = true;      /**< False when the configuration is rejected */
         QString            name       = "rstctrl"; /**< Controller instance name */
         QString            moduleName = "rstctrl"; /**< Module name */
         QString            testEnable;             /**< Test enable signal (optional) */
@@ -134,6 +135,13 @@ public:
      * @return Parsed configuration structure
      */
     ResetControllerConfig parseResetConfig(const YAML::Node &resetNode);
+
+    /**
+     * @brief Parse reset configuration without guarding YAML conversions
+     * @param resetNode YAML node containing reset configuration
+     * @return Parsed configuration structure
+     */
+    ResetControllerConfig parseResetConfigUnguarded(const YAML::Node &resetNode);
 
     /**
      * @brief Set force overwrite mode for reset_cell.v file

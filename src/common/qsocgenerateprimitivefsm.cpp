@@ -18,6 +18,15 @@ bool QSocFSMPrimitive::generateFSMVerilog(const YAML::Node &fsmNode, QTextStream
         return false;
     }
 
+    /* A missing required field reached yaml-cpp as an exception and took
+       the process with it. */
+    for (const char *field : {"name", "clk", "rst", "rst_state"}) {
+        if (!fsmNode[field] || !fsmNode[field].IsScalar()) {
+            QSocConsole::error() << "FSM requires a scalar" << field << "field";
+            return false;
+        }
+    }
+
     const QString fsmName   = QString::fromStdString(fsmNode["name"].as<std::string>());
     const QString clkSignal = QString::fromStdString(fsmNode["clk"].as<std::string>());
     const QString rstSignal = QString::fromStdString(fsmNode["rst"].as<std::string>());

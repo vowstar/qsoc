@@ -1756,6 +1756,60 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire sw_clk_a"));
     }
 
+    /* A divider interface name reused across dividers used to reach the
+       header emitter as an uncaught throw and abort the process. */
+    void test_duplicate_divider_signal_name_is_rejected()
+    {
+        messageList.clear();
+        const QString verilogContent = generateClockNetlist("test_dup_div", R"(
+port:
+  osc:
+    direction: input
+    type: logic
+  rst_n:
+    direction: input
+    type: logic
+  a_clk:
+    direction: output
+    type: logic
+  b_clk:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: test_dup_div_ctrl
+    clock: clk_sys
+    input:
+      osc:
+        freq: 24MHz
+    target:
+      a_clk:
+        freq: 12MHz
+        link:
+          osc:
+            div:
+              default: 2
+              width: 4
+              value: shared_div
+              reset: rst_n
+      b_clk:
+        freq: 6MHz
+        link:
+          osc:
+            div:
+              default: 4
+              width: 4
+              value: shared_div
+              reset: rst_n
+)");
+        QVERIFY(verilogContent.isEmpty());
+        QCOMPARE(messageList.filter("Duplicate divider value signal name: shared_div").size(), 1);
+    }
+
     void test_inverter_applies_once_through_a_cell()
     {
         const QString verilogContent = generateInverterCase(

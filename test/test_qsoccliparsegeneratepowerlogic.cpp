@@ -987,6 +987,34 @@ power:
         /* Verify test_en connection */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en (test_en)"));
     }
+    /* A malformed scalar in the power shape used to abort the process. */
+    void test_malformed_power_shape_is_reported_not_fatal()
+    {
+        const QString netlistContent = R"(
+power:
+  - name: guard_ctl
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: core
+        v_mv: abc
+)";
+        const QString netlistPath    = createTempFile("test_power_guard.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_power_guard.v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QCOMPARE(messageList.filter("Invalid power configuration:").size(), 1);
+    }
 };
 
 QStringList Test::messageList;

@@ -33,6 +33,9 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
     // Parse configuration
     PowerControllerConfig config = parsePowerConfig(powerNode);
 
+    if (!config.valid) {
+        return false;
+    }
     if (config.domains.isEmpty()) {
         QSocConsole::warn() << "Power configuration must have at least one domain";
         return false;
@@ -93,6 +96,21 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
 }
 
 QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfig(
+    const YAML::Node &powerNode)
+{
+    /* A malformed shape reaches yaml-cpp as an exception, and an uncaught one
+       aborts the process instead of reporting the user's configuration. */
+    try {
+        return parsePowerConfigUnguarded(powerNode);
+    } catch (const YAML::Exception &error) {
+        PowerControllerConfig config;
+        config.valid = false;
+        QSocConsole::error() << "Invalid power configuration:" << error.what();
+        return config;
+    }
+}
+
+QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUnguarded(
     const YAML::Node &powerNode)
 {
     PowerControllerConfig config;
