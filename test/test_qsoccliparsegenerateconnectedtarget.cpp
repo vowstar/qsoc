@@ -1886,6 +1886,197 @@ net:
         QVERIFY(!verilog.contains("output wire ghost"));
         QCOMPARE(messageList.filter("Port ghost has invalid format, skipping").size(), 1);
     }
+
+    /* A top-level port named by two nets takes two instance drivers. The
+       census must refuse the component instead of wiring both. */
+    void testDoubleBoundPortViaConnectAndNetIsRejected()
+    {
+        createSubModule();
+        messageList.clear();
+        const QString verilog = generate("connected_double_connect_net", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+    connect: n_a
+
+instance:
+  u0:
+    module: sub_mod
+  u1:
+    module: sub_mod
+
+net:
+  n_b:
+    - instance: top
+      port: p
+    - instance: u0
+      port: o
+  n_a:
+    - instance: u1
+      port: o
+)");
+        QEXPECT_FAIL("", "double-bound port awaits the census rejection", Abort);
+        QVERIFY(verilog.isEmpty());
+    }
+
+    void testDoubleBoundPortViaTwoNetsIsRejected()
+    {
+        createSubModule();
+        messageList.clear();
+        const QString verilog = generate("connected_double_two_nets", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+  u1:
+    module: sub_mod
+
+net:
+  n_a:
+    - instance: top
+      port: p
+    - instance: u0
+      port: o
+  n_b:
+    - instance: top
+      port: p
+    - instance: u1
+      port: o
+)");
+        QEXPECT_FAIL("", "double-bound port awaits the census rejection", Abort);
+        QVERIFY(verilog.isEmpty());
+    }
+
+    /* A net naming a top-level port that does not exist loses the export
+       with no diagnostic today; the binding must be refused. */
+    void testUndeclaredPortInNetBindingIsRejected()
+    {
+        createSubModule();
+        messageList.clear();
+        const QString verilog = generate("connected_undeclared_port", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+
+net:
+  n0:
+    - instance: top
+      port: ghost
+    - instance: u0
+      port: o
+)");
+        QEXPECT_FAIL("", "undeclared binding awaits the census rejection", Abort);
+        QVERIFY(verilog.isEmpty());
+    }
+
+    /* A connect: value written as a sequence is dropped without a report
+       today; the malformed alias must be refused. */
+    void testSequenceConnectIsRejected()
+    {
+        createSubModule();
+        messageList.clear();
+        const QString verilog = generate("connected_sequence_connect", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+    connect: [n_a]
+
+instance:
+  u0:
+    module: sub_mod
+
+net:
+  n_a:
+    - instance: u0
+      port: o
+)");
+        QEXPECT_FAIL("", "sequence connect awaits the census rejection", Abort);
+        QVERIFY(verilog.isEmpty());
+    }
+
+    /* Sentinel: guard-disjoint drivers are one driver per build and must
+       stay legal through every census change. */
+    void testGuardExclusiveDriversStayLegal()
+    {
+        createSubModule();
+        messageList.clear();
+        const QString verilog = generate("connected_guard_exclusive", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+    ifdef:
+      - FPGA
+  u1:
+    module: sub_mod
+    ifndef:
+      - FPGA
+
+net:
+  n_a:
+    - instance: top
+      port: p
+    - instance: u0
+      port: o
+    - instance: u1
+      port: o
+)");
+        QVERIFY(!verilog.isEmpty());
+        QVERIFY(verilog.contains("`ifdef FPGA"));
+        QVERIFY(verilog.contains("`ifndef FPGA"));
+    }
+
+    /* Sentinel: disjoint slices of one port are one driver per bit and must
+       stay legal through every census change. */
+    void testSliceDisjointDriversStayLegal()
+    {
+        createNibbleModule();
+        messageList.clear();
+        const QString verilog = generate("connected_slice_disjoint", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: nibble_mod
+  u1:
+    module: nibble_mod
+
+net:
+  n_hi:
+    - instance: top
+      port: p
+      bits: "[7:4]"
+    - instance: u0
+      port: o
+  n_lo:
+    - instance: top
+      port: p
+      bits: "[3:0]"
+    - instance: u1
+      port: o
+)");
+        QVERIFY(!verilog.isEmpty());
+        QVERIFY(verilog.contains("p[7:4]"));
+        QVERIFY(verilog.contains("p[3:0]"));
+    }
 };
 
 QStringList Test::messageList;
