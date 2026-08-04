@@ -28,7 +28,7 @@ The `comb` section is a sequence of combinational logic items, each describing o
 
 === Basic Structure
 <soc-net-comb-structure>
-Each combinational logic item must have an `out` field specifying the output signal name, and exactly one logic specification field (`expr`, `if`, or `case`). An item carrying more than one is reported and emitted from the first in the order `expr`, `if`, `case`; the others are dropped:
+Each combinational logic item must have an `out` field specifying the output signal name, and exactly one logic specification field (`expr`, `if`, or `case`). An item carrying more than one is reported as an error and generation is refused:
 
 ```yaml
 comb:
@@ -259,7 +259,7 @@ The `seq` section supports various types of sequential logic with comprehensive 
 
 === Basic Structure
 <soc-net-seq-structure>
-Each sequential logic item must have `reg` and `clk` fields, and exactly one logic specification field (`next` or `if`):
+Each sequential logic item must have `reg` and `clk` fields, and exactly one logic specification field (`next` or `if`). An item carrying both `next` and `if` is reported as an error and generation is refused.
 
 An item whose `reg` or `clk` field is missing or non-scalar is skipped as a
 whole; it does not declare or drive its `reg` target.

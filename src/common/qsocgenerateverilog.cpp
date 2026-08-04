@@ -1903,7 +1903,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                would emit `.port(~wire)` - illegal because
                                you cannot invert an output destination, and
                                nonsensical because the value comes FROM the
-                               instance. Strip the `~` and warn. */
+                               instance. */
                             if (wireConnection.startsWith('~') && portIter->second
                                 && portIter->second["direction"]
                                 && portIter->second["direction"].IsScalar()) {

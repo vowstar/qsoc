@@ -233,7 +233,10 @@ them change or drop parts of the design rather than only warning:
 - *Malformed `tie` values*: malformed numbers and macro-free expressions that
   fail SystemVerilog syntax are ignored with a warning, leaving the port in the
   unconnected report
-- *`tie` / `invert` on unsupported port kinds*: rejected with a warning
+- *`tie` on unsupported port kinds*: ignored with a warning; the port stays
+  in the unconnected report
+- *`invert` on an output destination*: reported as an error and generation is
+  refused
 - *Invalid identifiers*: port, parameter, and instance names must be IEEE
   1364-2001 simple identifiers, that is ASCII letters, digits, `_`, and `$`
   with no leading digit, and must not be a reserved keyword. Keyword matching
@@ -252,15 +255,16 @@ them change or drop parts of the design rather than only warning:
   input port on the controller
 - *`connect:` aliases*: every spelling of a connected component is judged
   together; direction fixes each endpoint's role (top input sources, top
-  output sinks), exactly one bound source drives the sinks, multiple bound
-  sources or inout endpoints emit a FIXME, and declaration order only
-  stabilizes equivalent sinks. The count covers bound endpoints, not the
-  instance and process drivers reaching the component; see @known-limitations
+  output sinks) and declaration order only stabilizes equivalent sinks. The
+  driver census covers bound inputs, instance outputs, and process targets:
+  two drivers whose bit ranges overlap and whose `ifdef`/`ifndef` guards are
+  not mutually exclusive are reported as an error and generation is refused.
+  Inout endpoints stay unwired with a FIXME
 - *Combinational and sequential driver conflicts*: a signal driven from more
   than one `comb`/`seq` block is rejected
 - *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or
-  whose `reset` equals `host_reset`, is reported as an error and *the entry is
-  dropped*. Generation continues with a reduced design
+  whose `reset` equals `host_reset`, or that carries only one of the two, is
+  reported as an error and generation is refused
 - *Reset controller without `source`*: generation is refused outright. Without a
   source every target would be tied inactive and the system would never reset
 
@@ -272,15 +276,6 @@ every port left unconnected after all of the above.
 These are reported here because generation succeeds and the output looks
 ordinary. Check them by hand until they are closed.
 
-- *One top-level port named by two nets*: naming the same top-level port in
-  two `net:` entries, or in one `net:` entry and one `connect:` alias, joins
-  both into a single component. Two instance outputs may then drive that port
-  with no diagnostic, because the multiple-driver check counts drivers per net
-  name. A `connect:` value written as a sequence is dropped without a report.
-  Give a top-level port exactly one net.
-- *Undeclared port in a net binding*: a `net:` entry naming a port the module
-  does not declare is dropped silently, so the intended export disappears and
-  the net becomes an internal wire.
 - *Preprocessor-dependent `tie` expressions*: not syntax-checked because the
   caller's macro and include environment is unavailable; they otherwise follow
   the existing `tie` emission rules.

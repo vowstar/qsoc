@@ -209,6 +209,8 @@ net:
 
 The list format allows the same instance to appear multiple times with different ports, which is useful for complex SoC designs where a single module may have multiple ports connected to the same net.
 
+A top-level port is named by exactly one net: naming it in two `net:` entries, or in one `net:` entry and one `connect:` alias, makes every driver of both nets a driver of one signal, and an overlapping pair is reported as an error and generation is refused.
+
 === Connection Properties
 <soc-net-connection-properties>
 Each connection in the list format supports the following properties:
