@@ -483,6 +483,7 @@ comb:
        onto an input port and leave the output undriven. */
     void testMixedDirectionGroupKeepsMemberIdentity()
     {
+        messageList.clear();
         const QString verilog = generate("connected_mixed_direction", R"(
 port:
   a_in:
@@ -498,13 +499,12 @@ comb:
   - out: z_out
     expr: a_in
 )");
-        QVERIFY(!verilog.isEmpty());
-        QCOMPARE(verilog.count("assign z_out = a_in;"), 1);
-        QVERIFY(!verilog.contains("tried to drive top-level input"));
-        /* The bound input and the explicit comb driver are two sources of the
-           net, the same diagnosis a bound input slice gets. */
-        QVERIFY(verilog.contains(
-            "FIXME: net shared_n is already driven but binds a_in - multi-driver conflict"));
+        /* Superseded pin (census ruling): the bound input and the comb
+           driver are two whole-width drivers of one net; the run refuses
+           instead of emitting a FIXME beside the winner. */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains(
+            "takes bound input 'a_in' and process target 'z_out' at once"));
     }
 
     /* One input member sources the net; every output member follows it,
@@ -732,6 +732,7 @@ comb:
        diagnosed and never silently wired from either. */
     void testTwoWholeSourcesAndASliceSinkAreAmbiguous()
     {
+        messageList.clear();
         const QString verilog = generate("connected_two_whole_sources", R"(
 port:
   a:
@@ -760,9 +761,12 @@ comb:
   - out: w
     expr: c
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("binds 2 sources - ambiguous driver, not wired"));
-        QVERIFY(!verilog.contains("assign y[3:0]"));
+        /* Superseded pin (census ruling): two whole sources each claim every
+           bit of the net; the contradiction refuses the run instead of
+           leaving the sink unwired. */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(
+            messageList.join('\n').contains("takes bound input 'a' and bound input 'b' at once"));
     }
 
     /* A process form on a top-level input is the same illegal driver as an
@@ -1298,6 +1302,7 @@ comb:
        the conflict is reported and the process keeps the sinks. */
     void testProcessAndInputSliceAreTwoSources()
     {
+        messageList.clear();
         const QString verilog = generate("owner_two_sources", R"(
 port:
   o_hi:
@@ -1316,10 +1321,11 @@ comb:
   - out: sig
     expr: "4'hA"
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(verilog.contains("assign o_hi[3:0] = 4'hA;"));
-        QVERIFY(!verilog.contains("assign i_lo"));
-        QVERIFY(verilog.contains("is already driven but binds i_lo[7:4]"));
+        /* Superseded pin (census ruling): the process expression and the
+           bound input slice both source the net; the run is refused. */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains(
+            "takes process target 'sig[3:0]' and bound input 'i_lo[7:4]' at once"));
     }
 
     void testDisjointCombSliceKeepsTheAliasConnection()
@@ -1449,6 +1455,7 @@ comb:
        the ambiguity is reported. */
     void testTwoInputSliceSourcesAreAmbiguous()
     {
+        messageList.clear();
         const QString verilog = generate("owner_ambiguous", R"(
 port:
   o_hi:
@@ -1474,9 +1481,11 @@ comb:
   - out: r
     expr: "1'b1"
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(!verilog.contains("assign o_hi"));
-        QVERIFY(verilog.contains("ambiguous driver"));
+        /* Superseded pin (census ruling): each input slice claims the whole
+           net; two claims are a contradiction, not a shrug. */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains(
+            "takes bound input 'i_a[3:0]' and bound input 'i_b[7:4]' at once"));
     }
 
     /* An inner select on a bound name lands inside the bound range. */
@@ -1604,6 +1613,7 @@ net:
 
     void testInstanceOutputNeverUsesATopInputAsItsDestination()
     {
+        messageList.clear();
         const QString verilog = generate("owner_instance_top_input", R"(
 port:
   src:
@@ -1619,11 +1629,12 @@ net:
   shared:
     - { instance: u_sub, port: o }
 )");
-        QVERIFY(!verilog.isEmpty());
-        QVERIFY(!verilog.contains(".o(src)"));
-        QVERIFY(verilog.contains("wire [7:0] shared;"));
-        QVERIFY(verilog.contains(".o(shared)"));
-        QVERIFY(verilog.contains("multi-driver conflict"));
+        /* Superseded pin (census ruling): an instance output and a bound
+           top input are two drivers of one net; the run is refused instead
+           of parking the instance on a private wire. */
+        QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains(
+            "takes instance output 'u_sub.o' and bound input 'src' at once"));
     }
 
     void testUnboundInstanceOutputNeverDrivesATopInput()
@@ -1880,8 +1891,11 @@ net:
     - instance: u1
       port: o
 )");
-        QEXPECT_FAIL("", "double-bound port awaits the census rejection", Abort);
         QVERIFY(verilog.isEmpty());
+        const QString log = messageList.join('\n');
+        QVERIFY(log.contains("takes instance output"));
+        QVERIFY(log.contains("'u0.o'"));
+        QVERIFY(log.contains("'u1.o'"));
     }
 
     void testDoubleBoundPortViaTwoNetsIsRejected()
@@ -1912,8 +1926,9 @@ net:
     - instance: u1
       port: o
 )");
-        QEXPECT_FAIL("", "double-bound port awaits the census rejection", Abort);
         QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains(
+            "takes instance output 'u0.o' and instance output 'u1.o' at once"));
     }
 
     /* A net naming a top-level port that does not exist loses the export

@@ -213,6 +213,23 @@ public:
     static bool guardsAreDisjoint(const PortDetailInfo &lhs, const PortDetailInfo &rhs);
 
     /**
+     * @brief Cube-disjointness test on raw guard lists
+     * @details Same verdict as the PortDetailInfo overload, callable
+     *          from any driver representation that carries its
+     *          `ifdef`/`ifndef` lists directly.
+     * @param lhsIfdef First driver's ifdef macros
+     * @param lhsIfndef First driver's ifndef macros
+     * @param rhsIfdef Second driver's ifdef macros
+     * @param rhsIfndef Second driver's ifndef macros
+     * @return true if the drivers can never be active together
+     */
+    static bool guardsAreDisjoint(
+        const QStringList &lhsIfdef,
+        const QStringList &lhsIfndef,
+        const QStringList &rhsIfdef,
+        const QStringList &rhsIfndef);
+
+    /**
      * @brief Calculate the width of a bit selection expression
      * @param bitSelect Bit selection string (e.g. "[3:2]", "[5]")
      * @return The width of the bit selection (e.g. 2 for "[3:2]", 1 for "[5]")

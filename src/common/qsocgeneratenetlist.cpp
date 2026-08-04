@@ -1375,18 +1375,27 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
 
 bool QSocGenerateManager::guardsAreDisjoint(const PortDetailInfo &lhs, const PortDetailInfo &rhs)
 {
+    return guardsAreDisjoint(lhs.ifdefGuard, lhs.ifndefGuard, rhs.ifdefGuard, rhs.ifndefGuard);
+}
+
+bool QSocGenerateManager::guardsAreDisjoint(
+    const QStringList &lhsIfdef,
+    const QStringList &lhsIfndef,
+    const QStringList &rhsIfdef,
+    const QStringList &rhsIfndef)
+{
     /* Cube disjointness: two cubes over the same macro space are
      * disjoint iff some macro appears with opposite polarity. With
      * `ifdef` lists holding +literals and `ifndef` lists holding
      * -literals, that reduces to a non-empty intersection between
      * one driver's `ifdef` and the other's `ifndef`. */
-    for (const QString &macro : lhs.ifdefGuard) {
-        if (rhs.ifndefGuard.contains(macro)) {
+    for (const QString &macro : lhsIfdef) {
+        if (rhsIfndef.contains(macro)) {
             return true;
         }
     }
-    for (const QString &macro : lhs.ifndefGuard) {
-        if (rhs.ifdefGuard.contains(macro)) {
+    for (const QString &macro : lhsIfndef) {
+        if (rhsIfdef.contains(macro)) {
             return true;
         }
     }

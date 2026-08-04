@@ -2342,10 +2342,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
        slice does not collide with an alias assignment onto a disjoint one. */
     struct ComponentDriver
     {
-        enum class Kind { BoundInput, InstanceOutput, ProcessTarget };
+        enum class Kind { BoundInput, InstanceOutput, ProcessTarget, InoutLink };
         Kind        kind;
         QString     origin; /* port spelling, instance.port, or process target */
         QString     slice;  /* empty = whole port */
+        QString     anchor; /* port whose coordinate the slice lives in */
         QStringList ifdefGuards;
         QStringList ifndefGuards;
     };
@@ -2414,7 +2415,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 }
                 drivenRangesByPort[target.port].append(range);
                 processDriversByPort[target.port].append(
-                    {ComponentDriver::Kind::ProcessTarget, name, range, {}, {}});
+                    {ComponentDriver::Kind::ProcessTarget, name, range, target.port, {}, {}});
                 if (netToTopPortAliases.contains(parsed.first)) {
                     processDrivenNets.insert(parsed.first);
                 }
@@ -2464,9 +2465,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                         ComponentDriver::Kind::InstanceOutput,
                         instanceName + QStringLiteral(".") + portName,
                         QString(),
+                        QString(),
                         guardEntry.first,
                         guardEntry.second};
                     if (role == InstancePortRole::Inout) {
+                        record.kind = ComponentDriver::Kind::InoutLink;
                         instanceDrivenNets[netName].append(record);
                         inoutConnectionNets.insert(netName);
                         continue;
@@ -2478,7 +2481,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                     const auto target = parseSignalBitSelect(connection);
                     if (!target.first.isEmpty()) {
                         drivenRangesByPort[target.first].append(target.second);
-                        record.slice = target.second;
+                        record.slice  = target.second;
+                        record.anchor = target.first;
                     }
                     instanceDrivenNets[netName].append(record);
                 }
@@ -2611,22 +2615,58 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
         const NetComponent &component = componentsByKey.value(componentKey);
         const QString      &netLabel  = component.netNames.first();
 
-        /* Census of every driver reaching this component. Bypass data for
-           now: the verdict below still runs on the legacy sets. */
-        QList<ComponentDriver> censusDrivers;
-        QSet<QString>          censusPorts;
-        for (const auto &endpoint : component.endpoints) {
-            if (endpoint.direction == QStringLiteral("input")) {
-                censusDrivers.append(
-                    {ComponentDriver::Kind::BoundInput, endpoint.port, endpoint.slice, {}, {}});
+        /* Census of every driver reaching this component. A driver keyed by
+           an endpoint port joins only when its slice can reach the bound
+           slice; a duplicate record is one driver, not two. */
+        static const QRegularExpression numericRange(R"(^\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]$)");
+        QList<ComponentDriver>          censusDrivers;
+        QSet<QString>                   censusSeen;
+        const auto appendCensus = [&censusDrivers, &censusSeen](const ComponentDriver &record) {
+            const QString key = QString::number(int(record.kind)) + QChar('\x1f') + record.origin
+                                + QChar('\x1f') + record.slice + QChar('\x1f') + record.anchor;
+            if (censusSeen.contains(key)) {
+                return;
             }
-            if (!censusPorts.contains(endpoint.port)) {
-                censusPorts.insert(endpoint.port);
-                censusDrivers.append(processDriversByPort.value(endpoint.port));
+            censusSeen.insert(key);
+            censusDrivers.append(record);
+        };
+        const auto sliceReachesBinding = [&](const QString &driverSlice, const QString &boundSlice) {
+            if (driverSlice.isEmpty() || boundSlice.isEmpty()
+                || !numericRange.match(driverSlice).hasMatch()
+                || !numericRange.match(boundSlice).hasMatch()) {
+                return true;
+            }
+            return QSocGenerateManager::doBitRangesOverlap(driverSlice, boundSlice);
+        };
+        for (const QString &netName : component.netNames) {
+            for (const auto &record : instanceDrivenNets.value(netName)) {
+                appendCensus(record);
             }
         }
-        for (const QString &netName : component.netNames) {
-            censusDrivers.append(instanceDrivenNets.value(netName));
+        for (const auto &endpoint : component.endpoints) {
+            if (endpoint.direction == QStringLiteral("input")) {
+                appendCensus(
+                    {ComponentDriver::Kind::BoundInput,
+                     endpoint.port,
+                     endpoint.slice,
+                     endpoint.port,
+                     {},
+                     {}});
+            }
+            for (const auto &record : processDriversByPort.value(endpoint.port)) {
+                if (sliceReachesBinding(record.slice, endpoint.slice)) {
+                    appendCensus(record);
+                }
+            }
+            /* A net spelled exactly like the endpoint port carries an
+               instance driver to it without being an alias member. */
+            if (!component.netNames.contains(endpoint.port)) {
+                for (const auto &record : instanceDrivenNets.value(endpoint.port)) {
+                    if (sliceReachesBinding(record.slice, endpoint.slice)) {
+                        appendCensus(record);
+                    }
+                }
+            }
         }
         if (!censusDrivers.isEmpty()) {
             QStringList censusText;
@@ -2635,6 +2675,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                      ? QStringLiteral("bound ")
                                  : driver.kind == ComponentDriver::Kind::InstanceOutput
                                      ? QStringLiteral("instance ")
+                                 : driver.kind == ComponentDriver::Kind::InoutLink
+                                     ? QStringLiteral("inout ")
                                      : QStringLiteral("process "))
                                 + driver.origin + driver.slice;
                 if (!driver.ifdefGuards.isEmpty() || !driver.ifndefGuards.isEmpty()) {
@@ -2696,7 +2738,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
         /* Only a real driver counts: a process or instance output reaching
            any spelling or endpoint port. Membership alone proves nothing. */
-        static const QRegularExpression numericRange(R"(^\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]$)");
         const auto numericRangeContains = [&](const QString &outer, const QString &inner) {
             const QRegularExpressionMatch outerMatch = numericRange.match(outer);
             const QRegularExpressionMatch innerMatch = numericRange.match(inner);
@@ -2769,6 +2810,57 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
             continue;
         }
 
+        /* Census verdict: a pair of drivers conflicts iff their slices can
+           overlap and their guard cubes are not disjoint. Symbolic slices
+           and cross-port coordinates count as overlapping: a wrong ERROR is
+           recoverable, a silent double drive is not. */
+        const auto driversConflict = [&](const ComponentDriver &lhs, const ComponentDriver &rhs) {
+            /* An inout link never enters the verdict: its FIXME-not-wired
+               handling stays as it is. */
+            if (lhs.kind == ComponentDriver::Kind::InoutLink
+                || rhs.kind == ComponentDriver::Kind::InoutLink) {
+                return false;
+            }
+            if (QSocGenerateManager::guardsAreDisjoint(
+                    lhs.ifdefGuards, lhs.ifndefGuards, rhs.ifdefGuards, rhs.ifndefGuards)) {
+                return false;
+            }
+            if (lhs.slice.isEmpty() || rhs.slice.isEmpty() || lhs.anchor != rhs.anchor
+                || !numericRange.match(lhs.slice).hasMatch()
+                || !numericRange.match(rhs.slice).hasMatch()) {
+                return true;
+            }
+            return QSocGenerateManager::doBitRangesOverlap(lhs.slice, rhs.slice);
+        };
+        const auto describeDriver = [](const ComponentDriver &driver) {
+            const QString kind = driver.kind == ComponentDriver::Kind::BoundInput
+                                     ? QStringLiteral("bound input")
+                                 : driver.kind == ComponentDriver::Kind::InstanceOutput
+                                     ? QStringLiteral("instance output")
+                                 : driver.kind == ComponentDriver::Kind::InoutLink
+                                     ? QStringLiteral("inout link")
+                                     : QStringLiteral("process target");
+            return kind + QStringLiteral(" '") + driver.origin + driver.slice + QStringLiteral("'");
+        };
+        bool censusConflict = false;
+        for (int lhsIdx = 0; lhsIdx < censusDrivers.size() && !censusConflict; ++lhsIdx) {
+            for (int rhsIdx = lhsIdx + 1; rhsIdx < censusDrivers.size(); ++rhsIdx) {
+                if (!driversConflict(censusDrivers.at(lhsIdx), censusDrivers.at(rhsIdx))) {
+                    continue;
+                }
+                QSocConsole::error()
+                    << "Net" << netLabel << "takes" << describeDriver(censusDrivers.at(lhsIdx))
+                    << "and" << describeDriver(censusDrivers.at(rhsIdx))
+                    << "at once; one driver may own a bit range";
+                emissionRejected = true;
+                censusConflict   = true;
+                break;
+            }
+        }
+        if (censusConflict) {
+            continue;
+        }
+
         if (netDriven) {
             /* The net's own driver reaches the head sink through routing;
                the remaining sinks follow it, and every bound input is a
@@ -2798,13 +2890,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                         sinks.at(carrierIndex).port,
                         sinks.at(carrierIndex).slice);
                 }
-            }
-            for (const auto &bound : sources) {
-                emitAliasHeader();
-                out << "    /* FIXME: net " << netLabel << " is already driven but binds "
-                    << bound.port << bound.slice << " - multi-driver conflict */\n";
-                QSocConsole::warn() << "Net" << netLabel << "is already driven but binds"
-                                    << bound.port << bound.slice << "- multi-driver conflict";
             }
         } else if (sources.size() == 1) {
             for (const auto &bound : sinks) {
