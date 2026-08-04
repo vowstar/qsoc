@@ -179,7 +179,7 @@ bool isOutputTopPort(const YAML::Node &netlistData, const QString &portName)
 } // namespace
 
 QMap<QString, QSocGenerateManager::NetTopPorts> QSocGenerateManager::buildNetToTopPorts(
-    const YAML::Node &netlistData)
+    const YAML::Node &netlistData, bool *bindingsOk)
 {
     QStringList   topPortNames;
     QSet<QString> topPortNameSet;
@@ -217,7 +217,14 @@ QMap<QString, QSocGenerateManager::NetTopPorts> QSocGenerateManager::buildNetToT
         if (!portNode || !portNode.IsMap()) {
             continue;
         }
-        if (!portNode["connect"] || !portNode["connect"].IsScalar()) {
+        if (!portNode["connect"]) {
+            continue;
+        }
+        if (!portNode["connect"].IsScalar()) {
+            if (bindingsOk != nullptr) {
+                QSocConsole::error() << "Port" << portName << "connect must be a scalar net name";
+                *bindingsOk = false;
+            }
             continue;
         }
         const QString netName = QString::fromStdString(portNode["connect"].as<std::string>());
@@ -250,6 +257,11 @@ QMap<QString, QSocGenerateManager::NetTopPorts> QSocGenerateManager::buildNetToT
                 const QString portName = QString::fromStdString(
                     connectionNode["port"].as<std::string>());
                 if (!topPortNameSet.contains(portName)) {
+                    if (bindingsOk != nullptr) {
+                        QSocConsole::error()
+                            << "Net" << netName << "binds undeclared top-level port" << portName;
+                        *bindingsOk = false;
+                    }
                     continue;
                 }
                 QString slice;

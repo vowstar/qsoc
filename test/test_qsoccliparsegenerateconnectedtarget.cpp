@@ -1954,8 +1954,8 @@ net:
     - instance: u0
       port: o
 )");
-        QEXPECT_FAIL("", "undeclared binding awaits the census rejection", Abort);
         QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("binds undeclared top-level port ghost"));
     }
 
     /* A connect: value written as a sequence is dropped without a report
@@ -1980,8 +1980,8 @@ net:
     - instance: u0
       port: o
 )");
-        QEXPECT_FAIL("", "sequence connect awaits the census rejection", Abort);
         QVERIFY(verilog.isEmpty());
+        QVERIFY(messageList.join('\n').contains("connect must be a scalar net name"));
     }
 
     /* Sentinel: guard-disjoint drivers are one driver per build and must

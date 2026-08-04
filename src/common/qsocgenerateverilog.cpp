@@ -655,8 +655,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
     QMap<QString, QString> declaredSignalRanges;
     /* Full membership per net. Routing and alias emission both read this,
        then choose ownership by direction from the same component. */
-    const QMap<QString, NetTopPorts> netToTopPortAliases = QSocGenerateManager::buildNetToTopPorts(
-        netlistData);
+    bool                             topBindingsOk = true;
+    const QMap<QString, NetTopPorts> netToTopPortAliases
+        = QSocGenerateManager::buildNetToTopPorts(netlistData, &topBindingsOk);
+    if (!topBindingsOk) {
+        emissionRejected = true;
+    }
     const QMap<QString, TopPortBinding> topPortRedirect = QSocGenerateManager::buildTopPortRedirect(
         netlistData);
 

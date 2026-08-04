@@ -290,9 +290,13 @@ public:
      *          from this shared component, so routing, aliasing, comb, and seq
      *          cannot disagree about ownership.
      * @param netlistData Processed netlist root node
+     * @param bindingsOk When non-null, a malformed binding (sequence
+     *        `connect:`, undeclared top port) reports an error and clears
+     *        the flag; when null the walk stays silent
      * @return Map of net name to its ordered top-level port members
      */
-    static QMap<QString, NetTopPorts> buildNetToTopPorts(const YAML::Node &netlistData);
+    static QMap<QString, NetTopPorts> buildNetToTopPorts(
+        const YAML::Node &netlistData, bool *bindingsOk = nullptr);
 
     /**
      * @brief Map every alias spelling to the port that carries it
