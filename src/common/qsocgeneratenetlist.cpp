@@ -1341,7 +1341,7 @@ QSocGenerateManager::checkPortDirectionConsistencyWithBitOverlap(
                 }
 
                 if (bitsOverlap && !guardsAreDisjoint(outputPorts[i], outputPorts[j])) {
-                    return PortDirectionStatus::Multidrive;
+                    return PortDirectionStatus::MultidriveOutputs;
                 }
             }
         }

@@ -263,6 +263,14 @@ them change or drop parts of the design rather than only warning:
   actually fans out records a FIXME
 - *Combinational and sequential driver conflicts*: a signal driven from more
   than one `comb`/`seq` block is rejected
+- *Multiple outputs on one net*: two plain output ports owning overlapping
+  bits of one net (with `ifdef`/`ifndef` guards that are not mutually
+  exclusive) are reported as an error and generation is refused, on internal
+  nets exactly as on top-level ones; declare a pin `inout` when the drivers
+  are wired together. An output beside an `inout` warns: driving against a
+  bidirectional pin is a contention hazard, but the `inout` side may
+  legitimately never drive. A net carrying only `inout` pins is an ordinary
+  bidirectional bus and is not reported
 - *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or
   whose `reset` equals `host_reset`, or that carries only one of the two, is
   reported as an error and generation is refused

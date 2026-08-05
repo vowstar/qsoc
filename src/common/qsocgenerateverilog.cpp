@@ -1331,11 +1331,22 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 const PortDirectionStatus dirStatus = checkPortDirectionConsistencyWithBitOverlap(
                     portDetails);
                 const bool isUndriven   = (dirStatus == PortDirectionStatus::Undriven);
-                const bool isMultidrive = (dirStatus == PortDirectionStatus::Multidrive);
+                const bool isMultidrive = (dirStatus == PortDirectionStatus::Multidrive)
+                                          || (dirStatus == PortDirectionStatus::MultidriveOutputs);
 
                 if (isUndriven) {
                     QSocConsole::warn()
                         << "Net" << netName << "has only input ports, missing driver";
+                } else if (dirStatus == PortDirectionStatus::MultidriveOutputs) {
+                    /* Two plain outputs own overlapping bits of one net: a
+                       certain contradiction on any net, internal or top.
+                       An output beside an inout stays a warning: the inout
+                       side may legitimately never drive. */
+                    QSocConsole::error()
+                        << "Net" << netName
+                        << "takes multiple output drivers; declare a pin inout if the "
+                           "drivers are wired together";
+                    emissionRejected = true;
                 } else if (isMultidrive) {
                     QSocConsole::warn() << "Net" << netName << "has multiple output/inout ports";
                 }

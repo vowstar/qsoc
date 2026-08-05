@@ -2093,6 +2093,65 @@ net:
         QVERIFY(verilog.contains("`ifdef FPGA"));
     }
 
+    /* Sentinels for the inout ladder: an output beside an inout is a
+       contention hazard worth one warning, not a refusal (the inout side
+       may legitimately never drive); an inout-only net is a normal
+       bidirectional bus and stays silent. */
+    void testOutputBesideInoutWarnsAndInoutPairIsSilent()
+    {
+        QVERIFY(!createIoModule().isEmpty());
+        messageList.clear();
+        const QString warned = generate("warn_out_inout", R"(
+port:
+  pad_o:
+    direction: inout
+    type: logic
+
+instance:
+  u0:
+    module: io_mod
+  u1:
+    module: io_mod
+
+net:
+  shared:
+    - instance: top
+      port: pad_o
+    - instance: u0
+      port: drive
+    - instance: u1
+      port: pad
+)");
+        QVERIFY(!warned.isEmpty());
+        QVERIFY(messageList.join('\n').contains("has multiple output/inout ports"));
+
+        messageList.clear();
+        const QString silent = generate("silent_inout_pair", R"(
+port:
+  pad_o:
+    direction: inout
+    type: logic
+
+instance:
+  u0:
+    module: io_mod
+  u1:
+    module: io_mod
+
+net:
+  shared:
+    - instance: top
+      port: pad_o
+    - instance: u0
+      port: pad
+    - instance: u1
+      port: pad
+)");
+        QVERIFY(!silent.isEmpty());
+        QVERIFY(!messageList.join('\n').contains("has multiple output/inout ports"));
+        QVERIFY(!messageList.join('\n').contains("takes multiple output drivers"));
+    }
+
     /* One rejection per structural family: a certain contradiction refuses
        the run and leaves no artifact. */
     void testStructuralContradictionsAreRejected_data()
@@ -2325,6 +2384,35 @@ instance:
   u0:
     module: sub_mod
 )") << "connect must be a scalar net name";
+
+        QTest::newRow("internal-double-output") << "rej_internal_double" << QString(R"(
+port:
+  y:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+  u1:
+    module: sub_mod
+  u2:
+    module: sub_mod
+
+net:
+  inner:
+    - instance: u0
+      port: o
+    - instance: u1
+      port: o
+    - instance: u2
+      port: i
+  outn:
+    - instance: top
+      port: y
+    - instance: u2
+      port: o
+)") << "takes multiple output drivers";
     }
 
     void testStructuralContradictionsAreRejected()

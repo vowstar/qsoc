@@ -64,9 +64,10 @@ public:
      * @brief Enum for port direction check results
      */
     enum class PortDirectionStatus : std::uint8_t {
-        Valid,     /**< Consistent port directions */
-        Undriven,  /**< Net has only input ports */
-        Multidrive /**< Net has multiple output/inout ports */
+        Valid,             /**< Consistent port directions */
+        Undriven,          /**< Net has only input ports */
+        Multidrive,        /**< Output and inout share the net: contention hazard */
+        MultidriveOutputs, /**< Two plain outputs own overlapping bits: refused */
     };
     Q_ENUM(PortDirectionStatus)
 
