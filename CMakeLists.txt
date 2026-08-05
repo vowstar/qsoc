@@ -159,7 +159,7 @@ else()
 endif()
 
 # QSCHEMATIC
-pkg_check_modules(QSCHEMATIC IMPORTED_TARGET qschematic>=1.4.0)
+pkg_check_modules(QSCHEMATIC IMPORTED_TARGET qschematic>=3.1.0)
 if (QSCHEMATIC_FOUND)
     message(STATUS "Use system qschematic library: ${QSCHEMATIC_LIBRARIES} ${QSCHEMATIC_VERSION}")
 else()
