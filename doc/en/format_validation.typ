@@ -259,7 +259,8 @@ them change or drop parts of the design rather than only warning:
   driver census covers bound inputs, instance outputs, and process targets:
   two drivers whose bit ranges overlap and whose `ifdef`/`ifndef` guards are
   not mutually exclusive are reported as an error and generation is refused.
-  Inout endpoints stay unwired with a FIXME
+  Inout endpoints stay out of the verdict and unwired; a component that
+  actually fans out records a FIXME
 - *Combinational and sequential driver conflicts*: a signal driven from more
   than one `comb`/`seq` block is rejected
 - *Power `follow` conflicts*: an entry whose `clock` equals `host_clock`, or

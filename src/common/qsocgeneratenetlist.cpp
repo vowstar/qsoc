@@ -2201,9 +2201,11 @@ bool QSocGenerateManager::processSeqLogic()
                 continue;
             }
 
-            /* Validate logic specification: must have either 'next' or 'if' */
-            bool hasNext = seqItem["next"] && seqItem["next"].IsScalar();
-            bool hasIf   = seqItem["if"] && seqItem["if"].IsSequence();
+            /* Validate logic specification: must have either 'next' or 'if'.
+               Presence is judged by key, not by well-formedness, or a
+               malformed second form evaporates instead of being rejected. */
+            bool hasNext = bool(seqItem["next"]);
+            bool hasIf   = bool(seqItem["if"]);
 
             if (!hasNext && !hasIf) {
                 QSocConsole::warn() << "Register" << regName
@@ -2214,6 +2216,18 @@ bool QSocGenerateManager::processSeqLogic()
             if (hasNext && hasIf) {
                 QSocConsole::error()
                     << "Register" << regName << "carries both 'next' and 'if'; pick one form";
+                rejected = true;
+                continue;
+            }
+
+            if (hasNext && !seqItem["next"].IsScalar()) {
+                QSocConsole::error() << "'next' must be a scalar for register" << regName;
+                rejected = true;
+                continue;
+            }
+
+            if (hasIf && !seqItem["if"].IsSequence()) {
+                QSocConsole::error() << "'if' must be a sequence for register" << regName;
                 rejected = true;
                 continue;
             }

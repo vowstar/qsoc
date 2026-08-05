@@ -1809,7 +1809,7 @@ comb:
 )");
         /* Superseded pin: keep-first for conflicting drivers was replaced by rejection */
         QVERIFY(verilog.isEmpty());
-        QVERIFY(messageList.join('\n').contains("driver"));
+        QVERIFY(messageList.join('\n').contains("comb has duplicate driver"));
     }
 
     /* A net that merely shares a name with a top-level port, without any
@@ -2056,6 +2056,43 @@ net:
         QVERIFY(verilog.contains("p[7:4]"));
         QVERIFY(verilog.contains("p[3:0]"));
     }
+    /* Sentinel: guard exclusivity and slice disjointness are independent
+       exits from the conflict verdict. A guarded and an unguarded driver on
+       disjoint slices of one component are one driver per bit per build and
+       must stay legal through every census change. */
+    void testGuardedAndUnguardedDisjointSlicesStayLegal()
+    {
+        createNibbleModule();
+        messageList.clear();
+        const QString verilog = generate("connected_guard_slice_cross", R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: nibble_mod
+    ifdef:
+      - FPGA
+  u1:
+    module: nibble_mod
+
+net:
+  n_share:
+    - instance: top
+      port: p
+    - instance: u0
+      port: o
+      bits: "[7:4]"
+    - instance: u1
+      port: o
+      bits: "[3:0]"
+)");
+        QVERIFY(!verilog.isEmpty());
+        QVERIFY(verilog.contains("`ifdef FPGA"));
+    }
+
     /* One rejection per structural family: a certain contradiction refuses
        the run and leaves no artifact. */
     void testStructuralContradictionsAreRejected_data()
@@ -2153,6 +2190,141 @@ net:
     - instance: u0
       port: o
 )") << "is not a list";
+
+        QTest::newRow("overlapping-sliced-nets") << "rej_sliced_overlap" << QString(R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: nibble_mod
+  u1:
+    module: nibble_mod
+
+net:
+  n_hi:
+    - instance: top
+      port: p
+      bits: "[5:2]"
+    - instance: u0
+      port: o
+  n_lo:
+    - instance: top
+      port: p
+      bits: "[3:0]"
+    - instance: u1
+      port: o
+)") << "at once; one driver may own a bit range";
+
+        QTest::newRow("driven-plus-bound-source") << "rej_driven_source" << QString(R"(
+port:
+  o:
+    direction: output
+    type: logic[7:0]
+    connect: n1
+  i:
+    direction: input
+    type: logic[7:0]
+    connect: n1
+
+instance:
+  u0:
+    module: sub_mod
+
+net:
+  n2:
+    - instance: top
+      port: o
+      bits: "[7:0]"
+    - instance: u0
+      port: o
+)") << "at once; one driver may own a bit range";
+
+        QTest::newRow("inout-rider-no-shield") << "rej_inout_rider" << QString(R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+  q:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+  u1:
+    module: sub_mod
+  u2:
+    module: io_mod
+
+net:
+  shared:
+    - instance: top
+      port: p
+    - instance: top
+      port: q
+    - instance: u0
+      port: o
+    - instance: u1
+      port: o
+    - instance: u2
+      port: pad
+)") << "at once; one driver may own a bit range";
+
+        QTest::newRow("same-port-slice-sources") << "rej_slice_sources" << QString(R"(
+port:
+  o:
+    direction: output
+    type: logic[7:0]
+  i:
+    direction: input
+    type: logic[7:0]
+
+instance:
+  u0:
+    module: sub_mod
+
+net:
+  n1:
+    - instance: top
+      port: o
+    - instance: top
+      port: i
+      bits: "[7:4]"
+    - instance: top
+      port: i
+      bits: "[3:0]"
+)") << "at once; one driver may own a bit range";
+
+        QTest::newRow("seq-two-forms-malformed") << "rej_seq_two_forms" << QString(R"(
+port:
+  clk:
+    direction: input
+    type: logic
+  q:
+    direction: output
+    type: logic
+
+seq:
+  - reg: q
+    clk: clk
+    next: "1'b0"
+    if: "cond ? a : b"
+)") << "carries both 'next' and 'if'";
+
+        QTest::newRow("empty-connect") << "rej_empty_connect" << QString(R"(
+port:
+  p:
+    direction: output
+    type: logic[7:0]
+    connect: ""
+
+instance:
+  u0:
+    module: sub_mod
+)") << "connect must be a scalar net name";
     }
 
     void testStructuralContradictionsAreRejected()
@@ -2162,6 +2334,8 @@ net:
         QFETCH(QString, fragment);
 
         createSubModule();
+        QVERIFY(!createNibbleModule().isEmpty());
+        QVERIFY(!createIoModule().isEmpty());
         messageList.clear();
         const QString verilog = generate(stem, netlist);
         QVERIFY(verilog.isEmpty());

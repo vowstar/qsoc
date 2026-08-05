@@ -228,9 +228,14 @@ QMap<QString, QSocGenerateManager::NetTopPorts> QSocGenerateManager::buildNetToT
             continue;
         }
         const QString netName = QString::fromStdString(portNode["connect"].as<std::string>());
-        if (!netName.isEmpty()) {
-            addBinding(portName, netName, QString());
+        if (netName.isEmpty()) {
+            if (bindingsOk != nullptr) {
+                QSocConsole::error() << "Port" << portName << "connect must be a scalar net name";
+                *bindingsOk = false;
+            }
+            continue;
         }
+        addBinding(portName, netName, QString());
     }
 
     /* Explicit `instance: top` entries bind the same way as `connect:`, except
