@@ -2357,7 +2357,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
     QMap<QString, QStringList>            drivenRangesByPort;
     QMap<QString, QList<ComponentDriver>> processDriversByPort;
     QMap<QString, QList<ComponentDriver>> instanceDriversByPort;
-    QSet<QString>                         processDrivenNets;
     QMap<QString, QList<ComponentDriver>> instanceDrivenNets;
     QSet<QString>                         inoutConnectionNets;
     QSet<QString>                         unknownOwnershipNets;
@@ -2421,9 +2420,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 drivenRangesByPort[target.port].append(range);
                 processDriversByPort[target.port].append(
                     {ComponentDriver::Kind::ProcessTarget, name, range, target.port, {}, {}});
-                if (netToTopPortAliases.contains(parsed.first)) {
-                    processDrivenNets.insert(parsed.first);
-                }
             }
         };
         collect("comb", "out", true);
@@ -2871,8 +2867,12 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
             }
         }
         if (sinks.isEmpty()) {
+            /* A process driver never lands here: its redirect target is one
+               of this component's own endpoints, so either it is an output
+               (sinks is not empty), an input (the collector skips it), or
+               ownerless (the component already bailed out above). */
             for (const QString &netName : component.netNames) {
-                if (processDrivenNets.contains(netName) || instanceDrivenNets.contains(netName)) {
+                if (instanceDrivenNets.contains(netName)) {
                     netDriven = true;
                     break;
                 }
