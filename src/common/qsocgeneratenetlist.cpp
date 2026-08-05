@@ -1421,6 +1421,23 @@ bool QSocGenerateManager::processLinkConnections()
 
         QSocConsole::info() << "Processing link and uplink connections...";
 
+        /* Ports the uplink walk itself created; only these may grow when a
+           later slice binds past their width. */
+        QSet<QString> uplinkCreatedPorts;
+
+        /* A sibling `bits:` composes into the link/uplink value unless the
+           value already carries its own bit-select. */
+        const auto mergeSiblingBits = [](const YAML::Node &portNode, std::string value) {
+            if (portNode["bits"] && portNode["bits"].IsScalar()
+                && value.find('[') == std::string::npos) {
+                const std::string bits = portNode["bits"].as<std::string>();
+                if (!bits.empty()) {
+                    value += bits;
+                }
+            }
+            return value;
+        };
+
         /* Process each instance */
         for (const auto &instancePair : netlistData["instance"]) {
             if (!instancePair.first.IsScalar()) {
@@ -1484,18 +1501,11 @@ bool QSocGenerateManager::processLinkConnections()
                             << portName.c_str() << "- the link wins and the tie is ignored";
                     }
 
-                    /* Per-port `bits:` lives next to `link:` in the YAML and
-                       used to be silently dropped by the link processor.
-                       Append it to the link string when the link itself does
-                       not already carry a bit-select, so the canonical
-                       parseLinkValue path picks it up. */
-                    if (portNode["bits"] && portNode["bits"].IsScalar()
-                        && netName.find('[') == std::string::npos) {
-                        const std::string bits = portNode["bits"].as<std::string>();
-                        if (!bits.empty()) {
-                            netName += bits;
-                        }
-                    }
+                    /* Per-port `bits:` lives next to `link:`/`uplink:` in the
+                       YAML and used to be silently dropped. Append it to the
+                       value when it does not already carry a bit-select, so
+                       the canonical parseLinkValue path picks it up. */
+                    netName = mergeSiblingBits(portNode, netName);
 
                     if (!processLinkConnection(
                             instanceName, portName, netName, moduleName, moduleData)) {
@@ -1505,10 +1515,21 @@ bool QSocGenerateManager::processLinkConnections()
 
                 /* Check for uplink attribute */
                 if (portNode["uplink"] && portNode["uplink"].IsScalar()) {
-                    const auto netName = portNode["uplink"].as<std::string>();
+                    auto netName = portNode["uplink"].as<std::string>();
+
+                    /* The sibling `bits:` belongs to the link when both are
+                       present; the uplink takes it only as sole consumer. */
+                    if (!portNode["link"]) {
+                        netName = mergeSiblingBits(portNode, netName);
+                    }
 
                     if (!processUplinkConnection(
-                            instanceName, portName, netName, moduleName, moduleData)) {
+                            instanceName,
+                            portName,
+                            netName,
+                            moduleName,
+                            moduleData,
+                            uplinkCreatedPorts)) {
                         return false;
                     }
                 }
@@ -1651,9 +1672,12 @@ bool QSocGenerateManager::processLinkConnection(
  * @brief Process a single uplink connection
  * @param instanceName The instance name
  * @param portName The port name
- * @param netName The net name to create/connect to
+ * @param netName The net name to create/connect to, optionally with a
+ *        bit-select (`name[hi:lo]`) that slices the shared net
  * @param moduleName The module name
  * @param moduleData The module YAML data
+ * @param uplinkCreatedPorts Ports created by this uplink walk; only these
+ *        may grow when a later slice binds past their width
  * @return true if successful, false on error
  */
 bool QSocGenerateManager::processUplinkConnection(
@@ -1661,11 +1685,33 @@ bool QSocGenerateManager::processUplinkConnection(
     const std::string &portName,
     const std::string &netName,
     const std::string &moduleName,
-    const YAML::Node  &moduleData)
+    const YAML::Node  &moduleData,
+    QSet<QString>     &uplinkCreatedPorts)
 {
     try {
+        /* An uplink value takes the same spellings as a link: a bare name or
+           name[slice]. The slice cuts the shared net; the auto-created port
+           must grow to cover it, so the bound bits are sizeable. */
+        const auto [cleanNetName, bitSelection] = parseLinkValue(netName);
+
+        int sliceMsb = -1;
+        if (!bitSelection.empty()) {
+            static const QRegularExpression sliceRegex(R"(^\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]$)");
+            const QRegularExpressionMatch   match = sliceRegex.match(
+                QString::fromStdString(bitSelection));
+            if (!match.hasMatch()) {
+                QSocConsole::error()
+                    << "Uplink bit select" << bitSelection.c_str() << "on" << instanceName.c_str()
+                    << "." << portName.c_str() << "must be numeric to size the top-level port";
+                return false;
+            }
+            const int first  = match.captured(1).toInt();
+            const int second = match.capturedLength(2) > 0 ? match.captured(2).toInt() : first;
+            sliceMsb         = qMax(first, second);
+        }
+
         QSocConsole::info() << "Processing uplink connection:" << instanceName.c_str() << "."
-                            << portName.c_str() << "-> top-level port:" << netName.c_str();
+                            << portName.c_str() << "-> top-level port:" << cleanNetName.c_str();
 
         /* Get port information from module */
         if (!moduleData["port"] || !moduleData["port"].IsMap()) {
@@ -1717,9 +1763,9 @@ bool QSocGenerateManager::processUplinkConnection(
         }
 
         /* Check if top-level port already exists */
-        if (netlistData["port"][netName]) {
+        if (netlistData["port"][cleanNetName]) {
             /* Port exists, check compatibility */
-            const YAML::Node &existingPortNode = netlistData["port"][netName];
+            const YAML::Node &existingPortNode = netlistData["port"][cleanNetName];
 
             /* Check direction compatibility */
             std::string existingDirection;
@@ -1737,65 +1783,90 @@ bool QSocGenerateManager::processUplinkConnection(
                    || topLevelDirection == existingDirection);
 
             if (!directionCompatible) {
-                QSocConsole::error() << "Direction mismatch for uplink port" << netName.c_str()
+                QSocConsole::error() << "Direction mismatch for uplink port" << cleanNetName.c_str()
                                      << ". Expected:" << topLevelDirection.c_str()
                                      << ", existing:" << existingDirection.c_str();
                 return false;
             }
 
-            /* Check type/width compatibility */
             std::string existingType;
             if (existingPortNode["type"] && existingPortNode["type"].IsScalar()) {
                 existingType = existingPortNode["type"].as<std::string>();
             }
 
-            if (!existingType.empty() && existingType != modulePortType) {
+            if (sliceMsb >= 0) {
+                /* A sliced uplink must fit the port; a port this walk created
+                   may grow to cover it, a user-declared width is a contract. */
+                const int existingWidth = calculatePortWidth(existingType);
+                if (existingWidth > 0 && sliceMsb >= existingWidth) {
+                    if (uplinkCreatedPorts.contains(QString::fromStdString(cleanNetName))) {
+                        netlistData["port"][cleanNetName]["type"] = std::string("logic[")
+                                                                    + std::to_string(sliceMsb)
+                                                                    + ":0]";
+                    } else {
+                        QSocConsole::error()
+                            << "Uplink slice" << bitSelection.c_str() << "exceeds the"
+                            << existingWidth << "bit top-level port" << cleanNetName.c_str();
+                        return false;
+                    }
+                }
+            } else if (!existingType.empty() && existingType != modulePortType) {
                 /* Calculate widths for comparison */
                 const int moduleWidth   = calculatePortWidth(modulePortType);
                 const int existingWidth = calculatePortWidth(existingType);
 
                 if (moduleWidth > 0 && existingWidth > 0 && moduleWidth != existingWidth) {
-                    QSocConsole::error() << "Type/width mismatch for uplink port" << netName.c_str()
-                                         << ". Expected width:" << moduleWidth
-                                         << ", existing width:" << existingWidth;
+                    QSocConsole::error()
+                        << "Type/width mismatch for uplink port" << cleanNetName.c_str()
+                        << ". Expected width:" << moduleWidth
+                        << ", existing width:" << existingWidth;
                     return false;
                 }
             }
 
-            QSocConsole::info() << "Uplink port" << netName.c_str()
+            QSocConsole::info() << "Uplink port" << cleanNetName.c_str()
                                 << "already exists and is compatible";
         } else {
-            /* Create new top-level port */
-            YAML::Node topLevelPortNode   = YAML::Node(YAML::NodeType::Map);
-            topLevelPortNode["direction"] = topLevelDirection;
-            topLevelPortNode["type"]      = modulePortType;
-            topLevelPortNode["connect"]   = netName; /* Add connect attribute to link port to net */
+            /* Create new top-level port. A sliced uplink sizes the port from
+               the slice; a whole uplink copies the module port type. */
+            const std::string createdType = sliceMsb >= 0 ? std::string("logic[")
+                                                                + std::to_string(sliceMsb) + ":0]"
+                                                          : modulePortType;
+            YAML::Node        topLevelPortNode = YAML::Node(YAML::NodeType::Map);
+            topLevelPortNode["direction"]      = topLevelDirection;
+            topLevelPortNode["type"]           = createdType;
+            topLevelPortNode["connect"]
+                = cleanNetName; /* Add connect attribute to link port to net */
 
-            netlistData["port"][netName] = topLevelPortNode;
+            netlistData["port"][cleanNetName] = topLevelPortNode;
+            uplinkCreatedPorts.insert(QString::fromStdString(cleanNetName));
 
-            QSocConsole::info() << "Created new top-level port:" << netName.c_str()
+            QSocConsole::info() << "Created new top-level port:" << cleanNetName.c_str()
                                 << ", direction:" << topLevelDirection.c_str()
-                                << ", type:" << modulePortType.c_str()
-                                << ", connected to net:" << netName.c_str();
+                                << ", type:" << createdType.c_str()
+                                << ", connected to net:" << cleanNetName.c_str();
         }
 
         /* For uplink, directly connect module port to top-level port - NO intermediate net */
         /* Find or create the net for this top-level port */
-        if (!netlistData["net"][netName] || !netlistData["net"][netName].IsSequence()) {
-            netlistData["net"][netName] = YAML::Node(YAML::NodeType::Sequence);
+        if (!netlistData["net"][cleanNetName] || !netlistData["net"][cleanNetName].IsSequence()) {
+            netlistData["net"][cleanNetName] = YAML::Node(YAML::NodeType::Sequence);
         }
 
         /* Connect module instance port directly to the top-level port via the net */
         YAML::Node connectionNode  = YAML::Node(YAML::NodeType::Map);
         connectionNode["instance"] = instanceName;
         connectionNode["port"]     = portName;
-        netlistData["net"][netName].push_back(connectionNode);
+        if (!bitSelection.empty()) {
+            connectionNode["bits"] = bitSelection;
+        }
+        netlistData["net"][cleanNetName].push_back(connectionNode);
 
         /* The top-level port is implicitly connected to the net with the same name */
         /* We don't add an explicit "top_level" connection since the net name matches the port name */
 
         QSocConsole::info() << "Successfully created uplink connection for port:"
-                            << netName.c_str();
+                            << cleanNetName.c_str();
         return true;
     } catch (const YAML::Exception &e) {
         QSocConsole::error() << "YAML exception in processUplinkConnection:" << e.what();

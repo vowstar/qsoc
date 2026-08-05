@@ -633,7 +633,8 @@ private:
         const std::string &portName,
         const std::string &netName,
         const std::string &moduleName,
-        const YAML::Node  &moduleData);
+        const YAML::Node  &moduleData,
+        QSet<QString>     &uplinkCreatedPorts);
 
     /**
      * @brief Parse link value to extract net name and bit selection

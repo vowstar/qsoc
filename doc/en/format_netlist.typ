@@ -209,7 +209,7 @@ net:
 
 The list format allows the same instance to appear multiple times with different ports, which is useful for complex SoC designs where a single module may have multiple ports connected to the same net.
 
-A top-level port is named by exactly one net: naming it in two `net:` entries, or in one `net:` entry and one `connect:` alias, makes every driver of both nets a driver of one signal, and an overlapping pair is reported as an error and generation is refused.
+A top-level port is named by exactly one net: naming it in two `net:` entries, or in one `net:` entry and one `connect:` alias, makes every driver of both nets a driver of one signal, and an overlapping pair is reported as an error and generation is refused. A `connect:` always binds the whole port; to bind a slice, use an `instance: top` entry with `bits` inside the net.
 
 === Connection Properties
 <soc-net-connection-properties>
@@ -223,11 +223,17 @@ Each connection in the list format supports the following properties:
     table.hline(),
     [instance], [Instance name to connect (required)],
     [port], [Port name to connect (required)],
-    [bits], [Optional bit selection (e.g., "[7:0]" or "[5]")],
+    [bits], [Optional bit selection (e.g., "[7:0]" or "[5]"); see below for what it selects],
   )],
   caption: [NET CONNECTION PROPERTIES],
   kind: table,
 )
+
+`bits` always slices the carrier of the signal. On an instance connection it
+selects bits of the *net*, so several narrow ports can assemble one wide net
+(the net's width is inferred from the highest bound bit). On an
+`instance: top` connection it selects bits of the *top-level port*, because
+that port is itself the carrier: the net becomes that slice of the port.
 
 == Link and Uplink Attributes
 <soc-net-link-uplink>
@@ -269,6 +275,12 @@ This is equivalent to:
 + Adding `ext_clk` to the `port` section as an input/output
 + Creating a net named `ext_clk`
 + Connecting `io_pad.PAD` to this net
+
+An `uplink` accepts the same bit-select spellings as `link`, inline
+(`uplink: bus[7:0]`) or as a sibling `bits:`, and slices the shared net
+identically. The auto-created top-level port grows to cover the highest
+bound bit, so several narrow ports can assemble one wide exported bus. A
+slice past the width of an explicitly declared port is an error.
 
 === Usage Guidelines
 <soc-net-link-uplink-guidelines>

@@ -1653,6 +1653,83 @@ UPLINK_TEST_CELL_16BIT:
         QVERIFY(foundWidthMismatchError);
     }
 
+    /* An uplink takes the same bit-select spellings as a link and slices the
+       shared net; the auto-created port grows to cover the highest bound
+       bit. Both spellings used to be dropped or mangled silently. */
+    void testUplinkBitSelectAssemblesTheBus()
+    {
+        QDir moduleDir(projectManager.getModulePath());
+        if (!moduleDir.exists()) {
+            moduleDir.mkpath(".");
+        }
+        QFile moduleFile(moduleDir.filePath("UPLINK_SLICE_CELL.soc_mod"));
+        if (moduleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&moduleFile);
+            stream << R"(
+UPLINK_SLICE_CELL:
+  port:
+    o:
+      type: logic[7:0]
+      direction: out
+)";
+            moduleFile.close();
+        }
+
+        const QString content  = R"(
+instance:
+  u_lo:
+    module: UPLINK_SLICE_CELL
+    port:
+      o:
+        uplink: upbus[7:0]
+  u_hi:
+    module: UPLINK_SLICE_CELL
+    port:
+      o:
+        uplink: upbus
+        bits: "[15:8]"
+)";
+        const QString filePath = createTempFile("test_uplink_slice_bus.soc_net", content);
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+        QVERIFY(verifyVerilogContent("test_uplink_slice_bus", "output wire [15:0] upbus"));
+        QVERIFY(verifyVerilogContent("test_uplink_slice_bus", ".o(upbus[7:0])"));
+        QVERIFY(verifyVerilogContent("test_uplink_slice_bus", ".o(upbus[15:8])"));
+
+        /* A slice past a user-declared port width is a contract violation
+           and refuses. */
+        const QString overflowContent = R"(
+port:
+  narrow:
+    direction: output
+    type: logic[7:0]
+
+instance:
+  u_lo:
+    module: UPLINK_SLICE_CELL
+    port:
+      o:
+        uplink: narrow[15:8]
+)";
+        const QString overflowPath
+            = createTempFile("test_uplink_slice_overflow.soc_net", overflowContent);
+        messageList.clear();
+        QSocCliWorker overflowWorker;
+        overflowWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), overflowPath},
+            false);
+        overflowWorker.run();
+        QVERIFY2(
+            messageList.join('\n').contains("exceeds the 8 bit top-level port"),
+            qPrintable(messageList.join('\n').right(400)));
+        QVERIFY(!verifyVerilogContent("test_uplink_slice_overflow", "module"));
+
+        moduleDir.remove("UPLINK_SLICE_CELL.soc_mod");
+    }
+
     void testGenerateWithUplinkCompatiblePorts()
     {
         messageList.clear();
