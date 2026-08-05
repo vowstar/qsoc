@@ -7,6 +7,7 @@
 #include <cmath>
 #include <QDebug>
 #include <QFileInfo>
+#include <QHash>
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
 #include <QSet>
@@ -178,6 +179,82 @@ QString clockSelectExpression(const QSocClockPrimitive::ClockTarget &target)
         return target.select + "[0]";
     }
     return QString("%1[%2:0]").arg(target.select).arg(target.select_width - 1);
+}
+
+struct DividerPortShape
+{
+    int  width;
+    bool packed;
+};
+
+class DividerPortShapes
+{
+public:
+    void add(const QString &name, int width, bool packed)
+    {
+        if (name.isEmpty() || m_repeated.contains(name)) {
+            return;
+        }
+        if (m_shapes.remove(name)) {
+            m_repeated.insert(name);
+            return;
+        }
+        m_shapes.insert(name, {width, packed});
+    }
+
+    const DividerPortShape *find(const QString &name) const
+    {
+        const auto it = m_shapes.constFind(name);
+        return it == m_shapes.cend() ? nullptr : &it.value();
+    }
+
+private:
+    QHash<QString, DividerPortShape> m_shapes;
+    QSet<QString>                    m_repeated;
+};
+
+DividerPortShapes dividerPortShapes(const QSocClockPrimitive::ClockControllerConfig &config)
+{
+    DividerPortShapes shapes;
+    const auto        addDivider = [&shapes](const QSocClockPrimitive::ClockDivider &divider) {
+        shapes.add(divider.value, divider.width, true);
+        shapes.add(divider.valid, 1, false);
+        shapes.add(divider.ready, 1, false);
+        shapes.add(divider.count, divider.width, true);
+        shapes.add(divider.enable, 1, false);
+    };
+
+    for (const auto &target : config.targets) {
+        if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
+            addDivider(target.div);
+        }
+        for (const auto &link : target.links) {
+            if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
+                addDivider(link.div);
+            }
+        }
+    }
+    return shapes;
+}
+
+bool validateDividerControlPort(
+    const DividerPortShapes &dividerPorts, const QString &name, int width, bool packed)
+{
+    const DividerPortShape *dividerPort = dividerPorts.find(name);
+    if (!dividerPort) {
+        return true;
+    }
+    if (dividerPort->width != width) {
+        QSocConsole::error() << "Clock divider port" << name << "has incompatible widths"
+                             << dividerPort->width << "and" << width;
+        return false;
+    }
+    if (dividerPort->packed != packed) {
+        QSocConsole::error() << "Clock divider port" << name
+                             << "has incompatible scalar and packed declarations";
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -829,6 +906,18 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
+    /* The auto divider (dynamic value without valid) has no ready handshake
+       to give; a requested ready would be a floating output port. */
+    for (const auto &target : config.targets) {
+        if (!target.div.value.isEmpty() && target.div.valid.isEmpty()
+            && !target.div.ready.isEmpty()) {
+            QSocConsole::error() << "Clock target" << target.name
+                                 << "divider ready requires valid; the auto divider has no "
+                                    "ready handshake";
+            config.valid = false;
+        }
+    }
+
     // One select port serves every target that names it, at the widest width
     QHash<QString, int> selectPortWidths;
     for (auto &target : config.targets) {
@@ -947,6 +1036,37 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
+    if (config.valid) {
+        const DividerPortShapes dividerPorts = dividerPortShapes(config);
+        QSet<QString>           checkedControls;
+        const auto validateControl = [&dividerPorts,
+                                      &checkedControls,
+                                      &config](const QString &name, int width, bool packed) {
+            if (name.isEmpty() || checkedControls.contains(name)) {
+                return;
+            }
+            checkedControls.insert(name);
+            if (!validateDividerControlPort(dividerPorts, name, width, packed)) {
+                config.valid = false;
+            }
+        };
+        if (classifyControlAtom(config.testEnable) == ControlAtom::Identifier) {
+            validateControl(config.testEnable, 1, false);
+        }
+        for (const auto &target : config.targets) {
+            if (!target.test_clock.isEmpty()
+                && classifyControlAtom(target.test_enable) == ControlAtom::Identifier) {
+                validateControl(target.test_enable, 1, false);
+            }
+            if (!target.test_clock.isEmpty()) {
+                validateControl(target.test_clock, 1, false);
+            }
+            if (target.links.size() >= 2) {
+                validateControl(target.select, target.select_port_width, target.select_port_width > 1);
+            }
+        }
+    }
+
     return config;
 }
 
@@ -965,6 +1085,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     for (const auto &input : config.inputs) {
         inputClocks.insert(input.name);
     }
+    const DividerPortShapes dividerPorts = dividerPortShapes(config);
 
     // Add input clocks
     for (const auto &input : config.inputs) {
@@ -991,6 +1112,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 
     // Add dynamic divider interface ports (target-level)
     QSet<QString> divSignalNames;
+    QSet<QString> declaredEnables;
     for (const auto &target : config.targets) {
         if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
             // Add dynamic division value input port
@@ -1049,8 +1171,10 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 portComments << QString("/**< Cycle counter for %1 */").arg(target.name);
             }
 
-            // Add enable signal port
-            if (!target.div.enable.isEmpty()) {
+            // Add enable signal port. One enable may serve several dividers,
+            // so it deduplicates instead of throwing.
+            if (!target.div.enable.isEmpty() && !declaredEnables.contains(target.div.enable)) {
+                declaredEnables.insert(target.div.enable);
                 portDecls << QString("    input  wire %1").arg(target.div.enable);
                 portComments << QString("/**< Division enable for %1 */").arg(target.name);
             }
@@ -1123,7 +1247,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 }
 
                 // Add enable signal port
-                if (!link.div.enable.isEmpty()) {
+                if (!link.div.enable.isEmpty() && !declaredEnables.contains(link.div.enable)) {
+                    declaredEnables.insert(link.div.enable);
                     portDecls << QString("    input  wire %1").arg(link.div.enable);
                     portComments << QString("/**< Division enable for link %1 */").arg(linkName);
                 }
@@ -1133,9 +1258,13 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 
     // Add test enable signal (if specified)
     if (classifyControlAtom(config.testEnable) == ControlAtom::Identifier
-        && !addedSignals.contains(config.testEnable)) {
+        && !addedSignals.contains(config.testEnable) && !dividerPorts.find(config.testEnable)) {
         portDecls << QString("    input  wire %1").arg(config.testEnable);
         portComments << QString("/**< Test enable signal */");
+        addedSignals.insert(config.testEnable);
+    } else if (
+        classifyControlAtom(config.testEnable) == ControlAtom::Identifier
+        && dividerPorts.find(config.testEnable)) {
         addedSignals.insert(config.testEnable);
     }
 
@@ -1143,9 +1272,15 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     for (const auto &target : config.targets) {
         if (!target.test_clock.isEmpty()
             && classifyControlAtom(target.test_enable) == ControlAtom::Identifier
-            && !addedSignals.contains(target.test_enable)) {
+            && !addedSignals.contains(target.test_enable)
+            && !dividerPorts.find(target.test_enable)) {
             portDecls << QString("    input  wire %1").arg(target.test_enable);
             portComments << QString("/**< Test enable for %1 */").arg(target.name);
+            addedSignals.insert(target.test_enable);
+        } else if (
+            !target.test_clock.isEmpty()
+            && classifyControlAtom(target.test_enable) == ControlAtom::Identifier
+            && dividerPorts.find(target.test_enable)) {
             addedSignals.insert(target.test_enable);
         }
     }
@@ -1184,7 +1319,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     // Add MUX interface ports (target-level)
     for (const auto &target : config.targets) {
         if (target.links.size() >= 2) { // Only for multi-source targets
-            if (!target.select.isEmpty() && !addedSignals.contains(target.select)) {
+            if (!target.select.isEmpty() && !addedSignals.contains(target.select)
+                && !dividerPorts.find(target.select)) {
                 const int selectWidth = target.select_port_width;
 
                 QString selectDecl;
@@ -1197,6 +1333,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 portDecls << QString("    input  wire %1").arg(selectDecl);
                 portComments << QString("/**< MUX select for %1 */").arg(target.name);
                 addedSignals.insert(target.select);
+            } else if (dividerPorts.find(target.select)) {
+                addedSignals.insert(target.select);
             }
             if (!target.reset.isEmpty() && !addedSignals.contains(target.reset)) {
                 portDecls << QString("    input  wire %1").arg(target.reset);
@@ -1206,7 +1344,8 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
             // Test enable is already added at controller level
             if (!target.test_clock.isEmpty() && !addedSignals.contains(target.test_clock)) {
                 // Implement "output win" mechanism: if test_clock matches an input clock, skip it
-                if (inputClocks.contains(target.test_clock)) {
+                if (inputClocks.contains(target.test_clock)
+                    || dividerPorts.find(target.test_clock)) {
                     // Port already exists as input clock, just mark as processed
                     addedSignals.insert(
                         target.test_clock); // Mark as processed to avoid future conflicts
