@@ -13,6 +13,7 @@
 #include "tui/qtuistatusbar.h"
 #include "tui/qtuitaskoverlay.h"
 #include "tui/qtuitodolist.h"
+#include "tui/qtuitoolblock.h"
 
 #include <QObject>
 #include <QTimer>
@@ -92,7 +93,7 @@ public:
      * output never interleaves. */
     void beginToolUse(const QString &toolName, const QString &detail);
     void appendToolUseBody(const QString &chunk);
-    void finishToolUse(bool success, const QString &summary = QString());
+    void finishToolUse(QTuiToolBlock::Status status, const QString &summary = QString());
 
     /* Push the user's input as a distinct scrollback block. Replaces
      * the prior `compositor.printContent("qsoc> " + input + "\n")`

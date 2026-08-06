@@ -125,6 +125,22 @@
 
 namespace {
 
+/* Map a tool result onto the block footer. Uncertain gets its own mark:
+ * painting an interrupted call green claims something we do not know, and
+ * painting it red invites a retry that may double-apply. */
+QTuiToolBlock::Status toolBlockStatus(const QString &result)
+{
+    switch (QSocTool::classifyResult(result)) {
+    case QSocTool::ResultStatus::Ok:
+        return QTuiToolBlock::Status::Success;
+    case QSocTool::ResultStatus::Failed:
+        return QTuiToolBlock::Status::Failure;
+    case QSocTool::ResultStatus::Uncertain:
+        return QTuiToolBlock::Status::Uncertain;
+    }
+    return QTuiToolBlock::Status::Uncertain;
+}
+
 /* Double Ctrl+C exit tracking */
 std::atomic<qint64> g_lastInterruptMs{0};
 constexpr qint64    DOUBLE_PRESS_MS = 2000;
@@ -7651,7 +7667,7 @@ bool QSocCliWorker::runAgentLoop(
                      * a block so the call is a no-op there. */
                     if (!toolName.startsWith("todo_")) {
                         compositor.appendToolUseBody(result);
-                        compositor.finishToolUse(true);
+                        compositor.finishToolUse(toolBlockStatus(result));
                     }
 
                     /* read_file image branch: when the tool returned an
@@ -8329,7 +8345,7 @@ bool QSocCliWorker::runAgentLoop(
                      * a block so the call is a no-op there. */
                     if (!toolName.startsWith("todo_")) {
                         compositor.appendToolUseBody(result);
-                        compositor.finishToolUse(true);
+                        compositor.finishToolUse(toolBlockStatus(result));
                     }
 
                     /* read_file image branch: when the tool returned an

@@ -87,6 +87,28 @@ public:
      */
     virtual QString execute(const json &arguments) = 0;
 
+    /** @brief How a tool call ended, as far as the caller can tell. */
+    enum class ResultStatus {
+        Ok,        /**< The call did what it said. */
+        Failed,    /**< The call did not happen. Nothing changed. */
+        Uncertain, /**< It may or may not have happened; do not retry blind. */
+    };
+
+    /**
+     * @brief Classify a tool result string.
+     * @details A tool that knows its own outcome says so with a leading
+     *          `status: ok|failed|uncertain` line, and that answer wins.
+     *          Otherwise the leading `Error:` convention marks a failure.
+     *          Body text is never inspected, so a file or build log
+     *          mentioning "error:" is not read as a failed call, and a
+     *          tool that streamed partial output before dying cannot be
+     *          mistaken for a success.
+     */
+    static ResultStatus classifyResult(const QString &result);
+
+    /** @brief Prefix a tool result with its machine-readable status line. */
+    static QString statusLine(ResultStatus status);
+
     /**
      * @brief Abort the current tool execution
      * @details Default implementation is a no-op. Override in tools that run

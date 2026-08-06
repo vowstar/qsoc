@@ -375,13 +375,12 @@ void QTuiCompositor::appendToolUseBody(const QString &chunk)
     activeTool->appendBody(chunk);
 }
 
-void QTuiCompositor::finishToolUse(bool success, const QString &summary)
+void QTuiCompositor::finishToolUse(QTuiToolBlock::Status status, const QString &summary)
 {
     if (activeTool == nullptr) {
         return;
     }
-    activeTool
-        ->finish(success ? QTuiToolBlock::Status::Success : QTuiToolBlock::Status::Failure, summary);
+    activeTool->finish(status, summary);
     activeTool = nullptr;
 }
 

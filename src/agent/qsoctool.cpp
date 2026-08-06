@@ -38,6 +38,56 @@ QSocTool::QSocTool(QObject *parent)
     : QObject(parent)
 {}
 
+QString QSocTool::statusLine(ResultStatus status)
+{
+    switch (status) {
+    case ResultStatus::Ok:
+        return QStringLiteral("status: ok\n");
+    case ResultStatus::Failed:
+        return QStringLiteral("status: failed\n");
+    case ResultStatus::Uncertain:
+        return QStringLiteral("status: uncertain\n");
+    }
+    return QStringLiteral("status: uncertain\n");
+}
+
+QSocTool::ResultStatus QSocTool::classifyResult(const QString &result)
+{
+    /* An explicit status must be the first line, so no amount of body text
+     * can forge or hide one. */
+    const QString first = result.left(result.indexOf(QLatin1Char('\n'))).trimmed();
+    if (first == QStringLiteral("status: ok")) {
+        return ResultStatus::Ok;
+    }
+    if (first == QStringLiteral("status: failed")) {
+        return ResultStatus::Failed;
+    }
+    if (first == QStringLiteral("status: uncertain")) {
+        return ResultStatus::Uncertain;
+    }
+    if (result.trimmed().startsWith(QStringLiteral("Error:"))) {
+        return ResultStatus::Failed;
+    }
+    /* Tools that answer in JSON declare the same thing in a "status" member,
+     * so read that rather than leaving their failures unstyled. Only a
+     * top-level object counts, and only its own status member: this is the
+     * tool's declaration, not a search of its payload. */
+    const QString trimmed = result.trimmed();
+    if (trimmed.startsWith(QLatin1Char('{'))) {
+        const auto parsed = json::parse(trimmed.toStdString(), nullptr, /*allow_exceptions=*/false);
+        if (parsed.is_object() && parsed.contains("status") && parsed["status"].is_string()) {
+            const auto declared = QString::fromStdString(parsed["status"].get<std::string>());
+            if (declared == QStringLiteral("error")) {
+                return ResultStatus::Failed;
+            }
+            if (declared == QStringLiteral("uncertain")) {
+                return ResultStatus::Uncertain;
+            }
+        }
+    }
+    return ResultStatus::Ok;
+}
+
 QSocTool::~QSocTool() = default;
 
 void QSocTool::abort() {}
