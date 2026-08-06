@@ -125,6 +125,14 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
     // Test enable is optional - if not set, tie to 1'b0 internally
     if (resetNode["test_enable"]) {
         config.testEnable = QString::fromStdString(resetNode["test_enable"].as<std::string>());
+        /* The name becomes a module port. A constant would emit
+           `input wire 1'b0`, and a tied 1'b1 would bypass reset for good. */
+        if (!config.testEnable.isEmpty()
+            && !QSocVerilogUtils::isValidVerilogIdentifier(config.testEnable)) {
+            QSocConsole::error() << "Reset controller" << config.name << "test_enable"
+                                 << config.testEnable << "must be a valid Verilog identifier";
+            config.valid = false;
+        }
     }
 
     // Parse sources (source: {name: {polarity: ...}})

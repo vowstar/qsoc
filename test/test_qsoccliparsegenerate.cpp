@@ -5583,7 +5583,6 @@ clock:
 reset:
   - name: rst_ctrl
     clock: clk_sys
-    test_enable: 1'b0
     source:
       por_rst_n:
         active: low
@@ -5629,6 +5628,65 @@ reset:
         QVERIFY(!rawBytes.contains("rst_n[3:0]_link"));
         QVERIFY(rawBytes.contains("clk_out_3"));
         QVERIFY(rawBytes.contains("rst_n_3_0"));
+
+        /* Sanitized names must also survive elaboration, not just a
+           substring check. */
+        const QDir   outputDir(projectManager.getOutputPath());
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "",
+            {outputDir.filePath("clock_cell.v"), outputDir.filePath("reset_cell.v"), outPath},
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
+    }
+
+    /* A reset test_enable names a module port. A constant would emit
+       `input wire 1'b0`, and a tied 1'b1 would bypass reset for good. */
+    void testGenerateRejectsConstantResetTestEnable()
+    {
+        const QString netContent = R"(
+---
+version: "1.0"
+module: "test_rst_const_te"
+port:
+  clk_sys:
+    type: logic
+    direction: in
+  por_rst_n:
+    type: logic
+    direction: in
+  rst_n:
+    type: logic
+    direction: out
+instance: {}
+reset:
+  - name: rst_const_te_ctrl
+    clock: clk_sys
+    test_enable: 1'b0
+    source:
+      por_rst_n:
+        active: low
+    target:
+      rst_n:
+        active: low
+        async:
+          clock: clk_sys
+          stage: 4
+        link:
+          por_rst_n:
+)";
+        const QString filePath   = createTempFile("test_rst_const_te.soc_net", netContent);
+        QVERIFY(filePath != "");
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
+        socCliWorker.run();
+
+        verifyGenerationRefused(
+            "test_rst_const_te", "test_enable 1'b0 must be a valid Verilog identifier");
     }
 
     /**
@@ -6308,7 +6366,6 @@ instance: {}
 reset:
   - name: rst_ctrl
     clock: clk_sys
-    test_enable: 1'b0
     target:
       cpu_rst_n:
         active: low
