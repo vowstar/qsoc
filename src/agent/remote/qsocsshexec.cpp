@@ -204,7 +204,27 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
     /* libssh2 reports EOF from a received CHANNEL_EOF, so a socket death
      * does not fake one; anything short of EOF has no status to read. */
     if (cleanEof) {
-        result.exitCode = libssh2_channel_get_exit_status(channel);
+        /* A process killed by a signal sends exit-signal instead of
+         * exit-status, and get_exit_status then returns its zero-initialized
+         * value: a SIGKILLed build would read as a clean exit 0. Ask for the
+         * signal first and leave exitCode at -1 when there is one. */
+        char  *signalName = nullptr;
+        size_t signalLen  = 0;
+        if (libssh2_channel_get_exit_signal(
+                channel, &signalName, &signalLen, nullptr, nullptr, nullptr, nullptr)
+            == 0) {
+            if (signalName != nullptr && signalLen > 0) {
+                result.exitSignal = QString::fromUtf8(signalName, static_cast<int>(signalLen));
+            }
+            /* libssh2 hands back a freshly allocated buffer for each of the
+             * out-parameters it filled; the caller owns them. */
+            if (signalName != nullptr) {
+                libssh2_free(session, signalName);
+            }
+        }
+        if (result.exitSignal.isEmpty()) {
+            result.exitCode = libssh2_channel_get_exit_status(channel);
+        }
     }
     libssh2_channel_free(channel);
 

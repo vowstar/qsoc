@@ -226,6 +226,7 @@ private slots:
     void overwriteExistingFileRepeatedly();
     void connectedSocketCarriesTheDocumentedKeepalive();
     void execReportsRealExitStatus();
+    void execReportsSignalledCommandsAsSignalled();
     void anOrdinaryCommandTimeoutKeepsTheSessionUsable();
     void execInventsNoExitStatusWhenTheLinkDiesMidCommand();
     void execAndSftpGiveUpWhenTheLinkIsAlreadyDead();
@@ -552,6 +553,46 @@ void Test::execReportsRealExitStatus()
  * the deadline. That is the only path where libssh2 has a channel to be
  * asked for an exit status, and asking a channel that never received one
  * is what reported a dead host as exit_code 0.
+ */
+/*
+ * A process killed by a signal sends exit-signal and no exit-status, so
+ * reading the status alone reports a zero-initialized 0: a SIGKILLed build
+ * would look like a clean success. The link is healthy throughout, so the
+ * session must remain usable afterwards.
+ */
+void Test::execReportsSignalledCommandsAsSignalled()
+{
+    if (!m_ready) {
+        QSKIP("loopback sshd unavailable in this environment");
+    }
+
+    QSocSshSession session;
+    QString        err;
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+        != QSocSshSession::ConnectStatus::Ok) {
+        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+    }
+
+    QSocSshExec exec(session);
+    const auto  killed = exec.run(QStringLiteral("kill -KILL $$"), 10000);
+    QCOMPARE(killed.exitSignal, QStringLiteral("KILL"));
+    QCOMPARE(killed.exitCode, -1);
+    QVERIFY(!killed.timedOut);
+    QVERIFY(!killed.transportDead);
+
+    /* Nothing about a killed remote process breaks the link. */
+    QVERIFY(session.isConnected());
+    const auto alive = exec.run(QStringLiteral("printf alive"), 10000);
+    QCOMPARE(alive.exitCode, 0);
+    QCOMPARE(alive.stdoutBytes, QByteArray("alive"));
+    QVERIFY(alive.exitSignal.isEmpty());
+}
+
+/*
+ * Giving a long command a short timeout is ordinary use, and the link is
+ * healthy throughout. The workspace must survive it: condemning the session
+ * here would make every impatient timeout cost the user their remote
+ * workspace.
  */
 void Test::anOrdinaryCommandTimeoutKeepsTheSessionUsable()
 {

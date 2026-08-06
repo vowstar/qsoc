@@ -35,6 +35,12 @@ public:
         bool       aborted  = false;
         /** The transport died mid-call: the command may have run anyway. */
         bool transportDead = false;
+        /**
+         * Signal name when the remote process was killed, e.g. "KILL".
+         * Non-empty means the command did not exit on its own, and
+         * `exitCode` stays -1: a signalled process sends no exit status.
+         */
+        QString exitSignal;
         QString errorText;
     };
 

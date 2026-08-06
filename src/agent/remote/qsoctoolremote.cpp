@@ -83,6 +83,11 @@ QSocTool::ResultStatus remoteRunStatus(const QSocSshExec::Result &result)
     if (!result.errorText.isEmpty()) {
         return QSocTool::ResultStatus::Failed;
     }
+    /* A killed process is a definite failure, not an uncertain one: the
+     * command ran and did not finish. Its fate is known. */
+    if (!result.exitSignal.isEmpty()) {
+        return QSocTool::ResultStatus::Failed;
+    }
     return QSocTool::ResultStatus::Ok;
 }
 
@@ -582,6 +587,9 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
      * a truncated read stops before it and the call looks clean. */
     QString out = QSocTool::statusLine(remoteRunStatus(result));
     out += QStringLiteral("exit_code: %1\n").arg(result.exitCode);
+    if (!result.exitSignal.isEmpty()) {
+        out += QStringLiteral("exit_signal: SIG%1\n").arg(result.exitSignal);
+    }
     if (result.timedOut) {
         out += QStringLiteral("timed_out: true\n");
     }
