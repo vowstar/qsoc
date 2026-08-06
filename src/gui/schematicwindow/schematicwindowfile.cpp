@@ -163,7 +163,6 @@ void SchematicWindow::openFile(const QString &filePath)
     // Clear existing scene and undo stack
     scene.clear();
     scene.undoStack()->clear();
-    m_documentUndo.clear();
 
     // Use standard gpds API to deserialize Scene directly
     const std::filesystem::path path = filePath.toStdString();
@@ -183,7 +182,6 @@ void SchematicWindow::openFile(const QString &filePath)
         // Successfully loaded
         m_currentFilePath = filePath;
         scene.undoStack()->setClean();
-        m_documentUndo.setClean();
         updateWindowTitle();
 
     } catch (const std::bad_optional_access &e) {
@@ -216,7 +214,6 @@ void SchematicWindow::saveToFile(const QString &path)
     // Successfully saved
     m_currentFilePath = path;
     scene.undoStack()->setClean();
-    m_documentUndo.setClean();
     updateWindowTitle();
 }
 
@@ -227,7 +224,6 @@ void SchematicWindow::closeFile()
 
     // Clear undo history
     scene.undoStack()->clear();
-    m_documentUndo.clear();
 
     // Reset to untitled state
     m_currentFilePath = "";
@@ -236,7 +232,7 @@ void SchematicWindow::closeFile()
 
 bool SchematicWindow::isModified() const
 {
-    return !scene.undoStack()->isClean() || !m_documentUndo.isClean();
+    return !scene.undoStack()->isClean();
 }
 
 bool SchematicWindow::checkSaveBeforeClose()

@@ -7,10 +7,9 @@
 #include "common/qsocyamlutils.h"
 #include "gui/schematicwindow/schematicconnector.h"
 #include "gui/schematicwindow/schematicmodule.h"
+#include "gui/schematicwindow/schematicscenerestorecommand.h"
 #include "gui/schematicwindow/schematicwindow.h"
 #include "gui/schematicwindow/schematicwire.h"
-#include "gui/undo/scenedocument.h"
-#include "gui/undo/snapshotcommand.h"
 
 #include "./ui_schematicwindow.h"
 
@@ -141,26 +140,25 @@ void SchematicWindow::on_actionImportNetlist_triggered()
         }
     }
 
-    /* The whole import, including the replace, is one undo step. Item-level
-     * history from the previous document no longer applies. */
-    scene.undoStack()->clear();
-    DocumentScope scope(
-        &m_documentUndo,
-        [this]() { return captureSnapshot(); },
-        [this](const SceneSnapshot &snapshot) { restoreSnapshot(snapshot); },
-        tr("Import Netlist"));
+    /* The whole import, including the replace, is one undo step on the
+       scene's own stack; item history from before the import stays
+       undoable behind it. */
+    const gpds::container before      = scene.to_container();
+    const QStringList     filesBefore = m_lastImportedFiles;
 
     if (haveContent) {
-        scene.clear();
+        /* Empty the scene without touching the undo stack. */
+        scene.restore_from_container({});
     }
 
     if (!importNetlistFiles(files)) {
-        scope.cancel();
+        scene.restore_from_container(before);
         QMessageBox::warning(
             this, tr("Import Netlist"), tr("No instances were imported from the selected files."));
         return;
     }
     m_lastImportedFiles = files;
+    pushSceneRestore(before, filesBefore, tr("Import Netlist"));
 }
 
 void SchematicWindow::on_actionAutoArrange_triggered()
@@ -198,46 +196,45 @@ void SchematicWindow::on_actionAutoArrange_triggered()
         return;
     }
 
-    scene.undoStack()->clear();
-    DocumentScope scope(
-        &m_documentUndo,
-        [this]() { return captureSnapshot(); },
-        [this](const SceneSnapshot &snapshot) { restoreSnapshot(snapshot); },
-        tr("Auto Arrange"));
+    const gpds::container before      = scene.to_container();
+    const QStringList     filesBefore = m_lastImportedFiles;
 
-    scene.clear();
+    scene.restore_from_container({});
     if (!importNetlistFiles(m_lastImportedFiles)) {
-        scope.cancel();
+        scene.restore_from_container(before);
         QMessageBox::warning(
             this, tr("Auto Arrange"), tr("No instances were imported during re-layout."));
         return;
     }
+    pushSceneRestore(before, filesBefore, tr("Auto Arrange"));
 }
 
-SchematicWindow::SceneSnapshot SchematicWindow::captureSnapshot() const
+void SchematicWindow::pushSceneRestore(
+    const gpds::container &before, const QStringList &filesBefore, const QString &text)
 {
-    SceneSnapshot snapshot;
-    snapshot.importedFiles = m_lastImportedFiles;
+    scene.undoStack()->push(new SchematicSceneRestoreCommand(
+        &scene,
+        before,
+        filesBefore,
+        m_lastImportedFiles,
+        [this]() {
+            /* autoNameWires reacts to every topology change; the names are
+               already in the snapshot, so keep it out of the restore. */
+            disconnect(
+                &scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
+        },
+        [this](const QStringList &files) {
+            connect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
+            m_lastImportedFiles = files;
 
-    snapshot.document = SceneDocument::capture(const_cast<QSchematic::Scene &>(scene));
-    return snapshot;
-}
-
-void SchematicWindow::restoreSnapshot(const SceneSnapshot &snapshot)
-{
-    m_lastImportedFiles = snapshot.importedFiles;
-
-    /* autoNameWires reacts to every topology change; the names are already in
-       the snapshot, so keep it out of the restore. */
-    disconnect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
-    SceneDocument::restore(scene, snapshot.document);
-    connect(&scene, &QSchematic::Scene::netlistChanged, this, &SchematicWindow::autoNameWires);
-
-    /* The viewport still shows wherever the user was before the swap, which
-       for a whole-document change is rarely where the content landed. */
-    if (!scene.items().isEmpty()) {
-        ui->schematicView->fitInView();
-    }
+            /* The viewport still shows wherever the user was before the
+               swap, which for a whole-document change is rarely where the
+               content landed. */
+            if (!scene.items().isEmpty()) {
+                ui->schematicView->fitInView();
+            }
+        },
+        text));
 
     updateWindowTitle();
 }

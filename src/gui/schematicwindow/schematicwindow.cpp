@@ -74,22 +74,11 @@ SchematicWindow::SchematicWindow(QWidget *parent, QSocProjectManager *projectMan
     /* Auto-generate instance names when items are added (drag/drop, paste, etc.) */
     connect(&scene, &QSchematic::Scene::itemAdded, this, &SchematicWindow::onItemAdded);
 
-    ui->actionUndo->setEnabled(scene.undoStack()->canUndo() || m_documentUndo.canUndo());
-    ui->actionRedo->setEnabled(scene.undoStack()->canRedo() || m_documentUndo.canRedo());
+    ui->actionUndo->setEnabled(scene.undoStack()->canUndo());
+    ui->actionRedo->setEnabled(scene.undoStack()->canRedo());
 
-    connect(&m_documentUndo, &QUndoStack::canUndoChanged, [this](bool) {
-        ui->actionUndo->setEnabled(scene.undoStack()->canUndo() || m_documentUndo.canUndo());
-    });
-    connect(&m_documentUndo, &QUndoStack::canRedoChanged, [this](bool) {
-        ui->actionRedo->setEnabled(scene.undoStack()->canRedo() || m_documentUndo.canRedo());
-    });
-    connect(&m_documentUndo, &QUndoStack::cleanChanged, this, &SchematicWindow::updateWindowTitle);
-    connect(scene.undoStack(), &QUndoStack::canUndoChanged, [this](bool) {
-        ui->actionUndo->setEnabled(scene.undoStack()->canUndo() || m_documentUndo.canUndo());
-    });
-    connect(scene.undoStack(), &QUndoStack::canRedoChanged, [this](bool) {
-        ui->actionRedo->setEnabled(scene.undoStack()->canRedo() || m_documentUndo.canRedo());
-    });
+    connect(scene.undoStack(), &QUndoStack::canUndoChanged, ui->actionUndo, &QAction::setEnabled);
+    connect(scene.undoStack(), &QUndoStack::canRedoChanged, ui->actionRedo, &QAction::setEnabled);
     connect(scene.undoStack(), &QUndoStack::cleanChanged, this, &SchematicWindow::updateWindowTitle);
 
     scene.setParent(ui->schematicView);

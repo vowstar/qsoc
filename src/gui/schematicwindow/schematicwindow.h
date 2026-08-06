@@ -4,8 +4,6 @@
 #ifndef SCHEMATICWINDOW_H
 #define SCHEMATICWINDOW_H
 
-#include "gui/undo/snapshotcommand.h"
-
 #include <QLabel>
 #include <QMainWindow>
 
@@ -373,41 +371,20 @@ private:
      * layout on the same input. */
     QStringList m_lastImportedFiles;
 
-    /* Restoring a document runs Scene::from_container, which clears the
-       scene's undo stack. A command living on that stack would delete itself
-       mid-undo, so bulk edits get their own history. Each bulk edit also
-       clears the item-level history, which keeps the two in chronological
-       order: item steps always postdate the last bulk edit. */
-    QUndoStack m_documentUndo;
-
-    /**
-     * @brief Whole-document snapshot used for one-step undo of bulk edits.
-     */
-    struct SceneSnapshot
-    {
-        QByteArray  document;      /**< Serialized scene */
-        QStringList importedFiles; /**< Files Auto Arrange would replay */
-    };
-
-    using DocumentScope = SnapshotScope<SceneSnapshot>;
-
-    /**
-     * @brief Capture the current scene.
-     * @return Snapshot that can be restored later.
-     */
-    SceneSnapshot captureSnapshot() const;
-
     /**
      * @brief Whether the document differs from the last saved state.
-     * @return true when either history holds unsaved work.
+     * @return true when the history holds unsaved work.
      */
     bool isModified() const;
 
     /**
-     * @brief Replace the scene with a snapshot.
-     * @param[in] snapshot State to restore.
+     * @brief Push a one-step undo entry for a finished bulk edit.
+     * @param[in] before Scene content captured before the operation.
+     * @param[in] filesBefore Imported file list before the operation.
+     * @param[in] text Label shown in the undo history.
      */
-    void restoreSnapshot(const SceneSnapshot &snapshot);
+    void pushSceneRestore(
+        const gpds::container &before, const QStringList &filesBefore, const QString &text);
 
     /* Status bar permanent label */
     QLabel *statusBarPermanentLabel = nullptr;

@@ -3,7 +3,7 @@
 
 #include "gui/schematicwindow/schematicitemfactory.h"
 #include "gui/schematicwindow/schematicmodule.h"
-#include "gui/undo/scenedocument.h"
+#include "gui/schematicwindow/schematicscenerestorecommand.h"
 #include "gui/undo/snapshotcommand.h"
 
 #include <qschematic/items/itemfactory.hpp>
@@ -18,10 +18,10 @@
 
 /**
  * @brief Scene snapshot tests.
- * @details Bulk edits are undone by swapping a serialized copy of the whole
- *          scene. That only works if a capture and restore round trip
- *          reproduces the scene, and if restoring never touches the stack the
- *          command lives on.
+ * @details Bulk edits are undone by swapping the whole scene content. That
+ *          only works if a capture and restore round trip reproduces the
+ *          scene, and if restoring never touches the stack the command
+ *          lives on.
  */
 class Test : public QObject
 {
@@ -38,13 +38,12 @@ private slots:
         }
         QCOMPARE(scene.items().count(), 3);
 
-        const QByteArray document = SceneDocument::capture(scene);
-        QVERIFY(!document.isEmpty());
+        const gpds::container document = scene.to_container();
 
-        SceneDocument::clearKeepingHistory(scene);
+        scene.restore_from_container({});
         QCOMPARE(scene.items().count(), 0);
 
-        SceneDocument::restore(scene, document);
+        scene.restore_from_container(document);
         QCOMPARE(scene.items().count(), 3);
     }
 
@@ -71,10 +70,9 @@ port:
         scene.addItem(module);
         QCOMPARE(scene.items().count(), 1);
 
-        const QByteArray document = SceneDocument::capture(scene);
-        QVERIFY(!document.isEmpty());
+        const gpds::container document = scene.to_container();
 
-        SceneDocument::restore(scene, document);
+        scene.restore_from_container(document);
         QCOMPARE(scene.items().count(), 1);
 
         auto restored = std::dynamic_pointer_cast<SchematicModule>(scene.items().first());
@@ -107,35 +105,61 @@ port:
         }
         QCOMPARE(scene.items().count(), 2);
 
-        const QByteArray document = SceneDocument::capture(scene);
-        QVERIFY(!document.isEmpty());
+        const gpds::container document = scene.to_container();
 
-        SceneDocument::restore(scene, document);
+        scene.restore_from_container(document);
         QCOMPARE(scene.items().count(), 2);
     }
 
-    void clearKeepingHistoryLeavesTheStackAlone()
+    void restoreFromContainerLeavesTheStackAlone()
     {
         QSchematic::Scene scene;
         auto              node = std::make_shared<QSchematic::Items::Node>();
         scene.addItem(node);
 
-        /* A marker command stands in for a snapshot command mid-undo. */
+        /* A marker command stands in for a restore command mid-undo. */
         scene.undoStack()->push(new QUndoCommand("marker"));
         QCOMPARE(scene.undoStack()->count(), 1);
 
-        SceneDocument::clearKeepingHistory(scene);
+        scene.restore_from_container({});
         QCOMPARE(scene.items().count(), 0);
         QCOMPARE(scene.undoStack()->count(), 1);
     }
 
-    void restoringAnEmptyDocumentEmptiesTheScene()
+    void sceneRestoreCommandSwapsContentAndEditorState()
     {
         QSchematic::Scene scene;
         scene.addItem(std::make_shared<QSchematic::Items::Node>());
+        const gpds::container before = scene.to_container();
 
-        SceneDocument::restore(scene, QByteArray());
-        QCOMPARE(scene.items().count(), 0);
+        /* The bulk operation runs before the command is pushed. */
+        scene.addItem(std::make_shared<QSchematic::Items::Node>());
+        QCOMPARE(scene.items().count(), 2);
+
+        int         begun = 0;
+        QStringList applied;
+        scene.undoStack()->push(new SchematicSceneRestoreCommand(
+            &scene,
+            before,
+            {"before.soc_net"},
+            {"after.soc_net"},
+            [&]() { ++begun; },
+            [&](const QStringList &files) { applied = files; },
+            "bulk edit"));
+
+        /* push() calls redo(), but the operation already ran. */
+        QCOMPARE(begun, 0);
+        QCOMPARE(scene.items().count(), 2);
+
+        scene.undoStack()->undo();
+        QCOMPARE(begun, 1);
+        QCOMPARE(scene.items().count(), 1);
+        QCOMPARE(applied, QStringList{"before.soc_net"});
+
+        scene.undoStack()->redo();
+        QCOMPARE(begun, 2);
+        QCOMPARE(scene.items().count(), 2);
+        QCOMPARE(applied, QStringList{"after.soc_net"});
     }
 
     void snapshotCommandSkipsTheFirstRedo()
