@@ -20,6 +20,7 @@ class QSocLoopScheduler;
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <utility>
 #include <QElapsedTimer>
 #include <QList>
 #include <QMutex>
@@ -53,6 +54,15 @@ using QSocBashSafetyJudge = std::function<QSocBashSafety(const QString &command)
  * blocking ask_user prompts when nobody is looking. Empty / returns true
  * = assume watching (no steering). */
 using QSocUserWatchingProbe = std::function<bool()>;
+
+/**
+ * @brief Reports whether the workspace can still serve tool calls.
+ * @details Returns an empty string while the workspace is usable, or a
+ *          user-facing reason when it is not. A remote workspace whose
+ *          link died does not recover by being asked again, so the reason
+ *          ends the turn instead of going back to the model.
+ */
+using QSocWorkspaceHealthProbe = std::function<QString()>;
 
 /**
  * @brief The QSocAgent class provides an AI agent for SoC design automation
@@ -270,6 +280,30 @@ public:
     {
         userWatchingProbe_ = std::move(probe);
     }
+
+    /**
+     * @brief Install the workspace health probe.
+     * @details Consulted after every tool call. When it reports a reason
+     *          the turn ends and the reason is shown to the user, because
+     *          a workspace that cannot serve one call will not serve the
+     *          next: without this the loop feeds the same failure back to
+     *          the model until the iteration cap, burning the whole turn
+     *          and a slice of context to rediscover it. Unset = the
+     *          workspace is assumed usable, which is the local case.
+     */
+    void setWorkspaceHealthProbe(QSocWorkspaceHealthProbe probe)
+    {
+        workspaceHealthProbe_ = std::move(probe);
+    }
+
+    /**
+     * @brief Consume the reason the last run stopped, if it had one.
+     * @details Empty when the user ended the run themselves. Reading it
+     *          clears it, so a later user abort cannot reprint a stale
+     *          reason. Deliberately separate from the `runAborted` payload,
+     *          which carries the partial assistant text.
+     */
+    QString takeStopNotice() { return std::exchange(lastStopNotice_, QString()); }
 
     /**
      * @brief Set the reasoning effort level
@@ -602,6 +636,9 @@ private:
         std::optional<QString>         executingToolCallId;
         json                           toolBatchAttachments = json::array();
         RunPhase                       phase                = RunPhase::Active;
+        /* Reason this run was stopped, when it was stopped for a reason
+         * the user needs to read rather than by their own abort. */
+        QString stopNotice;
     };
 
     using ActiveRunPtr = std::shared_ptr<ActiveRun>;
@@ -622,6 +659,10 @@ private:
     QSocBashSafetyJudge bashSafetyJudge_;
     /* Terminal-focus probe (empty = assume the user is watching). */
     QSocUserWatchingProbe userWatchingProbe_;
+    /* Workspace liveness probe (empty = assume usable). */
+    QSocWorkspaceHealthProbe workspaceHealthProbe_;
+    /* Reason the last run stopped; consumed by takeStopNotice(). */
+    QString lastStopNotice_;
 
     QPointer<QLLMService>           llmService;
     QPointer<QSocToolRegistry>      toolRegistry;

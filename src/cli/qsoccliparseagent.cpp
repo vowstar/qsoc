@@ -141,6 +141,19 @@ QTuiToolBlock::Status toolBlockStatus(const QString &result)
     return QTuiToolBlock::Status::Uncertain;
 }
 
+/* Report a remote workspace that can no longer serve tool calls, so the
+ * agent loop ends the turn instead of retrying into a dead link. */
+QString remoteWorkspaceHealth(QSocSshSession *session)
+{
+    if (session == nullptr || session->isConnected()) {
+        return {};
+    }
+    return session->unusableText()
+           + QStringLiteral(
+               ". The remote workspace is unusable; reconnect with /ssh, "
+               "or run /local to work on the local tree.");
+}
+
 /* Double Ctrl+C exit tracking */
 std::atomic<qint64> g_lastInterruptMs{0};
 constexpr qint64    DOUBLE_PRESS_MS = 2000;
@@ -1535,6 +1548,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
         {
+            QSocSshSession *healthSession = cliRemoteState.session;
+            agent->setWorkspaceHealthProbe(
+                [healthSession] { return remoteWorkspaceHealth(healthSession); });
+        }
+        {
             auto newCfg               = agent->getConfig();
             newCfg.remoteMode         = true;
             newCfg.remoteName         = cliRemoteState.targetKey;
@@ -1626,8 +1644,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 loop.quit();
             });
 
-            connect(agent, &QSocAgent::runAborted, &loop, [&qout, &loop](const QString &) {
-                qout << Qt::endl << "(interrupted)" << Qt::endl;
+            connect(agent, &QSocAgent::runAborted, &loop, [&qout, &loop, agent](const QString &) {
+                const QString notice = agent->takeStopNotice();
+                qout << Qt::endl
+                     << (notice.isEmpty() ? QStringLiteral("(interrupted)") : notice) << Qt::endl;
                 loop.quit();
             });
 
@@ -6882,6 +6902,11 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
             agent->setToolRegistry(remoteRegistry);
+            {
+                QSocSshSession *healthSession = newState.session;
+                agent->setWorkspaceHealthProbe(
+                    [healthSession] { return remoteWorkspaceHealth(healthSession); });
+            }
             /* Point file history at the remote tree so rewind restores
              * remote edits over SFTP. */
             wireRemoteFileHistory(remoteRegistry, remoteSftp);
@@ -6950,6 +6975,7 @@ bool QSocCliWorker::runAgentLoop(
             }
             /* Restore local tool registry and drop remote state. */
             agent->setToolRegistry(localRegistry);
+            agent->setWorkspaceHealthProbe({});
             /* Point file history back at the local disk. */
             restoreLocalFileHistory();
             /* Drop project-scope defs that were sourced from the
@@ -7916,9 +7942,16 @@ bool QSocCliWorker::runAgentLoop(
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &loopRunning](const QString &) {
+                 &loopRunning,
+                 agent](const QString &) {
                     compositor.resetExecution();
-                    compositor.printContent("\n(interrupted)\n");
+                    /* A run stopped by something other than the user has a
+                     * reason to show; wording that "interrupted" would
+                     * blame the user for a link that dropped. */
+                    const QString notice = agent->takeStopNotice();
+                    compositor.printContent(
+                        notice.isEmpty() ? QStringLiteral("\n(interrupted)\n")
+                                         : QStringLiteral("\n%1\n").arg(notice));
                     if (loopRunning) {
                         loop.quit();
                     }
@@ -8587,9 +8620,16 @@ bool QSocCliWorker::runAgentLoop(
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &loopRunning](const QString &) {
+                 &loopRunning,
+                 agent](const QString &) {
                     compositor.resetExecution();
-                    compositor.printContent("\n(interrupted)\n");
+                    /* A run stopped by something other than the user has a
+                     * reason to show; wording that "interrupted" would
+                     * blame the user for a link that dropped. */
+                    const QString notice = agent->takeStopNotice();
+                    compositor.printContent(
+                        notice.isEmpty() ? QStringLiteral("\n(interrupted)\n")
+                                         : QStringLiteral("\n%1\n").arg(notice));
                     if (loopRunning) {
                         loop.quit();
                     }

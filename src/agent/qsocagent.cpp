@@ -282,7 +282,8 @@ void QSocAgent::finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, con
         }
     }
 
-    run->phase = RunPhase::Terminal;
+    run->phase             = RunPhase::Terminal;
+    owner->lastStopNotice_ = run->stopNotice;
     owner->activeRun_.reset();
     owner->isStreaming = false;
     owner->heartbeatTimer->stop();
@@ -1965,6 +1966,21 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         }
 
         emit owner->toolResult(functionName, result);
+        if (stopBatch()) {
+            return false;
+        }
+
+        /* A workspace that just stopped answering will not answer the next
+         * call either. Ending the turn here is what keeps a dead remote
+         * link from consuming the whole iteration budget on identical
+         * failures. */
+        if (owner->workspaceHealthProbe_) {
+            const QString lost = owner->workspaceHealthProbe_();
+            if (!lost.isEmpty()) {
+                run->stopNotice = lost;
+                owner->requestStop(StopMode::Soft);
+            }
+        }
         if (stopBatch()) {
             return false;
         }
