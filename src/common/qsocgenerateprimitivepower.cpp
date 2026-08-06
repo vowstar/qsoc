@@ -231,28 +231,29 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
                         config.valid = false;
                         continue;
                     }
-
-                    // Only add valid entries with strict validation
-                    if (!entry.clock.isEmpty() && !entry.reset.isEmpty()) {
-                        // FATAL: Check for host signal misuse (creates circular dependency)
-                        if (entry.clock == config.host_clock) {
-                            QSocConsole::error()
-                                << "FATAL: Domain" << domain.name
-                                << "follow entry cannot use host_clock" << config.host_clock
-                                << "as synchronization clock - this creates circular dependency!";
-                            config.valid = false;
-                            continue;
-                        }
-                        if (entry.reset == config.host_reset) {
-                            QSocConsole::error()
-                                << "FATAL: Domain" << domain.name
-                                << "follow entry cannot use host_reset" << config.host_reset
-                                << "as reset output - this creates port conflict!";
-                            config.valid = false;
-                            continue;
-                        }
-                        domain.follow_entries.append(entry);
+                    /* Both empty: no follow pair requested. */
+                    if (entry.clock.isEmpty()) {
+                        continue;
                     }
+
+                    // FATAL: Check for host signal misuse (creates circular dependency)
+                    if (entry.clock == config.host_clock) {
+                        QSocConsole::error()
+                            << "FATAL: Domain" << domain.name
+                            << "follow entry cannot use host_clock" << config.host_clock
+                            << "as synchronization clock - this creates circular dependency!";
+                        config.valid = false;
+                        continue;
+                    }
+                    if (entry.reset == config.host_reset) {
+                        QSocConsole::error()
+                            << "FATAL: Domain" << domain.name
+                            << "follow entry cannot use host_reset" << config.host_reset
+                            << "as reset output - this creates port conflict!";
+                        config.valid = false;
+                        continue;
+                    }
+                    domain.follow_entries.append(entry);
                 }
             }
 
