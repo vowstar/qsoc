@@ -225,7 +225,7 @@ DividerPortShapes dividerPortShapes(const QSocClockPrimitive::ClockControllerCon
     };
 
     for (const auto &target : config.targets) {
-        if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
+        if (target.div.configured) {
             addDivider(target.div);
         }
         for (const auto &link : target.links) {
@@ -1114,7 +1114,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     QSet<QString> divSignalNames;
     QSet<QString> declaredEnables;
     for (const auto &target : config.targets) {
-        if (target.div.default_value > 1 || !target.div.value.isEmpty()) {
+        if (target.div.configured) {
             // Add dynamic division value input port
             if (!target.div.value.isEmpty()) {
                 if (divSignalNames.contains(target.div.value)) {
@@ -1130,8 +1130,9 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
                 portComments << QString("/**< Dynamic division value for %1 */").arg(target.name);
             }
 
-            // Add division value valid signal port
-            if (!target.div.valid.isEmpty()) {
+            // Add division value valid signal port (a unity divider has none)
+            if ((target.div.default_value > 1 || !target.div.value.isEmpty())
+                && !target.div.valid.isEmpty()) {
                 if (divSignalNames.contains(target.div.valid)) {
                     throw std::runtime_error(QString("Duplicate divider valid signal name: %1")
                                                  .arg(target.div.valid)
@@ -1361,8 +1362,7 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
     // Add target-level reset signals for DIV (if not already added via ICG/MUX)
     QStringList addedResets;
     for (const auto &target : config.targets) {
-        if ((target.div.default_value > 1 || !target.div.value.isEmpty())
-            && !target.div.reset.isEmpty()) {
+        if (target.div.configured && !target.div.reset.isEmpty()) {
             if (!addedResets.contains(target.div.reset)
                 && !addedSignals.contains(target.div.reset)) {
                 portDecls << QString("    input  wire %1").arg(target.div.reset);

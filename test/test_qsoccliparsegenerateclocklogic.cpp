@@ -1196,6 +1196,55 @@ clock:
         QCOMPARE(verilog.count(".en(div_en)"), qsizetype(2));
     }
 
+    /* A unity divider still owns its control ports: default: 1 with
+       reset/enable/ready/count must declare all four on the header. */
+    void test_unity_divider_declares_control_ports()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: unity_div_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_out:
+        freq: 100MHz
+        div:
+          default: 1
+          width: 2
+          reset: rst_n
+          enable: div_en
+          valid: unused_vld
+          ready: div_ready
+          count: div_count
+        link:
+          clk_in:
+)";
+
+        const QString verilog = generateClockNetlist("test_unity_divider_ports", netlistContent);
+        QVERIFY(!verilog.isEmpty());
+        QCOMPARE(verilog.count("input  wire rst_n"), qsizetype(1));
+        QCOMPARE(verilog.count("input  wire div_en"), qsizetype(1));
+        QCOMPARE(verilog.count("output wire div_ready"), qsizetype(1));
+        QCOMPARE(verilog.count("output wire [1:0] div_count"), qsizetype(1));
+        /* Without a value the RTL ties div_valid to 1'b0; the unused
+           valid must not surface as a port. */
+        QCOMPARE(verilog.count("unused_vld"), qsizetype(0));
+
+        messageList.clear();
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_unity_divider_ports.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+        bool cleanElaboration = false;
+        for (const QString &message : messageList) {
+            cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
+        }
+        QVERIFY(cleanElaboration);
+    }
+
     void test_incompatible_divider_control_ports_preserve_artifacts_data()
     {
         QTest::addColumn<int>("dividerWidth");
