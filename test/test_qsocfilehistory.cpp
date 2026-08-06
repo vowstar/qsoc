@@ -167,9 +167,94 @@ private slots:
         writeFile(fpath, QStringLiteral("after turn 2"));
         QVERIFY(history.makeSnapshot(2));
 
-        const QStringList touched = history.applySnapshot(0);
-        QCOMPARE(static_cast<int>(touched.size()), 1);
+        const auto report = history.applySnapshot(0);
+        QCOMPARE(static_cast<int>(report.restored.size()), 1);
+        QVERIFY(report.failed.isEmpty());
         QCOMPARE(readFile(fpath), QStringLiteral("before"));
+    }
+
+    /* A restore that could not write reports the file as not restored.
+     * Silently dropping it made a partial restore read as a smaller one:
+     * the caller printed "1 file restored" and the user believed the tree
+     * was back where it started. */
+    void testApplySnapshotReportsUnwritableFiles()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QSocFileHistory history(dir.path(), QStringLiteral("sess-report"));
+
+        QHash<QString, QString>           store;
+        QSocFileHistory::LiveFileAccessor acc;
+        acc.exists = [&store](const QString &path) { return store.contains(path); };
+        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+            if (!store.contains(path)) {
+                return std::nullopt;
+            }
+            return store.value(path);
+        };
+        bool allowWrites = true;
+        acc.write        = [&store, &allowWrites](const QString &path, const QString &content) {
+            if (!allowWrites) {
+                return false;
+            }
+            store.insert(path, content);
+            return true;
+        };
+        acc.remove = [&store](const QString &path) {
+            store.remove(path);
+            return true;
+        };
+        history.setLiveAccessor(acc);
+
+        const QString path = QStringLiteral("/vfs/remote/keep.txt");
+        store.insert(path, QStringLiteral("v0"));
+        history.trackEdit(path, true, QStringLiteral("v0"));
+        store.insert(path, QStringLiteral("v1"));
+        QVERIFY(history.makeSnapshot(1));
+
+        allowWrites       = false;
+        const auto report = history.applySnapshot(0);
+        QVERIFY(report.restored.isEmpty());
+        QCOMPARE(static_cast<int>(report.failed.size()), 1);
+        QCOMPARE(report.failed.first(), path);
+        /* And the file really is still the newer content. */
+        QCOMPARE(store.value(path), QStringLiteral("v1"));
+    }
+
+    /* Same contract for a removal the accessor refuses. */
+    void testApplySnapshotReportsUnremovableFiles()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QSocFileHistory history(dir.path(), QStringLiteral("sess-rm"));
+
+        QHash<QString, QString>           store;
+        QSocFileHistory::LiveFileAccessor acc;
+        acc.exists = [&store](const QString &path) { return store.contains(path); };
+        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+            if (!store.contains(path)) {
+                return std::nullopt;
+            }
+            return store.value(path);
+        };
+        acc.write = [&store](const QString &path, const QString &content) {
+            store.insert(path, content);
+            return true;
+        };
+        acc.remove = [](const QString &) { return false; };
+        history.setLiveAccessor(acc);
+
+        const QString path = QStringLiteral("/vfs/remote/created.txt");
+        /* Absent before the turn, created by it. */
+        history.trackEdit(path, false, QString());
+        store.insert(path, QStringLiteral("new"));
+        QVERIFY(history.makeSnapshot(1));
+
+        const auto report = history.applySnapshot(0);
+        QVERIFY(report.restored.isEmpty());
+        QCOMPARE(static_cast<int>(report.failed.size()), 1);
+        QCOMPARE(report.failed.first(), path);
+        QVERIFY(store.contains(path));
     }
 
     void testApplySnapshotRestoresMidwayTurn()

@@ -4716,6 +4716,9 @@ bool QSocCliWorker::runAgentLoop(
              &inputMonitor,
              &inputWidget,
              &popupWidget,
+             &remoteSession,
+             &remoteSftp,
+             &remotePath,
              &searching]() {
                 (void) this;
                 if (searching || popupWidget.isVisible()) {
@@ -4915,10 +4918,44 @@ bool QSocCliWorker::runAgentLoop(
                  * snapshots and rewind the turn counter; in code-only mode
                  * the conversation keeps going, so the snapshot history is
                  * left intact for a later full rewind. */
-                QStringList restoredFiles;
+                QSocFileHistory::RestoreReport restore;
                 if (restoreFiles && currentFileHistory) {
+                    /* Refuse before touching anything: on a workspace that
+                     * cannot answer, "the file is absent" and "I could not
+                     * ask" are the same answer, and the absent reading makes
+                     * the restore skip removals without saying so.
+                     *
+                     * The cached liveness flag only reports a death that
+                     * some earlier call already ran into, and a rewind is
+                     * often the first thing tried after a link goes quiet.
+                     * So when the flag looks fine, ask the host once for
+                     * real; the round trip is bounded by the SFTP operation
+                     * budget. */
+                    QString unhealthy = remoteWorkspaceHealth(remoteSession);
+                    if (unhealthy.isEmpty() && remoteSftp != nullptr && remotePath != nullptr
+                        && !remotePath->root().isEmpty()) {
+                        /* A liveness question deserves a liveness budget, not
+                         * the one sized for moving a file: the user is waiting
+                         * on a keystroke with nothing on screen. */
+                        const int savedBudget = remoteSftp->operationTimeoutMs();
+                        remoteSftp->setOperationTimeoutMs(5000);
+                        QString    probeErr;
+                        const bool answered = remoteSftp->presence(remotePath->root(), &probeErr)
+                                              != QSocSftpClient::Presence::Unknown;
+                        remoteSftp->setOperationTimeoutMs(savedBudget);
+                        if (!answered) {
+                            unhealthy = probeErr;
+                        }
+                    }
+                    if (!unhealthy.isEmpty()) {
+                        compositor.printContent(
+                            QStringLiteral("\n(Rewind cancelled: %1)\n").arg(unhealthy));
+                        compositor.invalidate();
+                        compositor.render();
+                        return;
+                    }
                     const int targetSnapshot = pick.turn - 1;
-                    restoredFiles            = currentFileHistory->applySnapshot(targetSnapshot);
+                    restore                  = currentFileHistory->applySnapshot(targetSnapshot);
                     if (restoreConversation) {
                         currentFileHistory->truncateAfter(targetSnapshot);
                         turnCounter = targetSnapshot;
@@ -4932,11 +4969,18 @@ bool QSocCliWorker::runAgentLoop(
                     inputMonitor.setInputBuffer(pick.content);
                 }
 
-                const QString fileSummary = restoredFiles.isEmpty()
-                                                ? QString()
-                                                : QString("%1 file%2 restored")
-                                                      .arg(restoredFiles.size())
-                                                      .arg(restoredFiles.size() == 1 ? "" : "s");
+                QString fileSummary;
+                if (!restore.restored.isEmpty()) {
+                    fileSummary = QString("%1 file%2 restored")
+                                      .arg(restore.restored.size())
+                                      .arg(restore.restored.size() == 1 ? "" : "s");
+                }
+                if (!restore.failed.isEmpty()) {
+                    if (!fileSummary.isEmpty()) {
+                        fileSummary += QStringLiteral(", ");
+                    }
+                    fileSummary += QString("%1 NOT restored").arg(restore.failed.size());
+                }
                 if (restoreConversation) {
                     compositor.printContent(
                         QString(
@@ -4953,6 +4997,11 @@ bool QSocCliWorker::runAgentLoop(
                             .arg(
                                 fileSummary.isEmpty() ? QStringLiteral("no files changed")
                                                       : fileSummary));
+                }
+                if (!restore.failed.isEmpty()) {
+                    compositor.printContent(
+                        QStringLiteral("  could not restore:\n    ")
+                        + restore.failed.join(QStringLiteral("\n    ")) + QLatin1Char('\n'));
                 }
                 compositor.invalidate();
                 compositor.render();

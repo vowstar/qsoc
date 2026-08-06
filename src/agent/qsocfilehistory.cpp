@@ -251,34 +251,44 @@ QMap<QString, QString> QSocFileHistory::effectiveStateAt(int turn) const
     return state;
 }
 
-QStringList QSocFileHistory::applySnapshot(int turn)
+QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn)
 {
-    QStringList touched;
-    const auto  state = effectiveStateAt(turn);
+    RestoreReport report;
+    const auto    state = effectiveStateAt(turn);
     if (state.isEmpty()) {
-        return touched;
+        return report;
     }
     for (auto it = state.begin(); it != state.end(); ++it) {
         const QString &path = it.key();
         const QString &sha  = it.value();
         if (sha.isEmpty()) {
-            /* File was absent at the target turn — remove it if present. */
-            const bool present = liveAccessor.exists && liveAccessor.exists(path);
-            if (present && liveAccessor.remove && liveAccessor.remove(path)) {
-                touched.append(path);
+            /* File was absent at the target turn: remove it if present. */
+            if (!liveAccessor.exists || !liveAccessor.exists(path)) {
+                continue;
+            }
+            if (liveAccessor.remove && liveAccessor.remove(path)) {
+                report.restored.append(path);
+            } else {
+                report.failed.append(path);
             }
             continue;
         }
         const QString content = readBackup(sha);
         if (content.isNull()) {
-            continue; /* backup missing; leave file alone rather than corrupt */
+            /* Leaving the file alone beats corrupting it, but the caller
+             * must not be told the tree is back where it was. */
+            report.failed.append(path);
+            continue;
         }
         if (liveAccessor.write && liveAccessor.write(path, content)) {
-            touched.append(path);
+            report.restored.append(path);
+        } else {
+            report.failed.append(path);
         }
     }
-    std::sort(touched.begin(), touched.end());
-    return touched;
+    std::sort(report.restored.begin(), report.restored.end());
+    std::sort(report.failed.begin(), report.failed.end());
+    return report;
 }
 
 void QSocFileHistory::truncateAfter(int cutoffTurn)

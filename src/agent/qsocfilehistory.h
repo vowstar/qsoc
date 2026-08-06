@@ -90,6 +90,22 @@ public:
     static LiveFileAccessor localAccessor();
 
     /**
+     * @brief Outcome of putting a snapshot back on the working tree.
+     * @details `failed` exists because a partial restore used to be
+     *          indistinguishable from a small one: a write the accessor
+     *          refused, a removal that did not happen, or a missing backup
+     *          blob all dropped out silently and the caller reported "N
+     *          files restored" with a smaller N.
+     */
+    struct RestoreReport
+    {
+        QStringList restored; /**< Paths whose content was put back. */
+        QStringList failed;   /**< Paths that could not be put back. */
+
+        bool isEmpty() const { return restored.isEmpty() && failed.isEmpty(); }
+    };
+
+    /**
      * @brief Construct a history bound to a session directory.
      * @param projectPath Absolute path to the project root (used to derive
      *                    the file-history directory).
@@ -148,10 +164,9 @@ public:
      *          most recent prior state for them and apply it. Files that
      *          the agent never touched are not modified.
      * @param turn Target snapshot index.
-     * @return List of absolute file paths that were touched by the restore.
-     *         Empty if the snapshot doesn't exist or on I/O errors.
+     * @return What was put back and what could not be.
      */
-    QStringList applySnapshot(int turn);
+    RestoreReport applySnapshot(int turn);
 
     /**
      * @brief Drop every snapshot with turn > cutoffTurn.
