@@ -1337,6 +1337,96 @@ clock:
         QCOMPARE(typstFile.readAll(), typstSentinel);
     }
 
+    void test_icg_without_enable_is_rejected_data()
+    {
+        QTest::addColumn<QString>("netlistContent");
+        QTest::addColumn<QString>("diagnostic");
+
+        /* Target level: the gate instance would get an empty .en(). */
+        QTest::newRow("target") << QString(R"(
+clock:
+  - name: icg_no_enable_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 100MHz
+        icg:
+          polarity: high
+        link:
+          clk_in:
+)") << QString("Clock target clk_t icg requires enable");
+
+        /* Link level: the configured gate would be silently bypassed. */
+        QTest::newRow("link") << QString(R"(
+clock:
+  - name: icg_no_enable_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 100MHz
+        link:
+          clk_in:
+            icg:
+              polarity: high
+)") << QString("Clock link clk_in icg requires enable");
+    }
+
+    void test_icg_without_enable_is_rejected()
+    {
+        QFETCH(QString, netlistContent);
+        QFETCH(QString, diagnostic);
+
+        const QString netlistPath = createTempFile("test_icg_no_enable.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_icg_no_enable.v");
+        const QString typstPath
+            = QDir(projectManager.getOutputPath()).filePath("icg_no_enable_ctl.typ");
+        const QByteArray verilogSentinel("existing-verilog\n");
+        const QByteArray typstSentinel("existing-typst\n");
+        {
+            QFile verilogFile(verilogPath);
+            QFile typstFile(typstPath);
+            QVERIFY(verilogFile.open(QIODevice::WriteOnly));
+            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
+            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+        }
+
+        messageList.clear();
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+                false);
+            worker.run();
+        }
+
+        int diagnostics = 0;
+        int rejections  = 0;
+        int successes   = 0;
+        for (const QString &message : messageList) {
+            diagnostics += message.contains(diagnostic) ? 1 : 0;
+            rejections += message.contains("configuration rejected") ? 1 : 0;
+            successes += message.contains("Successfully generated Verilog file") ? 1 : 0;
+        }
+        QCOMPARE(diagnostics, 1);
+        QCOMPARE(rejections, 1);
+        QCOMPARE(successes, 0);
+
+        QFile verilogFile(verilogPath);
+        QFile typstFile(typstPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(verilogFile.readAll(), verilogSentinel);
+        QCOMPARE(typstFile.readAll(), typstSentinel);
+    }
+
     /* Names that collide after bracket sanitization would declare one port
        twice; the controller is rejected instead. */
     void test_duplicate_sanitized_names_reject_generation()

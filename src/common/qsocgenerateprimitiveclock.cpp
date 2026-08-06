@@ -463,6 +463,10 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                             it->second["icg"]["sta_guide"]["instance"].as<std::string>());
                     }
                 }
+                if (target.icg.enable.isEmpty()) {
+                    QSocConsole::error() << "Clock target" << target.name << "icg requires enable";
+                    config.valid = false;
+                }
             }
 
             // Parse target-level divider
@@ -649,6 +653,10 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                                 link.icg.sta_guide.instance = QString::fromStdString(
                                     linkIt->second["icg"]["sta_guide"]["instance"].as<std::string>());
                             }
+                        }
+                        if (link.icg.enable.isEmpty()) {
+                            QSocConsole::error() << linkContext << "icg requires enable";
+                            config.valid = false;
                         }
                     }
 
