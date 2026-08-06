@@ -2807,8 +2807,10 @@ bool QSocCliWorker::runAgentLoop(
      * instead of touching a stale local path. */
     auto remoteFileAccessor = [](QSocSftpClient *sftp) -> QSocFileHistory::LiveFileAccessor {
         QSocFileHistory::LiveFileAccessor acc;
-        acc.exists = [sftp](const QString &path) { return sftp->exists(path); };
-        acc.read   = [sftp](const QString &path) -> std::optional<QString> {
+        acc.exists = [sftp](const QString &path) {
+            return sftp->presence(path) == QSocSftpClient::Presence::Present;
+        };
+        acc.read = [sftp](const QString &path) -> std::optional<QString> {
             QString          err;
             const QByteArray bytes = sftp->readFile(path, 0, &err);
             if (bytes.isNull() && !err.isEmpty()) {

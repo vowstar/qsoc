@@ -10,25 +10,11 @@
 
 namespace {
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     /* With no underlying session, open() fails with a descriptive error and
      * isOpen() stays false. Destructor must not crash. */
     void testOpenWithoutSession()
@@ -70,7 +56,32 @@ private slots:
         QVERIFY(!err.isEmpty());
 
         err.clear();
-        QCOMPARE(sftp.exists(QStringLiteral("/tmp"), &err), false);
+        QCOMPARE(sftp.presence(QStringLiteral("/tmp"), &err), QSocSftpClient::Presence::Unknown);
+        QVERIFY(!err.isEmpty());
+    }
+
+    /* A stat that never reached a server must report Unknown, never Absent:
+     * write_file skips its read-before-overwrite guard on Absent, so the
+     * two must stay distinguishable. */
+    void testPresenceWithoutSessionIsUnknownNotAbsent()
+    {
+        QSocSshSession session;
+        QSocSftpClient sftp(session);
+        QString        err;
+        const auto     result = sftp.presence(QStringLiteral("/definitely/not/here"), &err);
+        QCOMPARE(result, QSocSftpClient::Presence::Unknown);
+        QVERIFY(result != QSocSftpClient::Presence::Absent);
+        QVERIFY(!err.isEmpty());
+    }
+
+    /* removeFile must not claim success when it could not learn whether the
+     * file is there. */
+    void testRemoveFileFailsWhenPresenceUnknown()
+    {
+        QSocSshSession session;
+        QSocSftpClient sftp(session);
+        QString        err;
+        QCOMPARE(sftp.removeFile(QStringLiteral("/tmp/nothing"), &err), false);
         QVERIFY(!err.isEmpty());
     }
 };

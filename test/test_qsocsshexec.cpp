@@ -10,25 +10,11 @@
 
 namespace {
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     /* Exec on an un-connected session must not crash and must report the
      * missing session via errorText rather than abort. */
     void testRunWithoutConnectedSession()
@@ -53,6 +39,26 @@ private slots:
         const auto result = exec.run(QStringLiteral("true"), 500);
         QCOMPARE(result.exitCode, -1);
         QVERIFY(!result.errorText.isEmpty());
+    }
+
+    /* A dead-flagged session must be refused immediately: no waiting out the
+     * timeout, no exit status invented for a command that never ran. The
+     * flag surviving into the result is covered against a real server in
+     * test_qsocsftp_loopback. */
+    void testDeadTransportIsRefusedImmediately()
+    {
+        QSocSshSession session;
+        session.markTransportDead();
+        QVERIFY(!session.isConnected());
+        QSocSshExec   exec(session);
+        QElapsedTimer clock;
+        clock.start();
+        const auto   result  = exec.run(QStringLiteral("echo hi"), 5000);
+        const qint64 elapsed = clock.elapsed();
+        QCOMPARE(result.exitCode, -1);
+        QVERIFY(!result.timedOut);
+        QVERIFY(!result.errorText.isEmpty());
+        QVERIFY2(elapsed < 1000, qPrintable(QStringLiteral("took %1 ms").arg(elapsed)));
     }
 };
 

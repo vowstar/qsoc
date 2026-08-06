@@ -8,7 +8,9 @@
 
 #include <libssh2.h>
 
+#include <cstdint>
 #include <functional>
+#include <QDeadlineTimer>
 #include <QObject>
 #include <QString>
 
@@ -64,13 +66,79 @@ public:
     /** @brief Tear down the session and close the underlying socket. */
     void disconnectFromHost();
 
-    bool isConnected() const { return m_session != nullptr; }
+    /** @brief Why a session may no longer be used. */
+    enum class Unusable : std::uint8_t {
+        No,                /**< Usable. */
+        AbandonedExchange, /**< A libssh2 request was left half-finished. */
+        TransportDead,     /**< The socket is gone. */
+    };
+
+    /**
+     * @brief Whether the session is open and still safe to issue calls on.
+     * @details Answers usability, not "does this object own a session". Two
+     *          distinct states make it false, and they are not the same
+     *          thing: the socket may be gone, or it may be fine while
+     *          libssh2's own state machine is stranded mid-request.
+     */
+    bool isConnected() const { return m_session != nullptr && m_unusable == Unusable::No; }
+
+    Unusable unusableReason() const { return m_unusable; }
+
+    /** @brief Reason text safe for logs, empty while the session is usable. */
+    QString unusableText() const;
+
+    /**
+     * @brief Record that the socket underneath this session died.
+     * @details One-way: only a fresh connect clears it.
+     */
+    void markTransportDead() { m_unusable = Unusable::TransportDead; }
+
+    /**
+     * @brief Record that an incomplete libssh2 request was abandoned.
+     * @details libssh2 requires a call that returned EAGAIN to be retried
+     *          with the same arguments until it finishes. Walking away at a
+     *          deadline strands the protocol mid-request, so any later call
+     *          on this session would read replies belonging to the one we
+     *          gave up on. The link itself may be perfectly healthy, which
+     *          is why this is not folded into the transport-dead flag.
+     */
+    void markAbandonedExchange()
+    {
+        if (m_unusable == Unusable::No) {
+            m_unusable = Unusable::AbandonedExchange;
+        }
+    }
+
+    bool isTransportDead() const { return m_unusable == Unusable::TransportDead; }
+
+    /**
+     * @brief Whether a libssh2 return code means the transport is gone.
+     * @details Only the socket-level codes qualify. An SFTP protocol error
+     *          or a permission denial says the link works and the request
+     *          did not.
+     */
+    static bool isTransportError(int rc);
+
+    /**
+     * @brief Poison the session when @p rc is a transport-level error.
+     * @details Every EAGAIN loop in the codebase ends by handing its final
+     *          return code here, so a dropped link is recorded once,
+     *          wherever libssh2 first noticed it, instead of only when
+     *          poll happens to report the failure.
+     * @return True when the session was poisoned.
+     */
+    bool notePossibleTransportError(int rc);
 
     /** @brief Raw libssh2 session handle. Valid only while isConnected(). */
     LIBSSH2_SESSION *rawSession() const { return m_session; }
 
-    /** @brief Socket file descriptor. Returns -1 when not connected. */
-    int socketFd() const { return m_socket; }
+    /**
+     * @brief Socket handle. Returns -1 when not connected.
+     * @details qintptr, not int: a Win64 SOCKET is a 64-bit UINT_PTR and
+     *          truncating it produces a handle that no longer names the
+     *          socket.
+     */
+    qintptr socketFd() const { return m_socket; }
 
     /** @brief Last error text, safe for logs. Never contains secrets. */
     QString lastError() const { return m_lastError; }
@@ -79,11 +147,21 @@ public:
     void setTimeoutMs(int ms);
     int  timeoutMs() const { return m_timeoutMs; }
 
+    /** @brief Outcome of one bounded wait on a session socket. */
+    enum class WaitOutcome {
+        Ready,   /**< The socket signalled the direction libssh2 asked for. */
+        Timeout, /**< Nothing happened inside the slice; the link may be fine. */
+        Fatal,   /**< The socket is in error or hung up: the transport is gone. */
+    };
+
     /**
      * @brief Wait helper around libssh2's EAGAIN direction hint.
-     * @return 1 on ready, 0 on timeout, -1 on error.
+     * @details Timeout and Fatal are distinct on purpose: a slice that
+     *          expires says nothing about link health, while POLLERR or a
+     *          hangup means no later retry can succeed. Collapsing the two
+     *          is what let a powered-off host loop forever.
      */
-    static int waitSocket(int sockFd, LIBSSH2_SESSION *session, int timeoutMs);
+    static WaitOutcome waitSocket(qintptr sockFd, LIBSSH2_SESSION *session, int timeoutMs);
 
     /**
      * @brief Callback invoked when auth needs an interactive secret
@@ -106,6 +184,8 @@ public:
 
 private:
     ConnectStatus openSocket(const QString &host, int port, QString *errorMessage);
+    /** @brief Wait bounded by @p deadline rather than by a fresh timeout. */
+    WaitOutcome   waitWithin(qintptr sockFd, LIBSSH2_SESSION *session, QDeadlineTimer deadline);
     ConnectStatus performHandshake(QString *errorMessage);
     ConnectStatus verifyHostKey(const QSocSshHostConfig &host, QString *errorMessage);
     ConnectStatus authenticate(const QSocSshHostConfig &host, QString *errorMessage);
@@ -119,16 +199,21 @@ private:
     /* libssh2 transport callbacks for ProxyJump tunneling. When a parent
      * channel is set, the child session's bytes ride on top of it instead
      * of the TCP socket. */
-    static long long sendOverChannel(
-        int sockFd, const void *buf, size_t len, int flags, void **abstract);
-    static long long recvOverChannel(int sockFd, void *buf, size_t len, int flags, void **abstract);
+    /* Signatures must match LIBSSH2_SEND_FUNC / LIBSSH2_RECV_FUNC exactly:
+     * libssh2 calls these through a generic pointer, so a mismatched socket
+     * width or return type is an ABI bug the compiler cannot see. */
+    static ssize_t sendOverChannel(
+        libssh2_socket_t socket, const void *buffer, size_t length, int flags, void **abstract);
+    static ssize_t recvOverChannel(
+        libssh2_socket_t socket, void *buffer, size_t length, int flags, void **abstract);
 
     bool tryPassphrasePrompt(
         const QString &user, const QStringList &identityPaths, QStringList *triedKeys);
     bool tryPasswordPrompt(const QString &user, const QString &hostname, int port);
 
     LIBSSH2_SESSION *m_session       = nullptr;
-    int              m_socket        = -1;
+    qintptr          m_socket        = -1;
+    Unusable         m_unusable      = Unusable::No;
     int              m_timeoutMs     = 30000;
     QSocSshSession  *m_parent        = nullptr; /* non-owning */
     LIBSSH2_CHANNEL *m_parentChannel = nullptr;

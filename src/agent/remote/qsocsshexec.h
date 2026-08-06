@@ -7,6 +7,7 @@
 #include <libssh2.h>
 
 #include <QByteArray>
+#include <QDeadlineTimer>
 #include <QString>
 
 #include <atomic>
@@ -26,12 +27,15 @@ public:
     /** @brief Outcome of a single `run()` call. */
     struct Result
     {
+        /** Remote exit status, or -1 when the command's fate is unknown. */
         int        exitCode = -1;
         QByteArray stdoutBytes;
         QByteArray stderrBytes;
         bool       timedOut = false;
         bool       aborted  = false;
-        QString    errorText;
+        /** The transport died mid-call: the command may have run anyway. */
+        bool transportDead = false;
+        QString errorText;
     };
 
     explicit QSocSshExec(QSocSshSession &session);
@@ -40,7 +44,10 @@ public:
      * @brief Execute a command synchronously.
      * @param command Shell command string passed straight to the remote
      *                shell. The caller owns any required escaping.
-     * @param timeoutMs Per-call timeout. <=0 disables the timeout.
+     * @param timeoutMs Per-call timeout, measured from entry and covering
+     *                  channel open, exec request, reads and close. <=0
+     *                  disables it, leaving a dead transport as the only
+     *                  way out.
      */
     Result run(const QString &command, int timeoutMs = 30000);
 
@@ -48,10 +55,33 @@ public:
     void requestAbort();
 
 private:
-    bool waitReady();
+    /**
+     * @brief Wait during a request exchange, bounded by the call deadline.
+     * @details Giving up strands libssh2 mid-request, so the session is
+     *          marked unusable and later calls fail closed.
+     */
+    bool wait();
+
+    /**
+     * @brief Wait during work whose abandonment the caller can absorb.
+     * @details Reads are resumable, and a teardown is already unwinding: in
+     *          neither case does a later call depend on the reply we stop
+     *          waiting for. Crucially a server does not confirm a channel
+     *          close until the remote process exits, so insisting on that
+     *          confirmation would make every command that outruns its
+     *          timeout cost the user their whole workspace. A transport
+     *          genuinely stranded mid-send still surfaces: the next real
+     *          operation fails with a socket error and poisons the session
+     *          then.
+     */
+    bool waitAbandonable();
+
+    bool waitInternal(bool requestInFlight);
 
     QSocSshSession   &m_session;
     std::atomic<bool> m_abort{false};
+    QDeadlineTimer    m_deadline;
+    bool              m_transportDead = false;
 };
 
 #endif // QSOCSSHEXEC_H

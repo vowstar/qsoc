@@ -49,6 +49,43 @@ QString buildBashCommand(const QString &cwd, const QString &userCommand)
     return QStringLiteral("cd %1 && /bin/bash -lc %2").arg(cwdEscaped, cmdEscaped);
 }
 
+/* A command whose fate we know is ok or failed; one that was cut off is
+ * uncertain, because the remote side may well have run it to completion.
+ * A non-zero exit is a real answer, not a broken call. */
+/* Refusal text for a session that cannot serve a call. "Not connected" is
+ * wrong for a session whose socket is fine but whose protocol was stranded
+ * mid-request, and neither case tells the reader what to do next. */
+QString sessionRefusal(QSocSshSession *session)
+{
+    if (session == nullptr) {
+        return QStringLiteral("Error: SSH session is not connected");
+    }
+    return QStringLiteral("Error: %1; reconnect with /ssh").arg(session->unusableText());
+}
+
+/* A write we could not confirm is uncertain, not failed. Reporting it as
+ * failed invites a retry, and a retry of a write that actually landed is a
+ * second application of the same change. */
+QString sftpWriteError(QSocSftpClient *sftp, const QString &err)
+{
+    if (sftp != nullptr && sftp->lastFailureUncertain()) {
+        return QSocTool::statusLine(QSocTool::ResultStatus::Uncertain) + QStringLiteral("error: ")
+               + err + QLatin1Char('\n');
+    }
+    return QStringLiteral("Error: %1").arg(err);
+}
+
+QSocTool::ResultStatus remoteRunStatus(const QSocSshExec::Result &result)
+{
+    if (result.transportDead || result.timedOut || result.aborted) {
+        return QSocTool::ResultStatus::Uncertain;
+    }
+    if (!result.errorText.isEmpty()) {
+        return QSocTool::ResultStatus::Failed;
+    }
+    return QSocTool::ResultStatus::Ok;
+}
+
 } // namespace
 
 /* read_file */
@@ -212,8 +249,15 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
 
     /* Read-before-overwrite + stale guard for EXISTING remote files: an
      * overwrite must not clobber content the agent never read or a
-     * concurrent change. New files need no prior read. */
-    const bool existedBefore = m_sftp->exists(remotePath);
+     * concurrent change. New files need no prior read. A stat we could not
+     * complete must not be read as "new file", or the guard is skipped
+     * exactly when the link is least trustworthy. */
+    QString    presenceErr;
+    const auto before = m_sftp->presence(remotePath, &presenceErr);
+    if (before == QSocSftpClient::Presence::Unknown) {
+        return QStringLiteral("Error: %1").arg(presenceErr);
+    }
+    const bool existedBefore = before == QSocSftpClient::Presence::Present;
     QString    beforeContent;
     if (existedBefore) {
         if (!m_pathCtx->readState().wasRead(remotePath)) {
@@ -245,7 +289,7 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     const QString content = QString::fromStdString(arguments["content"].get<std::string>());
     QString       err;
     if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {
-        return QStringLiteral("Error: %1").arg(err);
+        return sftpWriteError(m_sftp, err);
     }
     /* The written content is now the agent's known state. */
     m_pathCtx->readState().recordRead(remotePath, content);
@@ -418,7 +462,7 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     }
     content.replace(first, oldString.size(), newString);
     if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {
-        return QStringLiteral("Error: %1").arg(err);
+        return sftpWriteError(m_sftp, err);
     }
     /* The agent now knows the post-edit content. */
     m_pathCtx->readState().recordRead(remotePath, content);
@@ -463,7 +507,7 @@ json QSocToolRemoteShellBash::getParametersSchema() const
 QString QSocToolRemoteShellBash::execute(const json &arguments)
 {
     if (m_session == nullptr || !m_session->isConnected()) {
-        return QStringLiteral("Error: SSH session is not connected");
+        return sessionRefusal(m_session);
     }
     if (!arguments.contains("command") || !arguments["command"].is_string()) {
         return QStringLiteral("Error: command is required");
@@ -533,13 +577,22 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
     const auto result = exec.run(wrapped, timeoutMs);
     m_running         = nullptr;
 
-    QString out;
+    /* Every field the reader needs to judge the call goes ahead of the
+     * body. Metadata after an unbounded stdout is metadata nobody can find:
+     * a truncated read stops before it and the call looks clean. */
+    QString out = QSocTool::statusLine(remoteRunStatus(result));
     out += QStringLiteral("exit_code: %1\n").arg(result.exitCode);
     if (result.timedOut) {
         out += QStringLiteral("timed_out: true\n");
     }
     if (result.aborted) {
         out += QStringLiteral("aborted: true\n");
+    }
+    if (result.transportDead) {
+        out += QStringLiteral("transport_dead: true\n");
+    }
+    if (!result.errorText.isEmpty()) {
+        out += QStringLiteral("error: ") + result.errorText + QLatin1Char('\n');
     }
     if (!result.stdoutBytes.isEmpty()) {
         out += QStringLiteral("stdout:\n") + QString::fromUtf8(result.stdoutBytes);
@@ -552,9 +605,6 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
         if (!out.endsWith(QLatin1Char('\n'))) {
             out += QLatin1Char('\n');
         }
-    }
-    if (!result.errorText.isEmpty()) {
-        out += QStringLiteral("error: ") + result.errorText + QLatin1Char('\n');
     }
     return out;
 }
@@ -665,7 +715,7 @@ json QSocToolRemoteBashManage::getParametersSchema() const
 QString QSocToolRemoteBashManage::execute(const json &arguments)
 {
     if (m_session == nullptr || !m_session->isConnected()) {
-        return QStringLiteral("Error: SSH session is not connected");
+        return sessionRefusal(m_session);
     }
     if (m_pathCtx == nullptr || m_pathCtx->root().isEmpty()) {
         return QStringLiteral("Error: workspace root is not configured");
@@ -691,6 +741,23 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         return exec.run(shell, timeoutMs);
     };
 
+    /* A job query that never reached the remote host says nothing about the
+     * job. Reporting the empty stdout would read as "no output yet" or, for
+     * terminate, as a kill that happened. */
+    auto queryFailure = [](const QSocSshExec::Result &result) -> QString {
+        const auto status = remoteRunStatus(result);
+        if (status == QSocTool::ResultStatus::Ok) {
+            return {};
+        }
+        QString detail = result.errorText;
+        if (detail.isEmpty()) {
+            detail = result.timedOut ? QStringLiteral("job query timed out")
+                                     : QStringLiteral("job query did not complete");
+        }
+        return QSocTool::statusLine(status) + QStringLiteral("error: ") + detail
+               + QStringLiteral("; job state is unknown\n");
+    };
+
     if (action == QStringLiteral("status")) {
         const QString script
             = QStringLiteral(
@@ -705,7 +772,11 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                   "'pid=%s\\nstart_time=%s\\nrunning=%s\\nexit_code=%s\\noutput_bytes=%s\\n' "
                   "\"$pid\" \"$start\" \"$running\" \"$exit_code\" \"$bytes\"")
                   .arg(jobDir);
-        const auto result = runShell(script, 5000);
+        const auto    result  = runShell(script, 5000);
+        const QString failure = queryFailure(result);
+        if (!failure.isEmpty()) {
+            return failure;
+        }
         return QString::fromUtf8(result.stdoutBytes)
                + (result.stderrBytes.isEmpty()
                       ? QString()
@@ -721,18 +792,26 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         }
         const QString script
             = QStringLiteral("tail -n %1 %2/output.log 2>&1 || true").arg(maxLines).arg(jobDir);
-        const auto result = runShell(script, 10000);
+        const auto    result  = runShell(script, 10000);
+        const QString failure = queryFailure(result);
+        if (!failure.isEmpty()) {
+            return failure;
+        }
         return QString::fromUtf8(result.stdoutBytes);
     }
     if (action == QStringLiteral("terminate") || action == QStringLiteral("kill")) {
-        const QString signal = action == QStringLiteral("kill") ? QStringLiteral("-KILL")
-                                                                : QStringLiteral("-TERM");
-        const QString script = QStringLiteral(
-                                   "pid=$(cat %1/pid 2>/dev/null); "
-                                   "if [ -n \"$pid\" ]; then kill %2 \"$pid\" 2>&1; fi; "
-                                   "echo done")
-                                   .arg(jobDir, signal);
-        const auto    result = runShell(script, 5000);
+        const QString signal  = action == QStringLiteral("kill") ? QStringLiteral("-KILL")
+                                                                 : QStringLiteral("-TERM");
+        const QString script  = QStringLiteral(
+                                    "pid=$(cat %1/pid 2>/dev/null); "
+                                    "if [ -n \"$pid\" ]; then kill %2 \"$pid\" 2>&1; fi; "
+                                    "echo done")
+                                    .arg(jobDir, signal);
+        const auto    result  = runShell(script, 5000);
+        const QString failure = queryFailure(result);
+        if (!failure.isEmpty()) {
+            return failure;
+        }
         return QString::fromUtf8(result.stdoutBytes)
                + (result.stderrBytes.isEmpty()
                       ? QString()

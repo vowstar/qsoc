@@ -15,11 +15,14 @@
 #ifdef Q_OS_WIN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+/* Must follow winsock2.h: it defines SIO_KEEPALIVE_VALS. */
+#include <mstcpip.h>
 using socket_fd_t = SOCKET;
 #else
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -61,19 +64,111 @@ int setNonBlocking(socket_fd_t sockFd)
 #endif
 }
 
-int pollSocket(socket_fd_t sockFd, short events, int timeoutMs)
+int pollSocket(socket_fd_t sockFd, short events, int timeoutMs, short *revents = nullptr)
 {
 #ifdef Q_OS_WIN
     WSAPOLLFD pfd{};
-    pfd.fd     = sockFd;
-    pfd.events = events;
-    return ::WSAPoll(&pfd, 1, timeoutMs);
 #else
     struct pollfd pfd{};
+#endif
     pfd.fd     = sockFd;
     pfd.events = events;
-    return ::poll(&pfd, 1, timeoutMs);
+#ifdef Q_OS_WIN
+    const int rc = ::WSAPoll(&pfd, 1, timeoutMs);
+#else
+    const int rc = ::poll(&pfd, 1, timeoutMs);
 #endif
+    if (revents != nullptr) {
+        *revents = pfd.revents;
+    }
+    return rc;
+}
+
+/* Ask the kernel to probe an idle connection so a peer that vanished
+ * without sending FIN or RST (power cut, cable pull) surfaces as a socket
+ * error instead of silence. Probes need an ACK, so this also catches a
+ * black hole. Every setsockopt here is advisory: a kernel that rejects a
+ * knob still gets the absolute deadlines above it. */
+void enableKeepalive(socket_fd_t sockFd)
+{
+    constexpr int kIdleSec     = 15;
+    constexpr int kIntervalSec = 5;
+    constexpr int kProbeCount  = 3;
+
+#ifdef Q_OS_WIN
+    /* Windows takes the whole schedule in one ioctl and hard-codes the
+     * probe count, so only idle and interval are ours to set. */
+    struct tcp_keepalive vals{};
+    vals.onoff             = 1;
+    vals.keepalivetime     = kIdleSec * 1000;
+    vals.keepaliveinterval = kIntervalSec * 1000;
+    DWORD returned         = 0;
+    (void) ::WSAIoctl(
+        sockFd, SIO_KEEPALIVE_VALS, &vals, sizeof(vals), nullptr, 0, &returned, nullptr, nullptr);
+#else
+    constexpr int on = 1;
+    (void) ::setsockopt(sockFd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
+#ifdef TCP_KEEPIDLE
+    (void) ::setsockopt(sockFd, IPPROTO_TCP, TCP_KEEPIDLE, &kIdleSec, sizeof(kIdleSec));
+#elif defined(TCP_KEEPALIVE)
+    /* Apple spells the idle time TCP_KEEPALIVE. */
+    (void) ::setsockopt(sockFd, IPPROTO_TCP, TCP_KEEPALIVE, &kIdleSec, sizeof(kIdleSec));
+#endif
+#ifdef TCP_KEEPINTVL
+    (void) ::setsockopt(sockFd, IPPROTO_TCP, TCP_KEEPINTVL, &kIntervalSec, sizeof(kIntervalSec));
+#endif
+#ifdef TCP_KEEPCNT
+    (void) ::setsockopt(sockFd, IPPROTO_TCP, TCP_KEEPCNT, &kProbeCount, sizeof(kProbeCount));
+#endif
+#endif
+}
+
+/* Connect without parking the calling thread on the kernel's SYN retry
+ * schedule, which can exceed two minutes. */
+bool connectWithTimeout(socket_fd_t sockFd, const struct addrinfo *addr, int timeoutMs)
+{
+    if (setNonBlocking(sockFd) != 0) {
+        return false;
+    }
+    if (::connect(sockFd, addr->ai_addr, static_cast<int>(addr->ai_addrlen)) == 0) {
+        return true;
+    }
+#ifdef Q_OS_WIN
+    if (::WSAGetLastError() != WSAEWOULDBLOCK) {
+        return false;
+    }
+#else
+    if (errno != EINPROGRESS) {
+        return false;
+    }
+#endif
+    short     revents = 0;
+    const int rc      = pollSocket(sockFd, POLLOUT, timeoutMs <= 0 ? -1 : timeoutMs, &revents);
+    if (rc <= 0) {
+        return false;
+    }
+    /* WSAPoll does not report a failed connect in revents, so the SO_ERROR
+     * read below is the authoritative check on every platform. */
+    int soError = 0;
+#ifdef Q_OS_WIN
+    /* Winsock's getsockopt is documented as taking int* for the length and
+     * char* for the value, not socklen_t*. */
+    int optLen = static_cast<int>(sizeof(soError));
+    if (::getsockopt(sockFd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&soError), &optLen)
+        != 0) {
+        return false;
+    }
+#else
+    socklen_t optLen = sizeof(soError);
+    if (::getsockopt(sockFd, SOL_SOCKET, SO_ERROR, &soError, &optLen) != 0) {
+        return false;
+    }
+#endif
+    if (soError != 0) {
+        errno = soError;
+        return false;
+    }
+    return true;
 }
 
 /* Materialize the public half of a private key alongside the private
@@ -103,6 +198,13 @@ QString derivePubkeyPath(const QString &privateKeyPath)
         QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup
             | QFileDevice::ReadOther);
     return pubPath;
+}
+
+/* libssh2's own socket type: int on POSIX, SOCKET on Windows. m_socket is
+ * stored wide enough for both. */
+libssh2_socket_t nativeSocket(qintptr sockFd)
+{
+    return static_cast<libssh2_socket_t>(sockFd);
 }
 
 QString libssh2ErrorString(LIBSSH2_SESSION *session)
@@ -137,10 +239,65 @@ void QSocSshSession::setTimeoutMs(int ms)
     m_timeoutMs = ms;
 }
 
-int QSocSshSession::waitSocket(int sockFd, LIBSSH2_SESSION *session, int timeoutMs)
+bool QSocSshSession::isTransportError(int rc)
+{
+    switch (rc) {
+    case LIBSSH2_ERROR_SOCKET_NONE:
+    case LIBSSH2_ERROR_SOCKET_SEND:
+    case LIBSSH2_ERROR_SOCKET_RECV:
+    case LIBSSH2_ERROR_SOCKET_DISCONNECT:
+    case LIBSSH2_ERROR_SOCKET_TIMEOUT:
+    case LIBSSH2_ERROR_TIMEOUT:
+    case LIBSSH2_ERROR_BAD_SOCKET:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool QSocSshSession::notePossibleTransportError(int rc)
+{
+    if (!isTransportError(rc)) {
+        return false;
+    }
+    markTransportDead();
+    return true;
+}
+
+QString QSocSshSession::unusableText() const
+{
+    switch (m_unusable) {
+    case Unusable::No:
+        return {};
+    case Unusable::AbandonedExchange:
+        return QStringLiteral(
+            "SSH session was left mid-request after a timeout and cannot be reused");
+    case Unusable::TransportDead:
+        return QStringLiteral("SSH transport is dead: the remote host stopped responding");
+    }
+    return {};
+}
+
+QSocSshSession::WaitOutcome QSocSshSession::waitWithin(
+    qintptr sockFd, LIBSSH2_SESSION *session, QDeadlineTimer deadline)
+{
+    if (deadline.hasExpired()) {
+        return WaitOutcome::Timeout;
+    }
+    const qint64 remaining = deadline.remainingTime();
+    const int    slice     = remaining < 0 ? -1 : qMax(1, static_cast<int>(remaining));
+    const auto   outcome   = waitSocket(sockFd, session, slice);
+    if (outcome == WaitOutcome::Ready && deadline.hasExpired()) {
+        return WaitOutcome::Timeout;
+    }
+    return outcome;
+}
+
+QSocSshSession::WaitOutcome QSocSshSession::waitSocket(
+    qintptr sockFd, LIBSSH2_SESSION *session, int timeoutMs)
 {
     if (sockFd < 0 || session == nullptr) {
-        return -1;
+        return WaitOutcome::Fatal;
     }
     const int dir    = libssh2_session_block_directions(session);
     short     events = 0;
@@ -153,15 +310,33 @@ int QSocSshSession::waitSocket(int sockFd, LIBSSH2_SESSION *session, int timeout
     if (events == 0) {
         events = POLLIN | POLLOUT;
     }
-    const int rc
-        = pollSocket(static_cast<socket_fd_t>(sockFd), events, timeoutMs <= 0 ? -1 : timeoutMs);
-    if (rc > 0) {
-        return 1;
+    short     revents = 0;
+    const int rc      = pollSocket(
+        static_cast<socket_fd_t>(sockFd), events, timeoutMs <= 0 ? -1 : timeoutMs, &revents);
+    if (rc < 0) {
+#ifndef Q_OS_WIN
+        /* A signal cut the wait short. The socket is untouched, so poisoning
+         * the session here would kill a healthy connection whenever a
+         * timer or SIGWINCH lands mid-poll. */
+        if (errno == EINTR) {
+            return WaitOutcome::Timeout;
+        }
+#endif
+        return WaitOutcome::Fatal;
     }
     if (rc == 0) {
-        return 0;
+        return WaitOutcome::Timeout;
     }
-    return -1;
+    /* A hangup that arrives with readable data still has bytes to drain,
+     * and libssh2 reports the real EOF once they are consumed. Only a
+     * hangup with nothing left, or an outright socket error, is fatal. */
+    if ((revents & (POLLERR | POLLNVAL)) != 0) {
+        return WaitOutcome::Fatal;
+    }
+    if ((revents & POLLHUP) != 0 && (revents & POLLIN) == 0) {
+        return WaitOutcome::Fatal;
+    }
+    return WaitOutcome::Ready;
 }
 
 void QSocSshSession::setError(const QString &msg)
@@ -188,8 +363,9 @@ void QSocSshSession::clearConnection()
     if (m_parent == nullptr && m_socket >= 0) {
         closeSocketFd(static_cast<socket_fd_t>(m_socket));
     }
-    m_socket = -1;
-    m_parent = nullptr;
+    m_socket   = -1;
+    m_parent   = nullptr;
+    m_unusable = Unusable::No;
 }
 
 QSocSshSession::ConnectStatus QSocSshSession::openSocket(
@@ -224,7 +400,7 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
         if (sockFd == kInvalidSocket) {
             continue;
         }
-        if (::connect(sockFd, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0) {
+        if (connectWithTimeout(sockFd, ai, m_timeoutMs)) {
             break;
         }
         closeSocketFd(sockFd);
@@ -244,8 +420,9 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
         return ConnectStatus::NetworkError;
     }
 
-    setNonBlocking(sockFd);
-    m_socket = static_cast<int>(sockFd);
+    /* connectWithTimeout already put the socket in non-blocking mode. */
+    enableKeepalive(sockFd);
+    m_socket = static_cast<qintptr>(sockFd);
     return ConnectStatus::Ok;
 }
 
@@ -270,9 +447,11 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
     libssh2_session_method_pref(
         m_session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
 
-    int rc = 0;
-    while ((rc = libssh2_session_handshake(m_session, m_socket)) == LIBSSH2_ERROR_EAGAIN) {
-        if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+    int                  rc = 0;
+    const QDeadlineTimer deadline(m_timeoutMs);
+    while ((rc = libssh2_session_handshake(m_session, nativeSocket(m_socket)))
+           == LIBSSH2_ERROR_EAGAIN) {
+        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
             const QString msg = QStringLiteral("SSH handshake timeout");
             setError(msg);
             if (errorMessage != nullptr) {
@@ -291,8 +470,11 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
         return ConnectStatus::HandshakeFailed;
     }
 
-    /* Enable keepalive: libssh2 sends a ping if idle for 60s; remote drops
-     * connection if idle too long otherwise. Non-fatal on failure. */
+    /* Arm SSH-level keepalive so an idle session is not reaped by the
+     * server. libssh2 only emits these when the application calls
+     * libssh2_keepalive_send(), and it never tracks whether a reply came
+     * back, so this is liveness for the server's benefit, not ours:
+     * detecting a dead peer is the socket keepalive's job. */
     libssh2_keepalive_config(m_session, 1, 60);
     return ConnectStatus::Ok;
 }
@@ -452,11 +634,12 @@ bool QSocSshSession::tryIdentityFileAuth(
      * Ed25519 private-key file (NULL pubkey works only for classic PEM
      * RSA), so we ask ssh-keygen to emit the sibling .pub when missing.
      * ssh-keygen, not QSoC, is the one that reads the private-key bytes. */
-    const QString    pubPath      = derivePubkeyPath(privateKeyPath);
-    const QByteArray pubPathBytes = pubPath.toUtf8();
-    const char      *pubArg       = pubPath.isEmpty() ? nullptr : pubPathBytes.constData();
-    const QByteArray phBytes      = passphrase.toUtf8();
-    int              rc           = 0;
+    const QString        pubPath      = derivePubkeyPath(privateKeyPath);
+    const QByteArray     pubPathBytes = pubPath.toUtf8();
+    const char          *pubArg       = pubPath.isEmpty() ? nullptr : pubPathBytes.constData();
+    const QByteArray     phBytes      = passphrase.toUtf8();
+    int                  rc           = 0;
+    const QDeadlineTimer deadline(m_timeoutMs);
     while ((rc = libssh2_userauth_publickey_fromfile_ex(
                 m_session,
                 userBytes.constData(),
@@ -465,10 +648,11 @@ bool QSocSshSession::tryIdentityFileAuth(
                 keyBytes.constData(),
                 phBytes.isEmpty() ? nullptr : phBytes.constData()))
            == LIBSSH2_ERROR_EAGAIN) {
-        if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
             return false;
         }
     }
+    notePossibleTransportError(rc);
     return rc == 0;
 }
 
@@ -523,15 +707,17 @@ bool QSocSshSession::tryPasswordPrompt(const QString &user, const QString &hostn
     if (pwd.isEmpty()) {
         return false;
     }
-    const QByteArray pwdBytes = pwd.toUtf8();
-    int              status   = 0;
+    const QByteArray     pwdBytes = pwd.toUtf8();
+    int                  status   = 0;
+    const QDeadlineTimer deadline(m_timeoutMs);
     while (
         (status = libssh2_userauth_password(m_session, userBytes.constData(), pwdBytes.constData()))
         == LIBSSH2_ERROR_EAGAIN) {
-        if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
             return false;
         }
     }
+    notePossibleTransportError(status);
     return status == 0;
 }
 
@@ -621,7 +807,9 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
 QSocSshSession::ConnectStatus QSocSshSession::connectTo(
     const QSocSshHostConfig &host, QString *errorMessage)
 {
-    if (isConnected()) {
+    /* Occupancy, not health: a session whose transport died still owns a
+     * libssh2 handle, and overwriting it here would leak it. */
+    if (m_session != nullptr) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Session is already connected");
         }
@@ -663,7 +851,9 @@ void QSocSshSession::disconnectFromHost()
 QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
     const QSocSshHostConfig &host, QSocSshSession *parent, QString *errorMessage)
 {
-    if (isConnected()) {
+    /* Occupancy, not health: a session whose transport died still owns a
+     * libssh2 handle, and overwriting it here would leak it. */
+    if (m_session != nullptr) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Session is already connected");
         }
@@ -682,9 +872,10 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
     /* Borrow the parent's socket for waitSocket polling; we never close it. */
     m_socket = parent->socketFd();
 
-    const QByteArray hostBytes = host.hostname.toUtf8();
-    LIBSSH2_CHANNEL *channel   = nullptr;
-    LIBSSH2_SESSION *parentSes = parent->rawSession();
+    const QByteArray     hostBytes = host.hostname.toUtf8();
+    LIBSSH2_CHANNEL     *channel   = nullptr;
+    LIBSSH2_SESSION     *parentSes = parent->rawSession();
+    const QDeadlineTimer jumpDeadline(m_timeoutMs);
     while ((channel = libssh2_channel_direct_tcpip_ex(
                 parentSes, hostBytes.constData(), host.port, "127.0.0.1", 0))
            == nullptr) {
@@ -702,7 +893,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
             m_socket = -1;
             return ConnectStatus::NetworkError;
         }
-        if (waitSocket(parent->socketFd(), parentSes, m_timeoutMs) <= 0) {
+        if (waitWithin(parent->socketFd(), parentSes, jumpDeadline) != WaitOutcome::Ready) {
             const QString msg = QStringLiteral("Timed out opening ProxyJump channel");
             setError(msg);
             if (errorMessage != nullptr) {
@@ -742,9 +933,11 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         reinterpret_cast<libssh2_cb_generic *>(&QSocSshSession::recvOverChannel));
     *libssh2_session_abstract(m_session) = this;
 
-    int rc = 0;
-    while ((rc = libssh2_session_handshake(m_session, m_socket)) == LIBSSH2_ERROR_EAGAIN) {
-        if (waitSocket(m_socket, m_session, m_timeoutMs) <= 0) {
+    int                  rc = 0;
+    const QDeadlineTimer deadline(m_timeoutMs);
+    while ((rc = libssh2_session_handshake(m_session, nativeSocket(m_socket)))
+           == LIBSSH2_ERROR_EAGAIN) {
+        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
             const QString msg = QStringLiteral("SSH handshake over ProxyJump timed out");
             setError(msg);
             if (errorMessage != nullptr) {
@@ -778,17 +971,17 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
     return ConnectStatus::Ok;
 }
 
-long long QSocSshSession::sendOverChannel(
-    int sockFd, const void *buf, size_t len, int flags, void **abstract)
+ssize_t QSocSshSession::sendOverChannel(
+    libssh2_socket_t socket, const void *buffer, size_t length, int flags, void **abstract)
 {
-    (void) sockFd;
+    (void) socket;
     (void) flags;
     auto *self = static_cast<QSocSshSession *>(*abstract);
     if (self == nullptr || self->m_parentChannel == nullptr) {
         return -1;
     }
-    const ssize_t n
-        = libssh2_channel_write_ex(self->m_parentChannel, 0, static_cast<const char *>(buf), len);
+    const ssize_t n = libssh2_channel_write_ex(
+        self->m_parentChannel, 0, static_cast<const char *>(buffer), length);
     if (n == LIBSSH2_ERROR_EAGAIN) {
         return -EAGAIN;
     }
@@ -805,10 +998,10 @@ long long QSocSshSession::sendOverChannel(
     return n;
 }
 
-long long QSocSshSession::recvOverChannel(
-    int sockFd, void *buf, size_t len, int flags, void **abstract)
+ssize_t QSocSshSession::recvOverChannel(
+    libssh2_socket_t socket, void *buffer, size_t length, int flags, void **abstract)
 {
-    (void) sockFd;
+    (void) socket;
     (void) flags;
     auto *self = static_cast<QSocSshSession *>(*abstract);
     if (self == nullptr || self->m_parentChannel == nullptr) {
@@ -824,7 +1017,7 @@ long long QSocSshSession::recvOverChannel(
     (void) libssh2_channel_read_ex(self->m_parentChannel, 0, &drain, 0);
 
     const ssize_t n
-        = libssh2_channel_read_ex(self->m_parentChannel, 0, static_cast<char *>(buf), len);
+        = libssh2_channel_read_ex(self->m_parentChannel, 0, static_cast<char *>(buffer), length);
     if (n == LIBSSH2_ERROR_EAGAIN) {
         return -EAGAIN;
     }
