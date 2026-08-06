@@ -145,6 +145,15 @@ c906:
         }
     }
 
+    /* A refused netlist reports its diagnostic once, never reports
+       success, and leaves no Verilog file behind. */
+    void verifyGenerationRefused(const QString &baseFileName, const QString &diagnostic)
+    {
+        QCOMPARE(messageList.filter(diagnostic).size(), 1);
+        QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
+        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v")));
+    }
+
     /* Look for Verilog output file in typical locations */
     bool verifyVerilogOutputExistence(const QString &baseFileName)
     {
@@ -259,6 +268,20 @@ private slots:
         QSocConsole::setTeeToMessageHandler(true);
         /* Set project name */
         projectName = QFileInfo(__FILE__).baseName() + "_data";
+        /* Wipe leftovers from earlier runs; a stale .v must never satisfy
+           an existence or content assertion. A wipe that cannot finish
+           fails the run: reusing old output is exactly the lie this
+           guards against. */
+        const QString staleDataPath = QDir::current().filePath(projectName);
+        QDir          staleDataDir(staleDataPath);
+        if (staleDataDir.exists()) {
+            QVERIFY2(
+                staleDataDir.removeRecursively(),
+                qPrintable("could not remove stale data directory: " + staleDataPath));
+        }
+        QVERIFY2(
+            !QDir(staleDataPath).exists(),
+            qPrintable("stale data directory survives: " + staleDataPath));
         /* Setup project manager */
         projectManager.setProjectName(projectName);
         projectManager.setCurrentPath(QDir::current().filePath(projectName));
@@ -555,15 +578,11 @@ instance:
     port:
       axim_clk_en:
         tie: 0
-      biu_pad_arvalid:
-        invert: true
   cpu1:
     module: c906
     port:
       axim_clk_en:
         tie: 1
-        invert: true
-      biu_pad_arvalid:
         invert: true
 net:
   clk_net:
@@ -579,6 +598,7 @@ net:
   arvalid_net:
     - instance: cpu0
       port: biu_pad_arvalid
+  arvalid_net_1:
     - instance: cpu1
       port: biu_pad_arvalid
 )";
@@ -601,15 +621,13 @@ net:
         /* Verify invert logic for cpu0 */
         QVERIFY(verifyVerilogContent("invert_test", "cpu0"));
         QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en(1'd0)"));
-        /* `biu_pad_arvalid` is an OUTPUT port; `invert: true` cannot apply
-           to an output destination. The fix strips the invert and warns. */
         QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(arvalid_net)"));
-        QVERIFY(!verifyVerilogContent("invert_test", ".biu_pad_arvalid(~"));
 
         /* Verify invert logic for cpu1 */
         QVERIFY(verifyVerilogContent("invert_test", "cpu1"));
         QVERIFY(verifyVerilogContent("invert_test", ".axim_clk_en(~(1'd1))"));
-        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(arvalid_net)"));
+        QVERIFY(verifyVerilogContent("invert_test", ".biu_pad_arvalid(arvalid_net_1)"));
+        QVERIFY(!verifyVerilogContent("invert_test", ".biu_pad_arvalid(~"));
 
         /* Verify net connections */
         QVERIFY(verifyVerilogContent("invert_test", "wire clk_net"));
@@ -2132,113 +2150,100 @@ net:
         QVERIFY(verifyVerilogContent("test_exact_duplicate_links", ".sys_apb_rst_b(reset_signal)"));
     }
 
-    void testGenerateWithLinkBitSelectionDeduplication()
+    void testLinkBitSelectionSplitsTheBusAcrossDrivers()
     {
         messageList.clear();
 
-        /* Create a netlist file with link bit selection deduplication */
+        /* Two drivers own disjoint slices of one bus: legal, and each keeps
+           its own bit selection. */
         const QString content = R"(
 instance:
-  u_ampfifo_east0:
-    module: ampfifo_2phase
+  u_nibble_east0:
+    module: nibble_drv
     port:
-      A1P0_VOUTP:
+      dout:
         link: vout_bus[7:4]
-  u_ampfifo_east1:
-    module: ampfifo_2phase
+  u_nibble_east1:
+    module: nibble_drv
     port:
-      A1P0_VOUTP:
-        link: vout_bus[3:0]     # Different bit selection, should be allowed
-  u_ampfifo_east2:
-    module: ampfifo_2phase
-    port:
-      A1P0_VOUTP:
-        link: vout_bus[7:4]     # Same instance type, same bit selection -> should deduplicate if exactly same
+      dout:
+        link: vout_bus[3:0]
 )";
 
-        /* Create ampfifo_2phase module */
-        const QString ampfifoContent = R"(
-ampfifo_2phase:
+        /* A four-bit driver for a four-bit slice: equal widths on both
+           sides, so the bus assembles without an implicit resize. */
+        const QString nibbleContent = R"(
+nibble_drv:
   port:
-    A1P0_VOUTP:
-      type: logic[7:0]
+    dout:
+      type: logic[3:0]
       direction: output
 )";
 
-        /* Create the module files */
-        const QDir moduleDir(projectManager.getModulePath());
-
-        /* Create ampfifo_2phase module file */
-        const QString ampfifoPath = moduleDir.filePath("ampfifo_2phase.soc_mod");
-        QFile         ampfifoFile(ampfifoPath);
-        if (ampfifoFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream stream(&ampfifoFile);
-            stream << ampfifoContent;
-            ampfifoFile.close();
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString nibblePath = moduleDir.filePath("nibble_drv.soc_mod");
+        QFile         nibbleFile(nibblePath);
+        if (nibbleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&nibbleFile);
+            stream << nibbleContent;
+            nibbleFile.close();
         }
 
-        /* Create netlist file */
         const QString filePath = createTempFile("test_link_bits_dedup.soc_net", content);
 
-        /* Run the command to generate Verilog */
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
             = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Verify the output file exists */
         QVERIFY(verifyVerilogOutputExistence("test_link_bits_dedup"));
-
-        /* Verify basic module structure */
         QVERIFY(verifyVerilogContent("test_link_bits_dedup", "module test_link_bits_dedup"));
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "nibble_drv u_nibble_east0"));
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "nibble_drv u_nibble_east1"));
 
-        /* Verify all instances exist */
-        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "ampfifo_2phase u_ampfifo_east0"));
-        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "ampfifo_2phase u_ampfifo_east1"));
-        QVERIFY(verifyVerilogContent("test_link_bits_dedup", "ampfifo_2phase u_ampfifo_east2"));
-
-        /* Verify wire declaration for the shared net */
+        /* The bus is inferred at its full width and each slice is kept. */
         QVERIFY(verifyVerilogContent("test_link_bits_dedup", "wire [7:0] vout_bus"));
-
-        /* Verify bit selection in port connections */
-        QVERIFY(verifyVerilogContent("test_link_bits_dedup", ".A1P0_VOUTP(vout_bus[7:4])"));
-        QVERIFY(verifyVerilogContent("test_link_bits_dedup", ".A1P0_VOUTP(vout_bus[3:0])"));
-
-        /* The third instance should also connect with [7:4] bit selection */
-        /* Count how many times [7:4] appears - should be twice for the two instances using that range */
-        QString verilogContent;
-        for (const QString &msg : messageList) {
-            if (msg.contains("Successfully generated Verilog code:")
-                && msg.contains("test_link_bits_dedup.v")) {
-                const QRegularExpression regex("Successfully generated Verilog code: (.+\\.v)");
-                const QRegularExpressionMatch match = regex.match(msg);
-                if (match.hasMatch()) {
-                    const QString generatedPath = match.captured(1);
-                    if (QFile::exists(generatedPath)) {
-                        QFile file(generatedPath);
-                        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                            verilogContent = file.readAll();
-                            file.close();
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!verilogContent.isEmpty()) {
-            /* Count occurrences of [7:4] - should appear at least twice */
-            int count = verilogContent.count("vout_bus[7:4]");
-            QVERIFY(count >= 2);
-        }
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", ".dout(vout_bus[7:4])"));
+        QVERIFY(verifyVerilogContent("test_link_bits_dedup", ".dout(vout_bus[3:0])"));
     }
 
-    void testGenerateWithSameInstanceMultiplePortsToSameNet()
+    /* Two instances claiming the same slice are two output drivers on those
+       bits, whatever the spelling of the link. */
+    void testOverlappingLinkBitSelectionIsRejected()
     {
         messageList.clear();
 
-        /* Create a netlist file with same instance multiple ports linking to same net */
+        const QString content  = R"(
+instance:
+  u_nibble_east0:
+    module: nibble_drv
+    port:
+      dout:
+        link: vout_bus[7:4]
+  u_nibble_east2:
+    module: nibble_drv
+    port:
+      dout:
+        link: vout_bus[7:4]
+)";
+        const QString filePath = createTempFile("test_link_bits_overlap.soc_net", content);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        verifyGenerationRefused("test_link_bits_overlap", "vout_bus takes multiple output drivers");
+    }
+
+    /* Four outputs of one instance on a single net are four drivers; the
+       netlist is refused instead of collapsing them. */
+    void testGenerateRejectsSameInstanceMultiplePortsToSameNet()
+    {
+        messageList.clear();
+
         const QString content = R"(
 instance:
   u_test_core:
@@ -2272,10 +2277,7 @@ test_core:
       direction: output
 )";
 
-        /* Create the module files */
-        const QDir moduleDir(projectManager.getModulePath());
-
-        /* Create test_core module file */
+        const QDir    moduleDir(projectManager.getModulePath());
         const QString corePath = moduleDir.filePath("test_core.soc_mod");
         QFile         coreFile(corePath);
         if (coreFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -2284,33 +2286,17 @@ test_core:
             coreFile.close();
         }
 
-        /* Create netlist file */
         const QString filePath
             = createTempFile("test_same_instance_multiple_ports.soc_net", content);
 
-        /* Run the command to generate Verilog */
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
             = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Verify the output file exists */
-        QVERIFY(verifyVerilogOutputExistence("test_same_instance_multiple_ports"));
-
-        /* Verify basic module structure */
-        QVERIFY(verifyVerilogContent(
-            "test_same_instance_multiple_ports", "module test_same_instance_multiple_ports"));
-        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", "test_core u_test_core"));
-
-        /* Verify wire declaration for the shared net */
-        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", "wire shared_signal"));
-
-        /* Verify all four ports connect to the same net */
-        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_a(shared_signal)"));
-        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_b(shared_signal)"));
-        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_c(shared_signal)"));
-        QVERIFY(verifyVerilogContent("test_same_instance_multiple_ports", ".out_d(shared_signal)"));
+        verifyGenerationRefused(
+            "test_same_instance_multiple_ports", "shared_signal takes multiple output drivers");
     }
 
     void testCombSeqFsmOutputDriveAnalysis()
@@ -2441,7 +2427,7 @@ instance: {}
 port:
   ctrl_data_i:
     type: logic[63:0]
-    direction: in
+    direction: out
 
 net:
   ctrl_data_i:
@@ -2565,11 +2551,11 @@ power_control:
         QVERIFY(verifyVerilogContent("test_non_overlapping_bits", "ctrl_data_i"));
     }
 
-    void testMultiDriverWithCombSeqFsmOutput()
+    void testCombOutputBesideAnInstanceOutputIsRejected()
     {
         messageList.clear();
 
-        /* Create a netlist with multiple drivers including comb output */
+        /* An instance output and a comb output on one net are two drivers */
         const QString content = R"(
 port:
   data_out:
@@ -2622,16 +2608,7 @@ test_module:
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Verify the output file exists */
-        QVERIFY(verifyVerilogOutputExistence("test_multi_driver"));
-
-        /* Verify that multi-driver warning is generated */
-        QVERIFY(
-            verifyVerilogContent("test_multi_driver", "FIXME: Net data_out has multiple drivers"));
-
-        /* Verify that both sources are identified in the warning */
-        QVERIFY(verifyVerilogContent("test_multi_driver", "Comb/Seq/FSM Output: data_out"));
-        QVERIFY(verifyVerilogContent("test_multi_driver", "Module: test_module"));
+        verifyGenerationRefused("test_multi_driver", "data_out takes multiple output drivers");
     }
 
     void testBusExpansionWidthPreservation()
@@ -3355,6 +3332,7 @@ seq:
   - reg: seq_out
     clk: clk
     rst: rst_n
+    rst_val: "8'h00"
     next: "data_in"
 
 # Empty instance section (required)
@@ -3964,10 +3942,9 @@ net:
     }
 
     /**
-     * The same instance.port routed across two different nets used to
-     * silently keep only the last one (QMap overwrite in
-     * instancePortConnections), leaving the first net dangling. The cross-net
-     * check now warns and keeps the first net.
+     * One instance.port cannot sit on two nets: it has a single physical
+     * connection, so the netlist is refused rather than silently keeping
+     * one of them.
      */
     void testGenerateRejectsCrossNetDuplicatePort()
     {
@@ -4014,16 +3991,13 @@ net:
         const QString filePath   = createTempFile("test_net_cross_dup.soc_net", netContent);
         QVERIFY(filePath != "");
 
+        messageList.clear();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        QVERIFY(verifyVerilogContent("test_net_cross_dup", "u_drv (.out8(net_a))"));
-        QVERIFY(verifyVerilogContent("test_net_cross_dup", "u_rcv_a (.in8(net_a))"));
-        QVERIFY(verifyVerilogContent("test_net_cross_dup", "u_rcv_b (.in8(net_b))"));
-        QVERIFY(verifyVerilogContent("test_net_cross_dup", "FIXME: Net net_a has port-routing"));
-        QVERIFY(verifyVerilogContent("test_net_cross_dup", "FIXME: Net net_b has port-routing"));
+        verifyGenerationRefused("test_net_cross_dup", "is wired to both nets net_a and net_b");
     }
 
     /**
@@ -4166,10 +4140,9 @@ net:
     }
 
     /**
-     * Two `comb` items targeting the same `out: signal[3:0]` used to emit
-     * both `assign signal[3:0] = ...;` lines, a guaranteed multi-driver
-     * conflict in synth. Detect the duplicate target, keep the first, and
-     * emit a FIXME for the second.
+     * Two `comb` items targeting the same `out: signal[3:0]` would emit
+     * two `assign signal[3:0] = ...;` lines, a multi-driver conflict in
+     * synth. One driver may own a bit range, so the netlist is refused.
      */
     void testGenerateCombRejectsDuplicateAssignTarget()
     {
@@ -4190,20 +4163,13 @@ comb:
         const QString filePath   = createTempFile("test_comb_dup_target.soc_net", netContent);
         QVERIFY(filePath != "");
 
+        messageList.clear();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_comb_dup_target.v");
-        QFile rawOut(outPath);
-        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QByteArray rawBytes = rawOut.readAll();
-        rawOut.close();
-        QVERIFY(rawBytes.contains("assign out_bus[3:0] = 4'h5"));
-        QVERIFY(!rawBytes.contains("assign out_bus[3:0] = 4'hA"));
-        QVERIFY(rawBytes.contains("FIXME: duplicate comb driver"));
+        verifyGenerationRefused("test_comb_dup_target", "comb has duplicate driver for out_bus[3:0]");
     }
 
     /**
@@ -5627,8 +5593,8 @@ reset:
         async:
           clock: clk_sys
           stage: 4
-          link:
-            por_rst_n:
+        link:
+          por_rst_n:
 )";
         const QString filePath   = createTempFile("test_clk_rst_sanitize.soc_net", netContent);
         QVERIFY(filePath != "");
@@ -5666,11 +5632,11 @@ reset:
     }
 
     /**
-     * `invert: true` on an output (or inout) port used to emit
-     * `.port(~wire)` which is illegal Verilog: you cannot invert an output
-     * destination. Strip the invert and warn.
+     * `invert: true` on an output (or inout) port would emit
+     * `.port(~wire)`, illegal Verilog: an output destination cannot be
+     * inverted. The netlist is refused.
      */
-    void testGenerateStripsInvertOnOutputPort()
+    void testGenerateRejectsInvertOnOutputPort()
     {
         const QString modContent = R"(
 flag_drv:
@@ -5708,25 +5674,15 @@ net:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        bool warned = false;
-        for (const QString &msg : messageList) {
-            if (msg.contains("'invert: true'") && msg.contains("u_drv")
-                && msg.contains("out_flag")) {
-                warned = true;
-                break;
-            }
-        }
-        QVERIFY(warned);
-        QVERIFY(verifyVerilogContent("test_invert_on_output", ".out_flag(flag_net)"));
-        QVERIFY(!verifyVerilogContent("test_invert_on_output", ".out_flag(~"));
+        verifyGenerationRefused("test_invert_on_output", "cannot be applied to an output destination");
     }
 
     /**
      * `comb` writing to a name that resolves to a top-level INPUT port
-     * used to emit `assign in_only = 8'h11;` - illegal Verilog: an input
-     * port cannot be driven from inside the module. Warn and skip.
+     * would emit `assign in_only = 8'h11;`, illegal Verilog: an input port
+     * cannot be driven from inside the module. The netlist is refused.
      */
-    void testGenerateCombRefusesToDriveTopInputPort()
+    void testGenerateRejectsCombDrivingTopInputPort()
     {
         const QString netContent = R"(
 ---
@@ -5751,17 +5707,8 @@ comb:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        bool warned = false;
-        for (const QString &msg : messageList) {
-            if (msg.contains("comb writes to top-level input port") && msg.contains("in_only")) {
-                warned = true;
-                break;
-            }
-        }
-        QVERIFY(warned);
-        QVERIFY(verifyVerilogContent(
-            "test_comb_drives_input", "FIXME: comb tried to drive top-level input in_only"));
-        QVERIFY(!verifyVerilogContent("test_comb_drives_input", "assign in_only ="));
+        verifyGenerationRefused(
+            "test_comb_drives_input", "comb writes to top-level input port in_only");
     }
 
     /**
@@ -5877,10 +5824,10 @@ seq:
 
     /**
      * yaml-cpp may iterate duplicate `instance:` keys, producing two
-     * `module inst (...)` blocks with the same identifier - illegal
-     * Verilog. Track emitted instance names and skip duplicates.
+     * `module inst (...)` blocks with the same identifier, illegal
+     * Verilog. The netlist is refused instead of dropping one of them.
      */
-    void testGenerateDeduplicatesInstanceNames()
+    void testGenerateRejectsDuplicateInstanceNames()
     {
         const QString modContent = R"(
 baseline:
@@ -5913,19 +5860,13 @@ net:
         const QString filePath   = createTempFile("test_dup_inst.soc_net", netContent);
         QVERIFY(filePath != "");
 
+        messageList.clear();
         QSocCliWorker socCliWorker;
         socCliWorker.setup(
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath = QDir(projectManager.getOutputPath()).filePath("test_dup_inst.v");
-        QFile         rawOut(outPath);
-        QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QByteArray rawBytes = rawOut.readAll();
-        rawOut.close();
-        /* Must NOT have two `baseline u_dup` blocks. */
-        const int count = rawBytes.count("baseline u_dup");
-        QVERIFY(count <= 1);
+        verifyGenerationRefused("test_dup_inst", "Duplicate instance name u_dup");
     }
 
     /**

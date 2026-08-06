@@ -18,8 +18,16 @@ class Test : public QObject
     Q_OBJECT
 
 private:
+    static QStringList messageList;
     QString            projectName;
     QSocProjectManager projectManager;
+
+    static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+    {
+        Q_UNUSED(type);
+        Q_UNUSED(context);
+        messageList << msg;
+    }
 
     QString createTempFile(const QString &fileName, const QString &content)
     {
@@ -44,6 +52,11 @@ private:
         const QString content = in.readAll();
         file.close();
         return content;
+    }
+
+    bool verilogExists(const QString &baseFileName)
+    {
+        return QFile::exists(QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v"));
     }
 
     void runGenerate(const QString &netlistPath)
@@ -80,8 +93,23 @@ buf_cell:
 private slots:
     void initTestCase()
     {
+        qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
+        /* Wipe leftovers from earlier runs; a stale .v must never satisfy
+           an existence or content assertion. A wipe that cannot finish
+           fails the run: reusing old output is exactly the lie this
+           guards against. */
+        const QString staleDataPath = QDir::current().filePath(projectName);
+        QDir          staleDataDir(staleDataPath);
+        if (staleDataDir.exists()) {
+            QVERIFY2(
+                staleDataDir.removeRecursively(),
+                qPrintable("could not remove stale data directory: " + staleDataPath));
+        }
+        QVERIFY2(
+            !QDir(staleDataPath).exists(),
+            qPrintable("stale data directory survives: " + staleDataPath));
         projectManager.setProjectName(projectName);
         projectManager.setCurrentPath(QDir::current().filePath(projectName));
         projectManager.mkpath();
@@ -102,7 +130,7 @@ private slots:
 
     /* Two drivers gated by `ifdef X` and `ifndef X` of the same macro form
      * disjoint cubes (the canonical FPGA / ASIC tech split). The multi-driver
-     * detector must NOT emit a FIXME, since at most one driver is active in
+     * census must NOT refuse them, since at most one driver is active in
      * any single build configuration. */
     void testIfdefIfndefSameMacroIsDisjoint()
     {
@@ -136,16 +164,14 @@ net:
 
         const QString verilog = readVerilog("test_guard_disjoint");
         QVERIFY2(!verilog.isEmpty(), "expected generated Verilog file");
-        QVERIFY2(
-            !verilog.contains("multiple drivers"),
-            "guard-disjoint drivers must not trigger multi-driver FIXME");
+        QVERIFY2(!verilog.contains("multiple drivers"), "guard-disjoint drivers must stay legal");
         QVERIFY2(verilog.contains("u_bufg"), "expected ifdef-guarded instance present");
         QVERIFY2(verilog.contains("u_buf"), "expected ifndef-guarded instance present");
     }
 
     /* Same shape, but no ifdef/ifndef. Both drivers are universally active,
-     * so the FIXME must remain. */
-    void testNoGuardsKeepsFixme()
+     * so the double driver stands and the netlist is refused. */
+    void testNoGuardsRejectsTheDoubleDriver()
     {
         const QString netlist = R"(
 port:
@@ -169,17 +195,19 @@ net:
       port: jtag_tck
 )";
         const QString path    = createTempFile("test_guard_unguarded.soc_net", netlist);
+        messageList.clear();
         runGenerate(path);
 
-        const QString verilog = readVerilog("test_guard_unguarded");
-        QVERIFY2(!verilog.isEmpty(), "expected generated Verilog file");
-        QVERIFY2(verilog.contains("multiple drivers"), "unguarded multi-driver must still emit FIXME");
+        QCOMPARE(messageList.filter("takes multiple output drivers").size(), 1);
+        QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
+        QVERIFY2(
+            !verilogExists("test_guard_unguarded"),
+            "a refused netlist must not leave a Verilog file");
     }
 
     /* Different macros (ifdef X vs ifdef Y). The cubes can both be true when
-     * X and Y are simultaneously defined, so we conservatively keep the
-     * warning. */
-    void testDifferentMacrosKeepsFixme()
+     * X and Y are simultaneously defined, so the double driver is refused. */
+    void testDifferentMacrosRejectTheDoubleDriver()
     {
         const QString netlist = R"(
 port:
@@ -207,13 +235,14 @@ net:
       port: jtag_tck
 )";
         const QString path    = createTempFile("test_guard_different_macros.soc_net", netlist);
+        messageList.clear();
         runGenerate(path);
 
-        const QString verilog = readVerilog("test_guard_different_macros");
-        QVERIFY2(!verilog.isEmpty(), "expected generated Verilog file");
+        QCOMPARE(messageList.filter("takes multiple output drivers").size(), 1);
+        QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
         QVERIFY2(
-            verilog.contains("multiple drivers"),
-            "non-disjoint guards must keep multi-driver FIXME");
+            !verilogExists("test_guard_different_macros"),
+            "a refused netlist must not leave a Verilog file");
     }
 
     /* Multi-literal cube `ifdef [X, Y]` against `ifndef [X]`. The +X / -X
@@ -277,6 +306,8 @@ net:
         QVERIFY(!QSocGenerateManager::guardsAreDisjoint(empty, empty));
     }
 };
+
+QStringList Test::messageList;
 
 QSOC_TEST_MAIN(Test)
 

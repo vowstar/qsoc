@@ -93,6 +93,20 @@ private slots:
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
+        /* Wipe leftovers from earlier runs; a stale .v must never satisfy
+           an existence or content assertion. A wipe that cannot finish
+           fails the run: reusing old output is exactly the lie this
+           guards against. */
+        const QString staleDataPath = QDir::current().filePath(projectName);
+        QDir          staleDataDir(staleDataPath);
+        if (staleDataDir.exists()) {
+            QVERIFY2(
+                staleDataDir.removeRecursively(),
+                qPrintable("could not remove stale data directory: " + staleDataPath));
+        }
+        QVERIFY2(
+            !QDir(staleDataPath).exists(),
+            qPrintable("stale data directory survives: " + staleDataPath));
         projectManager.setProjectName(projectName);
         projectManager.setCurrentPath(QDir::current().filePath(projectName));
         projectManager.mkpath();
@@ -169,10 +183,9 @@ comb:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "/* Combinational logic */"));
     }
 
-    /* `expr` wins over `if` and `case` at emission. Counting the item as a
-       process anyway declared a register nothing writes and drove the output
-       from both that register and the expression. */
-    void testMixedFormCombDrivesOutputOnce()
+    /* One comb item carries one form. Two forms have no defined winner,
+       so the whole item is refused rather than silently picking one. */
+    void testMixedFormCombItemIsRejected()
     {
         const QString netlistContent = R"(
 port:
@@ -200,6 +213,7 @@ comb:
         const QString netlistPath    = createTempFile("test_mixed_form.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
+        messageList.clear();
         {
             QSocCliWorker socCliWorker;
             QStringList   args;
@@ -209,17 +223,9 @@ comb:
             socCliWorker.run();
         }
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_mixed_form.v");
-        QVERIFY(QFile::exists(verilogPath));
-        QFile verilogFile(verilogPath);
-        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QString verilogContent = verilogFile.readAll();
-        verilogFile.close();
-
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign y = a;"));
-        QCOMPARE(verilogContent.count("assign y ="), 1);
-        QVERIFY(!verilogContent.contains("y_reg"));
+        QCOMPARE(messageList.filter("carries more than one of expr, if, and case").size(), 1);
+        QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
+        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath("test_mixed_form.v")));
     }
 
     void testConditionalComb()
@@ -629,30 +635,6 @@ port:
     direction: output
     type: logic[7:0]
     connect: case_net
-  connected_expr_in:
-    direction: input
-    type: logic[3:0]
-    connect: expr_input_net
-  direct_expr_in:
-    direction: input
-    type: logic[3:0]
-  implicit_expr:
-    type: logic[3:0]
-  sideways_expr:
-    direction: sideways
-    type: logic[3:0]
-  connected_process_in:
-    direction: input
-    type: logic[3:0]
-    connect: process_input_net
-  direct_process_in:
-    direction: input
-    type: logic[3:0]
-  implicit_process:
-    type: logic[3:0]
-  sideways_process:
-    direction: sideways
-    type: logic[3:0]
 
 comb:
   - out: if_net[3:0]
@@ -662,34 +644,6 @@ comb:
     default: 4'h0
   - out: case_net[0]
     bits: "[7:4]"
-    case: sel
-    cases:
-      "1'b1": value
-    default: 4'h0
-  - out: expr_input_net
-    expr: value
-  - out: direct_expr_in
-    expr: value
-  - out: implicit_expr
-    expr: value
-  - out: sideways_expr
-    expr: value
-  - out: process_input_net
-    if:
-      - cond: sel
-        then: value
-    default: 4'h0
-  - out: direct_process_in
-    case: sel
-    cases:
-      "1'b1": value
-    default: 4'h0
-  - out: implicit_process
-    if:
-      - cond: sel
-        then: value
-    default: 4'h0
-  - out: sideways_process
     case: sel
     cases:
       "1'b1": value
@@ -725,39 +679,109 @@ comb:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "out_case_reg[7:4] = value;"));
         QVERIFY(!verilogContent.contains("if_net_reg"));
         QVERIFY(!verilogContent.contains("case_net_reg"));
-
-        const QStringList skippedExprNames
-            = {"connected_expr_in", "direct_expr_in", "implicit_expr", "sideways_expr"};
-        for (const QString &name : skippedExprNames) {
-            QCOMPARE(verilogContent.count("FIXME: comb tried to drive top-level input " + name), 1);
-            QVERIFY(!verifyVerilogContentNormalized(verilogContent, "assign " + name + " = value;"));
-        }
-
-        /* A process form on a top-level input is the same illegal driver as
-           an expression on one; both skip emission behind a FIXME. */
-        const QStringList skippedProcessNames
-            = {"connected_process_in", "direct_process_in", "implicit_process", "sideways_process"};
-        for (const QString &name : skippedProcessNames) {
-            QCOMPARE(verilogContent.count("FIXME: comb tried to drive top-level input " + name), 1);
-            QVERIFY(!verilogContent.contains(name + "_reg"));
-        }
-        QVERIFY(!verilogContent.contains("process_input_net_reg"));
         QCOMPARE(verilogContent.count("always @(*)"), 2);
+    }
 
-        QMap<QString, int> warningCounts;
-        for (const QString &message : messageList) {
-            if (!message.contains("comb writes to top-level input port")) {
-                continue;
+    /* Any comb form that lands on a top-level input port, through any
+       spelling of the target, refuses the whole netlist. */
+    void testCombOnTopInputRejectsEveryTargetSpelling()
+    {
+        const QString netlistContent = R"(
+port:
+  sel:
+    direction: input
+    type: logic
+  value:
+    direction: input
+    type: logic[3:0]
+  connected_expr_in:
+    direction: input
+    type: logic[3:0]
+    connect: expr_input_net
+  direct_expr_in:
+    direction: input
+    type: logic[3:0]
+  implicit_expr:
+    type: logic[3:0]
+  sideways_expr:
+    direction: sideways
+    type: logic[3:0]
+  connected_process_in:
+    direction: input
+    type: logic[3:0]
+    connect: process_input_net
+  direct_process_in:
+    direction: input
+    type: logic[3:0]
+  implicit_process:
+    type: logic[3:0]
+  sideways_process:
+    direction: sideways
+    type: logic[3:0]
+
+comb:
+  - out: expr_input_net
+    expr: value
+  - out: direct_expr_in
+    expr: value
+  - out: implicit_expr
+    expr: value
+  - out: sideways_expr
+    expr: value
+  - out: process_input_net
+    if:
+      - cond: sel
+        then: value
+    default: 4'h0
+  - out: direct_process_in
+    case: sel
+    cases:
+      "1'b1": value
+    default: 4'h0
+  - out: implicit_process
+    if:
+      - cond: sel
+        then: value
+    default: 4'h0
+  - out: sideways_process
+    case: sel
+    cases:
+      "1'b1": value
+    default: 4'h0
+)";
+
+        const QString netlistPath = createTempFile("test_process_rejection.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        messageList.clear();
+        QSocCliWorker socCliWorker;
+        socCliWorker.setup(
+            {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+            false);
+        socCliWorker.run();
+
+        const QStringList rejectedNames
+            = {"connected_expr_in",
+               "direct_expr_in",
+               "implicit_expr",
+               "sideways_expr",
+               "connected_process_in",
+               "direct_process_in",
+               "implicit_process",
+               "sideways_process"};
+        for (const QString &name : rejectedNames) {
+            int hits = 0;
+            for (const QString &message : messageList) {
+                hits += (message.contains("comb writes to top-level input port")
+                         && message.contains(name))
+                            ? 1
+                            : 0;
             }
-            for (const QString &name : skippedExprNames + skippedProcessNames) {
-                if (message.contains(name)) {
-                    ++warningCounts[name];
-                }
-            }
+            QCOMPARE(hits, 1);
         }
-        for (const QString &name : skippedExprNames + skippedProcessNames) {
-            QCOMPARE(warningCounts.value(name), 1);
-        }
+        QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
+        QVERIFY(!QFile::exists(
+            QDir(projectManager.getOutputPath()).filePath("test_process_rejection.v")));
     }
 
     void testSharedConnectUsesFirstDeclaredPort()
@@ -911,9 +935,8 @@ comb:
             false);
         worker.run();
 
-        /* Superseded pin: keep-first emission for overlapping drivers was
-           replaced by rejection under the two-form ruling; one driver may
-           own a bit range. */
+        /* Overlapping process drivers are refused; one driver may own a
+           bit range. */
         const QString messages = messageList.join('\n');
         QVERIFY2(
             !messages.contains("Successfully generated Verilog code: " + verilogPath),
