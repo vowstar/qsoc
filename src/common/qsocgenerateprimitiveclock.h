@@ -155,6 +155,13 @@ public:
     /**
      * @brief Clock controller configuration
      */
+    /* One declared module port: the exact header line and its comment. */
+    struct ClockPort
+    {
+        QString decl;
+        QString comment;
+    };
+
     struct ClockControllerConfig
     {
         bool               valid = true; // False when the configuration is rejected
@@ -164,6 +171,7 @@ public:
         QString            ref_clock;    // Reference clock for GF_MUX
         QList<ClockInput>  inputs;       // Clock inputs
         QList<ClockTarget> targets;      // Clock targets
+        QList<ClockPort>   ports;        // Port roster in declaration order
     };
 
 public:

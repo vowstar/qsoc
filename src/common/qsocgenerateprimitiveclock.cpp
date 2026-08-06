@@ -13,16 +13,12 @@
 #include <QSet>
 
 /**
- * Clock generator with signal deduplication support.
+ * Clock controller generator.
  *
- * Features:
- * - Port deduplication: Same-name signals appear only once in module ports
- * - Parameter unification: All qsoc_tc_clk_gate use CLOCK_DURING_RESET parameter
- * - Duplicate target detection: ERROR messages for illegal duplicate outputs
- * - Output-priority deduplication: Output signals take precedence over inputs
- *
- * Implementation uses QSet for efficient duplicate tracking across:
- * ICG signals, MUX signals, divider controls, and reset signals.
+ * Port contract: one name is one port. Exact-ABI input reuse shares a
+ * single declaration; any output collision or shape mismatch rejects
+ * the controller before anything is written. Control constants stay
+ * inline in the RTL and never become ports.
  */
 
 namespace {
@@ -181,78 +177,305 @@ QString clockSelectExpression(const QSocClockPrimitive::ClockTarget &target)
     return QString("%1[%2:0]").arg(target.select).arg(target.select_width - 1);
 }
 
-struct DividerPortShape
+struct PortShape
 {
+    bool isInput;
     int  width;
     bool packed;
 };
 
-class DividerPortShapes
+/* Builds config.ports, the one port roster the header prints verbatim.
+   One name is one port: exact-ABI input reuse shares a declaration, any
+   output collision or shape mismatch rejects the controller. Control
+   constants (1'b0/1'b1) stay inline in the RTL; anything else that is
+   not a plain identifier rejects. Walks in header declaration order. */
+bool buildClockPortPlan(QSocClockPrimitive::ClockControllerConfig &config)
 {
-public:
-    void add(const QString &name, int width, bool packed)
-    {
-        if (name.isEmpty() || m_repeated.contains(name)) {
-            return;
-        }
-        if (m_shapes.remove(name)) {
-            m_repeated.insert(name);
-            return;
-        }
-        m_shapes.insert(name, {width, packed});
-    }
+    config.ports.clear();
+    QHash<QString, PortShape> claims;
 
-    const DividerPortShape *find(const QString &name) const
-    {
-        const auto it = m_shapes.constFind(name);
-        return it == m_shapes.cend() ? nullptr : &it.value();
-    }
-
-private:
-    QHash<QString, DividerPortShape> m_shapes;
-    QSet<QString>                    m_repeated;
-};
-
-DividerPortShapes dividerPortShapes(const QSocClockPrimitive::ClockControllerConfig &config)
-{
-    DividerPortShapes shapes;
-    const auto        addDivider = [&shapes](const QSocClockPrimitive::ClockDivider &divider) {
-        shapes.add(divider.value, divider.width, true);
-        shapes.add(divider.valid, 1, false);
-        shapes.add(divider.ready, 1, false);
-        shapes.add(divider.count, divider.width, true);
-        shapes.add(divider.enable, 1, false);
+    const auto inputDecl = [](const QString &name, int width, bool packed) {
+        return packed ? QString("    input  wire [%1:0] %2").arg(width - 1).arg(name)
+                      : QString("    input  wire %1").arg(name);
+    };
+    const auto outputDecl = [](const QString &name, int width, bool packed) {
+        return packed ? QString("    output wire [%1:0] %2").arg(width - 1).arg(name)
+                      : QString("    output wire %1").arg(name);
     };
 
-    for (const auto &target : config.targets) {
-        if (target.div.configured) {
-            addDivider(target.div);
+    const auto claimShape = [&claims, &config](
+                                const QString &name,
+                                bool           isInput,
+                                int            width,
+                                bool           packed,
+                                const QString &decl,
+                                const QString &comment) {
+        const auto found = claims.constFind(name);
+        if (found == claims.cend()) {
+            claims.insert(name, {isInput, width, packed});
+            config.ports.append({decl, comment});
+            return true;
         }
+        const PortShape &first = found.value();
+        if (first.isInput != isInput) {
+            QSocConsole::error() << "Clock controller port" << name
+                                 << "is declared as both input and output";
+            return false;
+        }
+        if (!first.isInput) {
+            QSocConsole::error() << "Clock controller port" << name << "is driven by two outputs";
+            return false;
+        }
+        if (first.width != width) {
+            QSocConsole::error() << "Clock controller port" << name << "has incompatible widths"
+                                 << first.width << "and" << width;
+            return false;
+        }
+        if (first.packed != packed) {
+            QSocConsole::error() << "Clock controller port" << name
+                                 << "has incompatible scalar and packed declarations";
+            return false;
+        }
+        return true;
+    };
+
+    /* Signals that must name a real port: clocks, outputs, and the
+       division value. */
+    const auto claimIdentifier =
+        [&claimShape, &inputDecl, &outputDecl](
+            const QString &name, bool isInput, int width, bool packed, const QString &comment) {
+            if (name.isEmpty()) {
+                return true;
+            }
+            if (classifyControlAtom(name) != ControlAtom::Identifier) {
+                QSocConsole::error()
+                    << "Clock controller port" << name << "must be a plain identifier";
+                return false;
+            }
+            return claimShape(
+                name,
+                isInput,
+                width,
+                packed,
+                isInput ? inputDecl(name, width, packed) : outputDecl(name, width, packed),
+                comment);
+        };
+
+    /* Input controls the RTL can inline: 1'b0/1'b1 form no port. */
+    const auto claimControl =
+        [&claimShape,
+         &inputDecl](const QString &name, int width, bool packed, const QString &comment) {
+            switch (classifyControlAtom(name)) {
+            case ControlAtom::Empty:
+            case ControlAtom::Constant:
+                return true;
+            case ControlAtom::Invalid:
+                QSocConsole::error() << "Clock control signal" << name
+                                     << "must be an identifier or a 1'b0/1'b1 constant";
+                return false;
+            case ControlAtom::Identifier:
+                break;
+            }
+            return claimShape(name, true, width, packed, inputDecl(name, width, packed), comment);
+        };
+
+    for (const auto &input : config.inputs) {
+        QString comment = QString("/**< Clock input: %1").arg(input.name);
+        if (!input.freq.isEmpty()) {
+            comment += QString(" (%1)").arg(input.freq);
+        }
+        comment += " */";
+        if (!claimIdentifier(input.name, true, 1, false, comment)) {
+            return false;
+        }
+    }
+    for (const auto &target : config.targets) {
+        QString comment = QString("/**< Clock target: %1").arg(target.name);
+        if (!target.freq.isEmpty()) {
+            comment += QString(" (%1)").arg(target.freq);
+        }
+        comment += " */";
+        if (!claimIdentifier(target.name, false, 1, false, comment)) {
+            return false;
+        }
+    }
+
+    for (const auto &target : config.targets) {
+        if (!target.div.configured) {
+            continue;
+        }
+        if (!claimIdentifier(
+                target.div.value,
+                true,
+                target.div.width,
+                true,
+                QString("/**< Dynamic division value for %1 */").arg(target.name))) {
+            return false;
+        }
+        /* A unity divider (no ratio, no value) ties div_valid to 1'b0;
+           only an active divider keeps the historical valid port. */
+        if ((target.div.default_value > 1 || !target.div.value.isEmpty())
+            && !claimControl(
+                target.div.valid,
+                1,
+                false,
+                QString("/**< Division valid signal for %1 */").arg(target.name))) {
+            return false;
+        }
+        if (!claimIdentifier(
+                target.div.ready,
+                false,
+                1,
+                false,
+                QString("/**< Division ready signal for %1 */").arg(target.name))) {
+            return false;
+        }
+        if (!claimIdentifier(
+                target.div.count,
+                false,
+                target.div.width,
+                true,
+                QString("/**< Cycle counter for %1 */").arg(target.name))) {
+            return false;
+        }
+        if (!claimControl(
+                target.div.enable,
+                1,
+                false,
+                QString("/**< Division enable for %1 */").arg(target.name))) {
+            return false;
+        }
+    }
+    for (const auto &target : config.targets) {
         for (const auto &link : target.links) {
-            if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
-                addDivider(link.div);
+            if (!(link.div.default_value > 1 || !link.div.value.isEmpty())) {
+                continue;
+            }
+            const QString linkName = QString("%1_from_%2").arg(target.name, link.source);
+            if (!claimIdentifier(
+                    link.div.value,
+                    true,
+                    link.div.width,
+                    true,
+                    QString("/**< Dynamic division value for link %1 */").arg(linkName))) {
+                return false;
+            }
+            if (!claimControl(
+                    link.div.valid,
+                    1,
+                    false,
+                    QString("/**< Division valid signal for link %1 */").arg(linkName))) {
+                return false;
+            }
+            if (!claimIdentifier(
+                    link.div.ready,
+                    false,
+                    1,
+                    false,
+                    QString("/**< Division ready signal for link %1 */").arg(linkName))) {
+                return false;
+            }
+            if (!claimIdentifier(
+                    link.div.count,
+                    false,
+                    link.div.width,
+                    true,
+                    QString("/**< Cycle counter for link %1 */").arg(linkName))) {
+                return false;
+            }
+            if (!claimControl(
+                    link.div.enable,
+                    1,
+                    false,
+                    QString("/**< Division enable for link %1 */").arg(linkName))) {
+                return false;
             }
         }
     }
-    return shapes;
-}
 
-bool validateDividerControlPort(
-    const DividerPortShapes &dividerPorts, const QString &name, int width, bool packed)
-{
-    const DividerPortShape *dividerPort = dividerPorts.find(name);
-    if (!dividerPort) {
-        return true;
-    }
-    if (dividerPort->width != width) {
-        QSocConsole::error() << "Clock divider port" << name << "has incompatible widths"
-                             << dividerPort->width << "and" << width;
+    if (!claimControl(config.testEnable, 1, false, QString("/**< Test enable signal */"))) {
         return false;
     }
-    if (dividerPort->packed != packed) {
-        QSocConsole::error() << "Clock divider port" << name
-                             << "has incompatible scalar and packed declarations";
-        return false;
+    for (const auto &target : config.targets) {
+        if (!target.test_clock.isEmpty()
+            && !claimControl(
+                target.test_enable,
+                1,
+                false,
+                QString("/**< Test enable for %1 */").arg(target.name))) {
+            return false;
+        }
+    }
+    for (const auto &target : config.targets) {
+        if (!claimControl(
+                target.icg.enable, 1, false, QString("/**< ICG enable for %1 */").arg(target.name))
+            || !claimControl(
+                target.icg.reset, 1, false, QString("/**< ICG reset for %1 */").arg(target.name))) {
+            return false;
+        }
+    }
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            const QString linkName = QString("%1_from_%2").arg(target.name, link.source);
+            if (!claimControl(
+                    link.icg.enable,
+                    1,
+                    false,
+                    QString("/**< Link ICG enable for %1 */").arg(linkName))
+                || !claimControl(
+                    link.icg.reset,
+                    1,
+                    false,
+                    QString("/**< Link ICG reset for %1 */").arg(linkName))) {
+                return false;
+            }
+        }
+    }
+    for (const auto &target : config.targets) {
+        if (target.links.size() < 2) {
+            continue;
+        }
+        if (!claimControl(
+                target.select,
+                target.select_port_width,
+                target.select_port_width > 1,
+                QString("/**< MUX select for %1 */").arg(target.name))) {
+            return false;
+        }
+        if (!claimControl(
+                target.reset, 1, false, QString("/**< MUX reset for %1 */").arg(target.name))) {
+            return false;
+        }
+        if (!claimControl(
+                target.test_clock,
+                1,
+                false,
+                QString("/**< MUX test clock for %1 */").arg(target.name))) {
+            return false;
+        }
+    }
+    for (const auto &target : config.targets) {
+        if (target.div.configured
+            && !claimControl(
+                target.div.reset,
+                1,
+                false,
+                QString("/**< Division reset for %1 */").arg(target.name))) {
+            return false;
+        }
+    }
+    for (const auto &target : config.targets) {
+        for (const auto &link : target.links) {
+            if ((link.div.default_value > 1 || !link.div.value.isEmpty())
+                && !claimControl(
+                    link.div.reset,
+                    1,
+                    false,
+                    QString("/**< Link division reset for %1 */")
+                        .arg(QString("%1_from_%2").arg(target.name, link.source)))) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -884,36 +1107,6 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
-    /* A divider interface name reused across dividers reached the header
-       emitter as an uncaught throw; refuse it while the author is present. */
-    {
-        QSet<QString> dividerNames;
-        const auto    claimDividerName = [&config,
-                                          &dividerNames](const QString &signal, const char *role) {
-            if (signal.isEmpty()) {
-                return;
-            }
-            if (dividerNames.contains(signal)) {
-                QSocConsole::error() << "Duplicate divider" << role << "signal name:" << signal;
-                config.valid = false;
-                return;
-            }
-            dividerNames.insert(signal);
-        };
-        for (const auto &target : config.targets) {
-            claimDividerName(target.div.value, "value");
-            claimDividerName(target.div.valid, "valid");
-            claimDividerName(target.div.ready, "ready");
-            claimDividerName(target.div.count, "count");
-            for (const auto &link : target.links) {
-                claimDividerName(link.div.value, "value");
-                claimDividerName(link.div.valid, "valid");
-                claimDividerName(link.div.ready, "ready");
-                claimDividerName(link.div.count, "count");
-            }
-        }
-    }
-
     /* The auto divider (dynamic value without valid) has no ready handshake
        to give; a requested ready would be a floating output port. */
     for (const auto &target : config.targets) {
@@ -1044,35 +1237,8 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
-    if (config.valid) {
-        const DividerPortShapes dividerPorts = dividerPortShapes(config);
-        QSet<QString>           checkedControls;
-        const auto validateControl = [&dividerPorts,
-                                      &checkedControls,
-                                      &config](const QString &name, int width, bool packed) {
-            if (name.isEmpty() || checkedControls.contains(name)) {
-                return;
-            }
-            checkedControls.insert(name);
-            if (!validateDividerControlPort(dividerPorts, name, width, packed)) {
-                config.valid = false;
-            }
-        };
-        if (classifyControlAtom(config.testEnable) == ControlAtom::Identifier) {
-            validateControl(config.testEnable, 1, false);
-        }
-        for (const auto &target : config.targets) {
-            if (!target.test_clock.isEmpty()
-                && classifyControlAtom(target.test_enable) == ControlAtom::Identifier) {
-                validateControl(target.test_enable, 1, false);
-            }
-            if (!target.test_clock.isEmpty()) {
-                validateControl(target.test_clock, 1, false);
-            }
-            if (target.links.size() >= 2) {
-                validateControl(target.select, target.select_port_width, target.select_port_width > 1);
-            }
-        }
+    if (config.valid && !buildClockPortPlan(config)) {
+        config.valid = false;
     }
 
     return config;
@@ -1082,329 +1248,11 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 {
     out << "\nmodule " << config.moduleName << " (\n";
 
-    QStringList portDecls;
-    QStringList portComments;
-
-    // Initialize global port tracking for unified "output win" mechanism
-    QSet<QString> addedSignals;
-
-    // Collect input clock names for "output win" mechanism
-    QSet<QString> inputClocks;
-    for (const auto &input : config.inputs) {
-        inputClocks.insert(input.name);
-    }
-    const DividerPortShapes dividerPorts = dividerPortShapes(config);
-
-    // Add input clocks
-    for (const auto &input : config.inputs) {
-        QString comment = QString("/**< Clock input: %1").arg(input.name);
-        if (!input.freq.isEmpty()) {
-            comment += QString(" (%1)").arg(input.freq);
-        }
-        comment += " */";
-        portDecls << QString("    input  wire %1").arg(input.name);
-        portComments << comment;
-        addedSignals.insert(input.name); // Track input clocks in global set
-    }
-
-    // Add target clocks
-    for (const auto &target : config.targets) {
-        QString comment = QString("/**< Clock target: %1").arg(target.name);
-        if (!target.freq.isEmpty()) {
-            comment += QString(" (%1)").arg(target.freq);
-        }
-        comment += " */";
-        portDecls << QString("    output wire %1").arg(target.name);
-        portComments << comment;
-    }
-
-    // Add dynamic divider interface ports (target-level)
-    QSet<QString> divSignalNames;
-    QSet<QString> declaredEnables;
-    for (const auto &target : config.targets) {
-        if (target.div.configured) {
-            // Add dynamic division value input port
-            if (!target.div.value.isEmpty()) {
-                if (divSignalNames.contains(target.div.value)) {
-                    throw std::runtime_error(QString("Duplicate divider value signal name: %1")
-                                                 .arg(target.div.value)
-                                                 .toStdString());
-                }
-                divSignalNames.insert(target.div.value);
-
-                portDecls << QString("    input  wire [%1:0] %2")
-                                 .arg(target.div.width - 1)
-                                 .arg(target.div.value);
-                portComments << QString("/**< Dynamic division value for %1 */").arg(target.name);
-            }
-
-            // Add division value valid signal port (a unity divider has none)
-            if ((target.div.default_value > 1 || !target.div.value.isEmpty())
-                && !target.div.valid.isEmpty()) {
-                if (divSignalNames.contains(target.div.valid)) {
-                    throw std::runtime_error(QString("Duplicate divider valid signal name: %1")
-                                                 .arg(target.div.valid)
-                                                 .toStdString());
-                }
-                divSignalNames.insert(target.div.valid);
-
-                portDecls << QString("    input  wire %1").arg(target.div.valid);
-                portComments << QString("/**< Division valid signal for %1 */").arg(target.name);
-            }
-
-            // Add division ready output port
-            if (!target.div.ready.isEmpty()) {
-                if (divSignalNames.contains(target.div.ready)) {
-                    throw std::runtime_error(QString("Duplicate divider ready signal name: %1")
-                                                 .arg(target.div.ready)
-                                                 .toStdString());
-                }
-                divSignalNames.insert(target.div.ready);
-
-                portDecls << QString("    output wire %1").arg(target.div.ready);
-                portComments << QString("/**< Division ready signal for %1 */").arg(target.name);
-            }
-
-            // Add cycle counter output port
-            if (!target.div.count.isEmpty()) {
-                if (divSignalNames.contains(target.div.count)) {
-                    throw std::runtime_error(QString("Duplicate divider count signal name: %1")
-                                                 .arg(target.div.count)
-                                                 .toStdString());
-                }
-                divSignalNames.insert(target.div.count);
-
-                portDecls << QString("    output wire [%1:0] %2")
-                                 .arg(target.div.width - 1)
-                                 .arg(target.div.count);
-                portComments << QString("/**< Cycle counter for %1 */").arg(target.name);
-            }
-
-            // Add enable signal port. One enable may serve several dividers,
-            // so it deduplicates instead of throwing.
-            if (!target.div.enable.isEmpty() && !declaredEnables.contains(target.div.enable)) {
-                declaredEnables.insert(target.div.enable);
-                portDecls << QString("    input  wire %1").arg(target.div.enable);
-                portComments << QString("/**< Division enable for %1 */").arg(target.name);
-            }
-        }
-    }
-
-    // Add dynamic divider interface ports (link-level)
-    for (const auto &target : config.targets) {
-        for (const auto &link : target.links) {
-            if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
-                QString linkName = QString("%1_from_%2").arg(target.name, link.source);
-
-                // Add dynamic division value input port
-                if (!link.div.value.isEmpty()) {
-                    if (divSignalNames.contains(link.div.value)) {
-                        throw std::runtime_error(QString("Duplicate divider value signal name: %1")
-                                                     .arg(link.div.value)
-                                                     .toStdString());
-                    }
-                    divSignalNames.insert(link.div.value);
-
-                    portDecls << QString("    input  wire [%1:0] %2")
-                                     .arg(link.div.width - 1)
-                                     .arg(link.div.value);
-                    portComments << QString("/**< Dynamic division value for link %1 */")
-                                        .arg(linkName);
-                }
-
-                // Add division value valid signal port
-                if (!link.div.valid.isEmpty()) {
-                    if (divSignalNames.contains(link.div.valid)) {
-                        throw std::runtime_error(QString("Duplicate divider valid signal name: %1")
-                                                     .arg(link.div.valid)
-                                                     .toStdString());
-                    }
-                    divSignalNames.insert(link.div.valid);
-
-                    portDecls << QString("    input  wire %1").arg(link.div.valid);
-                    portComments << QString("/**< Division valid signal for link %1 */")
-                                        .arg(linkName);
-                }
-
-                // Add division ready output port
-                if (!link.div.ready.isEmpty()) {
-                    if (divSignalNames.contains(link.div.ready)) {
-                        throw std::runtime_error(QString("Duplicate divider ready signal name: %1")
-                                                     .arg(link.div.ready)
-                                                     .toStdString());
-                    }
-                    divSignalNames.insert(link.div.ready);
-
-                    portDecls << QString("    output wire %1").arg(link.div.ready);
-                    portComments << QString("/**< Division ready signal for link %1 */")
-                                        .arg(linkName);
-                }
-
-                // Add cycle counter output port
-                if (!link.div.count.isEmpty()) {
-                    if (divSignalNames.contains(link.div.count)) {
-                        throw std::runtime_error(QString("Duplicate divider count signal name: %1")
-                                                     .arg(link.div.count)
-                                                     .toStdString());
-                    }
-                    divSignalNames.insert(link.div.count);
-
-                    portDecls << QString("    output wire [%1:0] %2")
-                                     .arg(link.div.width - 1)
-                                     .arg(link.div.count);
-                    portComments << QString("/**< Cycle counter for link %1 */").arg(linkName);
-                }
-
-                // Add enable signal port
-                if (!link.div.enable.isEmpty() && !declaredEnables.contains(link.div.enable)) {
-                    declaredEnables.insert(link.div.enable);
-                    portDecls << QString("    input  wire %1").arg(link.div.enable);
-                    portComments << QString("/**< Division enable for link %1 */").arg(linkName);
-                }
-            }
-        }
-    }
-
-    // Add test enable signal (if specified)
-    if (classifyControlAtom(config.testEnable) == ControlAtom::Identifier
-        && !addedSignals.contains(config.testEnable) && !dividerPorts.find(config.testEnable)) {
-        portDecls << QString("    input  wire %1").arg(config.testEnable);
-        portComments << QString("/**< Test enable signal */");
-        addedSignals.insert(config.testEnable);
-    } else if (
-        classifyControlAtom(config.testEnable) == ControlAtom::Identifier
-        && dividerPorts.find(config.testEnable)) {
-        addedSignals.insert(config.testEnable);
-    }
-
-    /* A consumed target-level test_enable identifier needs a port. */
-    for (const auto &target : config.targets) {
-        if (!target.test_clock.isEmpty()
-            && classifyControlAtom(target.test_enable) == ControlAtom::Identifier
-            && !addedSignals.contains(target.test_enable)
-            && !dividerPorts.find(target.test_enable)) {
-            portDecls << QString("    input  wire %1").arg(target.test_enable);
-            portComments << QString("/**< Test enable for %1 */").arg(target.name);
-            addedSignals.insert(target.test_enable);
-        } else if (
-            !target.test_clock.isEmpty()
-            && classifyControlAtom(target.test_enable) == ControlAtom::Identifier
-            && dividerPorts.find(target.test_enable)) {
-            addedSignals.insert(target.test_enable);
-        }
-    }
-
-    // Add ICG interface ports (target-level)
-    for (const auto &target : config.targets) {
-        if (!target.icg.enable.isEmpty() && !addedSignals.contains(target.icg.enable)) {
-            portDecls << QString("    input  wire %1").arg(target.icg.enable);
-            portComments << QString("/**< ICG enable for %1 */").arg(target.name);
-            addedSignals.insert(target.icg.enable);
-        }
-        if (!target.icg.reset.isEmpty() && !addedSignals.contains(target.icg.reset)) {
-            portDecls << QString("    input  wire %1").arg(target.icg.reset);
-            portComments << QString("/**< ICG reset for %1 */").arg(target.name);
-            addedSignals.insert(target.icg.reset);
-        }
-    }
-
-    // Add ICG interface ports (link-level)
-    for (const auto &target : config.targets) {
-        for (const auto &link : target.links) {
-            const QString linkName = QString("%1_from_%2").arg(target.name, link.source);
-            if (!link.icg.enable.isEmpty() && !addedSignals.contains(link.icg.enable)) {
-                portDecls << QString("    input  wire %1").arg(link.icg.enable);
-                portComments << QString("/**< Link ICG enable for %1 */").arg(linkName);
-                addedSignals.insert(link.icg.enable);
-            }
-            if (!link.icg.reset.isEmpty() && !addedSignals.contains(link.icg.reset)) {
-                portDecls << QString("    input  wire %1").arg(link.icg.reset);
-                portComments << QString("/**< Link ICG reset for %1 */").arg(linkName);
-                addedSignals.insert(link.icg.reset);
-            }
-        }
-    }
-
-    // Add MUX interface ports (target-level)
-    for (const auto &target : config.targets) {
-        if (target.links.size() >= 2) { // Only for multi-source targets
-            if (!target.select.isEmpty() && !addedSignals.contains(target.select)
-                && !dividerPorts.find(target.select)) {
-                const int selectWidth = target.select_port_width;
-
-                QString selectDecl;
-                if (selectWidth > 1) {
-                    selectDecl = QString("[%1:0] %2").arg(selectWidth - 1).arg(target.select);
-                } else {
-                    selectDecl = target.select;
-                }
-
-                portDecls << QString("    input  wire %1").arg(selectDecl);
-                portComments << QString("/**< MUX select for %1 */").arg(target.name);
-                addedSignals.insert(target.select);
-            } else if (dividerPorts.find(target.select)) {
-                addedSignals.insert(target.select);
-            }
-            if (!target.reset.isEmpty() && !addedSignals.contains(target.reset)) {
-                portDecls << QString("    input  wire %1").arg(target.reset);
-                portComments << QString("/**< MUX reset for %1 */").arg(target.name);
-                addedSignals.insert(target.reset);
-            }
-            // Test enable is already added at controller level
-            if (!target.test_clock.isEmpty() && !addedSignals.contains(target.test_clock)) {
-                // Implement "output win" mechanism: if test_clock matches an input clock, skip it
-                if (inputClocks.contains(target.test_clock)
-                    || dividerPorts.find(target.test_clock)) {
-                    // Port already exists as input clock, just mark as processed
-                    addedSignals.insert(
-                        target.test_clock); // Mark as processed to avoid future conflicts
-                } else {
-                    portDecls << QString("    input  wire %1").arg(target.test_clock);
-                    portComments << QString("/**< MUX test clock for %1 */").arg(target.name);
-                    addedSignals.insert(target.test_clock);
-                }
-            }
-        }
-    }
-
-    // Add target-level reset signals for DIV (if not already added via ICG/MUX)
-    QStringList addedResets;
-    for (const auto &target : config.targets) {
-        if (target.div.configured && !target.div.reset.isEmpty()) {
-            if (!addedResets.contains(target.div.reset)
-                && !addedSignals.contains(target.div.reset)) {
-                portDecls << QString("    input  wire %1").arg(target.div.reset);
-                portComments << QString("/**< Division reset for %1 */").arg(target.name);
-                addedResets << target.div.reset;
-                addedSignals.insert(target.div.reset);
-            }
-        }
-    }
-
-    // Add link-level reset signals for DIV (if not already added)
-    for (const auto &target : config.targets) {
-        for (const auto &link : target.links) {
-            if ((link.div.default_value > 1 || !link.div.value.isEmpty())
-                && !link.div.reset.isEmpty()) {
-                if (!addedResets.contains(link.div.reset)
-                    && !addedSignals.contains(link.div.reset)) {
-                    QString linkName = QString("%1_from_%2").arg(target.name, link.source);
-                    portDecls << QString("    input  wire %1").arg(link.div.reset);
-                    portComments << QString("/**< Link division reset for %1 */").arg(linkName);
-                    addedResets << link.div.reset;
-                    addedSignals.insert(link.div.reset);
-                }
-            }
-        }
-    }
-
-    // Test enable is handled at controller level, no need for fallback
-
-    // Output all ports with unified boundary judgment
-    for (int i = 0; i < portDecls.size(); ++i) {
-        bool    isLast = (i == portDecls.size() - 1);
-        QString comma  = isLast ? "" : ",";
-        out << portDecls[i] << comma << "    " << portComments[i] << "\n";
+    /* The roster was built and checked at parse time; print it verbatim. */
+    for (qsizetype i = 0; i < config.ports.size(); ++i) {
+        const bool isLast = (i == config.ports.size() - 1);
+        out << config.ports[i].decl << (isLast ? "" : ",") << "    " << config.ports[i].comment
+            << "\n";
     }
 
     out << ");\n\n";

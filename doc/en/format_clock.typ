@@ -869,27 +869,39 @@ File generation behavior:
 + Inspect the generated interfaces before integrating technology cells.
 + Replace the templates with technology-specific implementations before production use.
 
-== Signal Deduplication
+== Port Sharing
 <soc-net-clock-signal-dedup>
-Clock generators implement automatic signal deduplication to prevent duplicate port declarations in generated Verilog modules.
+Within a generated clock controller, a port name names exactly one
+port:
 
-=== Deduplication Features
-<soc-net-clock-dedup-features>
-- Port deduplication: Same-name signals appear only once in module ports
-- Output-priority: Output signals take precedence over input signals when conflicts occur
-- QSet-based tracking: Efficient duplicate detection across all signal types
-- Parameter unification: All qsoc_tc_clk_gate instances use CLOCK_DURING_RESET parameter
-- Error detection: Duplicate output target names generate ERROR messages
+- Exact input reuse is legal: when several consumers name the same
+  input with identical direction, width, and packed shape, the port
+  declares once and every consumer connects to it. This covers a
+  divider `value`/`valid`/`enable` shared between dividers, an input
+  clock doubling as `test_clock`, and a scalar control doubling as a
+  scalar `select`.
+- Any other collision rejects the controller: an output colliding with
+  an input, two outputs sharing a name, a width mismatch, or a scalar
+  meeting a packed `[0:0]` declaration. In particular, divider outputs
+  (`ready`, `count`) never feed a control input by carrying the same
+  name; route such signals through explicit topology instead.
+- A gating control accepts the constants `1'b0` and `1'b1` in place of
+  a signal name: `test_enable`, a divider `enable`, `valid`, or
+  `reset`, an ICG `enable` or `reset`, and a mux `reset`. A constant
+  stays inline in the RTL and forms no port. Every other name must be
+  a plain Verilog identifier, including `select`, `test_clock`, all
+  outputs, and the divider `value`; anything else rejects the
+  controller.
+- A divider `valid` only carries meaning together with a dynamic
+  `value`, but a static divider still declares the `valid` port it has
+  always declared, so parent connections keep working. A unity divider
+  (`default: 1` with no `value`) declares no `valid`; its other control
+  ports are unaffected.
+- Different controllers are separate Verilog modules and may reuse
+  names freely.
 
-=== Implementation Details
-<soc-net-clock-dedup-details>
-The deduplication system uses QSet containers to track signal names across:
-- ICG control signals (enable, test_enable, reset)
-- MUX control signals (select, reset, test_enable, test_clock)
-- Divider control signals (division ratio, enable, reset)
-- Clock input signals (skips duplicates with default clock)
-
-When the same signal name is used across multiple targets, only one port declaration is generated in the final Verilog module.
+A rejected controller reports the collision once and generates
+nothing; existing output files stay byte-identical.
 
 == Code Generation
 <soc-net-clock-generation>

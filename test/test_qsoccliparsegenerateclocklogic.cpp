@@ -1029,7 +1029,9 @@ clock:
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
     }
 
-    void test_divider_ports_may_feed_or_share_clock_controls()
+    /* Exact-ABI input reuse is the only legal name collision: a scalar
+       divider valid also serving as test enable declares one port. */
+    void test_exact_input_reuse_shares_one_port()
     {
         const QString netlistContent = R"(
 clock:
@@ -1056,55 +1058,6 @@ clock:
         select: valid_sel
         reset: valid_rst_n
         test_clock: tclk
-  - name: shared_ready_ctl
-    test_enable: ready_ctl_ten
-    input:
-      a:
-        freq: 10MHz
-      b:
-        freq: 20MHz
-      tclk:
-        freq: 5MHz
-    target:
-      ready_out:
-        freq: 10MHz
-        div:
-          default: 2
-          width: 2
-          value: ratio
-          valid: update
-          ready: shared_ready
-        link:
-          a:
-          b:
-        select: ready_sel
-        reset: ready_rst_n
-        test_enable: shared_ready
-        test_clock: tclk
-  - name: shared_count_ctl
-    input:
-      a:
-        freq: 10MHz
-      b:
-        freq: 20MHz
-      c:
-        freq: 30MHz
-      d:
-        freq: 40MHz
-    target:
-      count_out:
-        freq: 10MHz
-        div:
-          default: 2
-          width: 2
-          value: ratio
-          count: shared_select
-        link:
-          a:
-          b:
-          c:
-          d:
-        select: shared_select
   - name: shared_link_valid_ctl
     test_enable: shared_link_valid
     input:
@@ -1133,17 +1086,9 @@ clock:
         const QString verilog = generateClockNetlist("test_divider_control_ports", netlistContent);
         QVERIFY(!verilog.isEmpty());
         QCOMPARE(verilog.count("input  wire shared_valid"), qsizetype(1));
-        QCOMPARE(verilog.count("output wire shared_ready"), qsizetype(1));
-        QCOMPARE(verilog.count("input  wire shared_ready"), qsizetype(0));
-        QCOMPARE(verilog.count("output wire [1:0] shared_select"), qsizetype(1));
-        QCOMPARE(verilog.count("input  wire [1:0] shared_select"), qsizetype(0));
         QCOMPARE(verilog.count("input  wire shared_link_valid"), qsizetype(1));
         QCOMPARE(verilog.count(".div_valid(shared_valid)"), qsizetype(1));
         QCOMPARE(verilog.count(".test_en(shared_valid)"), qsizetype(2));
-        QCOMPARE(verilog.count(".div_ready(shared_ready)"), qsizetype(1));
-        QCOMPARE(verilog.count(".test_en(shared_ready)"), qsizetype(1));
-        QCOMPARE(verilog.count(".count(shared_select)"), qsizetype(1));
-        QCOMPARE(verilog.count(".clk_sel(shared_select)"), qsizetype(1));
         QCOMPARE(verilog.count(".div_valid(shared_link_valid)"), qsizetype(1));
         QCOMPARE(verilog.count(".test_en(shared_link_valid)"), qsizetype(2));
 
@@ -1159,6 +1104,177 @@ clock:
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
         }
         QVERIFY(cleanElaboration);
+    }
+
+    /* An output can only drive its own port; reaching a control input by
+       naming it the same is a rejected implicit topology. */
+    void test_output_to_control_name_collisions_reject_data()
+    {
+        QTest::addColumn<QString>("netlistContent");
+        QTest::addColumn<QString>("diagnostic");
+
+        QTest::newRow("ready-to-test-enable") << QString(R"(
+clock:
+  - name: port_collision_ctl
+    test_enable: shared_ready
+    input:
+      a:
+        freq: 10MHz
+      b:
+        freq: 20MHz
+      tclk:
+        freq: 5MHz
+    target:
+      ready_out:
+        freq: 10MHz
+        div:
+          default: 2
+          width: 2
+          value: ratio
+          valid: update
+          ready: shared_ready
+        link:
+          a:
+          b:
+        select: ready_sel
+        reset: ready_rst_n
+        test_enable: shared_ready
+        test_clock: tclk
+)") << QString("Clock controller port shared_ready is declared as both input and output");
+
+        QTest::newRow("count-to-select") << QString(R"(
+clock:
+  - name: port_collision_ctl
+    input:
+      a:
+        freq: 10MHz
+      b:
+        freq: 20MHz
+      c:
+        freq: 30MHz
+      d:
+        freq: 40MHz
+    target:
+      count_out:
+        freq: 10MHz
+        div:
+          default: 2
+          width: 2
+          value: ratio
+          count: shared_select
+        link:
+          a:
+          b:
+          c:
+          d:
+        select: shared_select
+)") << QString("Clock controller port shared_select is declared as both input and output");
+
+        QTest::newRow("two-readies") << QString(R"(
+clock:
+  - name: port_collision_ctl
+    input:
+      a:
+        freq: 10MHz
+    target:
+      clk_a:
+        freq: 5MHz
+        div:
+          default: 2
+          width: 2
+          value: ratio_a
+          valid: update_a
+          ready: shared_ready
+        link:
+          a:
+      clk_b:
+        freq: 5MHz
+        div:
+          default: 2
+          width: 2
+          value: ratio_b
+          valid: update_b
+          ready: shared_ready
+        link:
+          a:
+)") << QString("Clock controller port shared_ready is driven by two outputs");
+
+        QTest::newRow("link-two-counts") << QString(R"(
+clock:
+  - name: port_collision_ctl
+    input:
+      a:
+        freq: 10MHz
+      b:
+        freq: 20MHz
+    target:
+      clk_t:
+        freq: 5MHz
+        link:
+          a:
+            div:
+              default: 2
+              width: 2
+              count: shared_count
+          b:
+            div:
+              default: 2
+              width: 2
+              count: shared_count
+        select: sel
+)") << QString("Clock controller port shared_count is driven by two outputs");
+    }
+
+    void test_output_to_control_name_collisions_reject()
+    {
+        QFETCH(QString, netlistContent);
+        QFETCH(QString, diagnostic);
+
+        const QString netlistPath = createTempFile("test_port_collision.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_port_collision.v");
+        const QString typstPath
+            = QDir(projectManager.getOutputPath()).filePath("port_collision_ctl.typ");
+        const QByteArray verilogSentinel("existing-verilog\n");
+        const QByteArray typstSentinel("existing-typst\n");
+        {
+            QFile verilogFile(verilogPath);
+            QFile typstFile(typstPath);
+            QVERIFY(verilogFile.open(QIODevice::WriteOnly));
+            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
+            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+        }
+
+        messageList.clear();
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+                false);
+            worker.run();
+        }
+
+        int diagnostics = 0;
+        int rejections  = 0;
+        int successes   = 0;
+        for (const QString &message : messageList) {
+            diagnostics += message.contains(diagnostic) ? 1 : 0;
+            rejections += message.contains("configuration rejected") ? 1 : 0;
+            successes += message.contains("Successfully generated Verilog file") ? 1 : 0;
+        }
+        QCOMPARE(diagnostics, 1);
+        QCOMPARE(rejections, 1);
+        QCOMPARE(successes, 0);
+
+        QFile verilogFile(verilogPath);
+        QFile typstFile(typstPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(verilogFile.readAll(), verilogSentinel);
+        QCOMPARE(typstFile.readAll(), typstSentinel);
     }
 
     /* One enable input may serve several dividers; the port declares once
@@ -1194,6 +1310,338 @@ clock:
         QVERIFY(!verilog.isEmpty());
         QCOMPARE(verilog.count("input  wire div_en"), qsizetype(1));
         QCOMPARE(verilog.count(".en(div_en)"), qsizetype(2));
+    }
+
+    /* A name shared by two dividers and the controller test enable used to
+       declare twice and fail elaboration; it is one input port. */
+    void test_shared_enable_as_test_enable_declares_once()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: shared_en_ctl
+    test_enable: shared_en
+    input:
+      a:
+        freq: 10MHz
+    target:
+      clk_a:
+        freq: 5MHz
+        div:
+          default: 2
+          width: 2
+          enable: shared_en
+        link:
+          a:
+      clk_b:
+        freq: 5MHz
+        div:
+          default: 2
+          width: 2
+          enable: shared_en
+        link:
+          a:
+)";
+
+        const QString verilog = generateClockNetlist("test_shared_en_ten", netlistContent);
+        QVERIFY(!verilog.isEmpty());
+        QCOMPARE(verilog.count("input  wire shared_en"), qsizetype(1));
+        QCOMPARE(verilog.count(".en(shared_en)"), qsizetype(2));
+        QCOMPARE(verilog.count(".test_en(shared_en)"), qsizetype(2));
+
+        messageList.clear();
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_shared_en_ten.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+        bool cleanElaboration = false;
+        for (const QString &message : messageList) {
+            cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
+        }
+        QVERIFY(cleanElaboration);
+    }
+
+    /* An unused valid forms no port, so its name may legally belong to
+       another port such as a target output. */
+    void test_unused_valid_name_may_match_another_port()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: unused_valid_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_a:
+        freq: 100MHz
+        div:
+          default: 1
+          width: 2
+          valid: clk_b
+        link:
+          clk_in:
+      clk_b:
+        freq: 100MHz
+        link:
+          clk_in:
+)";
+
+        const QString verilog = generateClockNetlist("test_unused_valid", netlistContent);
+        QVERIFY(!verilog.isEmpty());
+        QCOMPARE(verilog.count("input  wire clk_b"), qsizetype(0));
+        QCOMPARE(verilog.count("output wire clk_b"), qsizetype(1));
+        QCOMPARE(verilog.count(".div_valid(1'b0)"), qsizetype(1));
+
+        messageList.clear();
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_unused_valid.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+        bool cleanElaboration = false;
+        for (const QString &message : messageList) {
+            cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
+        }
+        QVERIFY(cleanElaboration);
+    }
+
+    /* A control constant stays inline in the RTL; it must never surface
+       as a module port. */
+    void test_control_constant_forms_no_port()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: const_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 50MHz
+        icg:
+          enable: "1'b1"
+        div:
+          default: 2
+          width: 2
+          enable: "1'b1"
+        link:
+          clk_in:
+      clk_l:
+        freq: 50MHz
+        link:
+          clk_in:
+            div:
+              default: 2
+              width: 2
+              value: link_ratio
+              valid: "1'b1"
+)";
+
+        const QString verilog = generateClockNetlist("test_const_control", netlistContent);
+        QVERIFY(!verilog.isEmpty());
+        /* Three .en(1'b1): the constant icg enable, the constant divider
+           enable, and the link divider's default enable. */
+        QCOMPARE(verilog.count("input  wire 1'b1"), qsizetype(0));
+        QCOMPARE(verilog.count(".en(1'b1)"), qsizetype(3));
+        QCOMPARE(verilog.count(".div_valid(1'b1)"), qsizetype(1));
+
+        messageList.clear();
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_const_control.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+        bool cleanElaboration = false;
+        for (const QString &message : messageList) {
+            cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
+        }
+        QVERIFY(cleanElaboration);
+    }
+
+    /* A static divider's valid port is public ABI even though the RTL
+       ties div_valid to 1'b0; parents may already connect it. */
+    void test_static_divider_keeps_declaring_its_valid()
+    {
+        const QString netlistContent = R"(
+clock:
+  - name: static_valid_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 50MHz
+        div:
+          default: 2
+          width: 2
+          valid: legacy_valid
+        link:
+          clk_in:
+      clk_l:
+        freq: 50MHz
+        link:
+          clk_in:
+            div:
+              default: 2
+              width: 2
+              valid: legacy_link_valid
+)";
+
+        const QString verilog = generateClockNetlist("test_static_valid", netlistContent);
+        QVERIFY(!verilog.isEmpty());
+        QCOMPARE(verilog.count("input  wire legacy_valid"), qsizetype(1));
+        QCOMPARE(verilog.count("input  wire legacy_link_valid"), qsizetype(1));
+        QCOMPARE(verilog.count(".div_valid(1'b0)"), qsizetype(2));
+
+        messageList.clear();
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_static_valid.v");
+        QSlangDriver driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+        bool cleanElaboration = false;
+        for (const QString &message : messageList) {
+            cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
+        }
+        QVERIFY(cleanElaboration);
+    }
+
+    /* Signal names that are neither identifiers nor allowed constants
+       reject early instead of reaching the Verilog. */
+    void test_invalid_signal_atoms_reject_data()
+    {
+        QTest::addColumn<QString>("netlistContent");
+        QTest::addColumn<QString>("diagnostic");
+
+        QTest::newRow("output-ready-constant") << QString(R"(
+clock:
+  - name: bad_atom_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 50MHz
+        div:
+          default: 2
+          width: 2
+          value: ratio
+          valid: upd
+          ready: 1
+        link:
+          clk_in:
+)") << QString("Clock controller port 1 must be a plain identifier");
+
+        QTest::newRow("value-constant") << QString(R"(
+clock:
+  - name: bad_atom_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 50MHz
+        div:
+          default: 2
+          width: 2
+          value: "2'd4"
+        link:
+          clk_in:
+)") << QString("Clock controller port 2'd4 must be a plain identifier");
+
+        QTest::newRow("icg-enable-expression") << QString(R"(
+clock:
+  - name: bad_atom_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 100MHz
+        icg:
+          enable: "foo & bar"
+        link:
+          clk_in:
+)") << QString("Clock control signal foo & bar must be an identifier or a 1'b0/1'b1 constant");
+
+        QTest::newRow("link-count-constant") << QString(R"(
+clock:
+  - name: bad_atom_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 50MHz
+        link:
+          clk_in:
+            div:
+              default: 2
+              width: 2
+              count: "8'hff"
+)") << QString("Clock controller port 8'hff must be a plain identifier");
+
+        QTest::newRow("link-icg-reset-expression") << QString(R"(
+clock:
+  - name: bad_atom_ctl
+    input:
+      clk_in:
+        freq: 100MHz
+    target:
+      clk_t:
+        freq: 100MHz
+        link:
+          clk_in:
+            icg:
+              enable: gate_en
+              reset: "~rst"
+)") << QString("Clock control signal ~rst must be an identifier or a 1'b0/1'b1 constant");
+    }
+
+    void test_invalid_signal_atoms_reject()
+    {
+        QFETCH(QString, netlistContent);
+        QFETCH(QString, diagnostic);
+
+        const QString netlistPath = createTempFile("test_bad_atom.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_bad_atom.v");
+        const QString typstPath = QDir(projectManager.getOutputPath()).filePath("bad_atom_ctl.typ");
+        const QByteArray verilogSentinel("existing-verilog\n");
+        const QByteArray typstSentinel("existing-typst\n");
+        {
+            QFile verilogFile(verilogPath);
+            QFile typstFile(typstPath);
+            QVERIFY(verilogFile.open(QIODevice::WriteOnly));
+            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
+            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+        }
+
+        messageList.clear();
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+                false);
+            worker.run();
+        }
+
+        QCOMPARE(messageList.filter(diagnostic).size(), 1);
+        QCOMPARE(messageList.filter("configuration rejected").size(), 1);
+        QCOMPARE(messageList.filter("Successfully generated Verilog file").size(), 0);
+
+        QFile verilogFile(verilogPath);
+        QFile typstFile(typstPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(verilogFile.readAll(), verilogSentinel);
+        QCOMPARE(typstFile.readAll(), typstSentinel);
     }
 
     /* A unity divider still owns its control ports: default: 1 with
@@ -1250,12 +1698,12 @@ clock:
         QTest::addColumn<int>("dividerWidth");
         QTest::addColumn<QString>("diagnostic");
 
-        QTest::newRow("width") << 4
-                               << QString(
-                                      "Clock divider port shared has incompatible widths 4 and 1");
+        QTest::newRow("width")
+            << 4 << QString("Clock controller port shared has incompatible widths 4 and 1");
         QTest::newRow("packed-shape")
             << 1
-            << QString("Clock divider port shared has incompatible scalar and packed declarations");
+            << QString(
+                   "Clock controller port shared has incompatible scalar and packed declarations");
     }
 
     void test_incompatible_divider_control_ports_preserve_artifacts()
@@ -2154,9 +2602,9 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "input wire sw_clk_a"));
     }
 
-    /* A divider interface name reused across dividers used to reach the
-       header emitter as an uncaught throw and abort the process. */
-    void test_duplicate_divider_signal_name_is_rejected()
+    /* Two dividers reading one ratio register are exact-ABI input reuse:
+       the value port declares once and both instances consume it. */
+    void test_shared_divider_value_declares_once()
     {
         messageList.clear();
         const QString verilogContent = generateClockNetlist("test_dup_div", R"(
@@ -2204,8 +2652,21 @@ clock:
               value: shared_div
               reset: rst_n
 )");
-        QVERIFY(verilogContent.isEmpty());
-        QCOMPARE(messageList.filter("Duplicate divider value signal name: shared_div").size(), 1);
+        QVERIFY(!verilogContent.isEmpty());
+        QCOMPARE(verilogContent.count("input  wire [3:0] shared_div"), qsizetype(1));
+        QCOMPARE(verilogContent.count(".div(shared_div)"), qsizetype(2));
+
+        messageList.clear();
+        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_dup_div.v");
+        QSlangDriver  driver;
+        QVERIFY(driver.parseFileList(
+            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+        bool cleanElaboration = false;
+        for (const QString &message : messageList) {
+            cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
+        }
+        QVERIFY(cleanElaboration);
     }
 
     void test_inverter_applies_once_through_a_cell()
@@ -3803,10 +4264,10 @@ clock:
             < verilogContent.indexOf("u_clk_out_target_inv"));
     }
 
-    void test_test_clock_output_win()
+    void test_test_clock_shares_the_input_clock_port()
     {
-        // Test case for test_clock "output win" mechanism
-        // When test_clock name matches an input clock, it should merge and print info message
+        /* A test_clock naming an input clock is exact input reuse: the
+           clock declares once and the mux consumes the same port. */
         QString netlistContent = R"(
 port:
   clk_hse:
@@ -3839,7 +4300,7 @@ clock:
           clk_ext0:
         select: clk_sel
         reset: rst_n
-        test_clock: clk_hse  # Same as input clock - should trigger "output win"
+        test_clock: clk_hse  # Same as input clock - shares its port
 )";
 
         messageList.clear(); // Clear previous messages to catch the INFO message
@@ -3867,7 +4328,7 @@ clock:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        // Verify "output win": clk_hse should appear only once in the test_clock_merge module port declaration
+        // clk_hse appears exactly once in the test_clock_merge module ports
         // Extract the test_clock_merge module section only
         QRegularExpression      moduleRegex("module test_clock_merge \\(([^;]+)\\);");
         QRegularExpressionMatch match = moduleRegex.match(verilogContent);
@@ -3888,7 +4349,7 @@ clock:
         QVERIFY(!verilogContent.isEmpty());
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module test_clock_merge"));
 
-        // Verify that test_clock is properly used in the MUX instance (output win mechanism working)
+        // The MUX instance consumes the shared input clock port
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_clk   (clk_hse)"));
 
         // Verify no errors about port conflicts occurred
@@ -4598,43 +5059,73 @@ clock:
         QFETCH(QString, fragment);
 
         messageList.clear();
-        const QString netlist        = QString(
-                                           "port:\n"
-                                           "  osc:\n"
-                                           "    direction: input\n"
-                                           "    type: logic\n"
-                                           "  rst_n:\n"
-                                           "    direction: input\n"
-                                           "    type: logic\n"
-                                           "  ratio:\n"
-                                           "    direction: input\n"
-                                           "    type: logic[3:0]\n"
-                                           "  slow_clk:\n"
-                                           "    direction: output\n"
-                                           "    type: logic\n"
-                                           "\n"
-                                           "instance: {}\n"
-                                           "\n"
-                                           "net: {}\n"
-                                           "\n"
-                                           "clock:\n"
-                                           "  - name: %1_ctrl\n"
-                                           "    clock: clk_sys\n"
-                                           "    input:\n"
-                                           "      osc:\n"
-                                           "        freq: 24MHz\n"
-                                           "    target:\n"
-                                           "      slow_clk:\n"
-                                           "        freq: 12MHz\n"
-                                           "        link:\n"
-                                           "          osc:\n"
-                                           "%2")
-                                           .arg(stem, divBlock);
-        const QString verilogContent = generateClockNetlist(stem, netlist);
-        QVERIFY(verilogContent.isEmpty());
-        QVERIFY2(
-            messageList.join('\n').contains(fragment),
-            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
+        const QString netlist     = QString(
+                                        "port:\n"
+                                        "  osc:\n"
+                                        "    direction: input\n"
+                                        "    type: logic\n"
+                                        "  rst_n:\n"
+                                        "    direction: input\n"
+                                        "    type: logic\n"
+                                        "  ratio:\n"
+                                        "    direction: input\n"
+                                        "    type: logic[3:0]\n"
+                                        "  slow_clk:\n"
+                                        "    direction: output\n"
+                                        "    type: logic\n"
+                                        "\n"
+                                        "instance: {}\n"
+                                        "\n"
+                                        "net: {}\n"
+                                        "\n"
+                                        "clock:\n"
+                                        "  - name: %1_ctrl\n"
+                                        "    clock: clk_sys\n"
+                                        "    input:\n"
+                                        "      osc:\n"
+                                        "        freq: 24MHz\n"
+                                        "    target:\n"
+                                        "      slow_clk:\n"
+                                        "        freq: 12MHz\n"
+                                        "        link:\n"
+                                        "          osc:\n"
+                                        "%2")
+                                        .arg(stem, divBlock);
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+
+        /* A rejection must leave existing artifacts byte-identical. */
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString typstPath = QDir(projectManager.getOutputPath()).filePath(stem + "_ctrl.typ");
+        const QByteArray verilogSentinel("existing-verilog\n");
+        const QByteArray typstSentinel("existing-typst\n");
+        {
+            QFile verilogFile(verilogPath);
+            QFile typstFile(typstPath);
+            QVERIFY(verilogFile.open(QIODevice::WriteOnly));
+            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
+            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+        }
+
+        {
+            QSocCliWorker worker;
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), netlistPath},
+                false);
+            worker.run();
+        }
+
+        QCOMPARE(messageList.filter(fragment).size(), 1);
+        QCOMPARE(messageList.filter("configuration rejected").size(), 1);
+        QCOMPARE(messageList.filter("Successfully generated Verilog file").size(), 0);
+
+        QFile verilogFile(verilogPath);
+        QFile typstFile(typstPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly));
+        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QCOMPARE(verilogFile.readAll(), verilogSentinel);
+        QCOMPARE(typstFile.readAll(), typstSentinel);
     }
 
 private:
