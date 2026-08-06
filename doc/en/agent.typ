@@ -299,7 +299,7 @@ The following commands are available during an interactive session:
      `~/.ssh/config` aliases plus the saved binding. The user defaults
      to the current OS user, the port defaults to 22. After the session
      comes up a two-column directory browser asks for the workspace; the
-     choice is remembered in `<project>/.qsoc/remote.yml` and reused on
+     choice is remembered in `<project>/.qsoc/host.yml` and reused on
      later connects.],
     [`/status`], [Show model, session, and endpoint info],
     [`/help`], [Show help message],
@@ -1019,12 +1019,72 @@ back to 22. The workspace is never part of the command line; after the
 session comes up a two-column directory browser opens starting at the
 remote home directory, and the chosen path becomes both the initial cwd
 and the sole writable root for remote file tools. The selection is
-written to `<project>/.qsoc/remote.yml` and reused on subsequent
+written to `<project>/.qsoc/host.yml` and reused on subsequent
 `/ssh <same target>` invocations without prompting the picker.
 
 Bare `/ssh` opens a picker listing the saved binding plus concrete aliases
 parsed from `~/.ssh/config`. `/local` returns to local mode but keeps the
 binding on disk so the next session can auto-connect.
+
+=== When The Link Drops
+<agent-remote-disconnect>
+
+A remote host that reboots, loses power, or falls behind a firewall stops
+answering without closing the connection. QSoC treats that as a bounded
+failure rather than a wait:
+
+- Every remote operation has a deadline measured from when it started,
+  covering channel setup, transfer, and teardown. Closing a handle after
+  that budget is spent gets its own separate two-second window, so cleanup
+  is bounded rather than skipped.
+- The socket carries TCP keepalive as a second line of detection. How long
+  the kernel takes to declare a silent peer dead is platform dependent and
+  partly outside QSoC's control: the requested schedule is a 15-second idle
+  time and three probes five seconds apart, individual knobs may be
+  unsupported or overridden by system policy, and the deadlines above are
+  what actually bound an operation.
+- A session is refused for either of two reasons: the socket is gone, or a
+  request was abandoned at its deadline and the protocol is stranded
+  mid-exchange. Both make later tool calls fail immediately instead of
+  retrying, and the turn ends rather than feeding the same failure back to
+  the model. A command that simply outruns its own `timeout_ms` is *not*
+  one of these: the read was abandoned, not a request, so the workspace
+  stays usable and the next command runs normally.
+- The session stays in remote mode. QSoC never falls back to the local
+  workspace on its own, because a command written for the remote tree must
+  not silently run against local files. Reconnect with `/ssh`, or leave
+  remote mode deliberately with `/local`.
+
+There is no automatic reconnect. After a drop, remote state is unknown
+rather than known-gone: a reboot discards the working directory,
+backgrounded jobs, and temporary files, while a network partition leaves
+all of them running. A transparent reconnect would present either case as
+continuity, so QSoC makes you reconnect and re-establish what you need.
+
+=== Interrupted Operations
+<agent-remote-uncertain>
+
+A request that went out and got no answer has an unknown outcome: the
+remote side may have carried it out anyway. QSoC reports these as
+uncertain rather than as failures, and never retries them on its own,
+because retrying a change that already landed applies it twice.
+
+- `bash` reports `status: uncertain` with `exit_code: -1`. An exit status
+  is only reported when the command actually finished; a cut-off command
+  never reports `exit_code: 0`. A command killed by a signal is a definite
+  failure, not an uncertain one: it reports `status: failed` with
+  `exit_signal: SIGKILL` and keeps `exit_code: -1`, because a signalled
+  process sends no exit status at all.
+- `bash_manage` reports that the job state is unknown rather than showing
+  empty output, which would read as "no output yet" or as a kill that
+  happened.
+- `write_file` and `edit_file` never remove a file to make room for its
+  replacement. The existing content is renamed aside, the new content is
+  renamed in, and the saved copy is dropped only after that succeeds. If
+  the link dies mid-publish, the content is still on the remote host under
+  the original name or beside it as `<name>.qsoc-bak-<timestamp>`; the
+  tool says so instead of guessing which copy to keep.
+- In the TUI these calls are marked uncertain rather than green or red.
 
 === What Runs Where
 <agent-remote-where>
