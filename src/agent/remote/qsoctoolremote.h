@@ -6,6 +6,7 @@
 
 #include "agent/qsoctool.h"
 
+class QSocRemoteConnection;
 class QSocSftpClient;
 class QSocSshSession;
 class QSocSshExec;
@@ -22,7 +23,8 @@ class QSocToolRemoteFileRead : public QSocTool
     Q_OBJECT
 
 public:
-    QSocToolRemoteFileRead(QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx);
+    QSocToolRemoteFileRead(
+        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -31,7 +33,7 @@ public:
     bool    isReadOnly() const override { return true; }
 
 private:
-    QSocSftpClient        *m_sftp    = nullptr;
+    QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
 };
 
@@ -41,7 +43,8 @@ class QSocToolRemoteFileWrite : public QSocTool
     Q_OBJECT
 
 public:
-    QSocToolRemoteFileWrite(QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx);
+    QSocToolRemoteFileWrite(
+        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -52,7 +55,7 @@ public:
     void setFileHistory(QSocFileHistory *history) { m_fileHistory = history; }
 
 private:
-    QSocSftpClient        *m_sftp        = nullptr;
+    QSocRemoteConnection  *m_conn        = nullptr;
     QSocRemotePathContext *m_pathCtx     = nullptr;
     QSocFileHistory       *m_fileHistory = nullptr;
 };
@@ -63,7 +66,8 @@ class QSocToolRemoteFileList : public QSocTool
     Q_OBJECT
 
 public:
-    QSocToolRemoteFileList(QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx);
+    QSocToolRemoteFileList(
+        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -72,7 +76,7 @@ public:
     bool    isReadOnly() const override { return true; }
 
 private:
-    QSocSftpClient        *m_sftp    = nullptr;
+    QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
 };
 
@@ -82,7 +86,8 @@ class QSocToolRemoteFileEdit : public QSocTool
     Q_OBJECT
 
 public:
-    QSocToolRemoteFileEdit(QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx);
+    QSocToolRemoteFileEdit(
+        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -93,7 +98,7 @@ public:
     void setFileHistory(QSocFileHistory *history) { m_fileHistory = history; }
 
 private:
-    QSocSftpClient        *m_sftp        = nullptr;
+    QSocRemoteConnection  *m_conn        = nullptr;
     QSocRemotePathContext *m_pathCtx     = nullptr;
     QSocFileHistory       *m_fileHistory = nullptr;
 };
@@ -104,7 +109,8 @@ class QSocToolRemoteShellBash : public QSocTool
     Q_OBJECT
 
 public:
-    QSocToolRemoteShellBash(QObject *parent, QSocSshSession *session, QSocRemotePathContext *pathCtx);
+    QSocToolRemoteShellBash(
+        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -113,7 +119,7 @@ public:
     void    abort() override;
 
 private:
-    QSocSshSession        *m_session = nullptr;
+    QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
     QSocSshExec           *m_running = nullptr;
 };
@@ -131,7 +137,7 @@ class QSocToolRemoteBashManage : public QSocTool
 
 public:
     QSocToolRemoteBashManage(
-        QObject *parent, QSocSshSession *session, QSocRemotePathContext *pathCtx);
+        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -139,7 +145,7 @@ public:
     QString execute(const json &arguments) override;
 
 private:
-    QSocSshSession        *m_session = nullptr;
+    QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
 };
 

@@ -133,8 +133,9 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
      * Web/doc are intentionally local-only for now. */
     /* binding is heap-cached for the process lifetime, so its state.path
      * is a valid long-lived bind target. */
-    binding->registry
-        = buildAgentRemoteRegistry(this, &binding->state, &binding->state.path, nullptr, nullptr);
+    binding->conn.adopt(binding->state);
+    binding->registry = buildAgentRemoteRegistry(
+        this, &binding->state, &binding->conn, binding->conn.path(), nullptr, nullptr);
     hostCache_.insert(host, binding);
     return binding->registry;
 }

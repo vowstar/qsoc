@@ -137,6 +137,10 @@ private:
     struct HostBinding
     {
         AgentRemoteState state;
+        /* Stable handle the binding's tools bind to, so the transport can be
+         * replaced without rebuilding the registry. Lives here because it
+         * must outlive every tool built from it. */
+        QSocRemoteConnection conn;
         /* registry is parented to QSocToolAgent and owned via Qt's
          * tree; explicit delete happens in the destructor. */
         QSocToolRegistry *registry = nullptr;

@@ -303,17 +303,18 @@ bool prepareAgentRemoteWorkspace(
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     AgentRemoteState      *state,
+    QSocRemoteConnection  *conn,
     QSocRemotePathContext *pathCtx,
     QSocConfig            *socConfig,
     QSocMonitorTaskSource *monitorSource)
 {
     auto *registry = new QSocToolRegistry(parent);
-    registry->registerTool(new QSocToolRemoteFileRead(parent, state->sftp, pathCtx));
-    registry->registerTool(new QSocToolRemoteFileList(parent, state->sftp, pathCtx));
-    registry->registerTool(new QSocToolRemoteFileWrite(parent, state->sftp, pathCtx));
-    registry->registerTool(new QSocToolRemoteFileEdit(parent, state->sftp, pathCtx));
-    registry->registerTool(new QSocToolRemoteShellBash(parent, state->session, pathCtx));
-    registry->registerTool(new QSocToolRemoteBashManage(parent, state->session, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileRead(parent, conn, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
+    registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));
+    registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
+    registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemotePath(parent, pathCtx));
     if (monitorSource != nullptr) {
         QSocMonitorTaskSource::RemoteSpec remote;
@@ -333,6 +334,36 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     }
     state->registry = registry;
     return registry;
+}
+
+void QSocRemoteConnection::adopt(const AgentRemoteState &state)
+{
+    m_session   = state.session;
+    m_sftp      = state.sftp;
+    m_path      = state.path;
+    m_target    = state.targetKey;
+    m_workspace = state.workspace;
+}
+
+void QSocRemoteConnection::release()
+{
+    m_session = nullptr;
+    m_sftp    = nullptr;
+    m_target.clear();
+    m_workspace.clear();
+}
+
+bool QSocRemoteConnection::isUsable() const
+{
+    return m_session != nullptr && m_session->isConnected();
+}
+
+QString QSocRemoteConnection::unusableText() const
+{
+    if (m_session == nullptr) {
+        return QStringLiteral("no remote workspace is bound");
+    }
+    return m_session->unusableText();
 }
 
 bool remoteWorkspaceAnswers(

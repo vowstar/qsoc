@@ -44,6 +44,49 @@ struct AgentRemoteState
 };
 
 /**
+ * @brief Stable handle to whichever transport currently backs a workspace.
+ * @details Tools bind to one of these once and ask it for the session or
+ *          SFTP client on every call, so replacing the transport underneath
+ *          them needs no re-wiring. That indirection is the whole point:
+ *          `AgentRemoteState` already aggregates the same fields, but it is
+ *          deliberately short-lived, and a tool holding one directly would
+ *          keep reading a transport that has been torn down.
+ *
+ *          Owned by whoever owns the binding (the CLI worker, or the spawn
+ *          tool's host cache) and outlives every registry built from it.
+ *          Deliberately not a state machine: liveness lives on the session,
+ *          and there is no backoff, scheduler, or failover here.
+ */
+class QSocRemoteConnection
+{
+public:
+    /** @brief Take over the transport a successful connect produced. */
+    void adopt(const AgentRemoteState &state);
+
+    /** @brief Forget the transport without touching it; the caller frees. */
+    void release();
+
+    QSocSshSession        *session() const { return m_session; }
+    QSocSftpClient        *sftp() const { return m_sftp; }
+    QSocRemotePathContext *path() { return &m_path; }
+    QString                target() const { return m_target; }
+    QString                workspace() const { return m_workspace; }
+
+    /** @brief Whether a transport is bound and still usable. */
+    bool isUsable() const;
+
+    /** @brief Why the workspace cannot be used, empty while it can. */
+    QString unusableText() const;
+
+private:
+    QSocSshSession       *m_session = nullptr;
+    QSocSftpClient       *m_sftp    = nullptr;
+    QSocRemotePathContext m_path;
+    QString               m_target;
+    QString               m_workspace;
+};
+
+/**
  * @brief Open an SSH session (with ProxyJump chain) and SFTP subsystem.
  * @details Parses `[user@]host[:port]` or a `~/.ssh/config` alias, resolves
  *          host config, builds a proxy-jump-aware connection, and opens
@@ -95,6 +138,7 @@ bool prepareAgentRemoteWorkspace(
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     AgentRemoteState      *state,
+    QSocRemoteConnection  *conn,
     QSocRemotePathContext *pathCtx,
     QSocConfig            *socConfig,
     QSocMonitorTaskSource *monitorSource = nullptr);

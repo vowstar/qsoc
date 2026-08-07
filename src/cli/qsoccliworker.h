@@ -400,6 +400,7 @@ private:
         const QString               &resumeSessionId   = QString(),
         QSocPathContext             *pathContext       = nullptr,
         struct AgentRemoteState     *preconnected      = nullptr,
+        class QSocRemoteConnection  *preconnectedConn  = nullptr,
         class QSocToolRegistry      *preLocalRegistry  = nullptr,
         class QSocTaskRegistry      *taskRegistry      = nullptr,
         class QSocTaskEventQueue    *taskEventQueue    = nullptr,

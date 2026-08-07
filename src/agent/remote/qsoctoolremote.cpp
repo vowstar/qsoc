@@ -4,6 +4,7 @@
 #include "agent/remote/qsoctoolremote.h"
 
 #include "agent/qsocfilehistory.h"
+#include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
@@ -55,12 +56,12 @@ QString buildBashCommand(const QString &cwd, const QString &userCommand)
 /* Refusal text for a session that cannot serve a call. "Not connected" is
  * wrong for a session whose socket is fine but whose protocol was stranded
  * mid-request, and neither case tells the reader what to do next. */
-QString sessionRefusal(QSocSshSession *session)
+QString sessionRefusal(QSocRemoteConnection *conn)
 {
-    if (session == nullptr) {
+    if (conn == nullptr) {
         return QStringLiteral("Error: SSH session is not connected");
     }
-    return QStringLiteral("Error: %1; reconnect with /ssh").arg(session->unusableText());
+    return QStringLiteral("Error: %1; reconnect with /ssh").arg(conn->unusableText());
 }
 
 /* A write we could not confirm is uncertain, not failed. Reporting it as
@@ -96,9 +97,9 @@ QSocTool::ResultStatus remoteRunStatus(const QSocSshExec::Result &result)
 /* read_file */
 
 QSocToolRemoteFileRead::QSocToolRemoteFileRead(
-    QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
-    , m_sftp(sftp)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -141,7 +142,7 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
     if (!ok) {
         return QStringLiteral("Error: remote path context is not configured");
     }
-    if (m_sftp == nullptr) {
+    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
         return QStringLiteral("Error: remote SFTP client is not connected");
     }
 
@@ -161,7 +162,7 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
     }
 
     QString    err;
-    QByteArray bytes = m_sftp->readFile(remotePath, 0, &err);
+    QByteArray bytes = m_conn->sftp()->readFile(remotePath, 0, &err);
     if (bytes.isNull() && !err.isEmpty()) {
         return QStringLiteral("Error: %1").arg(err);
     }
@@ -199,9 +200,9 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
 /* write_file */
 
 QSocToolRemoteFileWrite::QSocToolRemoteFileWrite(
-    QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
-    , m_sftp(sftp)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -244,7 +245,7 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     if (!ok) {
         return QStringLiteral("Error: remote path context is not configured");
     }
-    if (m_sftp == nullptr) {
+    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
         return QStringLiteral("Error: remote SFTP client is not connected");
     }
     if (!m_pathCtx->isWritable(remotePath)) {
@@ -258,7 +259,7 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
      * complete must not be read as "new file", or the guard is skipped
      * exactly when the link is least trustworthy. */
     QString    presenceErr;
-    const auto before = m_sftp->presence(remotePath, &presenceErr);
+    const auto before = m_conn->sftp()->presence(remotePath, &presenceErr);
     if (before == QSocSftpClient::Presence::Unknown) {
         return QStringLiteral("Error: %1").arg(presenceErr);
     }
@@ -272,7 +273,7 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
                 .arg(remotePath);
         }
         QString          readErr;
-        const QByteArray current = m_sftp->readFile(remotePath, 0, &readErr);
+        const QByteArray current = m_conn->sftp()->readFile(remotePath, 0, &readErr);
         if (current.isNull() && !readErr.isEmpty()) {
             /* A transport error must not be misread as a concurrent change. */
             return QStringLiteral("Error: %1").arg(readErr);
@@ -293,8 +294,8 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
 
     const QString content = QString::fromStdString(arguments["content"].get<std::string>());
     QString       err;
-    if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {
-        return sftpWriteError(m_sftp, err);
+    if (!m_conn->sftp()->writeFile(remotePath, content.toUtf8(), &err)) {
+        return sftpWriteError(m_conn->sftp(), err);
     }
     /* The written content is now the agent's known state. */
     m_pathCtx->readState().recordRead(remotePath, content);
@@ -306,9 +307,9 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
 /* list_files */
 
 QSocToolRemoteFileList::QSocToolRemoteFileList(
-    QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
-    , m_sftp(sftp)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -346,7 +347,7 @@ QString QSocToolRemoteFileList::execute(const json &arguments)
     if (!ok) {
         return QStringLiteral("Error: remote path context is not configured");
     }
-    if (m_sftp == nullptr) {
+    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
         return QStringLiteral("Error: remote SFTP client is not connected");
     }
     int limit = 200;
@@ -357,7 +358,7 @@ QString QSocToolRemoteFileList::execute(const json &arguments)
         }
     }
     QString    err;
-    const auto entries = m_sftp->listDir(remotePath, limit, &err);
+    const auto entries = m_conn->sftp()->listDir(remotePath, limit, &err);
     if (entries.isEmpty() && !err.isEmpty()) {
         return QStringLiteral("Error: %1").arg(err);
     }
@@ -374,9 +375,9 @@ QString QSocToolRemoteFileList::execute(const json &arguments)
 /* edit_file */
 
 QSocToolRemoteFileEdit::QSocToolRemoteFileEdit(
-    QObject *parent, QSocSftpClient *sftp, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
-    , m_sftp(sftp)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -422,7 +423,7 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (!ok) {
         return QStringLiteral("Error: remote path context is not configured");
     }
-    if (m_sftp == nullptr) {
+    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
         return QStringLiteral("Error: remote SFTP client is not connected");
     }
     if (!m_pathCtx->isWritable(remotePath)) {
@@ -430,7 +431,7 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
             .arg(remotePath);
     }
     QString          err;
-    const QByteArray bytes = m_sftp->readFile(remotePath, 0, &err);
+    const QByteArray bytes = m_conn->sftp()->readFile(remotePath, 0, &err);
     if (bytes.isNull() && !err.isEmpty()) {
         return QStringLiteral("Error: %1").arg(err);
     }
@@ -466,8 +467,8 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
         m_fileHistory->trackEdit(remotePath, true, content);
     }
     content.replace(first, oldString.size(), newString);
-    if (!m_sftp->writeFile(remotePath, content.toUtf8(), &err)) {
-        return sftpWriteError(m_sftp, err);
+    if (!m_conn->sftp()->writeFile(remotePath, content.toUtf8(), &err)) {
+        return sftpWriteError(m_conn->sftp(), err);
     }
     /* The agent now knows the post-edit content. */
     m_pathCtx->readState().recordRead(remotePath, content);
@@ -477,9 +478,9 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
 /* bash (shell) */
 
 QSocToolRemoteShellBash::QSocToolRemoteShellBash(
-    QObject *parent, QSocSshSession *session, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
-    , m_session(session)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -511,8 +512,8 @@ json QSocToolRemoteShellBash::getParametersSchema() const
 
 QString QSocToolRemoteShellBash::execute(const json &arguments)
 {
-    if (m_session == nullptr || !m_session->isConnected()) {
-        return sessionRefusal(m_session);
+    if (m_conn == nullptr || !m_conn->isUsable()) {
+        return sessionRefusal(m_conn);
     }
     if (!arguments.contains("command") || !arguments["command"].is_string()) {
         return QStringLiteral("Error: command is required");
@@ -563,7 +564,7 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
         const QString launch
             = QStringLiteral("mkdir -p %1 && (%2) >/dev/null 2>&1 & disown").arg(jobDir, wrapper);
 
-        QSocSshExec exec(*m_session);
+        QSocSshExec exec(*m_conn->session());
         m_running         = &exec;
         const auto result = exec.run(launch, 10000);
         m_running         = nullptr;
@@ -577,7 +578,7 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
 
     const QString wrapped = buildBashCommand(cwd, cmd);
 
-    QSocSshExec exec(*m_session);
+    QSocSshExec exec(*m_conn->session());
     m_running         = &exec;
     const auto result = exec.run(wrapped, timeoutMs);
     m_running         = nullptr;
@@ -685,9 +686,9 @@ QString QSocToolRemotePath::execute(const json &arguments)
 /* bash_manage */
 
 QSocToolRemoteBashManage::QSocToolRemoteBashManage(
-    QObject *parent, QSocSshSession *session, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
-    , m_session(session)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -722,8 +723,8 @@ json QSocToolRemoteBashManage::getParametersSchema() const
 
 QString QSocToolRemoteBashManage::execute(const json &arguments)
 {
-    if (m_session == nullptr || !m_session->isConnected()) {
-        return sessionRefusal(m_session);
+    if (m_conn == nullptr || !m_conn->isUsable()) {
+        return sessionRefusal(m_conn);
     }
     if (m_pathCtx == nullptr || m_pathCtx->root().isEmpty()) {
         return QStringLiteral("Error: workspace root is not configured");
@@ -745,7 +746,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     const QString jobDir = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs/") + jobId;
 
     auto runShell = [&](const QString &shell, int timeoutMs) {
-        QSocSshExec exec(*m_session);
+        QSocSshExec exec(*m_conn->session());
         return exec.run(shell, timeoutMs);
     };
 

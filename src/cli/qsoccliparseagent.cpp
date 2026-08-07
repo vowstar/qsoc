@@ -1510,9 +1510,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * single-query just runs against the remote tools and exits; the
      * REPL receives the live session via runAgentLoop arguments and the
      * sticky binding's auto-/ssh is suppressed for this run. */
-    AgentRemoteState  cliRemoteState;
-    AgentRemoteState *preconnectedRemote = nullptr;
-    QSocToolRegistry *preLocalRegistry   = nullptr;
+    AgentRemoteState     cliRemoteState;
+    QSocRemoteConnection cliRemoteConn;
+    AgentRemoteState    *preconnectedRemote = nullptr;
+    QSocToolRegistry    *preLocalRegistry   = nullptr;
     if (parser.isSet("ssh")) {
         const QString sshTarget = parser.value("ssh");
         const QString workspace = parser.value("workspace");
@@ -1544,8 +1545,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         /* cliRemoteState lives in this frame for the whole run; the REPL
          * shares (never copies) its path context, so /cwd changes stay
          * visible to the tools bound here. */
+        cliRemoteConn.adopt(cliRemoteState);
         buildAgentRemoteRegistry(
-            this, &cliRemoteState, &cliRemoteState.path, socConfig, monitorTaskSource);
+            this,
+            &cliRemoteState,
+            &cliRemoteConn,
+            &cliRemoteState.path,
+            socConfig,
+            monitorTaskSource);
         /* Re-register the spawn tool + its companion into the remote
          * registry so the parent LLM still sees `agent` /
          * `agent_status` after the remote swap. Both tools are
@@ -1768,6 +1775,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         resumeSessionId,
         pathContext,
         preconnectedRemote,
+        preconnectedRemote != nullptr ? &cliRemoteConn : nullptr,
         preLocalRegistry,
         taskRegistry,
         taskEventQueue,
@@ -1782,6 +1790,7 @@ bool QSocCliWorker::runAgentLoop(
     const QString         &resumeSessionId,
     QSocPathContext       *pathContext,
     AgentRemoteState      *preconnected,
+    QSocRemoteConnection  *preconnectedConn,
     QSocToolRegistry      *preLocalRegistry,
     QSocTaskRegistry      *taskRegistry,
     QSocTaskEventQueue    *taskEventQueue,
@@ -1849,7 +1858,14 @@ bool QSocCliWorker::runAgentLoop(
      * The pointer is fixed after this block: handlers assign through it. */
     QSocRemotePathContext  remotePathStorage;
     QSocRemotePathContext *remotePath = &remotePathStorage;
-    QString                remoteTargetKey;
+    /* One handle for the whole run: remote tools bind to it once, so a later
+     * transport swap needs no registry rebuild. The launch path already built
+     * a registry against its own handle, so adopt that one rather than
+     * stranding the tools on a second. */
+    QSocRemoteConnection  remoteConnStorage;
+    QSocRemoteConnection *remoteConn = preconnectedConn != nullptr ? preconnectedConn
+                                                                   : &remoteConnStorage;
+    QString               remoteTargetKey;
     if (preconnected != nullptr && preconnected->session != nullptr) {
         remoteSession   = preconnected->session;
         remoteSftp      = preconnected->sftp;
@@ -6905,7 +6921,9 @@ bool QSocCliWorker::runAgentLoop(
              * context BEFORE binding tools to it: newState dies with this
              * handler block, so tools must never hold &newState.path. */
             *remotePath = newState.path;
-            buildAgentRemoteRegistry(this, &newState, remotePath, socConfig, monitorTaskSource);
+            remoteConn->adopt(newState);
+            buildAgentRemoteRegistry(
+                this, &newState, remoteConn, remotePath, socConfig, monitorTaskSource);
 
             /* Tear down any previous remote session before adopting the new one. */
             if (remoteRegistry != nullptr) {
