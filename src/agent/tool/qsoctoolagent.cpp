@@ -40,6 +40,14 @@ QSocToolAgent::QSocToolAgent(
     , taskSource_(taskSource)
 {}
 
+namespace {
+
+/* Liveness budget for reusing a cached host binding. A sibling dispatch
+ * should not wait out a transfer timeout to learn the host is gone. */
+constexpr int kHostProbeMs = 2000;
+
+} // namespace
+
 QSocToolAgent::~QSocToolAgent()
 {
     /* Tear down every cached host binding: registry first (it owns
@@ -47,34 +55,54 @@ QSocToolAgent::~QSocToolAgent()
      * the ProxyJump chain in reverse so children disconnect before
      * their parents. */
     for (auto *binding : std::as_const(hostCache_)) {
-        if (binding == nullptr) {
-            continue;
-        }
-        if (binding->registry != nullptr) {
-            delete binding->registry;
-        }
-        if (binding->state.sftp != nullptr) {
-            binding->state.sftp->close();
-            delete binding->state.sftp;
-        }
-        if (binding->state.session != nullptr) {
-            binding->state.session->disconnectFromHost();
-            delete binding->state.session;
-        }
-        for (auto it = binding->state.jumps.rbegin(); it != binding->state.jumps.rend(); ++it) {
-            (*it)->disconnectFromHost();
-            delete *it;
-        }
-        delete binding;
+        releaseHostBinding(binding);
     }
     hostCache_.clear();
 }
 
+void QSocToolAgent::releaseHostBinding(HostBinding *binding)
+{
+    if (binding == nullptr) {
+        return;
+    }
+    /* Registry first (it owns the tool instances), then SFTP, then the SSH
+     * session, then the ProxyJump chain in reverse so children disconnect
+     * before their parents. */
+    delete binding->registry;
+    if (binding->state.sftp != nullptr) {
+        binding->state.sftp->close();
+        delete binding->state.sftp;
+    }
+    if (binding->state.session != nullptr) {
+        binding->state.session->disconnectFromHost();
+        delete binding->state.session;
+    }
+    for (auto it = binding->state.jumps.rbegin(); it != binding->state.jumps.rend(); ++it) {
+        (*it)->disconnectFromHost();
+        delete *it;
+    }
+    delete binding;
+}
+
 QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QString *errorMessage)
 {
-    const auto cached = hostCache_.constFind(host);
-    if (cached != hostCache_.constEnd()) {
-        return cached.value()->registry;
+    const auto cached = hostCache_.find(host);
+    if (cached != hostCache_.end()) {
+        HostBinding *binding = cached.value();
+        /* A cached registry is only worth reusing while its host can still
+         * answer. Handing one back on a dead session gives every later
+         * sibling a workspace that cannot serve a call, and the failure then
+         * surfaces inside the child instead of here. The liveness flag alone
+         * is not enough: a host that went quiet without closing the
+         * connection still reads as connected, so spend one bounded round
+         * trip before reusing. */
+        if (binding != nullptr && binding->state.session != nullptr
+            && binding->state.session->isConnected()
+            && remoteWorkspaceAnswers(binding->state.sftp, binding->state.path.root(), kHostProbeMs)) {
+            return binding->registry;
+        }
+        hostCache_.erase(cached);
+        releaseHostBinding(binding);
     }
 
     ResolvedHostTarget resolved;
@@ -97,19 +125,7 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
         return nullptr;
     }
     if (!prepareAgentRemoteWorkspace(resolved.workspaceHint, &binding->state, errorMessage)) {
-        if (binding->state.sftp != nullptr) {
-            binding->state.sftp->close();
-            delete binding->state.sftp;
-        }
-        if (binding->state.session != nullptr) {
-            binding->state.session->disconnectFromHost();
-            delete binding->state.session;
-        }
-        for (auto it = binding->state.jumps.rbegin(); it != binding->state.jumps.rend(); ++it) {
-            (*it)->disconnectFromHost();
-            delete *it;
-        }
-        delete binding;
+        releaseHostBinding(binding);
         return nullptr;
     }
     /* Pass nullptr for socConfig + monitorTaskSource: sub-agent

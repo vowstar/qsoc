@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshsession.h"
 #include "qsoc_test.h"
@@ -58,6 +59,35 @@ private slots:
         err.clear();
         QCOMPARE(sftp.presence(QStringLiteral("/tmp"), &err), QSocSftpClient::Presence::Unknown);
         QVERIFY(!err.isEmpty());
+    }
+
+    /* The shared liveness probe must fail closed: no client, no root, or a
+     * host that cannot answer all mean "do not act on this workspace". */
+    void testWorkspaceProbeFailsClosed()
+    {
+        QString err;
+        QVERIFY(!remoteWorkspaceAnswers(nullptr, QStringLiteral("/tmp"), 500, &err));
+        QVERIFY(!err.isEmpty());
+
+        QSocSshSession session;
+        QSocSftpClient sftp(session);
+        err.clear();
+        QVERIFY(!remoteWorkspaceAnswers(&sftp, QStringLiteral("/tmp"), 500, &err));
+        QVERIFY(!err.isEmpty());
+
+        err.clear();
+        QVERIFY(!remoteWorkspaceAnswers(&sftp, QString(), 500, &err));
+        QVERIFY(!err.isEmpty());
+    }
+
+    /* The probe must leave the client's own budget as it found it. */
+    void testWorkspaceProbeRestoresTheOperationBudget()
+    {
+        QSocSshSession session;
+        QSocSftpClient sftp(session);
+        sftp.setOperationTimeoutMs(12345);
+        (void) remoteWorkspaceAnswers(&sftp, QStringLiteral("/tmp"), 500, nullptr);
+        QCOMPARE(sftp.operationTimeoutMs(), 12345);
     }
 
     /* A stat that never reached a server must report Unknown, never Absent:

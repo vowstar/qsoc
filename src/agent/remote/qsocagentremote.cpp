@@ -335,6 +335,26 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     return registry;
 }
 
+bool remoteWorkspaceAnswers(
+    QSocSftpClient *sftp, const QString &root, int budgetMs, QString *errorMessage)
+{
+    if (sftp == nullptr || root.isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("no remote workspace is bound");
+        }
+        return false;
+    }
+    const int saved = sftp->operationTimeoutMs();
+    sftp->setOperationTimeoutMs(budgetMs);
+    QString    probeErr;
+    const bool answered = sftp->presence(root, &probeErr) != QSocSftpClient::Presence::Unknown;
+    sftp->setOperationTimeoutMs(saved);
+    if (!answered && errorMessage != nullptr) {
+        *errorMessage = probeErr;
+    }
+    return answered;
+}
+
 bool resolveHostTarget(
     const QString             &arg,
     const QSocHostCatalog     *catalog,

@@ -225,6 +225,7 @@ private slots:
     void releasesAuthenticationCallbackAfterConnect();
     void overwriteExistingFileRepeatedly();
     void connectedSocketCarriesTheDocumentedKeepalive();
+    void aLiveWorkspaceAnswersTheProbe();
     void execReportsRealExitStatus();
     void execReportsSignalledCommandsAsSignalled();
     void anOrdinaryCommandTimeoutKeepsTheSessionUsable();
@@ -484,6 +485,29 @@ void Test::overwriteExistingFileRepeatedly()
  * operation, and keepalive is the earlier signal. What it does catch is the
  * setsockopt calls going missing, or drifting away from the manual.
  */
+/* The positive half of the liveness probe: a healthy host answers well
+ * inside the short budget the callers give it, so the probe cannot turn a
+ * working workspace into a refusal. */
+void Test::aLiveWorkspaceAnswersTheProbe()
+{
+    if (!m_ready) {
+        QSKIP("loopback sshd unavailable in this environment");
+    }
+
+    QSocSshSession session;
+    QString        err;
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+        != QSocSshSession::ConnectStatus::Ok) {
+        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+    }
+    QSocSftpClient sftp(session);
+    QElapsedTimer  clock;
+    clock.start();
+    QVERIFY2(remoteWorkspaceAnswers(&sftp, m_workDir, 2000, &err), qPrintable(err));
+    QVERIFY2(
+        clock.elapsed() < 2000, qPrintable(QStringLiteral("probe took %1 ms").arg(clock.elapsed())));
+}
+
 void Test::connectedSocketCarriesTheDocumentedKeepalive()
 {
     if (!m_ready) {

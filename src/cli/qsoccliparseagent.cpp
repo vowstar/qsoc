@@ -141,6 +141,10 @@ QTuiToolBlock::Status toolBlockStatus(const QString &result)
     return QTuiToolBlock::Status::Uncertain;
 }
 
+/* Liveness budget for the pre-rewind check. Short on purpose: the user is
+ * waiting on a keystroke with nothing on screen. */
+constexpr int kRewindProbeMs = 5000;
+
 /* Report a remote workspace that can no longer serve tool calls, so the
  * agent loop ends the turn instead of retrying into a dead link. */
 QString remoteWorkspaceHealth(QSocSshSession *session)
@@ -1415,6 +1419,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     agentTool->setHookManager(hookManager);
     agentTool->setLoopScheduler(loopScheduler);
     agentTool->setHostCatalog(hostCatalog);
+    /* Sub-agent dispatch resolves a catalog alias through ~/.ssh/config for
+     * its HostName, User, IdentityFile and ProxyJump. Without a parser the
+     * resolve always failed with "no target and is not in ~/.ssh/config", so
+     * only catalog entries carrying an explicit target were dispatchable at
+     * all, and those had no identity to authenticate with. */
     /* Bind to the live parent agent so the spawn tool re-resolves the
      * registry + config from it on every execute(). This is what keeps
      * sub-agents correct across `/remote` -> `/local` toggles: the
@@ -4932,18 +4941,10 @@ bool QSocCliWorker::runAgentLoop(
                      * real; the round trip is bounded by the SFTP operation
                      * budget. */
                     QString unhealthy = remoteWorkspaceHealth(remoteSession);
-                    if (unhealthy.isEmpty() && remoteSftp != nullptr && remotePath != nullptr
-                        && !remotePath->root().isEmpty()) {
-                        /* A liveness question deserves a liveness budget, not
-                         * the one sized for moving a file: the user is waiting
-                         * on a keystroke with nothing on screen. */
-                        const int savedBudget = remoteSftp->operationTimeoutMs();
-                        remoteSftp->setOperationTimeoutMs(5000);
-                        QString    probeErr;
-                        const bool answered = remoteSftp->presence(remotePath->root(), &probeErr)
-                                              != QSocSftpClient::Presence::Unknown;
-                        remoteSftp->setOperationTimeoutMs(savedBudget);
-                        if (!answered) {
+                    if (unhealthy.isEmpty() && remoteSftp != nullptr && remotePath != nullptr) {
+                        QString probeErr;
+                        if (!remoteWorkspaceAnswers(
+                                remoteSftp, remotePath->root(), kRewindProbeMs, &probeErr)) {
                             unhealthy = probeErr;
                         }
                     }

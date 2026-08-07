@@ -150,6 +150,9 @@ private:
      */
     QSocToolRegistry *resolveHostRegistry(const QString &host, QString *errorMessage);
 
+    /** @brief Tear down one cached binding in dependency order. */
+    static void releaseHostBinding(struct HostBinding *binding);
+
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
     QSocAgentConfig              parentConfig_;

@@ -100,6 +100,22 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     QSocMonitorTaskSource *monitorSource = nullptr);
 
 /**
+ * @brief Ask a remote workspace whether it can still answer.
+ * @details The session's cached liveness flag only reports a death some
+ *          earlier call already ran into. A host that went quiet without
+ *          closing the connection leaves that flag reading "fine", so any
+ *          decision that matters has to spend one bounded round trip.
+ * @param sftp Connected client; nullptr answers false.
+ * @param root Directory to stat, normally the workspace root.
+ * @param budgetMs Liveness budget, deliberately far below a transfer budget:
+ *                 a caller is usually holding up a keystroke.
+ * @param errorMessage Optional sink for a user-safe reason.
+ * @return True when the host answered.
+ */
+bool remoteWorkspaceAnswers(
+    QSocSftpClient *sftp, const QString &root, int budgetMs, QString *errorMessage = nullptr);
+
+/**
  * @brief Outcome of an alias-or-target resolution against the host catalog
  *        and `~/.ssh/config`.
  * @details Tells the caller which connect string to hand to
