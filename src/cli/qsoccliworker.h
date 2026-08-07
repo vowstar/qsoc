@@ -4,12 +4,15 @@
 #ifndef QSOCCLIWORKER_H
 #define QSOCCLIWORKER_H
 
+#include "agent/remote/qsocsshconfigparser.h"
 #include "common/qllmservice.h"
 #include "common/qsocbusmanager.h"
 #include "common/qsocconfig.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+
+#include <memory>
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -86,6 +89,12 @@ private:
     QSocModuleManager   *moduleManager   = nullptr;
     QSocGenerateManager *generateManager = nullptr;
     QSocMcpManager      *mcpManager      = nullptr;
+
+    /* Parsed ~/.ssh/config handed to the sub-agent spawn tool, which keeps
+     * a non-owning pointer for its whole life. Owned here because the tool
+     * is parented to this worker and therefore outlives parseAgent()'s
+     * locals. */
+    std::unique_ptr<QSocSshConfigParser> agentSshConfig;
 
     /**
      * @brief Parse the application command line arguments.

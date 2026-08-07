@@ -1424,6 +1424,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * resolve always failed with "no target and is not in ~/.ssh/config", so
      * only catalog entries carrying an explicit target were dispatchable at
      * all, and those had no identity to authenticate with. */
+    agentSshConfig = std::make_unique<QSocSshConfigParser>();
+    {
+        const QString cfg = QDir::homePath() + QStringLiteral("/.ssh/config");
+        if (QFileInfo::exists(cfg)) {
+            agentSshConfig->parse(cfg);
+        }
+    }
+    agentTool->setSshConfigParser(agentSshConfig.get());
     /* Bind to the live parent agent so the spawn tool re-resolves the
      * registry + config from it on every execute(). This is what keeps
      * sub-agents correct across `/remote` -> `/local` toggles: the
