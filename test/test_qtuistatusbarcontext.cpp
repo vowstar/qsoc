@@ -58,6 +58,30 @@ private slots:
         const QString chip = QTuiStatusBar::formatContextChip(90000, 100000, 0.0);
         QCOMPARE(chip, QStringLiteral(" [ctx 90%]"));
     }
+
+    /* The remote chip must be independent of the status text. Everything the
+     * agent writes there ("Ready", the running tool) is a statement about the
+     * agent, so a dead workspace used to sit behind an unchallenged "Ready". */
+    void remoteChipIsIndependentOfStatusText()
+    {
+        QTuiStatusBar bar;
+        QVERIFY(bar.remoteChip().isEmpty());
+
+        bar.setStatus(QStringLiteral("Ready"));
+        bar.setRemoteState(QStringLiteral("build01"), true);
+        QCOMPARE(bar.remoteChip(), QStringLiteral(" [SSH:build01]"));
+
+        /* A later status write must not clear it. */
+        bar.setStatus(QStringLiteral("bash done, reasoning"));
+        QCOMPARE(bar.remoteChip(), QStringLiteral(" [SSH:build01]"));
+
+        bar.setRemoteState(QStringLiteral("build01"), false);
+        QCOMPARE(bar.remoteChip(), QStringLiteral(" [SSH:build01 \u2717]"));
+
+        /* Local mode has no link to report on. */
+        bar.setRemoteState(QString(), true);
+        QVERIFY(bar.remoteChip().isEmpty());
+    }
 };
 
 QSOC_TEST_MAIN(Test)

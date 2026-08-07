@@ -38,6 +38,7 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!running) {
         /* Idle state: static, no spinner/timer */
         line = currentStatus;
+        line += remoteChip();
         if (planMode_) {
             line += QStringLiteral(" [⏸ PLAN]");
         }
@@ -121,6 +122,7 @@ void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
     if (!toolInfo.isEmpty()) {
         line += " " + toolInfo;
     }
+    line += remoteChip();
     if (planMode_) {
         line += QStringLiteral(" [⏸ PLAN]");
     }
@@ -239,6 +241,21 @@ void QTuiStatusBar::setEffortLevel(const QString &level)
 void QTuiStatusBar::setPlanMode(bool active)
 {
     planMode_ = active;
+}
+
+QString QTuiStatusBar::remoteChip() const
+{
+    if (remoteAlias_.isEmpty()) {
+        return {};
+    }
+    return remoteUsable_ ? QStringLiteral(" [SSH:%1]").arg(remoteAlias_)
+                         : QStringLiteral(" [SSH:%1 ✗]").arg(remoteAlias_);
+}
+
+void QTuiStatusBar::setRemoteState(const QString &alias, bool usable)
+{
+    remoteAlias_  = alias;
+    remoteUsable_ = usable;
 }
 
 void QTuiStatusBar::setUserWatching(bool watching)

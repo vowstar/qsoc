@@ -301,7 +301,10 @@ The following commands are available during an interactive session:
      comes up a two-column directory browser asks for the workspace; the
      choice is remembered in `<project>/.qsoc/host.yml` and reused on
      later connects.],
-    [`/status`], [Show model, session, and endpoint info],
+    [`/status`],
+    [Show model, session and endpoint info. In remote mode it also
+     reports the bound target, the workspace, and whether the link is
+     still usable.],
     [`/help`], [Show help message],
     [`/agents`],
     [List sub-agent definitions by scope (builtin, user, project) and any
@@ -378,6 +381,13 @@ and disabled with `agent.away_summary: false`.
 The status bar also shows a `[ctx N%]` chip tracking how full the context
 window is against the effective budget; as auto-compaction nears it reads
 `N% to compact`, then `compacting`.
+
+In remote mode the bar carries an `[SSH:<target>]` chip, which gains a `✗`
+once the link can no longer serve calls. It is deliberately separate from
+the status text beside it: that text says what the *agent* is doing
+("Ready", the running tool), so on its own it would leave a dead workspace
+sitting behind an unchallenged "Ready". `/status` carries the same state in
+full, including the reason and how to recover.
 
 == Keyboard and Input
 <agent-keyboard>

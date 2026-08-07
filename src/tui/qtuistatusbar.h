@@ -44,6 +44,20 @@ public:
     void           setModel(const QString &model);
     /** @brief Toggle the read-only plan-mode chip (paused indicator). */
     void setPlanMode(bool active);
+
+    /**
+     * @brief Show which remote workspace is bound and whether it still works.
+     * @details Its own chip, deliberately not routed through setStatus():
+     *          that field is rewritten every turn with "Ready" or the current
+     *          tool, which is a statement about the agent, not the workspace.
+     *          A dead link used to leave "Ready" on screen with nothing
+     *          contradicting it.
+     * @param alias Empty clears the chip, which is what local mode shows.
+     */
+    void setRemoteState(const QString &alias, bool usable);
+
+    /** @brief The remote chip text, empty in local mode. */
+    QString remoteChip() const;
     /** @brief Toggle the "away" chip when the terminal loses focus. */
     void setUserWatching(bool watching);
     /**
@@ -86,7 +100,9 @@ private:
     qint64        outputTokens = 0;
     QString       effortLevel;
     QString       modelId;
-    bool          planMode_     = false;
+    bool          planMode_ = false;
+    QString       remoteAlias_;
+    bool          remoteUsable_ = true;
     bool          userWatching_ = true;
     QElapsedTimer stepTimer;
     QElapsedTimer totalTimer;

@@ -1576,6 +1576,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             agent->setWorkspaceHealthProbe(
                 [healthSession] { return remoteWorkspaceHealth(healthSession); });
         }
+        /* The loop installs its own probe that also refreshes the chip; this
+         * one covers the window before the loop starts. */
         {
             auto newCfg               = agent->getConfig();
             newCfg.remoteMode         = true;
@@ -1880,8 +1882,19 @@ bool QSocCliWorker::runAgentLoop(
     auto          &todoWidget      = compositor.todoList();
     auto          &queueWidget     = compositor.queuedList();
     auto          &statusBarWidget = compositor.statusBar();
-    auto          &inputWidget     = compositor.inputLine();
-    auto          &popupWidget     = compositor.completionPopup();
+    /* Replace the launch-time probe with one that also keeps the chip
+     * truthful, now that the status bar exists. */
+    if (remoteSession != nullptr) {
+        agent->setWorkspaceHealthProbe(
+            [healthSession = remoteSession, &statusBarWidget, alias = remoteTargetKey] {
+                const QString reason = remoteWorkspaceHealth(healthSession);
+                statusBarWidget.setRemoteState(alias, reason.isEmpty());
+                return reason;
+            });
+        statusBarWidget.setRemoteState(remoteTargetKey, true);
+    }
+    auto &inputWidget = compositor.inputLine();
+    auto &popupWidget = compositor.completionPopup();
 
     /* Discoverability hint shown when the input line is empty. */
     inputWidget.setPlaceholder(
@@ -6363,6 +6376,25 @@ bool QSocCliWorker::runAgentLoop(
                                             agent->getConfig().effortLevel.isEmpty()
                                                 ? QStringLiteral("off")
                                                 : agent->getConfig().effortLevel));
+            if (remoteSession != nullptr) {
+                compositor.printContent(QString("  Remote:   %1\n")
+                                            .arg(
+                                                remoteConn->target().isEmpty()
+                                                    ? remoteTargetKey
+                                                    : remoteConn->target()));
+                compositor.printContent(QString("  Workspace:%1\n").arg(remotePath->root()));
+                const QString reason = remoteConn->unusableText();
+                compositor.printContent(
+                    QString("  Link:     %1\n")
+                        .arg(reason.isEmpty() ? QStringLiteral("connected") : reason));
+                if (!reason.isEmpty()) {
+                    compositor.printContent(QStringLiteral(
+                        "            reconnect with /ssh, or /local to work "
+                        "on the local tree\n"));
+                }
+            } else {
+                compositor.printContent(QStringLiteral("  Remote:   (local mode)\n"));
+            }
             if (currentSession) {
                 compositor.printContent(QString("  Session:  %1 (%2 messages)\n")
                                             .arg(currentSession->id().left(8))
@@ -6987,8 +7019,13 @@ bool QSocCliWorker::runAgentLoop(
             {
                 QSocSshSession *healthSession = newState.session;
                 agent->setWorkspaceHealthProbe(
-                    [healthSession] { return remoteWorkspaceHealth(healthSession); });
+                    [healthSession, &statusBarWidget, alias = newState.targetKey] {
+                        const QString reason = remoteWorkspaceHealth(healthSession);
+                        statusBarWidget.setRemoteState(alias, reason.isEmpty());
+                        return reason;
+                    });
             }
+            statusBarWidget.setRemoteState(newState.targetKey, true);
             /* Point file history at the remote tree so rewind restores
              * remote edits over SFTP. */
             wireRemoteFileHistory(remoteRegistry, remoteSftp);
@@ -7058,6 +7095,7 @@ bool QSocCliWorker::runAgentLoop(
             /* Restore local tool registry and drop remote state. */
             agent->setToolRegistry(localRegistry);
             agent->setWorkspaceHealthProbe({});
+            statusBarWidget.setRemoteState(QString(), true);
             /* Point file history back at the local disk. */
             restoreLocalFileHistory();
             /* Drop project-scope defs that were sourced from the
