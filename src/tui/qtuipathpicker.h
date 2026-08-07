@@ -30,9 +30,18 @@ class QTuiPathPicker
 public:
     using ListDirsFn = std::function<QStringList(const QString &path)>;
 
+    /**
+     * @brief Why the last listing came back unusable. Empty = it was fine.
+     * @details Without this an unreadable directory and an empty directory
+     *          render identically, so a dead link reads as "this folder has
+     *          no subdirectories" and the user keeps navigating.
+     */
+    using ListErrorFn = std::function<QString()>;
+
     void setTitle(const QString &title);
     void setStartPath(const QString &path);
     void setListDirs(ListDirsFn listDirs);
+    void setListError(ListErrorFn listError);
     /* Home directory used to expand a leading "~" in the locate prompt.
      * Empty (default) leaves "~" untouched. */
     void setHomePath(const QString &path);
@@ -55,10 +64,11 @@ public:
         const QString    &homePath = QString());
 
 private:
-    QString    m_title;
-    QString    m_startPath;
-    QString    m_homePath;
-    ListDirsFn m_listDirs;
+    QString     m_title;
+    QString     m_startPath;
+    QString     m_homePath;
+    ListDirsFn  m_listDirs;
+    ListErrorFn m_listError;
 };
 
 #endif // QTUIPATHPICKER_H

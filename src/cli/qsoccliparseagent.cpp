@@ -6842,9 +6842,14 @@ bool QSocCliWorker::runAgentLoop(
                 picker.setTitle(QStringLiteral("Remote workspace"));
                 picker.setStartPath(homeHint);
                 picker.setHomePath(homeHint);
-                picker.setListDirs([sftp](const QString &path) -> QStringList {
-                    QString     ignored;
-                    const auto  entries = sftp->listDir(path, 500, &ignored);
+                auto listErr = std::make_shared<QString>();
+                picker.setListDirs([sftp, listErr](const QString &path) -> QStringList {
+                    QString    err;
+                    const auto entries = sftp->listDir(path, 500, &err);
+                    listErr->clear();
+                    if (entries.isEmpty() && !err.isEmpty()) {
+                        *listErr = err;
+                    }
                     QStringList names;
                     names.reserve(entries.size());
                     for (const auto &entry : entries) {
@@ -6855,6 +6860,7 @@ bool QSocCliWorker::runAgentLoop(
                     std::sort(names.begin(), names.end());
                     return names;
                 });
+                picker.setListError([listErr] { return *listErr; });
                 compositor.pause();
                 workspace = picker.exec();
                 compositor.resume();
@@ -7206,10 +7212,15 @@ bool QSocCliWorker::runAgentLoop(
                         picker.setHomePath(raw);
                     }
                 }
-                QSocSftpClient *sftp = remoteSftp;
-                picker.setListDirs([sftp](const QString &path) -> QStringList {
-                    QString     ignored;
-                    const auto  entries = sftp->listDir(path, 500, &ignored);
+                QSocSftpClient *sftp    = remoteSftp;
+                auto            listErr = std::make_shared<QString>();
+                picker.setListDirs([sftp, listErr](const QString &path) -> QStringList {
+                    QString    err;
+                    const auto entries = sftp->listDir(path, 500, &err);
+                    listErr->clear();
+                    if (entries.isEmpty() && !err.isEmpty()) {
+                        *listErr = err;
+                    }
                     QStringList names;
                     names.reserve(entries.size());
                     for (const auto &entry : entries) {
@@ -7220,6 +7231,7 @@ bool QSocCliWorker::runAgentLoop(
                     std::sort(names.begin(), names.end());
                     return names;
                 });
+                picker.setListError([listErr] { return *listErr; });
                 compositor.pause();
                 const QString picked = picker.exec();
                 compositor.resume();

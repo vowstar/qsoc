@@ -67,6 +67,11 @@ void QTuiPathPicker::setTitle(const QString &title)
     m_title = title;
 }
 
+void QTuiPathPicker::setListError(ListErrorFn listError)
+{
+    m_listError = std::move(listError);
+}
+
 void QTuiPathPicker::setStartPath(const QString &path)
 {
     m_startPath = path;
@@ -172,6 +177,8 @@ QString QTuiPathPicker::exec()
     QList<Entry> leftEntries;
     int          leftHighlight = 0;
     QStringList  rightPreview;
+    /* Why the current listing is short, when it is short for a reason. */
+    QString listingError;
 
     /* Locate prompt: when active, typed bytes accumulate in jumpBuf and
      * the title row turns into an editable input line. jumpBuf holds raw
@@ -186,6 +193,7 @@ QString QTuiPathPicker::exec()
         }
         leftEntries.append({EntryKind::SelectCurrent, QStringLiteral("<current>"), currentPath});
         const QStringList subs = m_listDirs(currentPath);
+        listingError           = m_listError ? m_listError() : QString();
         for (const QString &sub : subs) {
             if (sub.isEmpty() || sub == QStringLiteral(".") || sub == QStringLiteral("..")) {
                 continue;
@@ -368,7 +376,12 @@ QString QTuiPathPicker::exec()
         QString footer = jumpMode ? QStringLiteral("  Enter: jump   ESC: cancel input")
                                   : QStringLiteral(
                                         "  Enter/Right: open   Left: up   /: locate   ESC: cancel");
-        fprintf(stdout, "\033[38;5;%d;48;5;%dm", FG_DIM, BG_NORMAL);
+        int     footerFg = FG_DIM;
+        if (!listingError.isEmpty()) {
+            footer   = QStringLiteral("  ") + listingError;
+            footerFg = FG_HIGHLIGHT;
+        }
+        fprintf(stdout, "\033[38;5;%d;48;5;%dm", footerFg, BG_NORMAL);
         fputs(padTo(footer, pickerW).toUtf8().constData(), stdout);
         fputs("\033[0m", stdout);
         writeMargin(rightMargin);
