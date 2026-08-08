@@ -1978,6 +1978,11 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             const QString lost = owner->workspaceHealthProbe_();
             if (!lost.isEmpty()) {
                 run->stopNotice = lost;
+                /* Published here rather than only at teardown: a soft stop
+                 * that finds a queued request restarts the run instead of
+                 * reaching Terminal, so a notice held until then is dropped
+                 * exactly when an unattended workflow carries on. */
+                owner->lastStopNotice_ = lost;
                 owner->requestStop(StopMode::Soft);
             }
         }

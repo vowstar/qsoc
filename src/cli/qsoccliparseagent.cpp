@@ -1806,7 +1806,14 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 agent,
                 &QSocAgent::processingQueuedRequest,
                 agent,
-                [&qout](const QString &request, int) {
+                [&qout, agent](const QString &request, int) {
+                    /* A run that stopped for its own reason and then restarted
+                     * on a queued request never reaches the aborted handler,
+                     * so the reason is printed here or nowhere. */
+                    const QString notice = agent->takeStopNotice();
+                    if (!notice.isEmpty()) {
+                        qout << "\n" << notice << "\n" << Qt::flush;
+                    }
                     qout << "\n> " << request << "\n" << Qt::flush;
                 });
             escMonitor.start();
@@ -8238,8 +8245,16 @@ bool QSocCliWorker::runAgentLoop(
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
-                 &inputWidget](const QString &request, int) {
+                 &inputWidget,
+                 agent](const QString &request, int) {
                     queueWidget.removeRequest(request);
+                    /* A run that stopped for its own reason and then restarted
+                     * on a queued request never reaches the aborted handler,
+                     * so the reason is printed here or nowhere. */
+                    const QString notice = agent->takeStopNotice();
+                    if (!notice.isEmpty()) {
+                        compositor.printContent(QStringLiteral("\n%1\n").arg(notice));
+                    }
                     compositor.printContent(QString("\n> %1\n").arg(request));
                 });
             auto connInputChanged = QObject::connect(
@@ -8902,8 +8917,16 @@ bool QSocCliWorker::runAgentLoop(
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
-                 &inputWidget](const QString &request, int) {
+                 &inputWidget,
+                 agent](const QString &request, int) {
                     queueWidget.removeRequest(request);
+                    /* A run that stopped for its own reason and then restarted
+                     * on a queued request never reaches the aborted handler,
+                     * so the reason is printed here or nowhere. */
+                    const QString notice = agent->takeStopNotice();
+                    if (!notice.isEmpty()) {
+                        compositor.printContent(QStringLiteral("\n%1\n").arg(notice));
+                    }
                     compositor.printContent(QString("\n> %1\n").arg(request));
                 });
             auto connInputChanged = QObject::connect(

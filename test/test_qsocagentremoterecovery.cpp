@@ -134,6 +134,13 @@ private:
         return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
     }
 
+    /** @brief Everything the agent printed, as one blob. */
+    QByteArray agentOutput() const
+    {
+        QFile file(m_dir.path() + QStringLiteral("/agent.out"));
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    }
+
     /* Bounded wait on an observed condition. Returns false on timeout so a
      * caller can assert rather than hang. */
     template<typename Predicate>
@@ -498,6 +505,15 @@ void Test::aHealedLinkIsRebuiltAndTheAgentIsToldToReObserve()
     QVERIFY(wire.contains("has been re-established"));
     QVERIFY(wire.contains("write_file and edit_file will refuse"));
     QVERIFY(wire.contains("Do not re-run a command whose effect you have not verified"));
+
+    /* The reason has to reach the human as well. The soft stop restarts on the
+     * queued brief instead of ending the run, so a notice delivered only at
+     * run teardown is dropped exactly when a workflow carries on unattended. */
+    QVERIFY2(
+        waitFor(
+            [this] { return agentOutput().contains("The SSH link was re-established after"); },
+            60000),
+        "the terminal never said the link had been re-established");
 
     stopAgent();
 }
