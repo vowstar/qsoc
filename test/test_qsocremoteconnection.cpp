@@ -138,8 +138,10 @@ private slots:
         QCOMPARE(conn.workspace(), QStringLiteral("/w"));
     }
 
-    /* A usable workspace is left alone. */
-    void reconnectDoesNothingWhileTheWorkspaceIsUsable()
+    /* An unconnected session is not usable, so it is rebuilt rather than
+     * left alone. NotNeeded needs a genuinely live session and is covered
+     * against a real sshd, not here. */
+    void reconnectRebuildsAnUnconnectedSession()
     {
         QObject              scratch;
         QSocRemoteConnection conn;
@@ -152,9 +154,6 @@ private slots:
                 ++builds;
                 return true;
             });
-        /* An unconnected session is not usable, so this fixture cannot assert
-         * NotNeeded directly; what it can assert is that the outcome is never
-         * silently "fine" while isUsable() says otherwise. */
         QString    err;
         const auto outcome = conn.reconnect(&err);
         QVERIFY(outcome != QSocRemoteConnection::ReconnectOutcome::NotNeeded);
