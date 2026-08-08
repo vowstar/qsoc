@@ -383,7 +383,9 @@ window is against the effective budget; as auto-compaction nears it reads
 `N% to compact`, then `compacting`.
 
 In remote mode the bar carries an `[SSH:<target>]` chip, which gains a `✗`
-once the link can no longer serve calls. It is deliberately separate from
+once the link can no longer serve calls. It refreshes when a tool call
+checks the workspace, not on a timer, so a link that dies while the agent is
+idle shows as broken on the next call rather than the moment it drops. It is deliberately separate from
 the status text beside it: that text says what the *agent* is doing
 ("Ready", the running tool), so on its own it would leave a dead workspace
 sitting behind an unchallenged "Ready". `/status` carries the same state in
@@ -1065,11 +1067,20 @@ failure rather than a wait:
   not silently run against local files. Reconnect with `/ssh`, or leave
   remote mode deliberately with `/local`.
 
-There is no automatic reconnect. After a drop, remote state is unknown
-rather than known-gone: a reboot discards the working directory,
-backgrounded jobs, and temporary files, while a network partition leaves
-all of them running. A transparent reconnect would present either case as
-continuity, so QSoC makes you reconnect and re-establish what you need.
+A dropped link is re-established automatically, bounded to a couple of
+attempts, so an unattended run survives a network hiccup. What is *not*
+automatic is carrying on: after a drop, remote state is unknown rather than
+known-gone, because a reboot discards the working directory, backgrounded
+jobs and temporary files, while a network partition leaves all of them
+running. So the turn always ends, and the next one begins with a brief
+telling the agent to verify remote state before acting: re-read any file it
+means to edit, check named background jobs, and never re-run a command whose
+effect it has not confirmed. Believed file contents are discarded on
+reconnect, which makes the read-before-overwrite guard refuse an edit until
+the file has actually been read again.
+
+When the reconnect itself does not come up, the workspace stays unusable and
+you reconnect with `/ssh` yourself.
 
 === Interrupted Operations
 <agent-remote-uncertain>

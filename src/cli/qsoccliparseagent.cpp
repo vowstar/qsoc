@@ -145,14 +145,97 @@ QTuiToolBlock::Status toolBlockStatus(const QString &result)
  * waiting on a keystroke with nothing on screen. */
 constexpr int kRewindProbeMs = 5000;
 
-/* Report a remote workspace that can no longer serve tool calls, so the
- * agent loop ends the turn instead of retrying into a dead link. */
-QString remoteWorkspaceHealth(QSocSshSession *session)
+/* Open a fresh transport for an existing binding. Never prompts: a reconnect
+ * happens between turns, where blocking on a passphrase would hang an
+ * unattended run, so a host needing an interactive secret falls through to
+ * the refusal and the user's own /ssh. Only the replacement is produced here;
+ * freeing the transport being replaced is the handle's job, and it does it
+ * after this returns so a failed attempt changes nothing. */
+bool connectReplacementTransport(
+    QObject          *parent,
+    const QString    &target,
+    const QString    &workspace,
+    AgentRemoteState *out,
+    QString          *errorMessage)
 {
-    if (session == nullptr || session->isConnected()) {
+    AgentRemoteState fresh;
+    if (!connectAgentSshSession(target, parent, &fresh, errorMessage)) {
+        return false;
+    }
+    if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
+        QSocRemoteConnection scratch;
+        scratch.adopt(fresh);
+        scratch.teardown();
+        return false;
+    }
+    *out = fresh;
+    return true;
+}
+
+/* Brief the agent after a reconnect. It must not read as "carry on": the
+ * link is back, but nothing about the host has been observed since it broke.
+ * Naming the in-flight jobs and the unverified operation is what turns a
+ * guess into a check, and the read-before-overwrite guard makes the check
+ * mandatory for any edit. */
+QString reobservationBriefing(QSocRemoteConnection *conn, const QStringList &jobIds)
+{
+    QString text = QStringLiteral(
+                       "The SSH link to %1 dropped and has been re-established. Nothing on "
+                       "the host has been observed since it broke, so treat every belief "
+                       "about remote state as stale.\n\n")
+                       .arg(conn->target());
+    text += QStringLiteral(
+        "Before acting:\n"
+        "- Re-read any file you intend to edit. write_file and edit_file will refuse "
+        "until you do.\n");
+    if (!jobIds.isEmpty()) {
+        text += QStringLiteral(
+                    "- Check these background jobs with bash_manage(action=status): %1. They "
+                    "may still be running, may have finished, or may be gone if the host "
+                    "restarted.\n")
+                    .arg(jobIds.join(QStringLiteral(", ")));
+    }
+    text += QStringLiteral(
+        "- Do not re-run a command whose effect you have not verified. The operation "
+        "that was in flight when the link broke has an unknown outcome.\n\n"
+        "Re-observe what you need, then continue the work.");
+    return text;
+}
+
+/* Report a remote workspace that can no longer serve tool calls. A link that
+ * can be re-established is, and the agent is handed a re-observation brief so
+ * an unattended workflow continues without assuming anything survived. Either
+ * way the current turn ends: the operation that broke it is unverified, and
+ * letting the model retry it is how an uncertain write becomes two. */
+QString remoteWorkspaceHealth(
+    QSocRemoteConnection *conn, QSocAgent *agent = nullptr, const QStringList &jobIds = {})
+{
+    if (conn == nullptr || conn->isUsable()) {
         return {};
     }
-    return session->unusableText()
+    QString    reconnectErr;
+    const auto outcome = conn->reconnect(&reconnectErr);
+    if (outcome == QSocRemoteConnection::ReconnectOutcome::NotNeeded) {
+        return {};
+    }
+    if (outcome == QSocRemoteConnection::ReconnectOutcome::Reconnected) {
+        if (agent != nullptr) {
+            agent->queueRequest(reobservationBriefing(conn, jobIds));
+        }
+        return QStringLiteral(
+                   "The SSH link was re-established after %1 attempt%2. Remote state has not been "
+                   "observed since it broke, so this turn stops here and the next one starts by "
+                   "re-checking it.")
+            .arg(conn->lastReconnectAttempts())
+            .arg(conn->lastReconnectAttempts() == 1 ? QString() : QStringLiteral("s"));
+    }
+    QString text = conn->unusableText();
+    if (outcome == QSocRemoteConnection::ReconnectOutcome::Exhausted && !reconnectErr.isEmpty()) {
+        text += QStringLiteral(" (reconnect failed after %1 attempts: %2)")
+                    .arg(conn->lastReconnectAttempts())
+                    .arg(reconnectErr);
+    }
+    return text
            + QStringLiteral(
                ". The remote workspace is unusable; reconnect with /ssh, "
                "or run /local to work on the local tree.");
@@ -1546,6 +1629,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
          * shares (never copies) its path context, so /cwd changes stay
          * visible to the tools bound here. */
         cliRemoteConn.adopt(cliRemoteState);
+        cliRemoteConn.setRebuilder([this](
+                                       const QString    &target,
+                                       const QString    &workspace,
+                                       AgentRemoteState *out,
+                                       QString          *errorMessage) {
+            return connectReplacementTransport(this, target, workspace, out, errorMessage);
+        });
         buildAgentRemoteRegistry(
             this,
             &cliRemoteState,
@@ -1571,11 +1661,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
         preLocalRegistry = agent->getToolRegistry();
         agent->setToolRegistry(cliRemoteState.registry);
-        {
-            QSocSshSession *healthSession = cliRemoteState.session;
-            agent->setWorkspaceHealthProbe(
-                [healthSession] { return remoteWorkspaceHealth(healthSession); });
-        }
+        agent->setWorkspaceHealthProbe(
+            [conn = &cliRemoteConn, agent] { return remoteWorkspaceHealth(conn, agent); });
         /* The loop installs its own probe that also refreshes the chip; this
          * one covers the window before the loop starts. */
         {
@@ -1846,35 +1933,23 @@ bool QSocCliWorker::runAgentLoop(
      * launched with `--ssh`, parseAgent has already opened the session;
      * we adopt that pre-connected state via preconnected/preLocalRegistry
      * so the REPL starts directly in remote mode. */
-    QSocToolRegistry *localRegistry  = (preLocalRegistry != nullptr) ? preLocalRegistry
-                                                                     : agent->getToolRegistry();
-    QSocSshSession   *remoteSession  = nullptr;
-    QSocSftpClient   *remoteSftp     = nullptr;
+    QSocToolRegistry *localRegistry = (preLocalRegistry != nullptr) ? preLocalRegistry
+                                                                    : agent->getToolRegistry();
+
     QSocToolRegistry *remoteRegistry = nullptr;
-    QList<QSocSshSession *> remoteJumps; /* ProxyJump chain, outlives target */
-    /* Canonical remote path context. The remote tools bind to exactly this
-     * object (never a copy), so /cwd changes are visible to them and the
-     * tools can never outlive what they point at. In --ssh startup the
-     * canonical object is preconnected->path (the tools were already bound
-     * to it in parseAgent); otherwise it is the loop-local storage below.
-     * The pointer is fixed after this block: handlers assign through it. */
-    QSocRemotePathContext  remotePathStorage;
-    QSocRemotePathContext *remotePath = &remotePathStorage;
-    /* One handle for the whole run: remote tools bind to it once, so a later
-     * transport swap needs no registry rebuild. The launch path already built
-     * a registry against its own handle, so adopt that one rather than
-     * stranding the tools on a second. */
+
+    /* The single holder of the remote transport for this run. Remote tools
+     * bind to it once and resolve the session or SFTP client per call, so a
+     * transport swap needs no registry rebuild and cannot leave a second
+     * copy of the pointers behind to dangle. The launch path already built a
+     * registry against its own handle; adopt that one rather than stranding
+     * the tools on a different object. It also owns the canonical path
+     * context, so /cwd changes stay visible to the tools. */
     QSocRemoteConnection  remoteConnStorage;
     QSocRemoteConnection *remoteConn = preconnectedConn != nullptr ? preconnectedConn
                                                                    : &remoteConnStorage;
-    QString               remoteTargetKey;
     if (preconnected != nullptr && preconnected->session != nullptr) {
-        remoteSession   = preconnected->session;
-        remoteSftp      = preconnected->sftp;
-        remoteRegistry  = preconnected->registry;
-        remoteJumps     = preconnected->jumps;
-        remotePath      = &preconnected->path;
-        remoteTargetKey = preconnected->targetKey;
+        remoteRegistry = preconnected->registry;
     }
 
     /* Create TUI compositor — enters alt screen immediately */
@@ -1884,14 +1959,17 @@ bool QSocCliWorker::runAgentLoop(
     auto          &statusBarWidget = compositor.statusBar();
     /* Replace the launch-time probe with one that also keeps the chip
      * truthful, now that the status bar exists. */
-    if (remoteSession != nullptr) {
-        agent->setWorkspaceHealthProbe(
-            [healthSession = remoteSession, &statusBarWidget, alias = remoteTargetKey] {
-                const QString reason = remoteWorkspaceHealth(healthSession);
-                statusBarWidget.setRemoteState(alias, reason.isEmpty());
-                return reason;
-            });
-        statusBarWidget.setRemoteState(remoteTargetKey, true);
+    if (remoteConn->session() != nullptr) {
+        agent->setWorkspaceHealthProbe([remoteConn, &statusBarWidget, agent] {
+            const QString reason = remoteWorkspaceHealth(remoteConn, agent);
+            /* The chip reports the link, the notice reports the turn. A
+             * successful reconnect returns a non-empty notice while the link
+             * is fine, so deriving the chip from the notice would mark a
+             * working workspace as broken. */
+            statusBarWidget.setRemoteState(remoteConn->target(), remoteConn->isUsable());
+            return reason;
+        });
+        statusBarWidget.setRemoteState(remoteConn->target(), true);
     }
     auto &inputWidget = compositor.inputLine();
     auto &popupWidget = compositor.completionPopup();
@@ -2530,9 +2608,9 @@ bool QSocCliWorker::runAgentLoop(
 
         /* Candidate files + reader: remote over SFTP when a session is up,
          * otherwise local from disk. */
-        if (remoteSession != nullptr && remoteSftp != nullptr) {
-            inputs.candidatePaths    = remotePath->readState().pathsByRecencyDesc(0);
-            QSocSftpClient *sftp     = remoteSftp;
+        if (remoteConn->session() != nullptr && remoteConn->sftp() != nullptr) {
+            inputs.candidatePaths    = remoteConn->path()->readState().pathsByRecencyDesc(0);
+            QSocSftpClient *sftp     = remoteConn->sftp();
             const qint64    maxBytes = static_cast<qint64>(cfg.contextRestoreMaxTokensFile) * 8;
             inputs.readFile = [sftp, maxBytes](const QString &path) -> std::optional<QString> {
                 QString          err;
@@ -2745,8 +2823,7 @@ bool QSocCliWorker::runAgentLoop(
          &dismissedFor,
          &slashCommands,
          &skillHints,
-         &remoteSession,
-         &remotePath,
+         remoteConn,
          detectSlashCommand,
          detectAtToken](const QString &text) {
             /* Helper: close whichever popup is currently showing. */
@@ -2822,9 +2899,9 @@ bool QSocCliWorker::runAgentLoop(
             }
 
             QStringList matches;
-            if (remoteSession != nullptr) {
-                matches
-                    = completionEngine.completeRemote(remoteSession, remotePath->root(), query, 50);
+            if (remoteConn->session() != nullptr) {
+                matches = completionEngine.completeRemote(
+                    remoteConn->session(), remoteConn->path()->root(), query, 50);
             } else {
                 QString projectPath = projectManager->getProjectPath();
                 if (projectPath.isEmpty()) {
@@ -3323,7 +3400,7 @@ bool QSocCliWorker::runAgentLoop(
         record.remoteMode     = config.remoteMode;
         record.remoteName     = config.remoteName;
         if (config.remoteMode) {
-            record.projectRoot = remotePath->root();
+            record.projectRoot = remoteConn->path()->root();
             record.workingDir  = workingDir;
         } else {
             const QFileInfo rootInfo(sessionProjectPath(projectManager));
@@ -3376,17 +3453,17 @@ bool QSocCliWorker::runAgentLoop(
         QString restoredWorkingDir;
         QString restoredProjectRoot;
         if (record.remoteMode) {
-            if (remoteSession == nullptr || remotePath == nullptr) {
+            if (remoteConn->session() == nullptr) {
                 *reason = QStringLiteral("the saved remote workspace is not connected");
                 return false;
             }
-            restoredProjectRoot = remotePath->root();
+            restoredProjectRoot = remoteConn->path()->root();
             if (record.projectRoot != restoredProjectRoot) {
                 *reason = QStringLiteral("the saved remote workspace no longer matches");
                 return false;
             }
-            const QString requested = remotePath->normalize(record.workingDir);
-            const QString resolved  = remotePath->resolveCwdRequest(record.workingDir);
+            const QString requested = remoteConn->path()->normalize(record.workingDir);
+            const QString resolved  = remoteConn->path()->resolveCwdRequest(record.workingDir);
             if (requested != resolved) {
                 *reason = QStringLiteral(
                     "the saved remote working directory is outside the workspace");
@@ -3422,9 +3499,9 @@ bool QSocCliWorker::runAgentLoop(
     const auto applyRunContext = [&](const QSocSession::RunRecord &record, QString *reason) {
         QString previousWorkingDir;
         if (record.remoteMode) {
-            previousWorkingDir = remotePath->cwd();
-            remotePath->setCwd(record.workingDir);
-            if (remotePath->cwd() != record.workingDir) {
+            previousWorkingDir = remoteConn->path()->cwd();
+            remoteConn->path()->setCwd(record.workingDir);
+            if (remoteConn->path()->cwd() != record.workingDir) {
                 *reason = QStringLiteral("the saved remote working directory could not be restored");
                 return false;
             }
@@ -3455,7 +3532,7 @@ bool QSocCliWorker::runAgentLoop(
         if (record.registryModel && llmService->getCurrentModelId() != record.modelId
             && !llmService->setCurrentModel(record.modelId)) {
             if (record.remoteMode) {
-                remotePath->setCwd(previousWorkingDir);
+                remoteConn->path()->setCwd(previousWorkingDir);
             } else if (pathContext != nullptr) {
                 pathContext->setWorkingDir(previousWorkingDir);
             }
@@ -3576,8 +3653,8 @@ bool QSocCliWorker::runAgentLoop(
 
         /* --ssh startup: the remote tools were built before this history
          * existed, so wire them now to checkpoint remote edits for rewind. */
-        if (preconnected != nullptr && remoteSftp != nullptr && remoteRegistry != nullptr) {
-            wireRemoteFileHistory(remoteRegistry, remoteSftp);
+        if (preconnected != nullptr && remoteConn->sftp() != nullptr && remoteRegistry != nullptr) {
+            wireRemoteFileHistory(remoteRegistry, remoteConn->sftp());
         }
 
         /* Resume an existing session if the JSONL already exists; otherwise
@@ -4260,7 +4337,7 @@ bool QSocCliWorker::runAgentLoop(
             /* AtFile: decide trailing char: '/' if directory, else ' '. Remote
              * listings only contain files so we never need to probe over SFTP. */
             QChar trailing = QLatin1Char(' ');
-            if (remoteSession == nullptr) {
+            if (remoteConn->session() == nullptr) {
                 QString projectPath = projectManager->getProjectPath();
                 if (projectPath.isEmpty()) {
                     projectPath = QDir::currentPath();
@@ -4762,9 +4839,7 @@ bool QSocCliWorker::runAgentLoop(
              &inputMonitor,
              &inputWidget,
              &popupWidget,
-             &remoteSession,
-             &remoteSftp,
-             &remotePath,
+             remoteConn,
              &searching]() {
                 (void) this;
                 if (searching || popupWidget.isVisible()) {
@@ -4977,11 +5052,15 @@ bool QSocCliWorker::runAgentLoop(
                      * So when the flag looks fine, ask the host once for
                      * real; the round trip is bounded by the SFTP operation
                      * budget. */
-                    QString unhealthy = remoteWorkspaceHealth(remoteSession);
-                    if (unhealthy.isEmpty() && remoteSftp != nullptr && remotePath != nullptr) {
+                    QString unhealthy = remoteConn->isUsable() ? QString()
+                                                               : remoteConn->unusableText();
+                    if (unhealthy.isEmpty() && remoteConn->sftp() != nullptr) {
                         QString probeErr;
                         if (!remoteWorkspaceAnswers(
-                                remoteSftp, remotePath->root(), kRewindProbeMs, &probeErr)) {
+                                remoteConn->sftp(),
+                                remoteConn->path()->root(),
+                                kRewindProbeMs,
+                                &probeErr)) {
                             unhealthy = probeErr;
                         }
                     }
@@ -5273,10 +5352,12 @@ bool QSocCliWorker::runAgentLoop(
                  * here briefly swaps buffers and exposes whatever the
                  * previous alt-screen frame held (for example the last
                  * path picker), which reads as a flash. */
-                const QString output
-                    = remoteSession != nullptr
-                          ? runRemoteShellEscape(*remoteSession, remotePath->cwd(), shellCmd)
-                          : runShellEscape(shellCmd);
+                const QString output = remoteConn->session() != nullptr
+                                           ? runRemoteShellEscape(
+                                                 *remoteConn->session(),
+                                                 remoteConn->path()->cwd(),
+                                                 shellCmd)
+                                           : runShellEscape(shellCmd);
                 if (!output.isEmpty()) {
                     compositor.printContent(output, QTuiScrollView::Dim);
                     if (!output.endsWith(QLatin1Char('\n'))) {
@@ -6376,13 +6457,9 @@ bool QSocCliWorker::runAgentLoop(
                                             agent->getConfig().effortLevel.isEmpty()
                                                 ? QStringLiteral("off")
                                                 : agent->getConfig().effortLevel));
-            if (remoteSession != nullptr) {
-                compositor.printContent(QString("  Remote:   %1\n")
-                                            .arg(
-                                                remoteConn->target().isEmpty()
-                                                    ? remoteTargetKey
-                                                    : remoteConn->target()));
-                compositor.printContent(QString("  Workspace:%1\n").arg(remotePath->root()));
+            if (remoteConn->session() != nullptr) {
+                compositor.printContent(QString("  Remote:   %1\n").arg(remoteConn->target()));
+                compositor.printContent(QString("  Workspace:%1\n").arg(remoteConn->path()->root()));
                 const QString reason = remoteConn->unusableText();
                 compositor.printContent(
                     QString("  Link:     %1\n")
@@ -6952,39 +7029,25 @@ bool QSocCliWorker::runAgentLoop(
             /* Adopt the staged path values into the loop-lifetime canonical
              * context BEFORE binding tools to it: newState dies with this
              * handler block, so tools must never hold &newState.path. */
-            *remotePath = newState.path;
-            remoteConn->adopt(newState);
-            buildAgentRemoteRegistry(
-                this, &newState, remoteConn, remotePath, socConfig, monitorTaskSource);
-
-            /* Tear down any previous remote session before adopting the new one. */
+            /* Order matters: the previous registry goes first because it owns
+             * tools bound to the handle, then the handle frees the previous
+             * transport, and only then does it take over the new one. */
             if (remoteRegistry != nullptr) {
                 remoteRegistry->deleteLater();
                 remoteRegistry = nullptr;
             }
-            if (remoteSftp != nullptr) {
-                remoteSftp->close();
-                delete remoteSftp;
-                remoteSftp = nullptr;
-            }
-            if (remoteSession != nullptr) {
-                remoteSession->disconnectFromHost();
-                delete remoteSession;
-                remoteSession = nullptr;
-            }
-            /* Tear down any previous ProxyJump chain in reverse order so
-             * children disconnect before their parents. */
-            for (auto it = remoteJumps.rbegin(); it != remoteJumps.rend(); ++it) {
-                (*it)->disconnectFromHost();
-                delete *it;
-            }
-            remoteJumps.clear();
-
-            remoteSession   = newState.session;
-            remoteSftp      = newState.sftp;
-            remoteJumps     = newState.jumps;
-            remoteRegistry  = newState.registry;
-            remoteTargetKey = newState.targetKey;
+            remoteConn->teardown();
+            remoteConn->adopt(newState);
+            remoteConn->setRebuilder([this](
+                                         const QString    &target,
+                                         const QString    &workspace,
+                                         AgentRemoteState *out,
+                                         QString          *errorMessage) {
+                return connectReplacementTransport(this, target, workspace, out, errorMessage);
+            });
+            buildAgentRemoteRegistry(
+                this, &newState, remoteConn, remoteConn->path(), socConfig, monitorTaskSource);
+            remoteRegistry = newState.registry;
 
             /* Carry the spawn tool and its status companion across
              * the swap so the parent LLM keeps seeing them; the
@@ -7016,24 +7079,24 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
             agent->setToolRegistry(remoteRegistry);
-            {
-                QSocSshSession *healthSession = newState.session;
-                agent->setWorkspaceHealthProbe(
-                    [healthSession, &statusBarWidget, alias = newState.targetKey] {
-                        const QString reason = remoteWorkspaceHealth(healthSession);
-                        statusBarWidget.setRemoteState(alias, reason.isEmpty());
-                        return reason;
-                    });
-            }
+            agent->setWorkspaceHealthProbe([remoteConn, &statusBarWidget, agent] {
+                const QString reason = remoteWorkspaceHealth(remoteConn, agent);
+                /* The chip reports the link, the notice reports the turn. A
+                 * successful reconnect returns a non-empty notice while the
+                 * link is fine, so deriving the chip from the notice would
+                 * mark a working workspace as broken. */
+                statusBarWidget.setRemoteState(remoteConn->target(), remoteConn->isUsable());
+                return reason;
+            });
             statusBarWidget.setRemoteState(newState.targetKey, true);
             /* Point file history at the remote tree so rewind restores
              * remote edits over SFTP. */
-            wireRemoteFileHistory(remoteRegistry, remoteSftp);
+            wireRemoteFileHistory(remoteRegistry, remoteConn->sftp());
             /* Pull the remote project's .qsoc/agents/ defs across SFTP
              * so the parent agent sees them after `/remote`. */
-            if (defs != nullptr && remoteSftp != nullptr && !newState.workspace.isEmpty()) {
+            if (defs != nullptr && remoteConn->sftp() != nullptr && !newState.workspace.isEmpty()) {
                 defs->scanFromRemoteSftp(
-                    remoteSftp, newState.workspace + QStringLiteral("/.qsoc/agents"));
+                    remoteConn->sftp(), newState.workspace + QStringLiteral("/.qsoc/agents"));
             }
 
             {
@@ -7043,7 +7106,7 @@ bool QSocCliWorker::runAgentLoop(
                 newCfg.remoteDisplay      = newState.display;
                 newCfg.remoteWorkspace    = newState.workspace;
                 newCfg.remoteWorkingDir   = newState.workspace;
-                newCfg.remoteWritableDirs = remotePath->writableDirs();
+                newCfg.remoteWritableDirs = remoteConn->path()->writableDirs();
                 agent->setConfig(newCfg);
             }
 
@@ -7088,7 +7151,7 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
         if (cmd == QStringLiteral("/local")) {
-            if (remoteSession == nullptr) {
+            if (remoteConn->session() == nullptr) {
                 compositor.printContent("Already in local mode.\n");
                 continue;
             }
@@ -7110,26 +7173,7 @@ bool QSocCliWorker::runAgentLoop(
                 remoteRegistry->deleteLater();
                 remoteRegistry = nullptr;
             }
-            remoteTargetKey.clear();
-            if (remoteSftp != nullptr) {
-                remoteSftp->close();
-                delete remoteSftp;
-                remoteSftp = nullptr;
-            }
-            // cppcheck-suppress knownConditionTrueFalse
-            if (remoteSession != nullptr) {
-                remoteSession->disconnectFromHost();
-                delete remoteSession;
-                remoteSession = nullptr;
-            }
-            /* Close ProxyJump hops in reverse order so each child channel
-             * is freed before its parent session tears down its TCP. */
-            for (auto it = remoteJumps.rbegin(); it != remoteJumps.rend(); ++it) {
-                (*it)->disconnectFromHost();
-                delete *it;
-            }
-            remoteJumps.clear();
-            *remotePath = QSocRemotePathContext{};
+            remoteConn->teardown();
 
             {
                 auto newCfg       = agent->getConfig();
@@ -7265,19 +7309,19 @@ bool QSocCliWorker::runAgentLoop(
             /* Bare /cwd on a remote session opens the same two-column
              * directory browser that /ssh uses for the workspace, so the
              * user gets parent navigation and consistent UX. */
-            if (arg.isEmpty() && remoteSession != nullptr && remoteSftp != nullptr) {
+            if (arg.isEmpty() && remoteConn->session() != nullptr && remoteConn->sftp() != nullptr) {
                 QTuiPathPicker picker;
                 picker.setTitle(QStringLiteral("Remote cwd"));
-                picker.setStartPath(remotePath->cwd());
+                picker.setStartPath(remoteConn->path()->cwd());
                 {
-                    QSocSshExec   homeExec(*remoteSession);
+                    QSocSshExec   homeExec(*remoteConn->session());
                     const auto    homeResult = homeExec.run(QStringLiteral("echo $HOME"), 5000);
                     const QString raw        = QString::fromUtf8(homeResult.stdoutBytes).trimmed();
                     if (!raw.isEmpty() && raw.startsWith(QLatin1Char('/'))) {
                         picker.setHomePath(raw);
                     }
                 }
-                QSocSftpClient *sftp    = remoteSftp;
+                QSocSftpClient *sftp    = remoteConn->sftp();
                 auto            listErr = std::make_shared<QString>();
                 picker.setListDirs([sftp, listErr](const QString &path) -> QStringList {
                     QString    err;
@@ -7304,8 +7348,8 @@ bool QSocCliWorker::runAgentLoop(
                 if (picked.isEmpty()) {
                     continue;
                 }
-                const QString resolved = remotePath->resolveCwdRequest(picked);
-                remotePath->setCwd(resolved);
+                const QString resolved = remoteConn->path()->resolveCwdRequest(picked);
+                remoteConn->path()->setCwd(resolved);
                 {
                     auto newCfg             = agent->getConfig();
                     newCfg.remoteWorkingDir = resolved;
@@ -7349,9 +7393,9 @@ bool QSocCliWorker::runAgentLoop(
 
             /* Remote workspace: /cwd updates the remote cwd via
              * QSocRemotePathContext, clamped to the workspace root. */
-            if (remoteSession != nullptr) {
-                const QString resolved = remotePath->resolveCwdRequest(arg);
-                remotePath->setCwd(resolved);
+            if (remoteConn->session() != nullptr) {
+                const QString resolved = remoteConn->path()->resolveCwdRequest(arg);
+                remoteConn->path()->setCwd(resolved);
                 {
                     auto newCfg             = agent->getConfig();
                     newCfg.remoteWorkingDir = resolved;
@@ -8127,18 +8171,17 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &escMonitor,
                  &qout,
-                 &remoteSession,
-                 &remotePath,
+                 remoteConn,
                  llm = this->llmService](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
                             compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            const QString output = remoteSession != nullptr
+                            const QString output = remoteConn->session() != nullptr
                                                        ? runRemoteShellEscape(
-                                                             *remoteSession,
-                                                             remotePath->cwd(),
+                                                             *remoteConn->session(),
+                                                             remoteConn->path()->cwd(),
                                                              shellCmd)
                                                        : runShellEscape(shellCmd);
                             compositor.resume();
@@ -8792,18 +8835,17 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &escMonitor,
                  &qout,
-                 &remoteSession,
-                 &remotePath,
+                 remoteConn,
                  llm = this->llmService](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
                             compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            const QString output = remoteSession != nullptr
+                            const QString output = remoteConn->session() != nullptr
                                                        ? runRemoteShellEscape(
-                                                             *remoteSession,
-                                                             remotePath->cwd(),
+                                                             *remoteConn->session(),
+                                                             remoteConn->path()->cwd(),
                                                              shellCmd)
                                                        : runShellEscape(shellCmd);
                             compositor.resume();

@@ -340,15 +340,39 @@ void QSocRemoteConnection::adopt(const AgentRemoteState &state)
 {
     m_session   = state.session;
     m_sftp      = state.sftp;
+    m_jumps     = state.jumps;
     m_path      = state.path;
     m_target    = state.targetKey;
     m_workspace = state.workspace;
+}
+
+void QSocRemoteConnection::teardown()
+{
+    if (m_sftp != nullptr) {
+        m_sftp->close();
+        delete m_sftp;
+    }
+    if (m_session != nullptr) {
+        m_session->disconnectFromHost();
+        delete m_session;
+    }
+    for (auto it = m_jumps.rbegin(); it != m_jumps.rend(); ++it) {
+        (*it)->disconnectFromHost();
+        delete *it;
+    }
+    m_jumps.clear();
+    m_session = nullptr;
+    m_sftp    = nullptr;
+    m_path    = QSocRemotePathContext{};
+    m_target.clear();
+    m_workspace.clear();
 }
 
 void QSocRemoteConnection::release()
 {
     m_session = nullptr;
     m_sftp    = nullptr;
+    m_jumps.clear();
     m_target.clear();
     m_workspace.clear();
 }
@@ -364,6 +388,65 @@ QString QSocRemoteConnection::unusableText() const
         return QStringLiteral("no remote workspace is bound");
     }
     return m_session->unusableText();
+}
+
+namespace {
+
+/* Liveness budget for re-verifying the working directory after a reconnect. */
+constexpr int kReconnectProbeMs = 3000;
+
+} // namespace
+
+void QSocRemoteConnection::setRebuilder(Rebuilder rebuilder)
+{
+    m_rebuilder = std::move(rebuilder);
+}
+
+QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *errorMessage)
+{
+    m_lastAttempts = 0;
+    if (m_session != nullptr && m_session->isConnected()) {
+        return ReconnectOutcome::NotNeeded;
+    }
+    if (!m_rebuilder || m_target.isEmpty() || m_workspace.isEmpty()) {
+        return ReconnectOutcome::Refused;
+    }
+
+    const QString wantedCwd = m_path.cwd();
+    const QString target    = m_target;
+    const QString workspace = m_workspace;
+
+    for (int attempt = 1; attempt <= kReconnectAttempts; ++attempt) {
+        m_lastAttempts = attempt;
+        AgentRemoteState fresh;
+        if (!m_rebuilder(target, workspace, &fresh, errorMessage)) {
+            /* A failed attempt leaves the caller exactly as it was, so the
+             * previous transport is still ours to free below. */
+            continue;
+        }
+        /* Only once a replacement exists: adopt() overwrites the pointers, so
+         * without this the previous session, its SFTP channel and its whole
+         * ProxyJump chain are never freed. Target, workspace and the wanted
+         * cwd were snapshotted above, which is what makes this safe here. */
+        teardown();
+        adopt(fresh);
+        /* The working directory is a path, not a handle, so it survives a
+         * reconnect when it still exists. Verifying beats assuming: the host
+         * may have rebooted out from under it. */
+        if (!wantedCwd.isEmpty() && wantedCwd != m_path.cwd()
+            && remoteWorkspaceAnswers(m_sftp, wantedCwd, kReconnectProbeMs)) {
+            m_path.setCwd(wantedCwd);
+        }
+        /* Forget every believed file content. The request we walked away from
+         * may have been a write, and a reboot may have rolled the tree back.
+         * The read-before-overwrite guard then mechanically forces a re-read
+         * before any edit, which is what makes reconnecting safe at all.
+         * Background job ids are deliberately kept: they may still be running,
+         * and the agent is told to verify them rather than assume either way. */
+        m_path.readState().clear();
+        return ReconnectOutcome::Reconnected;
+    }
+    return ReconnectOutcome::Exhausted;
 }
 
 bool remoteWorkspaceAnswers(

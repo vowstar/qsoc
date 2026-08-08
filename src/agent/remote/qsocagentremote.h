@@ -60,8 +60,16 @@ struct AgentRemoteState
 class QSocRemoteConnection
 {
 public:
-    /** @brief Take over the transport a successful connect produced. */
+    /** @brief Take ownership of the transport a successful connect produced. */
     void adopt(const AgentRemoteState &state);
+
+    /**
+     * @brief Close and free the bound transport in dependency order.
+     * @details SFTP, then the session, then the ProxyJump chain in reverse so
+     *          children disconnect before their parents. Safe to call with
+     *          nothing bound.
+     */
+    void teardown();
 
     /** @brief Forget the transport without touching it; the caller frees. */
     void release();
@@ -78,12 +86,53 @@ public:
     /** @brief Why the workspace cannot be used, empty while it can. */
     QString unusableText() const;
 
+    /**
+     * @brief Builds a fresh transport for an existing binding.
+     * @details Supplied by whoever created the binding, because only they can
+     *          reach the connect helpers. Fills @p out on success.
+     */
+    using Rebuilder = std::function<bool(
+        const QString &target, const QString &workspace, AgentRemoteState *out, QString *errorMessage)>;
+
+    void setRebuilder(Rebuilder rebuilder);
+
+    /** @brief What `reconnect()` did. */
+    enum class ReconnectOutcome : std::uint8_t {
+        NotNeeded,   /**< The workspace is usable; nothing was touched. */
+        Reconnected, /**< A fresh transport is bound. Remote state is unverified. */
+        Refused,     /**< No target, workspace or rebuilder to work from. */
+        Exhausted,   /**< Every attempt failed; the workspace stays unusable. */
+    };
+
+    /**
+     * @brief Replace a transport that can no longer serve calls.
+     * @details Covers both failure reasons. A stranded protocol keeps the same
+     *          host, so nothing observable changed; a dead transport may mean
+     *          the host rebooted and everything on it is now in question.
+     *          Reconnecting is safe in both cases only because the caller is
+     *          required to make the agent re-observe before acting: this
+     *          restores the link, it does not resume the work.
+     *
+     *          The clock is the failed attempt's own connect timeout, so there
+     *          is no sleep, no scheduler and no backoff state to own.
+     */
+    ReconnectOutcome reconnect(QString *errorMessage);
+
+    /** @brief Attempts spent on the most recent reconnect(). */
+    int lastReconnectAttempts() const { return m_lastAttempts; }
+
 private:
-    QSocSshSession       *m_session = nullptr;
-    QSocSftpClient       *m_sftp    = nullptr;
-    QSocRemotePathContext m_path;
-    QString               m_target;
-    QString               m_workspace;
+    /** @brief How many times one reconnect() call tries before giving up. */
+    static constexpr int kReconnectAttempts = 2;
+
+    QSocSshSession         *m_session = nullptr;
+    QSocSftpClient         *m_sftp    = nullptr;
+    QList<QSocSshSession *> m_jumps;
+    QSocRemotePathContext   m_path;
+    QString                 m_target;
+    QString                 m_workspace;
+    Rebuilder               m_rebuilder;
+    int                     m_lastAttempts = 0;
 };
 
 /**
