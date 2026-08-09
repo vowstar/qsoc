@@ -112,6 +112,17 @@ public:
     bool isTransportDead() const { return m_unusable == Unusable::TransportDead; }
 
     /**
+     * @brief Whether the last teardown released everything on the live link.
+     * @details False when the peer never confirmed the close and the socket
+     *          had to be closed under libssh2 to get the session released,
+     *          or when even that did not release it. The remote may then
+     *          still be holding the session, and in the second case the
+     *          library's own state is leaked. True while there was nothing
+     *          to tear down.
+     */
+    bool lastTeardownCompleted() const { return m_teardownComplete; }
+
+    /**
      * @brief Whether a libssh2 return code means the transport is gone.
      * @details Only the socket-level codes qualify. An SFTP protocol error
      *          or a permission denial says the link works and the request
@@ -194,6 +205,17 @@ private:
         const QString &user, const QString &privateKeyPath, const QString &passphrase);
 
     void clearConnection();
+    /**
+     * @brief Drive one libssh2 teardown call to completion, bounded.
+     * @details A non-blocking `libssh2_session_disconnect`, `_free` or
+     *          `_channel_free` can return EAGAIN with nothing done, so
+     *          calling once and moving on leaks the session, its channels and
+     *          its SFTP channel.
+     * @return False when the call still had not completed at the deadline.
+     */
+    bool drainCall(qintptr sockFd, LIBSSH2_SESSION *session, const std::function<int()> &call);
+    /** @brief Close the socket when it is ours; idempotent. */
+    void closeOwnedSocket();
     void setError(const QString &msg);
 
     /* libssh2 transport callbacks for ProxyJump tunneling. When a parent
@@ -211,12 +233,13 @@ private:
         const QString &user, const QStringList &identityPaths, QStringList *triedKeys);
     bool tryPasswordPrompt(const QString &user, const QString &hostname, int port);
 
-    LIBSSH2_SESSION *m_session       = nullptr;
-    qintptr          m_socket        = -1;
-    Unusable         m_unusable      = Unusable::No;
-    int              m_timeoutMs     = 30000;
-    QSocSshSession  *m_parent        = nullptr; /* non-owning */
-    LIBSSH2_CHANNEL *m_parentChannel = nullptr;
+    LIBSSH2_SESSION *m_session          = nullptr;
+    qintptr          m_socket           = -1;
+    Unusable         m_unusable         = Unusable::No;
+    bool             m_teardownComplete = true;
+    int              m_timeoutMs        = 30000;
+    QSocSshSession  *m_parent           = nullptr; /* non-owning */
+    LIBSSH2_CHANNEL *m_parentChannel    = nullptr;
     QString          m_lastError;
     SecretCallback   m_secretCallback;
 };

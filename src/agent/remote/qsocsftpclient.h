@@ -22,6 +22,12 @@ class QSocSshSession;
  *          directory operations, and reports errors as user-safe strings
  *          (no secrets, no private-key contents). Writes go through a
  *          temporary path + atomic rename where the server supports it.
+ *
+ *          Invariant: an abandoned SFTP request invalidates the SFTP
+ *          subsystem, because libssh2 keeps read, write and request-id state
+ *          per `LIBSSH2_SFTP` and a later call would re-enter it
+ *          mid-request. It condemns the SSH session only when that
+ *          subsystem cannot be released.
  */
 class QSocSftpClient
 {
@@ -38,6 +44,16 @@ public:
 
     /** @brief Install a test observer for the publish sequence. */
     void setPublishObserver(std::function<void(PublishStage)> observer);
+
+    /**
+     * @brief Install a test observer for the bulk-transfer phase.
+     * @details Fired once per operation, immediately before the first
+     *          `libssh2_sftp_read` or `libssh2_sftp_write` of that
+     *          operation, which is the only point where a test can strand
+     *          the subsystem in its data phase. Production code never
+     *          installs an observer.
+     */
+    void setDataPhaseObserver(std::function<void()> observer);
 
     /** @brief Directory entry returned by `listDir`. */
     struct Entry
@@ -137,6 +153,14 @@ public:
     bool lastFailureUncertain() const { return m_lastFailureUncertain; }
 
     /**
+     * @brief Bytes the server acknowledged during the most recent write.
+     * @details `libssh2_sftp_write` reports acked bytes only, while it may
+     *          already have put more on the wire, so this is a lower bound
+     *          on what the remote holds and never an upper one.
+     */
+    qint64 lastBytesAcked() const { return m_lastBytesAcked; }
+
+    /**
      * @brief Budget for one operation, measured from its entry. Default 30000.
      * @details Bounds every EAGAIN retry loop, including the ones a dead
      *          transport would otherwise never break out of.
@@ -174,26 +198,28 @@ private:
 
     /**
      * @brief Wait during a request exchange, bounded by the deadline.
-     * @details Giving up here strands libssh2 mid-request, so the session is
-     *          marked unusable: the reply we walked away from would be read
-     *          by whichever call came next.
+     * @details Giving up here strands libssh2 mid-request: every SFTP request
+     *          gets exactly one reply, and the state that reply belongs to
+     *          lives in the subsystem, so whichever call came next would
+     *          re-enter it. The subsystem is therefore marked stranded and
+     *          the outcome uncertain; whether the SSH session survives is
+     *          decided by `rebuildSubsystem`.
      * @return False when the wait gave up.
      */
     bool wait();
 
     /**
-     * @brief Wait during work whose abandonment the caller can absorb.
-     * @details Bulk transfer is resumable, and a close / unlink on an error
-     *          path is already unwinding: no later call depends on the reply
-     *          we stop waiting for, and libssh2 matches SFTP replies to
-     *          request ids so a late one cannot be mistaken for another
-     *          call's. A transport stranded mid-send still surfaces on the
-     *          next real operation as a socket error.
+     * @brief Release a stranded subsystem, or condemn the session.
+     * @details Bounded `libssh2_sftp_shutdown`. Completing it proves the SSH
+     *          transport is in sync, so only the subsystem is dropped and the
+     *          next call opens a fresh one. Failing to complete it is the
+     *          detection for a transport left mid-packet, which no later
+     *          caller can recover from, so the session is condemned. Does no
+     *          I/O at all once the session is already unusable.
+     * @return True when the SSH session may still be used.
      */
-    bool waitAbandonable();
+    bool rebuildSubsystem();
 
-    /** @brief Shared wait body. @p requestInFlight marks the session. */
-    bool waitInternal(bool requestInFlight);
     /** @brief Name why a wait gave up: a dead transport, or just slow. */
     QString waitFailureText(const QString &timeoutText) const;
     void    setError(const QString &msg, QString *sink);
@@ -211,10 +237,15 @@ private:
      * Best-effort: an EAGAIN is retried until the socket is ready, but the
      * cleanup budget stops the loop so a cleanup path cannot hang. Used
      * everywhere instead of bare libssh2 calls so a half-issued
-     * (EAGAIN-ignored) op never leaks a handle or a temp file. */
-    void drainClose(LIBSSH2_SFTP_HANDLE *handle);
-    void closeDir(LIBSSH2_SFTP_HANDLE *handle);
-    void drainUnlink(const QByteArray &path);
+     * (EAGAIN-ignored) op never leaks a handle or a temp file. Each reports
+     * whether it finished, because an unfinished one strands the subsystem. */
+    bool drainClose(LIBSSH2_SFTP_HANDLE *handle);
+    bool closeDir(LIBSSH2_SFTP_HANDLE *handle);
+    /* Releases a stranded subsystem first and refuses to run when that
+     * fails: `unlink_request_id` is one slot per subsystem, so an unlink
+     * issued while stranded skips its own send and reports the abandoned
+     * request's reply as its own, deleting a path nobody asked about. */
+    bool drainUnlink(const QByteArray &path);
 
     QSocSshSession &m_session;
     LIBSSH2_SFTP   *m_sftp       = nullptr;
@@ -222,9 +253,12 @@ private:
     QDeadlineTimer  m_deadline;
     bool            m_opActive             = false;
     bool            m_lastFailureUncertain = false;
+    bool            m_stranded             = false;
+    qint64          m_lastBytesAcked       = 0;
     QString         m_lastError;
 
     std::function<void(PublishStage)> m_publishObserver;
+    std::function<void()>             m_dataPhaseObserver;
 };
 
 #endif // QSOCSFTPCLIENT_H

@@ -41,6 +41,10 @@ constexpr socket_fd_t kInvalidSocket = INVALID_SOCKET;
 constexpr socket_fd_t kInvalidSocket = -1;
 #endif
 
+/* Teardown budget per libssh2 call. Bounded because a peer that stopped
+ * answering must not park a caller in the close handshake. */
+constexpr int kTeardownMs = 2000;
+
 void closeSocketFd(socket_fd_t sockFd)
 {
 #ifdef Q_OS_WIN
@@ -344,26 +348,80 @@ void QSocSshSession::setError(const QString &msg)
     m_lastError = msg;
 }
 
-void QSocSshSession::clearConnection()
+bool QSocSshSession::drainCall(
+    qintptr sockFd, LIBSSH2_SESSION *session, const std::function<int()> &call)
 {
-    if (m_session != nullptr) {
-        libssh2_session_disconnect(m_session, "QSoC shutting down session");
-        libssh2_session_free(m_session);
-        m_session = nullptr;
+    const QDeadlineTimer deadline(kTeardownMs);
+    while (call() == LIBSSH2_ERROR_EAGAIN) {
+        if (waitWithin(sockFd, session, deadline) != WaitOutcome::Ready) {
+            return false;
+        }
     }
-    if (m_parentChannel != nullptr) {
-        /* Free the direct-tcpip channel on the parent session. The parent
-         * owns its own socket and stays alive until the caller destroys
-         * it; we only release the hop we opened. */
-        libssh2_channel_free(m_parentChannel);
-        m_parentChannel = nullptr;
-    }
+    return true;
+}
+
+void QSocSshSession::closeOwnedSocket()
+{
     /* Only close the socket when it is ours. Tunneled sessions borrow the
      * parent's fd for polling and must not close it. */
     if (m_parent == nullptr && m_socket >= 0) {
         closeSocketFd(static_cast<socket_fd_t>(m_socket));
     }
-    m_socket   = -1;
+    m_socket = -1;
+}
+
+void QSocSshSession::clearConnection()
+{
+    if (m_session != nullptr) {
+        LIBSSH2_SESSION *session        = m_session;
+        const qintptr    sockFd         = m_socket;
+        const bool       sentDisconnect = drainCall(sockFd, session, [session] {
+            return libssh2_session_disconnect(session, "QSoC shutting down session");
+        });
+        /* The free is what closes and releases every channel, the SFTP one
+         * included, and it waits for the peer to confirm each close. */
+        const bool freedOnTheLink = drainCall(sockFd, session, [session] {
+            return libssh2_session_free(session);
+        });
+        bool       freed          = freedOnTheLink;
+        if (!freed) {
+            /* With the fd gone the channel free stops waiting for a peer that
+             * is not answering: it ignores every close error but EAGAIN. The
+             * one shape this cannot rescue is a packet left half-sent, which
+             * refuses before it ever touches the fd. */
+            closeOwnedSocket();
+            freed = libssh2_session_free(session) != LIBSSH2_ERROR_EAGAIN;
+        }
+        m_session          = nullptr;
+        m_teardownComplete = sentDisconnect && freedOnTheLink;
+        if (!freed) {
+            qWarning(
+                "SSH teardown could not release the libssh2 session; its state is left "
+                "allocated");
+        } else if (!m_teardownComplete) {
+            qWarning(
+                "SSH teardown closed the socket to release a session the peer never "
+                "confirmed");
+        }
+    }
+    if (m_parentChannel != nullptr) {
+        /* Free the direct-tcpip channel on the parent session. The parent
+         * owns its own socket and stays alive until the caller destroys it;
+         * we only release the hop we opened. Abandoning this one strands the
+         * parent's transport, which other hops are still using, so the parent
+         * has to be told. */
+        LIBSSH2_CHANNEL *hop           = m_parentChannel;
+        m_parentChannel                = nullptr;
+        LIBSSH2_SESSION *parentSession = m_parent == nullptr ? nullptr : m_parent->rawSession();
+        if (parentSession != nullptr && !drainCall(m_parent->socketFd(), parentSession, [hop] {
+                return libssh2_channel_free(hop);
+            })) {
+            m_parent->markAbandonedExchange();
+            m_teardownComplete = false;
+            qWarning("SSH teardown left a ProxyJump channel unreleased on its parent session");
+        }
+    }
+    closeOwnedSocket();
     m_parent   = nullptr;
     m_unusable = Unusable::No;
 }
