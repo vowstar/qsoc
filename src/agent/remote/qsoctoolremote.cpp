@@ -132,24 +132,6 @@ QString sftpWriteError(QSocSftpClient *sftp, const QString &err)
     return QStringLiteral("Error: %1").arg(err);
 }
 
-/* The job scripts print their verdict as a `token:` line; the composed result
- * text carries it, so echoing the script's own copy back would state it
- * twice. */
-QString withoutTokenLines(const QString &scriptOutput)
-{
-    QStringList       kept;
-    const QStringList lines = scriptOutput.split(QLatin1Char('\n'));
-    for (const QString &line : lines) {
-        const QString trimmed = line.trimmed();
-        if (trimmed.startsWith(QStringLiteral("token:"))
-            || trimmed.startsWith(QStringLiteral("detail="))) {
-            continue;
-        }
-        kept.append(line);
-    }
-    return kept.join(QLatin1Char('\n'));
-}
-
 /* Host detail the signal script captured from `kill`, empty when it said
  * nothing. */
 QString scriptDetail(const QString &scriptOutput)
@@ -854,6 +836,9 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         return QStringLiteral("Error: invalid job_id");
     }
     const QString jobDir = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs/") + jobId;
+    /* What this session recorded for the id. An id it never handed out yields
+     * a default record, which the scripts report as unverifiable. */
+    const QSocRemoteJobRecord record = m_conn->jobs()->record(jobId);
 
     auto runShell = [&](const QString &shell, int timeoutMs) {
         QSocSshExec exec(*m_conn->session());
@@ -886,18 +871,24 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     };
 
     if (action == QStringLiteral("status")) {
-        const auto    result  = runShell(jobStatusScript(jobDir), 5000);
+        const auto    result  = runShell(jobStatusScript(jobDir, record), 5000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
         }
         const QString observed = QString::fromUtf8(result.stdoutBytes);
         const auto    token    = parseJobToken(observed);
-        const QString verdict  = token == QSocRemoteJobToken::Absent
-                                     ? QSocTool::statusLine(QSocTool::ResultStatus::Ok)
-                                           + QStringLiteral("job_id: %1\n").arg(jobId)
-                                     : composeJobRefusal(jobId, token);
-        return verdict + withoutTokenLines(observed) + stderrTail(result);
+        /* An exit code the host reported for a job it could identify is the one
+         * thing that settles a record, and only a settled record can be evicted
+         * to make room for the next launch. */
+        if (token == QSocRemoteJobToken::Absent && !parseJobStatusExitCode(observed).isEmpty()) {
+            m_conn->jobs()->markSettled(jobId);
+        }
+        const QString verdict = token == QSocRemoteJobToken::Absent
+                                    ? QSocTool::statusLine(QSocTool::ResultStatus::Ok)
+                                          + QStringLiteral("job_id: %1\n").arg(jobId)
+                                    : composeJobRefusal(jobId, token);
+        return verdict + jobScriptEvidence(observed) + stderrTail(result);
     }
     if (action == QStringLiteral("output")) {
         int maxLines = 200;
@@ -907,7 +898,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                 maxLines = 200;
             }
         }
-        const auto    result  = runShell(jobOutputScript(jobDir, maxLines), 10000);
+        const auto    result  = runShell(jobOutputScript(jobDir, maxLines, record), 10000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
@@ -920,7 +911,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                                      ? QSocTool::statusLine(QSocTool::ResultStatus::Ok)
                                            + QStringLiteral("job_id: %1\n").arg(jobId)
                                      : composeJobRefusal(jobId, token);
-        return verdict + withoutTokenLines(observed);
+        return verdict + jobScriptEvidence(observed);
     }
     if (action == QStringLiteral("terminate") || action == QStringLiteral("kill")) {
         const bool    hard       = action == QStringLiteral("kill");
@@ -932,7 +923,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         if (!unrecorded.isEmpty()) {
             return unrecorded;
         }
-        const auto    result  = runShell(jobSignalScript(jobDir, signal), 5000);
+        const auto    result  = runShell(jobSignalScript(record, signal), 5000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;

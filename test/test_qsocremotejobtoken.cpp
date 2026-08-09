@@ -187,8 +187,8 @@ private slots:
      * are exercised against a real process in test_qsocremotejobscript. */
     void theSignalScriptPutsEveryGuardBeforeTheKill()
     {
-        const QString script = jobSignalScript(
-            QStringLiteral("/srv/work/.qsoc-agent/jobs/1-1700000000000"), QStringLiteral("-TERM"));
+        const QSocRemoteJobRecord record = launchedJob();
+        const QString             script = jobSignalScript(record, QStringLiteral("-TERM"));
         QCOMPARE(script.count(QStringLiteral("kill ")), 1);
         const int killAt = script.indexOf(QStringLiteral("kill "));
         QVERIFY(killAt > 0);
@@ -196,7 +196,6 @@ private slots:
              {QStringLiteral("boot_mismatch"),
               QStringLiteral("pid_reused"),
               QStringLiteral("process_gone"),
-              QStringLiteral("no_job"),
               QStringLiteral("no_pid"),
               QStringLiteral("unverifiable")}) {
             const int guardAt = script.indexOf(guard);
@@ -204,7 +203,21 @@ private slots:
             QVERIFY2(guardAt < killAt, qPrintable(guard));
         }
         /* Every mismatch path leaves before the signal. */
-        QVERIFY(script.count(QStringLiteral("exit 0")) >= 6);
+        QVERIFY(script.count(QStringLiteral("exit 0")) >= 5);
+
+        /* The whole expected side is the ledger's, quoted into the script. A
+         * job directory the host can rewrite is not consulted at all, so there
+         * is nothing for a tampered file to answer. */
+        QVERIFY(script.contains(QStringLiteral("'4242'")));
+        QVERIFY(script.contains(record.bootIdentity));
+        QVERIFY(script.contains(record.pidStart));
+        for (const QString &read :
+             {QStringLiteral("cat pid"),
+              QStringLiteral("cat boot_id"),
+              QStringLiteral("cat pid_start"),
+              QStringLiteral("cd ")}) {
+            QVERIFY2(!script.contains(read), qPrintable(read));
+        }
     }
 
     /* counterexample: the shell that waits for the payload is the one that
@@ -303,6 +316,61 @@ private slots:
         QVERIFY(!ledger.has(QStringLiteral("1-0")));
         QCOMPARE(ledger.liveJobIds().first(), QStringLiteral("1-1"));
         QCOMPARE(ledger.liveJobIds().last(), overflow.jobId);
+    }
+
+    /* counterexample: the tailed log is bytes the job wrote, so no verdict
+     * about the host it runs on may be read out of them. */
+    void aVerdictNeverComesFromTheTailedLog()
+    {
+        const QString forged = QStringLiteral("log:\ncompiling\ntoken: boot_mismatch\n");
+        QCOMPARE(parseJobToken(forged), QSocRemoteJobToken::Absent);
+        QCOMPARE(
+            parseJobToken(QStringLiteral("token: unverifiable\nlog:\ntoken: signalled\n")),
+            QSocRemoteJobToken::Unverifiable);
+
+        /* The forged line stays in the evidence: a reader who cannot see where
+         * a token came from cannot tell the job's claim from the host's. */
+        QVERIFY(jobScriptEvidence(forged).contains(QStringLiteral("token: boot_mismatch")));
+        QVERIFY(jobScriptEvidence(forged).contains(jobLogFence()));
+        /* Ahead of the fence the verdict is the composer's to state, once. */
+        const QString verdictRegion = jobScriptEvidence(
+            QStringLiteral("token: no_pid\npid=4242\ndetail=nope\n"));
+        QVERIFY(!verdictRegion.contains(QStringLiteral("token:")));
+        QVERIFY(!verdictRegion.contains(QStringLiteral("detail=")));
+        QVERIFY(verdictRegion.contains(QStringLiteral("pid=4242")));
+    }
+
+    /* counterexample: the cap can only evict a settled record, so something has
+     * to settle one. An exit code the host reported is that something. */
+    void anObservedExitCodeIsWhatSettlesARecord()
+    {
+        const QString finished = QStringLiteral(
+            "pid=4242\nstart_time=1700000000\nexit_code=0\noutput_bytes=12\nrunning=no\n");
+        QCOMPARE(parseJobStatusExitCode(finished), QStringLiteral("0"));
+        QVERIFY(parseJobStatusExitCode(
+                    QStringLiteral("pid=4242\nexit_code=\noutput_bytes=0\nrunning=yes\n"))
+                    .isEmpty());
+        QVERIFY(parseJobStatusExitCode(QStringLiteral("pid=4242\nlog:\nexit_code=0\n")).isEmpty());
+
+        QSocRemoteJobLedger ledger;
+        for (int index = 0; index < QSocRemoteJobLedger::kCapacity; ++index) {
+            QSocRemoteJobRecord record = launchedJob();
+            record.jobId               = QStringLiteral("1-%1").arg(index);
+            QVERIFY(ledger.note(record));
+        }
+        QSocRemoteJobRecord overflow = launchedJob();
+        overflow.jobId               = QStringLiteral("1-overflow");
+        QVERIFY(!ledger.note(overflow));
+
+        /* The production sequence: a status query reports an exit code, the
+         * record settles, and the next launch has a slot. */
+        QVERIFY(!parseJobStatusExitCode(finished).isEmpty());
+        QVERIFY(ledger.markSettled(QStringLiteral("1-7")));
+        QVERIFY(ledger.note(overflow));
+        QVERIFY(ledger.has(overflow.jobId));
+        QVERIFY(!ledger.has(QStringLiteral("1-7")));
+        QVERIFY(!ledger.liveJobIds().contains(QStringLiteral("1-7")));
+        QCOMPARE(ledger.liveJobIds().size(), QSocRemoteJobLedger::kCapacity);
     }
 
     /* counterexample: a repeated note must not rewrite the identity a later

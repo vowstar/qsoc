@@ -23,18 +23,7 @@ QString shellQuote(const QString &value)
 }
 
 const auto kUnknownScheme = QStringLiteral("unknown:");
-
-/* Shell twin of compareIdentity(). Same three answers, same rule that two
- * different schemes are Unknown rather than a mismatch. */
-QString identityCompareFunction()
-{
-    return QStringLiteral(
-        "__cmp() { "
-        "case \"$1\" in \"\"|unknown:*) echo unknown; return;; esac; "
-        "case \"$2\" in \"\"|unknown:*) echo unknown; return;; esac; "
-        "[ \"${1%%:*}\" = \"${2%%:*}\" ] || { echo unknown; return; }; "
-        "if [ \"$1\" = \"$2\" ]; then echo equal; else echo differ; fi; }\n");
-}
+const auto kLogFence      = QStringLiteral("log:");
 
 /* The host-incarnation part of one token. The signal script prints the four
  * tokens past the `equal` branch only after its own boot comparison answered
@@ -124,11 +113,21 @@ QString jobTokenName(QSocRemoteJobToken token)
     return QStringLiteral("unrecognized");
 }
 
+QString jobLogFence()
+{
+    return kLogFence;
+}
+
 QSocRemoteJobToken parseJobToken(const QString &scriptOutput)
 {
     const QStringList lines = scriptOutput.split(QLatin1Char('\n'));
     for (const QString &line : lines) {
         const QString trimmed = line.trimmed();
+        /* The script prints the fence itself, so the first one is always its
+         * own and everything past it is the job speaking. */
+        if (trimmed == kLogFence) {
+            break;
+        }
         if (!trimmed.startsWith(QStringLiteral("token:"))) {
             continue;
         }
@@ -149,6 +148,41 @@ QSocRemoteJobToken parseJobToken(const QString &scriptOutput)
         return QSocRemoteJobToken::Unrecognized;
     }
     return QSocRemoteJobToken::Absent;
+}
+
+QString jobScriptEvidence(const QString &scriptOutput)
+{
+    QStringList       kept;
+    bool              inLog = false;
+    const QStringList lines = scriptOutput.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (!inLog && trimmed == kLogFence) {
+            inLog = true;
+        } else if (
+            !inLog
+            && (trimmed.startsWith(QStringLiteral("token:"))
+                || trimmed.startsWith(QStringLiteral("detail=")))) {
+            continue;
+        }
+        kept.append(line);
+    }
+    return kept.join(QLatin1Char('\n'));
+}
+
+QString parseJobStatusExitCode(const QString &statusOutput)
+{
+    const QStringList lines = statusOutput.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed == kLogFence) {
+            break;
+        }
+        if (trimmed.startsWith(QStringLiteral("exit_code="))) {
+            return trimmed.mid(QStringLiteral("exit_code=").size()).trimmed();
+        }
+    }
+    return {};
 }
 
 /* Ledger */
@@ -287,6 +321,24 @@ QSocRemoteJobJudgement judgeSignal(
 
 /* Generated shell */
 
+QString identityCompareShell()
+{
+    /* Shell twin of compareIdentity(). Same three answers, and the same four
+     * ways to reach `unknown`: an empty string, an `unknown:` tag, a value with
+     * no scheme or an empty scheme, and an empty payload. Two identities that
+     * are both nothing but a scheme name have established nothing about each
+     * other, so they must not compare equal. */
+    return QStringLiteral(
+        "__cmp() { "
+        "case \"$1\" in \"\"|unknown:*|:*) echo unknown; return;; *:*) ;; "
+        "*) echo unknown; return;; esac; "
+        "case \"$2\" in \"\"|unknown:*|:*) echo unknown; return;; *:*) ;; "
+        "*) echo unknown; return;; esac; "
+        "[ -n \"${1#*:}\" ] && [ -n \"${2#*:}\" ] || { echo unknown; return; }; "
+        "[ \"${1%%:*}\" = \"${2%%:*}\" ] || { echo unknown; return; }; "
+        "if [ \"$1\" = \"$2\" ]; then echo equal; else echo differ; fi; }\n");
+}
+
 QString bootIdentityProbe()
 {
     return QStringLiteral(
@@ -350,86 +402,101 @@ QString jobLaunchScript(
         .arg(shellQuote(jobDir), shellQuote(wrapper));
 }
 
-QString jobStatusScript(const QString &jobDir)
+QString jobStatusScript(const QString &jobDir, const QSocRemoteJobRecord &record)
 {
-    return identityCompareFunction()
+    /* Every value read off disk is narrowed to digits before it is echoed. All
+     * three are numeric by construction, and a state file carrying a newline
+     * would otherwise print a `token:` line of its own ahead of the verdict. */
+    return identityCompareShell()
            + QStringLiteral(
                  "cd %1 2>/dev/null || { echo \"token: no_job\"; exit 0; }\n"
-                 "__pid=$(cat pid 2>/dev/null)\n"
-                 "__start=$(cat start_time 2>/dev/null)\n"
-                 "__code=$(cat exit_code 2>/dev/null)\n"
+                 "__pid=%2\n"
+                 "__start=$(cat start_time 2>/dev/null | tr -dc \"0-9\")\n"
+                 "__code=$(cat exit_code 2>/dev/null | tr -dc \"0-9\")\n"
                  "__bytes=$(wc -c < output.log 2>/dev/null | tr -dc \"0-9\")\n"
                  "[ -n \"$__bytes\" ] || __bytes=0\n"
                  "printf \"pid=%s\\nstart_time=%s\\nexit_code=%s\\noutput_bytes=%s\\n\" "
                  "\"$__pid\" \"$__start\" \"$__code\" \"$__bytes\"\n"
-                 "[ -n \"$__pid\" ] || { echo \"token: no_pid\"; exit 0; }\n"
-                 "__want_boot=$(cat boot_id 2>/dev/null)\n"
-                 "__live_boot=$(%2)\n"
+                 "case \"$__pid\" in \"\"|0|*[!0-9]*) echo \"token: no_pid\"; exit 0;; esac\n"
+                 "__want_boot=%3\n"
+                 "__live_boot=$(%4)\n"
                  "case \"$(__cmp \"$__want_boot\" \"$__live_boot\")\" in\n"
                  "unknown) echo \"token: unverifiable\"; exit 0;;\n"
                  "differ) echo \"token: boot_mismatch\"; exit 0;;\n"
                  "esac\n"
                  "[ -z \"$__code\" ] || { printf \"running=no\\n\"; exit 0; }\n")
-                 .arg(shellQuote(jobDir), bootIdentityProbe())
+                 .arg(
+                     shellQuote(jobDir),
+                     shellQuote(QString::number(record.pid)),
+                     shellQuote(record.bootIdentity),
+                     bootIdentityProbe())
            + pidPresenceGuard(
                QStringLiteral("\"$__pid\""), QStringLiteral("printf \"running=no\\n\"; exit 0;"))
            + QStringLiteral(
-                 "__want_start=$(cat pid_start 2>/dev/null)\n"
-                 "__live_start=$(%1)\n"
+                 "__want_start=%1\n"
+                 "__live_start=$(%2)\n"
                  "case \"$(__cmp \"$__want_start\" \"$__live_start\")\" in\n"
                  "unknown) echo \"token: unverifiable\"; exit 0;;\n"
                  "differ) echo \"token: pid_reused\"; exit 0;;\n"
                  "esac\n"
                  "printf \"running=yes\\n\"\n")
-                 .arg(pidStartProbe(QStringLiteral("\"$__pid\"")));
+                 .arg(shellQuote(record.pidStart), pidStartProbe(QStringLiteral("\"$__pid\"")));
 }
 
-QString jobOutputScript(const QString &jobDir, int maxLines)
+QString jobOutputScript(const QString &jobDir, int maxLines, const QSocRemoteJobRecord &record)
 {
     /* The log on disk is evidence whatever the host did since, so a failed
-     * identity check labels the answer instead of withholding it. */
-    return identityCompareFunction()
+     * identity check labels the answer instead of withholding it. The fence
+     * goes out before the first byte of the log, so nothing the job wrote can
+     * be read as the verdict. */
+    return identityCompareShell()
            + QStringLiteral(
                  "cd %1 2>/dev/null || { echo \"token: no_job\"; exit 0; }\n"
-                 "__want_boot=$(cat boot_id 2>/dev/null)\n"
-                 "__live_boot=$(%2)\n"
+                 "__want_boot=%2\n"
+                 "__live_boot=$(%3)\n"
                  "case \"$(__cmp \"$__want_boot\" \"$__live_boot\")\" in\n"
                  "unknown) echo \"token: unverifiable\";;\n"
                  "differ) echo \"token: boot_mismatch\";;\n"
                  "esac\n"
-                 "printf \"log:\\n\"\n"
-                 "tail -n %3 output.log 2>&1 || true\n")
-                 .arg(shellQuote(jobDir), bootIdentityProbe(), QString::number(maxLines));
+                 "printf \"%4\\n\"\n"
+                 "tail -n %5 output.log 2>&1 || true\n")
+                 .arg(
+                     shellQuote(jobDir),
+                     shellQuote(record.bootIdentity),
+                     bootIdentityProbe(),
+                     kLogFence,
+                     QString::number(maxLines));
 }
 
-QString jobSignalScript(const QString &jobDir, const QString &signal)
+QString jobSignalScript(const QSocRemoteJobRecord &record, const QString &signal)
 {
-    return identityCompareFunction()
+    return identityCompareShell()
            + QStringLiteral(
-                 "cd %1 2>/dev/null || { echo \"token: no_job\"; exit 0; }\n"
-                 "__pid=$(cat pid 2>/dev/null)\n"
-                 "[ -n \"$__pid\" ] || { echo \"token: no_pid\"; exit 0; }\n"
-                 "case \"$__pid\" in *[!0-9]*) echo \"token: no_pid\"; exit 0;; esac\n"
-                 "__want_boot=$(cat boot_id 2>/dev/null)\n"
-                 "__live_boot=$(%2)\n"
+                 "__pid=%1\n"
+                 "case \"$__pid\" in \"\"|0|*[!0-9]*) echo \"token: no_pid\"; exit 0;; esac\n"
+                 "__want_boot=%2\n"
+                 "__live_boot=$(%3)\n"
                  "case \"$(__cmp \"$__want_boot\" \"$__live_boot\")\" in\n"
                  "unknown) echo \"token: unverifiable\"; exit 0;;\n"
                  "differ) echo \"token: boot_mismatch\"; exit 0;;\n"
                  "esac\n")
-                 .arg(shellQuote(jobDir), bootIdentityProbe())
+                 .arg(
+                     shellQuote(QString::number(record.pid)),
+                     shellQuote(record.bootIdentity),
+                     bootIdentityProbe())
            + pidPresenceGuard(
                QStringLiteral("\"$__pid\""), QStringLiteral("echo \"token: process_gone\"; exit 0;"))
            + QStringLiteral(
-                 "__want_start=$(cat pid_start 2>/dev/null)\n"
-                 "__live_start=$(%1)\n"
+                 "__want_start=%1\n"
+                 "__live_start=$(%2)\n"
                  "case \"$(__cmp \"$__want_start\" \"$__live_start\")\" in\n"
                  "unknown) echo \"token: unverifiable\"; exit 0;;\n"
                  "differ) echo \"token: pid_reused\"; exit 0;;\n"
                  "esac\n"
-                 "if __err=$(kill %2 \"$__pid\" 2>&1); then echo \"token: signalled\"; "
+                 "if __err=$(kill %3 \"$__pid\" 2>&1); then echo \"token: signalled\"; "
                  "else echo \"token: signal_failed\"; fi\n"
                  "[ -z \"$__err\" ] || printf \"detail=%s\\n\" \"$__err\"\n")
-                 .arg(pidStartProbe(QStringLiteral("\"$__pid\"")), signal);
+                 .arg(shellQuote(record.pidStart), pidStartProbe(QStringLiteral("\"$__pid\"")), signal);
 }
 
 /* Text */
@@ -481,7 +548,7 @@ QString composeJobRefusal(const QString &jobId, QSocRemoteJobToken token)
             "the work with bash(background=true)");
         break;
     case QSocRemoteJobToken::NoPid:
-        reason = QStringLiteral("the job recorded no pid");
+        reason = QStringLiteral("no pid is on record for this job");
         next   = QStringLiteral("read the log with bash_manage(action=output)");
         break;
     case QSocRemoteJobToken::Unverifiable:

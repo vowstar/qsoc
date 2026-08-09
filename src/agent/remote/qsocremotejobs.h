@@ -42,9 +42,10 @@ QSocRemoteIdentityMatch compareIdentity(const QString &recorded, const QString &
 
 /**
  * @brief What the generated job script established, as one word.
- * @details The scripts print at most one `token: <name>` line. Absent means
- *          the script answered with no reservation, which only the status and
- *          output scripts can do.
+ * @details The scripts print at most one `token: <name>` line, and print it
+ *          before the `log:` fence past which the job's own bytes begin.
+ *          Absent means the script answered with no reservation, which only
+ *          the status and output scripts can do.
  */
 enum class QSocRemoteJobToken : std::uint8_t {
     Absent,       /**< No token line: nothing was in doubt. */
@@ -63,11 +64,38 @@ enum class QSocRemoteJobToken : std::uint8_t {
 QString jobTokenName(QSocRemoteJobToken token);
 
 /**
+ * @brief Line past which a script's stdout is the job's own output.
+ * @details The script prints it; everything after it was written by the
+ *          payload and establishes nothing about the host.
+ */
+QString jobLogFence();
+
+/**
  * @brief Read the `token:` line out of one script's stdout.
+ * @details Reading stops at @ref jobLogFence, so a job that prints
+ *          `token: boot_mismatch` into its own log cannot hand the client a
+ *          verdict about the host it is running on.
  * @param scriptOutput Raw stdout of a job script.
  * @return The token, or Absent when the script printed none.
  */
 QSocRemoteJobToken parseJobToken(const QString &scriptOutput);
+
+/**
+ * @brief One script's stdout with its verdict lines removed.
+ * @details The composed result text already carries the verdict, so echoing
+ *          the script's own copy would state it twice. Only the region ahead
+ *          of @ref jobLogFence is filtered: stripping a `token:` line out of
+ *          the tailed log would hide the one place a reader can see that the
+ *          job, not the host, wrote it.
+ */
+QString jobScriptEvidence(const QString &scriptOutput);
+
+/**
+ * @brief Exit code the status script reported, as the host printed it.
+ * @return The value of the `exit_code=` line, or an empty string when the job
+ *         has not finished or the host printed nothing readable.
+ */
+QString parseJobStatusExitCode(const QString &statusOutput);
 
 /**
  * @brief One background job as the client last observed it.
@@ -137,7 +165,14 @@ public:
      */
     bool rebind(const QString &jobId, quint64 generation);
 
-    /** @brief Mark @p jobId as having a known outcome. @return True when found. */
+    /**
+     * @brief Mark @p jobId as having a known outcome.
+     * @details The outcome is an exit code the host reported for the job. It is
+     *          the only thing that settles a record: it is what says the pid
+     *          can no longer be signalled, so it is what makes the record safe
+     *          to evict and pointless to re-observe after a reconnect.
+     * @return True when found.
+     */
     bool markSettled(const QString &jobId);
 
     /** @brief Drop the record for @p jobId. @return True when one was dropped. */
@@ -192,7 +227,9 @@ QString refuseUnrecordedJob(const QString &jobId, const QSocRemoteJobLedger &led
  *          place only, inside @ref jobSignalScript: the comparison has to be
  *          on the same round trip as the `kill` it guards, or the pid can exit
  *          and its number be reused in the window between deciding and
- *          signalling. This translates that verdict and compares nothing.
+ *          signalling. What is compared there is the ledger's copy: the host
+ *          decides, and the client says what it decides about. This translates
+ *          that verdict and compares nothing.
  *
  *          The transport generation is not an input. It tracks the client's
  *          socket, and neither the host incarnation nor the pid nor the pid's
@@ -212,9 +249,13 @@ QSocRemoteJobJudgement judgeSignal(
     QSocRemoteJobToken token,
     const QString     &detail);
 
-/* Generated shell. Identity is probed on the host, inside the job scripts:
- * only the host knows its own incarnation, and a separate health-check round
- * trip would be paid by every tool call.
+/* Generated shell. The LIVE identity is probed on the host, inside the job
+ * scripts: only the host knows its own incarnation, and a separate
+ * health-check round trip would be paid by every tool call. The RECORDED
+ * identity is always baked in as a literal from the ledger. A job directory
+ * lives in a writable remote directory, so a `pid` file read on the host is an
+ * expectation the attacker supplied, and comparing it against the live host
+ * attests to nothing.
  *
  * Portability of the answers: exact on Linux with procfs (`boot_id` and
  * `proc_starttime`), second-resolution on macOS and other BSD hosts
@@ -224,6 +265,15 @@ QSocRemoteJobJudgement judgeSignal(
 
 /** @brief Shell expression printing the host boot identity, scheme-tagged. */
 QString bootIdentityProbe();
+
+/**
+ * @brief Shell definition of `__cmp`, the host-side form of @ref
+ *        compareIdentity.
+ * @details Answers `unknown`, `equal` or `differ` for the pair of identities it
+ *          is handed, by the same rule, including the one an empty payload
+ *          falls under: `boot_id:` against `boot_id:` is Unknown, not a match.
+ */
+QString identityCompareShell();
 
 /**
  * @brief Shell expression printing one pid's start identity, scheme-tagged.
@@ -251,12 +301,22 @@ QString jobLaunchScript(
  * @brief Script reporting one job's state.
  * @details Prints no `running=` key at all when the binding cannot be
  *          verified: `running=no` would read as a definite answer about a
- *          process nobody identified.
+ *          process nobody identified. The pid it probes is @p record's, and
+ *          every value it echoes from the job directory is narrowed to digits
+ *          first, so a state file cannot inject a `token:` line ahead of the
+ *          verdict.
+ * @param jobDir Absolute remote job directory, read for the log and exit code.
+ * @param record What this session recorded for the job; a default-constructed
+ *        one is an id this session cannot verify, and says so.
  */
-QString jobStatusScript(const QString &jobDir);
+QString jobStatusScript(const QString &jobDir, const QSocRemoteJobRecord &record);
 
-/** @brief Script tailing one job's log, prefixed by its verification token. */
-QString jobOutputScript(const QString &jobDir, int maxLines);
+/**
+ * @brief Script tailing one job's log, prefixed by its verification token.
+ * @details The token comes before @ref jobLogFence and the log after it, so
+ *          the tail cannot be read as the host's verdict about itself.
+ */
+QString jobOutputScript(const QString &jobDir, int maxLines, const QSocRemoteJobRecord &record);
 
 /**
  * @brief Script signalling one job, with every guard ahead of the signal.
@@ -267,10 +327,16 @@ QString jobOutputScript(const QString &jobDir, int maxLines);
  *          reads shell, so the guards are held in place behaviourally: the
  *          script is run against a real process, and the process must survive
  *          every mismatch branch.
- * @param jobDir Absolute remote job directory.
+ *
+ *          It reads nothing from the job directory, and takes no job directory
+ *          to read: the pid it signals and the two identities it checks that
+ *          pid against are @p record's, baked in as literals. A recorded
+ *          `unknown:` therefore refuses the signal instead of falling back to
+ *          a value the host could rewrite.
+ * @param record What this session recorded for the job.
  * @param signal Signal flag for `kill`, e.g. `-TERM`.
  */
-QString jobSignalScript(const QString &jobDir, const QString &signal);
+QString jobSignalScript(const QSocRemoteJobRecord &record, const QString &signal);
 
 /** @brief The four identity fields a launch script printed. */
 struct QSocRemoteJobLaunchReport
