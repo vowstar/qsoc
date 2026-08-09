@@ -38,7 +38,9 @@ jobs:
         libxrender-dev
         linguist-qt6
         ninja-build
+        openssh-server
         p7zip-full
+        python3
         python3-py7zr
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
@@ -92,10 +94,100 @@ jobs:
 
     - name: Full Test
       if: github.event_name == 'pull_request'
+      env:
+        # openssh-server and python3 are installed above, so a fixture that
+        # cannot find sshd is a broken job declaration, not a developer machine.
+        QSOC_TEST_DEPS_REQUIRED: '1'
       uses: coactions/setup-xvfb@v1
       with:
         working-directory: build
         run: ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
+
+  # The loopback sshd fixtures are the only coverage of the remote-disconnect
+  # behaviour, and the job above runs no tests at all on a push. This one does,
+  # on both events, with the loopback binaries only so it stays short.
+  remote-loopback-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Install depends
+      run: >-
+        sudo apt update &&
+        sudo apt-get install -y
+        '^libxcb.*-dev'
+        catch
+        libfmt-dev
+        libgl-dev
+        libgl1-mesa-dev
+        libglu1-mesa-dev
+        libicu-dev
+        libx11-xcb-dev
+        libxcb-{icccm4,image0,keysyms1,randr0,render-util0,shape0,sync1,xfixes0,xinerama0,xkb1}
+        libxi-dev
+        libxkbcommon-dev
+        libxkbcommon-x11-0
+        libxkbcommon-x11-dev
+        libxrender-dev
+        linguist-qt6
+        ninja-build
+        openssh-server
+        p7zip-full
+        python3
+        python3-py7zr
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
+        install-deps: 'true'
+        modules: 'qt5compat'
+        cache: 'true'
+        cache-key-prefix: 'install-qt-action'
+        setup-python: 'true'
+        tools: 'tools_ifw'
+        set-env: 'true'
+        aqtversion: '==3.1.*'
+        py7zrversion: '==0.20.*'
+        extra: '--external 7z'
+
+    - name: Configure CMake
+      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_CLANG_TIDY=OFF -DENABLE_DOXYGEN=OFF
+
+    # The recovery fixture drives the real binary, so qsoc itself is part of
+    # the coverage and has to be built here.
+    - name: Build loopback tests
+      run: >-
+        cmake --build build --config ${{env.BUILD_TYPE}} --target
+        qsoc
+        test_qsocagentremoterecovery
+        test_qsocremoteguardafterreconnect
+        test_qsocsftp_loopback
+        test_qsocsftpstranded
+        test_qsocsshexecstatus
+
+    - name: Loopback Test
+      env:
+        # openssh-server and python3 are installed above, so a fixture that
+        # cannot find sshd is a broken job declaration, not a developer machine.
+        QSOC_TEST_DEPS_REQUIRED: '1'
+      run: |
+        set -o pipefail
+        ctest --test-dir build -C ${{env.BUILD_TYPE}} --verbose \
+          -R '^test_qsoc(agentremoterecovery|remoteguardafterreconnect|sftp_loopback|sftpstranded|sshexecstatus)$' \
+          2>&1 | tee loopback.log
+        # QtTest exits 0 on a skip, so a case that never ran would read as a
+        # pass. A skip here is a missing dependency or a fixture that would not
+        # come up, and either way this job has no coverage to report.
+        if grep -q 'SKIP   :' loopback.log; then
+          grep 'SKIP   :' loopback.log
+          echo "::error::a loopback case was skipped, so the remote coverage did not run"
+          exit 1
+        fi
 
   build-windows:
     runs-on: windows-2022
@@ -176,7 +268,10 @@ jobs:
       run: |
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
         cd build
-        ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected"
+        # The loopback sshd fixture is POSIX-only (sshd path lookup, the
+        # password database, /bin/bash on the target), so Windows has no remote
+        # coverage. Excluded by name: letting them skip would look green.
+        ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus"
 
     # ctest records no test output on Windows, so a failure arrives as a bare
     # exit code. Re-run each failed binary with its own log file and print it.
@@ -267,6 +362,9 @@ jobs:
 
     - name: Full Test
       if: github.event_name == 'pull_request'
+      # QSOC_TEST_DEPS_REQUIRED stays unset here until one run proves an
+      # unprivileged sshd comes up on this image; a fixture that starts and
+      # then fails already fails on macOS today.
       run: |
         cd build
         QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure

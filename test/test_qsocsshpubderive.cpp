@@ -12,18 +12,6 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -116,12 +104,10 @@ private:
     }
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     void rsaPemRoundTrip()
     {
         if (!haveSshKeygen()) {
-            QSKIP("ssh-keygen not available, skipping.");
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("ssh-keygen"));
         }
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -145,7 +131,7 @@ private slots:
     void ecdsaP256RoundTrip()
     {
         if (!haveSshKeygen()) {
-            QSKIP("ssh-keygen not available, skipping.");
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("ssh-keygen"));
         }
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -178,7 +164,7 @@ private slots:
     void ecdsaP256OpensshContainer()
     {
         if (!haveSshKeygen()) {
-            QSKIP("ssh-keygen not available, skipping.");
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("ssh-keygen"));
         }
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -200,7 +186,7 @@ private slots:
     void ed25519OpensshContainer()
     {
         if (!haveSshKeygen()) {
-            QSKIP("ssh-keygen not available, skipping.");
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("ssh-keygen"));
         }
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -217,7 +203,7 @@ private slots:
     void encryptedKeyIsRefused()
     {
         if (!haveSshKeygen()) {
-            QSKIP("ssh-keygen not available, skipping.");
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("ssh-keygen"));
         }
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
