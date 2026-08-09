@@ -117,10 +117,16 @@ QString QSocRemotePathContext::normalize(const QString &path) const
 
 bool QSocRemotePathContext::isWritable(const QString &normalizedPath) const
 {
+    return isWithinAny(normalizedPath, m_writableDirs);
+}
+
+bool QSocRemotePathContext::isWithinAny(
+    const QString &normalizedPath, const QStringList &normalizedDirs)
+{
     if (normalizedPath.isEmpty() || !normalizedPath.startsWith(kSep)) {
         return false;
     }
-    for (const QString &dir : m_writableDirs) {
+    for (const QString &dir : normalizedDirs) {
         if (dir.isEmpty()) {
             continue;
         }

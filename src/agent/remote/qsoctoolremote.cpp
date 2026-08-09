@@ -17,18 +17,73 @@
 
 namespace {
 
-QString remoteResolve(QSocRemotePathContext *ctx, const QString &raw, bool *ok = nullptr)
+/** @brief One resolved path argument, or the refusal to hand back. */
+struct ResolvedPath
+{
+    QString path;
+    QString error;
+};
+
+/**
+ * @brief Turn a tool's path argument into the name the host will operate on.
+ * @details Lexical normalization first, then host-side canonicalization, so
+ *          every tool downstream (the containment check, the write, the
+ *          read-before-edit bookkeeping and the message) names one path. The
+ *          lexical form alone is not enough: a directory the host reaches
+ *          through a symlink keeps its in-workspace spelling while the write
+ *          lands wherever the link points.
+ */
+ResolvedPath remoteResolve(QSocRemotePathContext *ctx, QSocRemoteConnection *conn, const QString &raw)
 {
     if (ctx == nullptr) {
-        if (ok != nullptr) {
-            *ok = false;
+        return {{}, QStringLiteral("Error: remote path context is not configured")};
+    }
+    if (conn == nullptr || conn->sftp() == nullptr) {
+        return {{}, QStringLiteral("Error: remote SFTP client is not connected")};
+    }
+    const QString lexical = ctx->normalize(raw);
+    QString       canonical;
+    QString       err;
+    switch (conn->sftp()->canonicalize(lexical, &canonical, &err)) {
+    case QSocSftpClient::Canonical::Ok:
+        return {canonical, {}};
+    case QSocSftpClient::Canonical::Unresolvable:
+    case QSocSftpClient::Canonical::Unknown:
+        break;
+    }
+    return {{}, QStringLiteral("Error: %1").arg(err)};
+}
+
+/**
+ * @brief Empty when @p canonicalPath may be written, the refusal otherwise.
+ * @details Both sides are canonicalized on the host: comparing a canonical
+ *          path against a lexical writable directory refuses every write in a
+ *          workspace that is itself reached through a symlink. A writable
+ *          directory the host cannot resolve grants nothing, and a host that
+ *          cannot answer at all refuses rather than guesses.
+ */
+QString writableRefusal(
+    QSocRemotePathContext *ctx, QSocSftpClient *sftp, const QString &canonicalPath)
+{
+    QStringList dirs;
+    for (const QString &dir : ctx->writableDirs()) {
+        QString canonical;
+        QString err;
+        switch (sftp->canonicalize(dir, &canonical, &err)) {
+        case QSocSftpClient::Canonical::Ok:
+            dirs.append(canonical);
+            break;
+        case QSocSftpClient::Canonical::Unresolvable:
+            break;
+        case QSocSftpClient::Canonical::Unknown:
+            return QStringLiteral("Error: %1").arg(err);
         }
+    }
+    if (QSocRemotePathContext::isWithinAny(canonicalPath, dirs)) {
         return {};
     }
-    if (ok != nullptr) {
-        *ok = true;
-    }
-    return ctx->normalize(raw);
+    return QStringLiteral("Error: remote path is outside writable directories: %1")
+        .arg(canonicalPath);
 }
 
 /* Wrap a user command for a remote POSIX shell running under bash -lc. */
@@ -176,15 +231,12 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
     if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
         return QStringLiteral("Error: file_path is required");
     }
-    const QString raw        = QString::fromStdString(arguments["file_path"].get<std::string>());
-    bool          ok         = false;
-    const QString remotePath = remoteResolve(m_pathCtx, raw, &ok);
-    if (!ok) {
-        return QStringLiteral("Error: remote path context is not configured");
+    const QString      raw      = QString::fromStdString(arguments["file_path"].get<std::string>());
+    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
+    if (!resolved.error.isEmpty()) {
+        return resolved.error;
     }
-    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
-        return QStringLiteral("Error: remote SFTP client is not connected");
-    }
+    const QString remotePath = resolved.path;
 
     int maxLines = 500;
     int offset   = 0;
@@ -257,7 +309,9 @@ QString QSocToolRemoteFileWrite::getDescription() const
         "Write (or overwrite) a remote file via SFTP. The parent directory is "
         "created if missing. Overwriting an existing file requires reading it "
         "first with read_file; a file changed since the read is rejected. "
-        "Writes are restricted to configured writable directories.");
+        "Writes are restricted to configured writable directories, checked "
+        "against the path the host resolves, so a symlink leading out of them "
+        "is refused.");
 }
 
 json QSocToolRemoteFileWrite::getParametersSchema() const
@@ -279,18 +333,15 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     if (!arguments.contains("content") || !arguments["content"].is_string()) {
         return QStringLiteral("Error: content is required");
     }
-    const QString raw        = QString::fromStdString(arguments["file_path"].get<std::string>());
-    bool          ok         = false;
-    const QString remotePath = remoteResolve(m_pathCtx, raw, &ok);
-    if (!ok) {
-        return QStringLiteral("Error: remote path context is not configured");
+    const QString      raw      = QString::fromStdString(arguments["file_path"].get<std::string>());
+    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
+    if (!resolved.error.isEmpty()) {
+        return resolved.error;
     }
-    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
-        return QStringLiteral("Error: remote SFTP client is not connected");
-    }
-    if (!m_pathCtx->isWritable(remotePath)) {
-        return QStringLiteral("Error: remote path is outside writable directories: %1")
-            .arg(remotePath);
+    const QString remotePath = resolved.path;
+    const QString refusal    = writableRefusal(m_pathCtx, m_conn->sftp(), remotePath);
+    if (!refusal.isEmpty()) {
+        return refusal;
     }
 
     /* Read-before-overwrite + stale guard for EXISTING remote files: an
@@ -381,16 +432,13 @@ QString QSocToolRemoteFileList::execute(const json &arguments)
     if (!arguments.contains("directory_path") || !arguments["directory_path"].is_string()) {
         return QStringLiteral("Error: directory_path is required");
     }
-    const QString raw = QString::fromStdString(arguments["directory_path"].get<std::string>());
-    bool          ok  = false;
-    const QString remotePath = remoteResolve(m_pathCtx, raw, &ok);
-    if (!ok) {
-        return QStringLiteral("Error: remote path context is not configured");
+    const QString      raw = QString::fromStdString(arguments["directory_path"].get<std::string>());
+    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
+    if (!resolved.error.isEmpty()) {
+        return resolved.error;
     }
-    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
-        return QStringLiteral("Error: remote SFTP client is not connected");
-    }
-    int limit = 200;
+    const QString remotePath = resolved.path;
+    int           limit      = 200;
     if (arguments.contains("limit") && arguments["limit"].is_number_integer()) {
         limit = arguments["limit"].get<int>();
         if (limit <= 0) {
@@ -431,7 +479,8 @@ QString QSocToolRemoteFileEdit::getDescription() const
     return QStringLiteral(
         "Edit a remote file by replacing a unique substring. Read the file with "
         "read_file first: editing an unread file, or one changed since the read, "
-        "is rejected. Fails if the old string is missing or appears more than once.");
+        "is rejected. Fails if the old string is missing or appears more than "
+        "once, or if the path resolves outside the writable directories.");
 }
 
 json QSocToolRemoteFileEdit::getParametersSchema() const
@@ -458,17 +507,14 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (oldString == newString) {
         return QStringLiteral("Error: old_string and new_string are identical");
     }
-    bool          ok         = false;
-    const QString remotePath = remoteResolve(m_pathCtx, raw, &ok);
-    if (!ok) {
-        return QStringLiteral("Error: remote path context is not configured");
+    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
+    if (!resolved.error.isEmpty()) {
+        return resolved.error;
     }
-    if (m_conn == nullptr || m_conn->sftp() == nullptr) {
-        return QStringLiteral("Error: remote SFTP client is not connected");
-    }
-    if (!m_pathCtx->isWritable(remotePath)) {
-        return QStringLiteral("Error: remote path is outside writable directories: %1")
-            .arg(remotePath);
+    const QString remotePath = resolved.path;
+    const QString refusal    = writableRefusal(m_pathCtx, m_conn->sftp(), remotePath);
+    if (!refusal.isEmpty()) {
+        return refusal;
     }
     QString          err;
     const QByteArray bytes = m_conn->sftp()->readFile(remotePath, 0, &err);

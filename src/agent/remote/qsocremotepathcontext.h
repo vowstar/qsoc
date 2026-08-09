@@ -15,9 +15,13 @@
  *          filesystem via QFileInfo. Remote paths are POSIX absolute or
  *          resolved against the current remote working directory.
  *
- *          Writable-directory checks operate on already-normalized paths; the
- *          caller is responsible for running SFTP realpath/stat separately to
- *          validate actual remote-side canonicalization before writing.
+ *          Writable-directory checks are byte-prefix comparisons on
+ *          already-normalized paths, so no check here can see a symlink. A
+ *          caller about to write must first canonicalize on the host with
+ *          `QSocSftpClient::canonicalize` and compare the canonical path
+ *          against canonicalized writable directories through
+ *          @ref isWithinAny; @ref isWritable is the lexical-only shorthand and
+ *          is not a containment guarantee on its own.
  */
 class QSocRemotePathContext
 {
@@ -43,9 +47,18 @@ public:
     QString normalize(const QString &path) const;
 
     /**
-     * @brief True when a normalized absolute path is inside any writable dir.
+     * @brief True when @p normalizedPath is inside one of @p normalizedDirs.
      * @details Matching is byte-prefix with a trailing-slash guard so
-     *          `/foo/barabc` does not match writable root `/foo/bar`.
+     *          `/foo/barabc` does not match writable root `/foo/bar`. Both
+     *          arguments must be in the same spelling: comparing a
+     *          host-canonical path against a lexical directory is how a
+     *          workspace reached through a symlink refuses every write in it.
+     */
+    static bool isWithinAny(const QString &normalizedPath, const QStringList &normalizedDirs);
+
+    /**
+     * @brief @ref isWithinAny against the configured writable dirs.
+     * @details Lexical only. See the class note before using it as a guard.
      */
     bool isWritable(const QString &normalizedPath) const;
 

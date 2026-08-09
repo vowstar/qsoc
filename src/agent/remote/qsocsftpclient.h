@@ -129,6 +129,53 @@ public:
      */
     Presence presence(const QString &path, QString *errorMessage = nullptr);
 
+    /**
+     * @brief Whether the remote path itself is there, without following it.
+     * @details LSTAT, so a symlink counts as Present even when its target is
+     *          gone. Present here with an unresolvable @ref realPath is what
+     *          a broken link looks like from the client.
+     */
+    Presence linkPresence(const QString &path, QString *errorMessage = nullptr);
+
+    /**
+     * @brief Ask the host for the canonical spelling of an existing path.
+     * @details SSH_FXP_REALPATH: every symlink in @p path is followed, so the
+     *          answer is the name the host will actually operate on. The
+     *          outcome stays three-state for the same reason as
+     *          @ref presence: Absent is the server's own answer, Unknown is
+     *          the absence of one, and a caller that read Unknown as Absent
+     *          would treat a name it cannot see as free to use. An answer that
+     *          is not an absolute path is Unknown, never Present.
+     * @param resolved Receives the host's spelling; cleared unless Present.
+     */
+    Presence realPath(const QString &path, QString *resolved, QString *errorMessage = nullptr);
+
+    /** @brief Outcome of @ref canonicalize. */
+    enum class Canonical : std::uint8_t {
+        Ok,           /**< @p resolved holds a host-canonical absolute path. */
+        Unresolvable, /**< The host holds the name but cannot follow it. */
+        Unknown,      /**< The host gave no usable answer. */
+    };
+
+    /**
+     * @brief Canonicalize a path whose trailing components need not exist yet.
+     * @details Resolves the deepest ancestor the host can resolve and
+     *          re-appends the components below it verbatim, so a path that is
+     *          about to be created still gets a canonical parent. Callers must
+     *          use the result for both the containment check and the write:
+     *          containment is a byte-prefix comparison and cannot see a
+     *          symlink, and the lexical and canonical spellings of the same
+     *          request can name different directories.
+     *
+     *          Invariant: a name the host holds but cannot resolve never comes
+     *          back as Ok with its lexical spelling. Its containment cannot be
+     *          judged, and its lexical form would pass a check the eventual
+     *          write does not honor.
+     * @param absolutePath Lexically normalized POSIX absolute path.
+     */
+    Canonical canonicalize(
+        const QString &absolutePath, QString *resolved, QString *errorMessage = nullptr);
+
     /** @brief Most recent error, user-safe for logs. */
     QString lastError() const { return m_lastError; }
 
@@ -231,6 +278,8 @@ private:
      *          out as none.
      */
     StepOutcome renameStep(const QByteArray &from, const QByteArray &to);
+    /** @brief One STAT or LSTAT exchange; @p statType picks which. */
+    Presence statStep(const QString &path, int statType, QString *errorMessage);
     /** @brief Poison the session on a transport code, flagging uncertainty. */
     bool noteTransport(int rc);
     /* Drive a close / unlink to completion on the non-blocking session.

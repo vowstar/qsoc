@@ -2,9 +2,11 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
+#include "agent/remote/qsoctoolremote.h"
 #include "qsoc_test.h"
 #include "qsoc_test_relay.h"
 #include "qsoc_test_sshd.h"
@@ -75,10 +77,93 @@ private slots:
     void aTimedOutRequestCondemnsTheSession();
     void aResetConnectionPoisonsTheSessionAndItsSftp();
     void aGracefulCloseInventsNoExitStatus();
+    void realpathAnswersWithTheHostsOwnSpelling();
+    void canonicalizeKeepsATailThatDoesNotExistYet();
+    void canonicalizeRefusesALinkTheHostCannotFollow();
+    void writeRefusesADirectorySymlinkOutOfTheWorkspace();
+    void writeRefusesToBuildTreesThroughASymlink();
+    void editRefusesADirectorySymlinkOutOfTheWorkspace();
+    void writeRefusesAFileSymlinkOutOfTheWorkspace();
+    void writeThroughAnInWorkspaceLinkKeepsTheLink();
+    void writeRefusesADeadLinkThatPointsOutOfTheWorkspace();
+    void writeRefusesALinkTheHostCannotFollow();
+    void writeRefusesADotDotEscape();
+    void writeWorksInAWorkspaceReachedThroughASymlink();
+    void writeAndEditStillWorkOnAnOrdinaryPath();
 
 private:
     /** @brief Client config pointing at @p port on loopback. */
     QSocSshHostConfig hostConfig(quint16 port) const { return m_fixture.hostConfig(port); }
+
+    /**
+     * @brief Bind @p workspace to @p conn the way the agent binds one.
+     * @details Seeds root = cwd = workspace and the writable set to
+     *          {workspace}, so the tools under test see production wiring.
+     *          @p conn takes ownership of the session and the SFTP client.
+     */
+    bool bindWorkspace(QSocRemoteConnection *conn, const QString &workspace, QString *error)
+    {
+        auto *session = new QSocSshSession();
+        if (session->connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), error)
+            != QSocSshSession::ConnectStatus::Ok) {
+            delete session;
+            return false;
+        }
+        AgentRemoteState state;
+        state.session   = session;
+        state.sftp      = new QSocSftpClient(*session);
+        state.targetKey = QStringLiteral("loopback");
+        state.workspace = workspace;
+        if (!conn->adopt(std::move(state))) {
+            /* adopt() drains the bundle only after it accepts one, so a
+             * refusal leaves the transport here and it is ours to free. */
+            // cppcheck-suppress accessMoved
+            discardAgentRemoteState(&state);
+            *error = QStringLiteral("adopt refused the staging bundle");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief A workspace directory and an escape target beside it.
+     * @details Both under the fixture root and outside each other, so a write
+     *          that lands in @p outside left the workspace by definition.
+     */
+    struct Escape
+    {
+        QString work;
+        QString outside;
+    };
+
+    Escape makeEscape(const QString &caseName)
+    {
+        const Escape paths{
+            m_fixture.root() + QLatin1Char('/') + caseName + QStringLiteral("/work"),
+            m_fixture.root() + QLatin1Char('/') + caseName + QStringLiteral("/outside")};
+        QDir().mkpath(paths.work);
+        QDir().mkpath(paths.outside);
+        return paths;
+    }
+
+    /** @brief Contents of a local file, empty when it is not readable. */
+    static QByteArray slurp(const QString &path)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        return file.readAll();
+    }
+
+    static bool spill(const QString &path, const QByteArray &content)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        return file.write(content) == content.size();
+    }
 
     QSocTestSshd m_fixture;
 };
@@ -773,6 +858,406 @@ void Test::aGracefulCloseInventsNoExitStatus()
     const auto dead = exec.run(QStringLiteral("sleep 5; printf later"), 3000);
     QCOMPARE(dead.exitCode, -1);
     QVERIFY(dead.stdoutBytes.isEmpty());
+}
+
+/*
+ * Containment is a byte-prefix comparison on path strings, so nothing lexical
+ * can see a symlink: the workspace spelling of a path and the directory the
+ * host reaches through it are two different things. The cases below run the
+ * real tools against the real server, and every one of them asserts on the
+ * filesystem before it looks at the returned message. A tool that writes
+ * outside the workspace and reports a refusal is worse than one that admits
+ * it, so the message must never be the first thing checked.
+ */
+void Test::realpathAnswersWithTheHostsOwnSpelling()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    QSocSshSession session;
+    QString        err;
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
+        != QSocSshSession::ConnectStatus::Ok) {
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
+    }
+    QSocSftpClient sftp(session);
+
+    QString resolved;
+    QCOMPARE(sftp.realPath(m_fixture.workDir(), &resolved, &err), QSocSftpClient::Presence::Present);
+    QVERIFY2(resolved.startsWith(QLatin1Char('/')), qPrintable(resolved));
+    QVERIFY2(resolved.endsWith(QStringLiteral("/work")), qPrintable(resolved));
+
+    /* A symlink resolves to what it points at, which is the whole point: two
+     * spellings name one directory, and only one of them can be compared
+     * against a writable root. */
+    const QString link = m_fixture.root() + QStringLiteral("/realpath_alias");
+    QVERIFY(QFile::link(m_fixture.workDir(), link));
+    QString viaLink;
+    QCOMPARE(sftp.realPath(link, &viaLink, &err), QSocSftpClient::Presence::Present);
+    QCOMPARE(viaLink, resolved);
+}
+
+/*
+ * How much of a missing path a server resolves is the server's business:
+ * OpenSSH answers a single missing component itself and refuses a deeper one,
+ * so the client walk has to produce the same canonical string either way.
+ */
+void Test::canonicalizeKeepsATailThatDoesNotExistYet()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    QSocSshSession session;
+    QString        err;
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
+        != QSocSshSession::ConnectStatus::Ok) {
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
+    }
+    QSocSftpClient sftp(session);
+
+    QString base;
+    QCOMPARE(sftp.realPath(m_fixture.workDir(), &base, &err), QSocSftpClient::Presence::Present);
+
+    QString canonical;
+    QCOMPARE(
+        sftp.canonicalize(m_fixture.workDir() + QStringLiteral("/absent_leaf"), &canonical, &err),
+        QSocSftpClient::Canonical::Ok);
+    QCOMPARE(canonical, base + QStringLiteral("/absent_leaf"));
+
+    QCOMPARE(
+        sftp.canonicalize(
+            m_fixture.workDir() + QStringLiteral("/absent/deeper/leaf.sv"), &canonical, &err),
+        QSocSftpClient::Canonical::Ok);
+    QCOMPARE(canonical, base + QStringLiteral("/absent/deeper/leaf.sv"));
+}
+
+/*
+ * A name the host holds but cannot follow has no canonical form and therefore
+ * no containment. Handing back its lexical spelling would pass a byte-prefix
+ * check that the write does not honor.
+ */
+void Test::canonicalizeRefusesALinkTheHostCannotFollow()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const QString dir = m_fixture.workDir() + QStringLiteral("/unfollowable");
+    QVERIFY(QDir().mkpath(dir));
+    const QString intoNowhere = dir + QStringLiteral("/into_missing_dir");
+    const QString loop        = dir + QStringLiteral("/loop_a");
+    QVERIFY(QFile::link(dir + QStringLiteral("/absent_dir/leaf"), intoNowhere));
+    QVERIFY(QFile::link(loop, dir + QStringLiteral("/loop_b")));
+    QVERIFY(QFile::link(dir + QStringLiteral("/loop_b"), loop));
+
+    QSocSshSession session;
+    QString        err;
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
+        != QSocSshSession::ConnectStatus::Ok) {
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
+    }
+    QSocSftpClient sftp(session);
+
+    for (const QString &path : QStringList{intoNowhere, loop}) {
+        QString canonical;
+        QCOMPARE(sftp.canonicalize(path, &canonical, &err), QSocSftpClient::Canonical::Unresolvable);
+        QVERIFY2(canonical.isEmpty(), qPrintable(canonical));
+        QVERIFY2(err.contains(QStringLiteral("does not lead to a file")), qPrintable(err));
+    }
+}
+
+void Test::writeRefusesADirectorySymlinkOutOfTheWorkspace()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape paths = makeEscape(QStringLiteral("link_dir_write"));
+    QVERIFY(QFile::link(paths.outside, paths.work + QStringLiteral("/linkdir")));
+    const QString escaped = paths.outside + QStringLiteral("/escaped.txt");
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString           result = tool.execute(
+        json{{"file_path", "linkdir/escaped.txt"}, {"content", "escaped\n"}});
+
+    QVERIFY2(
+        !QFileInfo::exists(escaped),
+        qPrintable(
+            QStringLiteral("the write escaped to %1; the tool said: %2").arg(escaped, result)));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside writable directories")), qPrintable(result));
+}
+
+/* The escape is not limited to overwriting: writeFile mkdir -p's the parent,
+ * so an unguarded write builds directory trees wherever the link points. */
+void Test::writeRefusesToBuildTreesThroughASymlink()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape paths = makeEscape(QStringLiteral("link_dir_tree"));
+    QVERIFY(QFile::link(paths.outside, paths.work + QStringLiteral("/linkdir")));
+    const QString newTree = paths.outside + QStringLiteral("/newsub");
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString           result = tool.execute(
+        json{{"file_path", "linkdir/newsub/deep/x.txt"}, {"content", "escaped\n"}});
+
+    QVERIFY2(
+        !QFileInfo::exists(newTree),
+        qPrintable(QStringLiteral("a directory tree was created at %1; the tool said: %2")
+                       .arg(newTree, result)));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+}
+
+void Test::editRefusesADirectorySymlinkOutOfTheWorkspace()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape     paths    = makeEscape(QStringLiteral("link_dir_edit"));
+    const QByteArray original = QByteArray("keep me exactly as I am\n");
+    const QString    victim   = paths.outside + QStringLiteral("/editme.txt");
+    QVERIFY(spill(victim, original));
+    QVERIFY(QFile::link(paths.outside, paths.work + QStringLiteral("/linkdir")));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    /* Read first, so the read-before-edit guard is satisfied and the write
+     * guard is the only thing left between the tool and the escape. */
+    QSocToolRemoteFileRead reader(nullptr, &conn, conn.path());
+    const QString          read = reader.execute(json{{"file_path", "linkdir/editme.txt"}});
+    QVERIFY2(read.contains(QStringLiteral("keep me")), qPrintable(read));
+
+    QSocToolRemoteFileEdit tool(nullptr, &conn, conn.path());
+    const QString          result = tool.execute(
+        json{
+            {"file_path", "linkdir/editme.txt"},
+            {"old_string", "keep me"},
+            {"new_string", "lose me"}});
+
+    QVERIFY2(
+        slurp(victim) == original,
+        qPrintable(QStringLiteral("the edit escaped to %1; the tool said: %2").arg(victim, result)));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside writable directories")), qPrintable(result));
+}
+
+/*
+ * A symlinked FILE is the case the publish sequence hid: the staged temp lands
+ * in the link's own directory and the final rename replaces the link, so the
+ * target outside the workspace survives by accident. The guard resolves the
+ * last component too, so the refusal no longer depends on how writeFile
+ * happens to stage its content, and the link is left intact.
+ */
+void Test::writeRefusesAFileSymlinkOutOfTheWorkspace()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape     paths    = makeEscape(QStringLiteral("link_file_write"));
+    const QByteArray original = QByteArray("outside content that must survive\n");
+    const QString    victim   = paths.outside + QStringLiteral("/target.txt");
+    const QString    link     = paths.work + QStringLiteral("/link.txt");
+    QVERIFY(spill(victim, original));
+    QVERIFY(QFile::link(victim, link));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileRead reader(nullptr, &conn, conn.path());
+    const QString          read = reader.execute(json{{"file_path", "link.txt"}});
+    QVERIFY2(read.contains(QStringLiteral("outside content")), qPrintable(read));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString           result = tool.execute(
+        json{{"file_path", "link.txt"}, {"content", "replacement\n"}});
+
+    QVERIFY2(
+        slurp(victim) == original,
+        qPrintable(
+            QStringLiteral("the write escaped to %1; the tool said: %2").arg(victim, result)));
+    QVERIFY2(
+        QFileInfo(link).isSymbolicLink(),
+        qPrintable(
+            QStringLiteral("%1 is no longer a symlink; the tool said: %2").arg(link, result)));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside writable directories")), qPrintable(result));
+}
+
+/*
+ * A link into the workspace is followed, so the file the agent read is the
+ * file it writes and the link survives. The alternative, replacing the link
+ * with a regular file, is what the temp+rename publish does by accident, and
+ * it silently drops an indirection the workspace was built with.
+ */
+void Test::writeThroughAnInWorkspaceLinkKeepsTheLink()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths = makeEscape(QStringLiteral("link_inside_write"));
+    const QString real  = paths.work + QStringLiteral("/real.txt");
+    const QString alias = paths.work + QStringLiteral("/alias.txt");
+    QVERIFY(spill(real, QByteArray("first\n")));
+    QVERIFY(QFile::link(real, alias));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileRead reader(nullptr, &conn, conn.path());
+    const QString          read = reader.execute(json{{"file_path", "alias.txt"}});
+    QVERIFY2(read.contains(QStringLiteral("first")), qPrintable(read));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString result = tool.execute(json{{"file_path", "alias.txt"}, {"content", "second\n"}});
+
+    QCOMPARE(slurp(real), QByteArray("second\n"));
+    QVERIFY2(
+        QFileInfo(alias).isSymbolicLink(),
+        qPrintable(
+            QStringLiteral("%1 is no longer a symlink; the tool said: %2").arg(alias, result)));
+    QVERIFY2(!result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+}
+
+/* The target of a link is where the write lands, so a link whose target is
+ * outside the workspace is refused even while the target does not exist yet. */
+void Test::writeRefusesADeadLinkThatPointsOutOfTheWorkspace()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths = makeEscape(QStringLiteral("link_dead_outward"));
+    const QString gone  = paths.outside + QStringLiteral("/gone.txt");
+    const QString link  = paths.work + QStringLiteral("/dangling.txt");
+    QVERIFY(QFile::link(gone, link));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString           result = tool.execute(
+        json{{"file_path", "dangling.txt"}, {"content", "escaped\n"}});
+
+    QVERIFY2(
+        !QFileInfo::exists(gone),
+        qPrintable(QStringLiteral("the write escaped to %1; the tool said: %2").arg(gone, result)));
+    QVERIFY2(
+        QFileInfo(link).isSymbolicLink(),
+        qPrintable(
+            QStringLiteral("%1 is no longer a symlink; the tool said: %2").arg(link, result)));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside writable directories")), qPrintable(result));
+}
+
+/* Nothing can be said about the containment of a name the host cannot follow,
+ * so the write is refused rather than aimed at the lexical spelling. */
+void Test::writeRefusesALinkTheHostCannotFollow()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths = makeEscape(QStringLiteral("link_unfollowable_write"));
+    const QString loop  = paths.work + QStringLiteral("/loop_a");
+    QVERIFY(QFile::link(loop, paths.work + QStringLiteral("/loop_b")));
+    QVERIFY(QFile::link(paths.work + QStringLiteral("/loop_b"), loop));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString result = tool.execute(json{{"file_path", "loop_a"}, {"content", "guessed\n"}});
+
+    QVERIFY2(
+        QFileInfo(loop).isSymbolicLink(),
+        qPrintable(
+            QStringLiteral("%1 is no longer a symlink; the tool said: %2").arg(loop, result)));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("does not lead to a file")), qPrintable(result));
+}
+
+/* The lexical rule already refused this one. It stays a case because nothing
+ * covered it end to end, and canonicalizing must not weaken it. */
+void Test::writeRefusesADotDotEscape()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths   = makeEscape(QStringLiteral("dotdot_write"));
+    const QString control = paths.outside + QStringLiteral("/control.txt");
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString           result = tool.execute(
+        json{{"file_path", "../outside/control.txt"}, {"content", "escaped\n"}});
+
+    QVERIFY2(
+        !QFileInfo::exists(control),
+        qPrintable(
+            QStringLiteral("the write escaped to %1; the tool said: %2").arg(control, result)));
+    QVERIFY2(result.contains(QStringLiteral("outside writable directories")), qPrintable(result));
+}
+
+/*
+ * The other half of canonicalizing: the workspace itself is often reached
+ * through a symlink (a temp directory under /var, for one), and comparing a
+ * canonical path against a lexical writable directory would refuse every
+ * write inside it.
+ */
+void Test::writeWorksInAWorkspaceReachedThroughASymlink()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const QString base = m_fixture.root() + QStringLiteral("/symlinked_workspace");
+    const QString real = base + QStringLiteral("/real");
+    const QString via  = base + QStringLiteral("/via_link");
+    QVERIFY(QDir().mkpath(real));
+    QVERIFY(QFile::link(real, via));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, via, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString result = tool.execute(json{{"file_path", "inside.txt"}, {"content", "allowed\n"}});
+
+    QCOMPARE(slurp(real + QStringLiteral("/inside.txt")), QByteArray("allowed\n"));
+    QVERIFY2(!result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+}
+
+void Test::writeAndEditStillWorkOnAnOrdinaryPath()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths = makeEscape(QStringLiteral("ordinary_paths"));
+    const QString file  = paths.work + QStringLiteral("/sub/plain.sv");
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QSocToolRemoteFileWrite writer(nullptr, &conn, conn.path());
+    const QString           wrote = writer.execute(
+        json{{"file_path", "sub/plain.sv"}, {"content", "module a;\nendmodule\n"}});
+    QCOMPARE(slurp(file), QByteArray("module a;\nendmodule\n"));
+    QVERIFY2(!wrote.startsWith(QStringLiteral("Error:")), qPrintable(wrote));
+
+    QSocToolRemoteFileRead reader(nullptr, &conn, conn.path());
+    const QString          read = reader.execute(json{{"file_path", "sub/plain.sv"}});
+    QVERIFY2(read.contains(QStringLiteral("module a;")), qPrintable(read));
+
+    QSocToolRemoteFileEdit editor(nullptr, &conn, conn.path());
+    const QString          edited = editor.execute(
+        json{{"file_path", "sub/plain.sv"}, {"old_string", "module a;"}, {"new_string", "module b;"}});
+    QCOMPARE(slurp(file), QByteArray("module b;\nendmodule\n"));
+    QVERIFY2(!edited.startsWith(QStringLiteral("Error:")), qPrintable(edited));
 }
 
 QSOC_TEST_MAIN(Test)

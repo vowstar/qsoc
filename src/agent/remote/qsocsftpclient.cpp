@@ -815,7 +815,8 @@ QList<QSocSftpClient::Entry> QSocSftpClient::listDir(
     return entries;
 }
 
-QSocSftpClient::Presence QSocSftpClient::presence(const QString &path, QString *errorMessage)
+QSocSftpClient::Presence QSocSftpClient::statStep(
+    const QString &path, int statType, QString *errorMessage)
 {
     OpScope scope(this, m_opBudgetMs);
     if (!open(errorMessage)) {
@@ -824,7 +825,13 @@ QSocSftpClient::Presence QSocSftpClient::presence(const QString &path, QString *
     const QByteArray        pathBytes = path.toUtf8();
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     int                     rc = 0;
-    while ((rc = libssh2_sftp_stat(m_sftp, pathBytes.constData(), &attrs)) == LIBSSH2_ERROR_EAGAIN) {
+    while ((rc = libssh2_sftp_stat_ex(
+                m_sftp,
+                pathBytes.constData(),
+                static_cast<unsigned int>(pathBytes.size()),
+                statType,
+                &attrs))
+           == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
             setError(waitFailureText(QStringLiteral("Timed out statting %1").arg(path)), errorMessage);
             return Presence::Unknown;
@@ -844,4 +851,135 @@ QSocSftpClient::Presence QSocSftpClient::presence(const QString &path, QString *
     noteTransport(rc);
     setError(waitFailureText(QStringLiteral("SFTP stat failed on %1").arg(path)), errorMessage);
     return Presence::Unknown;
+}
+
+QSocSftpClient::Presence QSocSftpClient::presence(const QString &path, QString *errorMessage)
+{
+    return statStep(path, LIBSSH2_SFTP_STAT, errorMessage);
+}
+
+QSocSftpClient::Presence QSocSftpClient::linkPresence(const QString &path, QString *errorMessage)
+{
+    return statStep(path, LIBSSH2_SFTP_LSTAT, errorMessage);
+}
+
+QSocSftpClient::Presence QSocSftpClient::realPath(
+    const QString &path, QString *resolved, QString *errorMessage)
+{
+    if (resolved != nullptr) {
+        resolved->clear();
+    }
+    OpScope scope(this, m_opBudgetMs);
+    if (!open(errorMessage)) {
+        return Presence::Unknown;
+    }
+    const QByteArray pathBytes = path.toUtf8();
+    /* One POSIX path plus its terminator. libssh2 reports a longer answer as
+     * BUFFER_TOO_SMALL rather than truncating, so a path that does not fit
+     * comes back as Unknown and never as a shorter one. */
+    char target[4096] = {0};
+    int  rc           = 0;
+    while ((rc = libssh2_sftp_symlink_ex(
+                m_sftp,
+                pathBytes.constData(),
+                static_cast<unsigned int>(pathBytes.size()),
+                target,
+                sizeof(target),
+                LIBSSH2_SFTP_REALPATH))
+           == LIBSSH2_ERROR_EAGAIN) {
+        if (!wait()) {
+            /* The subsystem holds one symlink request-id slot, so it must be
+             * released before any later call reuses it. */
+            (void) rebuildSubsystem();
+            setError(
+                waitFailureText(QStringLiteral("Timed out resolving %1").arg(path)), errorMessage);
+            return Presence::Unknown;
+        }
+    }
+    if (rc >= 0) {
+        const QString answer = QString::fromUtf8(target, rc);
+        if (!answer.startsWith(QLatin1Char('/'))) {
+            setError(
+                QStringLiteral("Remote host answered realpath %1 with a path it cannot mean: %2")
+                    .arg(path, answer),
+                errorMessage);
+            return Presence::Unknown;
+        }
+        if (resolved != nullptr) {
+            *resolved = answer;
+        }
+        return Presence::Present;
+    }
+    if (rc == LIBSSH2_ERROR_SFTP_PROTOCOL) {
+        const unsigned long sftpErr = libssh2_sftp_last_error(m_sftp);
+        if (sftpErr == LIBSSH2_FX_NO_SUCH_FILE || sftpErr == LIBSSH2_FX_NO_SUCH_PATH) {
+            return Presence::Absent;
+        }
+    }
+    noteTransport(rc);
+    setError(waitFailureText(QStringLiteral("SFTP realpath failed on %1").arg(path)), errorMessage);
+    return Presence::Unknown;
+}
+
+QSocSftpClient::Canonical QSocSftpClient::canonicalize(
+    const QString &absolutePath, QString *resolved, QString *errorMessage)
+{
+    if (resolved != nullptr) {
+        resolved->clear();
+    }
+    if (!absolutePath.startsWith(QLatin1Char('/'))) {
+        setError(
+            QStringLiteral("Cannot resolve a path that is not absolute: %1").arg(absolutePath),
+            errorMessage);
+        return Canonical::Unknown;
+    }
+    /* One budget for the whole walk: every request below is nested in this
+     * scope, so a slow host cannot spend a fresh 30 seconds per rung. */
+    OpScope     scope(this, m_opBudgetMs);
+    QStringList missing;
+    QString     candidate = absolutePath;
+    while (true) {
+        QString answer;
+        switch (realPath(candidate, &answer, errorMessage)) {
+        case Presence::Present: {
+            if (resolved != nullptr) {
+                QString out = answer;
+                for (const QString &seg : missing) {
+                    if (!out.endsWith(QLatin1Char('/'))) {
+                        out += QLatin1Char('/');
+                    }
+                    out += seg;
+                }
+                *resolved = out;
+            }
+            return Canonical::Ok;
+        }
+        case Presence::Unknown:
+            return Canonical::Unknown;
+        case Presence::Absent:
+            break;
+        }
+        switch (linkPresence(candidate, errorMessage)) {
+        case Presence::Present:
+            setError(
+                QStringLiteral(
+                    "Cannot resolve %1: the remote host holds that name but it does "
+                    "not lead to a file")
+                    .arg(candidate),
+                errorMessage);
+            return Canonical::Unresolvable;
+        case Presence::Unknown:
+            return Canonical::Unknown;
+        case Presence::Absent:
+            break;
+        }
+        if (candidate == QStringLiteral("/")) {
+            setError(
+                QStringLiteral("Remote host does not resolve its own root directory"), errorMessage);
+            return Canonical::Unknown;
+        }
+        const int cut = candidate.lastIndexOf(QLatin1Char('/'));
+        missing.prepend(candidate.mid(cut + 1));
+        candidate = cut == 0 ? QStringLiteral("/") : candidate.left(cut);
+    }
 }
