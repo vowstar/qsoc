@@ -385,8 +385,9 @@ window is against the effective budget; as auto-compaction nears it reads
 In remote mode the bar carries an `[SSH:<target>]` chip, which gains a `✗`
 once the link can no longer serve calls. It refreshes when a tool call
 checks the workspace, not on a timer, so a link that dies while the agent is
-idle shows as broken on the next call rather than the moment it drops. It is deliberately separate from
-the status text beside it: that text says what the *agent* is doing
+idle shows as broken on the next call rather than the moment it drops. It is
+deliberately separate from the status text beside it: that text says what the
+*agent* is doing
 ("Ready", the running tool), so on its own it would leave a dead workspace
 sitting behind an unchallenged "Ready". `/status` carries the same state in
 full, including the reason and how to recover.
@@ -1046,22 +1047,35 @@ answering without closing the connection. QSoC treats that as a bounded
 failure rather than a wait:
 
 - Every remote operation has a deadline measured from when it started,
-  covering channel setup, transfer, and teardown. Closing a handle after
-  that budget is spent gets its own separate two-second window, so cleanup
-  is bounded rather than skipped.
+  covering channel setup, transfer, and teardown. Waiting for the remote
+  process to report its exit status is part of that budget rather than
+  extra, so a command that closes its output early still gets the rest of
+  its timeout to finish. Only once the budget is spent does closing a handle
+  fall back to its own separate two-second window, so cleanup is bounded
+  rather than skipped. The interactive `!` shell escape is bounded too, at
+  fifteen minutes.
 - The socket carries TCP keepalive as a second line of detection. How long
   the kernel takes to declare a silent peer dead is platform dependent and
   partly outside QSoC's control: the requested schedule is a 15-second idle
-  time and three probes five seconds apart, individual knobs may be
-  unsupported or overridden by system policy, and the deadlines above are
-  what actually bound an operation.
-- A session is refused for either of two reasons: the socket is gone, or a
-  request was abandoned at its deadline and the protocol is stranded
-  mid-exchange. Both make later tool calls fail immediately instead of
-  retrying, and the turn ends rather than feeding the same failure back to
-  the model. A command that simply outruns its own `timeout_ms` is *not*
-  one of these: the read was abandoned, not a request, so the workspace
-  stays usable and the next command runs normally.
+  time and probes five seconds apart, three of them where the platform takes
+  a probe count at all (Windows sets the whole schedule in one call that has
+  no such field), individual knobs may be unsupported or overridden by
+  system policy, and the deadlines above are what actually bound an
+  operation.
+- A session is refused when the socket is gone, and also when a request was
+  abandoned at its deadline and the protocol is stranded mid-exchange. Both
+  make later tool calls fail immediately instead of retrying, and the turn
+  ends rather than feeding the same failure back to the model. A command
+  that simply outruns its own `timeout_ms` is *not* one of these: the read
+  was abandoned, not a request, so the workspace stays usable and the next
+  command runs normally.
+- An abandoned SFTP transfer is narrower than a lost session. It leaves the
+  file-transfer subsystem unusable, not the connection, so QSoC releases and
+  reopens the subsystem and the workspace survives; it condemns the session
+  only when that release cannot complete, which is itself the evidence that
+  the connection is no longer in step. What a transfer reports about bytes
+  is a lower bound: the count it acknowledges is what the host confirmed
+  writing, and the host may hold more.
 - The session stays in remote mode. QSoC never falls back to the local
   workspace on its own, because a command written for the remote tree must
   not silently run against local files. Reconnect with `/ssh`, or leave
@@ -1092,10 +1106,12 @@ because retrying a change that already landed applies it twice.
 
 - `bash` reports `status: uncertain` with `exit_code: -1`. An exit status
   is only reported when the command actually finished; a cut-off command
-  never reports `exit_code: 0`. A command killed by a signal is a definite
-  failure, not an uncertain one: it reports `status: failed` with
-  `exit_signal: SIGKILL` and keeps `exit_code: -1`, because a signalled
-  process sends no exit status at all.
+  never reports `exit_code: 0`. Where the fate is not known the field reads
+  `exit_code: unknown` rather than a number a reader would take for a status
+  the command returned. A command killed by a signal is a definite failure,
+  not an uncertain one: it reports `status: failed` with
+  `exit_signal: SIGKILL`, because a signalled process sends no exit status
+  at all.
 - `bash_manage` reports that the job state is unknown rather than showing
   empty output, which would read as "no output yet" or as a kill that
   happened.
@@ -1103,7 +1119,7 @@ because retrying a change that already landed applies it twice.
   replacement. The existing content is renamed aside, the new content is
   renamed in, and the saved copy is dropped only after that succeeds. If
   the link dies mid-publish, the content is still on the remote host under
-  the original name or beside it as `<name>.qsoc-bak-<timestamp>`; the
+  the original name or beside it as `<name>.qsoc-bak-<id>`; the
   tool says so instead of guessing which copy to keep.
 - In the TUI these calls are marked uncertain rather than green or red.
 
@@ -1174,10 +1190,20 @@ session that subsequent sub-agent spawns reuse from cache.
 
 `bash` with `background=true` launches the command detached under
 `<workspace>/.qsoc-agent/jobs/<id>/` and returns `job_id` immediately. The
-wrapper writes `pid`, `output.log`, and `exit_code` files; `bash_manage`
-reads those state files over SSH exec to report status, tail output, or
-send `SIGTERM`/`SIGKILL`. Jobs survive SSH channel closes; QSoC does not
-auto-kill them when the agent exits.
+wrapper writes `pid`, `output.log`, and `exit_code`, and alongside them the
+identity of the host and of the process itself; `bash_manage` reads those
+state files over SSH exec to report status, tail output, or send
+`SIGTERM`/`SIGKILL`. Jobs survive SSH channel closes, and so does the shell
+that waits for the exit code, so a dropped link does not cost you the
+outcome.
+
+A pid on its own is not a job. Before signalling, QSoC checks that the host
+is the same incarnation it was at launch and that the pid is the same
+process, because a pid is reused after a restart and signalling a number is
+then signalling a stranger. When either check cannot be answered, or answers
+no, nothing is signalled and the result says so as uncertain rather than
+reporting a kill that did not happen. A reconnect alone does not block a
+signal: the link is not the job.
 
 == Security
 <agent-security>
@@ -1205,7 +1231,9 @@ directory, one JSON event per line (messages plus metadata). This enables:
 An explicit resume continues an interrupted run only when QSoC can verify its
 saved model, workspace, goal, and local recovery record. Finished or
 inconsistent runs return to the prompt. A tool interrupted in flight is
-reported as uncertain and requires a new user turn; it is not replayed directly.
+reported as uncertain and is never replayed; continuing after it takes a new
+turn, which the queued re-observation brief supplies when a dropped link was
+what interrupted it.
 
 == Usage Examples
 <agent-examples>
