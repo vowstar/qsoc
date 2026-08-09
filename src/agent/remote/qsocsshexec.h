@@ -51,9 +51,13 @@ public:
      * @param command Shell command string passed straight to the remote
      *                shell. The caller owns any required escaping.
      * @param timeoutMs Per-call timeout, measured from entry and covering
-     *                  channel open, exec request, reads and close. <=0
-     *                  disables it, leaving a dead transport as the only
-     *                  way out.
+     *                  channel open, exec request, reads and the close
+     *                  handshake. The handshake is where the remote reports
+     *                  its exit status, which can be long after the last
+     *                  byte of output, so a budget too small to reach it
+     *                  yields `timedOut` with `exitCode == -1`. <=0 disables
+     *                  the timeout, leaving a dead transport as the only way
+     *                  out.
      */
     Result run(const QString &command, int timeoutMs = 30000);
 

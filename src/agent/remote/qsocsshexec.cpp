@@ -11,8 +11,10 @@ namespace {
  * another thread takes effect promptly. */
 constexpr int kPollSliceMs = 200;
 
-/* Separate budget for closing the channel once the main budget is spent,
- * so cleanup is bounded rather than skipped. */
+/* Courtesy window for releasing a remote handle once the call budget is
+ * already spent, so cleanup is bounded rather than skipped. Waiting for the
+ * remote process to report its status is not cleanup: it is part of the call
+ * budget and must not be squeezed into this. */
 constexpr int kCleanupMs = 2000;
 
 const auto kTransportDeadText = QStringLiteral(
@@ -131,10 +133,6 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
         return result;
     }
 
-    /* Set only when the channel reached EOF, which is the one state where
-     * libssh2 has a real exit status to report. */
-    bool cleanEof = false;
-
     char buffer[4096];
     while (true) {
         if (m_abort.load(std::memory_order_relaxed)) {
@@ -159,8 +157,11 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
         }
 
         if (nout == 0 && nerr == 0) {
+            /* CHANNEL_EOF only says no more channel data is coming. The
+             * remote process can outlive it by any amount, and its
+             * exit-status arrives later, so nothing about its fate is known
+             * here. */
             if (libssh2_channel_eof(channel) != 0) {
-                cleanEof = true;
                 break;
             }
             if (!waitAbandonable()) {
@@ -188,43 +189,65 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
         break;
     }
 
-    /* Cleanup gets its own window: the main budget is usually spent by the
-     * time we get here, and skipping the close leaks the remote handle on
-     * a session that is still alive. */
-    m_deadline  = QDeadlineTimer(kCleanupMs);
+    /* The close handshake is where the remote status arrives, so it runs on
+     * whatever is left of the call budget. Only a budget already spent falls
+     * back to the courtesy window, which keeps a still-live session from
+     * leaking the remote handle. */
+    if (m_deadline.hasExpired()) {
+        m_deadline = QDeadlineTimer(kCleanupMs);
+    }
     int closeRc = 0;
     while ((closeRc = libssh2_channel_close(channel)) == LIBSSH2_ERROR_EAGAIN) {
+        if (m_abort.load(std::memory_order_relaxed)) {
+            result.aborted = true;
+            break;
+        }
         if (!waitAbandonable()) {
+            result.timedOut = !m_transportDead;
             break;
         }
     }
     if (closeRc != 0) {
         m_transportDead = m_session.notePossibleTransportError(closeRc) || m_transportDead;
     }
-    /* libssh2 reports EOF from a received CHANNEL_EOF, so a socket death
-     * does not fake one; anything short of EOF has no status to read. */
-    if (cleanEof) {
-        /* A process killed by a signal sends exit-signal instead of
-         * exit-status, and get_exit_status then returns its zero-initialized
-         * value: a SIGKILLed build would read as a clean exit 0. Ask for the
-         * signal first and leave exitCode at -1 when there is one. */
-        char  *signalName = nullptr;
-        size_t signalLen  = 0;
-        if (libssh2_channel_get_exit_signal(
-                channel, &signalName, &signalLen, nullptr, nullptr, nullptr, nullptr)
-            == 0) {
-            if (signalName != nullptr && signalLen > 0) {
-                result.exitSignal = QString::fromUtf8(signalName, static_cast<int>(signalLen));
-            }
-            /* libssh2 hands back a freshly allocated buffer for each of the
-             * out-parameters it filled; the caller owns them. */
-            if (signalName != nullptr) {
-                libssh2_free(session, signalName);
-            }
+
+    /* exit_signal is a pointer libssh2 leaves null until the packet arrives,
+     * so a name here is proof on its own and needs no gate. A signalled
+     * process sends no exit-status, and exitCode stays -1. */
+    char  *signalName = nullptr;
+    size_t signalLen  = 0;
+    if (libssh2_channel_get_exit_signal(
+            channel, &signalName, &signalLen, nullptr, nullptr, nullptr, nullptr)
+        == 0) {
+        if (signalName != nullptr && signalLen > 0) {
+            result.exitSignal = QString::fromUtf8(signalName, static_cast<int>(signalLen));
         }
-        if (result.exitSignal.isEmpty()) {
-            result.exitCode = libssh2_channel_get_exit_status(channel);
+        /* libssh2 hands back a freshly allocated buffer for each of the
+         * out-parameters it filled; the caller owns them. */
+        if (signalName != nullptr) {
+            libssh2_free(session, signalName);
         }
+    }
+    /* exit_status is a bare int with no companion flag, so a channel that
+     * never received one reads as 0. closeRc == 0 means the peer's
+     * CHANNEL_CLOSE was received and dispatched, and exit-status precedes it
+     * on the same in-order stream.
+     *
+     * The transport conjunct is defensive: in libssh2 1.11.1 a post-handshake
+     * recv of 0 becomes LIBSSH2_ERROR_SOCKET_RECV and never sets
+     * socket_state, so the close-wait loop's disconnected shortcut is
+     * reachable only from a peer-sent SSH_MSG_DISCONNECT. No test fences it,
+     * because no test can produce that shape against OpenSSH.
+     *
+     * Residual, and it is reachable: a server that closes the channel without
+     * ever sending exit-status still reads as 0, and libssh2's public API
+     * cannot tell that apart. OpenSSH does that under
+     * `ChannelTimeout session:*=N`, where channel_force_close() sends EOF and
+     * CHANNEL_CLOSE with no status, so a command the server killed reports a
+     * clean exit. Distinguishing it needs a libssh2 that records whether the
+     * request arrived. */
+    if (result.exitSignal.isEmpty() && closeRc == 0 && !m_transportDead) {
+        result.exitCode = libssh2_channel_get_exit_status(channel);
     }
     libssh2_channel_free(channel);
 
