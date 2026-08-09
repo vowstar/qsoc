@@ -282,8 +282,7 @@ void QSocAgent::finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, con
         }
     }
 
-    run->phase             = RunPhase::Terminal;
-    owner->lastStopNotice_ = run->stopNotice;
+    run->phase = RunPhase::Terminal;
     owner->activeRun_.reset();
     owner->isStreaming = false;
     owner->heartbeatTimer->stop();
@@ -319,11 +318,11 @@ void QSocAgent::requestStop(StopMode mode)
     run->stopSource.request_stop();
 }
 
-bool QSocAgent::hasPendingUserRequests() const
+bool QSocAgent::hasRestartableRequests() const
 {
     QMutexLocker locker(&queueMutex);
     for (const QueuedRequest &item : requestQueue) {
-        if (!item.taskNotification) {
+        if (item.kind != QueuedRequest::Kind::Notification) {
             return true;
         }
     }
@@ -340,7 +339,7 @@ QSocAgent::CheckpointAction QSocAgent::checkpointRun(const ActiveRunPtr &run)
     case StopMode::None:
         return CheckpointAction::Continue;
     case StopMode::Soft:
-        if (hasPendingUserRequests()) {
+        if (hasRestartableRequests()) {
             StopMode expected = StopMode::Soft;
             if (run->stop.compare_exchange_strong(expected, StopMode::None)) {
                 run->stopSource = std::stop_source();
@@ -381,8 +380,12 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
         const auto                canContinue = [owner, run]() {
             return !owner.isNull() && owner->checkpointRun(run) != CheckpointAction::Terminal;
         };
-        if (item.taskNotification) {
-            emit processingQueuedRequest(QStringLiteral("[task notification]"), remaining);
+        if (item.kind != QueuedRequest::Kind::User) {
+            emit processingQueuedRequest(
+                item.kind == QueuedRequest::Kind::Notification
+                    ? QStringLiteral("[task notification]")
+                    : item.text,
+                remaining);
             if (!canContinue()) {
                 return false;
             }
@@ -1977,11 +1980,11 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         if (owner->workspaceHealthProbe_) {
             const QString lost = owner->workspaceHealthProbe_();
             if (!lost.isEmpty()) {
-                run->stopNotice = lost;
-                /* Published here rather than only at teardown: a soft stop
-                 * that finds a queued request restarts the run instead of
+                /* Published here rather than at teardown: a soft stop that
+                 * finds a queued request restarts the run instead of
                  * reaching Terminal, so a notice held until then is dropped
-                 * exactly when an unattended workflow carries on. */
+                 * exactly when an unattended workflow carries on. This is
+                 * the only write, so takeStopNotice() cannot deliver twice. */
                 owner->lastStopNotice_ = lost;
                 owner->requestStop(StopMode::Soft);
             }
@@ -2765,7 +2768,7 @@ bool QSocAgent::queueRequest(const QString &request)
     if (rejectQueuedRequests_) {
         return false;
     }
-    requestQueue.append({request, false});
+    requestQueue.append({request, QueuedRequest::Kind::User});
     return true;
 }
 
@@ -2775,7 +2778,17 @@ bool QSocAgent::queueTaskNotification(const QString &notification)
     if (rejectQueuedRequests_) {
         return false;
     }
-    requestQueue.append({notification, true});
+    requestQueue.append({notification, QueuedRequest::Kind::Notification});
+    return true;
+}
+
+bool QSocAgent::queueContinuation(const QString &instruction)
+{
+    QMutexLocker locker(&queueMutex);
+    if (rejectQueuedRequests_) {
+        return false;
+    }
+    requestQueue.append({instruction, QueuedRequest::Kind::Continuation});
     return true;
 }
 

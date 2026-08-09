@@ -19,6 +19,7 @@
 #include "agent/qsoclooptasksource.h"
 #include "agent/qsocmemorydream.h"
 #include "agent/qsocmemoryextractor.h"
+#include "agent/qsocrewind.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsessionrecovery.h"
 #include "agent/qsocsessiontitle.h"
@@ -163,9 +164,7 @@ bool connectReplacementTransport(
         return false;
     }
     if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
-        QSocRemoteConnection scratch;
-        scratch.adopt(fresh);
-        scratch.teardown();
+        discardAgentRemoteState(&fresh);
         return false;
     }
     *out = fresh;
@@ -207,8 +206,10 @@ QString reobservationBriefing(QSocRemoteConnection *conn, const QStringList &job
  * an unattended workflow continues without assuming anything survived. Either
  * way the current turn ends: the operation that broke it is unverified, and
  * letting the model retry it is how an uncertain write becomes two. */
-QString remoteWorkspaceHealth(
-    QSocRemoteConnection *conn, QSocAgent *agent = nullptr, const QStringList &jobIds = {})
+/* The job ids are read from the connection rather than passed in: a defaulted
+ * parameter is how the briefing's job branch came to be unreachable, with
+ * every call site quietly supplying an empty list. */
+QString remoteWorkspaceHealth(QSocRemoteConnection *conn, QSocAgent *agent = nullptr)
 {
     if (conn == nullptr || conn->isUsable()) {
         return {};
@@ -220,7 +221,10 @@ QString remoteWorkspaceHealth(
     }
     if (outcome == QSocRemoteConnection::ReconnectOutcome::Reconnected) {
         if (agent != nullptr) {
-            agent->queueRequest(reobservationBriefing(conn, jobIds));
+            /* A continuation, not a user request: a user_prompt_submit hook
+             * that blocks would otherwise drop this silently and leave the
+             * model working from beliefs nothing has re-checked. */
+            agent->queueContinuation(reobservationBriefing(conn, conn->jobs()->liveJobIds()));
         }
         return QStringLiteral(
                    "The SSH link was re-established after %1 attempt%2. Remote state has not been "
@@ -607,8 +611,13 @@ QString runRemoteShellEscape(QSocSshSession &session, const QString &cwd, const 
                                 .arg(shellEscape(cwd.isEmpty() ? QStringLiteral("/") : cwd))
                                 .arg(shellEscape(command));
 
+    /* A foreground escape may legitimately run long, but not forever: an
+     * unbounded budget also covers the close handshake, and the open and
+     * exec loops never test the abort flag, so a silent host would wedge the
+     * UI thread with only SIGKILL left. */
+    constexpr int       kRemoteShellEscapeMs = 15 * 60 * 1000;
     QSocSshExec         exec(session);
-    QSocSshExec::Result res = exec.run(wrapped, 0);
+    QSocSshExec::Result res = exec.run(wrapped, kRemoteShellEscapeMs);
 
     QString result = QString::fromUtf8(res.stdoutBytes);
     if (!res.stderrBytes.isEmpty()) {
@@ -1593,10 +1602,9 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * single-query just runs against the remote tools and exits; the
      * REPL receives the live session via runAgentLoop arguments and the
      * sticky binding's auto-/ssh is suppressed for this run. */
-    AgentRemoteState     cliRemoteState;
     QSocRemoteConnection cliRemoteConn;
-    AgentRemoteState    *preconnectedRemote = nullptr;
-    QSocToolRegistry    *preLocalRegistry   = nullptr;
+    QSocToolRegistry    *cliRemoteRegistry = nullptr;
+    QSocToolRegistry    *preLocalRegistry  = nullptr;
     if (parser.isSet("ssh")) {
         const QString sshTarget = parser.value("ssh");
         const QString workspace = parser.value("workspace");
@@ -1611,24 +1619,26 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         }
         QSocConsole::out() << "Connecting to " << sshTarget << " ...\n" << Qt::flush;
         QString sshErr;
-        if (!connectAgentSshSession(sshTarget, this, &cliRemoteState, &sshErr)) {
-            return showError(1, sshErr);
-        }
-        if (!prepareAgentRemoteWorkspace(workspace, &cliRemoteState, &sshErr)) {
-            cliRemoteState.sftp->close();
-            delete cliRemoteState.sftp;
-            cliRemoteState.session->disconnectFromHost();
-            delete cliRemoteState.session;
-            for (auto it = cliRemoteState.jumps.rbegin(); it != cliRemoteState.jumps.rend(); ++it) {
-                (*it)->disconnectFromHost();
-                delete *it;
+        {
+            /* Staging only: the connection drains it, so the transport has
+             * exactly one owner and the path context the tools bind to has
+             * exactly one home. */
+            AgentRemoteState staged;
+            if (!connectAgentSshSession(sshTarget, this, &staged, &sshErr)) {
+                return showError(1, sshErr);
             }
-            return showError(1, sshErr);
+            if (!prepareAgentRemoteWorkspace(workspace, &staged, &sshErr)) {
+                discardAgentRemoteState(&staged);
+                return showError(1, sshErr);
+            }
+            if (!cliRemoteConn.adopt(std::move(staged))) {
+                /* A refused adopt consumes nothing, so the transport is still
+                 * ours to free. */
+                // cppcheck-suppress accessMoved
+                discardAgentRemoteState(&staged);
+                return showError(1, QStringLiteral("internal error: incomplete remote transport"));
+            }
         }
-        /* cliRemoteState lives in this frame for the whole run; the REPL
-         * shares (never copies) its path context, so /cwd changes stay
-         * visible to the tools bound here. */
-        cliRemoteConn.adopt(cliRemoteState);
         cliRemoteConn.setRebuilder([this](
                                        const QString    &target,
                                        const QString    &workspace,
@@ -1636,31 +1646,26 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                                        QString          *errorMessage) {
             return connectReplacementTransport(this, target, workspace, out, errorMessage);
         });
-        buildAgentRemoteRegistry(
-            this,
-            &cliRemoteState,
-            &cliRemoteConn,
-            &cliRemoteState.path,
-            socConfig,
-            monitorTaskSource);
+        cliRemoteRegistry
+            = buildAgentRemoteRegistry(this, &cliRemoteConn, socConfig, monitorTaskSource);
         /* Re-register the spawn tool + its companion into the remote
          * registry so the parent LLM still sees `agent` /
          * `agent_status` after the remote swap. Both tools are
          * registry-agnostic; the spawn tool's child resolves tools
          * through whichever registry the parent currently uses
          * (see QSocToolAgent::setParentAgent). */
-        cliRemoteState.registry->registerTool(agentTool);
-        cliRemoteState.registry->registerTool(agentStatusTool);
-        cliRemoteState.registry->registerTool(sendMessageTool);
-        cliRemoteState.registry->registerTool(resumeTool);
+        cliRemoteRegistry->registerTool(agentTool);
+        cliRemoteRegistry->registerTool(agentStatusTool);
+        cliRemoteRegistry->registerTool(sendMessageTool);
+        cliRemoteRegistry->registerTool(resumeTool);
         /* Memory tools are local-scoped; carry them across so background
          * extraction / dream still work while on a remote workspace. */
-        cliRemoteState.registry->registerTool(memoryReadTool);
-        cliRemoteState.registry->registerTool(memoryWriteTool);
-        cliRemoteState.registry->registerTool(memoryDeleteTool);
+        cliRemoteRegistry->registerTool(memoryReadTool);
+        cliRemoteRegistry->registerTool(memoryWriteTool);
+        cliRemoteRegistry->registerTool(memoryDeleteTool);
 
         preLocalRegistry = agent->getToolRegistry();
-        agent->setToolRegistry(cliRemoteState.registry);
+        agent->setToolRegistry(cliRemoteRegistry);
         agent->setWorkspaceHealthProbe(
             [conn = &cliRemoteConn, agent] { return remoteWorkspaceHealth(conn, agent); });
         /* The loop installs its own probe that also refreshes the chip; this
@@ -1668,21 +1673,20 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         {
             auto newCfg               = agent->getConfig();
             newCfg.remoteMode         = true;
-            newCfg.remoteName         = cliRemoteState.targetKey;
-            newCfg.remoteDisplay      = cliRemoteState.display;
-            newCfg.remoteWorkspace    = cliRemoteState.workspace;
-            newCfg.remoteWorkingDir   = cliRemoteState.workspace;
-            newCfg.remoteWritableDirs = cliRemoteState.path.writableDirs();
+            newCfg.remoteName         = cliRemoteConn.target();
+            newCfg.remoteDisplay      = cliRemoteConn.display();
+            newCfg.remoteWorkspace    = cliRemoteConn.workspace();
+            newCfg.remoteWorkingDir   = cliRemoteConn.path()->cwd();
+            newCfg.remoteWritableDirs = cliRemoteConn.path()->writableDirs();
             agent->setConfig(newCfg);
         }
-        preconnectedRemote = &cliRemoteState;
         /* Pull the remote project's .qsoc/agents/ markdown defs into
          * the registry so the LLM sees them under scope=project. */
-        if (cliRemoteState.sftp != nullptr && !cliRemoteState.workspace.isEmpty()) {
+        if (cliRemoteConn.sftp() != nullptr && !cliRemoteConn.workspace().isEmpty()) {
             agentDefinitions->scanFromRemoteSftp(
-                cliRemoteState.sftp, cliRemoteState.workspace + QStringLiteral("/.qsoc/agents"));
+                cliRemoteConn.sftp(), cliRemoteConn.workspace() + QStringLiteral("/.qsoc/agents"));
         }
-        QSocConsole::out() << "Connected. Remote workspace: " << cliRemoteState.workspace << "\n"
+        QSocConsole::out() << "Connected. Remote workspace: " << cliRemoteConn.workspace() << "\n"
                            << Qt::flush;
     } else if (parser.isSet("workspace")) {
         /* Local --workspace already chdir'd above; nothing more to do. */
@@ -1870,8 +1874,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         streaming,
         resumeSessionId,
         pathContext,
-        preconnectedRemote,
-        preconnectedRemote != nullptr ? &cliRemoteConn : nullptr,
+        cliRemoteRegistry != nullptr ? &cliRemoteConn : nullptr,
+        cliRemoteRegistry,
         preLocalRegistry,
         taskRegistry,
         taskEventQueue,
@@ -1885,8 +1889,8 @@ bool QSocCliWorker::runAgentLoop(
     bool                   streaming,
     const QString         &resumeSessionId,
     QSocPathContext       *pathContext,
-    AgentRemoteState      *preconnected,
     QSocRemoteConnection  *preconnectedConn,
+    QSocToolRegistry      *preconnectedRemoteRegistry,
     QSocToolRegistry      *preLocalRegistry,
     QSocTaskRegistry      *taskRegistry,
     QSocTaskEventQueue    *taskEventQueue,
@@ -1937,27 +1941,25 @@ bool QSocCliWorker::runAgentLoop(
     /* Remote workspace state. A single session at a time; created by
      * `/ssh <target>` and torn down by `/local`. Local tool registry is
      * cached here so `/local` can restore it in O(1). When the CLI was
-     * launched with `--ssh`, parseAgent has already opened the session;
-     * we adopt that pre-connected state via preconnected/preLocalRegistry
-     * so the REPL starts directly in remote mode. */
+     * launched with `--ssh`, parseAgent has already opened the session; we
+     * take over that connection and its registry via
+     * preconnectedConn/preconnectedRemoteRegistry so the REPL starts directly
+     * in remote mode. */
     QSocToolRegistry *localRegistry = (preLocalRegistry != nullptr) ? preLocalRegistry
                                                                     : agent->getToolRegistry();
 
-    QSocToolRegistry *remoteRegistry = nullptr;
-
-    /* The single holder of the remote transport for this run. Remote tools
-     * bind to it once and resolve the session or SFTP client per call, so a
-     * transport swap needs no registry rebuild and cannot leave a second
-     * copy of the pointers behind to dangle. The launch path already built a
-     * registry against its own handle; adopt that one rather than stranding
-     * the tools on a different object. It also owns the canonical path
-     * context, so /cwd changes stay visible to the tools. */
+    /* The single owner of the remote transport for this run. Remote tools bind
+     * to it once and resolve the session, the SFTP client and the path context
+     * per call, so a transport swap needs no registry rebuild and cannot leave
+     * a second copy of the pointers behind to dangle. The launch path already
+     * built a registry against its own connection; take that one over rather
+     * than stranding the tools on a different object. */
     QSocRemoteConnection  remoteConnStorage;
-    QSocRemoteConnection *remoteConn = preconnectedConn != nullptr ? preconnectedConn
-                                                                   : &remoteConnStorage;
-    if (preconnected != nullptr && preconnected->session != nullptr) {
-        remoteRegistry = preconnected->registry;
-    }
+    QSocRemoteConnection *remoteConn     = preconnectedConn != nullptr ? preconnectedConn
+                                                                       : &remoteConnStorage;
+    QSocToolRegistry     *remoteRegistry = (remoteConn->session() != nullptr)
+                                               ? preconnectedRemoteRegistry
+                                               : nullptr;
 
     /* Create TUI compositor — enters alt screen immediately */
     QTuiCompositor compositor(this);
@@ -1994,9 +1996,8 @@ bool QSocCliWorker::runAgentLoop(
         compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
     }
     statusBarWidget.setStatus(
-        (preconnected != nullptr && !preconnected->targetKey.isEmpty())
-            ? QString("Remote: %1").arg(preconnected->targetKey)
-            : QStringLiteral("Ready"));
+        !remoteConn->target().isEmpty() ? QString("Remote: %1").arg(remoteConn->target())
+                                        : QStringLiteral("Ready"));
     statusBarWidget.setModel(llmService->getCurrentModelId());
     statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
     statusBarWidget.setPlanMode(agent->getConfig().planMode);
@@ -2046,9 +2047,9 @@ bool QSocCliWorker::runAgentLoop(
     if (streaming) {
         introLines << QStringLiteral("(Enhanced mode, streaming enabled)");
     }
-    if (preconnected != nullptr && !preconnected->workspace.isEmpty()) {
+    if (!remoteConn->workspace().isEmpty()) {
         introLines << QStringLiteral("Connected to %1 (workspace %2)")
-                          .arg(preconnected->targetKey, preconnected->workspace);
+                          .arg(remoteConn->target(), remoteConn->workspace());
     }
     compositor.topBanner().setIntro(introLines);
 
@@ -2067,7 +2068,7 @@ bool QSocCliWorker::runAgentLoop(
     QStringList pendingAutoInputs;
     /* When --ssh on the command line already brought the agent online, the
      * sticky binding's auto-/ssh would override the live session; skip it. */
-    if (preconnected == nullptr && pathContext != nullptr) {
+    if (preconnectedConn == nullptr && pathContext != nullptr) {
         const QString projectRootOnStart = pathContext->getProjectDir();
         if (!projectRootOnStart.isEmpty()) {
             const auto binding = hostCatalog->active();
@@ -2616,10 +2617,13 @@ bool QSocCliWorker::runAgentLoop(
         /* Candidate files + reader: remote over SFTP when a session is up,
          * otherwise local from disk. */
         if (remoteConn->session() != nullptr && remoteConn->sftp() != nullptr) {
-            inputs.candidatePaths    = remoteConn->path()->readState().pathsByRecencyDesc(0);
-            QSocSftpClient *sftp     = remoteConn->sftp();
-            const qint64    maxBytes = static_cast<qint64>(cfg.contextRestoreMaxTokensFile) * 8;
-            inputs.readFile = [sftp, maxBytes](const QString &path) -> std::optional<QString> {
+            inputs.candidatePaths = remoteConn->path()->readState().pathsByRecencyDesc(0);
+            const qint64 maxBytes = static_cast<qint64>(cfg.contextRestoreMaxTokensFile) * 8;
+            inputs.readFile = [remoteConn, maxBytes](const QString &path) -> std::optional<QString> {
+                QSocSftpClient *sftp = remoteConn->sftp();
+                if (sftp == nullptr) {
+                    return std::nullopt;
+                }
                 QString          err;
                 const QByteArray data = sftp->readFile(path, maxBytes, &err);
                 if (!err.isEmpty()) {
@@ -2955,46 +2959,22 @@ bool QSocCliWorker::runAgentLoop(
      * snapshot/restore reads and writes follow the active transport, so a
      * rewind in remote mode restores the remote working tree over SFTP
      * instead of touching a stale local path. */
-    auto remoteFileAccessor = [](QSocSftpClient *sftp) -> QSocFileHistory::LiveFileAccessor {
-        QSocFileHistory::LiveFileAccessor acc;
-        acc.exists = [sftp](const QString &path) {
-            return sftp->presence(path) == QSocSftpClient::Presence::Present;
-        };
-        acc.read = [sftp](const QString &path) -> std::optional<QString> {
-            QString          err;
-            const QByteArray bytes = sftp->readFile(path, 0, &err);
-            if (bytes.isNull() && !err.isEmpty()) {
-                return std::nullopt;
-            }
-            return QString::fromUtf8(bytes);
-        };
-        acc.write = [sftp](const QString &path, const QString &content) {
-            QString err;
-            return sftp->writeFile(path, content.toUtf8(), &err);
-        };
-        acc.remove = [sftp](const QString &path) {
-            QString err;
-            return sftp->removeFile(path, &err);
-        };
-        return acc;
+    auto wireRemoteFileHistory = [&currentFileHistory, remoteConn](QSocToolRegistry *reg) {
+        if (currentFileHistory) {
+            currentFileHistory->setLiveAccessor(remoteLiveFileAccessor(remoteConn));
+        }
+        if (reg == nullptr) {
+            return;
+        }
+        if (auto *writeTool = dynamic_cast<QSocToolRemoteFileWrite *>(
+                reg->getTool(QStringLiteral("write_file")))) {
+            writeTool->setFileHistory(currentFileHistory.get());
+        }
+        if (auto *editTool = dynamic_cast<QSocToolRemoteFileEdit *>(
+                reg->getTool(QStringLiteral("edit_file")))) {
+            editTool->setFileHistory(currentFileHistory.get());
+        }
     };
-    auto wireRemoteFileHistory =
-        [&currentFileHistory, &remoteFileAccessor](QSocToolRegistry *reg, QSocSftpClient *sftp) {
-            if (currentFileHistory && sftp != nullptr) {
-                currentFileHistory->setLiveAccessor(remoteFileAccessor(sftp));
-            }
-            if (reg == nullptr) {
-                return;
-            }
-            if (auto *writeTool = dynamic_cast<QSocToolRemoteFileWrite *>(
-                    reg->getTool(QStringLiteral("write_file")))) {
-                writeTool->setFileHistory(currentFileHistory.get());
-            }
-            if (auto *editTool = dynamic_cast<QSocToolRemoteFileEdit *>(
-                    reg->getTool(QStringLiteral("edit_file")))) {
-                editTool->setFileHistory(currentFileHistory.get());
-            }
-        };
     auto restoreLocalFileHistory = [&currentFileHistory]() {
         if (currentFileHistory) {
             currentFileHistory->setLiveAccessor(QSocFileHistory::localAccessor());
@@ -3058,6 +3038,39 @@ bool QSocCliWorker::runAgentLoop(
         }
     };
 
+    /* Checkpoint one turn and tell the user what the checkpoint does not
+     * cover. Naming the turn is the point: it says which rewind target will
+     * leave these files as they are instead of restoring them. */
+    auto checkpointAfterTurn = [&](int turn) {
+        if (!currentFileHistory || turn <= 0) {
+            return;
+        }
+        currentFileHistory->makeSnapshot(turn);
+        QStringList unreadable;
+        for (const auto &snap : currentFileHistory->listSnapshots()) {
+            if (snap.turn != turn) {
+                continue;
+            }
+            for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
+                if (it.value().isUnknown()) {
+                    unreadable.append(it.key());
+                }
+            }
+        }
+        if (unreadable.isEmpty()) {
+            return;
+        }
+        compositor.printContent(
+            QString(
+                "(Checkpoint #%1: %2 file%3 could not be read, so a rewind to #%1 will "
+                "leave %4 alone)\n    ")
+                .arg(turn)
+                .arg(unreadable.size())
+                .arg(unreadable.size() == 1 ? "" : "s")
+                .arg(unreadable.size() == 1 ? "it" : "them")
+            + unreadable.join(QStringLiteral("\n    ")) + QLatin1Char('\n'));
+    };
+
     /* Create a fresh session + file history rooted at projectPath, stamp
      * creation meta, and rewire the file-writing tools. Used by /project
      * switch; startup uses the same building blocks inline to interleave
@@ -3081,7 +3094,14 @@ bool QSocCliWorker::runAgentLoop(
         historyInputBlocked          = false;
         recoveryRequiresUserInput    = false;
         releaseRecoveryGateAtRequest = false;
-        wireFileHistoryTools();
+        /* In remote mode the file-writing tools are the SFTP-backed ones and
+         * the live accessor has to follow the transport; wiring only the
+         * local tools here would silently checkpoint the local disk. */
+        if (remoteConn->sftp() != nullptr && remoteRegistry != nullptr) {
+            wireRemoteFileHistory(remoteRegistry);
+        } else {
+            wireFileHistoryTools();
+        }
         return true;
     };
 
@@ -3660,8 +3680,8 @@ bool QSocCliWorker::runAgentLoop(
 
         /* --ssh startup: the remote tools were built before this history
          * existed, so wire them now to checkpoint remote edits for rewind. */
-        if (preconnected != nullptr && remoteConn->sftp() != nullptr && remoteRegistry != nullptr) {
-            wireRemoteFileHistory(remoteRegistry, remoteConn->sftp());
+        if (remoteConn->sftp() != nullptr && remoteRegistry != nullptr) {
+            wireRemoteFileHistory(remoteRegistry);
         }
 
         /* Resume an existing session if the JSONL already exists; otherwise
@@ -4906,8 +4926,9 @@ bool QSocCliWorker::runAgentLoop(
                 /* Build per-turn change counts from snapshot diffs so the
                  * picker can show "this turn touched N files" instead of
                  * a featureless [files] flag. */
-                QMap<int, QMap<QString, QString>> snapshotFiles;
-                QSet<int>                         turnsWithSnapshots;
+                using FileRecord = QSocFileHistory::FileRecord;
+                QMap<int, QMap<QString, FileRecord>> snapshotFiles;
+                QSet<int>                            turnsWithSnapshots;
                 if (currentFileHistory) {
                     for (const auto &snap : currentFileHistory->listSnapshots()) {
                         turnsWithSnapshots.insert(snap.turn);
@@ -4918,11 +4939,21 @@ bool QSocCliWorker::runAgentLoop(
                     if (!snapshotFiles.contains(turn)) {
                         return 0;
                     }
-                    const QMap<QString, QString> &cur  = snapshotFiles[turn];
-                    const QMap<QString, QString> &prev = snapshotFiles.value(turn - 1);
-                    int                           diff = 0;
+                    const QMap<QString, FileRecord> &cur  = snapshotFiles[turn];
+                    const QMap<QString, FileRecord> &prev = snapshotFiles.value(turn - 1);
+                    int                              diff = 0;
                     for (auto it = cur.constBegin(); it != cur.constEnd(); ++it) {
-                        if (prev.value(it.key()) != it.value()) {
+                        /* A state we could not establish is not a change. */
+                        if (it.value().isUnknown()) {
+                            continue;
+                        }
+                        const FileRecord before = prev.contains(it.key()) ? prev.value(it.key())
+                                                                          : FileRecord::absent(0);
+                        if (before.isUnknown()) {
+                            continue;
+                        }
+                        if (before.isAbsent() != it.value().isAbsent()
+                            || before.sha256() != it.value().sha256()) {
                             diff++;
                         }
                     }
@@ -5013,120 +5044,70 @@ bool QSocCliWorker::runAgentLoop(
                     restoreConversation = (modeSel == 0 || modeSel == 1);
                 }
 
-                /* Conversation rollback (skipped in code-only mode). Preserve
-                 * the original createdAt so the session picker still shows the
-                 * original timestamp; rewriteMessages truncates the file, so
-                 * meta must be re-emitted afterwards. */
+                /* Decide. Everything below this point is built from reads
+                 * only, so the gate inside qsocApplyRewind can still refuse
+                 * without having changed anything. */
+                QSocRewindRequest request;
+                request.restoreConversation = restoreConversation;
+                request.restoreFiles        = restoreFiles;
+                /* The rewound turn's pre-state is snapshot (turn - 1);
+                 * applying it puts the tree back where it was just before the
+                 * picked message ran. */
+                request.targetSnapshot = pick.turn - 1;
+                request.keptMessages   = json::array();
+                for (int idx = 0; idx < pick.index; idx++) {
+                    request.keptMessages.push_back(allMessages[idx]);
+                }
                 if (restoreConversation) {
-                    const QSocSession::Info origInfo = QSocSession::readInfo(
-                        currentSession->filePath());
-                    json truncated = json::array();
-                    for (int idx = 0; idx < pick.index; idx++) {
-                        truncated.push_back(allMessages[idx]);
-                    }
-                    if (!currentSession->rewriteMessages(truncated)) {
-                        compositor.printContent(
-                            QStringLiteral("Conversation rewind could not be persisted.\n"));
-                        return;
-                    }
-                    agent->setMessages(truncated);
-                    persistedMessages = truncated;
-                    if (origInfo.createdAt.isValid()) {
-                        currentSession->appendMeta(
-                            QStringLiteral("created"),
-                            origInfo.createdAt.toString(Qt::ISODateWithMs));
-                    }
-                    lastPersistedIndex = static_cast<int>(truncated.size());
+                    request.originalCreatedAt
+                        = QSocSession::readInfo(currentSession->filePath()).createdAt;
                 }
 
-                /* File restore. The rewound turn's pre-state is snapshot
-                 * (turn - 1); applying it puts the tree back where it was
-                 * just before the picked message ran. When the conversation
-                 * is also rolled back, drop the now-orphaned future
-                 * snapshots and rewind the turn counter; in code-only mode
-                 * the conversation keeps going, so the snapshot history is
-                 * left intact for a later full rewind. */
-                QSocFileHistory::RestoreReport restore;
+                /* Records captured over a transport that is no longer bound
+                 * are left alone, so say it before the restore instead of
+                 * only listing paths after it. */
+                QString boundaryNotice;
                 if (restoreFiles && currentFileHistory) {
-                    /* Refuse before touching anything: on a workspace that
-                     * cannot answer, "the file is absent" and "I could not
-                     * ask" are the same answer, and the absent reading makes
-                     * the restore skip removals without saying so.
-                     *
-                     * The cached liveness flag only reports a death that
-                     * some earlier call already ran into, and a rewind is
-                     * often the first thing tried after a link goes quiet.
-                     * So when the flag looks fine, ask the host once for
-                     * real; the round trip is bounded by the SFTP operation
-                     * budget. */
-                    QString unhealthy = remoteConn->isUsable() ? QString()
-                                                               : remoteConn->unusableText();
-                    if (unhealthy.isEmpty() && remoteConn->sftp() != nullptr) {
-                        QString probeErr;
-                        if (!remoteWorkspaceAnswers(
-                                remoteConn->sftp(),
-                                remoteConn->path()->root(),
-                                kRewindProbeMs,
-                                &probeErr)) {
-                            unhealthy = probeErr;
+                    const quint64 liveGen = remoteConn->generation();
+                    if (liveGen != 0) {
+                        for (const auto &snap : currentFileHistory->listSnapshots()) {
+                            if (snap.turn <= request.targetSnapshot && snap.generation != 0
+                                && snap.generation != liveGen) {
+                                boundaryNotice = QStringLiteral(
+                                    "\n(Some checkpoints were taken over an earlier connection; "
+                                    "their files are left untouched.)\n");
+                                break;
+                            }
                         }
                     }
-                    if (!unhealthy.isEmpty()) {
-                        compositor.printContent(
-                            QStringLiteral("\n(Rewind cancelled: %1)\n").arg(unhealthy));
-                        compositor.invalidate();
-                        compositor.render();
-                        return;
-                    }
-                    const int targetSnapshot = pick.turn - 1;
-                    restore                  = currentFileHistory->applySnapshot(targetSnapshot);
+                }
+
+                const QSocRewindResult result = qsocApplyRewind(
+                    request, currentSession.get(), currentFileHistory.get(), [remoteConn]() {
+                        return remoteWorkspaceRewindRefusal(remoteConn, kRewindProbeMs);
+                    });
+
+                if (result.outcome != QSocRewindResult::Outcome::Refused) {
                     if (restoreConversation) {
-                        currentFileHistory->truncateAfter(targetSnapshot);
-                        turnCounter = targetSnapshot;
+                        agent->setMessages(request.keptMessages);
+                        persistedMessages  = request.keptMessages;
+                        lastPersistedIndex = result.kept;
+                        /* Load the picked message back into the input buffer
+                         * so the user can edit and resubmit; code-only leaves
+                         * the live input untouched. */
+                        inputMonitor.setInputBuffer(pick.content);
+                    }
+                    /* The forward snapshots a retry restores from survive a
+                     * transport change, and so must the counter that names
+                     * them. */
+                    if (restoreConversation && restoreFiles && !result.files.transportChanged) {
+                        turnCounter = request.targetSnapshot;
+                    }
+                    if (!boundaryNotice.isEmpty()) {
+                        compositor.printContent(boundaryNotice);
                     }
                 }
-
-                /* Load the picked message back into the input buffer so the
-                 * user can edit and resubmit, only when the conversation was
-                 * rolled back; code-only leaves the live input untouched. */
-                if (restoreConversation) {
-                    inputMonitor.setInputBuffer(pick.content);
-                }
-
-                QString fileSummary;
-                if (!restore.restored.isEmpty()) {
-                    fileSummary = QString("%1 file%2 restored")
-                                      .arg(restore.restored.size())
-                                      .arg(restore.restored.size() == 1 ? "" : "s");
-                }
-                if (!restore.failed.isEmpty()) {
-                    if (!fileSummary.isEmpty()) {
-                        fileSummary += QStringLiteral(", ");
-                    }
-                    fileSummary += QString("%1 NOT restored").arg(restore.failed.size());
-                }
-                if (restoreConversation) {
-                    compositor.printContent(
-                        QString(
-                            "\n(Rewound: kept %1 message%2%3, picked text restored for "
-                            "editing)\n")
-                            .arg(lastPersistedIndex)
-                            .arg(lastPersistedIndex == 1 ? "" : "s")
-                            .arg(
-                                fileSummary.isEmpty() ? QString()
-                                                      : QStringLiteral(", ") + fileSummary));
-                } else {
-                    compositor.printContent(
-                        QString("\n(Rewound code only: %1, conversation unchanged)\n")
-                            .arg(
-                                fileSummary.isEmpty() ? QStringLiteral("no files changed")
-                                                      : fileSummary));
-                }
-                if (!restore.failed.isEmpty()) {
-                    compositor.printContent(
-                        QStringLiteral("  could not restore:\n    ")
-                        + restore.failed.join(QStringLiteral("\n    ")) + QLatin1Char('\n'));
-                }
+                compositor.printContent(qsocRewindReport(request, result));
                 compositor.invalidate();
                 compositor.render();
             });
@@ -5737,11 +5718,21 @@ bool QSocCliWorker::runAgentLoop(
             const auto snapshots = currentFileHistory->listSnapshots();
             /* A "turn" is meaningful only when there's a post-turn snapshot
              * to diff against its predecessor. Turn 0 is the baseline. */
+            using DiffRecord = QSocFileHistory::FileRecord;
+            /* A path missing from a snapshot map reads as unknown by default,
+             * but the only way a tracked path is missing is that the snapshot
+             * predates the tracking, where absent is the historical truth. */
+            const auto recordAt = [](const QMap<QString, DiffRecord> &map, const QString &path) {
+                return map.contains(path) ? map.value(path) : DiffRecord::absent(0);
+            };
+            const auto sameContent = [](const DiffRecord &lhs, const DiffRecord &rhs) {
+                return lhs.isAbsent() == rhs.isAbsent() && lhs.sha256() == rhs.sha256();
+            };
             struct TurnEntry
             {
-                int                    turn;
-                QMap<QString, QString> filesBefore;
-                QMap<QString, QString> filesAfter;
+                int                       turn;
+                QMap<QString, DiffRecord> filesBefore;
+                QMap<QString, DiffRecord> filesAfter;
             };
             QList<TurnEntry> turns;
             for (int i = 0; i < snapshots.size(); i++) {
@@ -5777,6 +5768,7 @@ bool QSocCliWorker::runAgentLoop(
             turnItems.reserve(turns.size());
             for (const TurnEntry &entry : turns) {
                 int           filesChanged = 0;
+                int           unknownFiles = 0;
                 int           linesAdded   = 0;
                 int           linesRemoved = 0;
                 QSet<QString> allPaths;
@@ -5787,19 +5779,25 @@ bool QSocCliWorker::runAgentLoop(
                     allPaths.insert(it.key());
                 }
                 for (const QString &path : allPaths) {
-                    const QString shaBefore = entry.filesBefore.value(path);
-                    const QString shaAfter  = entry.filesAfter.value(path);
-                    if (shaBefore == shaAfter) {
+                    const DiffRecord before = recordAt(entry.filesBefore, path);
+                    const DiffRecord after  = recordAt(entry.filesAfter, path);
+                    if (before.isUnknown() || after.isUnknown()) {
+                        /* No content on one side, so there is no diff to
+                         * count; rendering it as a deletion would invent one. */
+                        unknownFiles++;
+                        continue;
+                    }
+                    if (sameContent(before, after)) {
                         continue; /* untouched this turn */
                     }
                     filesChanged++;
-                    const QString before = shaBefore.isEmpty()
-                                               ? QString()
-                                               : currentFileHistory->contentAt(path, entry.turn - 1);
-                    const QString after = shaAfter.isEmpty()
-                                              ? QString()
-                                              : currentFileHistory->contentAt(path, entry.turn);
-                    const auto    diff  = QSocLineDiff::computeLineDiff(before, after);
+                    const QString beforeText
+                        = before.isPresent() ? currentFileHistory->contentAt(path, entry.turn - 1)
+                                             : QString();
+                    const QString afterText = after.isPresent()
+                                                  ? currentFileHistory->contentAt(path, entry.turn)
+                                                  : QString();
+                    const auto    diff      = QSocLineDiff::computeLineDiff(beforeText, afterText);
                     for (const auto &line : diff) {
                         if (line.kind == QSocLineDiff::Kind::Add) {
                             linesAdded++;
@@ -5815,6 +5813,9 @@ bool QSocCliWorker::runAgentLoop(
                                  .arg(filesChanged == 1 ? "" : "s")
                                  .arg(linesAdded)
                                  .arg(linesRemoved);
+                if (unknownFiles > 0) {
+                    item.hint += QString::fromUtf8("  \xc2\xb7 %1 unknown").arg(unknownFiles);
+                }
                 turnItems.append(item);
             }
 
@@ -5835,11 +5836,12 @@ bool QSocCliWorker::runAgentLoop(
             /* Second picker: per-file list for the chosen turn. */
             struct FileEntry
             {
-                QString path;
-                QString shaBefore;
-                QString shaAfter;
-                int     added;
-                int     removed;
+                QString    path;
+                DiffRecord before;
+                DiffRecord after;
+                int        added        = 0;
+                int        removed      = 0;
+                bool       unknownState = false;
             };
             QList<FileEntry> fileEntries;
             {
@@ -5854,22 +5856,28 @@ bool QSocCliWorker::runAgentLoop(
                 }
                 for (const QString &path : allPaths) {
                     FileEntry entry;
-                    entry.path      = path;
-                    entry.shaBefore = chosenTurn.filesBefore.value(path);
-                    entry.shaAfter  = chosenTurn.filesAfter.value(path);
-                    if (entry.shaBefore == entry.shaAfter) {
+                    entry.path   = path;
+                    entry.before = recordAt(chosenTurn.filesBefore, path);
+                    entry.after  = recordAt(chosenTurn.filesAfter, path);
+                    if (entry.before.isUnknown() || entry.after.isUnknown()) {
+                        /* Listed so the gap is visible, but never diffed: a
+                         * state we could not read is not a deletion. */
+                        entry.unknownState = true;
+                        fileEntries.append(entry);
                         continue;
                     }
-                    const QString before
-                        = entry.shaBefore.isEmpty()
-                              ? QString()
-                              : currentFileHistory->contentAt(path, chosenTurn.turn - 1);
-                    const QString after = entry.shaAfter.isEmpty()
-                                              ? QString()
-                                              : currentFileHistory->contentAt(path, chosenTurn.turn);
-                    const auto diff = QSocLineDiff::computeLineDiff(before, after);
-                    entry.added     = 0;
-                    entry.removed   = 0;
+                    if (sameContent(entry.before, entry.after)) {
+                        continue;
+                    }
+                    const QString beforeText
+                        = entry.before.isPresent()
+                              ? currentFileHistory->contentAt(path, chosenTurn.turn - 1)
+                              : QString();
+                    const QString afterText
+                        = entry.after.isPresent()
+                              ? currentFileHistory->contentAt(path, chosenTurn.turn)
+                              : QString();
+                    const auto diff = QSocLineDiff::computeLineDiff(beforeText, afterText);
                     for (const auto &line : diff) {
                         if (line.kind == QSocLineDiff::Kind::Add) {
                             entry.added++;
@@ -5905,7 +5913,9 @@ bool QSocCliWorker::runAgentLoop(
                     }
                 }
                 item.label = shortPath;
-                item.hint  = QString("+%1 -%2").arg(entry.added).arg(entry.removed);
+                item.hint  = entry.unknownState
+                                 ? QStringLiteral("state unknown")
+                                 : QString("+%1 -%2").arg(entry.added).arg(entry.removed);
                 fileItems.append(item);
             }
 
@@ -5923,14 +5933,23 @@ bool QSocCliWorker::runAgentLoop(
             }
 
             const FileEntry &chosenFile = fileEntries[fileSel];
-            const QString    beforeText
-                = chosenFile.shaBefore.isEmpty()
-                      ? QString()
-                      : currentFileHistory->contentAt(chosenFile.path, chosenTurn.turn - 1);
+            if (chosenFile.unknownState) {
+                compositor.printContent(
+                    QString(
+                        "(%1: the file could not be read at turn #%2, so there is nothing to "
+                        "compare)\n")
+                        .arg(chosenFile.path)
+                        .arg(chosenTurn.turn));
+                continue;
+            }
+            const QString beforeText
+                = chosenFile.before.isPresent()
+                      ? currentFileHistory->contentAt(chosenFile.path, chosenTurn.turn - 1)
+                      : QString();
             const QString afterText
-                = chosenFile.shaAfter.isEmpty()
-                      ? QString()
-                      : currentFileHistory->contentAt(chosenFile.path, chosenTurn.turn);
+                = chosenFile.after.isPresent()
+                      ? currentFileHistory->contentAt(chosenFile.path, chosenTurn.turn)
+                      : QString();
             renderDiffToScrollView(chosenFile.path, beforeText, afterText);
             continue;
         }
@@ -7008,43 +7027,36 @@ bool QSocCliWorker::runAgentLoop(
                 inputMonitor.resetEscState();
                 if (workspace.isEmpty()) {
                     compositor.printContent("No workspace selected. Disconnecting.\n");
-                    newState.sftp->close();
-                    delete newState.sftp;
-                    newState.session->disconnectFromHost();
-                    delete newState.session;
-                    for (auto it = newState.jumps.rbegin(); it != newState.jumps.rend(); ++it) {
-                        (*it)->disconnectFromHost();
-                        delete *it;
-                    }
+                    discardAgentRemoteState(&newState);
                     continue;
                 }
             }
 
             if (!prepareAgentRemoteWorkspace(workspace, &newState, &err)) {
                 compositor.printContent(QString("%1\n").arg(err));
-                newState.sftp->close();
-                delete newState.sftp;
-                newState.session->disconnectFromHost();
-                delete newState.session;
-                for (auto it = newState.jumps.rbegin(); it != newState.jumps.rend(); ++it) {
-                    (*it)->disconnectFromHost();
-                    delete *it;
-                }
+                discardAgentRemoteState(&newState);
                 continue;
             }
 
-            /* Adopt the staged path values into the loop-lifetime canonical
-             * context BEFORE binding tools to it: newState dies with this
-             * handler block, so tools must never hold &newState.path. */
             /* Order matters: the previous registry goes first because it owns
-             * tools bound to the handle, then the handle frees the previous
-             * transport, and only then does it take over the new one. */
+             * tools bound to the connection, then the connection frees the
+             * previous transport, and only then does it take over the new one.
+             * The explicit teardown() is what resets the path context, which a
+             * swap to a different workspace needs: adopt() alone would keep the
+             * working directory of an unchanged workspace. */
             if (remoteRegistry != nullptr) {
                 remoteRegistry->deleteLater();
                 remoteRegistry = nullptr;
             }
             remoteConn->teardown();
-            remoteConn->adopt(newState);
+            if (!remoteConn->adopt(std::move(newState))) {
+                /* A refused adopt consumes nothing, so the transport is still
+                 * ours to free. */
+                // cppcheck-suppress accessMoved
+                discardAgentRemoteState(&newState);
+                compositor.printContent("Internal error: incomplete remote transport.\n");
+                continue;
+            }
             remoteConn->setRebuilder([this](
                                          const QString    &target,
                                          const QString    &workspace,
@@ -7052,9 +7064,8 @@ bool QSocCliWorker::runAgentLoop(
                                          QString          *errorMessage) {
                 return connectReplacementTransport(this, target, workspace, out, errorMessage);
             });
-            buildAgentRemoteRegistry(
-                this, &newState, remoteConn, remoteConn->path(), socConfig, monitorTaskSource);
-            remoteRegistry = newState.registry;
+            remoteRegistry
+                = buildAgentRemoteRegistry(this, remoteConn, socConfig, monitorTaskSource);
 
             /* Carry the spawn tool and its status companion across
              * the swap so the parent LLM keeps seeing them; the
@@ -7095,24 +7106,25 @@ bool QSocCliWorker::runAgentLoop(
                 statusBarWidget.setRemoteState(remoteConn->target(), remoteConn->isUsable());
                 return reason;
             });
-            statusBarWidget.setRemoteState(newState.targetKey, true);
+            statusBarWidget.setRemoteState(remoteConn->target(), true);
             /* Point file history at the remote tree so rewind restores
              * remote edits over SFTP. */
-            wireRemoteFileHistory(remoteRegistry, remoteConn->sftp());
+            wireRemoteFileHistory(remoteRegistry);
             /* Pull the remote project's .qsoc/agents/ defs across SFTP
              * so the parent agent sees them after `/remote`. */
-            if (defs != nullptr && remoteConn->sftp() != nullptr && !newState.workspace.isEmpty()) {
+            if (defs != nullptr && remoteConn->sftp() != nullptr
+                && !remoteConn->workspace().isEmpty()) {
                 defs->scanFromRemoteSftp(
-                    remoteConn->sftp(), newState.workspace + QStringLiteral("/.qsoc/agents"));
+                    remoteConn->sftp(), remoteConn->workspace() + QStringLiteral("/.qsoc/agents"));
             }
 
             {
                 auto newCfg               = agent->getConfig();
                 newCfg.remoteMode         = true;
-                newCfg.remoteName         = newState.targetKey;
-                newCfg.remoteDisplay      = newState.display;
-                newCfg.remoteWorkspace    = newState.workspace;
-                newCfg.remoteWorkingDir   = newState.workspace;
+                newCfg.remoteName         = remoteConn->target();
+                newCfg.remoteDisplay      = remoteConn->display();
+                newCfg.remoteWorkspace    = remoteConn->workspace();
+                newCfg.remoteWorkingDir   = remoteConn->path()->cwd();
                 newCfg.remoteWritableDirs = remoteConn->path()->writableDirs();
                 agent->setConfig(newCfg);
             }
@@ -7126,16 +7138,16 @@ bool QSocCliWorker::runAgentLoop(
                 if (resolved.fromCatalog && hostCatalog->find(arg) != nullptr) {
                     hostCatalog->setActiveAlias(arg, &bindErr);
                 } else {
-                    hostCatalog->setActiveAdHoc(arg, newState.workspace, &bindErr);
+                    hostCatalog->setActiveAdHoc(arg, remoteConn->workspace(), &bindErr);
                 }
                 if (!bindErr.isEmpty()) {
                     compositor.printContent(QString("Binding write warning: %1\n").arg(bindErr));
                 }
             }
 
-            statusBarWidget.setStatus(QString("Remote: %1").arg(newState.targetKey));
+            statusBarWidget.setStatus(QString("Remote: %1").arg(remoteConn->target()));
             compositor.printContent(
-                QString("Connected. Remote workspace: %1\n").arg(newState.workspace));
+                QString("Connected. Remote workspace: %1\n").arg(remoteConn->workspace()));
             continue;
         }
         if (cmd == QStringLiteral("/plan") || cmd.startsWith(QStringLiteral("/plan "))) {
@@ -8318,7 +8330,7 @@ bool QSocCliWorker::runAgentLoop(
                 if (!resumeExistingHistory) {
                     turnCounter++;
                 }
-                currentFileHistory->makeSnapshot(turnCounter);
+                checkpointAfterTurn(turnCounter);
             }
 
             /* Background memory maintenance (extraction + once-per-process
@@ -8972,7 +8984,7 @@ bool QSocCliWorker::runAgentLoop(
                 if (!resumeExistingHistory) {
                     turnCounter++;
                 }
-                currentFileHistory->makeSnapshot(turnCounter);
+                checkpointAfterTurn(turnCounter);
             }
 
             /* Background memory maintenance (same idle-best-effort logic

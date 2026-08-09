@@ -396,17 +396,17 @@ private:
      */
     bool runAgentLoop(
         QSocAgent                   *agent,
-        bool                         streaming         = false,
-        const QString               &resumeSessionId   = QString(),
-        QSocPathContext             *pathContext       = nullptr,
-        struct AgentRemoteState     *preconnected      = nullptr,
-        class QSocRemoteConnection  *preconnectedConn  = nullptr,
-        class QSocToolRegistry      *preLocalRegistry  = nullptr,
-        class QSocTaskRegistry      *taskRegistry      = nullptr,
-        class QSocTaskEventQueue    *taskEventQueue    = nullptr,
-        class QSocMonitorTaskSource *monitorTaskSource = nullptr,
-        class QSocHostCatalog       *hostCatalog       = nullptr,
-        class QSocGoalCatalog       *goalCatalog       = nullptr);
+        bool                         streaming                  = false,
+        const QString               &resumeSessionId            = QString(),
+        QSocPathContext             *pathContext                = nullptr,
+        class QSocRemoteConnection  *preconnectedConn           = nullptr,
+        class QSocToolRegistry      *preconnectedRemoteRegistry = nullptr,
+        class QSocToolRegistry      *preLocalRegistry           = nullptr,
+        class QSocTaskRegistry      *taskRegistry               = nullptr,
+        class QSocTaskEventQueue    *taskEventQueue             = nullptr,
+        class QSocMonitorTaskSource *monitorTaskSource          = nullptr,
+        class QSocHostCatalog       *hostCatalog                = nullptr,
+        class QSocGoalCatalog       *goalCatalog                = nullptr);
 
     /**
      * @brief Parse options and report a command-line error.

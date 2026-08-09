@@ -65,22 +65,10 @@ void QSocToolAgent::releaseHostBinding(HostBinding *binding)
     if (binding == nullptr) {
         return;
     }
-    /* Registry first (it owns the tool instances), then SFTP, then the SSH
-     * session, then the ProxyJump chain in reverse so children disconnect
-     * before their parents. */
+    /* Registry first: it owns the tool instances, which resolve the transport
+     * through the connection. The transport itself belongs to that connection,
+     * so deleting the binding frees it in dependency order. */
     delete binding->registry;
-    if (binding->state.sftp != nullptr) {
-        binding->state.sftp->close();
-        delete binding->state.sftp;
-    }
-    if (binding->state.session != nullptr) {
-        binding->state.session->disconnectFromHost();
-        delete binding->state.session;
-    }
-    for (auto it = binding->state.jumps.rbegin(); it != binding->state.jumps.rend(); ++it) {
-        (*it)->disconnectFromHost();
-        delete *it;
-    }
     delete binding;
 }
 
@@ -96,9 +84,8 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
          * is not enough: a host that went quiet without closing the
          * connection still reads as connected, so spend one bounded round
          * trip before reusing. */
-        if (binding != nullptr && binding->state.session != nullptr
-            && binding->state.session->isConnected()
-            && remoteWorkspaceAnswers(binding->state.sftp, binding->state.path.root(), kHostProbeMs)) {
+        if (binding != nullptr && binding->conn.isUsable()
+            && remoteHostAnswers(binding->conn.sftp(), binding->conn.path()->root(), kHostProbeMs)) {
             return binding->registry;
         }
         hostCache_.erase(cached);
@@ -125,17 +112,22 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
         return nullptr;
     }
     if (!prepareAgentRemoteWorkspace(resolved.workspaceHint, &binding->state, errorMessage)) {
-        releaseHostBinding(binding);
+        discardAgentRemoteState(&binding->state);
+        delete binding;
+        return nullptr;
+    }
+    if (!binding->conn.adopt(std::move(binding->state))) {
+        discardAgentRemoteState(&binding->state);
+        delete binding;
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("internal error: incomplete remote transport");
+        }
         return nullptr;
     }
     /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
      * dispatch only needs file/shell/path tools on the remote.
      * Web/doc are intentionally local-only for now. */
-    /* binding is heap-cached for the process lifetime, so its state.path
-     * is a valid long-lived bind target. */
-    binding->conn.adopt(binding->state);
-    binding->registry = buildAgentRemoteRegistry(
-        this, &binding->state, &binding->conn, binding->conn.path(), nullptr, nullptr);
+    binding->registry = buildAgentRemoteRegistry(this, &binding->conn, nullptr, nullptr);
     hostCache_.insert(host, binding);
     return binding->registry;
 }
@@ -594,6 +586,15 @@ QString QSocToolAgent::execute(const json &arguments)
     if (childCfg.planMode && parentAgent_ != nullptr) {
         child->setBashSafetyJudge(parentAgent_->bashSafetyJudge());
     }
+    /* Forward, never copy: the parent's probe captures CLI-owned widgets
+     * that do not outlive the parent. A dead parent means assume usable,
+     * matching the unset semantics. */
+    if (parentAgent_ != nullptr && parentAgent_->hasWorkspaceHealthProbe()) {
+        QPointer<QSocAgent> probeParent(parentAgent_);
+        child->setWorkspaceHealthProbe([probeParent]() -> QString {
+            return probeParent.isNull() ? QString() : probeParent->probeWorkspaceHealth();
+        });
+    }
     /* def is null in fork mode; a fork inherits the parent context and
      * never opts into memory injection, so guard the deref. */
     if (memoryManager_ != nullptr && def != nullptr && def->injectMemory) {
@@ -758,14 +759,20 @@ QString QSocToolAgent::execute(const json &arguments)
      * its result inline and never notifies (the result is the tool's
      * return value, so a notification would double-report it). */
     QPointer<QSocAgent> parentGuard(parentAgent_);
+    QPointer<QSocAgent> childGuard(child);
     auto                notified     = std::make_shared<bool>(false);
     auto                backgrounded = std::make_shared<bool>(background);
-    auto pushNotification            = [srcGuard,
-                                        parentGuard,
-                                        notified,
-                                        backgrounded,
-                                        taskId,
-                                        effectiveType](const QString &status, const QString &body) {
+    /* Why the child stopped, when it stopped for a reason rather than by
+     * request. takeStopNotice() is destructive, so exactly one reader:
+     * the persistent runAborted handler, which Qt invokes before the
+     * foreground one because it was connected first. */
+    auto abortReason      = std::make_shared<QString>();
+    auto pushNotification = [srcGuard,
+                             parentGuard,
+                             notified,
+                             backgrounded,
+                             taskId,
+                             effectiveType](const QString &status, const QString &body) {
         if (!*backgrounded || parentGuard.isNull() || *notified) {
             return;
         }
@@ -801,11 +808,13 @@ QString QSocToolAgent::execute(const json &arguments)
         child,
         &QSocAgent::runAborted,
         taskSource_,
-        [srcGuard, taskId, wtCleanup, pushNotification](const QString &) {
+        [srcGuard, childGuard, taskId, wtCleanup, pushNotification, abortReason](const QString &) {
+            *abortReason      = childGuard.isNull() ? QString() : childGuard->takeStopNotice();
+            const QString why = abortReason->isEmpty() ? QStringLiteral("aborted") : *abortReason;
             if (!srcGuard.isNull()) {
-                srcGuard->markFailed(taskId, QStringLiteral("aborted"));
+                srcGuard->markFailed(taskId, why);
             }
-            pushNotification(QStringLiteral("aborted"), QStringLiteral("aborted"));
+            pushNotification(QStringLiteral("aborted"), why);
             wtCleanup();
         });
 
@@ -880,8 +889,12 @@ QString QSocToolAgent::execute(const json &arguments)
         stopFg(err);
     });
     fgConns << QObject::connect(
-        child, &QSocAgent::runAborted, &fgLoop, [&stopFg](const QString &partial) {
-            stopFg(partial);
+        child, &QSocAgent::runAborted, &fgLoop, [&stopFg, abortReason](const QString &partial) {
+            if (abortReason->isEmpty()) {
+                stopFg(partial);
+                return;
+            }
+            stopFg(partial.isEmpty() ? *abortReason : partial + QStringLiteral("\n") + *abortReason);
         });
     if (!callContext.isNull()) {
         const auto cancelForeground = [cancelTask, &stopFg]() {

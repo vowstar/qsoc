@@ -19,8 +19,28 @@
 #include <QFileInfo>
 
 #include <functional>
+#include <type_traits>
+#include <utility>
 
 namespace {
+
+/* One home for the remote path. A `path` member here would let a caller bind
+ * tools to a staging bundle again, and the compiler is the only thing that
+ * catches it before the tools outlive it. */
+template<typename T, typename = void>
+struct HasPathMember : std::false_type
+{};
+template<typename T>
+struct HasPathMember<T, std::void_t<decltype(std::declval<T &>().path)>> : std::true_type
+{};
+static_assert(!HasPathMember<AgentRemoteState>::value, "AgentRemoteState must carry no path");
+
+/* Every consumer holds a QSocRemoteConnection*, so a copy would double-free
+ * the transport and a move would dangle all of them at once. */
+static_assert(!std::is_copy_constructible_v<QSocRemoteConnection>);
+static_assert(!std::is_copy_assignable_v<QSocRemoteConnection>);
+static_assert(!std::is_move_constructible_v<QSocRemoteConnection>);
+static_assert(!std::is_move_assignable_v<QSocRemoteConnection>);
 
 struct ParsedTarget
 {
@@ -291,24 +311,42 @@ bool prepareAgentRemoteWorkspace(
         return false;
     }
 
-    state->path.setRoot(workspace);
-    state->path.setCwd(workspace);
-    state->path.setWritableDirs({workspace});
-
     state->workspace = workspace;
-    state->display   = state->targetKey + QStringLiteral(":") + workspace;
     return true;
+}
+
+void discardAgentRemoteState(AgentRemoteState *state)
+{
+    if (state == nullptr) {
+        return;
+    }
+    if (state->sftp != nullptr) {
+        state->sftp->close();
+        delete state->sftp;
+        state->sftp = nullptr;
+    }
+    if (state->session != nullptr) {
+        state->session->disconnectFromHost();
+        delete state->session;
+        state->session = nullptr;
+    }
+    for (auto it = state->jumps.rbegin(); it != state->jumps.rend(); ++it) {
+        (*it)->disconnectFromHost();
+        delete *it;
+    }
+    state->jumps.clear();
 }
 
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
-    AgentRemoteState      *state,
     QSocRemoteConnection  *conn,
-    QSocRemotePathContext *pathCtx,
     QSocConfig            *socConfig,
     QSocMonitorTaskSource *monitorSource)
 {
-    auto *registry = new QSocToolRegistry(parent);
+    /* Stable for the connection's lifetime: adopt() rewrites the context in
+     * place, so the address the tools bind to never changes. */
+    QSocRemotePathContext *pathCtx  = conn->path();
+    auto                  *registry = new QSocToolRegistry(parent);
     registry->registerTool(new QSocToolRemoteFileRead(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
@@ -318,8 +356,8 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolRemotePath(parent, pathCtx));
     if (monitorSource != nullptr) {
         QSocMonitorTaskSource::RemoteSpec remote;
-        remote.targetKey = state->targetKey;
-        remote.workspace = state->workspace;
+        remote.targetKey = conn->target();
+        remote.workspace = conn->workspace();
         registry->registerTool(new QSocToolMonitor(parent, monitorSource, remote));
         registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
     }
@@ -332,49 +370,129 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     if (socConfig != nullptr && !socConfig->getValue("web.search_api_url").isEmpty()) {
         registry->registerTool(new QSocToolWebSearch(parent, socConfig));
     }
-    state->registry = registry;
     return registry;
 }
 
-void QSocRemoteConnection::adopt(const AgentRemoteState &state)
+namespace {
+
+/* Liveness budget for re-verifying the working directory after a reconnect. */
+constexpr int kReconnectProbeMs = 3000;
+
+} // namespace
+
+QSocRemoteConnection::~QSocRemoteConnection()
 {
+    teardown();
+}
+
+bool QSocRemoteConnection::isComplete(const AgentRemoteState &state)
+{
+    return state.session != nullptr && state.sftp != nullptr && !state.workspace.isEmpty();
+}
+
+bool QSocRemoteConnection::confirmDirectory(const QString &dir) const
+{
+    if (m_directoryProbe) {
+        return m_directoryProbe(m_sftp, dir);
+    }
+    return remoteDirectoryExists(m_sftp, dir, kReconnectProbeMs);
+}
+
+void QSocRemoteConnection::setDirectoryProbe(
+    std::function<bool(QSocSftpClient *, const QString &)> probe)
+{
+    m_directoryProbe = std::move(probe);
+}
+
+bool QSocRemoteConnection::adopt(AgentRemoteState &&state)
+{
+    if (!isComplete(state)) {
+        return false;
+    }
+    /* One predicate for "this is the same binding", used for the working
+     * directory and for the job ledger alike. The host belongs in it as much
+     * as the path does: the same directory name on a different host is a
+     * different directory, and a job id there names a different process. */
+    const bool        rebindsSameBinding = !m_workspace.isEmpty() && m_workspace == state.workspace
+                                           && m_target == state.targetKey;
+    const QString     previousCwd        = rebindsSameBinding ? m_path.cwd() : QString();
+    const QStringList previousWritable = rebindsSameBinding ? m_path.writableDirs() : QStringList();
+    if (!rebindsSameBinding) {
+        m_jobs.clear();
+    }
+
     m_session   = state.session;
     m_sftp      = state.sftp;
     m_jumps     = state.jumps;
-    m_path      = state.path;
     m_target    = state.targetKey;
     m_workspace = state.workspace;
+
+    state.session = nullptr;
+    state.sftp    = nullptr;
+    state.jumps.clear();
+    state.targetKey.clear();
+    state.workspace.clear();
+
+    /* A fresh context, so every believed file content goes with the transport
+     * that was observed producing it. The read-before-overwrite guard keys off
+     * this, and it is what forces a re-read before any edit after a
+     * reconnect. */
+    m_path = QSocRemotePathContext{};
+    m_path.setRoot(m_workspace);
+    m_lastReconnectKeptCwd = false;
+    if (rebindsSameBinding) {
+        m_path.setWritableDirs(previousWritable);
+        /* The working directory is a path, not a handle, so it survives when
+         * it still exists. Verifying beats assuming: the host may have
+         * rebooted out from under it. */
+        if (!previousCwd.isEmpty() && confirmDirectory(previousCwd)) {
+            m_path.setCwd(previousCwd);
+            m_lastReconnectKeptCwd = true;
+        } else {
+            m_path.setCwd(m_workspace);
+        }
+    } else {
+        m_path.setCwd(m_workspace);
+        m_path.setWritableDirs({m_workspace});
+    }
+    ++m_generation;
+    return true;
 }
 
-void QSocRemoteConnection::teardown()
+void QSocRemoteConnection::closeTransport()
 {
     if (m_sftp != nullptr) {
         m_sftp->close();
         delete m_sftp;
+        m_sftp = nullptr;
     }
     if (m_session != nullptr) {
         m_session->disconnectFromHost();
         delete m_session;
+        m_session = nullptr;
     }
     for (auto it = m_jumps.rbegin(); it != m_jumps.rend(); ++it) {
         (*it)->disconnectFromHost();
         delete *it;
     }
     m_jumps.clear();
-    m_session = nullptr;
-    m_sftp    = nullptr;
-    m_path    = QSocRemotePathContext{};
-    m_target.clear();
-    m_workspace.clear();
 }
 
-void QSocRemoteConnection::release()
+void QSocRemoteConnection::teardown()
 {
-    m_session = nullptr;
-    m_sftp    = nullptr;
-    m_jumps.clear();
+    closeTransport();
+    m_path = QSocRemotePathContext{};
     m_target.clear();
     m_workspace.clear();
+    m_lastReconnectKeptCwd = false;
+}
+
+QString QSocRemoteConnection::display() const
+{
+    if (m_target.isEmpty() || m_workspace.isEmpty()) {
+        return {};
+    }
+    return m_target + QStringLiteral(":") + m_workspace;
 }
 
 bool QSocRemoteConnection::isUsable() const
@@ -389,13 +507,6 @@ QString QSocRemoteConnection::unusableText() const
     }
     return m_session->unusableText();
 }
-
-namespace {
-
-/* Liveness budget for re-verifying the working directory after a reconnect. */
-constexpr int kReconnectProbeMs = 3000;
-
-} // namespace
 
 void QSocRemoteConnection::setRebuilder(Rebuilder rebuilder)
 {
@@ -412,7 +523,6 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *
         return ReconnectOutcome::Refused;
     }
 
-    const QString wantedCwd = m_path.cwd();
     const QString target    = m_target;
     const QString workspace = m_workspace;
 
@@ -424,49 +534,161 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *
              * previous transport is still ours to free below. */
             continue;
         }
-        /* Only once a replacement exists: adopt() overwrites the pointers, so
-         * without this the previous session, its SFTP channel and its whole
-         * ProxyJump chain are never freed. Target, workspace and the wanted
-         * cwd were snapshotted above, which is what makes this safe here. */
-        teardown();
-        adopt(fresh);
-        /* The working directory is a path, not a handle, so it survives a
-         * reconnect when it still exists. Verifying beats assuming: the host
-         * may have rebooted out from under it. */
-        if (!wantedCwd.isEmpty() && wantedCwd != m_path.cwd()
-            && remoteWorkspaceAnswers(m_sftp, wantedCwd, kReconnectProbeMs)) {
-            m_path.setCwd(wantedCwd);
+        if (!isComplete(fresh)) {
+            /* Asked before anything is freed, because adopt() would refuse
+             * this and the previous transport would already be gone. */
+            discardAgentRemoteState(&fresh);
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("reconnect produced an incomplete transport");
+            }
+            continue;
         }
-        /* Forget every believed file content. The request we walked away from
-         * may have been a write, and a reboot may have rolled the tree back.
-         * The read-before-overwrite guard then mechanically forces a re-read
-         * before any edit, which is what makes reconnecting safe at all.
-         * Background job ids are deliberately kept: they may still be running,
-         * and the agent is told to verify them rather than assume either way. */
-        m_path.readState().clear();
+        /* Only once a replacement exists: without this the previous session,
+         * its SFTP channel and its whole ProxyJump chain are never freed. The
+         * identity and the working directory stay on this object, which is
+         * what lets adopt() below recognise the rebind and keep the cwd.
+         * Background job stamps are deliberately kept: those jobs may still be
+         * running, and the agent is told to verify them either way. */
+        closeTransport();
+        adopt(std::move(fresh));
         return ReconnectOutcome::Reconnected;
     }
     return ReconnectOutcome::Exhausted;
 }
 
-bool remoteWorkspaceAnswers(
-    QSocSftpClient *sftp, const QString &root, int budgetMs, QString *errorMessage)
+QSocFileHistory::LiveFileAccessor remoteLiveFileAccessor(QSocRemoteConnection *conn)
 {
-    if (sftp == nullptr || root.isEmpty()) {
+    QSocFileHistory::LiveFileAccessor accessor;
+    /* The two enums list their states in different orders on purpose, so
+     * every mapping between them is spelled out. */
+    const auto mapPresence = [](QSocSftpClient::Presence presence) {
+        switch (presence) {
+        case QSocSftpClient::Presence::Absent:
+            return QSocFileHistory::FileState::Absent;
+        case QSocSftpClient::Presence::Present:
+            return QSocFileHistory::FileState::Present;
+        case QSocSftpClient::Presence::Unknown:
+            break;
+        }
+        return QSocFileHistory::FileState::Unknown;
+    };
+    accessor.exists = [conn, mapPresence](const QString &path) {
+        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
+        if (sftp == nullptr) {
+            return QSocFileHistory::FileState::Unknown;
+        }
+        return mapPresence(sftp->presence(path));
+    };
+    accessor.read = [conn, mapPresence](const QString &path) {
+        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
+        if (sftp == nullptr) {
+            return QSocFileHistory::LiveRead::unknown();
+        }
+        QString          err;
+        const QByteArray bytes = sftp->readFile(path, 0, &err);
+        /* readFile sets err only on failure, so an empty err means the server
+         * answered and a null QByteArray is an empty file, not a failure. */
+        if (err.isEmpty()) {
+            return QSocFileHistory::LiveRead::present(QString::fromUtf8(bytes));
+        }
+        /* One extra round trip, and only on the failure path, to separate
+         * "there is nothing to read" from "I could not read it". A file that
+         * is there and unreadable is unknown content; lastError() is sticky
+         * across calls and lastFailureUncertain() answers a different
+         * question, so neither can decide this. */
+        switch (mapPresence(sftp->presence(path))) {
+        case QSocFileHistory::FileState::Absent:
+            return QSocFileHistory::LiveRead::absent();
+        case QSocFileHistory::FileState::Present:
+        case QSocFileHistory::FileState::Unknown:
+            break;
+        }
+        return QSocFileHistory::LiveRead::unknown();
+    };
+    accessor.write = [conn](const QString &path, const QString &content) {
+        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
+        if (sftp == nullptr) {
+            return false;
+        }
+        QString err;
+        return sftp->writeFile(path, content.toUtf8(), &err);
+    };
+    accessor.remove = [conn](const QString &path) {
+        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
+        if (sftp == nullptr) {
+            return false;
+        }
+        QString err;
+        return sftp->removeFile(path, &err);
+    };
+    accessor.generation = [conn]() -> quint64 { return (conn != nullptr) ? conn->generation() : 0; };
+    return accessor;
+}
+
+RemoteProbeResult probeRemotePath(
+    QSocSftpClient *sftp, const QString &path, int budgetMs, QString *errorMessage)
+{
+    if (sftp == nullptr || path.isEmpty()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("no remote workspace is bound");
         }
-        return false;
+        return RemoteProbeResult::Silent;
     }
     const int saved = sftp->operationTimeoutMs();
     sftp->setOperationTimeoutMs(budgetMs);
     QString    probeErr;
-    const bool answered = sftp->presence(root, &probeErr) != QSocSftpClient::Presence::Unknown;
+    const auto presence = sftp->presence(path, &probeErr);
     sftp->setOperationTimeoutMs(saved);
-    if (!answered && errorMessage != nullptr) {
+    switch (presence) {
+    case QSocSftpClient::Presence::Present:
+        return RemoteProbeResult::Present;
+    case QSocSftpClient::Presence::Absent:
+        return RemoteProbeResult::Absent;
+    case QSocSftpClient::Presence::Unknown:
+        break;
+    }
+    if (errorMessage != nullptr) {
         *errorMessage = probeErr;
     }
-    return answered;
+    return RemoteProbeResult::Silent;
+}
+
+bool remoteHostAnswers(QSocSftpClient *sftp, const QString &path, int budgetMs, QString *errorMessage)
+{
+    return probeRemotePath(sftp, path, budgetMs, errorMessage) != RemoteProbeResult::Silent;
+}
+
+bool remoteDirectoryExists(
+    QSocSftpClient *sftp, const QString &path, int budgetMs, QString *errorMessage)
+{
+    const auto result = probeRemotePath(sftp, path, budgetMs, errorMessage);
+    if (result == RemoteProbeResult::Absent && errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("%1 does not exist on the remote host").arg(path);
+    }
+    return result == RemoteProbeResult::Present;
+}
+
+QString remoteWorkspaceRewindRefusal(QSocRemoteConnection *conn, int budgetMs)
+{
+    /* No transport was ever bound, or /local unbound it: the working tree is
+     * this machine's disk and needs no probe. */
+    if (conn == nullptr || conn->session() == nullptr) {
+        return {};
+    }
+    if (!conn->isUsable()) {
+        /* A session that was never connected records no failure reason, and an
+         * empty string here would read as "go ahead". */
+        const QString why = conn->unusableText();
+        return why.isEmpty() ? QStringLiteral("the remote workspace is not connected") : why;
+    }
+    if (conn->sftp() == nullptr) {
+        return QStringLiteral("no remote workspace is bound");
+    }
+    QString probeErr;
+    if (!remoteHostAnswers(conn->sftp(), conn->path()->root(), budgetMs, &probeErr)) {
+        return probeErr.isEmpty() ? QStringLiteral("the remote host did not answer") : probeErr;
+    }
+    return {};
 }
 
 bool resolveHostTarget(

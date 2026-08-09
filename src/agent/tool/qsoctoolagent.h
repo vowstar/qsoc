@@ -136,10 +136,13 @@ private:
      */
     struct HostBinding
     {
+        /* Staging only: adopt() drains it, so the transport has exactly one
+         * owner and the two field sets can never both point at it. */
         AgentRemoteState state;
-        /* Stable handle the binding's tools bind to, so the transport can be
-         * replaced without rebuilding the registry. Lives here because it
-         * must outlive every tool built from it. */
+        /* Sole owner of the transport and the path context the binding's tools
+         * resolve on every call, so the transport can be replaced without
+         * rebuilding the registry. Lives here because it must outlive every
+         * tool built from it. */
         QSocRemoteConnection conn;
         /* registry is parented to QSocToolAgent and owned via Qt's
          * tree; explicit delete happens in the destructor. */

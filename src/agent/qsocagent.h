@@ -159,6 +159,18 @@ public:
     bool queueTaskNotification(const QString &notification);
 
     /**
+     * @brief Queue an internal instruction the model must always receive.
+     * @details Like queueTaskNotification() it bypasses
+     *          user_prompt_submit hooks, but unlike it the item counts as
+     *          restartable work, so a soft-stopped run resumes to deliver
+     *          it instead of leaving it in the queue. Reaches the model as
+     *          a `user` message carrying the full text.
+     * @param instruction The instruction to queue
+     * @return True when queued; false after a hard stop until the next run
+     */
+    bool queueContinuation(const QString &instruction);
+
+    /**
      * @brief Check if there are pending requests in the queue
      * @return True if there are pending requests
      */
@@ -294,6 +306,22 @@ public:
     void setWorkspaceHealthProbe(QSocWorkspaceHealthProbe probe)
     {
         workspaceHealthProbe_ = std::move(probe);
+    }
+
+    /**
+     * @brief Report whether a workspace health probe is installed.
+     * @return True when a probe is set.
+     */
+    bool hasWorkspaceHealthProbe() const { return static_cast<bool>(workspaceHealthProbe_); }
+
+    /**
+     * @brief Run the installed workspace health probe.
+     * @return Reason the workspace is unusable; empty when it is usable or
+     *         when no probe is installed.
+     */
+    QString probeWorkspaceHealth()
+    {
+        return workspaceHealthProbe_ ? workspaceHealthProbe_() : QString();
     }
 
     /**
@@ -636,9 +664,6 @@ private:
         std::optional<QString>         executingToolCallId;
         json                           toolBatchAttachments = json::array();
         RunPhase                       phase                = RunPhase::Active;
-        /* Reason this run was stopped, when it was stopped for a reason
-         * the user needs to read rather than by their own abort. */
-        QString stopNotice;
     };
 
     using ActiveRunPtr = std::shared_ptr<ActiveRun>;
@@ -712,8 +737,13 @@ private:
 
     struct QueuedRequest
     {
+        /* User items pass through user_prompt_submit; the other two are
+         * agent generated and bypass it. Notification items alone are not
+         * restartable work, so they never revive a soft-stopped run. */
+        enum class Kind : quint8 { User, Notification, Continuation };
+
         QString text;
-        bool    taskNotification = false;
+        Kind    kind = Kind::User;
     };
 
     /* Request queue for dynamic input during execution */
@@ -918,7 +948,7 @@ private:
     void finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, const QString &payload);
     void finishSynchronousRun(const ActiveRunPtr &run, RunOutcome outcome);
     void requestStop(StopMode mode);
-    bool hasPendingUserRequests() const;
+    bool hasRestartableRequests() const;
     bool drainQueuedRequests(const ActiveRunPtr &run);
 
     /**

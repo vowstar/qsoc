@@ -5,6 +5,7 @@
 
 #include "agent/qsocfilehistory.h"
 #include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsocremotejobs.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
@@ -76,6 +77,38 @@ QString sftpWriteError(QSocSftpClient *sftp, const QString &err)
     return QStringLiteral("Error: %1").arg(err);
 }
 
+/* The job scripts print their verdict as a `token:` line; the composed result
+ * text carries it, so echoing the script's own copy back would state it
+ * twice. */
+QString withoutTokenLines(const QString &scriptOutput)
+{
+    QStringList       kept;
+    const QStringList lines = scriptOutput.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QStringLiteral("token:"))
+            || trimmed.startsWith(QStringLiteral("detail="))) {
+            continue;
+        }
+        kept.append(line);
+    }
+    return kept.join(QLatin1Char('\n'));
+}
+
+/* Host detail the signal script captured from `kill`, empty when it said
+ * nothing. */
+QString scriptDetail(const QString &scriptOutput)
+{
+    const QStringList lines = scriptOutput.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QStringLiteral("detail="))) {
+            return trimmed.mid(QStringLiteral("detail=").size());
+        }
+    }
+    return {};
+}
+
 QSocTool::ResultStatus remoteRunStatus(const QSocSshExec::Result &result)
 {
     if (result.transportDead || result.timedOut || result.aborted) {
@@ -88,6 +121,13 @@ QSocTool::ResultStatus remoteRunStatus(const QSocSshExec::Result &result)
      * command ran and did not finish. Its fate is known. */
     if (!result.exitSignal.isEmpty()) {
         return QSocTool::ResultStatus::Failed;
+    }
+    /* No signal, no error text, no flag, and still no status: the close
+     * handshake never completed, so the command's fate was never reported.
+     * Ok is derived from the absence of failure flags, so without this any
+     * future path that leaves exitCode at -1 would read as a clean run. */
+    if (result.exitCode < 0) {
+        return QSocTool::ResultStatus::Uncertain;
     }
     return QSocTool::ResultStatus::Ok;
 }
@@ -532,8 +572,9 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
 
     /* Background mode: spawn a detached job under
      * `<workspace>/.qsoc-agent/jobs/<id>/`, return job_id immediately. The
-     * wrapper writes `pid`, `output.log`, and `exit_code`; bash_manage reads
-     * them back later. */
+     * wrapper writes `pid`, `boot_id`, `pid_start`, `output.log` and
+     * `exit_code`; bash_manage reads them back later and checks the recorded
+     * identity before it signals anything. */
     const bool background = arguments.contains("background") && arguments["background"].is_boolean()
                             && arguments["background"].get<bool>();
     if (background) {
@@ -541,39 +582,56 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
             return QStringLiteral("Error: workspace root is not configured");
         }
         const QString jobsRoot = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs");
-        const QString jobId    = QString::number(QDateTime::currentMSecsSinceEpoch());
-        const QString jobDir   = jobsRoot + QLatin1Char('/') + jobId;
-        const QString wrapper
-            = QStringLiteral(
-                  "set -e; "
-                  "mkdir -p %1; "
-                  "cd %2; "
-                  "printf %s %3 > %1/command; "
-                  "date +%s > %1/start_time; "
-                  "nohup /bin/bash -lc %3 > %1/output.log 2>&1 & "
-                  "echo $! > %1/pid; "
-                  "wait $! ; printf %d $? > %1/exit_code")
-                  .arg(jobDir)
-                  .arg(cwd)
-                  .arg(
-                      QStringLiteral("'")
-                      + QString(cmd).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
-                      + QStringLiteral("'"));
-        /* Fire-and-forget the wrapper: disown the background pipeline so the
-         * SSH exec channel closes immediately after the shell writes the pid. */
-        const QString launch
-            = QStringLiteral("mkdir -p %1 && (%2) >/dev/null 2>&1 & disown").arg(jobDir, wrapper);
+        /* The transport stamp keeps two jobs launched in the same millisecond
+         * across a reconnect from sharing a directory. */
+        const QString jobId  = QStringLiteral("%1-%2")
+                                   .arg(m_conn->generation())
+                                   .arg(QDateTime::currentMSecsSinceEpoch());
+        const QString jobDir = jobsRoot + QLatin1Char('/') + jobId;
 
         QSocSshExec exec(*m_conn->session());
         m_running         = &exec;
-        const auto result = exec.run(launch, 10000);
+        const auto result = exec.run(jobLaunchScript(jobDir, cwd, jobId, cmd), 10000);
         m_running         = nullptr;
+
+        if (remoteRunStatus(result) == QSocTool::ResultStatus::Uncertain) {
+            return composeJobUncertain(
+                jobId,
+                QStringLiteral(
+                    "the launch did not complete over this link, so the job may or may "
+                    "not be running"),
+                QStringLiteral(
+                    "check bash_manage(action=status) before launching the same work "
+                    "again"));
+        }
         if (result.exitCode != 0 || !result.errorText.isEmpty()) {
             return QStringLiteral("Error: job launch failed (exit %1) %2")
                 .arg(result.exitCode)
                 .arg(result.errorText);
         }
-        return QStringLiteral("job_id: %1\njob_dir: %2\n").arg(jobId, jobDir);
+        const auto report = parseJobLaunchOutput(QString::fromUtf8(result.stdoutBytes));
+        if (report.pid <= 0) {
+            return composeJobUncertain(
+                jobId,
+                QStringLiteral("the host started the job but reported no pid for it"),
+                QStringLiteral("read bash_manage(action=output); this job cannot be signalled"));
+        }
+        QSocRemoteJobRecord record;
+        record.jobId        = jobId;
+        record.commandLine  = cmd;
+        record.generation   = m_conn->generation();
+        record.bootIdentity = report.bootIdentity;
+        record.pidStart     = report.pidStart;
+        record.pid          = report.pid;
+        record.launchedMs   = QDateTime::currentMSecsSinceEpoch();
+        QString launched    = composeJobLaunchResult(record, jobDir);
+        /* Recorded here or the id is unusable: bash_manage identifies a job by
+         * what the ledger holds, and a re-observation brief names the ids it
+         * wants checked from the same place. */
+        if (!m_conn->jobs()->note(record)) {
+            launched += jobLedgerFullNote();
+        }
+        return launched;
     }
 
     const QString wrapped = buildBashCommand(cwd, cmd);
@@ -587,7 +645,11 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
      * body. Metadata after an unbounded stdout is metadata nobody can find:
      * a truncated read stops before it and the call looks clean. */
     QString out = QSocTool::statusLine(remoteRunStatus(result));
-    out += QStringLiteral("exit_code: %1\n").arg(result.exitCode);
+    /* -1 is the header's "fate unknown", not a status the command returned,
+     * so it is spelled out rather than printed as a number a reader would
+     * take for one. */
+    out += result.exitCode < 0 ? QStringLiteral("exit_code: unknown\n")
+                               : QStringLiteral("exit_code: %1\n").arg(result.exitCode);
     if (!result.exitSignal.isEmpty()) {
         out += QStringLiteral("exit_signal: SIG%1\n").arg(result.exitSignal);
     }
@@ -701,7 +763,9 @@ QString QSocToolRemoteBashManage::getDescription() const
 {
     return QStringLiteral(
         "Manage a backgrounded remote command by job_id from bash(background=true). "
-        "Actions: status, output, terminate (SIGTERM), kill (SIGKILL).");
+        "Actions: status, output, terminate (SIGTERM), kill (SIGKILL). A signal is sent "
+        "only when the host still reports the boot identity and the process start time "
+        "recorded at launch; otherwise the answer is uncertain and nothing is signalled.");
 }
 
 json QSocToolRemoteBashManage::getParametersSchema() const
@@ -767,29 +831,27 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                + QStringLiteral("; job state is unknown\n");
     };
 
+    /* Host stderr is evidence, so it follows the verdict rather than
+     * replacing it. */
+    auto stderrTail = [](const QSocSshExec::Result &result) {
+        return result.stderrBytes.isEmpty()
+                   ? QString()
+                   : QStringLiteral("stderr:\n") + QString::fromUtf8(result.stderrBytes);
+    };
+
     if (action == QStringLiteral("status")) {
-        const QString script
-            = QStringLiteral(
-                  "cd %1 2>/dev/null || { echo 'no_job'; exit 0; }; "
-                  "pid=$(cat pid 2>/dev/null); "
-                  "start=$(cat start_time 2>/dev/null); "
-                  "exit_code=$(cat exit_code 2>/dev/null); "
-                  "bytes=$(stat -c%s output.log 2>/dev/null || echo 0); "
-                  "running=no; "
-                  "[ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null && running=yes; "
-                  "printf "
-                  "'pid=%s\\nstart_time=%s\\nrunning=%s\\nexit_code=%s\\noutput_bytes=%s\\n' "
-                  "\"$pid\" \"$start\" \"$running\" \"$exit_code\" \"$bytes\"")
-                  .arg(jobDir);
-        const auto    result  = runShell(script, 5000);
+        const auto    result  = runShell(jobStatusScript(jobDir), 5000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
         }
-        return QString::fromUtf8(result.stdoutBytes)
-               + (result.stderrBytes.isEmpty()
-                      ? QString()
-                      : QStringLiteral("stderr:\n") + QString::fromUtf8(result.stderrBytes));
+        const QString observed = QString::fromUtf8(result.stdoutBytes);
+        const auto    token    = parseJobToken(observed);
+        const QString verdict  = token == QSocRemoteJobToken::Absent
+                                     ? QSocTool::statusLine(QSocTool::ResultStatus::Ok)
+                                           + QStringLiteral("job_id: %1\n").arg(jobId)
+                                     : composeJobRefusal(jobId, token);
+        return verdict + withoutTokenLines(observed) + stderrTail(result);
     }
     if (action == QStringLiteral("output")) {
         int maxLines = 200;
@@ -799,32 +861,49 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                 maxLines = 200;
             }
         }
-        const QString script
-            = QStringLiteral("tail -n %1 %2/output.log 2>&1 || true").arg(maxLines).arg(jobDir);
-        const auto    result  = runShell(script, 10000);
+        const auto    result  = runShell(jobOutputScript(jobDir, maxLines), 10000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
         }
-        return QString::fromUtf8(result.stdoutBytes);
+        /* A log that happens to open with "Error:" must not make the call read
+         * as failed, so the verdict always leads. */
+        const QString observed = QString::fromUtf8(result.stdoutBytes);
+        const auto    token    = parseJobToken(observed);
+        const QString verdict  = token == QSocRemoteJobToken::Absent
+                                     ? QSocTool::statusLine(QSocTool::ResultStatus::Ok)
+                                           + QStringLiteral("job_id: %1\n").arg(jobId)
+                                     : composeJobRefusal(jobId, token);
+        return verdict + withoutTokenLines(observed);
     }
     if (action == QStringLiteral("terminate") || action == QStringLiteral("kill")) {
-        const QString signal  = action == QStringLiteral("kill") ? QStringLiteral("-KILL")
-                                                                 : QStringLiteral("-TERM");
-        const QString script  = QStringLiteral(
-                                    "pid=$(cat %1/pid 2>/dev/null); "
-                                    "if [ -n \"$pid\" ]; then kill %2 \"$pid\" 2>&1; fi; "
-                                    "echo done")
-                                    .arg(jobDir, signal);
-        const auto    result  = runShell(script, 5000);
+        const bool    hard       = action == QStringLiteral("kill");
+        const QString signal     = hard ? QStringLiteral("-KILL") : QStringLiteral("-TERM");
+        const QString signalName = hard ? QStringLiteral("SIGKILL") : QStringLiteral("SIGTERM");
+        /* An id this session never handed out cannot be tied to a pid, and
+         * refusing it here costs no round trip. */
+        const QString unrecorded = refuseUnrecordedJob(jobId, *m_conn->jobs());
+        if (!unrecorded.isEmpty()) {
+            return unrecorded;
+        }
+        const auto    result  = runShell(jobSignalScript(jobDir, signal), 5000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
         }
-        return QString::fromUtf8(result.stdoutBytes)
-               + (result.stderrBytes.isEmpty()
-                      ? QString()
-                      : QStringLiteral("stderr:\n") + QString::fromUtf8(result.stderrBytes));
+        const QString observed = QString::fromUtf8(result.stdoutBytes);
+        const auto    judged
+            = judgeSignal(jobId, signalName, parseJobToken(observed), scriptDetail(observed));
+        /* The host compared the identities, so its verdict is what the ledger
+         * follows. A proven restart means the record describes nothing; a
+         * delivered signal means it still describes a live process under this
+         * transport. */
+        if (judged.boot == QSocRemoteIdentityMatch::Differs) {
+            m_conn->jobs()->forget(jobId);
+        } else if (judged.signalled) {
+            m_conn->jobs()->rebind(jobId, m_conn->generation());
+        }
+        return judged.text + stderrTail(result);
     }
     return QStringLiteral("Error: unknown action '%1'").arg(action);
 }

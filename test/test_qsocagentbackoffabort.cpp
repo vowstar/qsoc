@@ -539,6 +539,69 @@ private:
     mutable int                      definitionCount_ = 0;
 };
 
+/* Points QSOC_HOME / XDG_CONFIG_HOME at a generated qsoc.yml so
+ * QLLMService::clone() has a real QSocConfig to rebuild from. The
+ * sub-agent spawn path clones the parent's service for every child. */
+class ScopedLlmConfigHome final
+{
+public:
+    explicit ScopedLlmConfigHome(const MockServer &server)
+        : hadQsocHome_(qEnvironmentVariableIsSet("QSOC_HOME"))
+        , hadXdgHome_(qEnvironmentVariableIsSet("XDG_CONFIG_HOME"))
+        , oldQsocHome_(qgetenv("QSOC_HOME"))
+        , oldXdgHome_(qgetenv("XDG_CONFIG_HOME"))
+    {
+        if (!dir_.isValid()) {
+            return;
+        }
+        QFile configFile(dir_.filePath(QStringLiteral("qsoc.yml")));
+        if (!configFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return;
+        }
+        const QByteArray yaml = QByteArrayLiteral(
+                                    "llm:\n"
+                                    "  model: test-model\n"
+                                    "  models:\n"
+                                    "    test-model:\n"
+                                    "      url: ")
+                                + server.url().toString().toUtf8()
+                                + QByteArrayLiteral("\n      timeout: 10000\n");
+        valid_                = configFile.write(yaml) == yaml.size();
+        configFile.close();
+        qputenv("QSOC_HOME", dir_.path().toUtf8());
+        qputenv("XDG_CONFIG_HOME", dir_.path().toUtf8());
+    }
+
+    ~ScopedLlmConfigHome()
+    {
+        if (hadQsocHome_) {
+            qputenv("QSOC_HOME", oldQsocHome_);
+        } else {
+            qunsetenv("QSOC_HOME");
+        }
+        if (hadXdgHome_) {
+            qputenv("XDG_CONFIG_HOME", oldXdgHome_);
+        } else {
+            qunsetenv("XDG_CONFIG_HOME");
+        }
+    }
+
+    ScopedLlmConfigHome(const ScopedLlmConfigHome &)            = delete;
+    ScopedLlmConfigHome &operator=(const ScopedLlmConfigHome &) = delete;
+    ScopedLlmConfigHome(ScopedLlmConfigHome &&)                 = delete;
+    ScopedLlmConfigHome &operator=(ScopedLlmConfigHome &&)      = delete;
+
+    bool isValid() const { return valid_; }
+
+private:
+    QTemporaryDir dir_;
+    bool          hadQsocHome_ = false;
+    bool          hadXdgHome_  = false;
+    QByteArray    oldQsocHome_;
+    QByteArray    oldXdgHome_;
+    bool          valid_ = false;
+};
+
 void configureService(QLLMService &service, const MockServer &server)
 {
     LLMEndpoint endpoint;
@@ -2573,6 +2636,237 @@ private slots:
         QVERIFY(owner.isNull());
         QTest::qWait(3500);
         QCOMPARE(server.requestCount(), 1);
+    }
+
+    /* Counterexample: the terminal path used to re-arm the notice from
+     * ActiveRun, so a restarted run delivered it a second time. */
+    void workspaceStopNoticeIsDeliveredOnce()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        server.enqueueStream(QStringLiteral("resumed complete"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   effect;
+        registry.registerTool(&effect);
+        QSocAgentConfig config = testConfig();
+        config.maxIterations   = 4;
+        QSocAgent  agent(nullptr, &service, &registry, config);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+
+        const QString reason     = QStringLiteral("remote workspace stopped answering");
+        int           probeCalls = 0;
+        agent.setWorkspaceHealthProbe([&]() -> QString {
+            ++probeCalls;
+            if (probeCalls > 1) {
+                return {};
+            }
+            agent.queueRequest(QStringLiteral("keep going"));
+            return reason;
+        });
+
+        QStringList queuedNotices;
+        connect(&agent, &QSocAgent::processingQueuedRequest, &agent, [&](const QString &, int) {
+            queuedNotices.append(agent.takeStopNotice());
+        });
+        QString noticeAtCompletion;
+        connect(&agent, &QSocAgent::runComplete, &agent, [&](const QString &) {
+            noticeAtCompletion = agent.takeStopNotice();
+        });
+
+        agent.runStream(QStringLiteral("start"));
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+
+        QVERIFY2(noticeAtCompletion.isEmpty(), "the notice was re-armed at run teardown");
+        QCOMPARE(queuedNotices.size(), qsizetype(1));
+        QCOMPARE(queuedNotices.at(0), reason);
+        QCOMPARE(probeCalls, 1);
+        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(server.requestCount(), 2);
+    }
+
+    /* Specification: passes before the change too. Guards the surviving
+     * publish point now that the terminal read is gone. */
+    void workspaceStopNoticeStillReachesTheAbortHandler()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   effect;
+        registry.registerTool(&effect);
+        QSocAgent  agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy aborted(&agent, &QSocAgent::runAborted);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+
+        const QString reason = QStringLiteral("remote workspace is unusable");
+        agent.setWorkspaceHealthProbe([&]() -> QString { return reason; });
+
+        QString abortNotice;
+        connect(&agent, &QSocAgent::runAborted, &agent, [&](const QString &) {
+            abortNotice = agent.takeStopNotice();
+        });
+
+        agent.runStream(QStringLiteral("start"));
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 5000);
+
+        QCOMPARE(abortNotice, reason);
+        QCOMPARE(aborted.count(), 1);
+        QCOMPARE(completed.count(), 0);
+        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(server.requestCount(), 1);
+    }
+
+    /* Counterexample: queued with queueRequest() the briefing went
+     * through user_prompt_submit and a blocking hook dropped it. */
+    void internalContinuationSurvivesABlockingPromptHook()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        server.enqueueStream(QStringLiteral("briefed"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   effect;
+        registry.registerTool(&effect);
+        QSocAgentConfig config = testConfig();
+        config.maxIterations   = 4;
+        QSocAgent  agent(nullptr, &service, &registry, config);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+
+        const QString phrase = QStringLiteral("treat every belief about remote state as stale");
+        const QString brief  = QStringLiteral("The link was re-established, so ") + phrase
+                               + QStringLiteral(" and re-check it before acting.");
+
+        HookCommandConfig command;
+        /* The hook also fires for the initial query, so it must block the
+         * briefing only; an unconditional block would stop the run. */
+        command.command = QStringLiteral("grep -q '%1' && exit 2 || exit 0").arg(phrase);
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::UserPromptSubmit].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+        agent.setHookManager(&hooks);
+
+        int probeCalls = 0;
+        agent.setWorkspaceHealthProbe([&]() -> QString {
+            ++probeCalls;
+            if (probeCalls > 1) {
+                return {};
+            }
+            agent.queueContinuation(brief);
+            return QStringLiteral("the link dropped and was re-established");
+        });
+
+        agent.runStream(QStringLiteral("start"));
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 8000);
+
+        QVERIFY2(
+            requestContainsUserMessage(server, 1, brief),
+            "the briefing was dropped by the user_prompt_submit hook");
+        QCOMPARE(probeCalls, 1);
+        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(server.requestCount(), 2);
+        QCOMPARE(completed.count(), 1);
+    }
+
+    /* Counterexample: the child had no probe, so a dead workspace cost it
+     * its whole iteration budget. */
+    void subAgentInheritsTheParentWorkspaceHealthProbe()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        SideEffectTool         effect;
+        registry.registerTool(&effect);
+        QSocAgentConfig config  = testConfig();
+        config.autoBackgroundMs = 0;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        registry.registerTool(&tool);
+
+        int probeCalls = 0;
+        parent.setWorkspaceHealthProbe([&]() -> QString {
+            ++probeCalls;
+            return QStringLiteral("remote workspace stopped answering");
+        });
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "probe inheritance"},
+                {"prompt", "call the side effect tool"},
+                {"run_in_background", false}});
+
+        QCOMPARE(server.requestCount(), 1);
+        QCOMPARE(probeCalls, 1);
+        QCOMPARE(effect.executeCount(), 1);
+        const json response = json::parse(raw.toStdString());
+        QCOMPARE(response.value("status", std::string()), std::string("ok"));
+    }
+
+    /* Counterexample: the child's stop reason died with the child and the
+     * parent saw a bare "aborted". */
+    void subAgentAbortReasonReachesTheParentToolResult()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        SideEffectTool         effect;
+        registry.registerTool(&effect);
+        QSocAgentConfig config  = testConfig();
+        config.autoBackgroundMs = 0;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        registry.registerTool(&tool);
+
+        const QString reason = QStringLiteral("remote workspace stopped answering");
+        parent.setWorkspaceHealthProbe([&]() -> QString { return reason; });
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "abort reason"},
+                {"prompt", "call the side effect tool"},
+                {"run_in_background", false}});
+        const json response = json::parse(raw.toStdString());
+
+        QCOMPARE(server.requestCount(), 1);
+        QCOMPARE(response.value("status", std::string()), std::string("ok"));
+        const QString result = QString::fromStdString(response.value("result", std::string()));
+        QVERIFY2(
+            result.contains(reason),
+            qPrintable(QStringLiteral("tool result lost the child's stop reason: ") + result));
     }
 };
 

@@ -16,18 +16,6 @@
 
 using json = nlohmann::json;
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -86,8 +74,6 @@ private slots:
         QVERIFY(!state.wasRead(QStringLiteral("/ws/other.txt")));
     }
 
-    void initTestCase() { TestApp::instance(); }
-
     void testSha256HexIsStable()
     {
         const QString hex1 = QSocFileHistory::sha256Hex(QStringLiteral("hello world"));
@@ -117,10 +103,13 @@ private slots:
         QCOMPARE(static_cast<int>(snaps.size()), 1);
         QCOMPARE(snaps[0].turn, 0);
         QVERIFY(snaps[0].files.contains(fpath));
-        QCOMPARE(snaps[0].files.value(fpath), QSocFileHistory::sha256Hex(QStringLiteral("original")));
+        QVERIFY(snaps[0].files.value(fpath).isPresent());
+        QCOMPARE(
+            snaps[0].files.value(fpath).sha256(),
+            QSocFileHistory::sha256Hex(QStringLiteral("original")));
     }
 
-    void testTrackEditAbsentFileStoresEmptySha()
+    void testTrackEditAbsentFileStoresAbsentRecord()
     {
         QTemporaryDir tempDir;
         QVERIFY(tempDir.isValid());
@@ -132,7 +121,7 @@ private slots:
         const auto snaps = history.listSnapshots();
         QCOMPARE(static_cast<int>(snaps.size()), 1);
         QCOMPARE(snaps[0].turn, 0);
-        QVERIFY(snaps[0].files.value(fpath).isEmpty());
+        QVERIFY(snaps[0].files.value(fpath).isAbsent());
     }
 
     void testMakeSnapshotCapturesPostTurnState()
@@ -150,8 +139,10 @@ private slots:
         QCOMPARE(static_cast<int>(snaps.size()), 2);
         QCOMPARE(snaps[0].turn, 0);
         QCOMPARE(snaps[1].turn, 1);
-        QCOMPARE(snaps[0].files.value(fpath), QSocFileHistory::sha256Hex(QStringLiteral("v1")));
-        QCOMPARE(snaps[1].files.value(fpath), QSocFileHistory::sha256Hex(QStringLiteral("v2")));
+        QCOMPARE(
+            snaps[0].files.value(fpath).sha256(), QSocFileHistory::sha256Hex(QStringLiteral("v1")));
+        QCOMPARE(
+            snaps[1].files.value(fpath).sha256(), QSocFileHistory::sha256Hex(QStringLiteral("v2")));
     }
 
     void testApplySnapshotRestoresBaseline()
@@ -185,12 +176,15 @@ private slots:
 
         QHash<QString, QString>           store;
         QSocFileHistory::LiveFileAccessor acc;
-        acc.exists = [&store](const QString &path) { return store.contains(path); };
-        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+        acc.exists = [&store](const QString &path) {
+            return store.contains(path) ? QSocFileHistory::FileState::Present
+                                        : QSocFileHistory::FileState::Absent;
+        };
+        acc.read = [&store](const QString &path) {
             if (!store.contains(path)) {
-                return std::nullopt;
+                return QSocFileHistory::LiveRead::absent();
             }
-            return store.value(path);
+            return QSocFileHistory::LiveRead::present(store.value(path));
         };
         bool allowWrites = true;
         acc.write        = [&store, &allowWrites](const QString &path, const QString &content) {
@@ -230,12 +224,15 @@ private slots:
 
         QHash<QString, QString>           store;
         QSocFileHistory::LiveFileAccessor acc;
-        acc.exists = [&store](const QString &path) { return store.contains(path); };
-        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+        acc.exists = [&store](const QString &path) {
+            return store.contains(path) ? QSocFileHistory::FileState::Present
+                                        : QSocFileHistory::FileState::Absent;
+        };
+        acc.read = [&store](const QString &path) {
             if (!store.contains(path)) {
-                return std::nullopt;
+                return QSocFileHistory::LiveRead::absent();
             }
-            return store.value(path);
+            return QSocFileHistory::LiveRead::present(store.value(path));
         };
         acc.write = [&store](const QString &path, const QString &content) {
             store.insert(path, content);
@@ -451,7 +448,7 @@ private slots:
         const auto snaps = history.listSnapshots();
         QCOMPARE(static_cast<int>(snaps.size()), 1);
         QCOMPARE(snaps[0].turn, 0);
-        QCOMPARE(snaps[0].files.value(fpath), baselineSha);
+        QCOMPARE(snaps[0].files.value(fpath).sha256(), baselineSha);
     }
 
     void testWriteFileToolCapturesAbsentBaseline()
@@ -478,7 +475,7 @@ private slots:
         QCOMPARE(static_cast<int>(snaps.size()), 1);
         QCOMPARE(snaps[0].turn, 0);
         QVERIFY(snaps[0].files.contains(fpath));
-        QVERIFY(snaps[0].files.value(fpath).isEmpty());
+        QVERIFY(snaps[0].files.value(fpath).isAbsent());
 
         /* makeSnapshot after the "turn" should capture the new content. */
         QVERIFY(history.makeSnapshot(1));
@@ -523,12 +520,15 @@ private slots:
 
         QHash<QString, QString>           store;
         QSocFileHistory::LiveFileAccessor acc;
-        acc.exists = [&store](const QString &path) { return store.contains(path); };
-        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+        acc.exists = [&store](const QString &path) {
+            return store.contains(path) ? QSocFileHistory::FileState::Present
+                                        : QSocFileHistory::FileState::Absent;
+        };
+        acc.read = [&store](const QString &path) {
             if (!store.contains(path)) {
-                return std::nullopt;
+                return QSocFileHistory::LiveRead::absent();
             }
-            return store.value(path);
+            return QSocFileHistory::LiveRead::present(store.value(path));
         };
         acc.write = [&store](const QString &path, const QString &content) {
             store.insert(path, content);
@@ -566,12 +566,15 @@ private slots:
 
         QHash<QString, QString>           store;
         QSocFileHistory::LiveFileAccessor acc;
-        acc.exists = [&store](const QString &path) { return store.contains(path); };
-        acc.read   = [&store](const QString &path) -> std::optional<QString> {
+        acc.exists = [&store](const QString &path) {
+            return store.contains(path) ? QSocFileHistory::FileState::Present
+                                        : QSocFileHistory::FileState::Absent;
+        };
+        acc.read = [&store](const QString &path) {
             if (!store.contains(path)) {
-                return std::nullopt;
+                return QSocFileHistory::LiveRead::absent();
             }
-            return store.value(path);
+            return QSocFileHistory::LiveRead::present(store.value(path));
         };
         acc.write = [&store](const QString &path, const QString &content) {
             store.insert(path, content);

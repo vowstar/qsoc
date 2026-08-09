@@ -3,6 +3,7 @@
 
 #include "qsoc_test.h"
 #include "qsoc_test_relay.h"
+#include "qsoc_test_sshd.h"
 
 #include <QDir>
 #include <QFile>
@@ -12,11 +13,6 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
-
-#ifndef Q_OS_WIN
-#include <pwd.h>
-#include <unistd.h>
-#endif
 
 /*
  * End-to-end recovery behaviour of the agent against a remote workspace whose
@@ -33,35 +29,15 @@
  * Waits are bounded predicates on that log, never fixed sleeps, so the
  * ordering is decided by observed progress rather than by a race.
  *
- * QSKIPs (never fails) when the environment cannot host the fixture: no
- * sshd, no ssh-keygen, no python3, no built binary, or key generation fails.
+ * A dependency this fixture cannot supply itself (sshd, ssh-keygen, a login
+ * name, python3, a built qsoc) skips these cases, unless
+ * QSOC_TEST_DEPS_REQUIRED is set, which CI does after installing the lot.
+ * Anything else, a fixture that has its dependencies and still will not come
+ * up, always fails: QtTest exits 0 on a skip, so a silent skip is
+ * indistinguishable from coverage.
  */
 
 namespace {
-
-QString findExe(const QStringList &candidates)
-{
-    for (const QString &path : candidates) {
-        if (QFile::exists(path)) {
-            return path;
-        }
-    }
-    return {};
-}
-
-/* $USER is unset in CI non-login shells, so resolve via the password
- * database and fall back to the env var only off-POSIX. */
-QString currentUser()
-{
-#ifndef Q_OS_WIN
-    if (const struct passwd *pwd = getpwuid(getuid())) {
-        if (pwd->pw_name != nullptr && pwd->pw_name[0] != '\0') {
-            return QString::fromLocal8Bit(pwd->pw_name);
-        }
-    }
-#endif
-    return qEnvironmentVariable("USER");
-}
 
 int pickFreePort()
 {
@@ -74,28 +50,19 @@ int pickFreePort()
     return port;
 }
 
-/* RSA in classic PEM: qsoc pins userauth to the rsa-sha2 family, and this
- * libssh2 build signs RSA pubkey auth reliably only from a "BEGIN RSA
- * PRIVATE KEY" file. Generated at runtime; no key is ever committed. */
-bool runKeygen(const QString &keygen, const QString &keyPath)
+/* MACOSX_BUNDLE puts the binary inside qsoc.app on macOS, so both layouts
+ * have to be tried or the whole file is dead there. */
+QString builtQsoc()
 {
-    QProcess proc;
-    proc.start(
-        keygen,
-        {QStringLiteral("-t"),
-         QStringLiteral("rsa"),
-         QStringLiteral("-b"),
-         QStringLiteral("2048"),
-         QStringLiteral("-m"),
-         QStringLiteral("PEM"),
-         QStringLiteral("-N"),
-         QString(),
-         QStringLiteral("-q"),
-         QStringLiteral("-f"),
-         keyPath});
-    return proc.waitForStarted(5000) && proc.waitForFinished(20000)
-           && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0
-           && QFile::exists(keyPath);
+    const QDir buildDir(QStringLiteral(QT_TESTCASE_BUILDDIR));
+    for (const QString &candidate :
+         {QStringLiteral("../qsoc"), QStringLiteral("../qsoc.app/Contents/MacOS/qsoc")}) {
+        const QString path = buildDir.absoluteFilePath(candidate);
+        if (QFile::exists(path)) {
+            return path;
+        }
+    }
+    return {};
 }
 
 } // namespace
@@ -163,17 +130,27 @@ private:
     void stopAgent();
     void stopMock();
 
+    /* Everything after the dependency check. False leaves m_failure set, so
+     * every early return here is already a failure and none has to be
+     * remembered. */
+    bool prepare();
+
+    bool fail(const QString &detail)
+    {
+        m_failure = detail;
+        return false;
+    }
+
+    QSocTestSshd  m_fixture;
     QTemporaryDir m_dir;
-    QProcess      m_sshd;
     QProcess      m_mock;
     QProcess      m_agent;
-    int           m_sshdPort = 0;
     int           m_mockPort = 0;
     bool          m_ready    = false;
+    QString       m_missing;
+    QString       m_failure;
     QString       m_qsoc;
     QString       m_mockScript;
-    QString       m_keyPath;
-    QString       m_user;
     QString       m_workspace;
     QString       m_requestLog;
     QString       m_home;
@@ -182,100 +159,72 @@ private:
     std::unique_ptr<QSocTestRelay> m_relay;
 };
 
+/* First line of every case: the sshd fixture's own three-state policy, then
+ * the dependencies this test adds on top of it. */
+#define REQUIRE_RECOVERY_FIXTURE() \
+    do { \
+        QSOC_REQUIRE_SSHD(m_fixture); \
+        if (!m_missing.isEmpty()) { \
+            QSOC_TEST_MISSING_DEPENDENCY(m_missing); \
+        } \
+        if (!m_ready) { \
+            QSOC_TEST_FIXTURE_FAILED(m_failure); \
+        } \
+    } while (false)
+
 void Test::initTestCase()
 {
-    const QString sshd = findExe(
-        {QStringLiteral("/usr/sbin/sshd"), QStringLiteral("/usr/bin/sshd")});
-    const QString keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
-    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
-    m_qsoc               = QDir(QStringLiteral(QT_TESTCASE_BUILDDIR)).absoluteFilePath("../qsoc");
+    m_fixture.start();
+    if (m_fixture.state() != QSocTestSshd::State::Ready) {
+        return; /* the fixture's own state decides skip versus fail */
+    }
+
+    QStringList absent;
+    if (QStandardPaths::findExecutable(QStringLiteral("python3")).isEmpty()) {
+        absent << QStringLiteral("python3");
+    }
+    m_qsoc = builtQsoc();
+    if (m_qsoc.isEmpty()) {
+        absent << QStringLiteral("a built qsoc binary");
+    }
     /* The tracked copy, not one under .claude: that directory is ignored here,
      * so a fresh clone would find nothing and every case below would skip
      * while still looking like coverage. */
     m_mockScript = QDir(QStringLiteral(QT_TESTCASE_SOURCEDIR)).absoluteFilePath("qsoc_mock_llm.py");
-    m_user       = currentUser();
-
-    if (sshd.isEmpty() || keygen.isEmpty() || python.isEmpty() || m_user.isEmpty()
-        || !m_dir.isValid() || !QFile::exists(m_qsoc) || !QFile::exists(m_mockScript)) {
-        return; /* m_ready stays false -> every case QSKIPs */
+    if (!QFile::exists(m_mockScript)) {
+        absent << QStringLiteral("qsoc_mock_llm.py");
+    }
+    if (!absent.isEmpty()) {
+        m_missing = absent.join(QStringLiteral(", "));
+        return;
     }
 
+    m_ready = prepare();
+}
+
+bool Test::prepare()
+{
+    if (!m_dir.isValid()) {
+        return fail(QStringLiteral("temporary directory: %1").arg(m_dir.errorString()));
+    }
     const QString root = m_dir.path();
     m_home             = root + QStringLiteral("/home");
     m_xdg              = root + QStringLiteral("/xdg");
     m_workspace        = root + QStringLiteral("/work");
     m_requestLog       = root + QStringLiteral("/requests.jsonl");
-    m_keyPath          = root + QStringLiteral("/client_rsa");
     QDir().mkpath(m_home + QStringLiteral("/.ssh"));
     QDir().mkpath(m_xdg);
     QDir().mkpath(m_workspace);
 
-    const QString hostKey = root + QStringLiteral("/host_rsa");
-    if (!runKeygen(keygen, hostKey) || !runKeygen(keygen, m_keyPath)) {
-        return;
-    }
-    if (!QFile::copy(m_keyPath + QStringLiteral(".pub"), root + QStringLiteral("/authorized_keys"))) {
-        return;
-    }
-    QFile::setPermissions(
-        root + QStringLiteral("/authorized_keys"), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-
-    m_sshdPort = pickFreePort();
-    if (m_sshdPort == 0) {
-        return;
-    }
-    const QString cfgPath = root + QStringLiteral("/sshd_config");
-    QFile         cfg(cfgPath);
-    if (!cfg.open(QIODevice::WriteOnly)) {
-        return;
-    }
-    cfg.write(QStringLiteral(
-                  "Port %1\n"
-                  "ListenAddress 127.0.0.1\n"
-                  "HostKey %2\n"
-                  "PidFile %3/sshd.pid\n"
-                  "AuthorizedKeysFile %3/authorized_keys\n"
-                  "UsePAM no\n"
-                  "StrictModes no\n"
-                  "PasswordAuthentication no\n"
-                  "KbdInteractiveAuthentication no\n"
-                  "PubkeyAuthentication yes\n"
-                  "Subsystem sftp internal-sftp\n"
-                  "LogLevel ERROR\n")
-                  .arg(m_sshdPort)
-                  .arg(hostKey)
-                  .arg(root)
-                  .toUtf8());
-    cfg.close();
-
-    m_sshd.setStandardErrorFile(root + QStringLiteral("/sshd.err"));
-    m_sshd.start(sshd, {QStringLiteral("-D"), QStringLiteral("-e"), QStringLiteral("-f"), cfgPath});
-    if (!m_sshd.waitForStarted(5000)) {
-        return;
-    }
-    const bool listening = waitFor(
-        [this] {
-            if (m_sshd.state() != QProcess::Running) {
-                return false;
-            }
-            QTcpSocket probe;
-            probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(m_sshdPort));
-            return probe.waitForConnected(200);
-        },
-        8000);
-    if (!listening) {
-        return;
-    }
-
-    m_relay = std::make_unique<QSocTestRelay>(static_cast<quint16>(m_sshdPort));
+    m_relay = std::make_unique<QSocTestRelay>(static_cast<quint16>(m_fixture.port()));
     m_relay->start();
     if (!m_relay->waitUntilListening(5000) || m_relay->port() == 0) {
-        return;
+        return fail(QStringLiteral("the relay never started listening"));
     }
 
     QFile sshCfg(m_home + QStringLiteral("/.ssh/config"));
     if (!sshCfg.open(QIODevice::WriteOnly)) {
-        return;
+        return fail(QStringLiteral("could not write the client ssh config"));
     }
     sshCfg.write(QStringLiteral(
                      "Host relay\n"
@@ -287,7 +236,7 @@ void Test::initTestCase()
                      "  StrictHostKeyChecking no\n"
                      "  UserKnownHostsFile /dev/null\n")
                      .arg(m_relay->port())
-                     .arg(m_user, m_keyPath)
+                     .arg(m_fixture.user(), m_fixture.keyPath())
                      .toUtf8());
     sshCfg.close();
     QFile::setPermissions(
@@ -295,11 +244,11 @@ void Test::initTestCase()
 
     m_mockPort = pickFreePort();
     if (m_mockPort == 0) {
-        return;
+        return fail(QStringLiteral("no free loopback port for the mock"));
     }
     QFile projectCfg(root + QStringLiteral("/.qsoc.yml"));
     if (!projectCfg.open(QIODevice::WriteOnly)) {
-        return;
+        return fail(QStringLiteral("could not write the project config"));
     }
     projectCfg.write(QStringLiteral(
                          "llm:\n"
@@ -319,7 +268,7 @@ void Test::initTestCase()
                          .toUtf8());
     projectCfg.close();
 
-    m_ready = true;
+    return true;
 }
 
 void Test::cleanupTestCase()
@@ -330,18 +279,13 @@ void Test::cleanupTestCase()
         m_relay->stop();
         m_relay.reset();
     }
-    if (m_sshd.state() != QProcess::NotRunning) {
-        m_sshd.terminate();
-        if (!m_sshd.waitForFinished(3000)) {
-            m_sshd.kill();
-            m_sshd.waitForFinished(2000);
-        }
-    }
+    m_fixture.stop();
     /* QSOC_TEST_MAIN calls _exit(), so QTemporaryDir's destructor never runs
      * and the keys, work tree and logs would be left behind on every run. */
     if (m_dir.isValid()) {
         QVERIFY2(m_dir.remove(), qPrintable(m_dir.errorString()));
     }
+    QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
 }
 
 void Test::stopMock()
@@ -436,9 +380,7 @@ void Test::stopAgent()
  */
 void Test::aDeadWorkspaceEndsTheTurnInsteadOfBurningTheCap()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd, python3 or the built binary is unavailable here");
-    }
+    REQUIRE_RECOVERY_FIXTURE();
     m_relay->heal();
 
     /* No cap on the mock: left alone it would answer with the same tool call
@@ -476,9 +418,7 @@ void Test::aDeadWorkspaceEndsTheTurnInsteadOfBurningTheCap()
  */
 void Test::aHealedLinkIsRebuiltAndTheAgentIsToldToReObserve()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd, python3 or the built binary is unavailable here");
-    }
+    REQUIRE_RECOVERY_FIXTURE();
     m_relay->heal();
     startAgent(QStringLiteral("do the remote work"), /*toolCallCap=*/0);
 
