@@ -6,6 +6,8 @@
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
 #include "qsoc_test.h"
+#include "qsoc_test_relay.h"
+#include "qsoc_test_sshd.h"
 
 #include "agent/remote/qsocsshexec.h"
 
@@ -31,7 +33,6 @@
 #ifndef Q_OS_WIN
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <pwd.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -43,177 +44,14 @@
  * non-blocking unlink-before-rename bug made that fail intermittently
  * while writing a brand-new file did not.
  *
- * The test QSKIPs (never fails) when the environment cannot host a
- * user-level sshd: no sshd / ssh-keygen, key generation fails, sshd will
- * not start, or the SSH handshake does not complete. On a CI runner with
- * openssh-server installed it runs for real and catches the regression.
+ * A dependency this fixture cannot supply itself (sshd, ssh-keygen, a login
+ * name) skips these cases, unless QSOC_TEST_DEPS_REQUIRED is set, which CI
+ * does after installing openssh-server. Anything else, a fixture that has its
+ * dependencies and still will not start or handshake, always fails: QtTest
+ * exits 0 on a skip, so a silent skip is indistinguishable from coverage. On
+ * a host that forbids a user-level sshd, use
+ * `ctest -E test_qsocsftp_loopback`.
  */
-
-namespace {
-
-QString findExe(const QStringList &candidates)
-{
-    for (const QString &path : candidates) {
-        if (QFile::exists(path)) {
-            return path;
-        }
-    }
-    return {};
-}
-
-/* The login name of the process owner. $USER is unset in CI non-login
- * shells (e.g. GitHub Actions), so resolve via the password database and
- * fall back to the env var only off-POSIX. Without this the loopback
- * test would QSKIP on CI instead of actually exercising the SFTP path. */
-QString currentUser()
-{
-#ifndef Q_OS_WIN
-    if (const struct passwd *pw = getpwuid(getuid())) {
-        if (pw->pw_name != nullptr && pw->pw_name[0] != '\0') {
-            return QString::fromLocal8Bit(pw->pw_name);
-        }
-    }
-#endif
-    return qEnvironmentVariable("USER");
-}
-
-int pickFreePort()
-{
-    QTcpServer probe;
-    if (!probe.listen(QHostAddress::LocalHost, 0)) {
-        return 0;
-    }
-    const int port = probe.serverPort();
-    probe.close();
-    return port;
-}
-
-/*
- * TCP relay that can be told to stop forwarding while holding both sockets
- * open. From the client's side that is indistinguishable from a host that
- * lost power: the connection is established, writes are accepted by the
- * local kernel, and no reply ever comes. Closing a socket or killing sshd
- * would send FIN or RST instead and exercise a different, easier path.
- *
- * Lives in its own thread because the code under test blocks in poll() and
- * never returns to the main event loop.
- */
-class BlackholeRelay : public QThread
-{
-    Q_OBJECT
-
-public:
-    explicit BlackholeRelay(quint16 upstreamPort)
-        : m_upstreamPort(upstreamPort)
-    {}
-
-    bool    waitUntilListening(int timeoutMs) { return m_listening.tryAcquire(1, timeoutMs); }
-    quint16 port() const { return m_port; }
-    void    blackhole() { m_blackhole.store(true, std::memory_order_relaxed); }
-
-    /** @brief Abort the live pair, which the client sees as FIN or RST. */
-    void hangUp()
-    {
-        QMutexLocker locker(&m_socketsLock);
-        for (QTcpSocket *sock : m_sockets) {
-            /* Queued onto the relay thread: the sockets live there, and
-             * abort() is not an invokable slot so it has to go through a
-             * functor. */
-            QMetaObject::invokeMethod(sock, [sock] { sock->abort(); }, Qt::QueuedConnection);
-        }
-    }
-
-    /** @brief Close the live pair politely, which the client sees as FIN. */
-    void finish()
-    {
-        QMutexLocker locker(&m_socketsLock);
-        for (QTcpSocket *sock : m_sockets) {
-            QMetaObject::invokeMethod(
-                sock, [sock] { sock->disconnectFromHost(); }, Qt::QueuedConnection);
-        }
-    }
-
-    void stop()
-    {
-        quit();
-        wait(5000);
-    }
-
-protected:
-    void run() override
-    {
-        QTcpServer server;
-        if (!server.listen(QHostAddress::LocalHost, 0)) {
-            m_listening.release();
-            return;
-        }
-        m_port = server.serverPort();
-
-        QObject::connect(&server, &QTcpServer::newConnection, &server, [this, &server] {
-            QTcpSocket *downstream = server.nextPendingConnection();
-            auto       *upstream   = new QTcpSocket(downstream);
-            upstream->connectToHost(QHostAddress::LocalHost, m_upstreamPort);
-            {
-                QMutexLocker locker(&m_socketsLock);
-                m_sockets = {downstream, upstream};
-            }
-
-            auto pump = [this](QTcpSocket *from, QTcpSocket *to) {
-                const QByteArray bytes = from->readAll();
-                if (!m_blackhole.load(std::memory_order_relaxed)) {
-                    to->write(bytes);
-                }
-            };
-            QObject::connect(
-                downstream, &QTcpSocket::readyRead, downstream, [pump, downstream, upstream] {
-                    pump(downstream, upstream);
-                });
-            QObject::connect(upstream, &QTcpSocket::readyRead, upstream, [pump, downstream, upstream] {
-                pump(upstream, downstream);
-            });
-        });
-
-        m_listening.release();
-        exec();
-    }
-
-private:
-    quint16             m_upstreamPort;
-    quint16             m_port = 0;
-    QSemaphore          m_listening;
-    std::atomic<bool>   m_blackhole{false};
-    QMutex              m_socketsLock;
-    QList<QTcpSocket *> m_sockets;
-};
-
-bool runKeygen(const QString &keygen, const QString &keyPath)
-{
-    /* RSA, classic PEM (-m PEM). qsoc pins userauth to the rsa-sha2
-     * family (see QSocSshSession) and every real server offers an RSA
-     * host key, so the fixture mirrors that. PEM matters for the client
-     * key: this libssh2 build signs RSA pubkey auth reliably only from a
-     * classic "BEGIN RSA PRIVATE KEY" file; a modern OpenSSH-format key
-     * aborts the signature step after the server's PK_OK. */
-    QProcess proc;
-    proc.start(
-        keygen,
-        {QStringLiteral("-t"),
-         QStringLiteral("rsa"),
-         QStringLiteral("-b"),
-         QStringLiteral("3072"),
-         QStringLiteral("-m"),
-         QStringLiteral("PEM"),
-         QStringLiteral("-N"),
-         QString(),
-         QStringLiteral("-q"),
-         QStringLiteral("-f"),
-         keyPath});
-    return proc.waitForStarted(5000) && proc.waitForFinished(15000)
-           && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0
-           && QFile::exists(keyPath);
-}
-
-} // namespace
 
 class Test : public QObject
 {
@@ -240,142 +78,27 @@ private slots:
 
 private:
     /** @brief Client config pointing at @p port on loopback. */
-    QSocSshHostConfig hostConfig(quint16 port) const
-    {
-        QSocSshHostConfig host;
-        host.hostname           = QStringLiteral("127.0.0.1");
-        host.port               = port;
-        host.user               = m_user;
-        host.identityFiles      = {m_keyPath};
-        host.identitiesOnly     = true;
-        host.strictHostKey      = QSocSshHostConfig::StrictHostKey::No;
-        host.userKnownHostsFile = QStringLiteral("/dev/null");
-        return host;
-    }
+    QSocSshHostConfig hostConfig(quint16 port) const { return m_fixture.hostConfig(port); }
 
-    QTemporaryDir m_dir;
-    QProcess      m_sshd;
-    int           m_port  = 0;
-    bool          m_ready = false;
-    QString       m_keyPath;
-    QString       m_user;
-    QString       m_workDir;
-    QString       m_sshdErr;
+    QSocTestSshd m_fixture;
 };
 
 void Test::initTestCase()
 {
-    const QString sshd = findExe(
-        {QStringLiteral("/usr/sbin/sshd"), QStringLiteral("/usr/bin/sshd")});
-    const QString keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
-    m_user               = currentUser();
-    if (sshd.isEmpty() || keygen.isEmpty() || m_user.isEmpty() || !m_dir.isValid()) {
-        return; /* m_ready stays false -> test QSKIPs */
-    }
-
-    const QString root     = m_dir.path();
-    const QString hostKey  = root + QStringLiteral("/host_rsa");
-    m_keyPath              = root + QStringLiteral("/client_rsa");
-    const QString authKeys = root + QStringLiteral("/authorized_keys");
-    const QString cfgPath  = root + QStringLiteral("/sshd_config");
-    m_workDir              = root + QStringLiteral("/work");
-    QDir().mkpath(m_workDir);
-
-    if (!runKeygen(keygen, hostKey) || !runKeygen(keygen, m_keyPath)) {
-        return;
-    }
-    /* authorized_keys = the client public key. */
-    QFile pub(m_keyPath + QStringLiteral(".pub"));
-    if (!pub.open(QIODevice::ReadOnly)) {
-        return;
-    }
-    const QByteArray pubKey = pub.readAll();
-    pub.close();
-    QFile ak(authKeys);
-    if (!ak.open(QIODevice::WriteOnly)) {
-        return;
-    }
-    ak.write(pubKey);
-    ak.close();
-
-    m_port = pickFreePort();
-    if (m_port == 0) {
-        return;
-    }
-
-    /* internal-sftp keeps the test independent of the sftp-server path;
-     * StrictModes/UsePAM off so a user-level sshd in a temp dir is happy. */
-    const QString cfg = QStringLiteral(
-                            "Port %1\n"
-                            "ListenAddress 127.0.0.1\n"
-                            "HostKey %2\n"
-                            "PidFile %3/sshd.pid\n"
-                            "AuthorizedKeysFile %4\n"
-                            "UsePAM no\n"
-                            "StrictModes no\n"
-                            "PasswordAuthentication no\n"
-                            "KbdInteractiveAuthentication no\n"
-                            "PubkeyAuthentication yes\n"
-                            "Subsystem sftp internal-sftp\n"
-                            "LogLevel ERROR\n")
-                            .arg(m_port)
-                            .arg(hostKey)
-                            .arg(root)
-                            .arg(authKeys);
-    QFile         cf(cfgPath);
-    if (!cf.open(QIODevice::WriteOnly)) {
-        return;
-    }
-    cf.write(cfg.toUtf8());
-    cf.close();
-
-    /* -D foreground, -e log to stderr; absolute sshd path satisfies the
-     * re-exec requirement. Capture the server log for failure diagnosis. */
-    m_sshdErr = root + QStringLiteral("/sshd.err");
-    m_sshd.setStandardErrorFile(m_sshdErr);
-    m_sshd.start(sshd, {QStringLiteral("-D"), QStringLiteral("-e"), QStringLiteral("-f"), cfgPath});
-    if (!m_sshd.waitForStarted(5000)) {
-        return;
-    }
-
-    /* Wait until the port accepts connections (sshd is up). */
-    for (int attempt = 0; attempt < 50; ++attempt) {
-        if (m_sshd.state() != QProcess::Running) {
-            return; /* sshd died (likely refuses to run here) -> QSKIP */
-        }
-        QTcpSocket probe;
-        probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(m_port));
-        if (probe.waitForConnected(200)) {
-            probe.disconnectFromHost();
-            m_ready = true;
-            return;
-        }
-        QTest::qWait(100);
-    }
+    m_fixture.start();
 }
 
 void Test::cleanupTestCase()
 {
-    if (m_sshd.state() != QProcess::NotRunning) {
-        m_sshd.terminate();
-        if (!m_sshd.waitForFinished(3000)) {
-            m_sshd.kill();
-            m_sshd.waitForFinished(2000);
-        }
-    }
-    /* QSOC_TEST_MAIN calls _exit(), so QTemporaryDir's destructor never
-     * runs and the host keys, work tree and backup siblings would be left
-     * behind on every run. Remove them here instead. */
-    QVERIFY2(m_dir.remove(), qPrintable(m_dir.errorString()));
+    m_fixture.stop();
+    QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
 }
 
 void Test::releasesAuthenticationCallbackAfterConnect()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    const QString homeDir = m_dir.path() + QStringLiteral("/client_home");
+    const QString homeDir = m_fixture.root() + QStringLiteral("/client_home");
     QVERIFY(QDir().mkpath(homeDir + QStringLiteral("/.ssh")));
     QFile config(homeDir + QStringLiteral("/.ssh/config"));
     QVERIFY(config.open(QIODevice::WriteOnly | QIODevice::Text));
@@ -386,8 +109,8 @@ void Test::releasesAuthenticationCallbackAfterConnect()
                      "  User %2\n"
                      "  IdentityFile %3\n"
                      "  IdentitiesOnly yes\n")
-                     .arg(m_port)
-                     .arg(m_user, m_keyPath)
+                     .arg(m_fixture.port())
+                     .arg(m_fixture.user(), m_fixture.keyPath())
                      .toUtf8());
     config.close();
 
@@ -435,15 +158,13 @@ void Test::releasesAuthenticationCallbackAfterConnect()
 
 void Test::overwriteExistingFileRepeatedly()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
     QSocSshHostConfig host;
     host.hostname           = QStringLiteral("127.0.0.1");
-    host.port               = m_port;
-    host.user               = m_user;
-    host.identityFiles      = {m_keyPath};
+    host.port               = m_fixture.port();
+    host.user               = m_fixture.user();
+    host.identityFiles      = {m_fixture.keyPath()};
     host.identitiesOnly     = true;
     host.strictHostKey      = QSocSshHostConfig::StrictHostKey::No;
     host.userKnownHostsFile = QStringLiteral("/dev/null");
@@ -451,16 +172,12 @@ void Test::overwriteExistingFileRepeatedly()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(host, &err) != QSocSshSession::ConnectStatus::Ok) {
-        QString log;
-        QFile   lf(m_sshdErr);
-        if (lf.open(QIODevice::ReadOnly)) {
-            log = QString::fromUtf8(lf.readAll()).section(QLatin1Char('\n'), -30);
-        }
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, log)));
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
 
     QSocSftpClient sftp(session);
-    const QString  path = m_workDir + QStringLiteral("/edit_target.sv");
+    const QString  path = m_fixture.workDir() + QStringLiteral("/edit_target.sv");
 
     /* New file: write_file path (target absent, unlink no-ops). */
     QVERIFY2(sftp.writeFile(path, QByteArray("version-0\n"), &err), qPrintable(err));
@@ -490,37 +207,35 @@ void Test::overwriteExistingFileRepeatedly()
  * working workspace into a refusal. */
 void Test::aLiveWorkspaceAnswersTheProbe()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
     QSocSshSession session;
     QString        err;
-    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
     QSocSftpClient sftp(session);
     QElapsedTimer  clock;
     clock.start();
-    QVERIFY2(remoteWorkspaceAnswers(&sftp, m_workDir, 2000, &err), qPrintable(err));
+    QVERIFY2(remoteHostAnswers(&sftp, m_fixture.workDir(), 2000, &err), qPrintable(err));
     QVERIFY2(
         clock.elapsed() < 2000, qPrintable(QStringLiteral("probe took %1 ms").arg(clock.elapsed())));
 }
 
 void Test::connectedSocketCarriesTheDocumentedKeepalive()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 #ifdef Q_OS_WIN
     QSKIP("Windows sets the schedule through SIO_KEEPALIVE_VALS, which is write-only");
 #else
     QSocSshSession session;
     QString        err;
-    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
 
     const auto sockFd = static_cast<int>(session.socketFd());
@@ -550,14 +265,13 @@ void Test::connectedSocketCarriesTheDocumentedKeepalive()
 
 void Test::execReportsRealExitStatus()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
     QSocSshSession session;
     QString        err;
-    if (session.connectTo(hostConfig(m_port), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+    if (session.connectTo(hostConfig(m_fixture.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
 
     QSocSshExec exec(session);
@@ -586,15 +300,14 @@ void Test::execReportsRealExitStatus()
  */
 void Test::execReportsSignalledCommandsAsSignalled()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
     QSocSshSession session;
     QString        err;
-    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
 
     QSocSshExec exec(session);
@@ -620,15 +333,14 @@ void Test::execReportsSignalledCommandsAsSignalled()
  */
 void Test::anOrdinaryCommandTimeoutKeepsTheSessionUsable()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
     QSocSshSession session;
     QString        err;
-    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
 
     QSocSshExec exec(session);
@@ -648,11 +360,9 @@ void Test::anOrdinaryCommandTimeoutKeepsTheSessionUsable()
 
 void Test::execInventsNoExitStatusWhenTheLinkDiesMidCommand()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     QVERIFY(relay.port() != 0);
@@ -661,7 +371,8 @@ void Test::execInventsNoExitStatusWhenTheLinkDiesMidCommand()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
     QSocSshExec exec(session);
@@ -694,11 +405,9 @@ void Test::execInventsNoExitStatusWhenTheLinkDiesMidCommand()
  * rather than retry EAGAIN forever. */
 void Test::execAndSftpGiveUpWhenTheLinkIsAlreadyDead()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
@@ -706,10 +415,11 @@ void Test::execAndSftpGiveUpWhenTheLinkIsAlreadyDead()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
-    const QString  path = m_workDir + QStringLiteral("/deadline_target.sv");
+    const QString  path = m_fixture.workDir() + QStringLiteral("/deadline_target.sv");
     QSocSftpClient sftp(session);
     sftp.setOperationTimeoutMs(1000);
     QVERIFY2(sftp.writeFile(path, QByteArray("alive\n"), &err), qPrintable(err));
@@ -745,11 +455,9 @@ void Test::execAndSftpGiveUpWhenTheLinkIsAlreadyDead()
  */
 void Test::overwriteKeepsACopyWhenThePublishIsCutOff()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
@@ -757,10 +465,11 @@ void Test::overwriteKeepsACopyWhenThePublishIsCutOff()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
-    const QString    dir      = m_workDir + QStringLiteral("/publish");
+    const QString    dir      = m_fixture.workDir() + QStringLiteral("/publish");
     const QString    path     = dir + QStringLiteral("/precious.sv");
     const QByteArray original = QByteArray("original content that must survive\n");
 
@@ -779,9 +488,10 @@ void Test::overwriteKeepsACopyWhenThePublishIsCutOff()
     /* Reconnect on a clean link and prove the content is still reachable,
      * either under the original name or beside it. */
     QSocSshSession recovery;
-    if (recovery.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (recovery.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("recovery connect failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("recovery connect failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
     QSocSftpClient check(recovery);
     QString        listErr;
@@ -813,11 +523,9 @@ void Test::overwriteKeepsACopyWhenThePublishIsCutOff()
  */
 void Test::publishCutAfterAsideLeavesBothNamesAlone()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
@@ -825,10 +533,11 @@ void Test::publishCutAfterAsideLeavesBothNamesAlone()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
-    const QString    dir      = m_workDir + QStringLiteral("/aside");
+    const QString    dir      = m_fixture.workDir() + QStringLiteral("/aside");
     const QString    path     = dir + QStringLiteral("/target.sv");
     const QByteArray original = QByteArray("original that must remain readable\n");
 
@@ -853,9 +562,10 @@ void Test::publishCutAfterAsideLeavesBothNamesAlone()
     /* On a fresh link: the original content is still there under some name,
      * and nothing was cleaned up after the unknown outcome. */
     QSocSshSession recovery;
-    if (recovery.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (recovery.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("recovery connect failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("recovery connect failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
     QSocSftpClient check(recovery);
     QString        listErr;
@@ -888,26 +598,26 @@ void Test::publishCutAfterAsideLeavesBothNamesAlone()
  */
 void Test::publishFailureThatCannotBeRestoredSaysSo()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
     QSocSshSession session;
     QString        err;
-    if (session.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (session.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect failed: %1").arg(err)));
+        QFAIL(qPrintable(
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
     }
     /* A second session does the sabotage so the client under test never sees
      * it coming. */
     QSocSshSession saboteurSession;
-    if (saboteurSession.connectTo(hostConfig(static_cast<quint16>(m_port)), &err)
+    if (saboteurSession.connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), &err)
         != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("saboteur connect failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("saboteur connect failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
     QSocSftpClient saboteur(saboteurSession);
 
-    const QString    dir      = m_workDir + QStringLiteral("/refused");
+    const QString    dir      = m_fixture.workDir() + QStringLiteral("/refused");
     const QString    path     = dir + QStringLiteral("/target.sv");
     const QByteArray original = QByteArray("original for the refused publish\n");
 
@@ -947,11 +657,9 @@ void Test::publishFailureThatCannotBeRestoredSaysSo()
  */
 void Test::aTimedOutRequestCondemnsTheSession()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
@@ -959,12 +667,13 @@ void Test::aTimedOutRequestCondemnsTheSession()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
     QSocSftpClient sftp(session);
     sftp.setOperationTimeoutMs(600);
-    const QString path = m_workDir + QStringLiteral("/condemn.sv");
+    const QString path = m_fixture.workDir() + QStringLiteral("/condemn.sv");
     QVERIFY2(sftp.writeFile(path, QByteArray("alive\n"), &err), qPrintable(err));
     QVERIFY(session.isConnected());
 
@@ -988,11 +697,9 @@ void Test::aTimedOutRequestCondemnsTheSession()
 
 void Test::aResetConnectionPoisonsTheSessionAndItsSftp()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
@@ -1000,13 +707,14 @@ void Test::aResetConnectionPoisonsTheSessionAndItsSftp()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
     /* Open SFTP for real so the next call has a cached handle to reuse. */
     QSocSftpClient sftp(session);
     sftp.setOperationTimeoutMs(1000);
-    const QString path = m_workDir + QStringLiteral("/poison_target.sv");
+    const QString path = m_fixture.workDir() + QStringLiteral("/poison_target.sv");
     QVERIFY2(sftp.writeFile(path, QByteArray("alive\n"), &err), qPrintable(err));
     QVERIFY(sftp.isOpen());
     QVERIFY(session.isConnected());
@@ -1039,11 +747,9 @@ void Test::aResetConnectionPoisonsTheSessionAndItsSftp()
  */
 void Test::aGracefulCloseInventsNoExitStatus()
 {
-    if (!m_ready) {
-        QSKIP("loopback sshd unavailable in this environment");
-    }
+    QSOC_REQUIRE_SSHD(m_fixture);
 
-    BlackholeRelay relay(static_cast<quint16>(m_port));
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
     relay.start();
     QVERIFY(relay.waitUntilListening(5000));
     const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
@@ -1051,7 +757,8 @@ void Test::aGracefulCloseInventsNoExitStatus()
     QSocSshSession session;
     QString        err;
     if (session.connectTo(hostConfig(relay.port()), &err) != QSocSshSession::ConnectStatus::Ok) {
-        QSKIP(qPrintable(QStringLiteral("connect through relay failed: %1").arg(err)));
+        QFAIL(qPrintable(QStringLiteral("connect through relay failed: %1\n--- sshd ---\n%2")
+                             .arg(err, m_fixture.log())));
     }
 
     QSocSshExec exec(session);

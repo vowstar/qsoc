@@ -104,6 +104,41 @@ private:
 };
 
 /**
+ * @brief Whether an external test dependency is mandatory in this environment.
+ * @details CI sets QSOC_TEST_DEPS_REQUIRED=1 in the jobs that install the
+ *          dependencies a fixture cannot supply itself. A dependency missing
+ *          there is a broken job declaration, not a developer machine, so it
+ *          must fail rather than skip: QtTest exits 0 on a skip, so a silent
+ *          QSKIP is indistinguishable from coverage.
+ */
+inline bool qsocTestDependenciesRequired()
+{
+    return qEnvironmentVariableIntValue("QSOC_TEST_DEPS_REQUIRED") != 0;
+}
+
+/**
+ * @brief A dependency the fixture cannot install: skip, or fail if required.
+ * @param what Human-readable name(s) of what is absent.
+ */
+#define QSOC_TEST_MISSING_DEPENDENCY(what) \
+    do { \
+        const QString qsocMissing_ = (what); \
+        if (qsocTestDependenciesRequired()) { \
+            QFAIL(qPrintable( \
+                QStringLiteral("required test dependency missing: %1").arg(qsocMissing_))); \
+        } \
+        QSKIP(qPrintable(QStringLiteral("test dependency missing: %1").arg(qsocMissing_))); \
+    } while (false)
+
+/**
+ * @brief Dependencies were present and the fixture still did not come up.
+ * @details Always a failure. Skipping here would hide a broken fixture behind
+ *          the same message an absent dependency produces.
+ */
+#define QSOC_TEST_FIXTURE_FAILED(detail) \
+    QFAIL(qPrintable(QStringLiteral("test fixture failed to initialise: %1").arg(QString(detail))))
+
+/**
  * @brief QSOC_TEST_MAIN macro for QSOC test applications
  * @details This macro provides a custom main function for QSOC test applications
  *          that avoids segmentation faults during test exit by using _exit instead

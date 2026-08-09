@@ -49,6 +49,15 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
         )
     endif()
 
+    # The loopback sshd fixtures each bring up their own server and mock on
+    # their own ports, but they share /tmp and the machine's socket backlog,
+    # and running them together has produced a mock that never started. A
+    # shared lock keeps `ctest -jN` from interleaving them without forcing the
+    # whole suite serial.
+    if(${TARGET_NAME} MATCHES "^test_qsoc(sftp_loopback|sftpstranded|sshexecstatus|agentremoterecovery|remoteguardafterreconnect)$")
+        set_tests_properties(${TARGET_NAME} PROPERTIES RESOURCE_LOCK "qsoc_loopback_sshd")
+    endif()
+
     set(_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/${TARGET_NAME}.cpp")
 
     if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)

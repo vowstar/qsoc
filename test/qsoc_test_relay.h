@@ -13,8 +13,13 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
+#include <QtGlobal>
 
 #include <atomic>
+
+#ifndef Q_OS_WIN
+#include <sys/socket.h>
+#endif
 
 /**
  * @brief TCP relay that can stop forwarding while holding its sockets open.
@@ -67,7 +72,62 @@ public:
     {
         const QMutexLocker locker(&m_controlLock);
         m_healOnNextConnection = false;
+        m_stopReading.store(false, std::memory_order_relaxed);
         m_blackhole.store(false, std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief Stop draining the sockets, so the client's own sends stall.
+     * @details Stronger than blackhole(), which reads and discards and so
+     *          always lets the local kernel accept a small write. Here the
+     *          receive window closes instead, which is the only way to leave a
+     *          peer blocked mid-packet with unsent bytes still buffered on its
+     *          side. Cleared by heal().
+     */
+    void stopReading() { m_stopReading.store(true, std::memory_order_relaxed); }
+
+    /**
+     * @brief Close the live pair gracefully, which the client sees as FIN.
+     * @details The polite counterpart to hangUp(): the peer says it is done
+     *          instead of vanishing. libssh2 reports that as a clean channel
+     *          close, so it is the case that must not be mistaken for a
+     *          process that reported an exit status.
+     */
+    void finish()
+    {
+        const QMutexLocker locker(&m_socketsLock);
+        for (QTcpSocket *sock : m_sockets) {
+            /* Queued onto the relay thread, where the sockets live. */
+            QMetaObject::invokeMethod(
+                sock, [sock] { sock->disconnectFromHost(); }, Qt::QueuedConnection);
+        }
+    }
+
+    /**
+     * @brief Take away only the direction the client reads from.
+     * @details The client reaches EOF on recv while its own sends keep being
+     *          accepted, which is what a TCP half-close looks like and what
+     *          neither finish() nor hangUp() produces: both of those take the
+     *          client's send direction away as well. Forwarding stops in the
+     *          same breath, because a write to a socket whose send side is gone
+     *          fails and Qt then closes the whole socket, which the client
+     *          would read as a reset instead.
+     *
+     *          No-op before the pair exists, and on platforms without the
+     *          POSIX call, so a build there stays green even though the mode is
+     *          unavailable.
+     */
+    void halfClose()
+    {
+        const QMutexLocker locker(&m_socketsLock);
+        m_blackhole.store(true, std::memory_order_relaxed);
+        if (m_sockets.isEmpty()) {
+            return;
+        }
+        /* Index 0 is the accepted socket, the one facing the client. */
+        QTcpSocket *sock = m_sockets.at(0);
+        /* Queued onto the relay thread, where the sockets live. */
+        QMetaObject::invokeMethod(sock, [sock] { shutdownSend(sock); }, Qt::QueuedConnection);
     }
 
     /** @brief Abort the live pair, which the client sees as RST. */
@@ -103,6 +163,7 @@ protected:
                 const QMutexLocker locker(&m_controlLock);
                 if (m_healOnNextConnection) {
                     m_healOnNextConnection = false;
+                    m_stopReading.store(false, std::memory_order_relaxed);
                     m_blackhole.store(false, std::memory_order_relaxed);
                 }
             }
@@ -115,11 +176,20 @@ protected:
             }
 
             auto pump = [this](QTcpSocket *from, QTcpSocket *to) {
+                /* Leaving the bytes unread is what distinguishes stopReading()
+                 * from blackhole(): Qt stops draining the OS socket once its
+                 * own buffer is full, the receive window closes, and the peer's
+                 * sends begin to block partway through a packet. */
+                if (m_stopReading.load(std::memory_order_relaxed)) {
+                    return;
+                }
                 const QByteArray bytes = from->readAll();
                 if (!m_blackhole.load(std::memory_order_relaxed)) {
                     to->write(bytes);
                 }
             };
+            downstream->setReadBufferSize(kStalledBufferBytes);
+            upstream->setReadBufferSize(kStalledBufferBytes);
             QObject::connect(
                 downstream, &QTcpSocket::readyRead, downstream, [pump, downstream, upstream] {
                     pump(downstream, upstream);
@@ -134,6 +204,21 @@ protected:
     }
 
 private:
+    static void shutdownSend(QTcpSocket *sock)
+    {
+#ifndef Q_OS_WIN
+        ::shutdown(static_cast<int>(sock->socketDescriptor()), SHUT_WR);
+#else
+        Q_UNUSED(sock)
+#endif
+    }
+
+    /* Small enough that a stalled relay closes its receive window after very
+     * little data, and irrelevant while forwarding, because pump() drains on
+     * every readyRead. */
+    static constexpr int kStalledBufferBytes = 4096;
+
+    std::atomic<bool>   m_stopReading{false};
     std::atomic<int>    m_acceptedConnections{0};
     quint16             m_upstreamPort;
     quint16             m_port = 0;
