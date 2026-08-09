@@ -38,34 +38,55 @@ bool isSha256Hex(const QString &value)
     return true;
 }
 
+/* Three-state existence on local disk. QFileInfo::exists() is also false for
+ * a path we were not allowed to stat and for a stale mount handle, so "not
+ * there" is a fact only when the parent directory could answer for its
+ * children. */
+QSocFileHistory::FileState localPresence(const QString &path)
+{
+    if (QFileInfo::exists(path)) {
+        return QSocFileHistory::FileState::Present;
+    }
+    const QFileInfo parent(QFileInfo(path).absolutePath());
+    if (parent.isDir() && parent.isReadable() && parent.isExecutable()) {
+        return QSocFileHistory::FileState::Absent;
+    }
+    return QSocFileHistory::FileState::Unknown;
+}
+
+/* The name localAccessor() reports for the local disk. It is also the one tree
+ * a record that names none may be acted on: that is where the absolute paths of
+ * a session written before the field existed point. */
+QString localTreeName()
+{
+    return QStringLiteral("local");
+}
+
 } // namespace
 
 QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor()
 {
     LiveFileAccessor accessor;
-    accessor.exists = [](const QString &path) {
-        if (QFileInfo::exists(path)) {
-            return FileState::Present;
-        }
-        /* QFileInfo::exists() is also false for a path we were not allowed
-         * to stat and for a stale mount handle, so "not there" is a fact
-         * only when the parent directory could answer for its children. */
-        const QFileInfo parent(QFileInfo(path).absolutePath());
-        if (parent.isDir() && parent.isReadable() && parent.isExecutable()) {
-            return FileState::Absent;
-        }
-        return FileState::Unknown;
-    };
-    accessor.read = [](const QString &path) -> LiveRead {
+    accessor.exists = [](const QString &path) { return localPresence(path); };
+    accessor.read   = [](const QString &path) -> LiveRead {
         QFile file(path);
         if (file.open(QIODevice::ReadOnly)) {
             const QByteArray utf8 = file.readAll();
             file.close();
             return LiveRead::present(QString::fromUtf8(utf8));
         }
-        /* An open that failed on a file that is there (EACCES, EIO, ELOOP)
-         * says nothing about its content. */
-        return QFileInfo::exists(path) ? LiveRead::unknown() : LiveRead::absent();
+        /* An open that failed says nothing about the content, and the same
+         * stat that could not answer for exists() cannot answer here either:
+         * deciding "absent" from a failed stat is what turns a permission
+         * error into an instruction to unlink. */
+        switch (localPresence(path)) {
+        case FileState::Absent:
+            return LiveRead::absent();
+        case FileState::Present:
+        case FileState::Unknown:
+            break;
+        }
+        return LiveRead::unknown();
     };
     accessor.write = [](const QString &path, const QString &content) {
         const QFileInfo info(path);
@@ -88,14 +109,60 @@ QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor()
         }
         return existing.remove();
     };
-    /* generation stays unset: the local disk is never replaced underneath a
-     * capture, so both generation checks are disabled here. */
+    /* The local disk is one tree that is never replaced underneath a capture,
+     * so it names itself and leaves the link unnumbered. Naming it is what
+     * fences it from a remote workspace reached over SFTP: without a name both
+     * would read as "no discipline" and records would cross between them. */
+    accessor.tree = []() { return localTreeName(); };
     return accessor;
 }
 
-quint64 QSocFileHistory::liveGeneration() const
+QSocFileHistory::EpochRelation QSocFileHistory::relate(const Epoch &record, const Epoch &live)
 {
-    return liveAccessor.generation ? liveAccessor.generation() : 0;
+    /* A record that names no tree predates the field: nothing on disk shows
+     * which namespace it was captured in. Without a proven tree identity there
+     * is no permission to overwrite or unlink a colliding path, on the local
+     * disk or anywhere else, so such a record is never this tree's. A purely
+     * local pre-upgrade session loses automatic rewind of those records; the
+     * alternative is silently deleting a local file the record was never shown
+     * to describe, and a refusal the user can act on beats an unrecoverable
+     * false success. */
+    if (record.tree.isEmpty()) {
+        return EpochRelation::OtherTree;
+    }
+    if (record.tree != live.tree) {
+        return EpochRelation::OtherTree;
+    }
+    if (record.link != 0 && live.link != 0 && record.link != live.link) {
+        return EpochRelation::OtherLink;
+    }
+    return EpochRelation::Same;
+}
+
+QSocFileHistory::Epoch QSocFileHistory::liveEpoch() const
+{
+    Epoch epoch;
+    if (liveAccessor.tree) {
+        epoch.tree = liveAccessor.tree();
+    }
+    if (epoch.tree.isEmpty()) {
+        epoch.tree = QStringLiteral("unnamed");
+    }
+    if (liveAccessor.generation) {
+        epoch.link = liveAccessor.generation();
+    }
+    return epoch;
+}
+
+QSet<QString> QSocFileHistory::trackedPathsFor(const QString &tree) const
+{
+    /* Only the paths actually tracked on this tree. A path carried over from a
+     * snapshot that names no tree is never swept in here: capturing it would
+     * stamp the live tree onto it and promote a fenced record into an
+     * actionable one, so the next rewind could delete, create or overwrite it.
+     * If the session really edits such a path, trackEdit() records it fresh
+     * under the live tree, which is a genuine capture, not a promotion. */
+    return trackedFiles.value(tree);
 }
 
 void QSocFileHistory::setLiveAccessor(LiveFileAccessor accessor)
@@ -110,11 +177,12 @@ QSocFileHistory::QSocFileHistory(QString projectPath, QString sessionId)
 {
     /* Seed the trackedFiles set from any pre-existing snapshots so that
      * a resumed session continues to capture the same paths in its next
-     * makeSnapshot call even if the current turn didn't touch them. */
+     * makeSnapshot call even if the current turn didn't touch them. Each path
+     * lands under the tree it was observed on. */
     const auto snaps = loadSnapshots();
     for (const Snapshot &snap : snaps) {
         for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
-            trackedFiles.insert(it.key());
+            trackedFiles[snap.epoch.tree].insert(it.key());
         }
     }
 }
@@ -186,14 +254,17 @@ QString QSocFileHistory::readBackup(const QString &sha256) const
 void QSocFileHistory::trackEdit(
     const QString &filePath, bool beforeExists, const QString &beforeContent)
 {
-    /* If this file has already been tracked earlier in the session, its
-     * baseline (the turn-0 "before the first edit" state) was captured on
-     * the first call — nothing to do now. Subsequent edits in the same
-     * session will have their post-state captured by makeSnapshot(). */
-    if (trackedFiles.contains(filePath)) {
+    /* If this file has already been tracked on this tree earlier in the
+     * session, its baseline (the turn-0 "before the first edit" state) was
+     * captured on the first call, so nothing to do now. Subsequent edits in the
+     * same session will have their post-state captured by makeSnapshot(). A
+     * path tracked only on another tree gets its own baseline below: the same
+     * absolute path is a different file there. */
+    const Epoch epoch = liveEpoch();
+    if (trackedPathsFor(epoch.tree).contains(filePath)) {
         return;
     }
-    trackedFiles.insert(filePath);
+    trackedFiles[epoch.tree].insert(filePath);
 
     /* The caller already observed the file, so the baseline is never
      * unknown: it is present with a blob, or absent. */
@@ -203,35 +274,37 @@ void QSocFileHistory::trackEdit(
         writeBackup(sha, beforeContent);
     }
 
-    /* Merge the baseline into snapshot turn 0. If the file already has an
-     * entry at turn 0 (paranoia — shouldn't happen because we just added
-     * it to trackedFiles), leave the existing record alone. */
+    /* Merge the baseline into snapshot turn 0 for this tree. If the file
+     * already has an entry there (paranoia: shouldn't happen because we just
+     * added it to trackedFiles), leave the existing record alone. */
     QList<Snapshot> snapshots = loadSnapshots();
     Snapshot       *baseline  = nullptr;
     for (Snapshot &snap : snapshots) {
-        if (snap.turn == 0) {
+        /* Matched on the tree, not on the turn alone: the on-disk form keeps
+         * one epoch per snapshot, so merging a second tree's baseline into this
+         * line would claim this tree for every path already in it. */
+        if (snap.turn == 0 && snap.epoch.tree == epoch.tree) {
             baseline = &snap;
             break;
         }
     }
-    /* Records carry the baseline's own generation, not the one bound right
-     * now: the on-disk form keeps one generation per snapshot, so stamping a
-     * later transport here would claim it for every path already recorded. */
     if (baseline == nullptr) {
         Snapshot fresh;
-        fresh.turn       = 0;
-        fresh.timestamp  = QDateTime::currentDateTimeUtc();
-        fresh.generation = liveGeneration();
+        fresh.turn      = 0;
+        fresh.timestamp = QDateTime::currentDateTimeUtc();
+        fresh.epoch     = epoch;
         fresh.files.insert(
             filePath,
-            beforeExists ? FileRecord::present(sha, fresh.generation)
-                         : FileRecord::absent(fresh.generation));
-        snapshots.prepend(fresh);
+            beforeExists ? FileRecord::present(sha, fresh.epoch) : FileRecord::absent(fresh.epoch));
+        /* Appended, not prepended: snapshots are flattened in file order for
+         * equal turns, so a baseline written later must win over one written
+         * before it. */
+        snapshots.append(fresh);
     } else if (!baseline->files.contains(filePath)) {
         baseline->files.insert(
             filePath,
-            beforeExists ? FileRecord::present(sha, baseline->generation)
-                         : FileRecord::absent(baseline->generation));
+            beforeExists ? FileRecord::present(sha, baseline->epoch)
+                         : FileRecord::absent(baseline->epoch));
     }
     saveSnapshots(snapshots);
 }
@@ -241,21 +314,26 @@ bool QSocFileHistory::makeSnapshot(int turn)
     if (turn <= 0) {
         return false; /* turn 0 is reserved for the lazily-populated baseline */
     }
-    if (trackedFiles.isEmpty()) {
-        return true; /* nothing to snapshot; not an error */
+    const Epoch         entryEpoch = liveEpoch();
+    const QSet<QString> paths      = trackedPathsFor(entryEpoch.tree);
+    if (paths.isEmpty()) {
+        /* Nothing tracked on the bound tree; not an error. Paths tracked on
+         * another tree are deliberately not read here: over this link the same
+         * absolute path names a different file or nothing at all, and "nothing
+         * at all" would be recorded as an instruction to unlink. */
+        return true;
     }
-    const quint64 entryGeneration = liveGeneration();
-    Snapshot      snap;
-    snap.turn       = turn;
-    snap.timestamp  = QDateTime::currentDateTimeUtc();
-    snap.generation = entryGeneration;
-    bool straddled  = false;
-    for (const QString &path : trackedFiles) {
+    Snapshot snap;
+    snap.turn      = turn;
+    snap.timestamp = QDateTime::currentDateTimeUtc();
+    snap.epoch     = entryEpoch;
+    bool straddled = false;
+    for (const QString &path : paths) {
         /* Once the transport has been replaced, the rest of the tree belongs
          * to a tree this snapshot is not describing, so claim nothing about
          * it rather than reading it on the new link. */
         if (straddled) {
-            snap.files.insert(path, FileRecord::unknown(entryGeneration));
+            snap.files.insert(path, FileRecord::unknown(entryEpoch));
             continue;
         }
         const LiveRead live = liveAccessor.read ? liveAccessor.read(path) : LiveRead::unknown();
@@ -264,9 +342,9 @@ bool QSocFileHistory::makeSnapshot(int turn)
          * record at or below a turn, so omitting the entry would make a
          * rewind here inherit the previous turn's records and unlink a file
          * that this turn created. */
-        if (liveGeneration() != entryGeneration) {
+        if (liveEpoch() != entryEpoch) {
             straddled = true;
-            snap.files.insert(path, FileRecord::unknown(entryGeneration));
+            snap.files.insert(path, FileRecord::unknown(entryEpoch));
             continue;
         }
         switch (live.state()) {
@@ -274,15 +352,15 @@ bool QSocFileHistory::makeSnapshot(int turn)
             /* Recorded as unknown, never as absent: absent is an instruction
              * to unlink, and we did not establish that there is nothing
              * there to unlink. */
-            snap.files.insert(path, FileRecord::unknown(entryGeneration));
+            snap.files.insert(path, FileRecord::unknown(entryEpoch));
             break;
         case FileState::Absent:
-            snap.files.insert(path, FileRecord::absent(entryGeneration));
+            snap.files.insert(path, FileRecord::absent(entryEpoch));
             break;
         case FileState::Present: {
             const QString sha = sha256Hex(live.content());
             writeBackup(sha, live.content());
-            snap.files.insert(path, FileRecord::present(sha, entryGeneration));
+            snap.files.insert(path, FileRecord::present(sha, entryEpoch));
             break;
         }
         }
@@ -311,8 +389,10 @@ bool QSocFileHistory::makeSnapshot(int turn)
     return true;
 }
 
-QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::effectiveStateAt(int turn) const
+QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::effectiveStateAt(
+    int turn, const Epoch &live) const
 {
+    const bool                scoped = !live.tree.isEmpty();
     QMap<QString, FileRecord> state;
     const auto                snapshots = loadSnapshots();
     for (const Snapshot &snap : snapshots) {
@@ -320,6 +400,15 @@ QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::effectiveStateAt(int
             continue;
         }
         for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
+            /* A turn that ran on another tree cannot have changed this one, so
+             * its records are not a later truth about these paths: dropping
+             * them leaves each path at its most recent record on the bound
+             * tree, which is what that file still holds. A tree-less record is
+             * OtherTree by relate() and dropped here too: its origin cannot be
+             * proven, so it may not act on a colliding path on any tree. */
+            if (scoped && relate(it.value().epoch(), live) == EpochRelation::OtherTree) {
+                continue;
+            }
             /* Later snapshots overwrite earlier ones for the same path. */
             state.insert(it.key(), it.value());
         }
@@ -327,15 +416,45 @@ QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::effectiveStateAt(int
     return state;
 }
 
+QSocFileHistory::BoundaryPreview QSocFileHistory::previewBoundary(int turn) const
+{
+    BoundaryPreview preview;
+    const Epoch     live  = liveEpoch();
+    const auto      state = effectiveStateAt(turn, live);
+    QSet<QString>   elsewhere;
+    for (const Snapshot &snap : loadSnapshots()) {
+        if (snap.turn > turn) {
+            continue;
+        }
+        for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
+            /* Recorded at or below the target turn, yet absent from the scoped
+             * state: every record it has belongs to another tree. */
+            if (!it.value().isUnknown() && !state.contains(it.key())) {
+                elsewhere.insert(it.key());
+            }
+        }
+    }
+    preview.otherTree = QStringList(elsewhere.begin(), elsewhere.end());
+    for (auto it = state.begin(); it != state.end(); ++it) {
+        if (!it.value().isUnknown()
+            && relate(it.value().epoch(), live) == EpochRelation::OtherLink) {
+            preview.otherLink.append(it.key());
+        }
+    }
+    std::sort(preview.otherTree.begin(), preview.otherTree.end());
+    std::sort(preview.otherLink.begin(), preview.otherLink.end());
+    return preview;
+}
+
 QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGeneration across)
 {
     RestoreReport report;
-    const auto    state = effectiveStateAt(turn);
+    const Epoch   entryEpoch = liveEpoch();
+    const auto    state      = effectiveStateAt(turn, entryEpoch);
     if (state.isEmpty()) {
         return report;
     }
-    const quint64 entryGeneration = liveGeneration();
-    bool          stopped         = false;
+    bool stopped = false;
     for (auto it = state.begin(); it != state.end(); ++it) {
         const QString    &path = it.key();
         const FileRecord &rec  = it.value();
@@ -347,8 +466,8 @@ QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGe
             report.unknown.append(path);
             continue;
         }
-        const quint64 live = liveGeneration();
-        if (live != entryGeneration) {
+        const Epoch live = liveEpoch();
+        if (live != entryEpoch) {
             /* The link this restore started on is gone; every path from here
              * on is unattempted and the tree is half-way between two turns. */
             report.transportChanged = true;
@@ -356,8 +475,10 @@ QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGe
             report.failed.append(path);
             continue;
         }
-        const bool crossed = live != 0 && rec.generation() != 0 && rec.generation() != live;
-        if (crossed && across == AcrossGeneration::Refuse) {
+        /* effectiveStateAt dropped every record from another tree, so the only
+         * boundary left here is a replaced connection to this one. */
+        if (relate(rec.epoch(), live) == EpochRelation::OtherLink
+            && across == AcrossGeneration::Refuse) {
             report.unknown.append(path);
             continue;
         }
@@ -424,7 +545,9 @@ QList<QSocFileHistory::Snapshot> QSocFileHistory::listSnapshots() const
 
 QString QSocFileHistory::contentAt(const QString &filePath, int turn) const
 {
-    const auto state = effectiveStateAt(turn);
+    /* Unscoped on purpose: this reads a backup blob and writes nothing, and
+     * /diff asks about paths from every tree in the session. */
+    const auto state = effectiveStateAt(turn, Epoch());
     if (!state.contains(filePath)) {
         return QString();
     }
@@ -481,10 +604,14 @@ QList<QSocFileHistory::Snapshot> QSocFileHistory::loadSnapshots() const
                 snap.timestamp = QDateTime::fromString(
                     QString::fromStdString(doc["ts"].get<std::string>()), Qt::ISODateWithMs);
             }
-            /* A line written before "gen" existed reads as 0, which never
-             * trips the cross-generation guard. */
+            /* A line written before these fields existed names no tree and
+             * reads as link 0. It still loads: what it may be acted on is
+             * relate()'s decision, not the parser's. */
+            if (doc.contains("tree") && doc["tree"].is_string()) {
+                snap.epoch.tree = QString::fromStdString(doc["tree"].get<std::string>());
+            }
             if (doc.contains("gen") && doc["gen"].is_number_unsigned()) {
-                snap.generation = doc["gen"].get<quint64>();
+                snap.epoch.link = doc["gen"].get<quint64>();
             }
             const auto &files = doc["files"];
             if (files.is_object()) {
@@ -493,13 +620,13 @@ QList<QSocFileHistory::Snapshot> QSocFileHistory::loadSnapshots() const
                     /* Classified by JSON type plus shape: null is absent, a
                      * well-formed digest is present, and everything else
                      * (including a torn value) is unknown. */
-                    FileRecord rec = FileRecord::unknown(snap.generation);
+                    FileRecord rec = FileRecord::unknown(snap.epoch);
                     if (it.value().is_null()) {
-                        rec = FileRecord::absent(snap.generation);
+                        rec = FileRecord::absent(snap.epoch);
                     } else if (it.value().is_string()) {
                         const QString sha = QString::fromStdString(it.value().get<std::string>());
                         if (isSha256Hex(sha)) {
-                            rec = FileRecord::present(sha, snap.generation);
+                            rec = FileRecord::present(sha, snap.epoch);
                         }
                     }
                     snap.files.insert(path, rec);
@@ -512,7 +639,10 @@ QList<QSocFileHistory::Snapshot> QSocFileHistory::loadSnapshots() const
         }
     }
     file.close();
-    std::sort(result.begin(), result.end(), [](const Snapshot &lhs, const Snapshot &rhs) {
+    /* Stable: two snapshots can share a turn (one baseline per tree, plus a
+     * legacy baseline that names none), and flattening must take the one
+     * written later, not whichever the sort happened to leave last. */
+    std::stable_sort(result.begin(), result.end(), [](const Snapshot &lhs, const Snapshot &rhs) {
         return lhs.turn < rhs.turn;
     });
     cachedSnapshots = result;
@@ -534,7 +664,12 @@ void QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
         doc["ts"]   = (snap.timestamp.isValid() ? snap.timestamp : QDateTime::currentDateTimeUtc())
                           .toString(Qt::ISODateWithMs)
                           .toStdString();
-        doc["gen"]  = snap.generation;
+        /* Omitted when unnamed so a legacy line stays a legacy line through a
+         * rewrite instead of gaining a tree it was never captured on. */
+        if (!snap.epoch.tree.isEmpty()) {
+            doc["tree"] = snap.epoch.tree.toStdString();
+        }
+        doc["gen"]    = snap.epoch.link;
         json filesObj = json::object();
         for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
             if (it.value().isPresent()) {

@@ -34,10 +34,11 @@ struct QSocRewindRequest
 
 /**
  * @brief What a rewind attempt did, and what is left to tell the user.
- * @details Refused means nothing was mutated at all. Partial means the
- *          conversation moved but at least one path did not, which is a
- *          different thing from a refusal and must never be reported with
- *          the word "cancelled".
+ * @details Refused means nothing was mutated at all. Partial means the rewind
+ *          ran but at least one path did not end up where it was asked to,
+ *          whether it was refused or deliberately left alone, which is a
+ *          different thing from a refusal and must never be reported with the
+ *          word "cancelled".
  */
 struct QSocRewindResult
 {

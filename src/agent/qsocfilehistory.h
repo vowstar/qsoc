@@ -35,7 +35,8 @@
  *     {
  *       "turn": <int>,                  // monotonic turn counter
  *       "ts":   "<iso8601>",             // when the snapshot was captured
- *       "gen":  <uint>,                  // transport that captured it, 0 = none
+ *       "tree": "<id>",                  // working tree it describes, absent = unnamed
+ *       "gen":  <uint>,                  // link within that tree, 0 = none
  *       "files": {                       // files tracked in this snapshot
  *         "/abs/path/to/apb.yaml": "<sha256>",
  *         "/abs/path/to/new.v":    null,     // file was absent at this turn
@@ -46,8 +47,10 @@
  *   A file value is classified by JSON type and shape, not by a version
  *   field: null is absent, a 64-character lowercase hex string is present,
  *   and anything else (including a torn value) is unknown. A line with no
- *   `"gen"` reads as generation 0, which never trips the cross-generation
- *   guard, so sessions written before the field existed still rewind.
+ *   `"tree"` names no tree: it still loads, and it applies to the local disk,
+ *   where the absolute paths of a session written before the field existed
+ *   point. It never applies to a workspace reached over a link, which it was
+ *   never shown to have been captured on.
  *
  *   **Snapshot indexing**: turn 0 is the "baseline" snapshot that captures
  *   the pre-edit state of each tracked file at its first mutation. Turn N
@@ -62,7 +65,15 @@
  *
  *   **Lazy tracking**: only files that the agent has actually written are
  *   ever backed up or snapshotted. Untouched project files are left alone
- *   by every rewind / apply operation.
+ *   by every rewind / apply operation. The tracked set is per tree: a path
+ *   edited on one tree is not read on another, where the same absolute path
+ *   names a different file or nothing at all.
+ *
+ *   **Epochs**: every record carries the epoch it was captured under, a tree
+ *   name plus a link number. Records from another tree are dropped when the
+ *   effective state is flattened, so a path falls back to its most recent
+ *   record on the bound tree; a turn that ran elsewhere cannot have changed
+ *   this tree's files, so that record is still the truth about it.
  */
 class QSocFileHistory
 {
@@ -118,11 +129,59 @@ public:
     };
 
     /**
+     * @brief Which working tree a record belongs to, and over which link.
+     * @details @ref tree names a file namespace: the local disk, or one
+     *          workspace on one host. Absolute paths only mean the same thing
+     *          inside one of them. @ref link names the connection reaching
+     *          that tree, so a reconnect to the same workspace keeps the tree
+     *          and changes the link. An empty tree names nothing and a link of
+     *          0 numbers nothing; both are what a snapshot written before the
+     *          fields existed reads as. An empty tree is not a wildcard: it is
+     *          an unproven origin, actionable only on the local disk.
+     */
+    struct Epoch
+    {
+        QString tree;     /**< Working-tree identity; empty when unnamed. */
+        quint64 link = 0; /**< Connection within that tree; 0 when unnumbered. */
+
+        friend bool operator==(const Epoch &lhs, const Epoch &rhs)
+        {
+            return lhs.tree == rhs.tree && lhs.link == rhs.link;
+        }
+        friend bool operator!=(const Epoch &lhs, const Epoch &rhs) { return !(lhs == rhs); }
+    };
+
+    /**
+     * @brief How a record's epoch relates to the one bound right now.
+     * @details The two mismatches are not one risk with two names. A
+     *          different link is the same files seen over a connection that
+     *          has since been replaced, which a user may knowingly accept. A
+     *          tree that is not this one, or cannot be shown to be, is another
+     *          file namespace, where the same absolute path may denote an
+     *          unrelated file, so acting on it is not a risk anyone can accept
+     *          on the user's behalf.
+     */
+    enum class EpochRelation : std::uint8_t {
+        Same,      /**< The record is this tree's, over a link still bound. */
+        OtherLink, /**< Same tree, a connection that has been replaced. */
+        OtherTree, /**< Not shown to be this namespace; paths may differ. */
+    };
+
+    /**
+     * @brief Classify @p record against @p live. Exposed for tests.
+     * @details A record naming no tree is OtherTree against every live epoch,
+     *          the local disk included: its origin was never proven, so nothing
+     *          acts on it and no caller can waive it. Only a record whose named
+     *          tree matches the live one is Same.
+     */
+    static EpochRelation relate(const Epoch &record, const Epoch &live);
+
+    /**
      * @brief What a snapshot recorded about one file.
      * @details A default-constructed record is Unknown, so a path missing
      *          from a map reads as "no information" rather than "absent".
-     *          @ref generation names the transport the record was captured
-     *          over; it survives the flattening that merges several
+     *          @ref epoch names the tree and link the record was captured
+     *          under; it survives the flattening that merges several
      *          snapshots into one effective state.
      */
     class FileRecord
@@ -131,21 +190,21 @@ public:
         FileRecord() = default;
 
         /** @brief State could not be established at capture time. */
-        static FileRecord unknown(quint64 generation = 0)
+        static FileRecord unknown(Epoch epoch)
         {
-            return FileRecord(FileState::Unknown, QString(), generation);
+            return FileRecord(FileState::Unknown, QString(), std::move(epoch));
         }
 
         /** @brief The file was not there at capture time. */
-        static FileRecord absent(quint64 generation)
+        static FileRecord absent(Epoch epoch)
         {
-            return FileRecord(FileState::Absent, QString(), generation);
+            return FileRecord(FileState::Absent, QString(), std::move(epoch));
         }
 
         /** @brief The file held the content behind @p sha256. */
-        static FileRecord present(QString sha256, quint64 generation)
+        static FileRecord present(QString sha256, Epoch epoch)
         {
-            return FileRecord(FileState::Present, std::move(sha256), generation);
+            return FileRecord(FileState::Present, std::move(sha256), std::move(epoch));
         }
 
         bool isUnknown() const { return stateValue == FileState::Unknown; }
@@ -155,35 +214,34 @@ public:
         /** @brief Backup blob digest; empty unless the record is present. */
         QString sha256() const { return shaValue; }
 
-        /** @brief Transport this record was captured over; 0 means none. */
-        quint64 generation() const { return generationValue; }
+        /** @brief Tree and link this record was captured under. */
+        const Epoch &epoch() const { return epochValue; }
 
     private:
-        FileRecord(FileState state, QString sha256, quint64 generation)
+        FileRecord(FileState state, QString sha256, Epoch epoch)
             : stateValue(state)
             , shaValue(std::move(sha256))
-            , generationValue(generation)
+            , epochValue(std::move(epoch))
         {}
 
         FileState stateValue = FileState::Unknown;
         QString   shaValue;
-        quint64   generationValue = 0;
+        Epoch     epochValue;
     };
 
     /**
-     * @brief Per-snapshot metadata (one entry per captured turn).
-     * @details generation names the transport that captured the snapshot; 0
-     *          means no transport discipline (local disk, or a session
-     *          written before the field existed). The baseline turn 0 keeps
-     *          the generation it was created under even as later edits add
-     *          paths to it, so a record never claims a transport that was
-     *          not bound when it was captured.
+     * @brief Per-snapshot metadata (one entry per captured turn and tree).
+     * @details The epoch is stored once per snapshot, so every record in one
+     *          snapshot shares it. That is why the baseline keeps the epoch it
+     *          was created under: stamping a later one would claim it for
+     *          every path already recorded. A session that edits on two trees
+     *          therefore gets one baseline per tree, not one shared baseline.
      */
     struct Snapshot
     {
         int                       turn = 0;
         QDateTime                 timestamp;
-        quint64                   generation = 0;
+        Epoch                     epoch;
         QMap<QString, FileRecord> files;
     };
 
@@ -204,11 +262,13 @@ public:
      *          reported as not restored, which over-reports failure but
      *          never deletes.
      *
-     *          `generation` names the transport that is bound right now, so
-     *          a capture or a restore can tell that the link it started on
-     *          is no longer the link it is finishing on. Leave it unset when
-     *          the backend has no such notion; 0 disables both generation
-     *          checks.
+     *          `tree` names the file namespace these paths live in and
+     *          `generation` the connection reaching it, so a capture or a
+     *          restore can tell that the tree it started on is not the tree it
+     *          is finishing on. A backend that names no tree is treated as one
+     *          unnamed tree: its own records stay actionable, but two such
+     *          backends are indistinguishable, so name the tree to be fenced
+     *          apart from another one.
      */
     struct LiveFileAccessor
     {
@@ -216,6 +276,7 @@ public:
         std::function<LiveRead(const QString &path)>                     read;
         std::function<bool(const QString &path, const QString &content)> write;
         std::function<bool(const QString &path)>                         remove;
+        std::function<QString()>                                         tree;
         std::function<quint64()>                                         generation;
     };
 
@@ -246,10 +307,32 @@ public:
         bool isEmpty() const { return restored.isEmpty() && failed.isEmpty() && unknown.isEmpty(); }
     };
 
-    /** @brief Whether a restore may act on a record from another transport. */
+    /**
+     * @brief Whether a restore may act on a record from a replaced link.
+     * @details Scoped to @ref EpochRelation::OtherLink, the risk it was
+     *          written for: the same tree, seen over a connection that is
+     *          gone. It cannot waive @ref EpochRelation::OtherTree, because
+     *          those records never reach the decision: they are dropped when
+     *          the effective state is flattened.
+     */
     enum class AcrossGeneration : std::uint8_t {
         Refuse, /**< Leave such records alone and report them as unknown. */
         Allow,  /**< Act on them anyway; the user accepted the risk. */
+    };
+
+    /**
+     * @brief What a restore to a given turn cannot put back, known up front.
+     * @details Read before the restore so the user is told why a path will be
+     *          left alone instead of inferring it from a shorter list
+     *          afterwards. Sampled through the same live epoch the restore
+     *          itself uses, so the two can never disagree.
+     */
+    struct BoundaryPreview
+    {
+        QStringList otherTree; /**< Recorded on another tree; never acted on. */
+        QStringList otherLink; /**< Same tree, replaced link; needs Allow. */
+
+        bool isEmpty() const { return otherTree.isEmpty() && otherLink.isEmpty(); }
     };
 
     /**
@@ -315,15 +398,26 @@ public:
      *          are also restored: we look back through history to find the
      *          most recent prior state for them and apply it. Files that
      *          the agent never touched are not modified.
+     *          Records captured on another tree are dropped before any of
+     *          this, so a path falls back to its most recent record on the
+     *          bound tree and a path with no such record is left alone.
      * @param turn Target snapshot index.
-     * @param across Whether to act on records captured over a transport
-     *               other than the one bound now. An unknown record is never
-     *               actionable, Allow or not: a generation boundary is a
-     *               heuristic the user may knowingly override, an unknown
-     *               record is a genuine absence of information.
+     * @param across Whether to act on records captured over a link that has
+     *               since been replaced. An unknown record is never
+     *               actionable, Allow or not: a replaced link is a heuristic
+     *               the user may knowingly override, an unknown record is a
+     *               genuine absence of information.
      * @return What was put back, what could not be, and what was skipped.
      */
     RestoreReport applySnapshot(int turn, AcrossGeneration across = AcrossGeneration::Refuse);
+
+    /**
+     * @brief What @ref applySnapshot would refuse to act on at @p turn.
+     * @details Unknown records are left out: they are reported by the restore
+     *          itself and would fire the notice for something no boundary
+     *          caused.
+     */
+    BoundaryPreview previewBoundary(int turn) const;
 
     /**
      * @brief Drop every snapshot with turn > cutoffTurn.
@@ -391,10 +485,13 @@ private:
     QString          projectPathValue;
     QString          sessionIdValue;
     LiveFileAccessor liveAccessor;
-    /* Files that have been touched at least once this session, tracked so
-     * subsequent snapshots capture their post-turn state even when the
-     * file wasn't re-edited in that specific turn. */
-    QSet<QString> trackedFiles;
+    /* Files touched at least once this session, keyed by the tree they were
+     * touched on, so subsequent snapshots capture their post-turn state even
+     * when the file wasn't re-edited in that turn, and so a turn on one tree
+     * never reads a path that only exists on another. The empty key holds
+     * paths from snapshots that name no tree; those are read on the local disk
+     * only, the same tree their records may be acted on. */
+    QHash<QString, QSet<QString>> trackedFiles;
     /* Snapshots loaded lazily on first access; mutations to disk keep this
      * in sync so callers don't pay for repeated reads. */
     mutable QList<Snapshot> cachedSnapshots;
@@ -408,13 +505,17 @@ private:
     /* Walk every surviving snapshot, collect referenced sha256 set, and
      * delete any .bak blob that is no longer referenced. */
     void gcOrphanedBackups() const;
-    /* Build the effective path->record map at the given turn by scanning
-     * all snapshots with turn <= N and keeping the latest record per path. */
-    QMap<QString, FileRecord> effectiveStateAt(int turn) const;
-    /* Single sampling point for both generation checks, so the straddle
-     * guard and the per-record boundary guard can never disagree about
-     * which transport is bound. 0 when the backend has no notion of one. */
-    quint64 liveGeneration() const;
+    /* Build the effective path->record map at the given turn by scanning all
+     * snapshots with turn <= N and keeping the latest record per path. A
+     * non-empty live.tree drops every record from another tree first. */
+    QMap<QString, FileRecord> effectiveStateAt(int turn, const Epoch &live) const;
+    /* Paths to snapshot on the given tree: the ones tracked there, plus, on the
+     * local disk only, the ones from snapshots that name no tree. */
+    QSet<QString> trackedPathsFor(const QString &tree) const;
+    /* Single sampling point for every epoch check, so the straddle guard, the
+     * scoping and the per-record boundary guard can never disagree about what
+     * is bound. Never returns an empty tree: an unnamed backend is one tree. */
+    Epoch liveEpoch() const;
 };
 
 #endif // QSOCFILEHISTORY_H

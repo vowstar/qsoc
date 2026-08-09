@@ -312,13 +312,14 @@ private slots:
      * new. A full rewind commits every step: the conversation shrinks, the
      * original creation timestamp survives the rewrite, the tree goes back,
      * and the orphaned future snapshots are dropped while the target stays
-     * readable. */
+     * readable. A path left alone for unknown state is a partial rewind: it
+     * did not move, and the label has to match the list underneath it. */
     void fullRewindTruncatesForwardSnapshotsAndKeepsTheTargetReachable()
     {
         const QSocRewindResult result
             = qsocApplyRewind(fullRewind(), session.get(), history.get(), QSocRewindFileGate());
 
-        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Done);
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Partial);
         QCOMPARE(result.kept, 2);
         QCOMPARE(QSocSession::loadMessages(session->filePath()).size(), std::size_t{2});
         QCOMPARE(QSocSession::readInfo(session->filePath()).createdAt, createdAt);
@@ -329,9 +330,34 @@ private slots:
         QCOMPARE(
             qsocRewindReport(fullRewind(), result),
             QStringLiteral(
-                "\n(Rewound: kept 2 messages, 2 files restored, 1 left alone (state "
-                "unknown), picked text restored for editing)\n"
+                "\n(Rewound partially: kept 2 messages, 2 files restored, 1 left alone "
+                "(state unknown), picked text restored for editing)\n"
                 "  left untouched (state unknown):\n    /w/c.sv\n"));
+    }
+
+    /* SPECIFICATION test, not a counterexample: the function under test is
+     * new. Done means every path the rewind was responsible for moved. With
+     * nothing left alone and nothing refused there is no qualifier to print. */
+    void aRewindThatMovedEveryPathReportsDone()
+    {
+        /* c stays readable this time, so its turn-1 record is a real one. */
+        tree.files.insert(kPathC, QStringLiteral("turn1 C"));
+        QVERIFY(history->makeSnapshot(3));
+        QSocRewindRequest request = fullRewind();
+        request.targetSnapshot    = 3;
+
+        const QSocRewindResult result
+            = qsocApplyRewind(request, session.get(), history.get(), QSocRewindFileGate());
+
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Done);
+        QVERIFY(result.files.unknown.isEmpty());
+        QVERIFY(result.files.failed.isEmpty());
+        QCOMPARE(result.files.restored.size(), 3);
+        QCOMPARE(
+            qsocRewindReport(request, result),
+            QStringLiteral(
+                "\n(Rewound: kept 2 messages, 3 files restored, picked text restored "
+                "for editing)\n"));
     }
 
     /* SPECIFICATION test, not a counterexample: the function under test is
@@ -354,14 +380,14 @@ private slots:
         QCOMPARE(QSocSession::loadMessages(session->filePath()).size(), std::size_t{4});
         QCOMPARE(snapshotHighWater(), 2);
 
-        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Done);
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Partial);
         QCOMPARE(result.kept, 0);
         QCOMPARE(tree.files.value(kPathA), QStringLiteral("turn1 A"));
         QCOMPARE(
             qsocRewindReport(request, result),
             QStringLiteral(
-                "\n(Rewound code only: 2 files restored, 1 left alone (state "
-                "unknown), conversation unchanged)\n"
+                "\n(Rewound partially: code only, 2 files restored, 1 left alone "
+                "(state unknown), conversation unchanged)\n"
                 "  left untouched (state unknown):\n    /w/c.sv\n"));
     }
 

@@ -2961,7 +2961,21 @@ bool QSocCliWorker::runAgentLoop(
      * instead of touching a stale local path. */
     auto wireRemoteFileHistory = [&currentFileHistory, remoteConn](QSocToolRegistry *reg) {
         if (currentFileHistory) {
-            currentFileHistory->setLiveAccessor(remoteLiveFileAccessor(remoteConn));
+            auto accessor = remoteLiveFileAccessor(remoteConn);
+            /* The accessor knows which connection is bound; only this call site
+             * knows which tree that connection reaches. Naming it is what stops
+             * a rewind from acting on a local path recorded before /ssh, where
+             * the same absolute path names a different file or none at all.
+             * 0x1F separates the two names so no target and workspace pair can
+             * spell another pair's identity. */
+            accessor.tree = [remoteConn]() -> QString {
+                if (remoteConn == nullptr) {
+                    return QString();
+                }
+                return QStringLiteral("ssh:") + remoteConn->target() + QChar(0x1F)
+                       + remoteConn->workspace();
+            };
+            currentFileHistory->setLiveAccessor(accessor);
         }
         if (reg == nullptr) {
             return;
@@ -4947,8 +4961,9 @@ bool QSocCliWorker::runAgentLoop(
                         if (it.value().isUnknown()) {
                             continue;
                         }
-                        const FileRecord before = prev.contains(it.key()) ? prev.value(it.key())
-                                                                          : FileRecord::absent(0);
+                        const FileRecord before = prev.contains(it.key())
+                                                      ? prev.value(it.key())
+                                                      : FileRecord::absent(QSocFileHistory::Epoch());
                         if (before.isUnknown()) {
                             continue;
                         }
@@ -5063,22 +5078,23 @@ bool QSocCliWorker::runAgentLoop(
                         = QSocSession::readInfo(currentSession->filePath()).createdAt;
                 }
 
-                /* Records captured over a transport that is no longer bound
-                 * are left alone, so say it before the restore instead of
-                 * only listing paths after it. */
+                /* Records the bound tree cannot be acted on from are left
+                 * alone, so say it before the restore instead of only listing
+                 * paths after it. Asked of the history, which samples the live
+                 * epoch once: reading the transport again here is how the
+                 * notice used to stay silent in the exact case it names. */
                 QString boundaryNotice;
                 if (restoreFiles && currentFileHistory) {
-                    const quint64 liveGen = remoteConn->generation();
-                    if (liveGen != 0) {
-                        for (const auto &snap : currentFileHistory->listSnapshots()) {
-                            if (snap.turn <= request.targetSnapshot && snap.generation != 0
-                                && snap.generation != liveGen) {
-                                boundaryNotice = QStringLiteral(
-                                    "\n(Some checkpoints were taken over an earlier connection; "
-                                    "their files are left untouched.)\n");
-                                break;
-                            }
-                        }
+                    const auto preview = currentFileHistory->previewBoundary(request.targetSnapshot);
+                    if (!preview.otherTree.isEmpty()) {
+                        boundaryNotice += QStringLiteral(
+                            "\n(Some checkpoints were taken on a different workspace; "
+                            "their files are left untouched.)\n");
+                    }
+                    if (!preview.otherLink.isEmpty()) {
+                        boundaryNotice += QStringLiteral(
+                            "\n(Some checkpoints were taken over an earlier connection; "
+                            "their files are left untouched.)\n");
                     }
                 }
 
@@ -5719,11 +5735,14 @@ bool QSocCliWorker::runAgentLoop(
             /* A "turn" is meaningful only when there's a post-turn snapshot
              * to diff against its predecessor. Turn 0 is the baseline. */
             using DiffRecord = QSocFileHistory::FileRecord;
-            /* A path missing from a snapshot map reads as unknown by default,
-             * but the only way a tracked path is missing is that the snapshot
-             * predates the tracking, where absent is the historical truth. */
+            /* A path missing from a snapshot map reads as unknown by default;
+             * here it means the snapshot predates the tracking or describes
+             * another tree, and absent renders the same either way. The epoch
+             * is left unset: this record is synthesised for display and is
+             * never restored from. */
             const auto recordAt = [](const QMap<QString, DiffRecord> &map, const QString &path) {
-                return map.contains(path) ? map.value(path) : DiffRecord::absent(0);
+                return map.contains(path) ? map.value(path)
+                                          : DiffRecord::absent(QSocFileHistory::Epoch());
             };
             const auto sameContent = [](const DiffRecord &lhs, const DiffRecord &rhs) {
                 return lhs.isAbsent() == rhs.isAbsent() && lhs.sha256() == rhs.sha256();

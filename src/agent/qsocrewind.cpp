@@ -101,8 +101,11 @@ QSocRewindResult qsocApplyRewind(
             history->truncateAfter(request.targetSnapshot);
         }
     }
-    result.outcome = result.files.failed.isEmpty() ? QSocRewindResult::Outcome::Done
-                                                   : QSocRewindResult::Outcome::Partial;
+    /* A path left alone for unknown state did not move either, so the rewind
+     * is not Done: the label has to match the list the report already prints. */
+    result.outcome = (result.files.failed.isEmpty() && result.files.unknown.isEmpty())
+                         ? QSocRewindResult::Outcome::Done
+                         : QSocRewindResult::Outcome::Partial;
     return result;
 }
 
