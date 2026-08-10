@@ -21,9 +21,10 @@
  * exit-status before CHANNEL_CLOSE, so the status only arrives when the
  * process is done; treating EOF as the end of the command reported a
  * still-running process as a clean exit 0. The first two cases run over a
- * healthy loopback link, because the link is not what they are about; the last
- * one takes the link's receive direction away mid-command, which is the other
- * way a status can fail to arrive.
+ * healthy loopback link, because the link is not what they are about. The other
+ * two cover the remaining ways a status fails to arrive: the link loses its
+ * receive direction mid-command, and the server closes the channel cleanly
+ * without ever sending one.
  */
 
 class Test : public QObject
@@ -36,12 +37,22 @@ private slots:
     void execWaitsForTheExitStatusWhenOutputClosesEarly();
     void execReportsUnknownWhenOutputClosesEarlyAndTheProcessOutrunsTheBudget();
     void aHalfClosedLinkInventsNoExitStatus();
+    void aChannelClosedWithoutAStatusIsNotACleanExit();
 
 private:
     /** @brief Connect to the fixture, failing the case with the sshd log. */
-    void connectOrFail(QSocSshSession &session) { connectOrFail(session, m_fixture.hostConfig()); }
+    void connectOrFail(QSocSshSession &session)
+    {
+        connectOrFail(session, m_fixture.hostConfig(), m_fixture);
+    }
     /** @brief Connect to @p host, failing the case with the sshd log. */
-    void connectOrFail(QSocSshSession &session, const QSocSshHostConfig &host);
+    void connectOrFail(QSocSshSession &session, const QSocSshHostConfig &host)
+    {
+        connectOrFail(session, host, m_fixture);
+    }
+    /** @brief Connect to @p host, failing with @p fixture's sshd log. */
+    void connectOrFail(
+        QSocSshSession &session, const QSocSshHostConfig &host, const QSocTestSshd &fixture);
 
     QSocTestSshd m_fixture;
 };
@@ -57,12 +68,13 @@ void Test::cleanupTestCase()
     QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
 }
 
-void Test::connectOrFail(QSocSshSession &session, const QSocSshHostConfig &host)
+void Test::connectOrFail(
+    QSocSshSession &session, const QSocSshHostConfig &host, const QSocTestSshd &fixture)
 {
     QString err;
     if (session.connectTo(host, &err) != QSocSshSession::ConnectStatus::Ok) {
         QFAIL(qPrintable(
-            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, m_fixture.log())));
+            QStringLiteral("connect failed: %1\n--- sshd ---\n%2").arg(err, fixture.log())));
     }
 }
 
@@ -157,6 +169,65 @@ void Test::aHalfClosedLinkInventsNoExitStatus()
     QVERIFY(stranded.exitSignal.isEmpty());
     QVERIFY(stranded.transportDead);
     QVERIFY(!stranded.errorText.isEmpty());
+}
+
+/*
+ * A server can close a channel cleanly and never send exit-status. OpenSSH does
+ * it under `ChannelTimeout session:*=N`: channel_force_close() sends EOF and
+ * CHANNEL_CLOSE and unlinks the session record, so the process's later SIGCHLD
+ * finds no session and session_exit_message() never runs. It does not kill the
+ * process either, which is why the command's fate is unknown rather than
+ * failed. exit_status reads as its allocated zero behind that clean close, so
+ * this pins the arrival flag: without it a command still running reported a
+ * clean exit 0.
+ *
+ * Its own sshd: the directive would kill every idle channel the other cases
+ * depend on.
+ */
+void Test::aChannelClosedWithoutAStatusIsNotACleanExit()
+{
+    QSocTestSshd fixture;
+    fixture.setExtraConfig({QStringLiteral("ChannelTimeout session:*=1s")});
+    if (!fixture.start() && fixture.state() == QSocTestSshd::State::InitFailed
+        && fixture.log().contains(QStringLiteral("ChannelTimeout"), Qt::CaseInsensitive)) {
+        QSOC_TEST_MISSING_DEPENDENCY("an sshd that supports ChannelTimeout");
+    }
+    QSOC_REQUIRE_SSHD(fixture);
+    const auto fixtureGuard = qScopeGuard([&fixture] {
+        fixture.stop();
+        fixture.removeRoot();
+    });
+
+    QSocSshSession session;
+    connectOrFail(session, fixture.hostConfig(), fixture);
+
+    /* Silent, so the channel is idle from the start and the server closes it
+     * long before the command is done. */
+    const QString started  = fixture.workDir() + QStringLiteral("/started");
+    const QString finished = fixture.workDir() + QStringLiteral("/finished");
+    QSocSshExec   exec(session);
+    QElapsedTimer clock;
+    clock.start();
+    const auto unreported = exec.run(
+        QStringLiteral("touch %1; sleep 6; touch %2; exit 7").arg(started, finished), 30000);
+    const qint64 elapsed = clock.elapsed();
+
+    QVERIFY2(QFile::exists(started), "the command never ran");
+    QVERIFY2(
+        !QFile::exists(finished),
+        qPrintable(QStringLiteral(
+                       "the command was already done after %1 ms, so the case proves "
+                       "nothing about a status that never arrived")
+                       .arg(elapsed)));
+    QCOMPARE(unreported.exitCode, -1);
+    QVERIFY(unreported.exitSignal.isEmpty());
+    QVERIFY(!unreported.transportDead);
+    QVERIFY2(session.isConnected(), "a server-closed channel condemned the workspace");
+    QCOMPARE(session.unusableReason(), QSocSshSession::Unusable::No);
+
+    /* The command outlives the report: proof that the exit 7 it eventually
+     * reaches was never available to be reported. */
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(finished), 30000);
 }
 
 QSOC_TEST_MAIN(Test)

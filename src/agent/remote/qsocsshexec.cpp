@@ -69,6 +69,29 @@ bool QSocSshExec::waitInternal(bool requestInFlight)
     return true;
 }
 
+void QSocSshExec::freeChannel(LIBSSH2_CHANNEL *channel)
+{
+    /* An EAGAIN free released nothing and left the channel registered. The free
+     * cannot finish while the remote process outlives the call: it waits for the
+     * peer's CHANNEL_CLOSE, the same reply the close handshake gave up on. It
+     * shares the call's cleanup window with that handshake, so teardown stays
+     * bounded as a whole. */
+    while (libssh2_channel_free(channel) == LIBSSH2_ERROR_EAGAIN) {
+        if (m_abort.load(std::memory_order_relaxed) || !waitAbandonable()) {
+            /* Handing it to the session rather than forgetting it. A channel
+             * nobody frees stays registered and keeps taking delivery of packets
+             * nobody reads for as long as the session lives. The session retries
+             * the release before the next command, by which time the peer has
+             * usually confirmed the close. */
+            m_session.noteStrandedChannel(channel);
+            qWarning(
+                "SSH exec could not release the channel of a command that outlived its "
+                "budget; the release is queued on the session");
+            return;
+        }
+    }
+}
+
 QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
 {
     Result result;
@@ -91,6 +114,11 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
         result.transportDead = m_session.isTransportDead();
         return result;
     }
+
+    /* One non-blocking attempt at whatever an earlier command could not
+     * release. Nothing waits on it: the free either finds the peer's close
+     * already delivered and completes, or keeps its place for next time. */
+    m_session.releaseStrandedChannels();
 
     LIBSSH2_CHANNEL *channel = nullptr;
     while ((channel = libssh2_channel_open_session(session)) == nullptr) {
@@ -116,7 +144,7 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
     int              rc       = 0;
     while ((rc = libssh2_channel_exec(channel, cmdBytes.constData())) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
-            libssh2_channel_free(channel);
+            freeChannel(channel);
             result.transportDead = m_transportDead;
             result.errorText = m_transportDead ? kTransportDeadText
                                                : QStringLiteral("Timed out sending exec request");
@@ -125,8 +153,8 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
         }
     }
     if (rc != 0) {
-        libssh2_channel_free(channel);
-        m_transportDead      = m_session.notePossibleTransportError(rc);
+        m_transportDead = m_session.notePossibleTransportError(rc);
+        freeChannel(channel);
         result.transportDead = m_transportDead;
         result.errorText     = m_transportDead ? kTransportDeadText
                                                : QStringLiteral("Remote exec failed to start");
@@ -228,28 +256,16 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
             libssh2_free(session, signalName);
         }
     }
-    /* exit_status is a bare int with no companion flag, so a channel that
-     * never received one reads as 0. closeRc == 0 means the peer's
-     * CHANNEL_CLOSE was received and dispatched, and exit-status precedes it
-     * on the same in-order stream.
-     *
-     * The transport conjunct is defensive: in libssh2 1.11.1 a post-handshake
-     * recv of 0 becomes LIBSSH2_ERROR_SOCKET_RECV and never sets
-     * socket_state, so the close-wait loop's disconnected shortcut is
-     * reachable only from a peer-sent SSH_MSG_DISCONNECT. No test fences it,
-     * because no test can produce that shape against OpenSSH.
-     *
-     * Residual, and it is reachable: a server that closes the channel without
-     * ever sending exit-status still reads as 0, and libssh2's public API
-     * cannot tell that apart. OpenSSH does that under
-     * `ChannelTimeout session:*=N`, where channel_force_close() sends EOF and
-     * CHANNEL_CLOSE with no status, so a command the server killed reports a
-     * clean exit. Distinguishing it needs a libssh2 that records whether the
-     * request arrived. */
-    if (result.exitSignal.isEmpty() && closeRc == 0 && !m_transportDead) {
+    /* exit_status is a bare int that reads as 0 on a channel which never
+     * received one, so only the arrival flag proves a status was sent. A clean
+     * CHANNEL_CLOSE does not: OpenSSH under `ChannelTimeout session:*=N`
+     * force-closes the channel with EOF and CHANNEL_CLOSE and no status while
+     * the command keeps running, so trusting the close reported a command that
+     * had not finished as a clean exit 0. */
+    if (libssh2_channel_has_exit_status(channel) != 0) {
         result.exitCode = libssh2_channel_get_exit_status(channel);
     }
-    libssh2_channel_free(channel);
+    freeChannel(channel);
 
     result.transportDead = m_transportDead;
     if (m_transportDead && result.errorText.isEmpty()) {

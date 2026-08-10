@@ -38,7 +38,7 @@ public:
         /**
          * Signal name when the remote process was killed, e.g. "KILL".
          * Non-empty means the command did not exit on its own, and
-         * `exitCode` stays -1: a signalled process sends no exit status.
+         * `exitCode` stays -1: a signalled process sends no exit-status.
          */
         QString exitSignal;
         QString errorText;
@@ -79,14 +79,24 @@ private:
      *          waiting for. Crucially a server does not confirm a channel
      *          close until the remote process exits, so insisting on that
      *          confirmation would make every command that outruns its
-     *          timeout cost the user their whole workspace. A transport
-     *          genuinely stranded mid-send still surfaces: the next real
-     *          operation fails with a socket error and poisons the session
-     *          then.
+     *          timeout cost the user their whole workspace. A transport left
+     *          stranded mid-send is not reported as such: `send_existing`
+     *          returns EAGAIN, so the next call EAGAIN-loops to its own
+     *          deadline and comes back `timedOut`.
      */
     bool waitAbandonable();
 
     bool waitInternal(bool requestInFlight);
+
+    /**
+     * @brief Release a channel, driving the non-blocking free to completion.
+     * @details An EAGAIN return released nothing and left the channel
+     *          registered, and it cannot succeed while the remote process
+     *          outlives the call. The channel is then left to the session
+     *          teardown, which frees it: condemning the session over an
+     *          ordinary timeout would cost the caller its workspace.
+     */
+    void freeChannel(LIBSSH2_CHANNEL *channel);
 
     QSocSshSession   &m_session;
     std::atomic<bool> m_abort{false};

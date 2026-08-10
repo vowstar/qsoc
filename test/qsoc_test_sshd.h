@@ -55,6 +55,14 @@ public:
     QSocTestSshd(const QSocTestSshd &)            = delete;
     QSocTestSshd &operator=(const QSocTestSshd &) = delete;
 
+    /**
+     * @brief Append directives to the generated sshd_config. Call before
+     *        start(); a case that needs server behaviour the default config
+     *        does not have gets its own fixture instance rather than changing
+     *        what every other case runs against.
+     */
+    void setExtraConfig(const QStringList &directives) { m_extraConfig = directives; }
+
     /** @brief Bring up sshd. False unless state() becomes Ready. */
     bool start()
     {
@@ -122,24 +130,27 @@ public:
         /* internal-sftp keeps this independent of the sftp-server path;
          * StrictModes and UsePAM off so a user-level sshd in a temp dir is
          * happy. */
-        const QString cfg = QStringLiteral(
-                                "Port %1\n"
-                                "ListenAddress 127.0.0.1\n"
-                                "HostKey %2\n"
-                                "PidFile %3/sshd.pid\n"
-                                "AuthorizedKeysFile %4\n"
-                                "UsePAM no\n"
-                                "StrictModes no\n"
-                                "PasswordAuthentication no\n"
-                                "KbdInteractiveAuthentication no\n"
-                                "PubkeyAuthentication yes\n"
-                                "Subsystem sftp internal-sftp\n"
-                                "LogLevel ERROR\n")
-                                .arg(m_port)
-                                .arg(hostKey)
-                                .arg(root)
-                                .arg(authKeys);
-        QFile         configFile(cfgPath);
+        QString cfg = QStringLiteral(
+                          "Port %1\n"
+                          "ListenAddress 127.0.0.1\n"
+                          "HostKey %2\n"
+                          "PidFile %3/sshd.pid\n"
+                          "AuthorizedKeysFile %4\n"
+                          "UsePAM no\n"
+                          "StrictModes no\n"
+                          "PasswordAuthentication no\n"
+                          "KbdInteractiveAuthentication no\n"
+                          "PubkeyAuthentication yes\n"
+                          "Subsystem sftp internal-sftp\n"
+                          "LogLevel ERROR\n")
+                          .arg(m_port)
+                          .arg(hostKey)
+                          .arg(root)
+                          .arg(authKeys);
+        for (const QString &directive : m_extraConfig) {
+            cfg += directive + QLatin1Char('\n');
+        }
+        QFile configFile(cfgPath);
         if (!configFile.open(QIODevice::WriteOnly)) {
             return fail(QStringLiteral("could not write sshd_config"));
         }
@@ -307,6 +318,7 @@ private:
     QString       m_user;
     QString       m_workDir;
     QString       m_logPath;
+    QStringList   m_extraConfig;
     int           m_port = 0;
 };
 
