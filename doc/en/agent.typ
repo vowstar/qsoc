@@ -1160,6 +1160,22 @@ Authentication order:
 + If none configured, QSoC enumerates `~/.ssh/id_*` by filename and lets
   libssh2 try each key in turn
 
+The agent is tried for `ProxyJump` hops too: QSoC speaks the agent protocol on
+its own socket, so a hop's keys come from the local agent as usual.
+
+One deadline covers a whole connect attempt, from name resolution through the
+TCP connect, the handshake and every authentication stage, so the worst case is
+the operation timeout rather than one timeout per stage. Ctrl-C is answered
+inside any of them. The agent is the only route that depends on a third
+process, and one that accepts the connection and then stops answering is the
+ordinary way to meet a forwarded agent whose upstream hop has died; it may
+therefore spend at most half of what is left of the budget, leaving the
+identity-file routes behind it their share. Two limits are worth knowing:
+name resolution has no interruptible form, so a resolver that stops answering
+is bounded by the system resolver's own retry schedule and not by this
+deadline, and on Windows the agent is a Pageant window or a named pipe driven
+by libssh2, which the bound above does not reach.
+
 Host key verification uses `~/.ssh/known_hosts` by default with strict
 checking enabled. `accept-new` is honored for first-contact hosts.
 

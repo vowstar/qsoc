@@ -23,6 +23,8 @@ void QSocRemotePathContext::setRoot(const QString &root)
 {
     m_root = lexicalNormalize(root);
     if (m_cwd.isEmpty()) {
+        /* A seed, not a move: an unset working directory follows the root, and
+         * nothing has been told about it yet. setCwd() is what publishes. */
         m_cwd = m_root;
     }
 }
@@ -30,6 +32,24 @@ void QSocRemotePathContext::setRoot(const QString &root)
 void QSocRemotePathContext::setCwd(const QString &cwd)
 {
     m_cwd = lexicalNormalize(cwd.isEmpty() ? m_root : cwd);
+    if (m_cwdObserver) {
+        /* The stored spelling, not the argument: a copy must never differ from
+         * what cwd() reports. */
+        m_cwdObserver(m_cwd);
+    }
+}
+
+void QSocRemotePathContext::setCwdObserver(std::function<void(const QString &)> observer)
+{
+    m_cwdObserver = std::move(observer);
+}
+
+void QSocRemotePathContext::reset()
+{
+    m_root.clear();
+    m_cwd.clear();
+    m_writableDirs.clear();
+    m_readState.clear();
 }
 
 void QSocRemotePathContext::setWritableDirs(const QStringList &dirs)

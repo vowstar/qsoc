@@ -125,7 +125,8 @@ bool connectAgentSshSession(
     QObject                       *parent,
     AgentRemoteState              *state,
     QString                       *errorMessage,
-    QSocSshSession::SecretCallback secretCallback)
+    QSocSshSession::SecretCallback secretCallback,
+    std::function<bool()>          abortProbe)
 {
     if (state == nullptr) {
         if (errorMessage != nullptr) {
@@ -235,6 +236,10 @@ bool connectAgentSshSession(
             currentParent = hopSession;
         }
         auto *session = new QSocSshSession(parent);
+        /* Every session in the chain, not just the outermost: a hop's own
+         * handshake and auth are polls of their own, and a stop during one of
+         * them is the same stop. */
+        session->setAbortProbe(abortProbe);
         /* ProxyJump children skip prompting: their auth bytes ride
          * through the parent channel and the agent socket path is
          * not reachable; the interactive route only makes sense at
@@ -353,7 +358,7 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
-    registry->registerTool(new QSocToolRemotePath(parent, pathCtx));
+    registry->registerTool(new QSocToolRemotePath(parent, conn, pathCtx));
     if (monitorSource != nullptr) {
         QSocMonitorTaskSource::RemoteSpec remote;
         remote.targetKey = conn->target();
@@ -437,7 +442,7 @@ bool QSocRemoteConnection::adopt(AgentRemoteState &&state)
      * that was observed producing it. The read-before-overwrite guard keys off
      * this, and it is what forces a re-read before any edit after a
      * reconnect. */
-    m_path = QSocRemotePathContext{};
+    m_path.reset();
     m_path.setRoot(m_workspace);
     m_lastReconnectKeptCwd = false;
     if (rebindsSameBinding) {
@@ -481,7 +486,7 @@ void QSocRemoteConnection::closeTransport()
 void QSocRemoteConnection::teardown()
 {
     closeTransport();
-    m_path = QSocRemotePathContext{};
+    m_path.reset();
     m_target.clear();
     m_workspace.clear();
     m_lastReconnectKeptCwd = false;
@@ -513,6 +518,74 @@ void QSocRemoteConnection::setRebuilder(Rebuilder rebuilder)
     m_rebuilder = std::move(rebuilder);
 }
 
+void QSocRemoteConnection::setWorkingDirectoryObserver(std::function<void(const QString &)> observer)
+{
+    m_path.setCwdObserver(std::move(observer));
+}
+
+void QSocRemoteConnection::setAbortProbe(std::function<bool()> probe)
+{
+    m_abortProbe = std::move(probe);
+}
+
+void QSocRemoteConnection::resetReconnectBudget()
+{
+    m_reconnectsUsed = 0;
+}
+
+QSocRemoteConnection::CwdChange QSocRemoteConnection::setWorkingDirectory(
+    const QString &requested, QString *errorMessage)
+{
+    const auto refuse = [errorMessage](CwdChange outcome, const QString &why) {
+        if (errorMessage != nullptr) {
+            *errorMessage = why;
+        }
+        return outcome;
+    };
+    if (m_sftp == nullptr) {
+        return refuse(CwdChange::Refused, QStringLiteral("no remote workspace is bound"));
+    }
+
+    const QString lexical = m_path.resolveCwdRequest(requested);
+    QString       err;
+    QString       canonicalDir;
+    switch (m_sftp->canonicalize(lexical, &canonicalDir, &err)) {
+    case QSocSftpClient::Canonical::Ok:
+        break;
+    case QSocSftpClient::Canonical::Unresolvable:
+        return refuse(
+            CwdChange::Unresolvable,
+            QStringLiteral("the host holds %1 but cannot resolve it").arg(lexical));
+    case QSocSftpClient::Canonical::Unknown:
+        return refuse(CwdChange::Unknown, err);
+    }
+
+    /* The root has to be asked about too. Comparing a canonical answer
+     * against a lexical root refuses every directory in a workspace that is
+     * itself reached through a symlink. */
+    QString canonicalRoot;
+    switch (m_sftp->canonicalize(m_path.root(), &canonicalRoot, &err)) {
+    case QSocSftpClient::Canonical::Ok:
+        break;
+    case QSocSftpClient::Canonical::Unresolvable:
+        return refuse(
+            CwdChange::Unresolvable,
+            QStringLiteral("the host cannot resolve the workspace root %1").arg(m_path.root()));
+    case QSocSftpClient::Canonical::Unknown:
+        return refuse(CwdChange::Unknown, err);
+    }
+
+    if (!QSocRemotePathContext::isWithinAny(canonicalDir, {canonicalRoot})) {
+        return refuse(
+            CwdChange::Outside,
+            QStringLiteral("the host resolves %1 to %2, outside the workspace")
+                .arg(lexical, canonicalDir));
+    }
+
+    m_path.setCwd(lexical);
+    return CwdChange::Changed;
+}
+
 QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *errorMessage)
 {
     m_lastAttempts = 0;
@@ -522,11 +595,21 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *
     if (!m_rebuilder || m_target.isEmpty() || m_workspace.isEmpty()) {
         return ReconnectOutcome::Refused;
     }
+    /* Asked before the first attempt, not after it: the budget exists to stop
+     * the second and later tool calls of one turn from each paying a full
+     * connect sequence on the event loop. */
+    if (reconnectBudgetSpent()) {
+        return ReconnectOutcome::BudgetSpent;
+    }
+    ++m_reconnectsUsed;
 
     const QString target    = m_target;
     const QString workspace = m_workspace;
 
     for (int attempt = 1; attempt <= kReconnectAttempts; ++attempt) {
+        if (m_abortProbe && m_abortProbe()) {
+            return ReconnectOutcome::Aborted;
+        }
         m_lastAttempts = attempt;
         AgentRemoteState fresh;
         if (!m_rebuilder(target, workspace, &fresh, errorMessage)) {

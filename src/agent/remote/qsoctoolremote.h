@@ -155,7 +155,7 @@ class QSocToolRemotePath : public QSocTool
     Q_OBJECT
 
 public:
-    QSocToolRemotePath(QObject *parent, QSocRemotePathContext *pathCtx);
+    QSocToolRemotePath(QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -164,6 +164,7 @@ public:
     bool    isReadOnly() const override { return true; }
 
 private:
+    QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
 };
 

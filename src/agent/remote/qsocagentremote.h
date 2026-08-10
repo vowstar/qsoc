@@ -95,9 +95,12 @@ public:
      *          {workspace}. A rebind to the SAME workspace keeps the working
      *          directory and the writable set, re-verifies the working
      *          directory against the host, and falls back to the root when
-     *          the host does not confirm it. Believed file contents are
-     *          forgotten either way: the read-before-overwrite guard keys off
-     *          them, and nothing on the host has been observed since.
+     *          the host does not confirm it. Whichever directory it lands on
+     *          is published to the working-directory observer, so a rewind
+     *          cannot leave the system prompt naming a directory the session
+     *          has left. Believed file contents are forgotten either way: the
+     *          read-before-overwrite guard keys off them, and nothing on the
+     *          host has been observed since.
      * @return True when the transport was adopted.
      */
     bool adopt(AgentRemoteState &&state);
@@ -107,7 +110,9 @@ public:
      * @details SFTP, then the session, then the ProxyJump chain in reverse so
      *          children disconnect before their parents. Also clears the
      *          identity and the path context, so a later `adopt()` seeds a
-     *          fresh working directory. Leaves @ref generation alone: a stale
+     *          fresh working directory. The working-directory observer stays
+     *          installed: it belongs to the binding, not to the transport.
+     *          Leaves @ref generation alone: a stale
      *          holder must keep reading stale rather than matching a later
      *          rebind by accident. Safe to call with nothing bound.
      */
@@ -118,6 +123,54 @@ public:
     QSocRemotePathContext *path() { return &m_path; }
     QString                target() const { return m_target; }
     QString                workspace() const { return m_workspace; }
+
+    /** @brief What @ref setWorkingDirectory decided. */
+    enum class CwdChange : std::uint8_t {
+        Changed,      /**< @ref path() now reports the new working directory. */
+        Outside,      /**< The host resolves the request outside the root. */
+        Unresolvable, /**< The host holds the name but cannot follow it. */
+        Unknown,      /**< The host gave no usable answer. */
+        Refused,      /**< Nothing is bound, so there is no host to ask. */
+    };
+
+    /**
+     * @brief Move the working directory to where a request asks.
+     * @details Every accepted change goes through
+     *          @ref QSocRemotePathContext::setCwd, here and in @ref adopt
+     *          alike, so the copies of it are written wherever it moves.
+     *
+     *          Lexical clamping alone cannot see a symlink: a directory whose
+     *          name sits under the root while the host resolves it elsewhere
+     *          passes a byte-prefix test, and the working directory then names
+     *          a place the session is not. So the clamped request is
+     *          canonicalized on the host and the canonical answer is what gets
+     *          clamped, against a canonical root so both sides are in one
+     *          spelling.
+     *
+     *          What is stored is the clamped lexical name, not the canonical
+     *          one: the root is held lexically, and a canonical working
+     *          directory under a root that is itself reached through a symlink
+     *          would fail every later containment test in the workspace it is
+     *          actually inside.
+     *
+     *          An answer that is not Ok leaves the working directory alone.
+     *          Moving to a name the host cannot resolve would publish a
+     *          directory nothing has confirmed, and every relative path the
+     *          tools derive would be built on it.
+     * @param errorMessage Optional sink for a user-safe reason.
+     */
+    CwdChange setWorkingDirectory(const QString &requested, QString *errorMessage = nullptr);
+
+    /**
+     * @brief Observe every accepted working-directory change.
+     * @details The working directory lives in the path context, but the agent
+     *          config carries a copy of it into the system prompt and the hook
+     *          envelope. This is how that copy is written, and it is installed
+     *          on the context itself rather than here, so a reconnect that
+     *          rewinds the directory publishes on the same path as an explicit
+     *          request: there is one mutator, and it is the one that publishes.
+     */
+    void setWorkingDirectoryObserver(std::function<void(const QString &)> observer);
 
     /** @brief "<target>:<workspace>" UI label, empty while nothing is bound. */
     QString display() const;
@@ -175,7 +228,39 @@ public:
         Reconnected, /**< A fresh transport is bound. Remote state is unverified. */
         Refused,     /**< No target, workspace or rebuilder to work from. */
         Exhausted,   /**< Every attempt failed; the workspace stays unusable. */
+        BudgetSpent, /**< This turn already spent its budget. Nothing was tried. */
+        Aborted,     /**< The user asked to stop. Nothing further was tried. */
     };
+
+    /**
+     * @brief Hand the caller a full reconnect budget again.
+     * @details Called when a new user request begins. A turn that reconnected
+     *          once does not reconnect again, because a turn that keeps
+     *          reconnecting is one where nothing on the host has been observed
+     *          working between the attempts, and each of them holds the event
+     *          loop for a full connect sequence. A new request is a new
+     *          intent, so it gets the full budget.
+     */
+    void resetReconnectBudget();
+
+    /** @brief Whether this turn has already spent its reconnect budget. */
+    bool reconnectBudgetSpent() const { return m_reconnectsUsed >= kReconnectBudgetPerTurn; }
+
+    /**
+     * @brief Install the predicate `reconnect()` consults between attempts.
+     * @details Each attempt is a full connect, so a user who asked to stop
+     *          must not be made to sit through the next one. Consulted before
+     *          every attempt including the first.
+     */
+    void setAbortProbe(std::function<bool()> probe);
+
+    /**
+     * @brief The installed abort probe, so a rebuilder can pass it down.
+     * @details A connect attempt is a sequence of poll loops inside the
+     *          session, and only the session can cut one of them short. Empty
+     *          when none is installed.
+     */
+    std::function<bool()> abortProbe() const { return m_abortProbe; }
 
     /**
      * @brief Replace a transport that can no longer serve calls.
@@ -198,6 +283,15 @@ private:
     /** @brief How many times one reconnect() call tries before giving up. */
     static constexpr int kReconnectAttempts = 2;
 
+    /**
+     * @brief How many reconnect() calls one turn may spend.
+     * @details Bounds the turn, not the call. Every tool call in a turn
+     *          consults the workspace, so without this a turn pays a full
+     *          connect sequence per call and the event loop is held for the
+     *          sum of them.
+     */
+    static constexpr int kReconnectBudgetPerTurn = 1;
+
     /** @brief Whether a staging bundle carries everything a bind needs. */
     static bool isComplete(const AgentRemoteState &state);
 
@@ -219,9 +313,11 @@ private:
     QString                                                m_workspace;
     Rebuilder                                              m_rebuilder;
     std::function<bool(QSocSftpClient *, const QString &)> m_directoryProbe;
+    std::function<bool()>                                  m_abortProbe;
     QSocRemoteJobLedger                                    m_jobs;
     Generation                                             m_generation           = 0;
     int                                                    m_lastAttempts         = 0;
+    int                                                    m_reconnectsUsed       = 0;
     bool                                                   m_lastReconnectKeptCwd = false;
 };
 
@@ -237,6 +333,8 @@ private:
  * @param state Output struct receiving session/sftp/jumps/targetKey.
  * @param errorMessage Optional sink for a UI-safe error string.
  * @param secretCallback Optional synchronous authentication prompt; not retained.
+ * @param abortProbe Optional stop predicate, installed on every session in the
+ *                   chain so a poll inside any of them can be cut short.
  * @return True on success, false on any connect or SFTP failure.
  */
 bool connectAgentSshSession(
@@ -244,7 +342,8 @@ bool connectAgentSshSession(
     QObject                       *parent,
     AgentRemoteState              *state,
     QString                       *errorMessage,
-    QSocSshSession::SecretCallback secretCallback = {});
+    QSocSshSession::SecretCallback secretCallback = {},
+    std::function<bool()>          abortProbe     = {});
 
 /**
  * @brief Ensure the workspace directory exists on the remote host.

@@ -67,7 +67,10 @@ private slots:
         QCOMPARE(builds, 1);
         QCOMPARE(scratch.children().size(), 1);
 
-        /* Repeating it must not accumulate either. */
+        /* Repeating it must not accumulate either. A second reconnect belongs
+         * to a later turn, and a turn gets one: driving the object directly
+         * there is no turn boundary to supply it. */
+        conn.resetReconnectBudget();
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Reconnected);
         QCOMPARE(builds, 2);
         QCOMPARE(scratch.children().size(), 1);
@@ -231,6 +234,8 @@ private slots:
         QVERIFY(conn.isCurrent(2));
         QVERIFY(!conn.isCurrent(1));
 
+        /* A later turn, so a fresh budget. */
+        conn.resetReconnectBudget();
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Reconnected);
         QCOMPARE(conn.generation(), QSocRemoteConnection::Generation{3});
         QVERIFY(conn.isCurrent(3));
@@ -261,6 +266,8 @@ private slots:
          * refused, and that is not a bind either. */
         conn.setRebuilder(
             [](const QString &, const QString &, AgentRemoteState *, QString *) { return true; });
+        /* A later turn, so a fresh budget. */
+        conn.resetReconnectBudget();
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Exhausted);
         QCOMPARE(conn.generation(), QSocRemoteConnection::Generation{1});
     }

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <QDeadlineTimer>
+#include <QList>
 #include <QObject>
 #include <QString>
 
@@ -19,7 +20,9 @@
  * @details Never reads SSH private key contents. IdentityFile paths are
  *          handed to `libssh2_userauth_publickey_fromfile_ex` which performs
  *          the file read inside the library. ssh-agent authentication is
- *          tried first when available.
+ *          tried first when available, over an agent connection this class
+ *          owns rather than libssh2's, which is what makes it interruptible;
+ *          only public key blobs and finished signatures cross that socket.
  */
 class QSocSshSession : public QObject
 {
@@ -112,6 +115,31 @@ public:
     bool isTransportDead() const { return m_unusable == Unusable::TransportDead; }
 
     /**
+     * @brief Take ownership of a channel whose release could not finish.
+     * @details libssh2 cannot free a channel the peer has not confirmed closed,
+     *          and the peer does not confirm until the remote process exits, so
+     *          a command that outlives its budget leaves one behind. Dropping it
+     *          is not an option: it stays registered, so it keeps taking
+     *          delivery of packets nobody reads until the session is freed, and
+     *          nothing is left to retry the release with. Handing it here means
+     *          the next command retries, by which time the confirmation has
+     *          usually arrived.
+     */
+    void noteStrandedChannel(LIBSSH2_CHANNEL *channel);
+
+    /** @brief How many channels are still waiting to be released. */
+    int strandedChannelCount() const { return static_cast<int>(m_stranded.size()); }
+
+    /**
+     * @brief Retry the release of every channel handed to noteStrandedChannel.
+     * @details One non-blocking attempt each, no wait: the free either finds
+     *          the peer's close already delivered and completes, or says EAGAIN
+     *          and keeps its place in the queue. Cheap enough to run before
+     *          every command.
+     */
+    void releaseStrandedChannels();
+
+    /**
      * @brief Whether the last teardown released everything on the live link.
      * @details False when the peer never confirmed the close and the socket
      *          had to be closed under libssh2 to get the session released,
@@ -121,6 +149,16 @@ public:
      *          to tear down.
      */
     bool lastTeardownCompleted() const { return m_teardownComplete; }
+
+    /**
+     * @brief Whether the last teardown got libssh2 to release its own state.
+     * @details Weaker than lastTeardownCompleted(): closing the socket under a
+     *          session the peer never answered still releases everything, which
+     *          is a successful release of an unconfirmed close. False means the
+     *          library kept the session, and nothing can ever reclaim it, so it
+     *          is the only outcome that is a real leak.
+     */
+    bool lastTeardownReleasedState() const { return m_teardownReleased; }
 
     /**
      * @brief Whether a libssh2 return code means the transport is gone.
@@ -193,14 +231,55 @@ public:
      */
     void setSecretCallback(SecretCallback callback);
 
+    /**
+     * @brief Install the predicate a connect-path wait consults every slice.
+     * @details Connecting is a sequence of EAGAIN loops around one poll each,
+     *          and a poll bounded only by the operation timeout is a wait the
+     *          user cannot get out of. With a probe installed those polls run
+     *          in slices and a stop is honoured within one of them.
+     */
+    void setAbortProbe(std::function<bool()> probe);
+
 private:
+    /** @brief Whether a stop the user asked for may cut a wait short. */
+    enum class Interruptible : std::uint8_t {
+        No,  /**< Teardown: giving up here leaks what it is releasing. */
+        Yes, /**< Connecting: nothing is owned yet, so the caller can go. */
+    };
+
     ConnectStatus openSocket(const QString &host, int port, QString *errorMessage);
-    /** @brief Wait bounded by @p deadline rather than by a fresh timeout. */
-    WaitOutcome   waitWithin(qintptr sockFd, LIBSSH2_SESSION *session, QDeadlineTimer deadline);
+    /**
+     * @brief Wait bounded by @p deadline rather than by a fresh timeout.
+     * @details @p interruptible has no default so every call site has to say
+     *          which it is. A teardown wait that honoured an abort would
+     *          abandon the disconnect or free it was draining.
+     */
+    WaitOutcome waitWithin(
+        qintptr          sockFd,
+        LIBSSH2_SESSION *session,
+        QDeadlineTimer   deadline,
+        Interruptible    interruptible);
+    /**
+     * @brief Arm the one deadline every connect stage answers to.
+     * @details A non-positive timeout means no deadline, matching the socket
+     *          connect. Without the distinction `QDeadlineTimer(0)` would be
+     *          born expired and "no timeout" would mean "fail immediately".
+     */
+    void armConnectDeadline();
+    /** @brief Whether the connect budget is spent or the user asked to stop. */
+    bool connectGaveUp() const;
+    /**
+     * @brief Ask the caller for a secret without charging the wait to the link.
+     * @details Typing time is not network time. Pushing the deadline out by
+     *          however long the prompt was on screen is what lets one absolute
+     *          deadline cover the whole connect and still allow a human to
+     *          answer a passphrase prompt.
+     */
+    QString       promptSecret(const QString &prompt);
     ConnectStatus performHandshake(QString *errorMessage);
     ConnectStatus verifyHostKey(const QSocSshHostConfig &host, QString *errorMessage);
     ConnectStatus authenticate(const QSocSshHostConfig &host, QString *errorMessage);
-    bool          tryAgentAuth(const QString &user);
+    bool          tryAgentAuth(const QString &user, QDeadlineTimer deadline);
     bool          tryIdentityFileAuth(
         const QString &user, const QString &privateKeyPath, const QString &passphrase);
 
@@ -233,15 +312,23 @@ private:
         const QString &user, const QStringList &identityPaths, QStringList *triedKeys);
     bool tryPasswordPrompt(const QString &user, const QString &hostname, int port);
 
-    LIBSSH2_SESSION *m_session          = nullptr;
-    qintptr          m_socket           = -1;
-    Unusable         m_unusable         = Unusable::No;
-    bool             m_teardownComplete = true;
-    int              m_timeoutMs        = 30000;
-    QSocSshSession  *m_parent           = nullptr; /* non-owning */
-    LIBSSH2_CHANNEL *m_parentChannel    = nullptr;
-    QString          m_lastError;
-    SecretCallback   m_secretCallback;
+    LIBSSH2_SESSION      *m_session          = nullptr;
+    qintptr               m_socket           = -1;
+    Unusable              m_unusable         = Unusable::No;
+    bool                  m_teardownComplete = true;
+    bool                  m_teardownReleased = true;
+    int                   m_timeoutMs        = 30000;
+    QSocSshSession       *m_parent           = nullptr; /* non-owning */
+    LIBSSH2_CHANNEL      *m_parentChannel    = nullptr;
+    QString               m_lastError;
+    SecretCallback        m_secretCallback;
+    std::function<bool()> m_abortProbe;
+    /* The one deadline the whole connect answers to: resolve, TCP connect,
+     * handshake and every auth stage share it, so the worst case is the
+     * operation timeout rather than one timeout per stage. */
+    QDeadlineTimer m_connectDeadline;
+    /* Channels libssh2 would not release yet, oldest first. */
+    QList<LIBSSH2_CHANNEL *> m_stranded;
 };
 
 #endif // QSOCSSHSESSION_H

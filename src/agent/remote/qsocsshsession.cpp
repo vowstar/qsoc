@@ -26,11 +26,13 @@ using socket_fd_t = SOCKET;
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <unistd.h>
 using socket_fd_t = int;
 #endif
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -44,6 +46,10 @@ constexpr socket_fd_t kInvalidSocket = -1;
 /* Teardown budget per libssh2 call. Bounded because a peer that stopped
  * answering must not park a caller in the close handshake. */
 constexpr int kTeardownMs = 2000;
+
+/* Slice length for one poll on the connect path. Short enough that a stop the
+ * user asked for is honoured inside one, instead of after the whole attempt. */
+constexpr int kPollSliceMs = 200;
 
 void closeSocketFd(socket_fd_t sockFd)
 {
@@ -129,7 +135,11 @@ void enableKeepalive(socket_fd_t sockFd)
 
 /* Connect without parking the calling thread on the kernel's SYN retry
  * schedule, which can exceed two minutes. */
-bool connectWithTimeout(socket_fd_t sockFd, const struct addrinfo *addr, int timeoutMs)
+bool connectWithTimeout(
+    socket_fd_t                  sockFd,
+    const struct addrinfo       *addr,
+    QDeadlineTimer               deadline,
+    const std::function<bool()> &abortProbe)
 {
     if (setNonBlocking(sockFd) != 0) {
         return false;
@@ -146,8 +156,32 @@ bool connectWithTimeout(socket_fd_t sockFd, const struct addrinfo *addr, int tim
         return false;
     }
 #endif
-    short     revents = 0;
-    const int rc      = pollSocket(sockFd, POLLOUT, timeoutMs <= 0 ? -1 : timeoutMs, &revents);
+    /* A host that drops SYNs answers nothing here, so this poll is the other
+     * place a stop has to be honoured. Sliced only when there is a probe to
+     * consult, so a caller without one keeps the single bounded poll. */
+    short        revents = 0;
+    int          rc      = 0;
+    const qint64 budget  = deadline.remainingTime();
+    if (!abortProbe) {
+        rc = pollSocket(sockFd, POLLOUT, budget < 0 ? -1 : static_cast<int>(budget), &revents);
+    } else {
+        while (true) {
+            if (deadline.hasExpired() || abortProbe()) {
+                return false;
+            }
+            const qint64 remaining = deadline.remainingTime();
+            /* A negative remainder is "no deadline", not "no time left": poll
+             * would read it as an infinite wait and put the probe out of
+             * reach. */
+            const int slice = remaining < 0
+                                  ? kPollSliceMs
+                                  : qMax(1, static_cast<int>(qMin<qint64>(remaining, kPollSliceMs)));
+            rc = pollSocket(sockFd, POLLOUT, slice, &revents);
+            if (rc != 0) {
+                break;
+            }
+        }
+    }
     if (rc <= 0) {
         return false;
     }
@@ -203,6 +237,452 @@ QString derivePubkeyPath(const QString &privateKeyPath)
             | QFileDevice::ReadOther);
     return pubPath;
 }
+
+#ifndef Q_OS_WIN
+
+/* One bounded poll on a descriptor we own, sliced so a stop the user asked for
+ * is honoured inside a slice. Unlike waitSocket this takes the direction from
+ * the caller: an ssh-agent link is not an SSH session and has no libssh2 block
+ * hint to read. */
+enum class LinkWait : std::uint8_t { Ready, Expired, Failed };
+
+LinkWait waitFd(
+    socket_fd_t                  sockFd,
+    short                        events,
+    QDeadlineTimer               deadline,
+    const std::function<bool()> &abortProbe)
+{
+    while (true) {
+        if (deadline.hasExpired()) {
+            return LinkWait::Expired;
+        }
+        if (abortProbe && abortProbe()) {
+            return LinkWait::Expired;
+        }
+        const qint64 remaining = deadline.remainingTime();
+        const int    slice = remaining < 0
+                                 ? kPollSliceMs
+                                 : qMax(1, static_cast<int>(qMin<qint64>(remaining, kPollSliceMs)));
+        short        revents = 0;
+        const int    rc      = pollSocket(sockFd, events, slice, &revents);
+        if (rc < 0) {
+#ifndef Q_OS_WIN
+            if (errno == EINTR) {
+                continue;
+            }
+#endif
+            return LinkWait::Failed;
+        }
+        if (rc == 0) {
+            continue;
+        }
+        if ((revents & (POLLERR | POLLNVAL)) != 0) {
+            return LinkWait::Failed;
+        }
+        if ((revents & POLLHUP) != 0 && (revents & POLLIN) == 0) {
+            return LinkWait::Failed;
+        }
+        return LinkWait::Ready;
+    }
+}
+
+/* ssh-agent wire protocol message numbers and signature flags, from the
+ * SSH agent protocol. Only the two requests public-key auth needs are here. */
+constexpr unsigned char kAgentcRequestIdentities = 11;
+constexpr unsigned char kAgentIdentitiesAnswer   = 12;
+constexpr unsigned char kAgentcSignRequest       = 13;
+constexpr unsigned char kAgentSignResponse       = 14;
+constexpr quint32       kAgentFlagRsaSha2_256    = 2;
+constexpr quint32       kAgentFlagRsaSha2_512    = 4;
+
+/* Caps on what an agent may claim, matching libssh2's own limits so a hostile
+ * or confused agent cannot make us allocate without bound. */
+constexpr quint32 kAgentMaxMsgLen     = 256 * 1024;
+constexpr quint32 kAgentMaxIdentities = 1024;
+
+void appendU32(QByteArray *out, quint32 value)
+{
+    const char bytes[4]
+        = {static_cast<char>((value >> 24) & 0xFF),
+           static_cast<char>((value >> 16) & 0xFF),
+           static_cast<char>((value >> 8) & 0xFF),
+           static_cast<char>(value & 0xFF)};
+    out->append(bytes, 4);
+}
+
+void appendString(QByteArray *out, const QByteArray &value)
+{
+    appendU32(out, static_cast<quint32>(value.size()));
+    out->append(value);
+}
+
+quint32 readU32(const unsigned char *data)
+{
+    return (static_cast<quint32>(data[0]) << 24) | (static_cast<quint32>(data[1]) << 16)
+           | (static_cast<quint32>(data[2]) << 8) | static_cast<quint32>(data[3]);
+}
+
+/* Cursor over an SSH wire-format buffer. Every take* returns false rather than
+ * reading past the end, so a truncated or lying agent reply fails the parse
+ * instead of the process. */
+class WireReader
+{
+public:
+    explicit WireReader(const QByteArray &buffer)
+        : m_buffer(buffer)
+    {}
+
+    bool takeByte(unsigned char *value)
+    {
+        if (m_pos + 1 > m_buffer.size()) {
+            return false;
+        }
+        *value = static_cast<unsigned char>(m_buffer.at(m_pos));
+        m_pos += 1;
+        return true;
+    }
+
+    bool takeU32(quint32 *value)
+    {
+        if (m_pos + 4 > m_buffer.size()) {
+            return false;
+        }
+        *value = readU32(reinterpret_cast<const unsigned char *>(m_buffer.constData()) + m_pos);
+        m_pos += 4;
+        return true;
+    }
+
+    bool takeString(QByteArray *value)
+    {
+        quint32 length = 0;
+        if (!takeU32(&length)) {
+            return false;
+        }
+        if (static_cast<qsizetype>(length) > m_buffer.size() - m_pos) {
+            return false;
+        }
+        *value = m_buffer.mid(m_pos, static_cast<qsizetype>(length));
+        m_pos += static_cast<qsizetype>(length);
+        return true;
+    }
+
+    bool skipString()
+    {
+        QByteArray ignored;
+        return takeString(&ignored);
+    }
+
+private:
+    QByteArray m_buffer;
+    qsizetype  m_pos = 0;
+};
+
+struct AgentIdentity
+{
+    QByteArray blob;
+};
+
+/**
+ * @brief An ssh-agent connection bounded by a deadline and a stop.
+ * @details libssh2 ships its own agent client, and it cannot be used here:
+ *          `libssh2_session_set_blocking` is documented as leaving the socket
+ *          alone, the agent backend creates its AF_UNIX socket in the default
+ *          blocking mode, and the descriptor is not reachable through any
+ *          public API. An agent that accepts the connection and then stops
+ *          answering therefore parks the caller in `recv` with no deadline and
+ *          nothing to interrupt it. Speaking the protocol on a socket we own is
+ *          what puts the agent stage under the same budget as the handshake.
+ */
+class AgentLink
+{
+public:
+    AgentLink(QDeadlineTimer deadline, std::function<bool()> abortProbe)
+        : m_deadline(deadline)
+        , m_abortProbe(std::move(abortProbe))
+    {}
+
+    ~AgentLink() { closeLink(); }
+
+    AgentLink(const AgentLink &)            = delete;
+    AgentLink &operator=(const AgentLink &) = delete;
+
+    /** @brief Connect to $SSH_AUTH_SOCK. False when there is no agent to use. */
+    bool open()
+    {
+        const QByteArray path = qgetenv("SSH_AUTH_SOCK");
+        if (path.isEmpty()) {
+            return false;
+        }
+        struct sockaddr_un addr{};
+        if (static_cast<size_t>(path.size()) >= sizeof(addr.sun_path)) {
+            return false;
+        }
+        m_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        if (m_fd < 0) {
+            return false;
+        }
+        if (setNonBlocking(m_fd) != 0) {
+            closeLink();
+            return false;
+        }
+        addr.sun_family = AF_UNIX;
+        std::memcpy(addr.sun_path, path.constData(), static_cast<size_t>(path.size()));
+        if (::connect(m_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
+            if (errno != EINPROGRESS) {
+                closeLink();
+                return false;
+            }
+            if (waitFd(m_fd, POLLOUT, m_deadline, m_abortProbe) != LinkWait::Ready) {
+                closeLink();
+                return false;
+            }
+            int       soError = 0;
+            socklen_t optLen  = sizeof(soError);
+            if (::getsockopt(m_fd, SOL_SOCKET, SO_ERROR, &soError, &optLen) != 0 || soError != 0) {
+                closeLink();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** @brief Every public key the agent holds, in the agent's own order. */
+    bool listIdentities(QList<AgentIdentity> *out)
+    {
+        QByteArray request;
+        request.append(static_cast<char>(kAgentcRequestIdentities));
+        QByteArray response;
+        if (!transact(request, &response)) {
+            return false;
+        }
+        WireReader    reader(response);
+        unsigned char kind  = 0;
+        quint32       count = 0;
+        if (!reader.takeByte(&kind) || kind != kAgentIdentitiesAnswer || !reader.takeU32(&count)) {
+            return false;
+        }
+        if (count > kAgentMaxIdentities) {
+            return false;
+        }
+        for (quint32 index = 0; index < count; ++index) {
+            AgentIdentity identity;
+            if (!reader.takeString(&identity.blob) || !reader.skipString()) {
+                return false;
+            }
+            out->append(identity);
+        }
+        return true;
+    }
+
+    /**
+     * @brief Have the agent sign @p data with the key @p blob names.
+     * @details @p algorithm comes back as the agent named it, for the caller to
+     *          hold against what libssh2 is about to write into the packet.
+     */
+    bool sign(
+        const QByteArray &blob,
+        const QByteArray &data,
+        quint32           flags,
+        QByteArray       *algorithm,
+        QByteArray       *signature)
+    {
+        QByteArray request;
+        request.append(static_cast<char>(kAgentcSignRequest));
+        appendString(&request, blob);
+        appendString(&request, data);
+        appendU32(&request, flags);
+        QByteArray response;
+        if (!transact(request, &response)) {
+            return false;
+        }
+        WireReader    reader(response);
+        unsigned char kind = 0;
+        if (!reader.takeByte(&kind) || kind != kAgentSignResponse) {
+            return false;
+        }
+        /* The payload is one string holding the algorithm name and the
+         * signature, so the outer length is skipped to read the two inside. */
+        quint32 blobLen = 0;
+        return reader.takeU32(&blobLen) && reader.takeString(algorithm)
+               && reader.takeString(signature);
+    }
+
+private:
+    bool transact(const QByteArray &request, QByteArray *response)
+    {
+        QByteArray framed;
+        appendU32(&framed, static_cast<quint32>(request.size()));
+        framed.append(request);
+        if (!sendAll(framed.constData(), framed.size())) {
+            return false;
+        }
+        unsigned char header[4] = {0, 0, 0, 0};
+        if (!recvAll(reinterpret_cast<char *>(header), 4)) {
+            return false;
+        }
+        const quint32 length = readU32(header);
+        if (length == 0 || length > kAgentMaxMsgLen) {
+            return false;
+        }
+        response->resize(static_cast<qsizetype>(length));
+        return recvAll(response->data(), static_cast<qsizetype>(length));
+    }
+
+    bool sendAll(const char *data, qsizetype length)
+    {
+        qsizetype done = 0;
+        while (done < length) {
+            const ssize_t written = ::send(m_fd, data + done, static_cast<size_t>(length - done), 0);
+            if (written > 0) {
+                done += written;
+                continue;
+            }
+            if (written == 0) {
+                return false;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                return false;
+            }
+            if (waitFd(m_fd, POLLOUT, m_deadline, m_abortProbe) != LinkWait::Ready) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool recvAll(char *data, qsizetype length)
+    {
+        qsizetype done = 0;
+        while (done < length) {
+            const ssize_t read = ::recv(m_fd, data + done, static_cast<size_t>(length - done), 0);
+            if (read > 0) {
+                done += read;
+                continue;
+            }
+            /* Zero is the agent hanging up mid-message: no later retry can
+             * finish this reply, and treating it as "try again" is how a closed
+             * socket becomes a spin. */
+            if (read == 0) {
+                return false;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                return false;
+            }
+            if (waitFd(m_fd, POLLIN, m_deadline, m_abortProbe) != LinkWait::Ready) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void closeLink()
+    {
+        if (m_fd >= 0) {
+            closeSocketFd(m_fd);
+        }
+        m_fd = kInvalidSocket;
+    }
+
+    socket_fd_t           m_fd = kInvalidSocket;
+    QDeadlineTimer        m_deadline;
+    std::function<bool()> m_abortProbe;
+};
+
+/* What the sign callback needs: the link to ask, and which key to ask about. */
+struct AgentSignContext
+{
+    AgentLink *link = nullptr;
+    QByteArray blob;
+};
+
+/**
+ * @brief The algorithm libssh2 settled on, read out of the bytes to be signed.
+ * @details The signature has to name the same algorithm libssh2 is about to
+ *          write into the userauth packet, and that choice depends on the
+ *          server's advertised signature algorithms, which no public API
+ *          exposes. It does not have to be guessed: the blob handed to the
+ *          callback is the session id followed by the userauth request itself,
+ *          and the request carries the algorithm name as its sixth field.
+ */
+QByteArray methodFromSignData(const unsigned char *data, size_t length)
+{
+    const QByteArray view = QByteArray::fromRawData(
+        reinterpret_cast<const char *>(data), static_cast<qsizetype>(length));
+    WireReader    reader(view);
+    unsigned char ignored = 0;
+    QByteArray    method;
+    if (!reader.skipString()          /* session id */
+        || !reader.takeByte(&ignored) /* SSH_MSG_USERAUTH_REQUEST */
+        || !reader.skipString()       /* user name */
+        || !reader.skipString()       /* "ssh-connection" */
+        || !reader.skipString()       /* "publickey" */
+        || !reader.takeByte(&ignored) /* signature-follows flag */
+        || !reader.takeString(&method)) {
+        return {};
+    }
+    return method;
+}
+
+/* Signature fixed by LIBSSH2_USERAUTH_PUBLICKEY_SIGN_FUNC: libssh2 calls this
+ * through a function pointer, so the shape has to match exactly. */
+int agentSignCallback(
+    LIBSSH2_SESSION     *session,
+    unsigned char      **sig,
+    size_t              *sigLen,
+    const unsigned char *data,
+    size_t               dataLen,
+    void               **abstract)
+{
+    (void) session;
+    if (abstract == nullptr || *abstract == nullptr) {
+        return -1;
+    }
+    auto *context = static_cast<AgentSignContext *>(*abstract);
+    if (context->link == nullptr) {
+        return -1;
+    }
+    const QByteArray method = methodFromSignData(data, dataLen);
+    if (method.isEmpty()) {
+        return -1;
+    }
+    quint32 flags = 0;
+    if (method == "rsa-sha2-512") {
+        flags = kAgentFlagRsaSha2_512;
+    } else if (method == "rsa-sha2-256") {
+        flags = kAgentFlagRsaSha2_256;
+    }
+    QByteArray       algorithm;
+    QByteArray       signature;
+    const QByteArray payload
+        = QByteArray(reinterpret_cast<const char *>(data), static_cast<qsizetype>(dataLen));
+    if (!context->link->sign(context->blob, payload, flags, &algorithm, &signature)) {
+        return -1;
+    }
+    /* An agent that signed with something else than libssh2 asked for is not a
+     * failure: libssh2 answers this code by retrying the key with its default
+     * algorithm. */
+    if (algorithm != method) {
+        return LIBSSH2_ERROR_ALGO_UNSUPPORTED;
+    }
+    /* libssh2 releases this with the session allocator, which is the default
+     * malloc/free pair because the session was made by libssh2_session_init. */
+    void *owned = std::malloc(static_cast<size_t>(signature.size()));
+    if (owned == nullptr) {
+        return -1;
+    }
+    std::memcpy(owned, signature.constData(), static_cast<size_t>(signature.size()));
+    *sig    = static_cast<unsigned char *>(owned);
+    *sigLen = static_cast<size_t>(signature.size());
+    return 0;
+}
+
+#endif // !Q_OS_WIN
 
 /* libssh2's own socket type: int on POSIX, SOCKET on Windows. m_socket is
  * stored wide enough for both. */
@@ -268,6 +748,54 @@ bool QSocSshSession::notePossibleTransportError(int rc)
     return true;
 }
 
+void QSocSshSession::armConnectDeadline()
+{
+    m_connectDeadline = m_timeoutMs <= 0 ? QDeadlineTimer(QDeadlineTimer::Forever)
+                                         : QDeadlineTimer(m_timeoutMs);
+}
+
+bool QSocSshSession::connectGaveUp() const
+{
+    return m_connectDeadline.hasExpired() || (m_abortProbe && m_abortProbe());
+}
+
+QString QSocSshSession::promptSecret(const QString &prompt)
+{
+    if (!m_secretCallback) {
+        return {};
+    }
+    /* Frozen, not extended: remainingTime() reports zero once expired, so
+     * adding the time on screen to it would hand a spent budget a fresh one. */
+    const qint64  before = m_connectDeadline.remainingTime();
+    const QString secret = m_secretCallback(prompt);
+    if (before > 0) {
+        m_connectDeadline = QDeadlineTimer(before);
+    }
+    return secret;
+}
+
+void QSocSshSession::noteStrandedChannel(LIBSSH2_CHANNEL *channel)
+{
+    if (channel != nullptr) {
+        m_stranded.append(channel);
+    }
+}
+
+void QSocSshSession::releaseStrandedChannels()
+{
+    if (m_session == nullptr) {
+        m_stranded.clear();
+        return;
+    }
+    QList<LIBSSH2_CHANNEL *> keep;
+    for (LIBSSH2_CHANNEL *channel : m_stranded) {
+        if (libssh2_channel_free(channel) == LIBSSH2_ERROR_EAGAIN) {
+            keep.append(channel);
+        }
+    }
+    m_stranded = keep;
+}
+
 QString QSocSshSession::unusableText() const
 {
     switch (m_unusable) {
@@ -283,18 +811,38 @@ QString QSocSshSession::unusableText() const
 }
 
 QSocSshSession::WaitOutcome QSocSshSession::waitWithin(
-    qintptr sockFd, LIBSSH2_SESSION *session, QDeadlineTimer deadline)
+    qintptr sockFd, LIBSSH2_SESSION *session, QDeadlineTimer deadline, Interruptible interruptible)
 {
-    if (deadline.hasExpired()) {
-        return WaitOutcome::Timeout;
+    const bool abortable = interruptible == Interruptible::Yes && static_cast<bool>(m_abortProbe);
+    while (true) {
+        if (deadline.hasExpired()) {
+            return WaitOutcome::Timeout;
+        }
+        if (abortable && m_abortProbe()) {
+            return WaitOutcome::Timeout;
+        }
+        const qint64 remaining = deadline.remainingTime();
+        /* A negative remainder is "never expires", not "no time left". Reading
+         * it as a poll timeout would wait forever and put the probe out of
+         * reach; reading it as a length would poll in 1 ms slices. */
+        const int slice
+            = abortable ? (remaining < 0
+                               ? kPollSliceMs
+                               : qMax(1, static_cast<int>(qMin<qint64>(remaining, kPollSliceMs))))
+                        : (remaining < 0 ? -1 : qMax(1, static_cast<int>(remaining)));
+        const auto outcome = waitSocket(sockFd, session, slice);
+        if (outcome == WaitOutcome::Ready) {
+            return deadline.hasExpired() ? WaitOutcome::Timeout : WaitOutcome::Ready;
+        }
+        if (outcome == WaitOutcome::Fatal) {
+            return WaitOutcome::Fatal;
+        }
+        /* A slice expired. Without a probe to consult that is the whole
+         * budget, because the slice was the budget. */
+        if (!abortable) {
+            return WaitOutcome::Timeout;
+        }
     }
-    const qint64 remaining = deadline.remainingTime();
-    const int    slice     = remaining < 0 ? -1 : qMax(1, static_cast<int>(remaining));
-    const auto   outcome   = waitSocket(sockFd, session, slice);
-    if (outcome == WaitOutcome::Ready && deadline.hasExpired()) {
-        return WaitOutcome::Timeout;
-    }
-    return outcome;
 }
 
 QSocSshSession::WaitOutcome QSocSshSession::waitSocket(
@@ -353,7 +901,7 @@ bool QSocSshSession::drainCall(
 {
     const QDeadlineTimer deadline(kTeardownMs);
     while (call() == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(sockFd, session, deadline) != WaitOutcome::Ready) {
+        if (waitWithin(sockFd, session, deadline, Interruptible::No) != WaitOutcome::Ready) {
             return false;
         }
     }
@@ -392,8 +940,12 @@ void QSocSshSession::clearConnection()
             closeOwnedSocket();
             freed = libssh2_session_free(session) != LIBSSH2_ERROR_EAGAIN;
         }
-        m_session          = nullptr;
+        m_session = nullptr;
+        /* Whatever survived is owned by the session, and the session is gone:
+         * either its free released them or nothing ever will. */
+        m_stranded.clear();
         m_teardownComplete = sentDisconnect && freedOnTheLink;
+        m_teardownReleased = freed;
         if (!freed) {
             qWarning(
                 "SSH teardown could not release the libssh2 session; its state is left "
@@ -437,6 +989,18 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
     struct addrinfo *result    = nullptr;
     const QByteArray hostBytes = host.toUtf8();
     const QByteArray portBytes = QByteArray::number(port);
+    /* getaddrinfo has no non-blocking form in POSIX, so the deadline cannot
+     * reach inside it: a resolver that stops answering is bounded only by the
+     * resolver's own retry schedule. Asking before and after is what keeps a
+     * stop from being swallowed by the stage around it. */
+    if (connectGaveUp()) {
+        const QString msg = QStringLiteral("Connect to %1 stopped before resolving").arg(host);
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        return ConnectStatus::Timeout;
+    }
     const int rc = getaddrinfo(hostBytes.constData(), portBytes.constData(), &hints, &result);
     if (rc != 0 || result == nullptr) {
 #ifdef Q_OS_WIN
@@ -454,11 +1018,14 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
 
     socket_fd_t sockFd = kInvalidSocket;
     for (struct addrinfo *ai = result; ai != nullptr; ai = ai->ai_next) {
+        if (connectGaveUp()) {
+            break;
+        }
         sockFd = ::socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (sockFd == kInvalidSocket) {
             continue;
         }
-        if (connectWithTimeout(sockFd, ai, m_timeoutMs)) {
+        if (connectWithTimeout(sockFd, ai, m_connectDeadline, m_abortProbe)) {
             break;
         }
         closeSocketFd(sockFd);
@@ -466,6 +1033,15 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
     }
     freeaddrinfo(result);
 
+    if (sockFd == kInvalidSocket && connectGaveUp()) {
+        const QString msg
+            = QStringLiteral("TCP connect to %1:%2 did not finish in time").arg(host).arg(port);
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        return ConnectStatus::Timeout;
+    }
     if (sockFd == kInvalidSocket) {
         const QString msg = QStringLiteral("TCP connect to %1:%2 failed: %3")
                                 .arg(host)
@@ -505,11 +1081,11 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
     libssh2_session_method_pref(
         m_session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
 
-    int                  rc = 0;
-    const QDeadlineTimer deadline(m_timeoutMs);
+    int rc = 0;
     while ((rc = libssh2_session_handshake(m_session, nativeSocket(m_socket)))
            == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
+        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
+            != WaitOutcome::Ready) {
             const QString msg = QStringLiteral("SSH handshake timeout");
             setError(msg);
             if (errorMessage != nullptr) {
@@ -633,12 +1209,19 @@ QSocSshSession::ConnectStatus QSocSshSession::verifyHostKey(
     }
 }
 
-bool QSocSshSession::tryAgentAuth(const QString &user)
+bool QSocSshSession::tryAgentAuth(const QString &user, QDeadlineTimer deadline)
 {
-    /* libssh2's agent API is documented as blocking-only. When our session
-     * runs in non-blocking mode (needed for waitSocket polling elsewhere)
-     * the agent calls return EAGAIN and auth never completes. Flip to
-     * blocking for the agent exchange and restore afterwards. */
+#ifdef Q_OS_WIN
+    /* Windows agents are a Pageant window or a named pipe, neither of which the
+     * AF_UNIX client below can speak, so libssh2's own agent client stays in
+     * charge here and the bound this function promises elsewhere does not hold
+     * on this platform. Its agent traffic also rides the session's send/recv
+     * callbacks, which for a ProxyJump child lead into the remote channel
+     * instead of the local agent, so a tunneled child skips the agent here. */
+    (void) deadline;
+    if (m_parent != nullptr) {
+        return false;
+    }
     libssh2_session_set_blocking(m_session, 1);
     LIBSSH2_AGENT *agent = libssh2_agent_init(m_session);
     if (agent == nullptr) {
@@ -678,6 +1261,49 @@ bool QSocSshSession::tryAgentAuth(const QString &user)
     libssh2_agent_free(agent);
     libssh2_session_set_blocking(m_session, 0);
     return authOk;
+#else
+    /* The session stays non-blocking throughout: the agent exchange runs on our
+     * own socket inside AgentLink, and the userauth packets ride the same sliced
+     * waits as the handshake. */
+    AgentLink link(deadline, m_abortProbe);
+    if (!link.open()) {
+        return false;
+    }
+    QList<AgentIdentity> identities;
+    if (!link.listIdentities(&identities)) {
+        return false;
+    }
+
+    const QByteArray userBytes = user.toUtf8();
+    for (const AgentIdentity &identity : identities) {
+        if (deadline.hasExpired() || (m_abortProbe && m_abortProbe())) {
+            return false;
+        }
+        AgentSignContext context{&link, identity.blob};
+        void            *abstract = &context;
+        int              rc       = 0;
+        while ((rc = libssh2_userauth_publickey(
+                    m_session,
+                    userBytes.constData(),
+                    reinterpret_cast<const unsigned char *>(identity.blob.constData()),
+                    static_cast<size_t>(identity.blob.size()),
+                    &agentSignCallback,
+                    &abstract))
+               == LIBSSH2_ERROR_EAGAIN) {
+            if (waitWithin(m_socket, m_session, deadline, Interruptible::Yes)
+                != WaitOutcome::Ready) {
+                return false;
+            }
+        }
+        if (rc == 0) {
+            return true;
+        }
+        if (notePossibleTransportError(rc)) {
+            return false;
+        }
+    }
+    return false;
+#endif
 }
 
 bool QSocSshSession::tryIdentityFileAuth(
@@ -692,12 +1318,11 @@ bool QSocSshSession::tryIdentityFileAuth(
      * Ed25519 private-key file (NULL pubkey works only for classic PEM
      * RSA), so we ask ssh-keygen to emit the sibling .pub when missing.
      * ssh-keygen, not QSoC, is the one that reads the private-key bytes. */
-    const QString        pubPath      = derivePubkeyPath(privateKeyPath);
-    const QByteArray     pubPathBytes = pubPath.toUtf8();
-    const char          *pubArg       = pubPath.isEmpty() ? nullptr : pubPathBytes.constData();
-    const QByteArray     phBytes      = passphrase.toUtf8();
-    int                  rc           = 0;
-    const QDeadlineTimer deadline(m_timeoutMs);
+    const QString    pubPath      = derivePubkeyPath(privateKeyPath);
+    const QByteArray pubPathBytes = pubPath.toUtf8();
+    const char      *pubArg       = pubPath.isEmpty() ? nullptr : pubPathBytes.constData();
+    const QByteArray phBytes      = passphrase.toUtf8();
+    int              rc           = 0;
     while ((rc = libssh2_userauth_publickey_fromfile_ex(
                 m_session,
                 userBytes.constData(),
@@ -706,7 +1331,8 @@ bool QSocSshSession::tryIdentityFileAuth(
                 keyBytes.constData(),
                 phBytes.isEmpty() ? nullptr : phBytes.constData()))
            == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
+        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
+            != WaitOutcome::Ready) {
             return false;
         }
     }
@@ -719,6 +1345,11 @@ void QSocSshSession::setSecretCallback(SecretCallback callback)
     m_secretCallback = std::move(callback);
 }
 
+void QSocSshSession::setAbortProbe(std::function<bool()> probe)
+{
+    m_abortProbe = std::move(probe);
+}
+
 bool QSocSshSession::tryPassphrasePrompt(
     const QString &user, const QStringList &identityPaths, QStringList *triedKeys)
 {
@@ -726,9 +1357,12 @@ bool QSocSshSession::tryPassphrasePrompt(
         return false;
     }
     for (const QString &identity : identityPaths) {
+        if (connectGaveUp()) {
+            return false;
+        }
         const QString prompt
             = QStringLiteral("Passphrase for %1: ").arg(QFileInfo(identity).fileName());
-        const QString phrase = m_secretCallback(prompt);
+        const QString phrase = promptSecret(prompt);
         if (phrase.isEmpty()) {
             continue;
         }
@@ -748,30 +1382,40 @@ bool QSocSshSession::tryPasswordPrompt(const QString &user, const QString &hostn
     const QByteArray userBytes = user.toUtf8();
     /* Query which methods the server accepts so we only prompt for a
      * password when the server actually has the `password` method.
-     * The call also primes libssh2's userauth state. */
-    libssh2_session_set_blocking(m_session, 1);
-    char *methods = libssh2_userauth_list(
-        m_session, userBytes.constData(), static_cast<unsigned int>(userBytes.size()));
-    libssh2_session_set_blocking(m_session, 0);
-    if (methods == nullptr) {
-        return false;
+     * The call also primes libssh2's userauth state. Driven from the
+     * non-blocking session rather than flipped to blocking: this is ordinary
+     * session traffic, so the same sliced wait as the handshake applies and a
+     * server that goes quiet mid-query stays interruptible. */
+    char *methods = nullptr;
+    while ((methods = libssh2_userauth_list(
+                m_session, userBytes.constData(), static_cast<unsigned int>(userBytes.size())))
+           == nullptr) {
+        const int err = libssh2_session_last_errno(m_session);
+        if (err != LIBSSH2_ERROR_EAGAIN) {
+            notePossibleTransportError(err);
+            return false;
+        }
+        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
+            != WaitOutcome::Ready) {
+            return false;
+        }
     }
     const QByteArray methodList(methods);
     if (!methodList.contains("password")) {
         return false;
     }
     const QString prompt = QStringLiteral("Password for %1@%2:%3: ").arg(user, hostname).arg(port);
-    const QString pwd    = m_secretCallback(prompt);
+    const QString pwd    = promptSecret(prompt);
     if (pwd.isEmpty()) {
         return false;
     }
-    const QByteArray     pwdBytes = pwd.toUtf8();
-    int                  status   = 0;
-    const QDeadlineTimer deadline(m_timeoutMs);
+    const QByteArray pwdBytes = pwd.toUtf8();
+    int              status   = 0;
     while (
         (status = libssh2_userauth_password(m_session, userBytes.constData(), pwdBytes.constData()))
         == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
+        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
+            != WaitOutcome::Ready) {
             return false;
         }
     }
@@ -797,14 +1441,29 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
      * keys that are absent on disk, and skipping it means losing that
      * route even when the user intended the agent to sign.
      *
-     * ProxyJump children are the one exception: libssh2_agent_* routes
-     * agent-protocol bytes through the session's send/recv callbacks,
-     * which for a tunneled child end up in the remote SSH channel
-     * instead of the local Unix socket. The call then EAGAIN-loops
-     * forever, so we skip it and drop straight to file-based auth. */
+     * The agent is also the only route that depends on a third process, and one
+     * that accepts a connection and then never answers is an ordinary way to
+     * find a forwarded agent whose upstream hop died. It therefore gets a share
+     * of what is left of the connect budget rather than all of it, so the file
+     * routes behind it still have time to work. */
     const bool restrictToFiles = host.identitiesOnly && !host.identityFiles.isEmpty();
-    if (!restrictToFiles && m_parent == nullptr && tryAgentAuth(user)) {
-        return ConnectStatus::Ok;
+    if (!restrictToFiles) {
+        const qint64         share         = m_connectDeadline.remainingTime();
+        const QDeadlineTimer agentDeadline = share < 0 ? QDeadlineTimer(QDeadlineTimer::Forever)
+                                                       : QDeadlineTimer(share / 2);
+        if (tryAgentAuth(user, agentDeadline)) {
+            return ConnectStatus::Ok;
+        }
+    }
+    if (connectGaveUp()) {
+        const QString msg = QStringLiteral("Authentication for %1@%2:%3 did not finish in time")
+                                .arg(user, host.hostname)
+                                .arg(host.port);
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        return ConnectStatus::Timeout;
     }
 
     /* Identity file fallback: honour the config-supplied paths when present
@@ -831,6 +1490,12 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
             return ConnectStatus::Ok;
         }
         triedKeys.append(QFileInfo(identity).fileName());
+        /* A key that failed because the wait ran out left libssh2 in the middle
+         * of a userauth request, and the next key would send its request into
+         * that half-finished one. There is nothing left to spend anyway. */
+        if (connectGaveUp()) {
+            break;
+        }
     }
 
     /* Interactive fallback (only when a secret callback is wired by the
@@ -874,6 +1539,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectTo(
         return ConnectStatus::AlreadyConnected;
     }
 
+    armConnectDeadline();
     ConnectStatus status = openSocket(host.hostname, host.port, errorMessage);
     if (status != ConnectStatus::Ok) {
         clearConnection();
@@ -917,6 +1583,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         }
         return ConnectStatus::AlreadyConnected;
     }
+    armConnectDeadline();
     if (parent == nullptr || !parent->isConnected()) {
         const QString msg = QStringLiteral("Parent ProxyJump session is not connected");
         setError(msg);
@@ -930,10 +1597,9 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
     /* Borrow the parent's socket for waitSocket polling; we never close it. */
     m_socket = parent->socketFd();
 
-    const QByteArray     hostBytes = host.hostname.toUtf8();
-    LIBSSH2_CHANNEL     *channel   = nullptr;
-    LIBSSH2_SESSION     *parentSes = parent->rawSession();
-    const QDeadlineTimer jumpDeadline(m_timeoutMs);
+    const QByteArray hostBytes = host.hostname.toUtf8();
+    LIBSSH2_CHANNEL *channel   = nullptr;
+    LIBSSH2_SESSION *parentSes = parent->rawSession();
     while ((channel = libssh2_channel_direct_tcpip_ex(
                 parentSes, hostBytes.constData(), host.port, "127.0.0.1", 0))
            == nullptr) {
@@ -951,7 +1617,8 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
             m_socket = -1;
             return ConnectStatus::NetworkError;
         }
-        if (waitWithin(parent->socketFd(), parentSes, jumpDeadline) != WaitOutcome::Ready) {
+        if (waitWithin(parent->socketFd(), parentSes, m_connectDeadline, Interruptible::Yes)
+            != WaitOutcome::Ready) {
             const QString msg = QStringLiteral("Timed out opening ProxyJump channel");
             setError(msg);
             if (errorMessage != nullptr) {
@@ -991,11 +1658,11 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         reinterpret_cast<libssh2_cb_generic *>(&QSocSshSession::recvOverChannel));
     *libssh2_session_abstract(m_session) = this;
 
-    int                  rc = 0;
-    const QDeadlineTimer deadline(m_timeoutMs);
+    int rc = 0;
     while ((rc = libssh2_session_handshake(m_session, nativeSocket(m_socket)))
            == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(m_socket, m_session, deadline) != WaitOutcome::Ready) {
+        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
+            != WaitOutcome::Ready) {
             const QString msg = QStringLiteral("SSH handshake over ProxyJump timed out");
             setError(msg);
             if (errorMessage != nullptr) {

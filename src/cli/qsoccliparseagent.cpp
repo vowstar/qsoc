@@ -153,14 +153,15 @@ constexpr int kRewindProbeMs = 5000;
  * freeing the transport being replaced is the handle's job, and it does it
  * after this returns so a failed attempt changes nothing. */
 bool connectReplacementTransport(
-    QObject          *parent,
-    const QString    &target,
-    const QString    &workspace,
-    AgentRemoteState *out,
-    QString          *errorMessage)
+    QObject                     *parent,
+    const QString               &target,
+    const QString               &workspace,
+    AgentRemoteState            *out,
+    QString                     *errorMessage,
+    const std::function<bool()> &abortProbe)
 {
     AgentRemoteState fresh;
-    if (!connectAgentSshSession(target, parent, &fresh, errorMessage)) {
+    if (!connectAgentSshSession(target, parent, &fresh, errorMessage, {}, abortProbe)) {
         return false;
     }
     if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
@@ -234,10 +235,28 @@ QString remoteWorkspaceHealth(QSocRemoteConnection *conn, QSocAgent *agent = nul
             .arg(conn->lastReconnectAttempts() == 1 ? QString() : QStringLiteral("s"));
     }
     QString text = conn->unusableText();
-    if (outcome == QSocRemoteConnection::ReconnectOutcome::Exhausted && !reconnectErr.isEmpty()) {
-        text += QStringLiteral(" (reconnect failed after %1 attempts: %2)")
-                    .arg(conn->lastReconnectAttempts())
-                    .arg(reconnectErr);
+    switch (outcome) {
+    case QSocRemoteConnection::ReconnectOutcome::Exhausted:
+        if (!reconnectErr.isEmpty()) {
+            text += QStringLiteral(" (reconnect failed after %1 attempts: %2)")
+                        .arg(conn->lastReconnectAttempts())
+                        .arg(reconnectErr);
+        }
+        break;
+    case QSocRemoteConnection::ReconnectOutcome::BudgetSpent:
+        /* Must not read as "the host was asked and refused": nothing was sent.
+         * A turn that already paid for a reconnect does not pay again, because
+         * every later tool call would pay the same full connect sequence with
+         * the interface frozen for the sum of them. */
+        text += QStringLiteral(" (this turn already reconnected once; it was not retried)");
+        break;
+    case QSocRemoteConnection::ReconnectOutcome::Aborted:
+        text += QStringLiteral(" (you asked to stop, so the reconnect was not retried)");
+        break;
+    case QSocRemoteConnection::ReconnectOutcome::NotNeeded:
+    case QSocRemoteConnection::ReconnectOutcome::Reconnected:
+    case QSocRemoteConnection::ReconnectOutcome::Refused:
+        break;
     }
     return text
            + QStringLiteral(
@@ -275,6 +294,35 @@ void installSigintHandler()
 #else
     std::signal(SIGINT, sigintHandler);
 #endif
+}
+
+/* Wire a bound connection to the agent that talks to it. The working directory
+ * lives on the connection and the config carries a copy of it into the system
+ * prompt and the hook envelope; the observer is the only path between them, so
+ * the copy is written exactly where the directory changes and cannot be left
+ * naming a directory the session has left. The abort probe reads the signal
+ * flag because a reconnect attempt holds the event loop, so a queued
+ * Qt-signalled abort would not be delivered until after the attempt it was
+ * meant to stop. */
+void bindRemoteConnectionToAgent(QSocRemoteConnection *conn, QSocAgent *agent)
+{
+    conn->setWorkingDirectoryObserver([agent](const QString &cwd) {
+        auto cfg             = agent->getConfig();
+        cfg.remoteWorkingDir = cwd;
+        agent->setConfig(cfg);
+    });
+    conn->setAbortProbe([] { return g_sigintReceived != 0; });
+}
+
+/* A new user request gets a full reconnect budget, and a stop the user asked
+ * for during an earlier one does not stand in for one they have not asked for
+ * now. */
+void beginRemoteTurn(QSocRemoteConnection *conn)
+{
+    g_sigintReceived = 0;
+    if (conn != nullptr) {
+        conn->resetReconnectBudget();
+    }
 }
 
 /**
@@ -1639,12 +1687,13 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 return showError(1, QStringLiteral("internal error: incomplete remote transport"));
             }
         }
-        cliRemoteConn.setRebuilder([this](
+        cliRemoteConn.setRebuilder([this, conn = &cliRemoteConn](
                                        const QString    &target,
                                        const QString    &workspace,
                                        AgentRemoteState *out,
                                        QString          *errorMessage) {
-            return connectReplacementTransport(this, target, workspace, out, errorMessage);
+            return connectReplacementTransport(
+                this, target, workspace, out, errorMessage, conn->abortProbe());
         });
         cliRemoteRegistry
             = buildAgentRemoteRegistry(this, &cliRemoteConn, socConfig, monitorTaskSource);
@@ -1680,6 +1729,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             newCfg.remoteWritableDirs = cliRemoteConn.path()->writableDirs();
             agent->setConfig(newCfg);
         }
+        bindRemoteConnectionToAgent(&cliRemoteConn, agent);
         /* Pull the remote project's .qsoc/agents/ markdown defs into
          * the registry so the LLM sees them under scope=project. */
         if (cliRemoteConn.sftp() != nullptr && !cliRemoteConn.workspace().isEmpty()) {
@@ -1822,10 +1872,12 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 });
             escMonitor.start();
 
+            beginRemoteTurn(&cliRemoteConn);
             agent->runStream(query);
             loop.exec();
             escMonitor.stop();
         } else {
+            beginRemoteTurn(&cliRemoteConn);
             QString result = agent->run(query);
             return showInfo(0, result);
         }
@@ -3424,10 +3476,13 @@ bool QSocCliWorker::runAgentLoop(
 
     const auto applyCurrentRunContext = [&](QSocSession::RunRecord &record) {
         const QSocAgentConfig config = agent->getConfig();
-        QString workingDir           = config.remoteMode
-                                           ? config.remoteWorkingDir
-                                           : (pathContext != nullptr ? pathContext->getWorkingDir()
-                                                                     : QDir::currentPath());
+        /* Read through the owner, not through the config's copy of it: a `path`
+         * tool call changes the directory mid-turn and the record has to name
+         * the one the session is actually in. */
+        QString workingDir = config.remoteMode
+                                 ? remoteConn->path()->cwd()
+                                 : (pathContext != nullptr ? pathContext->getWorkingDir()
+                                                           : QDir::currentPath());
         if (workingDir.isEmpty()) {
             workingDir = config.remoteMode ? QStringLiteral("/") : QDir::currentPath();
         }
@@ -3541,7 +3596,7 @@ bool QSocCliWorker::runAgentLoop(
         QString previousWorkingDir;
         if (record.remoteMode) {
             previousWorkingDir = remoteConn->path()->cwd();
-            remoteConn->path()->setCwd(record.workingDir);
+            remoteConn->setWorkingDirectory(record.workingDir);
             if (remoteConn->path()->cwd() != record.workingDir) {
                 *reason = QStringLiteral("the saved remote working directory could not be restored");
                 return false;
@@ -3573,7 +3628,7 @@ bool QSocCliWorker::runAgentLoop(
         if (record.registryModel && llmService->getCurrentModelId() != record.modelId
             && !llmService->setCurrentModel(record.modelId)) {
             if (record.remoteMode) {
-                remoteConn->path()->setCwd(previousWorkingDir);
+                remoteConn->setWorkingDirectory(previousWorkingDir);
             } else if (pathContext != nullptr) {
                 pathContext->setWorkingDir(previousWorkingDir);
             }
@@ -3590,9 +3645,6 @@ bool QSocCliWorker::runAgentLoop(
         config.reasoningModel = record.reasoningModel;
         config.modelId        = record.registryModel ? record.modelId : QString();
         config.planMode       = record.planMode;
-        if (record.remoteMode) {
-            config.remoteWorkingDir = record.workingDir;
-        }
         agent->setConfig(config);
         statusBarWidget.setModel(record.modelId);
         statusBarWidget.setEffortLevel(record.effortLevel);
@@ -7076,12 +7128,13 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.printContent("Internal error: incomplete remote transport.\n");
                 continue;
             }
-            remoteConn->setRebuilder([this](
+            remoteConn->setRebuilder([this, remoteConn](
                                          const QString    &target,
                                          const QString    &workspace,
                                          AgentRemoteState *out,
                                          QString          *errorMessage) {
-                return connectReplacementTransport(this, target, workspace, out, errorMessage);
+                return connectReplacementTransport(
+                    this, target, workspace, out, errorMessage, remoteConn->abortProbe());
             });
             remoteRegistry
                 = buildAgentRemoteRegistry(this, remoteConn, socConfig, monitorTaskSource);
@@ -7147,6 +7200,7 @@ bool QSocCliWorker::runAgentLoop(
                 newCfg.remoteWritableDirs = remoteConn->path()->writableDirs();
                 agent->setConfig(newCfg);
             }
+            bindRemoteConnectionToAgent(remoteConn, agent);
 
             /* Sticky binding: catalog hit -> active alias, ad-hoc
              * target -> active ad-hoc with the original user-typed
@@ -7386,14 +7440,13 @@ bool QSocCliWorker::runAgentLoop(
                 if (picked.isEmpty()) {
                     continue;
                 }
-                const QString resolved = remoteConn->path()->resolveCwdRequest(picked);
-                remoteConn->path()->setCwd(resolved);
-                {
-                    auto newCfg             = agent->getConfig();
-                    newCfg.remoteWorkingDir = resolved;
-                    agent->setConfig(newCfg);
+                QString why;
+                if (remoteConn->setWorkingDirectory(picked, &why)
+                    != QSocRemoteConnection::CwdChange::Changed) {
+                    compositor.printContent(QString("Remote cwd unchanged: %1\n").arg(why));
+                    continue;
                 }
-                compositor.printContent(QString("Remote cwd: %1\n").arg(resolved));
+                compositor.printContent(QString("Remote cwd: %1\n").arg(remoteConn->path()->cwd()));
                 continue;
             }
 
@@ -7429,17 +7482,17 @@ bool QSocCliWorker::runAgentLoop(
                 arg = picked;
             }
 
-            /* Remote workspace: /cwd updates the remote cwd via
-             * QSocRemotePathContext, clamped to the workspace root. */
+            /* Remote workspace: /cwd goes through the connection, which clamps
+             * the host's answer to the workspace root rather than the request's
+             * spelling. */
             if (remoteConn->session() != nullptr) {
-                const QString resolved = remoteConn->path()->resolveCwdRequest(arg);
-                remoteConn->path()->setCwd(resolved);
-                {
-                    auto newCfg             = agent->getConfig();
-                    newCfg.remoteWorkingDir = resolved;
-                    agent->setConfig(newCfg);
+                QString why;
+                if (remoteConn->setWorkingDirectory(arg, &why)
+                    != QSocRemoteConnection::CwdChange::Changed) {
+                    compositor.printContent(QString("Remote cwd unchanged: %1\n").arg(why));
+                    continue;
                 }
-                compositor.printContent(QString("Remote cwd: %1\n").arg(resolved));
+                compositor.printContent(QString("Remote cwd: %1\n").arg(remoteConn->path()->cwd()));
                 continue;
             }
             /* Resolve relative paths against the current agent working dir,
@@ -8310,6 +8363,7 @@ bool QSocCliWorker::runAgentLoop(
             awaySummaryShown          = false;
             awaySummaryPending        = false;
             planApprovalShownThisTurn = false;
+            beginRemoteTurn(remoteConn);
             if (resumeExistingHistory) {
                 agent->resumeStream();
             } else {
@@ -8982,6 +9036,7 @@ bool QSocCliWorker::runAgentLoop(
             awaySummaryShown          = false;
             awaySummaryPending        = false;
             planApprovalShownThisTurn = false;
+            beginRemoteTurn(remoteConn);
             if (resumeExistingHistory) {
                 agent->resumeStream();
             } else {

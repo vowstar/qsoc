@@ -301,6 +301,8 @@ void Test::aReconnectDoesNotRestoreAWorkingDirectoryThatIsGone()
     QVERIFY(QDir().mkpath(kept));
     wiring.conn->path()->setCwd(wiring.conn->path()->resolveCwdRequest(QStringLiteral("surviving")));
     wiring.conn->session()->disconnectFromHost();
+    /* A later turn, so a fresh reconnect budget. */
+    wiring.conn->resetReconnectBudget();
     QCOMPARE(
         wiring.conn->reconnect(&reconnectErr), QSocRemoteConnection::ReconnectOutcome::Reconnected);
     QCOMPARE(wiring.conn->path()->cwd(), kept);

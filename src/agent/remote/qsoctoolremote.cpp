@@ -717,8 +717,10 @@ void QSocToolRemoteShellBash::abort()
 
 /* path_context */
 
-QSocToolRemotePath::QSocToolRemotePath(QObject *parent, QSocRemotePathContext *pathCtx)
+QSocToolRemotePath::QSocToolRemotePath(
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
     : QSocTool(parent)
+    , m_conn(conn)
     , m_pathCtx(pathCtx)
 {}
 
@@ -758,9 +760,19 @@ QString QSocToolRemotePath::execute(const json &arguments)
         if (!arguments.contains("path") || !arguments["path"].is_string()) {
             return QStringLiteral("Error: path is required for action=cwd");
         }
+        if (m_conn == nullptr) {
+            return QStringLiteral("Error: no remote workspace is bound");
+        }
         const QString requested = QString::fromStdString(arguments["path"].get<std::string>());
-        const QString resolved  = m_pathCtx->resolveCwdRequest(requested);
-        m_pathCtx->setCwd(resolved);
+        QString       why;
+        /* Every refusal reads the same to the model, and they must: what it
+         * has to know is that the move did not happen and where it still is.
+         * Which of them it was lives in @p why. */
+        if (m_conn->setWorkingDirectory(requested, &why)
+            != QSocRemoteConnection::CwdChange::Changed) {
+            return QStringLiteral("Error: %1. The working directory is unchanged and still %2.")
+                .arg(why, m_pathCtx->cwd());
+        }
     }
     QString out;
     out += QStringLiteral("remote_root: ") + m_pathCtx->root() + QLatin1Char('\n');

@@ -9,11 +9,17 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 /**
- * @brief Pure-logic container for remote workspace paths.
+ * @brief The one home of the remote workspace paths, and their publisher.
  * @details Normalizes remote paths lexically without ever touching the local
  *          filesystem via QFileInfo. Remote paths are POSIX absolute or
  *          resolved against the current remote working directory.
+ *
+ *          The working directory is read from here by the tools and copied
+ *          elsewhere by whoever describes the session, so @ref setCwd is both
+ *          the only mutator and the publisher: see @ref setCwdObserver.
  *
  *          Writable-directory checks are byte-prefix comparisons on
  *          already-normalized paths, so no check here can see a symlink. A
@@ -34,8 +40,28 @@ public:
     QStringList writableDirs() const { return m_writableDirs; }
 
     void setRoot(const QString &root);
+
+    /**
+     * @brief The only mutator of the working directory, and it publishes.
+     * @details Every copy of the working directory (the agent config, and
+     *          through it the system prompt and the hook envelope) is written
+     *          from here, so no caller can move the directory without the
+     *          copies following.
+     */
     void setCwd(const QString &cwd);
+
+    /** @brief Install the observer @ref setCwd publishes to. Replaces any. */
+    void setCwdObserver(std::function<void(const QString &)> observer);
+
     void setWritableDirs(const QStringList &dirs);
+
+    /**
+     * @brief Forget everything a transport taught us, keep the observer.
+     * @details Assigning a default-constructed context instead drops the
+     *          observer, and the working directory then moves with nobody
+     *          listening.
+     */
+    void reset();
 
     /**
      * @brief Lexically normalize a remote path.
@@ -78,10 +104,11 @@ private:
     static QString     joinPosix(const QStringList &parts, bool absolute);
     static QString     lexicalNormalize(const QString &path);
 
-    QString           m_root;
-    QString           m_cwd;
-    QStringList       m_writableDirs;
-    QSocFileReadState m_readState;
+    QString                              m_root;
+    QString                              m_cwd;
+    QStringList                          m_writableDirs;
+    QSocFileReadState                    m_readState;
+    std::function<void(const QString &)> m_cwdObserver;
 };
 
 #endif // QSOCREMOTEPATHCONTEXT_H
