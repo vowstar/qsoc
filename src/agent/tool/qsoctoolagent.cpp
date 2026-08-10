@@ -48,35 +48,12 @@ constexpr int kHostProbeMs = 2000;
 
 } // namespace
 
-QSocToolAgent::~QSocToolAgent()
-{
-    /* Tear down every cached host binding: registry first (it owns
-     * the tool instances), then SFTP, then the SSH session, then
-     * the ProxyJump chain in reverse so children disconnect before
-     * their parents. */
-    for (auto *binding : std::as_const(hostCache_)) {
-        releaseHostBinding(binding);
-    }
-    hostCache_.clear();
-}
-
-void QSocToolAgent::releaseHostBinding(HostBinding *binding)
-{
-    if (binding == nullptr) {
-        return;
-    }
-    /* Registry first: it owns the tool instances, which resolve the transport
-     * through the connection. The transport itself belongs to that connection,
-     * so deleting the binding frees it in dependency order. */
-    delete binding->registry;
-    delete binding;
-}
-
-QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QString *errorMessage)
+std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
+    const QString &host, QString *errorMessage)
 {
     const auto cached = hostCache_.find(host);
     if (cached != hostCache_.end()) {
-        HostBinding *binding = cached.value();
+        const std::shared_ptr<HostBinding> &binding = cached.value();
         /* A cached registry is only worth reusing while its host can still
          * answer. Handing one back on a dead session gives every later
          * sibling a workspace that cannot serve a call, and the failure then
@@ -84,12 +61,13 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
          * is not enough: a host that went quiet without closing the
          * connection still reads as connected, so spend one bounded round
          * trip before reusing. */
-        if (binding != nullptr && binding->conn.isUsable()
+        if (binding->conn.isUsable()
             && remoteHostAnswers(binding->conn.sftp(), binding->conn.path()->root(), kHostProbeMs)) {
-            return binding->registry;
+            return binding;
         }
+        /* Unpublish: no later spawn is handed this binding again. The memory
+         * goes with the last child that was already dispatched onto it. */
         hostCache_.erase(cached);
-        releaseHostBinding(binding);
     }
 
     ResolvedHostTarget resolved;
@@ -106,19 +84,19 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
         return nullptr;
     }
 
-    auto *binding = new HostBinding{};
-    if (!connectAgentSshSession(resolved.connectString, this, &binding->state, errorMessage)) {
-        delete binding;
+    auto binding = std::make_shared<HostBinding>();
+    /* No Qt parent for the transport: the connection deletes it, and a second
+     * owner in this tool's tree would free it under a binding that outlived
+     * the tool. */
+    if (!connectAgentSshSession(resolved.connectString, nullptr, &binding->state, errorMessage)) {
         return nullptr;
     }
     if (!prepareAgentRemoteWorkspace(resolved.workspaceHint, &binding->state, errorMessage)) {
         discardAgentRemoteState(&binding->state);
-        delete binding;
         return nullptr;
     }
     if (!binding->conn.adopt(std::move(binding->state))) {
         discardAgentRemoteState(&binding->state);
-        delete binding;
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("internal error: incomplete remote transport");
         }
@@ -127,9 +105,11 @@ QSocToolRegistry *QSocToolAgent::resolveHostRegistry(const QString &host, QStrin
     /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
      * dispatch only needs file/shell/path tools on the remote.
      * Web/doc are intentionally local-only for now. */
-    binding->registry = buildAgentRemoteRegistry(this, &binding->conn, nullptr, nullptr);
+    binding->owner = std::make_unique<QObject>();
+    binding->registry
+        = buildAgentRemoteRegistry(binding->owner.get(), &binding->conn, nullptr, nullptr);
     hostCache_.insert(host, binding);
-    return binding->registry;
+    return binding;
 }
 
 QString QSocToolAgent::getName() const
@@ -480,10 +460,15 @@ QString QSocToolAgent::execute(const json &arguments)
     if (hostArg.isEmpty() && def != nullptr && !def->preferredHost.isEmpty()) {
         hostArg = def->preferredHost;
     }
+    /* The one name for the host the child runs on. Null means it inherits the
+     * parent's binding; when set, the child's registry, its config and its
+     * workspace health all come from this pointer, so they cannot disagree
+     * about which host answers for the child. */
+    std::shared_ptr<HostBinding> childHost;
     if (!hostArg.isEmpty() && hostArg != QStringLiteral("local")) {
-        QString           hostErr;
-        QSocToolRegistry *hostReg = resolveHostRegistry(hostArg, &hostErr);
-        if (hostReg == nullptr) {
+        QString hostErr;
+        childHost = resolveHostBinding(hostArg, &hostErr);
+        if (childHost == nullptr) {
             return QString::fromUtf8(
                 json{
                     {"status", "error"},
@@ -493,7 +478,7 @@ QString QSocToolAgent::execute(const json &arguments)
                     .dump()
                     .c_str());
         }
-        effectiveRegistry = hostReg;
+        effectiveRegistry = childHost->registry;
     }
 
     /* Concurrency policy: a sliding window the task source enforces.
@@ -580,6 +565,12 @@ QString QSocToolAgent::execute(const json &arguments)
     auto *childLlm = effectiveLlm->clone(nullptr);
     auto *child    = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */
+    if (childHost != nullptr) {
+        /* The child resolves its tools through this binding on every call, so
+         * it holds its own reference: a sibling spawn that finds the host gone
+         * unpublishes the binding without freeing it under this child. */
+        new HostBindingHold(child, childHost);
+    }
     /* planMode rides childCfg (copied from the parent). The shell safety
      * judge is a separate member, so hand it down too: a read-only
      * exploration child judges its own bash the same way. */

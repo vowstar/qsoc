@@ -8,6 +8,7 @@
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 
+#include <memory>
 #include <QMap>
 
 class QLLMService;
@@ -48,7 +49,6 @@ public:
         QSocAgentConfig              parentConfig,
         QSocAgentDefinitionRegistry *defRegistry,
         QSocSubAgentTaskSource      *taskSource);
-    ~QSocToolAgent() override;
 
     /**
      * @brief Inject the host catalog so `host` parameter resolves
@@ -130,9 +130,12 @@ public:
 
 private:
     /**
-     * @brief One cached remote binding for a host alias. Lives as
-     *        long as the parent QSocToolAgent so sibling sub-agent
-     *        spawns to the same alias reuse the SSH session.
+     * @brief One remote binding for a host alias, and everything built on it.
+     * @details Shared, not cached: the cache holds one reference so sibling
+     *          spawns to the same alias reuse the SSH session, and every child
+     *          dispatched onto it holds another. Nothing here is in the
+     *          QSocToolAgent's Qt tree, so the binding is free to outlive both
+     *          the cache entry and the tool that opened it.
      */
     struct HostBinding
     {
@@ -144,21 +147,43 @@ private:
          * rebuilding the registry. Lives here because it must outlive every
          * tool built from it. */
         QSocRemoteConnection conn;
-        /* registry is parented to QSocToolAgent and owned via Qt's
-         * tree; explicit delete happens in the destructor. */
+        /* Parents the registry and every tool in it. Declared before registry
+         * so the whole tool tree is gone before the connection those tools
+         * resolve through. */
+        std::unique_ptr<QObject> owner;
+        /* Handle into owner's tree, not a second owner. */
         QSocToolRegistry *registry = nullptr;
     };
 
     /**
-     * @brief Resolve a host alias to a tool registry. Opens an SSH
-     *        session + remote registry on first use, caches for
-     *        subsequent siblings, returns nullptr on failure with
-     *        a populated @p errorMessage.
+     * @brief One binding reference, held for exactly as long as one child.
+     * @details Parented to the child, so the reference is released when the
+     *          child object is destroyed. A dispatched child resolves its
+     *          tools through the binding's registry on every call, so eviction
+     *          may stop publishing a binding but must not free it.
      */
-    QSocToolRegistry *resolveHostRegistry(const QString &host, QString *errorMessage);
+    class HostBindingHold : public QObject
+    {
+    public:
+        HostBindingHold(QObject *parent, std::shared_ptr<HostBinding> binding)
+            : QObject(parent)
+            , binding_(std::move(binding))
+        {}
 
-    /** @brief Tear down one cached binding in dependency order. */
-    static void releaseHostBinding(struct HostBinding *binding);
+    private:
+        std::shared_ptr<HostBinding> binding_;
+    };
+
+    /**
+     * @brief Resolve a host alias to the binding a child runs on. Opens an
+     *        SSH session + remote registry on first use, publishes it for
+     *        subsequent siblings, returns null on failure with a populated
+     *        @p errorMessage.
+     * @details The whole binding rather than its registry, because a child's
+     *          tools, its config and its workspace health all have to name
+     *          the same (target, workspace) pair.
+     */
+    std::shared_ptr<HostBinding> resolveHostBinding(const QString &host, QString *errorMessage);
 
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
@@ -171,7 +196,8 @@ private:
     QSocAgent                   *parentAgent_     = nullptr;
     QSocHostCatalog             *hostCatalog_     = nullptr;
     QSocSshConfigParser         *sshConfigParser_ = nullptr;
-    QMap<QString, HostBinding *> hostCache_;
+
+    QMap<QString, std::shared_ptr<HostBinding>> hostCache_;
 };
 
 #endif /* QSOCTOOLAGENT_H */
