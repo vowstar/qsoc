@@ -274,7 +274,9 @@ The following commands are available during an interactive session:
     [`/cost`], [Show session token totals and cost (if rates configured)],
     [`/cwd [path]`],
     [Show or change the working directory. Empty opens a picker. In remote
-     mode, drives the remote cwd clamped to the workspace root.],
+     mode, drives the remote cwd: the host resolves the path first, so a
+     directory reached through a symlink is judged by where it really is and
+     refused when that is outside the workspace root.],
     [`/diff`], [Review file edits turn-by-turn],
     [`/effort [level]`], [Show or set effort (off/low/medium/high)],
     [`/local`],
@@ -1044,6 +1046,31 @@ Bare `/ssh` opens a picker listing the saved binding plus concrete aliases
 parsed from `~/.ssh/config`. `/local` returns to local mode but keeps the
 binding on disk so the next session can auto-connect.
 
+=== Writable Root and Symlinks
+<agent-remote-writable>
+
+`write_file` and `edit_file` refuse a path outside the workspace root. The
+check runs on the path the *host* resolves, not on the path as typed, so a
+symlink cannot be used to spell an outside directory as an inside one:
+
+- A symlink that leads out of the workspace is refused, whether it is a
+  directory in the middle of the path or the last component, and whether or
+  not its target exists yet.
+- A symlink that leads inside the workspace is followed. The file it points
+  at is what gets written, and the link itself stays a link.
+- A name the host cannot resolve at all, such as a symlink loop or a link
+  into a directory that does not exist, is refused rather than treated as a
+  free name.
+- Every tool reports the resolved path, so the name in the transcript is the
+  name on the host.
+
+A workspace root that is itself reached through a symlink works normally:
+both sides of the comparison are resolved on the host. Its resolved directory
+and persistent `.qsoc-agent/tree-id` are bound when selected; changing the root
+link or replacing the directory at the same path makes writes, shell cwd, and
+rewinds refuse the workspace instead of following the replacement. A copied
+marker deliberately identifies the copy as the same logical tree.
+
 === When The Link Drops
 <agent-remote-disconnect>
 
@@ -1051,7 +1078,8 @@ A remote host that reboots, loses power, or falls behind a firewall stops
 answering without closing the connection. QSoC treats that as a bounded
 failure rather than a wait:
 
-- Every remote operation has a deadline measured from when it started,
+- Each SSH or SFTP operation after connection has a deadline measured from
+  when it started,
   covering channel setup, transfer, and teardown. Waiting for the remote
   process to report its exit status is part of that budget rather than
   extra, so a command that closes its output early still gets the rest of
@@ -1086,9 +1114,17 @@ failure rather than a wait:
   not silently run against local files. Reconnect with `/ssh`, or leave
   remote mode deliberately with `/local`.
 
-A dropped link is re-established automatically, bounded to a couple of
-attempts, so an unattended run survives a network hiccup. What is *not*
-automatic is carrying on: after a drop, remote state is unknown rather than
+A dropped link is re-established automatically, so an unattended run survives
+a network hiccup. Its attempts pass one 30-second deadline through every
+ProxyJump hop, SFTP startup, workspace identity check, and working-directory
+verification; a later attempt receives only the time left. System resolution
+and the Windows agent exchange have the exceptions described below. The budget
+is one reconnect sequence per user request, not per tool call: a second failure
+in the same turn is told the turn has already reconnected instead of paying for
+another sequence. On Linux and macOS, Ctrl-C is answered while an attempt is
+still in flight; on Windows, where Ctrl-C is a console key event read by the
+same loop the attempt is holding, it takes effect when the attempt returns.
+What is *not* automatic is carrying on: after a drop, remote state is unknown rather than
 known-gone, because a reboot discards the working directory, backgrounded
 jobs and temporary files, while a network partition leaves all of them
 running. So the turn always ends, and the next one begins with a brief
@@ -1109,11 +1145,13 @@ remote side may have carried it out anyway. QSoC reports these as
 uncertain rather than as failures, and never retries them on its own,
 because retrying a change that already landed applies it twice.
 
-- `bash` reports `status: uncertain` with `exit_code: -1`. An exit status
-  is only reported when the command actually finished; a cut-off command
-  never reports `exit_code: 0`. Where the fate is not known the field reads
-  `exit_code: unknown` rather than a number a reader would take for a status
-  the command returned. A command killed by a signal is a definite failure,
+- `bash` reports `status: uncertain` with `exit_code: unknown`. An exit
+  status is only reported when the command actually finished, so a cut-off
+  command never reports `exit_code: 0`, and the field never carries a number
+  a reader would take for a status the command returned. A command whose
+  channel the host force-closed without ever sending a status counts as
+  cut off, however cleanly the channel went away. A command killed by a
+  signal is a definite failure,
   not an uncertain one: it reports `status: failed` with
   `exit_signal: SIGKILL`, because a signalled process sends no exit status
   at all.
@@ -1212,9 +1250,14 @@ session that subsequent sub-agent spawns reuse from cache.
 `bash` with `background=true` launches the command detached under
 `<workspace>/.qsoc-agent/jobs/<id>/` and returns `job_id` immediately. The
 wrapper writes `pid`, `output.log`, and `exit_code`, and alongside them the
-identity of the host and of the process itself; `bash_manage` reads those
-state files over SSH exec to report status, tail output, or send
-`SIGTERM`/`SIGKILL`. Jobs survive SSH channel closes, and so does the shell
+identity of the host and of the process itself; `bash_manage` reads the log
+and the exit code back over SSH exec. What it never reads from them is whom
+to signal: the pid, and the two identities that pid is checked against, come
+from the record QSoC kept at launch, because the job directory sits in a
+writable remote directory and anything in it is what the host chose to put
+there. A job id this session never launched therefore has no pid on record,
+and `bash_manage` refuses it rather than trusting the directory.
+Jobs survive SSH channel closes, and so does the shell
 that waits for the exit code, so a dropped link does not cost you the
 outcome.
 
@@ -1236,6 +1279,10 @@ The agent uses a read-unrestricted, write-restricted permission model:
   `%TEMP%` on Windows; resolved via Qt `QDir::tempPath()`)
 - *Shell*: Configurable timeout, no upper limit
 
+A writable root reached through a symbolic link is bound to the resolved
+directory when it is selected. If the link later points elsewhere, file writes
+are refused until that root is selected again.
+
 == Sessions
 <agent-persistence>
 Each session is persisted as `.qsoc/sessions/<id>.jsonl` under the project
@@ -1255,6 +1302,22 @@ inconsistent runs return to the prompt. A tool interrupted in flight is
 reported as uncertain and is never replayed; continuing after it takes a new
 turn, which the queued re-observation brief supplies when a dropped link was
 what interrupted it.
+
+=== File Checkpoints
+
+File rewind covers the active local project root or the selected remote
+workspace. Other locally allowed write roots, such as the working directory,
+user-added directories, and the OS temp directory, remain writable but are not
+checkpointed and are never changed by rewind.
+
+Each checkpoint names the tree that produced it. A local tree is bound to the
+project's `.qsoc/tree-id`; a remote tree is bound to the authenticated host,
+the host-resolved workspace, and its `.qsoc-agent/tree-id`. Replacing either
+directory without its bound marker, reaching a different endpoint, or loading
+an old checkpoint that has no tree identity leaves its files untouched. A
+copied marker denotes the same logical tree. A damaged or incomplete checkpoint
+index disables file restoration instead of guessing;
+conversation-only rewind remains available.
 
 == Usage Examples
 <agent-examples>
