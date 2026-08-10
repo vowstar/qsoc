@@ -20,10 +20,12 @@ int statusRank(QSocTask::Status status)
         return 3;
     case QSocTask::Status::Completed:
         return 4;
-    case QSocTask::Status::Failed:
+    case QSocTask::Status::Aborted:
         return 5;
+    case QSocTask::Status::Failed:
+        return 6;
     }
-    return 6;
+    return 7;
 }
 
 } /* namespace */

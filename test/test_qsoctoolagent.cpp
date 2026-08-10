@@ -327,7 +327,7 @@ private slots:
 
         tool->abort();
         QVERIFY(src->findRow(pendingId, &pending));
-        QCOMPARE(pending.status, QSocTask::Status::Failed);
+        QCOMPARE(pending.status, QSocTask::Status::Aborted);
         QVERIFY(!pending.canKill);
     }
 

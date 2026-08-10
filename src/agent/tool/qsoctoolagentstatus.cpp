@@ -21,8 +21,10 @@ QString QSocToolAgentStatus::getDescription() const
     return QStringLiteral(
         "Query the current status of a sub-agent run started with the `agent` tool "
         "in `run_in_background=true` mode. Returns the run's status (running / "
-        "completed / failed), elapsed seconds, and a tail of the captured "
-        "transcript / final result. Use this when you need to act on a child run "
+        "completed / failed / aborted), elapsed seconds, and a tail of the captured "
+        "transcript / final result. `aborted` means the run was cut off before it "
+        "reported anything, so treat its side effects as unknown rather than "
+        "retrying blindly. Use this when you need to act on a child run "
         "without waiting for it synchronously.");
 }
 
@@ -43,29 +45,6 @@ json QSocToolAgentStatus::getParametersSchema() const
              "with a leading marker when over the cap."}}}}},
         {"required", json::array({"task_id"})}};
 }
-
-namespace {
-
-const char *statusToString(QSocTask::Status status)
-{
-    switch (status) {
-    case QSocTask::Status::Running:
-        return "running";
-    case QSocTask::Status::Pending:
-        return "pending";
-    case QSocTask::Status::Idle:
-        return "idle";
-    case QSocTask::Status::Stuck:
-        return "stuck";
-    case QSocTask::Status::Completed:
-        return "completed";
-    case QSocTask::Status::Failed:
-        return "failed";
-    }
-    return "unknown";
-}
-
-} // namespace
 
 QString QSocToolAgentStatus::execute(const json &arguments)
 {
@@ -102,7 +81,7 @@ QString QSocToolAgentStatus::execute(const json &arguments)
         json{
             {"status", "ok"},
             {"task_id", taskId.toStdString()},
-            {"run_status", statusToString(row.status)},
+            {"run_status", QSocTask::statusWord(row.status).toStdString()},
             {"label", row.label.toStdString()},
             {"subagent_type", subagentType.toStdString()},
             {"elapsed_seconds", elapsedSeconds},

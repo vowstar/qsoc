@@ -18,7 +18,7 @@ class QSocAgent;
  * @details The spawn-agent tool calls registerRun() before invoking
  *          the child, then feeds the child's progress signals
  *          through appendTranscript() and finalizes via
- *          markCompleted() or markFailed(). The overlay listing
+ *          markTerminal() (or one of its named wrappers). The overlay listing
  *          updates automatically through tasksChanged().
  *          The source owns each registered child agent and disposes
  *          of it during eviction.
@@ -74,14 +74,33 @@ public:
     void appendTranscript(const QString &id, const QString &chunk);
 
     /**
+     * @brief Move a run to a terminal state and stash its payload.
+     * @details The single transition every flavour goes through: it
+     *          records the state, appends the disk event, rewrites the
+     *          meta sidecar, notifies listeners and frees the
+     *          concurrency slot. @p state must be Completed, Failed or
+     *          Aborted. No-op for unknown ids.
+     */
+    void markTerminal(const QString &id, QSocTask::Status state, const QString &text);
+
+    /**
      * @brief Mark a run completed and stash the final assistant text.
      */
     void markCompleted(const QString &id, const QString &finalResult);
 
     /**
-     * @brief Mark a run failed and stash the error message.
+     * @brief Mark a run failed and stash the error message. The run
+     *        reported this error itself.
      */
     void markFailed(const QString &id, const QString &errorText);
+
+    /**
+     * @brief Mark a run aborted and stash why it was cut off.
+     * @details Distinct from markFailed: the run never reported an
+     *          outcome, so the side effects it had already produced are
+     *          unknown and it must not be presented as safe to retry.
+     */
+    void markAborted(const QString &id, const QString &reason);
 
     /**
      * @brief True when any registered run is currently Running.
@@ -128,6 +147,13 @@ public:
     void setTranscriptDir(const QString &dir) { transcriptDir_ = dir; }
 
     /**
+     * @brief Override how long a finished run lingers in the panel
+     *        before eviction. 0 evicts on the next registerRun().
+     *        Test-only.
+     */
+    void setCompletionTtlMs(qint64 ttlMs) { completionTtlMs_ = ttlMs > 0 ? ttlMs : 0; }
+
+    /**
      * @brief Resolve the JSONL transcript file path for a given run
      *        id (independent of whether the run is still tracked
      *        in-memory). Used by `tailFor` for evicted-run fallback.
@@ -159,7 +185,7 @@ public:
         QString id;
         QString label;
         QString subagentType;
-        QString status; /* running / completed / failed / ... */
+        QString status; /* QSocTask::statusWord of the run's state */
         qint64  startedAtMs  = 0;
         qint64  finishedAtMs = 0;
         QString isolation;
@@ -225,7 +251,7 @@ private:
         qint64                lastActivityMs = 0;
         QString               transcript;  /* rolling, capped */
         QString               finalResult; /* on Completed */
-        QString               errorText;   /* on Failed */
+        QString               errorText;   /* on Failed / Aborted */
         QString               isolation;   /* "none" | "worktree" */
         QString               worktreePath;
         std::function<void()> launcher; /* set by start(); fired by pumpQueue */
@@ -237,7 +263,7 @@ private:
      * whenever a run reaches a terminal state and frees a slot. */
     void pumpQueue();
 
-    /* Drop Completed / Failed runs older than completionTtlMs_,
+    /* Drop terminal runs older than completionTtlMs_,
      * deleteLater()'ing their agents. Called whenever a new run is
      * registered, so the panel doesn't grow without bound. */
     void evictStaleCompleted();

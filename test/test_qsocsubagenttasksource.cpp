@@ -192,9 +192,9 @@ private slots:
         QCOMPARE(src.listTasks()[0].status, QSocTask::Status::Running);
         QVERIFY(src.hasActiveRun());
 
-        src.markFailed(id, QStringLiteral("aborted"));
+        src.markAborted(id, QStringLiteral("aborted"));
         QCOMPARE(spy.count(), 1);
-        QCOMPARE(src.listTasks()[0].status, QSocTask::Status::Failed);
+        QCOMPARE(src.listTasks()[0].status, QSocTask::Status::Aborted);
         QVERIFY(!src.hasActiveRun());
     }
 
@@ -423,7 +423,7 @@ private slots:
         QSocTask::Row row;
         QVERIFY(killed);
         QVERIFY(src.findRow(id, &row));
-        QCOMPARE(row.status, QSocTask::Status::Failed);
+        QCOMPARE(row.status, QSocTask::Status::Aborted);
         QCOMPARE(launchCount, 0);
     }
 
@@ -636,8 +636,10 @@ private slots:
 
     void testLoadHistoricalRunsRewritesStaleRunning()
     {
-        /* Hand-craft a "running" meta whose timestamp is 2 hours
-         * old; loadHistoricalRuns must rewrite it as failed. */
+        /* Hand-craft a "running" meta whose timestamp is 2 hours old.
+         * loadHistoricalRuns must rewrite it as aborted: a run cut off by a
+         * process death has unknown effects, the same fact abort carries, and
+         * failed would invite a retry of a run that may have finished. */
         QTemporaryDir tmp;
         QDir().mkpath(tmp.path());
         const QString metaPath = QDir(tmp.path()).filePath(QStringLiteral("a55.meta.json"));
@@ -660,7 +662,7 @@ private slots:
         bool       sawRewritten = false;
         for (const auto &run : runs) {
             if (run.id == QStringLiteral("a55")) {
-                QCOMPARE(run.status, QStringLiteral("failed"));
+                QCOMPARE(run.status, QStringLiteral("aborted"));
                 QVERIFY(run.error.contains(QStringLiteral("process restart")));
                 sawRewritten = true;
             }
@@ -671,7 +673,7 @@ private slots:
         QFile reread(metaPath);
         QVERIFY(reread.open(QIODevice::ReadOnly));
         const QJsonObject newObj = QJsonDocument::fromJson(reread.readAll()).object();
-        QCOMPARE(newObj.value(QStringLiteral("status")).toString(), QStringLiteral("failed"));
+        QCOMPARE(newObj.value(QStringLiteral("status")).toString(), QStringLiteral("aborted"));
     }
 
     /* Disk file survives evictStaleCompleted: even after the

@@ -12,8 +12,32 @@
 #include <QJsonObject>
 #include <QScopeGuard>
 #include <QStandardPaths>
+#include <QStringList>
 
 #include <utility>
+
+namespace {
+
+/* JSONL event kind for a terminal state. `final` and `error` are the
+ * historical wire words for a clean finish and a reported error. */
+QString terminalEventKind(QSocTask::Status state)
+{
+    if (state == QSocTask::Status::Completed) {
+        return QStringLiteral("final");
+    }
+    if (state == QSocTask::Status::Aborted) {
+        return QStringLiteral("aborted");
+    }
+    return QStringLiteral("error");
+}
+
+bool isTerminal(QSocTask::Status state)
+{
+    return state == QSocTask::Status::Completed || state == QSocTask::Status::Failed
+           || state == QSocTask::Status::Aborted;
+}
+
+} /* namespace */
 
 QSocSubAgentTaskSource::QSocSubAgentTaskSource(QObject *parent)
     : QSocTaskSource(parent)
@@ -57,8 +81,11 @@ QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
         QString out = run.transcript;
         if (run.status == QSocTask::Status::Completed && !run.finalResult.isEmpty()) {
             out += QStringLiteral("\n=== final ===\n") + run.finalResult;
-        } else if (run.status == QSocTask::Status::Failed && !run.errorText.isEmpty()) {
-            out += QStringLiteral("\n=== failed ===\n") + run.errorText;
+        } else if (
+            (run.status == QSocTask::Status::Failed || run.status == QSocTask::Status::Aborted)
+            && !run.errorText.isEmpty()) {
+            out += QStringLiteral("\n=== ") + QSocTask::statusWord(run.status)
+                   + QStringLiteral(" ===\n") + run.errorText;
         }
         if (maxBytes > 0 && out.size() > maxBytes) {
             out = QStringLiteral("[... truncated ...]\n") + out.right(maxBytes);
@@ -104,9 +131,8 @@ QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
 
 bool QSocSubAgentTaskSource::killTask(const QString &id)
 {
-    const QPointer<QSocSubAgentTaskSource> owner(this);
-    QPointer<QSocAgent>                    runningAgent;
-    bool                                   finishNow = false;
+    QPointer<QSocAgent> runningAgent;
+    bool                cutOffNow = false;
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
@@ -122,19 +148,13 @@ bool QSocSubAgentTaskSource::killTask(const QString &id)
         }
 
         /* Pending and admitted-but-not-started runs have no live work. */
-        run.launcher       = {};
-        run.status         = QSocTask::Status::Failed;
-        run.errorText      = QStringLiteral("aborted by user");
-        run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        finishNow          = true;
+        run.launcher = {};
+        cutOffNow    = true;
         break;
     }
 
-    if (finishNow) {
-        emit tasksChanged();
-        if (!owner.isNull()) {
-            owner->pumpQueue();
-        }
+    if (cutOffNow) {
+        markTerminal(id, QSocTask::Status::Aborted, QStringLiteral("aborted by user"));
         return true;
     }
     if (runningAgent.isNull()) {
@@ -280,17 +300,22 @@ void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &
     }
 }
 
-void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &finalResult)
+void QSocSubAgentTaskSource::markTerminal(
+    const QString &id, QSocTask::Status state, const QString &text)
 {
     const QPointer<QSocSubAgentTaskSource> owner(this);
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
         }
-        run.status         = QSocTask::Status::Completed;
-        run.finalResult    = finalResult;
+        run.status = state;
+        if (state == QSocTask::Status::Completed) {
+            run.finalResult = text;
+        } else {
+            run.errorText = text;
+        }
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        appendDiskEvent(id, QStringLiteral("final"), finalResult);
+        appendDiskEvent(id, terminalEventKind(state), text);
         writeMeta(run);
         emit tasksChanged();
         if (owner.isNull()) {
@@ -302,26 +327,19 @@ void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &fin
     owner->pumpQueue();
 }
 
+void QSocSubAgentTaskSource::markCompleted(const QString &id, const QString &finalResult)
+{
+    markTerminal(id, QSocTask::Status::Completed, finalResult);
+}
+
 void QSocSubAgentTaskSource::markFailed(const QString &id, const QString &errorText)
 {
-    const QPointer<QSocSubAgentTaskSource> owner(this);
-    for (RunState &run : runs_) {
-        if (run.id != id) {
-            continue;
-        }
-        run.status         = QSocTask::Status::Failed;
-        run.errorText      = errorText;
-        run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        appendDiskEvent(id, QStringLiteral("error"), errorText);
-        writeMeta(run);
-        emit tasksChanged();
-        if (owner.isNull()) {
-            return;
-        }
-        break;
-    }
-    /* A finished run frees a slot; admit the next queued one. */
-    owner->pumpQueue();
+    markTerminal(id, QSocTask::Status::Failed, errorText);
+}
+
+void QSocSubAgentTaskSource::markAborted(const QString &id, const QString &reason)
+{
+    markTerminal(id, QSocTask::Status::Aborted, reason);
 }
 
 void QSocSubAgentTaskSource::setIsolationMetadata(
@@ -362,23 +380,20 @@ int QSocSubAgentTaskSource::runCount() const
 void QSocSubAgentTaskSource::abortAll()
 {
     QList<QPointer<QSocAgent>> runningAgents;
-    bool                       changed = false;
+    QStringList                cutOff;
     for (RunState &run : runs_) {
         const bool neverStarted = run.status == QSocTask::Status::Pending
                                   || (run.status == QSocTask::Status::Running
                                       && !run.launcherStarted);
         if (neverStarted) {
-            run.launcher       = {};
-            run.status         = QSocTask::Status::Failed;
-            run.errorText      = QStringLiteral("aborted by user");
-            run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-            changed            = true;
+            run.launcher = {};
+            cutOff.append(run.id);
         } else if (run.status == QSocTask::Status::Running && !run.agent.isNull()) {
             runningAgents.append(run.agent);
         }
     }
-    if (changed) {
-        emit tasksChanged();
+    for (const QString &id : std::as_const(cutOff)) {
+        markTerminal(id, QSocTask::Status::Aborted, QStringLiteral("aborted by user"));
     }
     for (const QPointer<QSocAgent> &agent : std::as_const(runningAgents)) {
         if (!agent.isNull()) {
@@ -510,33 +525,12 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     meta["label"]         = run.label;
     meta["subagent_type"] = run.subagentType;
     meta["started_at_ms"] = run.startedAtMs;
-    const char *statusStr = "running";
-    switch (run.status) {
-    case QSocTask::Status::Running:
-        statusStr = "running";
-        break;
-    case QSocTask::Status::Completed:
-        statusStr = "completed";
-        break;
-    case QSocTask::Status::Failed:
-        statusStr = "failed";
-        break;
-    case QSocTask::Status::Pending:
-        statusStr = "pending";
-        break;
-    case QSocTask::Status::Idle:
-        statusStr = "idle";
-        break;
-    case QSocTask::Status::Stuck:
-        statusStr = "stuck";
-        break;
-    }
-    meta["status"]    = QString::fromLatin1(statusStr);
-    meta["isolation"] = run.isolation.isEmpty() ? QStringLiteral("none") : run.isolation;
+    meta["status"]        = QSocTask::statusWord(run.status);
+    meta["isolation"]     = run.isolation.isEmpty() ? QStringLiteral("none") : run.isolation;
     if (!run.worktreePath.isEmpty()) {
         meta["worktree"] = run.worktreePath;
     }
-    if (run.status == QSocTask::Status::Completed || run.status == QSocTask::Status::Failed) {
+    if (isTerminal(run.status)) {
         meta["finished_at_ms"] = run.lastActivityMs;
         if (!run.finalResult.isEmpty()) {
             meta["final_preview"] = run.finalResult.left(256);
@@ -591,12 +585,13 @@ QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistori
         if (run.id.isEmpty()) {
             continue;
         }
-        /* Resurrect-prevention: a running meta older than staleAgeSec
-         * is necessarily from a dead process. Rewrite it as failed
-         * so it never appears as live again. */
+        /* Resurrect-prevention: a running meta older than staleAgeSec is from
+         * a dead process. It was cut off, so its effects are unknown, the same
+         * fact an aborted run carries; rewriting it as failed would invite a
+         * retry of a run that may have finished. */
         if (run.status == QStringLiteral("running") && run.startedAtMs > 0
             && (nowMs - run.startedAtMs) / 1000 > staleAgeSec) {
-            run.status          = QStringLiteral("failed");
+            run.status          = QStringLiteral("aborted");
             run.error           = QStringLiteral("process restart (sub-agent did not finish)");
             run.finishedAtMs    = nowMs;
             QJsonObject patched = obj;
@@ -648,9 +643,7 @@ void QSocSubAgentTaskSource::evictStaleCompleted()
     bool         changed = false;
     for (int i = static_cast<int>(runs_.size()) - 1; i >= 0; --i) {
         const RunState &run = runs_[i];
-        const bool      finished
-            = (run.status == QSocTask::Status::Completed || run.status == QSocTask::Status::Failed);
-        if (!finished) {
+        if (!isTerminal(run.status)) {
             continue;
         }
         if (nowMs - run.lastActivityMs < completionTtlMs_) {

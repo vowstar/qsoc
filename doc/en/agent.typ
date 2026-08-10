@@ -893,7 +893,12 @@ without a live owner are swept.
 While a backgrounded run is alive:
 
 - `agent_status` returns the current status, transcript tail, and the
-  final output once the run completes.
+  final output once the run completes. A run that was cut off before it
+  reported anything, by `x` in the task panel or by a parent ESC, ends
+  as `aborted` rather than `failed`: it ran for an unknown distance, so
+  its side effects are unknown. `failed` means the run itself reported
+  an error. The status word is the same in the meta sidecar, the task
+  notification and the task panel.
 - `send_message` queues a line of user input into the child's stream.
 - `/agents-history` lists prior runs with their final results.
 - `agent_resume` reads the meta sidecar plus the transcript tail and

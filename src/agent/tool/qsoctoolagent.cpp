@@ -102,6 +102,10 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         }
         return nullptr;
     }
+    /* A dropped host B is sensed by the child's probe and recovered here: the
+     * connection can now rebuild its own transport instead of only answering
+     * Refused. */
+    installBindingRecovery(&binding->conn);
     /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
      * dispatch only needs file/shell/path tools on the remote.
      * Web/doc are intentionally local-only for now. */
@@ -110,6 +114,89 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         = buildAgentRemoteRegistry(binding->owner.get(), &binding->conn, nullptr, nullptr);
     hostCache_.insert(host, binding);
     return binding;
+}
+
+void QSocToolAgent::installBindingRecovery(QSocRemoteConnection *conn)
+{
+    if (conn == nullptr) {
+        return;
+    }
+    /* The same two connect helpers resolveHostBinding used for the first bind,
+     * reached the same way. reconnect() supplies the binding's own (target,
+     * workspace), so there is no second connect path to keep in step. */
+    conn->setRebuilder([](const QString    &target,
+                          const QString    &workspace,
+                          AgentRemoteState *out,
+                          QString          *errorMessage) {
+        AgentRemoteState fresh;
+        if (!connectAgentSshSession(target, nullptr, &fresh, errorMessage)) {
+            return false;
+        }
+        if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
+            discardAgentRemoteState(&fresh);
+            return false;
+        }
+        *out = fresh;
+        return true;
+    });
+}
+
+QString QSocToolAgent::probeBindingHealth(QSocRemoteConnection *conn)
+{
+    if (conn == nullptr) {
+        return {};
+    }
+    /* isUsable() alone can read a host that went quiet without closing as
+     * live, and a child waiting on the model has run no call to flip the flag,
+     * so spend one bounded round trip before trusting it. */
+    if (conn->isUsable() && remoteHostAnswers(conn->sftp(), conn->path()->root(), kHostProbeMs)) {
+        return {};
+    }
+    QString    reconnectErr;
+    const auto outcome = conn->reconnect(&reconnectErr);
+    switch (outcome) {
+    case QSocRemoteConnection::ReconnectOutcome::NotNeeded:
+        /* The socket is open but the host did not answer the probe above.
+         * Report the silence rather than a false all-clear. */
+        return QStringLiteral(
+                   "The host %1 stopped answering; re-observe remote state before "
+                   "acting.")
+            .arg(conn->target());
+    case QSocRemoteConnection::ReconnectOutcome::Reconnected:
+        return QStringLiteral(
+                   "The SSH link to %1 was re-established after %2 attempt%3. Remote "
+                   "state has not been observed since it broke, so re-check it before "
+                   "acting.")
+            .arg(conn->target())
+            .arg(conn->lastReconnectAttempts())
+            .arg(conn->lastReconnectAttempts() == 1 ? QString() : QStringLiteral("s"));
+    case QSocRemoteConnection::ReconnectOutcome::Refused:
+    case QSocRemoteConnection::ReconnectOutcome::Exhausted:
+    case QSocRemoteConnection::ReconnectOutcome::BudgetSpent:
+    case QSocRemoteConnection::ReconnectOutcome::Aborted:
+        break;
+    }
+    QString text = conn->unusableText();
+    if (!reconnectErr.isEmpty()) {
+        text += QStringLiteral(" (reconnect failed: %1)").arg(reconnectErr);
+    }
+    return text.isEmpty() ? QStringLiteral("the remote workspace is unusable") : text;
+}
+
+void QSocToolAgent::bindChildCwd(QSocRemoteConnection *conn, QSocAgent *child)
+{
+    if (conn == nullptr || child == nullptr) {
+        return;
+    }
+    QPointer<QSocAgent> childPtr(child);
+    conn->setWorkingDirectoryObserver([childPtr](const QString &cwd) {
+        if (childPtr.isNull()) {
+            return;
+        }
+        auto cfg             = childPtr->getConfig();
+        cfg.remoteWorkingDir = cwd;
+        childPtr->setConfig(cfg);
+    });
 }
 
 QString QSocToolAgent::getName() const
@@ -314,6 +401,34 @@ void removeWorktreeAt(const QString &repoRoot, const QString &wtPath)
         {QStringLiteral("worktree"), QStringLiteral("remove"), QStringLiteral("--force"), wtPath});
     /* Belt and braces: remove any leftover directory tree. */
     QDir(wtPath).removeRecursively();
+}
+
+/* Declare the workspace a binding's tools actually resolve on, so the child's
+ * system prompt and its hook envelope name the host that answers its calls. */
+void bindConfigToHost(QSocRemoteConnection *conn, QSocAgentConfig *cfg)
+{
+    cfg->remoteMode         = true;
+    cfg->remoteName         = conn->target();
+    cfg->remoteDisplay      = conn->display();
+    cfg->remoteWorkspace    = conn->workspace();
+    cfg->remoteWorkingDir   = conn->path()->cwd();
+    cfg->remoteWritableDirs = conn->path()->writableDirs();
+}
+
+/* JSON spelling of a terminal flavour. Deliberately not statusLine()'s words:
+ * QSocTool::classifyResult reads "error" / "uncertain" from a top-level
+ * "status" member, and reads any other value, "failed" included, as ok. */
+const char *resultStatusWord(QSocTool::ResultStatus status)
+{
+    switch (status) {
+    case QSocTool::ResultStatus::Ok:
+        return "ok";
+    case QSocTool::ResultStatus::Failed:
+        return "error";
+    case QSocTool::ResultStatus::Uncertain:
+        return "uncertain";
+    }
+    return "uncertain";
 }
 
 bool runGitFromInsideWorktree(const QStringList &args, const QString &cwd)
@@ -556,6 +671,9 @@ QString QSocToolAgent::execute(const json &arguments)
     if (!worktreePath.isEmpty()) {
         childCfg.projectPath = worktreePath;
     }
+    if (childHost != nullptr) {
+        bindConfigToHost(&childHost->conn, &childCfg);
+    }
 
     /* Per-child LLMService: clone the live parent's service so the
      * child has its own streaming reply and buffers. Without this,
@@ -570,6 +688,10 @@ QString QSocToolAgent::execute(const json &arguments)
          * it holds its own reference: a sibling spawn that finds the host gone
          * unpublishes the binding without freeing it under this child. */
         new HostBindingHold(child, childHost);
+        /* Route the binding's cwd into the child's config so a reconnect's
+         * rewind cannot leave the system prompt naming a directory host B has
+         * left. */
+        bindChildCwd(&childHost->conn, child);
     }
     /* planMode rides childCfg (copied from the parent). The shell safety
      * judge is a separate member, so hand it down too: a read-only
@@ -577,10 +699,17 @@ QString QSocToolAgent::execute(const json &arguments)
     if (childCfg.planMode && parentAgent_ != nullptr) {
         child->setBashSafetyJudge(parentAgent_->bashSafetyJudge());
     }
-    /* Forward, never copy: the parent's probe captures CLI-owned widgets
-     * that do not outlive the parent. A dead parent means assume usable,
+    /* Health probe by host. A child on host B senses and recovers host B's own
+     * link through its binding, not the parent's host: the captured binding
+     * outlives the probe, held alongside the HostBindingHold above. A child on
+     * the parent's host forwards the parent's probe, which captures CLI-owned
+     * widgets that do not outlive the parent, so a dead parent reads as usable,
      * matching the unset semantics. */
-    if (parentAgent_ != nullptr && parentAgent_->hasWorkspaceHealthProbe()) {
+    if (childHost != nullptr) {
+        std::shared_ptr<HostBinding> boundHost = childHost;
+        child->setWorkspaceHealthProbe(
+            [boundHost]() -> QString { return probeBindingHealth(&boundHost->conn); });
+    } else if (parentAgent_ != nullptr && parentAgent_->hasWorkspaceHealthProbe()) {
         QPointer<QSocAgent> probeParent(parentAgent_);
         child->setWorkspaceHealthProbe([probeParent]() -> QString {
             return probeParent.isNull() ? QString() : probeParent->probeWorkspaceHealth();
@@ -773,40 +902,34 @@ QString QSocToolAgent::execute(const json &arguments)
         parentGuard->queueTaskNotification(
             buildTaskNotification(taskId, effectiveType, status, body, transcriptPath));
     };
-    QObject::connect(
-        child,
-        &QSocAgent::runComplete,
-        taskSource_,
-        [srcGuard, taskId, wtCleanup, pushNotification](const QString &finalText) {
-            if (!srcGuard.isNull()) {
-                srcGuard->markCompleted(taskId, finalText);
-            }
-            pushNotification(QStringLiteral("completed"), finalText);
-            wtCleanup();
-        });
-    QObject::connect(
-        child,
-        &QSocAgent::runError,
-        taskSource_,
-        [srcGuard, taskId, wtCleanup, pushNotification](const QString &error) {
-            if (!srcGuard.isNull()) {
-                srcGuard->markFailed(taskId, error);
-            }
-            pushNotification(QStringLiteral("failed"), error);
-            wtCleanup();
-        });
+    /* One terminal state drives both sinks, so the persisted run and the
+     * notification cannot report the same stop under two names. */
+    auto finish = [srcGuard,
+                   taskId,
+                   wtCleanup,
+                   pushNotification](QSocTask::Status state, const QString &body) {
+        if (!srcGuard.isNull()) {
+            srcGuard->markTerminal(taskId, state, body);
+        }
+        pushNotification(QSocTask::statusWord(state), body);
+        wtCleanup();
+    };
+    QObject::connect(child, &QSocAgent::runComplete, taskSource_, [finish](const QString &finalText) {
+        finish(QSocTask::Status::Completed, finalText);
+    });
+    QObject::connect(child, &QSocAgent::runError, taskSource_, [finish](const QString &error) {
+        finish(QSocTask::Status::Failed, error);
+    });
     QObject::connect(
         child,
         &QSocAgent::runAborted,
         taskSource_,
-        [srcGuard, childGuard, taskId, wtCleanup, pushNotification, abortReason](const QString &) {
+        [childGuard, finish, abortReason](const QString &) {
             *abortReason      = childGuard.isNull() ? QString() : childGuard->takeStopNotice();
             const QString why = abortReason->isEmpty() ? QStringLiteral("aborted") : *abortReason;
-            if (!srcGuard.isNull()) {
-                srcGuard->markFailed(taskId, why);
-            }
-            pushNotification(QStringLiteral("aborted"), why);
-            wtCleanup();
+            /* Cut off mid-work: the child never reported an outcome, so
+             * its side effects are unknown. Not Failed. */
+            finish(QSocTask::Status::Aborted, why);
         });
 
     const json launchedResponse = json{
@@ -840,8 +963,13 @@ QString QSocToolAgent::execute(const json &arguments)
         }
         QObject::disconnect(cancelConnection);
         if (!callContext.isNull() && callContext->isCancellationRequested()) {
+            /* Cancellation can arrive while start() sits in a hook's event
+             * loop, so the child may have begun work before it was killed.
+             * Nothing here knows what it did, hence Uncertain, and the reason
+             * rides in `result` as it does on the foreground path. */
             json resp      = launchedResponse;
-            resp["status"] = "aborted";
+            resp["status"] = resultStatusWord(QSocTool::ResultStatus::Uncertain);
+            resp["result"] = "aborted";
             return QString::fromUtf8(resp.dump().c_str());
         }
         QSocTask::Row row;
@@ -865,32 +993,43 @@ QString QSocToolAgent::execute(const json &arguments)
     QEventLoop fgLoop;
     bool       fgTerminal = false;
     QString    fgBody;
-    auto       stopFg = [&fgLoop, &fgTerminal, &fgBody](const QString &body) {
+    /* Which of the three terminal signals fired. An abort is Uncertain, not
+     * Failed: the child was cut off mid-work, so its effects are unknown. */
+    auto fgStatus = QSocTool::ResultStatus::Ok;
+    auto stopFg   = [&fgLoop,
+                     &fgTerminal,
+                     &fgBody,
+                     &fgStatus](QSocTool::ResultStatus status, const QString &body) {
         if (fgTerminal) {
             return;
         }
         fgTerminal = true;
+        fgStatus   = status;
         fgBody     = body;
         fgLoop.quit();
     };
     QList<QMetaObject::Connection> fgConns;
     fgConns << QObject::connect(
-        child, &QSocAgent::runComplete, &fgLoop, [&stopFg](const QString &text) { stopFg(text); });
+        child, &QSocAgent::runComplete, &fgLoop, [&stopFg](const QString &text) {
+            stopFg(QSocTool::ResultStatus::Ok, text);
+        });
     fgConns << QObject::connect(child, &QSocAgent::runError, &fgLoop, [&stopFg](const QString &err) {
-        stopFg(err);
+        stopFg(QSocTool::ResultStatus::Failed, err);
     });
     fgConns << QObject::connect(
         child, &QSocAgent::runAborted, &fgLoop, [&stopFg, abortReason](const QString &partial) {
             if (abortReason->isEmpty()) {
-                stopFg(partial);
+                stopFg(QSocTool::ResultStatus::Uncertain, partial);
                 return;
             }
-            stopFg(partial.isEmpty() ? *abortReason : partial + QStringLiteral("\n") + *abortReason);
+            stopFg(
+                QSocTool::ResultStatus::Uncertain,
+                partial.isEmpty() ? *abortReason : partial + QStringLiteral("\n") + *abortReason);
         });
     if (!callContext.isNull()) {
         const auto cancelForeground = [cancelTask, &stopFg]() {
             if (cancelTask()) {
-                stopFg(QStringLiteral("aborted"));
+                stopFg(QSocTool::ResultStatus::Uncertain, QStringLiteral("aborted"));
             }
         };
         fgConns << QObject::connect(
@@ -939,16 +1078,14 @@ QString QSocToolAgent::execute(const json &arguments)
         return QString::fromUtf8(launchedResponse.dump().c_str());
     }
 
-    /* Finished within the window: the persistent handler already
-     * transitioned task state and (because the run never backgrounded)
-     * skipped the notification. Return the result inline as the tool's
-     * value, preserving the legacy {"status":"ok","result":...}
-     * contract regardless of the child's terminal flavor. */
+    /* Finished within the window: the notification was skipped, so this return
+     * is the only report of the child's outcome. `result` carries the body in
+     * every flavour; `status` says whether it can be believed. */
     return QString::fromUtf8(
         json{
-            {"status", "ok"},
+            {"status", resultStatusWord(fgStatus)},
             {"task_id", taskId.toStdString()},
-            {"subagent_type", subagentType.toStdString()},
+            {"subagent_type", effectiveType.toStdString()},
             {"result", fgBody.toStdString()},
             {"isolation", isolation.toStdString()},
             {"worktree", worktreePath.toStdString()}}

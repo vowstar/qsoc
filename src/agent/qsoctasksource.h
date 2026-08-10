@@ -32,8 +32,37 @@ enum class Status {
     Idle,      /* alive but not currently doing work */
     Stuck,     /* watchdog flagged */
     Completed, /* finished cleanly (transient, removed soon) */
-    Failed,    /* finished with error (transient) */
+    Failed,    /* the work ran and reported an error (transient) */
+    Aborted,   /* cut off mid-work; what it already did is unknown */
 };
+
+/**
+ * @brief The one wire word for a status.
+ * @details Shared by the meta sidecar, the `agent_status` tool and task
+ *          notifications so a single state cannot reach the model under
+ *          two names. Purely cosmetic renderings (the task overlay's
+ *          column) are free to abbreviate.
+ */
+inline QString statusWord(Status status)
+{
+    switch (status) {
+    case Status::Running:
+        return QStringLiteral("running");
+    case Status::Pending:
+        return QStringLiteral("pending");
+    case Status::Idle:
+        return QStringLiteral("idle");
+    case Status::Stuck:
+        return QStringLiteral("stuck");
+    case Status::Completed:
+        return QStringLiteral("completed");
+    case Status::Failed:
+        return QStringLiteral("failed");
+    case Status::Aborted:
+        return QStringLiteral("aborted");
+    }
+    return QStringLiteral("unknown");
+}
 
 /**
  * @brief Compact row for list rendering.

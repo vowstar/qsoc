@@ -128,6 +128,37 @@ public:
         const QString &body,
         const QString &transcriptPath);
 
+    /**
+     * @brief Give a dispatched host's connection a way to re-establish itself.
+     * @details Installs the rebuilder `reconnect()` needs, built from the same
+     *          connect helpers `resolveHostBinding` used for the first bind.
+     *          Without it a dropped host B connection can only answer
+     *          `Refused`. Exposed for testing the wiring against a fake
+     *          transport.
+     */
+    static void installBindingRecovery(QSocRemoteConnection *conn);
+
+    /**
+     * @brief Report a dispatched host's link health, recovering it if it can.
+     * @details Empty when the host still answers, else a reason the workspace
+     *          cannot serve calls. Spends one bounded round trip first, because
+     *          a child waiting on the model has run no call to flip the
+     *          session's liveness flag, so a silent host would otherwise read
+     *          as live. A dropped link is reconnected in the same step.
+     *          Exposed so the child's probe and its test share one path.
+     */
+    static QString probeBindingHealth(QSocRemoteConnection *conn);
+
+    /**
+     * @brief Route a binding's working-directory changes into a child's config.
+     * @details The working directory lives on the binding; the child's config
+     *          carries a copy of it into the system prompt and hook envelope.
+     *          This observer is the only path between them, so a reconnect that
+     *          rewinds the directory cannot leave the copy stale. Installed per
+     *          child because the binding is shared across siblings.
+     */
+    static void bindChildCwd(QSocRemoteConnection *conn, QSocAgent *child);
+
 private:
     /**
      * @brief One remote binding for a host alias, and everything built on it.

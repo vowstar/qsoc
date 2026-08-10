@@ -35,6 +35,8 @@ QString statusLabel(QSocTask::Status status)
         return QStringLiteral("done");
     case QSocTask::Status::Failed:
         return QStringLiteral("failed");
+    case QSocTask::Status::Aborted:
+        return QStringLiteral("aborted");
     }
     return QStringLiteral("?");
 }

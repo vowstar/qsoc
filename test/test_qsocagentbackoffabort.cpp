@@ -1995,7 +1995,8 @@ private slots:
 
         QVERIFY(cancellationRequested);
         QVERIFY2(elapsed.elapsed() < 2000, "foreground cancellation did not terminate promptly");
-        QCOMPARE(response.value("status", std::string()), std::string("ok"));
+        /* Cut off mid-work: what the child had already done is unknown. */
+        QCOMPARE(response.value("status", std::string()), std::string("uncertain"));
         QVERIFY(response.contains("task_id"));
         const QString targetId = QString::fromStdString(response["task_id"].get<std::string>());
         QVERIFY(targetId != unrelatedId);
@@ -2003,7 +2004,9 @@ private slots:
         QSocTask::Row unrelatedRow;
         QVERIFY(tasks.findRow(targetId, &targetRow));
         QVERIFY(tasks.findRow(unrelatedId, &unrelatedRow));
-        QCOMPARE(targetRow.status, QSocTask::Status::Failed);
+        /* Same fact as the `uncertain` return above: cut off, effects
+         * unknown. `Failed` here would invite a blind retry. */
+        QCOMPARE(targetRow.status, QSocTask::Status::Aborted);
         QCOMPARE(unrelatedRow.status, QSocTask::Status::Pending);
         QVERIFY(unrelatedRow.canKill);
         QCOMPARE(tasks.countRunning(), 0);
@@ -2821,7 +2824,8 @@ private slots:
         QCOMPARE(probeCalls, 1);
         QCOMPARE(effect.executeCount(), 1);
         const json response = json::parse(raw.toStdString());
-        QCOMPARE(response.value("status", std::string()), std::string("ok"));
+        /* The probe stopped the child, so the spawn did not deliver an answer. */
+        QCOMPARE(response.value("status", std::string()), std::string("uncertain"));
     }
 
     /* Counterexample: the child's stop reason died with the child and the
@@ -2862,11 +2866,224 @@ private slots:
         const json response = json::parse(raw.toStdString());
 
         QCOMPARE(server.requestCount(), 1);
-        QCOMPARE(response.value("status", std::string()), std::string("ok"));
+        QCOMPARE(response.value("status", std::string()), std::string("uncertain"));
         const QString result = QString::fromStdString(response.value("result", std::string()));
         QVERIFY2(
             result.contains(reason),
             qPrintable(QStringLiteral("tool result lost the child's stop reason: ") + result));
+    }
+
+    /* Counterexample: the foreground return said {"status":"ok"} whatever the
+     * child did, so a run that produced no answer read to the parent as
+     * delegated work done. */
+    void aForegroundChildThatFailedIsNotReportedAsDone()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        /* 401 is unretryable, so the child's run ends in runError. */
+        server.enqueueError(401);
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        QSocAgentConfig        config = testConfig();
+        config.autoBackgroundMs       = 0;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        registry.registerTool(&tool);
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "failing child"},
+                {"prompt", "do the delegated work"},
+                {"run_in_background", false}});
+        const json response = json::parse(raw.toStdString());
+
+        QVERIFY2(
+            response.value("status", std::string()) != std::string("ok"),
+            qPrintable(QStringLiteral("a failed child reported success to the parent: ") + raw));
+        QCOMPARE(QSocTool::classifyResult(raw), QSocTool::ResultStatus::Failed);
+        /* The body survives the flavour: dropping it to signal failure would
+         * trade one bad answer for another. */
+        QVERIFY2(
+            !response.value("result", std::string()).empty(),
+            qPrintable(QStringLiteral("the failure lost the child's body: ") + raw));
+        QCOMPARE(server.requestCount(), 1);
+    }
+
+    /* Counterexample: an aborted child was reported with the same "ok" as a
+     * completed one, so a cut-off run invited the parent to build on it. */
+    void aForegroundChildThatWasAbortedIsNotReportedAsDone()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        SideEffectTool         effect;
+        registry.registerTool(&effect);
+        QSocAgentConfig config  = testConfig();
+        config.autoBackgroundMs = 0;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        registry.registerTool(&tool);
+
+        /* A workspace that stopped answering soft-stops the child's turn. */
+        parent.setWorkspaceHealthProbe(
+            [] { return QStringLiteral("the workspace stopped answering"); });
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "aborted child"},
+                {"prompt", "do the delegated work"},
+                {"run_in_background", false}});
+        const json response = json::parse(raw.toStdString());
+
+        QVERIFY2(
+            response.value("status", std::string()) != std::string("ok"),
+            qPrintable(QStringLiteral("an aborted child reported success to the parent: ") + raw));
+        /* Not "failed": the child ran one tool before it was cut off, so its
+         * effects are unknown rather than absent. */
+        QCOMPARE(QSocTool::classifyResult(raw), QSocTool::ResultStatus::Uncertain);
+        QCOMPARE(effect.executeCount(), 1);
+        QVERIFY2(
+            !response.value("result", std::string()).empty(),
+            qPrintable(QStringLiteral("the abort lost the child's body: ") + raw));
+    }
+
+    /* Counterexample: a cancelled background spawn returned {"status":"aborted"},
+     * which classifyResult reads as ok, so the parent's own tool-result footer
+     * marked a killed spawn a success.
+     *
+     * The cancellation is made to land inside taskSource_->start(): a
+     * user_prompt_submit hook puts the child's runStream in a nested event
+     * loop, and the queued abort is delivered there. The hook's marker file
+     * proves the child had begun work before it was killed, which is why the
+     * honest flavour is uncertain rather than failed. */
+    void aCancelledBackgroundSpawnIsNotReportedAsDone()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("never read"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+
+        QTemporaryDir markerDir;
+        QVERIFY(markerDir.isValid());
+        const QString marker = markerDir.filePath(QStringLiteral("child-started"));
+
+        /* Sleeps only so the nested loop is open when the abort is delivered;
+         * exits 0 so the hook permits the prompt rather than blocking it. */
+        HookCommandConfig command;
+        command.command = QStringLiteral("touch %1; sleep 0.4; exit 0").arg(marker);
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::UserPromptSubmit].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        QSocAgentConfig        config = testConfig();
+        config.autoBackgroundMs       = 0;
+        /* Non-empty hooks are what lets a sub-agent fire lifecycle events. */
+        config.hooks = hookConfig;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        tool.setHookManager(&hooks);
+        registry.registerTool(&tool);
+
+        /* Fires as soon as any event loop runs, which is the hook's. */
+        QObject owner;
+        QTimer::singleShot(0, &owner, [&registry, &owner]() { registry.abortCalls(&owner); });
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "cancelled background spawn"},
+                {"prompt", "do the delegated work"},
+                {"run_in_background", true}},
+            &owner);
+        const json response = json::parse(raw.toStdString());
+
+        QVERIFY2(
+            QFile::exists(marker),
+            qPrintable(
+                QStringLiteral("the child never started, so this case proves nothing: ") + raw));
+        QCOMPARE(QSocTool::classifyResult(raw), QSocTool::ResultStatus::Uncertain);
+        /* The word "aborted" survives somewhere the parent reads. */
+        QVERIFY2(
+            raw.contains(QStringLiteral("aborted")),
+            qPrintable(QStringLiteral("the cancellation stopped saying it was aborted: ") + raw));
+        QVERIFY(response.contains("task_id"));
+    }
+
+    /* Counterexample: the foreground return reported the raw subagent_type
+     * argument, so a fork, whose argument is empty, came back unattributed and
+     * disagreed with the launched and notification surfaces, which both say
+     * "fork". */
+    void aForegroundForkNamesItselfInItsResult()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("fork finished"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        QSocAgentConfig        config = testConfig();
+        config.autoBackgroundMs       = 0;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        registry.registerTool(&tool);
+
+        /* subagent_type omitted: fork mode. */
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"description", "fork the thread"},
+                {"prompt", "continue the delegated work"},
+                {"run_in_background", false}});
+        const json response = json::parse(raw.toStdString());
+
+        QCOMPARE(
+            QString::fromStdString(response.value("status", std::string())), QStringLiteral("ok"));
+        QCOMPARE(
+            QString::fromStdString(response.value("subagent_type", std::string())),
+            QStringLiteral("fork"));
     }
 };
 
