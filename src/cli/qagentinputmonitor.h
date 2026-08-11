@@ -44,8 +44,9 @@ public:
 
     /**
      * @brief Stop monitoring and restore terminal settings
+     * @return True when the terminal was restored and monitoring stopped
      */
-    void stop();
+    bool stop();
 
     /**
      * @brief Check if monitor is currently active
@@ -255,9 +256,12 @@ private:
 #else
     struct termios origTermios;
 #endif
-    QSocketNotifier    *notifier     = nullptr;
-    bool                active       = false;
-    bool                termiosSaved = false;
+    QSocketNotifier *notifier = nullptr;
+    /* Self-pipe edge listener: one SIGINT byte in, one Ctrl-C flow out. Only
+     * created while the monitor is active and the signal bridge exists. */
+    QSocketNotifier    *sigintNotifier = nullptr;
+    bool                active         = false;
+    bool                termiosSaved   = false;
     QString             inputBuffer;
     int                 cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
     QByteArray          utf8Pending;
@@ -357,6 +361,14 @@ public:
 
 private:
     void resetEscBuffer();
+    /**
+     * @brief The one Ctrl-C flow: clear the pending input, then signal.
+     * @details Reached from the raw 0x03 byte (Windows, and the POSIX fallback
+     *          when the signal bridge is off) and from each drained self-pipe
+     *          edge (POSIX with the bridge on). One press behaves identically
+     *          on every path, including double-press detection downstream.
+     */
+    void emitCtrlC();
 };
 
 #endif // QAGENTINPUTMONITOR_H

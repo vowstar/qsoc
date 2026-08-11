@@ -256,7 +256,31 @@ qt_add_test_target("test_qsocremotecwdowner")
 qt_add_test_target("test_qsocremotecwdpublish")
 qt_add_test_target("test_qsocremotedeadlinkcost")
 qt_add_test_target("test_qsocsshabortlatency")
+add_dependencies(test_qsocsshabortlatency qsoc)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_definitions(
+        test_qsocsshabortlatency PRIVATE
+        QSOC_TEST_WRAP_SIGACTION=1
+        QSOC_TEST_WRAP_TCSETATTR=1
+        QSOC_TEST_WRAP_READ=1
+    )
+    target_link_options(
+        test_qsocsshabortlatency PRIVATE
+        "-Wl,--wrap=sigaction"
+        "-Wl,--wrap=tcsetattr"
+        "-Wl,--wrap=read"
+    )
+endif()
 qt_add_test_target("test_qsocsshagentbudget")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_definitions(
+        test_qsocsshagentbudget PRIVATE QSOC_TEST_WRAP_AUTH_TRANSPORT=1
+    )
+    target_link_options(
+        test_qsocsshagentbudget PRIVATE
+        "-Wl,--wrap=libssh2_userauth_publickey_fromfile_ex"
+    )
+endif()
 qt_add_test_target("test_qsocsshstrandedchannel")
 qt_add_test_target("test_qsocremoteguardafterreconnect")
 qt_add_test_target("test_qsoctoolagenthostdispatch")
@@ -276,3 +300,14 @@ qt_add_test_target("test_qsocmemoryrecall")
 qt_add_test_target("test_qsocmemoryextractor")
 qt_add_test_target("test_qsocmemorydream")
 qt_add_test_target("test_qsocsftpstranded")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_definitions(
+        test_qsocsftpstranded PRIVATE QSOC_TEST_WRAP_LIBSSH2_TEARDOWN=1
+    )
+    target_link_options(
+        test_qsocsftpstranded PRIVATE
+        "-Wl,--wrap=libssh2_channel_free"
+        "-Wl,--wrap=libssh2_session_disconnect_ex"
+        "-Wl,--wrap=libssh2_session_free"
+    )
+endif()

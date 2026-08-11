@@ -1477,16 +1477,23 @@ private slots:
         config.maxTurnsOverride = 2;
         QSocAgent   agent(nullptr, &service, &registry, config);
         QStringList iterations;
-        bool        injected = false;
-        bool        queued   = false;
+        bool        injected          = false;
+        bool        queued            = false;
+        bool        staleRequestState = false;
+        int         requestBoundaries = 0;
+        agent.setRequestBoundaryHandler([&] {
+            ++requestBoundaries;
+            staleRequestState = false;
+        });
 
         connect(&agent, &QSocAgent::verboseOutput, &agent, [&](const QString &message) {
             if (message.startsWith(QStringLiteral("[Iteration "))) {
                 iterations.append(message);
             }
             if (!injected && message == QStringLiteral("[Assistant]: first complete")) {
-                injected = true;
-                queued   = agent.queueRequest(QStringLiteral("queued request"));
+                injected          = true;
+                staleRequestState = true;
+                queued            = agent.queueRequest(QStringLiteral("queued request"));
                 agent.abort();
             }
         });
@@ -1494,6 +1501,8 @@ private slots:
         const QString result = agent.run(QStringLiteral("first request"));
         QVERIFY(injected);
         QVERIFY(queued);
+        QCOMPARE(requestBoundaries, 2);
+        QVERIFY(!staleRequestState);
         QCOMPARE(server.requestCount(), 2);
         QVERIFY(requestContainsUserMessage(server, 0, QStringLiteral("first request")));
         QVERIFY(!requestContainsUserMessage(server, 0, QStringLiteral("queued request")));

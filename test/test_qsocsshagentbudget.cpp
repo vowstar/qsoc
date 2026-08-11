@@ -14,6 +14,39 @@
 #include <QtCore>
 #include <QtTest>
 
+#include <atomic>
+
+#ifdef QSOC_TEST_WRAP_AUTH_TRANSPORT
+namespace {
+std::atomic<bool> g_failAuthTransport{false};
+std::atomic<int>  g_authTransportDelayMs{0};
+} // namespace
+
+extern "C" int __real_libssh2_userauth_publickey_fromfile_ex(
+    LIBSSH2_SESSION *session,
+    const char      *username,
+    unsigned int     usernameLength,
+    const char      *publicKey,
+    const char      *privateKey,
+    const char      *passphrase);
+
+extern "C" int __wrap_libssh2_userauth_publickey_fromfile_ex(
+    LIBSSH2_SESSION *session,
+    const char      *username,
+    unsigned int     usernameLength,
+    const char      *publicKey,
+    const char      *privateKey,
+    const char      *passphrase)
+{
+    if (g_failAuthTransport.load()) {
+        QThread::msleep(static_cast<unsigned long>(g_authTransportDelayMs.load()));
+        return LIBSSH2_ERROR_SOCKET_RECV;
+    }
+    return __real_libssh2_userauth_publickey_fromfile_ex(
+        session, username, usernameLength, publicKey, privateKey, passphrase);
+}
+#endif
+
 /*
  * What an ssh-agent that stops answering costs the caller.
  *
@@ -162,7 +195,63 @@ private slots:
                            "stop was not consulted until %2 ms")
                            .arg(latencyMs)
                            .arg(askedAtMs)));
-        QVERIFY(status != QSocSshSession::ConnectStatus::Ok);
+        /* A user-requested stop is an abort, not a timeout: the two must not
+         * report under one status. */
+        QCOMPARE(status, QSocSshSession::ConnectStatus::Aborted);
+    }
+
+    void aFatalAuthTransportIsNotReportedAsRejectedCredentials()
+    {
+#ifdef QSOC_TEST_WRAP_AUTH_TRANSPORT
+        QSOC_REQUIRE_SSHD(m_sshd);
+        QSocSshSession    session;
+        QSocSshHostConfig host = m_sshd.hostConfig();
+        session.setTimeoutMs(kConnectTimeoutMs);
+
+        g_failAuthTransport.store(true);
+        QString    err;
+        const auto status = session.connectTo(host, &err);
+        g_failAuthTransport.store(false);
+
+        QCOMPARE(status, QSocSshSession::ConnectStatus::NetworkError);
+        QVERIFY2(
+            err.contains(QStringLiteral("transport failed during authentication")), qPrintable(err));
+        QVERIFY2(!err.contains(QStringLiteral("Authentication failed")), qPrintable(err));
+#else
+        QSKIP("libssh2 auth failure injection is available on Linux linkers");
+#endif
+    }
+
+    void aFatalAuthTransportOutranksAnExpiredDeadline()
+    {
+#ifdef QSOC_TEST_WRAP_AUTH_TRANSPORT
+        QSOC_REQUIRE_SSHD(m_sshd);
+        QSocSshSession    session;
+        QSocSshHostConfig host = m_sshd.hostConfig();
+        session.setTimeoutMs(kConnectTimeoutMs);
+
+        g_authTransportDelayMs.store(kConnectTimeoutMs + 200);
+        g_failAuthTransport.store(true);
+        const auto resetFailure = qScopeGuard([] {
+            g_failAuthTransport.store(false);
+            g_authTransportDelayMs.store(0);
+        });
+
+        QString       err;
+        QElapsedTimer clock;
+        clock.start();
+        const auto status = session.connectTo(host, &err);
+
+        QVERIFY2(
+            clock.elapsed() >= kConnectTimeoutMs,
+            "the injected fatal result arrived before the deadline expired");
+        QCOMPARE(status, QSocSshSession::ConnectStatus::NetworkError);
+        QVERIFY2(
+            err.contains(QStringLiteral("transport failed during authentication")), qPrintable(err));
+        QVERIFY2(!err.contains(QStringLiteral("did not finish in time")), qPrintable(err));
+#else
+        QSKIP("libssh2 auth failure injection is available on Linux linkers");
+#endif
     }
 
     /*
@@ -229,6 +318,92 @@ private slots:
         if (!hangup.waitForFinished(3000)) {
             hangup.kill();
             hangup.waitForFinished(2000);
+        }
+    }
+
+    /*
+     * An agent that answers the identity list with a key the server accepts,
+     * then hangs up before the signature, makes the client send into a socket
+     * whose peer is gone. That send must not raise SIGPIPE and take the whole
+     * process down with it: a routine agent hangup is not a crash. Reaching the
+     * assertions at all is the proof, since a SIGPIPE would kill this binary
+     * mid-connect.
+     */
+    void anAgentThatHangsUpBeforeSigningDoesNotRaiseSigpipe()
+    {
+        QSOC_REQUIRE_SSHD(m_sshd);
+        const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
+        if (python.isEmpty()) {
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("python3"));
+        }
+
+        QTemporaryDir hangupDir;
+        QVERIFY(hangupDir.isValid());
+        const QString sockPath = hangupDir.path() + QStringLiteral("/presign.sock");
+        const QString pubPath  = m_sshd.keyPath() + QStringLiteral(".pub");
+        /* Answer the list with the server's own key so the client goes on to
+         * sign it, then RST the socket so the signature send lands on a dead
+         * peer. SO_LINGER 0 forces the reset over a lingering FIN. */
+        const QString script
+            = QStringLiteral(
+                  "import socket, struct, base64\n"
+                  "blob = base64.b64decode(open(%1).read().split()[1])\n"
+                  "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+                  "s.bind(%2)\n"
+                  "s.listen(8)\n"
+                  "while True:\n"
+                  "    c, _ = s.accept()\n"
+                  "    h = c.recv(4)\n"
+                  "    if len(h) < 4:\n"
+                  "        c.close()\n"
+                  "        continue\n"
+                  "    c.recv(struct.unpack('>I', h)[0])\n"
+                  "    body = bytes([12]) + struct.pack('>I', 1)\n"
+                  "    body += struct.pack('>I', len(blob)) + blob\n"
+                  "    body += struct.pack('>I', 1) + b'k'\n"
+                  "    c.sendall(struct.pack('>I', len(body)) + body)\n"
+                  "    c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,"
+                  " struct.pack('ii', 1, 0))\n"
+                  "    c.close()\n")
+                  .arg(QStringLiteral("'%1'").arg(pubPath), QStringLiteral("'%1'").arg(sockPath));
+        QProcess presign;
+        presign.start(python, {QStringLiteral("-c"), script});
+        QVERIFY2(presign.waitForStarted(5000), qPrintable(presign.errorString()));
+        for (int attempt = 0; attempt < 50 && !QFile::exists(sockPath); ++attempt) {
+            QTest::qWait(100);
+        }
+        QVERIFY2(QFile::exists(sockPath), "the pre-sign peer never created its socket");
+
+        const QByteArray previous = qgetenv("SSH_AUTH_SOCK");
+        qputenv("SSH_AUTH_SOCK", sockPath.toLocal8Bit());
+
+        QSocSshSession session;
+        session.setTimeoutMs(kConnectTimeoutMs);
+        QSocSshHostConfig host = m_sshd.hostConfig();
+        host.identitiesOnly    = false;
+        /* No file route, so the dead agent sign is the path that runs. */
+        host.identityFiles = {hangupDir.path() + QStringLiteral("/absent_key")};
+
+        QString       err;
+        QElapsedTimer clock;
+        clock.start();
+        const auto   status    = session.connectTo(host, &err);
+        const qint64 elapsedMs = clock.elapsed();
+        qputenv("SSH_AUTH_SOCK", previous);
+        Q_UNUSED(status);
+
+        qInfo("connect past an agent that hung up before signing took %lld ms", elapsedMs);
+        /* The process survived the send: the assertion is that control returned
+         * here at all, bounded so a hang does not masquerade as survival. */
+        QVERIFY2(
+            elapsedMs < kOuterSafetyMs,
+            qPrintable(QStringLiteral("the call took %1 ms").arg(elapsedMs)));
+        session.disconnectFromHost();
+
+        presign.terminate();
+        if (!presign.waitForFinished(3000)) {
+            presign.kill();
+            presign.waitForFinished(2000);
         }
     }
 

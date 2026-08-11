@@ -39,6 +39,7 @@ public:
         HostKeyNotFound,
         AuthFailed,
         Timeout,
+        Aborted, /**< The user stopped the connect; it did not run out of time. */
     };
 
     explicit QSocSshSession(QObject *parent = nullptr);
@@ -141,22 +142,9 @@ public:
 
     /**
      * @brief Whether the last teardown released everything on the live link.
-     * @details False when the peer never confirmed the close and the socket
-     *          had to be closed under libssh2 to get the session released,
-     *          or when even that did not release it. The remote may then
-     *          still be holding the session, and in the second case the
-     *          library's own state is leaked. True while there was nothing
-     *          to tear down.
-     */
-    bool lastTeardownCompleted() const { return m_teardownComplete; }
-
-    /**
-     * @brief Whether the last teardown got libssh2 to release its own state.
-     * @details Weaker than lastTeardownCompleted(): closing the socket under a
-     *          session the peer never answered still releases everything, which
-     *          is a successful release of an unconfirmed close. False means the
-     *          library kept the session, and nothing can ever reclaim it, so it
-     *          is the only outcome that is a real leak.
+     * @details False means libssh2 refused to free the session or a ProxyJump
+     *          channel. A later teardown of the parent may reclaim a refused
+     *          jump channel; this result reports only the attempt that ran.
      */
     bool lastTeardownReleasedState() const { return m_teardownReleased; }
 
@@ -259,6 +247,8 @@ private:
         LIBSSH2_SESSION *session,
         QDeadlineTimer   deadline,
         Interruptible    interruptible);
+    /** @brief Wait for authentication and record a fatal transport event. */
+    bool waitForAuthentication(QDeadlineTimer deadline);
     /**
      * @brief Arm the one deadline every connect stage answers to.
      * @details A non-positive timeout means no deadline, matching the socket
@@ -268,6 +258,10 @@ private:
     void armConnectDeadline();
     /** @brief Whether the connect budget is spent or the user asked to stop. */
     bool connectGaveUp() const;
+    /** @brief Whether the connect stopped because the user asked, not the clock.
+     *  @details Read live off the same probe connectGaveUp() consults, so a
+     *           timeout and a cancellation report under distinct statuses. */
+    bool connectAborted() const;
     /**
      * @brief Ask the caller for a secret without charging the wait to the link.
      * @details Typing time is not network time. Pushing the deadline out by
@@ -286,11 +280,9 @@ private:
     void clearConnection();
     /**
      * @brief Drive one libssh2 teardown call to completion, bounded.
-     * @details A non-blocking `libssh2_session_disconnect`, `_free` or
-     *          `_channel_free` can return EAGAIN with nothing done, so
-     *          calling once and moving on leaks the session, its channels and
-     *          its SFTP channel.
-     * @return False when the call still had not completed at the deadline.
+     * @details A non-blocking session or channel free can return EAGAIN with
+     *          nothing done.
+     * @return True only when the call returns zero before the deadline.
      */
     bool drainCall(qintptr sockFd, LIBSSH2_SESSION *session, const std::function<int()> &call);
     /** @brief Close the socket when it is ours; idempotent. */
@@ -315,7 +307,6 @@ private:
     LIBSSH2_SESSION      *m_session          = nullptr;
     qintptr               m_socket           = -1;
     Unusable              m_unusable         = Unusable::No;
-    bool                  m_teardownComplete = true;
     bool                  m_teardownReleased = true;
     int                   m_timeoutMs        = 30000;
     QSocSshSession       *m_parent           = nullptr; /* non-owning */
@@ -323,9 +314,8 @@ private:
     QString               m_lastError;
     SecretCallback        m_secretCallback;
     std::function<bool()> m_abortProbe;
-    /* The one deadline the whole connect answers to: resolve, TCP connect,
-     * handshake and every auth stage share it, so the worst case is the
-     * operation timeout rather than one timeout per stage. */
+    /* The connect deadline starts before the blocking resolver; later stages
+     * consume only the time it leaves. */
     QDeadlineTimer m_connectDeadline;
     /* Channels libssh2 would not release yet, oldest first. */
     QList<LIBSSH2_CHANNEL *> m_stranded;

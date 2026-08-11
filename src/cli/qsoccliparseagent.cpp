@@ -29,6 +29,7 @@
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocinterrupt.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
@@ -105,8 +106,10 @@
 #include <QPair>
 #include <QRegularExpression>
 #include <QScopeGuard>
+#include <QSocketNotifier>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QTimer>
 
 #include <algorithm>
 #include <atomic>
@@ -275,35 +278,7 @@ bool checkDoubleInterrupt()
     return (last > 0 && (now - last) < DOUBLE_PRESS_MS);
 }
 
-/* SIGINT handler for non-raw-mode states */
-volatile sig_atomic_t g_sigintReceived = 0;
-
-void sigintHandler(int)
-{
-    g_sigintReceived = 1;
-}
-
-void installSigintHandler()
-{
-#ifdef Q_OS_UNIX
-    struct sigaction sigact = {};
-    sigact.sa_handler       = sigintHandler;
-    sigemptyset(&sigact.sa_mask);
-    sigact.sa_flags = 0;
-    sigaction(SIGINT, &sigact, nullptr);
-#else
-    std::signal(SIGINT, sigintHandler);
-#endif
-}
-
-/* Wire a bound connection to the agent that talks to it. The working directory
- * lives on the connection and the config carries a copy of it into the system
- * prompt and the hook envelope; the observer is the only path between them, so
- * the copy is written exactly where the directory changes and cannot be left
- * naming a directory the session has left. The abort probe reads the signal
- * flag because a reconnect attempt holds the event loop, so a queued
- * Qt-signalled abort would not be delivered until after the attempt it was
- * meant to stop. */
+/* Keep request-scoped transport state on the agent's request boundary. */
 void bindRemoteConnectionToAgent(QSocRemoteConnection *conn, QSocAgent *agent)
 {
     conn->setWorkingDirectoryObserver([agent](const QString &cwd) {
@@ -311,18 +286,11 @@ void bindRemoteConnectionToAgent(QSocRemoteConnection *conn, QSocAgent *agent)
         cfg.remoteWorkingDir = cwd;
         agent->setConfig(cfg);
     });
-    conn->setAbortProbe([] { return g_sigintReceived != 0; });
-}
-
-/* A new user request gets a full reconnect budget, and a stop the user asked
- * for during an earlier one does not stand in for one they have not asked for
- * now. */
-void beginRemoteTurn(QSocRemoteConnection *conn)
-{
-    g_sigintReceived = 0;
-    if (conn != nullptr) {
+    conn->setAbortProbe([] { return QSocInterrupt::requested(); });
+    agent->setRequestBoundaryHandler([conn] {
+        QSocInterrupt::clearRequest();
         conn->resetReconnectBudget();
-    }
+    });
 }
 
 /**
@@ -578,13 +546,6 @@ QPair<int, QString> parseTodoUpdateResult(const QString &result)
     return qMakePair(-1, QString());
 }
 
-/**
- * @brief Execute a shell escape command with real-time terminal I/O
- * @param command The shell command to execute
- * @param supportsColor Whether the terminal supports ANSI colors
- * @details Uses std::system() so the child process inherits the terminal directly.
- *          Supports Ctrl+C (POSIX: parent ignores SIGINT, child gets it) and has no timeout.
- */
 /**
  * @brief Run a shell command and return its combined stdout+stderr output.
  * @details Uses popen() so the output can be captured and displayed in the
@@ -1493,6 +1454,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
+    agent->setRequestBoundaryHandler([] { QSocInterrupt::clearRequest(); });
     agent->setMemoryManager(memoryManager);
     agent->setLoopScheduler(loopScheduler);
     /* hostCatalog is constructed below; defer setHostCatalog until then. */
@@ -1641,8 +1603,18 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             << Q_FUNC_INFO << ":Tool result: " << toolName << " -> " << truncated;
     });
 
-    /* Install SIGINT handler for Ctrl+C support in non-raw-mode states */
-    installSigintHandler();
+    const bool interruptBridgeInstalled = QSocInterrupt::installBridge();
+#ifndef Q_OS_WIN
+    if (!interruptBridgeInstalled && !QSocInterrupt::byteFallbackReady()) {
+        return showError(1, QStringLiteral("Ctrl-C handling could not be installed safely"));
+    }
+#else
+    (void) interruptBridgeInstalled;
+#endif
+
+    if (parser.isSet("query")) {
+        QSocInterrupt::clearRequest();
+    }
 
     /* CLI --ssh: connect once before the agent runs the first prompt.
      * --workspace is required to skip the interactive picker, since -q
@@ -1654,6 +1626,9 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     QSocToolRegistry    *cliRemoteRegistry = nullptr;
     QSocToolRegistry    *preLocalRegistry  = nullptr;
     if (parser.isSet("ssh")) {
+        if (!QSocInterrupt::handlerReady()) {
+            return showError(1, QStringLiteral("SSH refused: Ctrl-C handling is unavailable"));
+        }
         const QString sshTarget = parser.value("ssh");
         const QString workspace = parser.value("workspace");
         if (sshTarget.isEmpty()) {
@@ -1668,16 +1643,48 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QSocConsole::out() << "Connecting to " << sshTarget << " ...\n" << Qt::flush;
         QString sshErr;
         {
+            QSocInterrupt::TerminalInterruptGuard terminalInterrupt;
+            if (!terminalInterrupt.isReady()) {
+                return showError(1, QStringLiteral("could not prepare terminal Ctrl-C handling"));
+            }
             /* Staging only: the connection drains it, so the transport has
              * exactly one owner and the path context the tools bind to has
              * exactly one home. */
             AgentRemoteState staged;
-            if (!connectAgentSshSession(sshTarget, this, &staged, &sshErr)) {
+            if (!connectAgentSshSession(sshTarget, this, &staged, &sshErr, {}, [] {
+                    return QSocInterrupt::requested();
+                })) {
+                if (!terminalInterrupt.restore()) {
+                    return showError(
+                        1, QStringLiteral("could not restore the terminal interrupt key"));
+                }
                 return showError(1, sshErr);
             }
             if (!prepareAgentRemoteWorkspace(workspace, &staged, &sshErr)) {
                 discardAgentRemoteState(&staged);
+                if (!terminalInterrupt.restore()) {
+                    return showError(
+                        1, QStringLiteral("could not restore the terminal interrupt key"));
+                }
                 return showError(1, sshErr);
+            }
+            bool connectionInterrupted = false;
+            if (!QSocInterrupt::finishForegroundHandoff(&connectionInterrupted)
+                || connectionInterrupted) {
+                discardAgentRemoteState(&staged);
+                if (!terminalInterrupt.restore()) {
+                    return showError(
+                        1, QStringLiteral("could not restore the terminal interrupt key"));
+                }
+                return showError(
+                    1,
+                    !connectionInterrupted
+                        ? QStringLiteral("could not read terminal Ctrl-C handling")
+                        : QStringLiteral("SSH connection cancelled by user"));
+            }
+            if (!terminalInterrupt.restore()) {
+                discardAgentRemoteState(&staged);
+                return showError(1, QStringLiteral("could not restore the terminal interrupt key"));
             }
             if (!cliRemoteConn.adopt(std::move(staged))) {
                 /* A refused adopt consumes nothing, so the transport is still
@@ -1833,14 +1840,29 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                 &escMonitor,
                 &QAgentInputMonitor::inputReady,
                 agent,
-                [agent, &qout, &escMonitor](const QString &text) {
+                [agent, &qout, &escMonitor, &cliRemoteConn](const QString &text) {
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
                             qout << "\n$ " << shellCmd << "\n" << Qt::flush;
-                            escMonitor.stop();
-                            const QString output = runShellEscape(shellCmd);
+                            if (!escMonitor.stop()) {
+                                qout << "Shell escape refused: terminal input could not be "
+                                        "restored.\n"
+                                     << Qt::flush;
+                                return;
+                            }
+                            const QString output
+                                = agent->getConfig().remoteMode
+                                      ? runBoundRemoteShellEscape(&cliRemoteConn, shellCmd)
+                                      : runShellEscape(shellCmd);
                             escMonitor.start();
+                            if (!escMonitor.isActive()) {
+                                qout << "Terminal input could not be restarted; stopping the "
+                                        "agent.\n"
+                                     << Qt::flush;
+                                agent->abort();
+                                return;
+                            }
                             qout << output;
                             if (!output.endsWith(QLatin1Char('\n'))) {
                                 qout << "\n";
@@ -1871,14 +1893,86 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                     qout << "\n> " << request << "\n" << Qt::flush;
                 });
             escMonitor.start();
+            if (!escMonitor.isActive()) {
+                return showError(1, QStringLiteral("terminal input setup failed"));
+            }
 
-            beginRemoteTurn(&cliRemoteConn);
             agent->runStream(query);
             loop.exec();
-            escMonitor.stop();
+            if (!escMonitor.stop()) {
+                return showError(1, QStringLiteral("terminal input restoration failed"));
+            }
         } else {
-            beginRemoteTurn(&cliRemoteConn);
+            QSocInterrupt::TerminalInterruptGuard terminalInterrupt;
+            if (QSocInterrupt::handlerReady() && !terminalInterrupt.isReady()) {
+                return showError(1, QStringLiteral("could not prepare terminal Ctrl-C handling"));
+            }
+
+            bool   interrupted         = false;
+            bool   interruptReadFailed = false;
+            QTimer interruptPoll;
+
+#ifndef Q_OS_WIN
+            std::unique_ptr<QSocketNotifier> interruptNotifier;
+#endif
+
+            const auto stopInterruptConsumer = [&] {
+                interruptPoll.stop();
+#ifndef Q_OS_WIN
+                if (interruptNotifier) {
+                    interruptNotifier->setEnabled(false);
+                }
+#endif
+            };
+            const auto consumeInterrupts = [&] {
+                const int edges = QSocInterrupt::drainSignalPipe();
+                if (edges < 0) {
+                    interruptReadFailed = true;
+                    stopInterruptConsumer();
+                    agent->abort();
+                    return;
+                }
+                for (int edge = 0; edge < edges; ++edge) {
+                    if (checkDoubleInterrupt()) {
+                        stopInterruptConsumer();
+                        (void) terminalInterrupt.restore();
+                        QSocConsole::err() << "\n" << Qt::flush;
+                        std::exit(130);
+                    }
+                    interrupted = true;
+                    agent->abort();
+                }
+            };
+            if (QSocInterrupt::handlerReady()) {
+#ifdef Q_OS_WIN
+                interruptPoll.setInterval(10);
+                connect(&interruptPoll, &QTimer::timeout, &interruptPoll, consumeInterrupts);
+                interruptPoll.start();
+#else
+                interruptNotifier = std::make_unique<QSocketNotifier>(
+                    QSocInterrupt::signalReadFd(), QSocketNotifier::Read);
+                connect(
+                    interruptNotifier.get(),
+                    &QSocketNotifier::activated,
+                    interruptNotifier.get(),
+                    consumeInterrupts);
+#endif
+            }
+
             QString result = agent->run(query);
+            stopInterruptConsumer();
+            if (QSocInterrupt::handlerReady() && !terminalInterrupt.restore()) {
+                return showError(1, QStringLiteral("could not restore the terminal interrupt key"));
+            }
+            if (interruptReadFailed) {
+                return showError(1, QStringLiteral("could not read terminal Ctrl-C handling"));
+            }
+            if (interrupted) {
+                const QString notice = agent->takeStopNotice();
+                qout << Qt::endl
+                     << (notice.isEmpty() ? QStringLiteral("(interrupted)") : notice) << Qt::endl;
+                return true;
+            }
             return showInfo(0, result);
         }
 
@@ -2989,6 +3083,11 @@ bool QSocCliWorker::runAgentLoop(
 
     /* Start input monitor (raw mode for entire REPL lifetime) */
     inputMonitor.start();
+    if (!inputMonitor.isActive()) {
+        compositor.stop();
+        return showError(
+            1, QCoreApplication::translate("main", "Error: terminal input setup failed."));
+    }
 
     /* Session storage. Each interactive REPL run owns one session JSONL
      * under <projectPath>/.qsoc/sessions/<id>.jsonl. lastPersistedIndex
@@ -4628,45 +4727,61 @@ bool QSocCliWorker::runAgentLoop(
         inputMonitor.insertText(chip);
     });
 
+    QEventLoop *idlePromptLoop      = nullptr;
+    bool        terminalInputFailed = false;
+
     /* External editor (Ctrl+X Ctrl+E or Ctrl+G): pause the TUI, hand off
      * to $EDITOR with the current input text, and reload the edited result
      * into the input buffer when the editor exits. Paste chips are expanded
      * into the tempfile so the user can actually edit their pasted content;
      * the edited return text replaces the buffer as-is — chips are not
      * reconstructed, so the user sees (and commits) the real payload. */
-    connect(&inputMonitor, &QAgentInputMonitor::externalEditorRequested, [&]() {
-        const QString rawBuffer = inputWidget.getText();
-        const QString current   = expandPasteChips(rawBuffer);
+    connect(
+        &inputMonitor, &QAgentInputMonitor::externalEditorRequested, [&]() {
+            const QString rawBuffer = inputWidget.getText();
+            const QString current   = expandPasteChips(rawBuffer);
 
-        /* Tear down the alt-screen and raw-mode monitor so the editor owns
-         * the terminal. Mirrors the '!<cmd>' shell-escape dance. */
-        compositor.pause();
-        inputMonitor.stop();
+            /* Tear down the alt-screen and raw-mode monitor so the editor owns
+             * the terminal. Mirrors the '!<cmd>' shell-escape dance. */
+            if (!inputMonitor.stop()) {
+                compositor.printContent(QStringLiteral(
+                    "External editor refused: terminal input could not be restored.\n"));
+                return;
+            }
+            compositor.pause();
 
-        QString editedText;
-        QString errMessage;
-        bool    success = QSocExternalEditor::editText(current, editedText, errMessage);
+            QString editedText;
+            QString errMessage;
+            bool    success = QSocExternalEditor::editText(current, editedText, errMessage);
 
-        /* Restore TUI before reporting anything so output lands in the
-         * scroll view rather than the cooked terminal. */
-        inputMonitor.start();
-        compositor.resume();
+            inputMonitor.start();
+            if (!inputMonitor.isActive()) {
+                terminalInputFailed = true;
+                compositor.stop();
+                QSocConsole::warn()
+                    << "Terminal input could not be restarted after the external editor.";
+                if (idlePromptLoop != nullptr) {
+                    idlePromptLoop->quit();
+                }
+                return;
+            }
+            compositor.resume();
 
-        if (success) {
-            inputMonitor.setInputBuffer(editedText);
-        } else {
-            /* Restore the ORIGINAL chip-containing buffer (not the expanded
+            if (success) {
+                inputMonitor.setInputBuffer(editedText);
+            } else {
+                /* Restore the ORIGINAL chip-containing buffer (not the expanded
              * form) so a failed editor invocation is a pure no-op — we don't
              * want to silently expand chips when the user just bailed out. */
-            inputMonitor.setInputBuffer(rawBuffer);
-            if (!errMessage.isEmpty()) {
-                compositor.printContent(
-                    QStringLiteral("External editor: ") + errMessage + QLatin1Char('\n'));
+                inputMonitor.setInputBuffer(rawBuffer);
+                if (!errMessage.isEmpty()) {
+                    compositor.printContent(
+                        QStringLiteral("External editor: ") + errMessage + QLatin1Char('\n'));
+                }
             }
-        }
-        compositor.invalidate();
-        compositor.render();
-    });
+            compositor.invalidate();
+            compositor.render();
+        });
 
     /* /loop scheduler is now constructed in parseAgent() and reached via
      * agent->getLoopScheduler() so schedule_* tools and the REPL share a
@@ -4680,8 +4795,7 @@ bool QSocCliWorker::runAgentLoop(
             loopScheduler.setProjectDir(loopProjectPath);
         }
     }
-    QEventLoop *idlePromptLoop = nullptr;
-    QObject     replConnectionScope;
+    QObject replConnectionScope;
 
     if (taskEventQueue != nullptr) {
         connect(
@@ -4788,7 +4902,8 @@ bool QSocCliWorker::runAgentLoop(
     /* Main loop */
     bool exitRequested = false;
 
-    while (!exitRequested) {
+    while (!exitRequested && !terminalInputFailed) {
+        QSocInterrupt::clearRequest();
         QEventLoop promptLoop;
         QString    input;
         QString    recoveredRunId;
@@ -5221,6 +5336,11 @@ bool QSocCliWorker::runAgentLoop(
          * before a command or agent turn runs. */
         predictor.cancel();
 
+        /* promptLoop.exec() can set this through an input callback. */
+        // cppcheck-suppress knownConditionTrueFalse
+        if (terminalInputFailed) {
+            break;
+        }
         if (exitRequested) {
             break;
         }
@@ -5401,7 +5521,7 @@ bool QSocCliWorker::runAgentLoop(
             QString shellCmd = input.mid(1).trimmed();
             if (!shellCmd.isEmpty()) {
                 compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
-                /* Both runShellEscape and runRemoteShellEscape buffer
+                /* Both shell-escape paths buffer
                  * stdout/stderr into a string and return it; nothing is
                  * written to the terminal during exec. That means the
                  * compositor can keep painting normally. A pause/resume
@@ -5409,11 +5529,14 @@ bool QSocCliWorker::runAgentLoop(
                  * previous alt-screen frame held (for example the last
                  * path picker), which reads as a flash. */
                 const QString output = remoteConn->session() != nullptr
-                                           ? runRemoteShellEscape(
-                                                 *remoteConn->session(),
-                                                 remoteConn->path()->cwd(),
-                                                 shellCmd)
+                                           ? runBoundRemoteShellEscape(remoteConn, shellCmd)
                                            : runShellEscape(shellCmd);
+                if (!QSocInterrupt::finishForegroundHandoff()) {
+                    terminalInputFailed = true;
+                    compositor.stop();
+                    QSocConsole::warn() << "Terminal Ctrl-C handling failed after the shell.";
+                    break;
+                }
                 if (!output.isEmpty()) {
                     compositor.printContent(output, QTuiScrollView::Dim);
                     if (!output.endsWith(QLatin1Char('\n'))) {
@@ -6899,12 +7022,24 @@ bool QSocCliWorker::runAgentLoop(
 
             const QString body = QSocMemoryRecall::stripFrontmatter(
                 mm->readTopicFile(scope, canonical));
+            if (!inputMonitor.stop()) {
+                compositor.printContent(
+                    QStringLiteral("Memory editor refused: terminal input could not be restored.\n"),
+                    QTuiScrollView::Dim);
+                continue;
+            }
             compositor.pause();
-            inputMonitor.stop();
             QString    edited;
             QString    editErr;
             const bool ok = QSocExternalEditor::editText(body, edited, editErr);
             inputMonitor.start();
+            if (!inputMonitor.isActive()) {
+                terminalInputFailed = true;
+                compositor.stop();
+                QSocConsole::warn()
+                    << "Terminal input could not be restarted after the memory editor.";
+                break;
+            }
             compositor.resume();
             if (!ok) {
                 compositor.printContent(
@@ -6919,6 +7054,10 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
         if (cmd.startsWith(QStringLiteral("/ssh"))) {
+            if (!QSocInterrupt::handlerReady()) {
+                compositor.printContent("SSH refused: Ctrl-C handling is unavailable.\n");
+                continue;
+            }
             QString arg = input.mid(4).trimmed();
 
             /* Bare /ssh pops a picker built from the sticky binding target
@@ -7021,6 +7160,15 @@ bool QSocCliWorker::runAgentLoop(
 
             AgentRemoteState newState;
             QString          err;
+            const auto       finishSshHandoff = [&](bool *interrupted = nullptr) {
+                if (QSocInterrupt::finishForegroundHandoff(interrupted)) {
+                    return true;
+                }
+                terminalInputFailed = true;
+                compositor.stop();
+                QSocConsole::warn() << "Terminal Ctrl-C handling failed after SSH.";
+                return false;
+            };
 
             /* Interactive secret callback: handles encrypted private-key
              * passphrase prompts and `password`-method auth. Compositor
@@ -7040,7 +7188,12 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent(QString("Connecting to %1 ...\n").arg(arg));
             compositor.render();
             if (!connectAgentSshSession(
-                    resolved.connectString, this, &newState, &err, interactiveSecret)) {
+                    resolved.connectString, this, &newState, &err, interactiveSecret, [] {
+                        return QSocInterrupt::requested();
+                    })) {
+                if (!finishSshHandoff()) {
+                    break;
+                }
                 compositor.printContent(QString("%1\n").arg(err));
                 continue;
             }
@@ -7099,12 +7252,29 @@ bool QSocCliWorker::runAgentLoop(
                 if (workspace.isEmpty()) {
                     compositor.printContent("No workspace selected. Disconnecting.\n");
                     discardAgentRemoteState(&newState);
+                    if (!finishSshHandoff()) {
+                        break;
+                    }
                     continue;
                 }
             }
 
             if (!prepareAgentRemoteWorkspace(workspace, &newState, &err)) {
                 compositor.printContent(QString("%1\n").arg(err));
+                discardAgentRemoteState(&newState);
+                if (!finishSshHandoff()) {
+                    break;
+                }
+                continue;
+            }
+
+            bool connectionInterrupted = false;
+            if (!finishSshHandoff(&connectionInterrupted)) {
+                discardAgentRemoteState(&newState);
+                break;
+            }
+            if (connectionInterrupted) {
+                compositor.printContent("SSH connection cancelled by user.\n");
                 discardAgentRemoteState(&newState);
                 continue;
             }
@@ -8269,12 +8439,17 @@ bool QSocCliWorker::runAgentLoop(
                         if (!shellCmd.isEmpty()) {
                             compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            const QString output = remoteConn->session() != nullptr
-                                                       ? runRemoteShellEscape(
-                                                             *remoteConn->session(),
-                                                             remoteConn->path()->cwd(),
-                                                             shellCmd)
-                                                       : runShellEscape(shellCmd);
+                            const QString output
+                                = remoteConn->session() != nullptr
+                                      ? runBoundRemoteShellEscape(remoteConn, shellCmd)
+                                      : runShellEscape(shellCmd);
+                            if (!QSocInterrupt::finishForegroundHandoff()) {
+                                compositor.resume();
+                                compositor.printContent(
+                                    "Terminal Ctrl-C handling failed after the shell.\n");
+                                agent->abort();
+                                return;
+                            }
                             compositor.resume();
                             if (!output.isEmpty()) {
                                 compositor.printContent(output, QTuiScrollView::Dim);
@@ -8363,7 +8538,6 @@ bool QSocCliWorker::runAgentLoop(
             awaySummaryShown          = false;
             awaySummaryPending        = false;
             planApprovalShownThisTurn = false;
-            beginRemoteTurn(remoteConn);
             if (resumeExistingHistory) {
                 agent->resumeStream();
             } else {
@@ -8942,12 +9116,17 @@ bool QSocCliWorker::runAgentLoop(
                         if (!shellCmd.isEmpty()) {
                             compositor.printContent("$ " + shellCmd + "\n", QTuiScrollView::Bold);
                             compositor.pause();
-                            const QString output = remoteConn->session() != nullptr
-                                                       ? runRemoteShellEscape(
-                                                             *remoteConn->session(),
-                                                             remoteConn->path()->cwd(),
-                                                             shellCmd)
-                                                       : runShellEscape(shellCmd);
+                            const QString output
+                                = remoteConn->session() != nullptr
+                                      ? runBoundRemoteShellEscape(remoteConn, shellCmd)
+                                      : runShellEscape(shellCmd);
+                            if (!QSocInterrupt::finishForegroundHandoff()) {
+                                compositor.resume();
+                                compositor.printContent(
+                                    "Terminal Ctrl-C handling failed after the shell.\n");
+                                agent->abort();
+                                return;
+                            }
                             compositor.resume();
                             if (!output.isEmpty()) {
                                 compositor.printContent(output, QTuiScrollView::Dim);
@@ -9036,7 +9215,6 @@ bool QSocCliWorker::runAgentLoop(
             awaySummaryShown          = false;
             awaySummaryPending        = false;
             planApprovalShownThisTurn = false;
-            beginRemoteTurn(remoteConn);
             if (resumeExistingHistory) {
                 agent->resumeStream();
             } else {
@@ -9189,8 +9367,11 @@ bool QSocCliWorker::runAgentLoop(
     }
 
     /* Stop TUI and restore terminal */
-    inputMonitor.stop();
+    const bool inputRestored = inputMonitor.stop();
     compositor.stop();
 
-    return true;
+    if (!inputRestored) {
+        return showError(1, QStringLiteral("terminal input restoration failed"));
+    }
+    return !terminalInputFailed;
 }

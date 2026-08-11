@@ -138,6 +138,7 @@ QSocAgent::~QSocAgent()
 
 QSocAgent::ActiveRunPtr QSocAgent::beginRun(RunMode mode)
 {
+    enterRequestBoundary();
     auto run   = std::make_shared<ActiveRun>();
     run->epoch = ++nextRunEpoch_;
     run->mode  = mode;
@@ -393,6 +394,10 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
             continue;
         }
 
+        owner->enterRequestBoundary();
+        if (owner.isNull() || !owner->isCurrentRun(run)) {
+            return false;
+        }
         QString    request = item.text;
         QString    blockReason;
         const bool allowed = firePromptSubmitHook(&request, &blockReason);
@@ -2022,6 +2027,19 @@ void QSocAgent::setGoalCatalog(QSocGoalCatalog *catalog)
 void QSocAgent::setPersistenceBarrier(PersistenceBarrier barrier)
 {
     persistenceBarrier_ = std::move(barrier);
+}
+
+void QSocAgent::setRequestBoundaryHandler(RequestBoundaryHandler handler)
+{
+    requestBoundaryHandler_ = std::move(handler);
+}
+
+void QSocAgent::enterRequestBoundary()
+{
+    const RequestBoundaryHandler handler = requestBoundaryHandler_;
+    if (handler) {
+        handler();
+    }
 }
 
 bool QSocAgent::runPersistenceBarrier(PersistencePoint point, const QString &toolCallId)

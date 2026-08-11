@@ -11,6 +11,28 @@
 #include <QtCore>
 #include <QtTest>
 
+#ifndef Q_OS_WIN
+#include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <thread>
+#endif
+
+#ifndef Q_OS_WIN
+namespace {
+volatile sig_atomic_t g_signalSeen = 0;
+
+void recordSignal(int)
+{
+    g_signalSeen = 1;
+}
+} // namespace
+#endif
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -48,6 +70,38 @@ private slots:
         QVERIFY(!err.contains(QStringLiteral("id_ed25519")));
     }
 
+    /* A stop asked for while the resolver is running is a cancellation, not a
+     * broken resolver: the same unresolvable host, with the user's stop
+     * pending, must classify as Aborted before the NetworkError branch. This
+     * pins the classification order at the resolver's own failure exit. */
+    void testResolverFailureUnderAStopIsAborted()
+    {
+        QSocSshSession    session;
+        QSocSshHostConfig host;
+        host.hostname      = QStringLiteral("qsoc.invalid.example.nxdomain.test");
+        host.port          = 22;
+        host.user          = QStringLiteral("nobody");
+        host.strictHostKey = QSocSshHostConfig::StrictHostKey::No;
+
+        session.setTimeoutMs(2000);
+        int probeCalls = 0;
+        session.setAbortProbe([&probeCalls] {
+            ++probeCalls;
+            return probeCalls > 1;
+        });
+        QString    err;
+        const auto status = session.connectTo(host, &err);
+        QCOMPARE(status, QSocSshSession::ConnectStatus::Aborted);
+        QVERIFY2(probeCalls >= 2, "the stop probe never reached the resolver failure exit");
+        QVERIFY2(
+            err.contains(QStringLiteral("cancelled by user")),
+            qPrintable(
+                QStringLiteral("a cancelled resolve reported as a resolver failure: ") + err));
+        QVERIFY2(
+            !err.startsWith(QStringLiteral("TCP connect")),
+            qPrintable(QStringLiteral("the test never reached the resolver failure exit: ") + err));
+    }
+
     /* Closed TCP port on localhost: connect() returns NetworkError, not a
      * crash. Uses port 1 which is almost never served. */
     void testConnectToClosedPort()
@@ -71,6 +125,72 @@ private slots:
     void testWaitSocketRejectsBadArguments()
     {
         QCOMPARE(QSocSshSession::waitSocket(-1, nullptr, 100), QSocSshSession::WaitOutcome::Fatal);
+    }
+
+    /* A benign process signal does not consume a socket deadline. Returning
+     * Timeout on EINTR made teardown abandon a healthy channel immediately. */
+    void testWaitSocketKeepsItsBudgetAcrossEintr()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("POSIX poll interruption is not available on Windows");
+#else
+        int sockets[2] = {-1, -1};
+        QVERIFY(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+        const auto closeSockets = qScopeGuard([&] {
+            ::close(sockets[0]);
+            ::close(sockets[1]);
+        });
+
+        struct sigaction action    = {};
+        struct sigaction oldAction = {};
+        action.sa_handler          = recordSignal;
+        QVERIFY(::sigemptyset(&action.sa_mask) == 0);
+        QVERIFY(::sigaction(SIGUSR1, &action, &oldAction) == 0);
+        const auto restoreSignal = qScopeGuard(
+            [&] { (void) ::sigaction(SIGUSR1, &oldAction, nullptr); });
+
+        QSocLibSsh2Init::ensure();
+        LIBSSH2_SESSION *session = libssh2_session_init();
+        QVERIFY(session != nullptr);
+        const auto freeSession = qScopeGuard([&] { (void) libssh2_session_free(session); });
+        const int  flags       = ::fcntl(sockets[0], F_GETFL, 0);
+        QVERIFY(flags >= 0);
+        QVERIFY(::fcntl(sockets[0], F_SETFL, flags | O_NONBLOCK) == 0);
+        libssh2_session_set_blocking(session, 0);
+        QCOMPARE(
+            libssh2_session_handshake(session, sockets[0]), static_cast<int>(LIBSSH2_ERROR_EAGAIN));
+        QVERIFY((libssh2_session_block_directions(session) & LIBSSH2_SESSION_BLOCK_INBOUND) != 0);
+
+        g_signalSeen             = 0;
+        const pthread_t   target = ::pthread_self();
+        std::atomic<bool> keepInterrupting{true};
+        std::atomic<int>  signalsSent{0};
+        std::thread       interrupter([target, &keepInterrupting, &signalsSent] {
+            while (keepInterrupting.load(std::memory_order_acquire)) {
+                if (::pthread_kill(target, SIGUSR1) == 0) {
+                    signalsSent.fetch_add(1, std::memory_order_relaxed);
+                }
+                QThread::msleep(5);
+            }
+        });
+        const auto        stopThread = qScopeGuard([&] {
+            keepInterrupting.store(false, std::memory_order_release);
+            if (interrupter.joinable()) {
+                interrupter.join();
+            }
+        });
+
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const auto outcome = QSocSshSession::waitSocket(sockets[0], session, 500);
+        keepInterrupting.store(false, std::memory_order_release);
+        interrupter.join();
+
+        QCOMPARE(outcome, QSocSshSession::WaitOutcome::Timeout);
+        QVERIFY(g_signalSeen != 0);
+        QVERIFY2(signalsSent.load() > 5, "the wait was not interrupted repeatedly");
+        QVERIFY2(elapsed.elapsed() >= 400, "EINTR was mistaken for the end of the deadline");
+#endif
     }
 
     /* Only socket-level codes may poison a session. An SFTP protocol error

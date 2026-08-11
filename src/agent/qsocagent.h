@@ -85,6 +85,7 @@ public:
 
     using PersistenceBarrier
         = std::function<bool(PersistencePoint point, const QString &toolCallId)>;
+    using RequestBoundaryHandler = std::function<void()>;
 
     /**
      * @brief Constructor
@@ -132,6 +133,13 @@ public:
      *          running. An empty callback disables persistence checkpoints.
      */
     void setPersistenceBarrier(PersistenceBarrier barrier);
+
+    /**
+     * @brief Run one callback before admitting each user request.
+     * @details The callback also runs for a queued user request that restarts
+     *          an active run. Internal notifications do not start a request.
+     */
+    void setRequestBoundaryHandler(RequestBoundaryHandler handler);
 
     /**
      * @brief Clear the conversation history
@@ -686,6 +694,8 @@ private:
     QSocUserWatchingProbe userWatchingProbe_;
     /* Workspace liveness probe (empty = assume usable). */
     QSocWorkspaceHealthProbe workspaceHealthProbe_;
+    /* Per-request state reset, including transport retry and interrupt state. */
+    RequestBoundaryHandler requestBoundaryHandler_;
     /* Reason the last run stopped; consumed by takeStopNotice(). */
     QString lastStopNotice_;
 
@@ -939,6 +949,7 @@ private:
     void computeRecallForTurn(const QString &query, const ActiveRunPtr &run);
 
     ActiveRunPtr beginRun(RunMode mode);
+    void         enterRequestBoundary();
     void         startStream(const std::optional<QString> &userQuery, bool restoredSession);
     bool         isCurrentRun(const ActiveRunPtr &run) const;
     bool runPersistenceBarrier(PersistencePoint point, const QString &toolCallId = QString());

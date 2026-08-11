@@ -3,6 +3,8 @@
 
 #include "cli/qagentinputmonitor.h"
 
+#include "agent/remote/qsocinterrupt.h"
+
 #ifdef Q_OS_WIN
 #include <io.h>
 #else
@@ -19,7 +21,7 @@ QAgentInputMonitor::QAgentInputMonitor(QObject *parent)
 
 QAgentInputMonitor::~QAgentInputMonitor()
 {
-    stop();
+    (void) stop();
 }
 
 int QAgentInputMonitor::utf8SeqLen(unsigned char lead)
@@ -310,6 +312,19 @@ void QAgentInputMonitor::resetEscBuffer()
 {
     escBuffer.clear();
     inEscSeq = false;
+}
+
+void QAgentInputMonitor::emitCtrlC()
+{
+#ifdef Q_OS_WIN
+    QSocInterrupt::acknowledge();
+#endif
+    inputBuffer.clear();
+    cursorPos = 0;
+    utf8Pending.clear();
+    clearUndoStack();
+    emit inputChanged(inputBuffer);
+    emit ctrlCPressed();
 }
 
 void QAgentInputMonitor::processEscSequence()
@@ -653,15 +668,13 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
-        /* Ctrl+C: interrupt — use continue, NOT return, so multiple 0x03 in one
-         * read() can all be processed (critical for double Ctrl+C detection) */
+        /* Ctrl+C: interrupt. Use continue, NOT return, so multiple 0x03 in one
+         * read() can all be processed (critical for double Ctrl+C detection).
+         * With the POSIX signal bridge on, Ctrl-C arrives as SIGINT and never
+         * as this byte; the branch stays for Windows and the bridge-off
+         * fallback, feeding the same flow. */
         if (byte == 0x03) {
-            inputBuffer.clear();
-            cursorPos = 0;
-            utf8Pending.clear();
-            clearUndoStack();
-            emit inputChanged(inputBuffer);
-            emit ctrlCPressed();
+            emitCtrlC();
             continue;
         }
 
@@ -915,20 +928,27 @@ void QAgentInputMonitor::start()
     if (active) {
         return;
     }
+    if (!QSocInterrupt::finishForegroundHandoff()) {
+        return;
+    }
 
 #ifdef Q_OS_WIN
     origStdinHandle = GetStdHandle(STD_INPUT_HANDLE);
     if (origStdinHandle == INVALID_HANDLE_VALUE) {
         return;
     }
-    GetConsoleMode(origStdinHandle, &origConsoleMode);
+    if (!GetConsoleMode(origStdinHandle, &origConsoleMode)) {
+        return;
+    }
     termiosSaved = true;
 
     DWORD mode = origConsoleMode;
     mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
     mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
-    SetConsoleMode(origStdinHandle, mode);
-
+    if (!SetConsoleMode(origStdinHandle, mode)) {
+        termiosSaved = false;
+        return;
+    }
     /* Enable VT processing on stdout for ANSI escape output */
     HANDLE hOut    = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD  outMode = 0;
@@ -975,16 +995,42 @@ void QAgentInputMonitor::start()
 
     active = true;
 #else
-    if (tcgetattr(STDIN_FILENO, &origTermios) == 0) {
+    /* The bridge keeps Ctrl-C observable while an SSH wait holds the event
+     * loop. Without it, Ctrl-C stays on the byte path. */
+    const bool sigBridge  = QSocInterrupt::bridgeReady();
+    const bool stdinIsTty = ::isatty(STDIN_FILENO) == 1;
+    if (stdinIsTty && !sigBridge && !QSocInterrupt::byteFallbackReady()) {
+        return;
+    }
+    if (stdinIsTty) {
+        if (tcgetattr(STDIN_FILENO, &origTermios) != 0) {
+            return;
+        }
         termiosSaved = true;
 
         struct termios raw = origTermios;
         raw.c_iflag &= ~static_cast<tcflag_t>(ICRNL | INLCR | IXON);
         raw.c_oflag &= ~static_cast<tcflag_t>(OPOST);
-        raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO | ISIG);
+        if (sigBridge) {
+            /* Raw mode owns these settings until stop() restores the exact
+             * terminal state captured above. */
+            raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+            raw.c_lflag |= static_cast<tcflag_t>(ISIG | NOFLSH);
+            raw.c_cc[VINTR] = 0x03;
+            raw.c_cc[VSUSP] = _POSIX_VDISABLE;
+            raw.c_cc[VQUIT] = _POSIX_VDISABLE;
+#ifdef VDSUSP
+            raw.c_cc[VDSUSP] = _POSIX_VDISABLE;
+#endif
+        } else {
+            raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO | ISIG);
+        }
         raw.c_cc[VMIN]  = 0;
         raw.c_cc[VTIME] = 0;
-        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+            termiosSaved = false;
+            return;
+        }
     }
 
     notifier = new QSocketNotifier(STDIN_FILENO, QSocketNotifier::Read, this);
@@ -995,6 +1041,18 @@ void QAgentInputMonitor::start()
             processBytes(buf, static_cast<int>(bytesRead));
         }
     });
+
+    if (sigBridge) {
+        sigintNotifier
+            = new QSocketNotifier(QSocInterrupt::signalReadFd(), QSocketNotifier::Read, this);
+        connect(sigintNotifier, &QSocketNotifier::activated, this, [this]() {
+            /* One byte per press preserves rapid double-press detection. */
+            const int edges = QSocInterrupt::drainSignalPipe();
+            for (int i = 0; i < edges; ++i) {
+                emitCtrlC();
+            }
+        });
+    }
 
     /* Enable bracketed paste + focus reporting (DECSET 1004), and request
      * xterm modifyOtherKeys level 1 so Shift+Enter gets its own encoding
@@ -1010,13 +1068,18 @@ void QAgentInputMonitor::start()
 #endif
 }
 
-void QAgentInputMonitor::stop()
+bool QAgentInputMonitor::stop()
 {
     if (!active) {
-        return;
+        return true;
     }
 
 #ifdef Q_OS_WIN
+    if (termiosSaved && !SetConsoleMode(origStdinHandle, origConsoleMode)) {
+        return false;
+    }
+    termiosSaved = false;
+
     if (pollTimer) {
         pollTimer->stop();
         delete pollTimer;
@@ -1027,28 +1090,28 @@ void QAgentInputMonitor::stop()
     fputs("\033[>4m\033[?2004l\033[?1004l", stdout);
     fflush(stdout);
 
-    if (termiosSaved) {
-        SetConsoleMode(origStdinHandle, origConsoleMode);
-        termiosSaved = false;
-    }
 #else
+    if (termiosSaved && tcsetattr(STDIN_FILENO, TCSANOW, &origTermios) != 0) {
+        return false;
+    }
+    termiosSaved = false;
+
     if (notifier) {
         delete notifier;
         notifier = nullptr;
     }
+    if (sigintNotifier) {
+        delete sigintNotifier;
+        sigintNotifier = nullptr;
+    }
 
-    /* Reset modifyOtherKeys, disable bracketed paste + focus reporting
-     * before restoring termios */
+    /* Reset modifyOtherKeys, disable bracketed paste + focus reporting. */
     {
         const char *seq     = "\033[>4m\033[?2004l\033[?1004l";
         ssize_t     written = write(STDOUT_FILENO, seq, strlen(seq));
         (void) written;
     }
 
-    if (termiosSaved) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &origTermios);
-        termiosSaved = false;
-    }
 #endif
 
     inputBuffer.clear();
@@ -1062,6 +1125,7 @@ void QAgentInputMonitor::stop()
     emit inputChanged(QString());
 
     active = false;
+    return true;
 }
 
 bool QAgentInputMonitor::isActive() const

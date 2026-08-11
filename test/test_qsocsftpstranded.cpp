@@ -13,11 +13,68 @@
 #include <QString>
 #include <QtTest>
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <thread>
 
 #ifndef Q_OS_WIN
 #include <sys/socket.h>
+#endif
+
+#ifdef QSOC_TEST_WRAP_LIBSSH2_TEARDOWN
+namespace {
+
+enum class TeardownWrapMode : std::uint8_t {
+    PassThrough,
+    SessionFreeError,
+    ParentChannelFreeError,
+};
+
+std::atomic<TeardownWrapMode> g_teardownWrapMode{TeardownWrapMode::PassThrough};
+std::atomic<int>              g_channelFreeCalls{0};
+std::atomic<int>              g_disconnectCalls{0};
+std::atomic<int>              g_sessionFreeCalls{0};
+
+void resetTeardownWrapper(TeardownWrapMode mode)
+{
+    g_channelFreeCalls.store(0);
+    g_disconnectCalls.store(0);
+    g_sessionFreeCalls.store(0);
+    g_teardownWrapMode.store(mode);
+}
+
+} // namespace
+
+extern "C" int __real_libssh2_channel_free(LIBSSH2_CHANNEL *channel);
+extern "C" int __real_libssh2_session_disconnect_ex(
+    LIBSSH2_SESSION *session, int reason, const char *description, const char *language);
+extern "C" int __real_libssh2_session_free(LIBSSH2_SESSION *session);
+
+extern "C" int __wrap_libssh2_channel_free(LIBSSH2_CHANNEL *channel)
+{
+    g_channelFreeCalls.fetch_add(1);
+    if (g_teardownWrapMode.load() == TeardownWrapMode::ParentChannelFreeError) {
+        return LIBSSH2_ERROR_SOCKET_SEND;
+    }
+    return __real_libssh2_channel_free(channel);
+}
+
+extern "C" int __wrap_libssh2_session_disconnect_ex(
+    LIBSSH2_SESSION *session, int reason, const char *description, const char *language)
+{
+    g_disconnectCalls.fetch_add(1);
+    return __real_libssh2_session_disconnect_ex(session, reason, description, language);
+}
+
+extern "C" int __wrap_libssh2_session_free(LIBSSH2_SESSION *session)
+{
+    g_sessionFreeCalls.fetch_add(1);
+    if (g_teardownWrapMode.load() == TeardownWrapMode::SessionFreeError) {
+        return LIBSSH2_ERROR_SOCKET_SEND;
+    }
+    return __real_libssh2_session_free(session);
+}
 #endif
 
 /*
@@ -46,6 +103,10 @@ private slots:
     void anAbandonedReadCondemnsTheSessionItStranded();
     void aWriteStrandedMidPacketCondemnsTheSession();
     void aTeardownOnASilentLinkStillReleasesTheSession();
+    void aLiveTeardownReleasesEveryTime();
+    void aNegativeFreeResultIsNotReportedAsReleased();
+    void aProxyJumpReleaseFailureIsReported();
+    void teardownNeverSendsDisconnectBeforeFree();
 
 private:
     /** @brief Connect @p session to @p port, failing the case on refusal. */
@@ -299,8 +360,8 @@ void Test::aWriteStrandedMidPacketCondemnsTheSession()
  * Teardown is where a non-blocking libssh2_session_free has to be driven to
  * completion: one call that returns EAGAIN has freed nothing, so nulling the
  * pointer there leaks the session, every channel and the SFTP channel. On a
- * peer that stopped answering the release still has to happen, and the caller
- * has to be able to tell that it was not the peer that confirmed it.
+ * peer that stopped answering the release still has to finish or report that
+ * libssh2 refused it.
  */
 void Test::aTeardownOnASilentLinkStillReleasesTheSession()
 {
@@ -336,8 +397,8 @@ void Test::aTeardownOnASilentLinkStillReleasesTheSession()
                 QStringLiteral("teardown gave up after %1 ms without draining").arg(elapsed)));
         QVERIFY2(elapsed < 6000, qPrintable(QStringLiteral("teardown took %1 ms").arg(elapsed)));
         QVERIFY2(
-            !session.lastTeardownCompleted(),
-            "a silent peer was reported as having confirmed the close");
+            session.lastTeardownReleasedState(),
+            "closing the socket under a silent peer still had to release the session");
         QCOMPARE(session.rawSession(), static_cast<LIBSSH2_SESSION *>(nullptr));
 
         clock.restart();
@@ -345,11 +406,11 @@ void Test::aTeardownOnASilentLinkStillReleasesTheSession()
         QVERIFY2(
             clock.elapsed() < 200,
             qPrintable(QStringLiteral("a second teardown took %1 ms").arg(clock.elapsed())));
-        QVERIFY(!session.lastTeardownCompleted());
     }
 
-    /* And the other half: a live peer confirms, so the same teardown is
-     * quick and reports itself complete. */
+    /* And the other half: a live peer answers the channel closes, so the same
+     * teardown is quick and the release never needs the socket closed under
+     * the library. */
     QSocSshSession session;
     QVERIFY(connectOrFail(&session, static_cast<quint16>(m_fixture.port())));
     QSocSftpClient sftp(session);
@@ -365,7 +426,115 @@ void Test::aTeardownOnASilentLinkStillReleasesTheSession()
     session.disconnectFromHost();
     const qint64 elapsed = clock.elapsed();
     QVERIFY2(elapsed < 500, qPrintable(QStringLiteral("teardown took %1 ms").arg(elapsed)));
-    QVERIFY2(session.lastTeardownCompleted(), "a confirmed teardown reported itself incomplete");
+    QVERIFY2(session.lastTeardownReleasedState(), "a live-peer teardown failed to release");
+}
+
+/* A live link must release promptly on every run. */
+void Test::aLiveTeardownReleasesEveryTime()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    for (int round = 0; round < 20; ++round) {
+        QSocSshSession session;
+        QVERIFY(connectOrFail(&session, static_cast<quint16>(m_fixture.port())));
+        QSocSftpClient sftp(session);
+        QString        err;
+        QVERIFY2(
+            sftp.writeFile(
+                m_fixture.workDir() + QStringLiteral("/teardown_stress.sv"),
+                QByteArray("alive\n"),
+                &err),
+            qPrintable(err));
+        /* The channel is open on purpose: the teardown, not the caller, is
+         * responsible for settling it before the transport goes. */
+        QVERIFY(sftp.isOpen());
+        QElapsedTimer clock;
+        clock.start();
+        session.disconnectFromHost();
+        const qint64 elapsed = clock.elapsed();
+        QVERIFY2(
+            session.lastTeardownReleasedState(),
+            qPrintable(QStringLiteral("teardown %1/20 failed to release").arg(round + 1)));
+        QVERIFY2(
+            elapsed < 1500,
+            qPrintable(QStringLiteral("teardown %1/20 took %2 ms on a live peer")
+                           .arg(round + 1)
+                           .arg(elapsed)));
+    }
+}
+
+/* Every negative libssh2 result is a failed release, both on the bounded
+ * attempt and on the one fallback after the socket is closed. */
+void Test::aNegativeFreeResultIsNotReportedAsReleased()
+{
+#ifndef QSOC_TEST_WRAP_LIBSSH2_TEARDOWN
+    QSKIP("libssh2 linker wrapping is unavailable on this platform");
+#else
+    QSOC_REQUIRE_SSHD(m_fixture);
+    resetTeardownWrapper(TeardownWrapMode::SessionFreeError);
+    const auto wrapperGuard = qScopeGuard(
+        [] { resetTeardownWrapper(TeardownWrapMode::PassThrough); });
+
+    QSocSshSession session;
+    QVERIFY(connectOrFail(&session, static_cast<quint16>(m_fixture.port())));
+    session.disconnectFromHost();
+
+    QVERIFY(!session.lastTeardownReleasedState());
+    QCOMPARE(g_sessionFreeCalls.load(), 2);
+#endif
+}
+
+/* A ProxyJump channel belongs to the child teardown even though libssh2
+ * registers it on the parent session. Its failed free is part of the result. */
+void Test::aProxyJumpReleaseFailureIsReported()
+{
+#ifndef QSOC_TEST_WRAP_LIBSSH2_TEARDOWN
+    QSKIP("libssh2 linker wrapping is unavailable on this platform");
+#else
+    QSOC_REQUIRE_SSHD(m_fixture);
+    QSocSshSession parent;
+    QVERIFY(connectOrFail(&parent, static_cast<quint16>(m_fixture.port())));
+
+    QSocSshSession child;
+    QString        err;
+    QCOMPARE(
+        child.connectToVia(m_fixture.hostConfig(), &parent, &err),
+        QSocSshSession::ConnectStatus::Ok);
+
+    resetTeardownWrapper(TeardownWrapMode::ParentChannelFreeError);
+    const auto wrapperGuard = qScopeGuard(
+        [] { resetTeardownWrapper(TeardownWrapMode::PassThrough); });
+    child.disconnectFromHost();
+
+    QVERIFY(!child.lastTeardownReleasedState());
+    QCOMPARE(g_channelFreeCalls.load(), 1);
+    QCOMPARE(parent.unusableReason(), QSocSshSession::Unusable::AbandonedExchange);
+    parent.disconnectFromHost();
+#endif
+}
+
+/* Production teardown must free without sending disconnect_ex first. */
+void Test::teardownNeverSendsDisconnectBeforeFree()
+{
+#ifndef QSOC_TEST_WRAP_LIBSSH2_TEARDOWN
+    QSKIP("libssh2 linker wrapping is unavailable on this platform");
+#else
+    QSOC_REQUIRE_SSHD(m_fixture);
+    QSocSshSession session;
+    QVERIFY(connectOrFail(&session, static_cast<quint16>(m_fixture.port())));
+    QSocSftpClient sftp(session);
+    QString        err;
+    QVERIFY2(
+        sftp.writeFile(
+            m_fixture.workDir() + QStringLiteral("/teardown_order.sv"), QByteArray("alive\n"), &err),
+        qPrintable(err));
+    QVERIFY(sftp.isOpen());
+
+    resetTeardownWrapper(TeardownWrapMode::PassThrough);
+    session.disconnectFromHost();
+
+    QVERIFY(g_sessionFreeCalls.load() > 0);
+    QCOMPARE(g_disconnectCalls.load(), 0);
+#endif
 }
 
 QSOC_TEST_MAIN(Test)

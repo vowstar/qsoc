@@ -19,7 +19,7 @@
  * cases here pin down where that channel goes: it must not be dropped, because
  * an unfreed channel stays registered and takes delivery of packets nobody
  * reads, and because libssh2_session_free stops at the first channel it cannot
- * free, which costs the orderly disconnect too.
+ * free, which leaves the session allocated too.
  */
 
 namespace {
@@ -119,12 +119,10 @@ private slots:
     }
 
     /*
-     * A release that goes through before the session is freed keeps the orderly
-     * disconnect available: libssh2_session_free walks the channels itself and
-     * gives up on the first one the peer has not confirmed, and giving up there
-     * is what forces the socket to be closed under the library instead.
+     * A release that goes through before the session is freed lets the session
+     * free complete without closing the socket under the library.
      */
-    void aReleasedChannelKeepsTheDisconnectOrderly()
+    void aReleasedChannelLetsTheSessionRelease()
     {
         QSOC_REQUIRE_SSHD(m_sshd);
         QSocSshSession session;
@@ -139,9 +137,6 @@ private slots:
 
         session.disconnectFromHost();
         QVERIFY(session.lastTeardownReleasedState());
-        QVERIFY2(
-            session.lastTeardownCompleted(),
-            "the disconnect fell back to closing the socket under libssh2");
     }
 
 private:

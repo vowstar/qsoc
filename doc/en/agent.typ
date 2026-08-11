@@ -55,6 +55,11 @@ qsoc agent -q "List all modules in the project"
 qsoc agent -q "Import cpu.v and add AXI bus interface"
 ```
 
+Ctrl-C cancels an in-flight query with or without streaming. One press prints
+`(interrupted)` and exits with status 0; a second press within two seconds
+exits immediately with status 130. `--no-stream` still sends a synchronous
+request and does not add terminal control sequences to its output.
+
 === Workspace Override
 <agent-workspace-flag>
 
@@ -1124,9 +1129,9 @@ in the same turn is told the turn has already reconnected instead of paying for
 another sequence. On Linux and macOS, Ctrl-C is answered while an attempt is
 still in flight; on Windows, where Ctrl-C is a console key event read by the
 same loop the attempt is holding, it takes effect when the attempt returns.
-What is *not* automatic is carrying on: after a drop, remote state is unknown rather than
-known-gone, because a reboot discards the working directory, backgrounded
-jobs and temporary files, while a network partition leaves all of them
+What is *not* automatic is carrying on: after a drop, remote state is unknown
+rather than known-gone, because a reboot discards the working directory,
+backgrounded jobs and temporary files, while a network partition leaves all of them
 running. So the turn always ends, and the next one begins with a brief
 telling the agent to verify remote state before acting: re-read any file it
 means to edit, check named background jobs, and never re-run a command whose
@@ -1206,18 +1211,20 @@ Authentication order:
 The agent is tried for `ProxyJump` hops too: QSoC speaks the agent protocol on
 its own socket, so a hop's keys come from the local agent as usual.
 
-One deadline covers a whole connect attempt, from name resolution through the
-TCP connect, the handshake and every authentication stage, so the worst case is
-the operation timeout rather than one timeout per stage. Ctrl-C is answered
-inside any of them. The agent is the only route that depends on a third
+One deadline starts before name resolution and is shared by the TCP connect,
+handshake and every authentication stage; those later stages consume only the
+time left rather than each receiving a fresh timeout. On Linux and macOS,
+Ctrl-C is answered inside any of them; on Windows it is answered once the
+attempt returns, since the console delivers it as a key event on the loop the
+attempt is holding. The agent is the only route that depends on a third
 process, and one that accepts the connection and then stops answering is the
 ordinary way to meet a forwarded agent whose upstream hop has died; it may
 therefore spend at most half of what is left of the budget, leaving the
 identity-file routes behind it their share. Two limits are worth knowing:
 name resolution has no interruptible form, so a resolver that stops answering
-is bounded by the system resolver's own retry schedule and not by this
-deadline, and on Windows the agent is a Pageant window or a named pipe driven
-by libssh2, which the bound above does not reach.
+may overrun the deadline until the system resolver's own retry schedule ends,
+and on Windows the agent is a Pageant window or a named pipe driven by libssh2,
+which the bound above does not reach.
 
 Host key verification uses `~/.ssh/known_hosts` by default with strict
 checking enabled. `accept-new` is honored for first-contact hosts.

@@ -34,6 +34,7 @@ using socket_fd_t = int;
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 
 namespace {
 
@@ -159,11 +160,22 @@ bool connectWithTimeout(
     /* A host that drops SYNs answers nothing here, so this poll is the other
      * place a stop has to be honoured. Sliced only when there is a probe to
      * consult, so a caller without one keeps the single bounded poll. */
-    short        revents = 0;
-    int          rc      = 0;
-    const qint64 budget  = deadline.remainingTime();
+    short revents = 0;
+    int   rc      = 0;
     if (!abortProbe) {
-        rc = pollSocket(sockFd, POLLOUT, budget < 0 ? -1 : static_cast<int>(budget), &revents);
+        while (true) {
+            const qint64 remaining = deadline.remainingTime();
+            rc                     = pollSocket(
+                sockFd, POLLOUT, remaining < 0 ? -1 : static_cast<int>(remaining), &revents);
+#ifndef Q_OS_WIN
+            /* A signal cut the wait short; the connect is still in flight.
+             * Recomputed remainder, so the retry never extends the budget. */
+            if (rc < 0 && errno == EINTR && !deadline.hasExpired()) {
+                continue;
+            }
+#endif
+            break;
+        }
     } else {
         while (true) {
             if (deadline.hasExpired() || abortProbe()) {
@@ -177,9 +189,21 @@ bool connectWithTimeout(
                                   ? kPollSliceMs
                                   : qMax(1, static_cast<int>(qMin<qint64>(remaining, kPollSliceMs)));
             rc = pollSocket(sockFd, POLLOUT, slice, &revents);
-            if (rc != 0) {
+            if (rc > 0) {
                 break;
             }
+#ifndef Q_OS_WIN
+            /* EINTR is not a failed connect: loop back to the probe, so a
+             * SIGINT lands as the abort it is and any other signal costs one
+             * slice, never the attempt. */
+            if (rc < 0 && errno != EINTR) {
+                break;
+            }
+#else
+            if (rc < 0) {
+                break;
+            }
+#endif
         }
     }
     if (rc <= 0) {
@@ -239,6 +263,16 @@ QString derivePubkeyPath(const QString &privateKeyPath)
 }
 
 #ifndef Q_OS_WIN
+
+/* A dead peer must never raise SIGPIPE and kill the process: an ssh-agent that
+ * hangs up between two of our requests is a routine event. Linux carries the
+ * suppression on the send; macOS and the BSDs carry it on the socket, so both
+ * are set and the platform lacking one has the other. */
+#ifdef MSG_NOSIGNAL
+constexpr int kAgentSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kAgentSendFlags = 0;
+#endif
 
 /* One bounded poll on a descriptor we own, sliced so a stop the user asked for
  * is honoured inside a slice. Unlike waitSocket this takes the direction from
@@ -425,6 +459,29 @@ public:
             closeLink();
             return false;
         }
+#ifdef SO_NOSIGPIPE
+        const int noSigPipe = 1;
+        if (::setsockopt(m_fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe)) != 0
+            && kAgentSendFlags == 0) {
+            /* This socket option is the only SIGPIPE guard on a platform whose
+             * send() carries no MSG_NOSIGNAL, so a later write to a dead agent
+             * could take the whole process down. Refuse the link, do not risk
+             * it. */
+            closeLink();
+            return false;
+        }
+#elif !defined(MSG_NOSIGNAL)
+        /* Neither the socket option nor the per-send flag exists here, so a
+         * dead agent could SIGPIPE the process on the next write. Do not offer
+         * the agent route on such a platform at all. */
+        closeLink();
+        return false;
+#endif
+        /* cppcheck cannot see the system MSG_NOSIGNAL / SO_NOSIGPIPE macros, so
+         * it analyses the neither-guard branch above as always taken and reads
+         * the rest as unreachable. On every platform we ship one guard exists
+         * and this is the normal path. */
+        // cppcheck-suppress unreachableCode
         addr.sun_family = AF_UNIX;
         std::memcpy(addr.sun_path, path.constData(), static_cast<size_t>(path.size()));
         if (::connect(m_fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) != 0) {
@@ -532,7 +589,8 @@ private:
     {
         qsizetype done = 0;
         while (done < length) {
-            const ssize_t written = ::send(m_fd, data + done, static_cast<size_t>(length - done), 0);
+            const ssize_t written
+                = ::send(m_fd, data + done, static_cast<size_t>(length - done), kAgentSendFlags);
             if (written > 0) {
                 done += written;
                 continue;
@@ -759,6 +817,11 @@ bool QSocSshSession::connectGaveUp() const
     return m_connectDeadline.hasExpired() || (m_abortProbe && m_abortProbe());
 }
 
+bool QSocSshSession::connectAborted() const
+{
+    return m_abortProbe && m_abortProbe();
+}
+
 QString QSocSshSession::promptSecret(const QString &prompt)
 {
     if (!m_secretCallback) {
@@ -845,6 +908,15 @@ QSocSshSession::WaitOutcome QSocSshSession::waitWithin(
     }
 }
 
+bool QSocSshSession::waitForAuthentication(QDeadlineTimer deadline)
+{
+    const WaitOutcome outcome = waitWithin(m_socket, m_session, deadline, Interruptible::Yes);
+    if (outcome == WaitOutcome::Fatal) {
+        markTransportDead();
+    }
+    return outcome == WaitOutcome::Ready;
+}
+
 QSocSshSession::WaitOutcome QSocSshSession::waitSocket(
     qintptr sockFd, LIBSSH2_SESSION *session, int timeoutMs)
 {
@@ -862,18 +934,26 @@ QSocSshSession::WaitOutcome QSocSshSession::waitSocket(
     if (events == 0) {
         events = POLLIN | POLLOUT;
     }
-    short     revents = 0;
-    const int rc      = pollSocket(
-        static_cast<socket_fd_t>(sockFd), events, timeoutMs <= 0 ? -1 : timeoutMs, &revents);
-    if (rc < 0) {
+    const QDeadlineTimer deadline = timeoutMs <= 0 ? QDeadlineTimer(QDeadlineTimer::Forever)
+                                                   : QDeadlineTimer(timeoutMs);
+    short                revents  = 0;
+    int                  rc       = -1;
+    int                  waitMs   = timeoutMs <= 0 ? -1 : timeoutMs;
+    while (true) {
+        rc = pollSocket(static_cast<socket_fd_t>(sockFd), events, waitMs, &revents);
 #ifndef Q_OS_WIN
-        /* A signal cut the wait short. The socket is untouched, so poisoning
-         * the session here would kill a healthy connection whenever a
-         * timer or SIGWINCH lands mid-poll. */
-        if (errno == EINTR) {
-            return WaitOutcome::Timeout;
+        if (rc < 0 && errno == EINTR) {
+            const qint64 remaining = deadline.remainingTime();
+            if (remaining == 0) {
+                return WaitOutcome::Timeout;
+            }
+            waitMs = remaining < 0 ? -1 : qMax(1, static_cast<int>(remaining));
+            continue;
         }
 #endif
+        break;
+    }
+    if (rc < 0) {
         return WaitOutcome::Fatal;
     }
     if (rc == 0) {
@@ -900,12 +980,14 @@ bool QSocSshSession::drainCall(
     qintptr sockFd, LIBSSH2_SESSION *session, const std::function<int()> &call)
 {
     const QDeadlineTimer deadline(kTeardownMs);
-    while (call() == LIBSSH2_ERROR_EAGAIN) {
+    int                  rc = call();
+    while (rc == LIBSSH2_ERROR_EAGAIN) {
         if (waitWithin(sockFd, session, deadline, Interruptible::No) != WaitOutcome::Ready) {
             return false;
         }
+        rc = call();
     }
-    return true;
+    return rc == 0;
 }
 
 void QSocSshSession::closeOwnedSocket()
@@ -920,40 +1002,28 @@ void QSocSshSession::closeOwnedSocket()
 
 void QSocSshSession::clearConnection()
 {
+    const bool hadOwnedHandles = m_session != nullptr || m_parentChannel != nullptr;
+    bool       released        = true;
     if (m_session != nullptr) {
-        LIBSSH2_SESSION *session        = m_session;
-        const qintptr    sockFd         = m_socket;
-        const bool       sentDisconnect = drainCall(sockFd, session, [session] {
-            return libssh2_session_disconnect(session, "QSoC shutting down session");
-        });
-        /* The free is what closes and releases every channel, the SFTP one
-         * included, and it waits for the peer to confirm each close. */
-        const bool freedOnTheLink = drainCall(sockFd, session, [session] {
-            return libssh2_session_free(session);
-        });
-        bool       freed          = freedOnTheLink;
+        LIBSSH2_SESSION *session = m_session;
+        const qintptr    sockFd  = m_socket;
+        /* The session owns every channel and is freed before its transport. */
+        bool freed = drainCall(sockFd, session, [session] { return libssh2_session_free(session); });
         if (!freed) {
             /* With the fd gone the channel free stops waiting for a peer that
              * is not answering: it ignores every close error but EAGAIN. The
              * one shape this cannot rescue is a packet left half-sent, which
              * refuses before it ever touches the fd. */
             closeOwnedSocket();
-            freed = libssh2_session_free(session) != LIBSSH2_ERROR_EAGAIN;
+            freed = libssh2_session_free(session) == 0;
         }
         m_session = nullptr;
-        /* Whatever survived is owned by the session, and the session is gone:
-         * either its free released them or nothing ever will. */
         m_stranded.clear();
-        m_teardownComplete = sentDisconnect && freedOnTheLink;
-        m_teardownReleased = freed;
+        released = freed;
         if (!freed) {
             qWarning(
                 "SSH teardown could not release the libssh2 session; its state is left "
                 "allocated");
-        } else if (!m_teardownComplete) {
-            qWarning(
-                "SSH teardown closed the socket to release a session the peer never "
-                "confirmed");
         }
     }
     if (m_parentChannel != nullptr) {
@@ -965,13 +1035,22 @@ void QSocSshSession::clearConnection()
         LIBSSH2_CHANNEL *hop           = m_parentChannel;
         m_parentChannel                = nullptr;
         LIBSSH2_SESSION *parentSession = m_parent == nullptr ? nullptr : m_parent->rawSession();
-        if (parentSession != nullptr && !drainCall(m_parent->socketFd(), parentSession, [hop] {
+        bool             hopReleased   = false;
+        if (parentSession != nullptr) {
+            hopReleased = drainCall(m_parent->socketFd(), parentSession, [hop] {
                 return libssh2_channel_free(hop);
-            })) {
-            m_parent->markAbandonedExchange();
-            m_teardownComplete = false;
+            });
+        }
+        released = released && hopReleased;
+        if (!hopReleased) {
+            if (m_parent != nullptr) {
+                m_parent->markAbandonedExchange();
+            }
             qWarning("SSH teardown left a ProxyJump channel unreleased on its parent session");
         }
+    }
+    if (hadOwnedHandles) {
+        m_teardownReleased = released;
     }
     closeOwnedSocket();
     m_parent   = nullptr;
@@ -994,15 +1073,37 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
      * resolver's own retry schedule. Asking before and after is what keeps a
      * stop from being swallowed by the stage around it. */
     if (connectGaveUp()) {
-        const QString msg = QStringLiteral("Connect to %1 stopped before resolving").arg(host);
+        const bool cancelled = connectAborted();
+        const QString msg = cancelled
+                                ? QStringLiteral("Connect to %1 cancelled by user").arg(host)
+                                : QStringLiteral("Connect to %1 stopped before resolving").arg(host);
         setError(msg);
         if (errorMessage != nullptr) {
             *errorMessage = msg;
         }
-        return ConnectStatus::Timeout;
+        return cancelled ? ConnectStatus::Aborted : ConnectStatus::Timeout;
     }
     const int rc = getaddrinfo(hostBytes.constData(), portBytes.constData(), &hints, &result);
     if (rc != 0 || result == nullptr) {
+        /* Classify the stop before blaming the resolver: a signal can cut
+         * getaddrinfo short (EAI_SYSTEM/EINTR), and a resolver that answered
+         * only after the budget was spent did not fail, it was too late. */
+        if (connectAborted()) {
+            const QString msg = QStringLiteral("Connect to %1 cancelled by user").arg(host);
+            setError(msg);
+            if (errorMessage != nullptr) {
+                *errorMessage = msg;
+            }
+            return ConnectStatus::Aborted;
+        }
+        if (m_connectDeadline.hasExpired()) {
+            const QString msg = QStringLiteral("Resolving %1 did not finish in time").arg(host);
+            setError(msg);
+            if (errorMessage != nullptr) {
+                *errorMessage = msg;
+            }
+            return ConnectStatus::Timeout;
+        }
 #ifdef Q_OS_WIN
         const QString errText = QString::fromWCharArray(gai_strerror(rc));
 #else
@@ -1034,13 +1135,16 @@ QSocSshSession::ConnectStatus QSocSshSession::openSocket(
     freeaddrinfo(result);
 
     if (sockFd == kInvalidSocket && connectGaveUp()) {
+        const bool    cancelled = connectAborted();
         const QString msg
-            = QStringLiteral("TCP connect to %1:%2 did not finish in time").arg(host).arg(port);
+            = cancelled
+                  ? QStringLiteral("TCP connect to %1:%2 cancelled by user").arg(host).arg(port)
+                  : QStringLiteral("TCP connect to %1:%2 did not finish in time").arg(host).arg(port);
         setError(msg);
         if (errorMessage != nullptr) {
             *errorMessage = msg;
         }
-        return ConnectStatus::Timeout;
+        return cancelled ? ConnectStatus::Aborted : ConnectStatus::Timeout;
     }
     if (sockFd == kInvalidSocket) {
         const QString msg = QStringLiteral("TCP connect to %1:%2 failed: %3")
@@ -1086,12 +1190,14 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
            == LIBSSH2_ERROR_EAGAIN) {
         if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
             != WaitOutcome::Ready) {
-            const QString msg = QStringLiteral("SSH handshake timeout");
+            const bool    cancelled = connectAborted();
+            const QString msg       = cancelled ? QStringLiteral("SSH handshake cancelled by user")
+                                                : QStringLiteral("SSH handshake timeout");
             setError(msg);
             if (errorMessage != nullptr) {
                 *errorMessage = msg;
             }
-            return ConnectStatus::Timeout;
+            return cancelled ? ConnectStatus::Aborted : ConnectStatus::Timeout;
         }
     }
     if (rc != 0) {
@@ -1254,6 +1360,9 @@ bool QSocSshSession::tryAgentAuth(const QString &user, QDeadlineTimer deadline)
             authOk = true;
             break;
         }
+        if (notePossibleTransportError(rc)) {
+            break;
+        }
         prev = identity;
     }
 
@@ -1290,8 +1399,7 @@ bool QSocSshSession::tryAgentAuth(const QString &user, QDeadlineTimer deadline)
                     &agentSignCallback,
                     &abstract))
                == LIBSSH2_ERROR_EAGAIN) {
-            if (waitWithin(m_socket, m_session, deadline, Interruptible::Yes)
-                != WaitOutcome::Ready) {
+            if (!waitForAuthentication(deadline)) {
                 return false;
             }
         }
@@ -1331,8 +1439,7 @@ bool QSocSshSession::tryIdentityFileAuth(
                 keyBytes.constData(),
                 phBytes.isEmpty() ? nullptr : phBytes.constData()))
            == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
-            != WaitOutcome::Ready) {
+        if (!waitForAuthentication(m_connectDeadline)) {
             return false;
         }
     }
@@ -1395,8 +1502,7 @@ bool QSocSshSession::tryPasswordPrompt(const QString &user, const QString &hostn
             notePossibleTransportError(err);
             return false;
         }
-        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
-            != WaitOutcome::Ready) {
+        if (!waitForAuthentication(m_connectDeadline)) {
             return false;
         }
     }
@@ -1414,8 +1520,7 @@ bool QSocSshSession::tryPasswordPrompt(const QString &user, const QString &hostn
     while (
         (status = libssh2_userauth_password(m_session, userBytes.constData(), pwdBytes.constData()))
         == LIBSSH2_ERROR_EAGAIN) {
-        if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
-            != WaitOutcome::Ready) {
+        if (!waitForAuthentication(m_connectDeadline)) {
             return false;
         }
     }
@@ -1436,6 +1541,34 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
         return ConnectStatus::AuthFailed;
     }
 
+    const auto terminalAuthStatus = [&]() -> std::optional<ConnectStatus> {
+        ConnectStatus status;
+        QString       msg;
+        if (connectAborted()) {
+            status = ConnectStatus::Aborted;
+            msg    = QStringLiteral("Authentication for %1@%2:%3 cancelled by user")
+                         .arg(user, host.hostname)
+                         .arg(host.port);
+        } else if (isTransportDead()) {
+            status = ConnectStatus::NetworkError;
+            msg    = QStringLiteral("SSH transport failed during authentication for %1@%2:%3")
+                         .arg(user, host.hostname)
+                         .arg(host.port);
+        } else if (m_connectDeadline.hasExpired()) {
+            status = ConnectStatus::Timeout;
+            msg    = QStringLiteral("Authentication for %1@%2:%3 did not finish in time")
+                         .arg(user, host.hostname)
+                         .arg(host.port);
+        } else {
+            return std::nullopt;
+        }
+        setError(msg);
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        return status;
+    };
+
     /* Try ssh-agent first whenever the config does not explicitly forbid it
      * via IdentitiesOnly + a concrete IdentityFile list. An agent may hold
      * keys that are absent on disk, and skipping it means losing that
@@ -1455,15 +1588,8 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
             return ConnectStatus::Ok;
         }
     }
-    if (connectGaveUp()) {
-        const QString msg = QStringLiteral("Authentication for %1@%2:%3 did not finish in time")
-                                .arg(user, host.hostname)
-                                .arg(host.port);
-        setError(msg);
-        if (errorMessage != nullptr) {
-            *errorMessage = msg;
-        }
-        return ConnectStatus::Timeout;
+    if (const auto stopped = terminalAuthStatus()) {
+        return *stopped;
     }
 
     /* Identity file fallback: honour the config-supplied paths when present
@@ -1493,8 +1619,8 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
         /* A key that failed because the wait ran out left libssh2 in the middle
          * of a userauth request, and the next key would send its request into
          * that half-finished one. There is nothing left to spend anyway. */
-        if (connectGaveUp()) {
-            break;
+        if (const auto stopped = terminalAuthStatus()) {
+            return *stopped;
         }
     }
 
@@ -1507,11 +1633,21 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
         if (tryPassphrasePrompt(user, identityPaths, &triedKeys)) {
             return ConnectStatus::Ok;
         }
+        if (const auto stopped = terminalAuthStatus()) {
+            return *stopped;
+        }
         if (tryPasswordPrompt(user, host.hostname, host.port)) {
             return ConnectStatus::Ok;
         }
     }
 
+    /* Classify the stop before blaming the credentials: a route that failed
+     * because the user cancelled mid-poll, or because the budget ran out, did
+     * not have its keys refused, and reporting AuthFailed would send the user
+     * chasing credentials that were never the problem. */
+    if (const auto stopped = terminalAuthStatus()) {
+        return *stopped;
+    }
     const QString hint = triedKeys.isEmpty()
                              ? QStringLiteral(" (no identity keys found in ~/.ssh)")
                              : QStringLiteral(" (tried: ") + triedKeys.join(QStringLiteral(", "))
@@ -1619,14 +1755,17 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         }
         if (waitWithin(parent->socketFd(), parentSes, m_connectDeadline, Interruptible::Yes)
             != WaitOutcome::Ready) {
-            const QString msg = QStringLiteral("Timed out opening ProxyJump channel");
+            const bool    cancelled = connectAborted();
+            const QString msg = cancelled
+                                    ? QStringLiteral("ProxyJump channel open cancelled by user")
+                                    : QStringLiteral("Timed out opening ProxyJump channel");
             setError(msg);
             if (errorMessage != nullptr) {
                 *errorMessage = msg;
             }
             m_parent = nullptr;
             m_socket = -1;
-            return ConnectStatus::Timeout;
+            return cancelled ? ConnectStatus::Aborted : ConnectStatus::Timeout;
         }
     }
     m_parentChannel = channel;
@@ -1663,13 +1802,17 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
            == LIBSSH2_ERROR_EAGAIN) {
         if (waitWithin(m_socket, m_session, m_connectDeadline, Interruptible::Yes)
             != WaitOutcome::Ready) {
-            const QString msg = QStringLiteral("SSH handshake over ProxyJump timed out");
+            const bool    cancelled = connectAborted();
+            const QString msg       = cancelled
+                                          ? QStringLiteral(
+                                                "SSH handshake over ProxyJump cancelled by user")
+                                          : QStringLiteral("SSH handshake over ProxyJump timed out");
             setError(msg);
             if (errorMessage != nullptr) {
                 *errorMessage = msg;
             }
             clearConnection();
-            return ConnectStatus::Timeout;
+            return cancelled ? ConnectStatus::Aborted : ConnectStatus::Timeout;
         }
     }
     if (rc != 0) {
