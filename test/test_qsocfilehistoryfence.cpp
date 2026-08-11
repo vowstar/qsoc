@@ -86,7 +86,7 @@ public:
             acc.tree = [this]() { return name; };
         }
         if (reportGeneration) {
-            acc.generation = [this]() { return gen; };
+            acc.generation = [this]() { return QString::number(gen); };
         }
         return acc;
     }
@@ -105,12 +105,33 @@ private:
         const QString &value,
         bool           quoted,
         const QString &tree = QString(),
-        quint64        gen  = 0)
+        quint64        gen  = 1)
     {
+        const bool validState = (!quoted && value == QStringLiteral("null"))
+                                || (quoted
+                                    && (value == QStringLiteral("unknown") || value.size() == 64));
+        if (!tree.isEmpty() && gen != 0 && validState) {
+            json record;
+            record["since"] = turn;
+            if (!quoted) {
+                record["state"] = nullptr;
+            } else {
+                record["state"] = value.toStdString();
+            }
+            json doc;
+            doc["turn"]           = turn;
+            doc["ts"]             = "2026-01-01T00:00:00.000Z";
+            doc["tree"]           = tree.toStdString();
+            doc["link"]           = QString::number(gen).toStdString();
+            doc["files"]          = json::object({{path.toStdString(), record}});
+            const QString payload = QString::fromStdString(doc.dump());
+            doc["seal"]           = QSocFileHistory::sha256Hex(payload).toStdString();
+            return QString::fromStdString(doc.dump());
+        }
         const QString encoded = quoted ? QStringLiteral("\"%1\"").arg(value) : value;
-        const QString epoch   = tree.isEmpty()
-                                    ? QString()
-                                    : QStringLiteral(R"("tree":"%1","gen":%2,)").arg(tree).arg(gen);
+        const QString epoch = tree.isEmpty()
+                                  ? QString()
+                                  : QStringLiteral(R"("tree":"%1","link":"%2",)").arg(tree).arg(gen);
         return QStringLiteral(R"({"turn":%1,"ts":"2026-01-01T00:00:00.000Z",%2"files":{"%3":%4}})")
             .arg(turn)
             .arg(epoch, path, encoded);
@@ -181,7 +202,7 @@ private slots:
         tree.files.insert(path, QStringLiteral("v1")); /* the turn's edit */
 
         tree.unreadable = true;
-        QVERIFY(history.makeSnapshot(1));
+        QVERIFY(!history.makeSnapshot(1));
 
         tree.unreadable   = false; /* the link comes back */
         const auto report = history.applySnapshot(1);
@@ -214,7 +235,7 @@ private slots:
 
         tree.files.insert(path, QStringLiteral("v2"));
         tree.unreadable = true;
-        QVERIFY(history.makeSnapshot(2));
+        QVERIFY(!history.makeSnapshot(2));
         tree.unreadable = false;
 
         const auto report = history.applySnapshot(0);
@@ -267,7 +288,7 @@ private slots:
             first.trackEdit(path, true, QStringLiteral("v0"));
             tree.files.insert(path, QStringLiteral("v1"));
             tree.unreadable = true;
-            QVERIFY(first.makeSnapshot(1));
+            QVERIFY(!first.makeSnapshot(1));
         }
 
         FakeTree        tree;
@@ -307,7 +328,7 @@ private slots:
         history.trackEdit(quiet, true, QStringLiteral("q0"));
         tree.files.insert(kept, QStringLiteral("v1"));
         tree.unreadable = true;
-        QVERIFY(history.makeSnapshot(1)); /* both recorded unknown */
+        QVERIFY(!history.makeSnapshot(1)); /* both recorded unknown */
         tree.unreadable = false;
 
         tree.gen = 2; /* the link was replaced */
@@ -332,11 +353,7 @@ private slots:
         QVERIFY(forcedUnknown.restored.isEmpty());
     }
 
-    /* A backend that numbers no connection still names one tree, so its own
-     * records stay restorable: an unnumbered link must not read as a boundary.
-     * This replaces the expectation that generation 0 disables the check
-     * globally, which is what let a record captured on one tree be acted on
-     * over another whenever either side reported 0. */
+    /* A backend without a link identity cannot publish an actionable record. */
     void testBackendWithoutGenerationRestoresItsOwnRecords()
     {
         QTemporaryDir dir;
@@ -348,20 +365,14 @@ private slots:
 
         const QString path = QStringLiteral("/vfs/plain.v");
         tree.files.insert(path, QStringLiteral("v0"));
-        history.trackEdit(path, true, QStringLiteral("v0"));
+        QVERIFY(!history.trackEdit(path, true, QStringLiteral("v0")));
         tree.files.insert(path, QStringLiteral("v1"));
-        QVERIFY(history.makeSnapshot(1));
-        QCOMPARE(recordAt(history, 1, path).epoch().link, quint64{0});
-        QCOMPARE(recordAt(history, 1, path).epoch().tree, tree.name);
-
-        const auto report = history.applySnapshot(0);
-        QCOMPARE(report.restored, QStringList{path});
-        QVERIFY(report.unknown.isEmpty());
-        QCOMPARE(tree.files.value(path), QStringLiteral("v0"));
+        QVERIFY(!history.makeSnapshot(1));
+        QVERIFY(history.listSnapshots().isEmpty());
+        QCOMPARE(tree.files.value(path), QStringLiteral("v1"));
     }
 
-    /* A backend that names no tree at all is one unnamed tree, not a licence
-     * to act on anything: its records are still restorable through it. */
+    /* A backend without a tree identity cannot publish an actionable record. */
     void testBackendWithoutTreeRestoresItsOwnRecords()
     {
         QTemporaryDir dir;
@@ -374,22 +385,15 @@ private slots:
 
         const QString path = QStringLiteral("/vfs/nameless.v");
         tree.files.insert(path, QStringLiteral("v0"));
-        history.trackEdit(path, true, QStringLiteral("v0"));
+        QVERIFY(!history.trackEdit(path, true, QStringLiteral("v0")));
         tree.files.insert(path, QStringLiteral("v1"));
-        QVERIFY(history.makeSnapshot(1));
-        QVERIFY(!recordAt(history, 1, path).epoch().tree.isEmpty());
-
-        const auto report = history.applySnapshot(0);
-        QCOMPARE(report.restored, QStringList{path});
-        QCOMPARE(tree.files.value(path), QStringLiteral("v0"));
+        QVERIFY(!history.makeSnapshot(1));
+        QVERIFY(history.listSnapshots().isEmpty());
+        QCOMPARE(tree.files.value(path), QStringLiteral("v1"));
     }
 
-    /* A session written before the "gen" field existed reads as generation 0,
-     * and on the tree those paths point at that must not fence it: stamping
-     * such lines with 1, or judging them by the live link count, would make
-     * every pre-existing local rewind refuse. Bound to the local disk because
-     * that is the only tree a tree-less line may be acted on; the refusal
-     * elsewhere is testLegacyRecordNeverActsOnAnotherTree. */
+    /* A session written before the tree and generation fields existed still
+     * loads, but its missing tree keeps it fenced from every live namespace. */
     void testLegacyJsonlWithoutGenerationLoads()
     {
         QTemporaryDir dir;
@@ -407,7 +411,7 @@ private slots:
         QSocFileHistory history(dir.path(), QStringLiteral("fence-legacy"));
         history.setLiveAccessor(tree.accessor());
 
-        QVERIFY(recordAt(history, 0, path).isPresent());
+        QVERIFY(recordAt(history, 0, path).isUnknown());
 
         /* The line loads, but a tree-less record acts on no tree: its overwrite
          * is refused and the path is reported as a boundary, not restored. */
@@ -416,7 +420,7 @@ private slots:
         QVERIFY(report.unknown.isEmpty());
         QCOMPARE(tree.files.value(path), QStringLiteral("changed"));
         QCOMPARE(history.previewBoundary(0).otherTree, QStringList{path});
-        QCOMPARE(recordAt(history, 0, path).epoch().link, quint64{0});
+        QVERIFY(recordAt(history, 0, path).epoch().link.isEmpty());
         QVERIFY(recordAt(history, 0, path).epoch().tree.isEmpty());
     }
 
@@ -445,8 +449,7 @@ private slots:
             {body});
 
         FakeTree tree;
-        tree.name             = QStringLiteral("local");
-        tree.reportGeneration = false;
+        tree.name = QStringLiteral("local");
         tree.files.insert(overwrite, QStringLiteral("changed"));
         /* create is absent on the live tree; remove is present. */
         tree.files.insert(remove, QStringLiteral("still here"));
@@ -507,7 +510,7 @@ private slots:
         history.setLiveAccessor(remote.accessor());
 
         /* The line still loads; only where it may be acted on changes. */
-        QVERIFY(recordAt(history, 0, path).isAbsent());
+        QVERIFY(recordAt(history, 0, path).isUnknown());
         QVERIFY(recordAt(history, 0, path).epoch().tree.isEmpty());
 
         const auto refused = history.applySnapshot(0);
@@ -529,7 +532,8 @@ private slots:
         QVERIFY(forced.restored.isEmpty());
         QCOMPARE(history.previewBoundary(0).otherTree, QStringList{path});
         QCOMPARE(
-            QSocFileHistory::relate(QSocFileHistory::Epoch{}, QSocFileHistory::Epoch{remote.name, 1}),
+            QSocFileHistory::relate(
+                QSocFileHistory::Epoch{}, QSocFileHistory::Epoch{remote.name, QStringLiteral("1")}),
             QSocFileHistory::EpochRelation::OtherTree);
     }
 
@@ -557,8 +561,7 @@ private slots:
             {content});
 
         FakeTree local;
-        local.name             = QStringLiteral("local");
-        local.reportGeneration = false; /* the local disk numbers no link */
+        local.name = QStringLiteral("local");
         local.files.insert(kept, QStringLiteral("changed"));
         local.files.insert(created, QStringLiteral("created later"));
         QSocFileHistory history(dir.path(), QStringLiteral("fence-legacy-local"));
@@ -593,7 +596,8 @@ private slots:
         QVERIFY(history.previewBoundary(0).otherLink.isEmpty());
         QCOMPARE(
             QSocFileHistory::relate(
-                QSocFileHistory::Epoch{}, QSocFileHistory::Epoch{QStringLiteral("local"), 0}),
+                QSocFileHistory::Epoch{},
+                QSocFileHistory::Epoch{QStringLiteral("local"), QStringLiteral("disk")}),
             QSocFileHistory::EpochRelation::OtherTree);
     }
 
@@ -615,8 +619,7 @@ private slots:
             {content});
 
         FakeTree local;
-        local.name             = QStringLiteral("local");
-        local.reportGeneration = false;
+        local.name = QStringLiteral("local");
         local.files.insert(kept, QStringLiteral("changed"));
         local.files.insert(created, QStringLiteral("created later"));
         QSocFileHistory history(dir.path(), QStringLiteral("fence-local-named"));
@@ -632,8 +635,8 @@ private slots:
         QVERIFY(history.previewBoundary(0).isEmpty());
         QCOMPARE(
             QSocFileHistory::relate(
-                QSocFileHistory::Epoch{QStringLiteral("local"), 0},
-                QSocFileHistory::Epoch{QStringLiteral("local"), 0}),
+                QSocFileHistory::Epoch{QStringLiteral("local"), QStringLiteral("disk")},
+                QSocFileHistory::Epoch{QStringLiteral("local"), QStringLiteral("disk")}),
             QSocFileHistory::EpochRelation::Same);
     }
 
@@ -671,27 +674,27 @@ private slots:
         QCOMPARE(remote.files.value(path), QStringLiteral("theirs"));
         QCOMPARE(remote.removeCalls, 0);
         QVERIFY(report.restored.isEmpty());
-        /* No record was invented for that tree in the first place. */
+        /* The turn marker exists, but no path was invented for that tree. */
         QCOMPARE(remote.readCalls, 0);
-        QVERIFY(!hasTurn(history, 1));
+        QVERIFY(hasTurn(history, 1));
+        QVERIFY(recordAt(history, 1, path).isUnknown());
 
-        /* Once the agent does edit that path here, it is this tree's path: it
-         * gets its own baseline from the state observed here, and the tree-less
-         * record stays the local disk's business. */
+        /* Once the agent edits that path here, it gets a fresh baseline under
+         * this tree; the tree-less record remains fenced. */
         history.trackEdit(path, true, QStringLiteral("theirs"));
         bool baselineHere = false;
         bool legacyIntact = false;
         for (const auto &snap : history.listSnapshots()) {
-            if (snap.turn != 0 || !snap.files.contains(path)) {
+            if (!snap.files.contains(path)) {
                 continue;
             }
-            baselineHere = baselineHere || snap.epoch.tree == remote.name;
-            legacyIntact = legacyIntact || snap.epoch.tree.isEmpty();
+            baselineHere = baselineHere || (snap.turn == 1 && snap.epoch.tree == remote.name);
+            legacyIntact = legacyIntact || (snap.turn == 0 && snap.epoch.tree.isEmpty());
         }
         QVERIFY(baselineHere);
         QVERIFY(legacyIntact);
         remote.files.insert(path, QStringLiteral("edited"));
-        const auto second = history.applySnapshot(0);
+        const auto second = history.applySnapshot(1);
         QCOMPARE(second.restored, QStringList{path});
         QCOMPARE(remote.files.value(path), QStringLiteral("theirs"));
     }
@@ -714,8 +717,7 @@ private slots:
             {});
 
         FakeTree tree;
-        tree.name             = QStringLiteral("local");
-        tree.reportGeneration = false;
+        tree.name = QStringLiteral("local");
         tree.files.insert(path, QStringLiteral("live"));
         QSocFileHistory history(dir.path(), QStringLiteral("fence-torn"));
         history.setLiveAccessor(tree.accessor());
@@ -725,11 +727,39 @@ private slots:
         QVERIFY(recordAt(history, 2, path).isUnknown());
 
         const auto report = history.applySnapshot(0);
-        QCOMPARE(report.unknown, QStringList{path});
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.unknown.isEmpty());
         QVERIFY(report.restored.isEmpty());
         QVERIFY(report.failed.isEmpty());
         QCOMPARE(tree.removeCalls, 0);
         QCOMPARE(tree.files.value(path), QStringLiteral("live"));
+    }
+
+    void testNonObjectFileMapIsNotACheckpoint()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path    = QStringLiteral("/vfs/torn-map.v");
+        const QString content = QStringLiteral("before");
+        seedLegacyHistory(
+            dir.path(),
+            QStringLiteral("fence-torn-map"),
+            {jsonlLine(0, path, QSocFileHistory::sha256Hex(content), true, QStringLiteral("local")),
+             QStringLiteral(R"({"turn":1,"tree":"local","link":"1","files":[]})")},
+            {content});
+
+        FakeTree local;
+        local.name = QStringLiteral("local");
+        local.files.insert(path, QStringLiteral("later"));
+        QSocFileHistory history(dir.path(), QStringLiteral("fence-torn-map"));
+        history.setLiveAccessor(local.accessor());
+
+        const auto report = history.applySnapshot(1);
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.restored.isEmpty());
+        QVERIFY(report.unknown.isEmpty());
+        QVERIFY(!history.restoreRefusal(1).isEmpty());
+        QCOMPARE(local.files.value(path), QStringLiteral("later"));
     }
 
     /* COUNTEREXAMPLE. A checkpoint taken through one accessor must never
@@ -754,8 +784,7 @@ private slots:
             {content});
 
         FakeTree local;
-        local.name             = QStringLiteral("local");
-        local.reportGeneration = false; /* the local disk numbers no link */
+        local.name = QStringLiteral("local");
         local.files.insert(path, QStringLiteral("local v1"));
         QSocFileHistory history(dir.path(), QStringLiteral("fence-crossing"));
         history.setLiveAccessor(local.accessor());
@@ -767,10 +796,12 @@ private slots:
             local.files.contains(path),
             "a rewind deleted a local file because another tree could not see it");
         QCOMPARE(local.removeCalls, 0);
-        /* The remote record is dropped, so the path falls back to the last
-         * state anyone observed on this tree. */
-        QCOMPARE(local.files.value(path), content);
-        QCOMPARE(report.restored, QStringList{path});
+        /* The remote target is not a checkpoint for this tree, so even its
+         * older local record cannot be applied as a substitute. */
+        QCOMPARE(local.files.value(path), QStringLiteral("local v1"));
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.restored.isEmpty());
+        QVERIFY(report.unknown.isEmpty());
         QVERIFY(report.failed.isEmpty());
     }
 
@@ -782,8 +813,7 @@ private slots:
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
         FakeTree local;
-        local.name             = QStringLiteral("local");
-        local.reportGeneration = false;
+        local.name = QStringLiteral("local");
         FakeTree remote;
         remote.name = QStringLiteral("ssh:workspace");
 
@@ -801,7 +831,8 @@ private slots:
         QVERIFY(history.makeSnapshot(2));
 
         QCOMPARE(remote.readCalls, 0);
-        QVERIFY(!hasTurn(history, 2));
+        QVERIFY(hasTurn(history, 2));
+        QVERIFY(recordAt(history, 2, path).isUnknown());
 
         /* /local, then a rewind to that turn. */
         history.setLiveAccessor(local.accessor());
@@ -810,7 +841,76 @@ private slots:
         QVERIFY2(local.files.contains(path), "a rewind deleted a file the other tree never saw");
         QCOMPARE(local.removeCalls, 0);
         QCOMPARE(local.files.value(path), QStringLiteral("v1"));
-        QCOMPARE(report.restored, QStringList{path});
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.restored.isEmpty());
+        QCOMPARE(report.unknown, QStringList{path});
+    }
+
+    /* Eviction cannot make another tree's baseline stand in for the requested
+     * turn. Without an exact checkpoint on the live tree, nothing is written. */
+    void testEvictionCannotMakeAnotherTreeBaselineActionable()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        FakeTree local;
+        local.name = QStringLiteral("local");
+        FakeTree remote;
+        remote.name = QStringLiteral("ssh:workspace");
+
+        QSocFileHistory history(dir.path(), QStringLiteral("fence-tree-anchor"));
+        history.setLiveAccessor(local.accessor());
+        const QString path = QStringLiteral("/local/proj/anchor.v");
+        local.files.insert(path, QStringLiteral("v0"));
+        history.trackEdit(path, true, QStringLiteral("v0"));
+        local.files.insert(path, QStringLiteral("v1"));
+        QVERIFY(history.makeSnapshot(1));
+
+        history.setLiveAccessor(remote.accessor());
+        const int finalTurn = QSocFileHistory::MAX_SNAPSHOTS + 5;
+        for (int turn = 2; turn <= finalTurn; ++turn) {
+            QVERIFY(history.makeSnapshot(turn));
+        }
+
+        history.setLiveAccessor(local.accessor());
+        const auto report = history.applySnapshot(finalTurn);
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.restored.isEmpty());
+        QVERIFY(report.unknown.isEmpty());
+        QCOMPARE(local.files.value(path), QStringLiteral("v1"));
+    }
+
+    void testCrossTreeIntroductionCannotExceedSnapshotCap()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        FakeTree first;
+        first.name = QStringLiteral("first-tree");
+        FakeTree second;
+        second.name = QStringLiteral("second-tree");
+        QSocFileHistory history(dir.path(), QStringLiteral("bounded-cross-tree"));
+        history.setLiveAccessor(first.accessor());
+        const QString firstPath = QStringLiteral("/first/old.txt");
+        first.files.insert(firstPath, QStringLiteral("baseline"));
+        QVERIFY(history.trackEdit(firstPath, true, QStringLiteral("baseline")));
+        for (int turn = 1; turn <= QSocFileHistory::MAX_SNAPSHOTS; ++turn) {
+            first.files.insert(firstPath, QStringLiteral("turn-%1").arg(turn));
+            QVERIFY(history.makeSnapshot(turn));
+        }
+        QCOMPARE(history.listSnapshots().size(), QSocFileHistory::MAX_SNAPSHOTS);
+        const QString evictedSha = QSocFileHistory::sha256Hex(QStringLiteral("turn-1"));
+        QVERIFY(QFile::exists(history.backupPathFor(evictedSha)));
+
+        history.setLiveAccessor(second.accessor());
+        const QString path = QStringLiteral("/second/new.txt");
+        QVERIFY(history.trackEdit(path, false, QString()));
+        QVERIFY(!QFile::exists(history.backupPathFor(evictedSha)));
+        const auto snapshots = history.listSnapshots();
+        QCOMPARE(snapshots.size(), QSocFileHistory::MAX_SNAPSHOTS);
+        bool found = false;
+        for (const auto &snapshot : snapshots) {
+            found = found || (snapshot.epoch.tree == second.name && snapshot.files.contains(path));
+        }
+        QVERIFY(found);
     }
 
     /* A record from another tree is not a boundary the user can waive: unlike
@@ -827,8 +927,7 @@ private slots:
             {});
 
         FakeTree local;
-        local.name             = QStringLiteral("local");
-        local.reportGeneration = false;
+        local.name = QStringLiteral("local");
         local.files.insert(path, QStringLiteral("mine"));
         QSocFileHistory history(dir.path(), QStringLiteral("fence-allow-tree"));
         history.setLiveAccessor(local.accessor());
@@ -846,8 +945,8 @@ private slots:
         QVERIFY(history.previewBoundary(0).otherLink.isEmpty());
         QCOMPARE(
             QSocFileHistory::relate(
-                QSocFileHistory::Epoch{QStringLiteral("ssh:workspace"), 1},
-                QSocFileHistory::Epoch{QStringLiteral("local"), 0}),
+                QSocFileHistory::Epoch{QStringLiteral("ssh:workspace"), QStringLiteral("1")},
+                QSocFileHistory::Epoch{QStringLiteral("local"), QStringLiteral("disk")}),
             QSocFileHistory::EpochRelation::OtherTree);
     }
 
@@ -858,7 +957,7 @@ private slots:
     {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
-        const auto accessor = QSocFileHistory::localAccessor();
+        const auto accessor = QSocFileHistory::localAccessor(dir.path());
 
         /* The answerable cases first, on every platform. */
         const QString present = QDir(dir.path()).filePath(QStringLiteral("there.v"));
@@ -896,6 +995,266 @@ private slots:
 #endif
     }
 
+    void testLegacyNumericGenerationCannotAuthorizeADelete()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = QStringLiteral("/vfs/only-copy.v");
+        seedLegacyHistory(
+            dir.path(),
+            QStringLiteral("legacy-numeric-link"),
+            {QStringLiteral(
+                R"({"turn":0,"tree":"same-tree","gen":1,"files":{"/vfs/only-copy.v":null}})")},
+            {});
+        FakeTree tree;
+        tree.name = QStringLiteral("same-tree");
+        tree.files.insert(path, QStringLiteral("only copy"));
+        QSocFileHistory history(dir.path(), QStringLiteral("legacy-numeric-link"));
+        history.setLiveAccessor(tree.accessor());
+
+        const auto report = history.applySnapshot(0);
+        QVERIFY(report.restored.isEmpty());
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.unknown.isEmpty());
+        QCOMPARE(history.previewBoundary(0).otherTree, QStringList{path});
+        QCOMPARE(tree.removeCalls, 0);
+        QCOMPARE(tree.files.value(path), QStringLiteral("only copy"));
+    }
+
+    void testMovedLocalProjectCannotReachItsOldAbsolutePaths()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString oldRoot = QDir(dir.path()).filePath(QStringLiteral("old-project"));
+        const QString newRoot = QDir(dir.path()).filePath(QStringLiteral("new-project"));
+        QVERIFY(QDir().mkpath(oldRoot));
+        const QString oldPath = QDir(oldRoot).filePath(QStringLiteral("same.txt"));
+        QFile         file(oldPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("original"), qint64(8));
+        file.close();
+        QSocFileHistory first(oldRoot, QStringLiteral("moved-project"));
+        QVERIFY(first.trackEdit(oldPath, true, QStringLiteral("original")));
+        QVERIFY(QDir().rename(oldRoot, newRoot));
+        QVERIFY(QDir().mkpath(oldRoot));
+        QFile unrelated(oldPath);
+        QVERIFY(unrelated.open(QIODevice::WriteOnly));
+        QCOMPARE(unrelated.write("unrelated"), qint64(9));
+        unrelated.close();
+
+        QSocFileHistory resumed(newRoot, QStringLiteral("moved-project"));
+        const auto      report = resumed.applySnapshot(0);
+        QVERIFY(!report.targetMissing);
+        QCOMPARE(report.failed, QStringList{oldPath});
+        QVERIFY(report.restored.isEmpty());
+        QFile check(oldPath);
+        QVERIFY(check.open(QIODevice::ReadOnly));
+        QCOMPARE(check.readAll(), QByteArray("unrelated"));
+    }
+
+    void testRecreatedLocalProjectCannotReachReplacementFiles()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString project = QDir(dir.path()).filePath(QStringLiteral("project"));
+        const QString saved   = QDir(dir.path()).filePath(QStringLiteral("saved"));
+        QVERIFY(QDir().mkpath(project));
+        const QString victim = QDir(project).filePath(QStringLiteral("only-copy.txt"));
+
+        QSocFileHistory history(project, QStringLiteral("recreated-project"));
+        QVERIFY(history.trackEdit(victim, false, QString()));
+        QVERIFY(QDir().rename(project, saved));
+        QVERIFY(QDir().mkpath(project));
+        QFile replacement(victim);
+        QVERIFY(replacement.open(QIODevice::WriteOnly));
+        QCOMPARE(replacement.write("replacement"), qint64(11));
+        replacement.close();
+
+        QVERIFY(!history.restoreRefusal(0).isEmpty());
+        const auto report = history.applySnapshot(0);
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.restored.isEmpty());
+        QVERIFY(QFileInfo::exists(victim));
+        QFile check(victim);
+        QVERIFY(check.open(QIODevice::ReadOnly));
+        QCOMPARE(check.readAll(), QByteArray("replacement"));
+    }
+
+    void testRecreatedProjectRootCannotReceiveCheckpointWrites()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString project = dir.filePath(QStringLiteral("project"));
+        const QString saved   = dir.filePath(QStringLiteral("saved"));
+        QVERIFY(QDir().mkpath(project));
+
+        const QString victim = QDir(project).filePath(QStringLiteral("victim.txt"));
+        QFile         original(victim);
+        QVERIFY(original.open(QIODevice::WriteOnly));
+        QCOMPARE(original.write("before"), qint64(6));
+        original.close();
+
+        const QString   id = QStringLiteral("recreated-storage");
+        QSocFileHistory history(project, id);
+        QVERIFY(history.trackEdit(victim, true, QStringLiteral("before")));
+        QVERIFY(history.makeSnapshot(1));
+        QVERIFY(QDir().rename(project, saved));
+
+        const QString replacementHistory = QSocFileHistory::historyDir(project, id);
+        const QString replacementBackups
+            = QDir(replacementHistory).filePath(QStringLiteral("backups"));
+        QVERIFY(QDir().mkpath(replacementBackups));
+        QFile replacementIndex(QDir(replacementHistory).filePath(QStringLiteral("snapshots.jsonl")));
+        QVERIFY(replacementIndex.open(QIODevice::WriteOnly));
+        QCOMPARE(replacementIndex.write("replacement-index\n"), qint64(18));
+        replacementIndex.close();
+        QFile sentinel(QDir(replacementBackups).filePath(QStringLiteral("sentinel.bak")));
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinel.write("keep"), qint64(4));
+        sentinel.close();
+
+        FakeTree remote;
+        remote.files.insert(QStringLiteral("/vfs/next.txt"), QStringLiteral("remote"));
+        history.setLiveAccessor(remote.accessor());
+        QVERIFY(!history.storageIsBound());
+        QVERIFY(!history.trackEdit(QStringLiteral("/vfs/next.txt"), true, QStringLiteral("remote")));
+        QVERIFY(!history.truncateAfter(-1));
+
+        QVERIFY(replacementIndex.open(QIODevice::ReadOnly));
+        QCOMPARE(replacementIndex.readAll(), QByteArray("replacement-index\n"));
+        QVERIFY(sentinel.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinel.readAll(), QByteArray("keep"));
+    }
+
+    void testCheckpointMetadataSymlinkCannotEscapeTheProject()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("directory symlink coverage is POSIX-only");
+#else
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString project = dir.filePath(QStringLiteral("project"));
+        const QString outside = dir.filePath(QStringLiteral("outside"));
+        QVERIFY(QDir().mkpath(project));
+        QVERIFY(QDir().mkpath(outside));
+
+        const QString   id = QStringLiteral("metadata-symlink");
+        QSocFileHistory history(project, id);
+        const QString   victim = QDir(project).filePath(QStringLiteral("victim.txt"));
+        QVERIFY(history.trackEdit(victim, false, QString()));
+
+        const QString backups
+            = QDir(QSocFileHistory::historyDir(project, id)).filePath(QStringLiteral("backups"));
+        const QString savedBackups = backups + QStringLiteral(".saved");
+        QVERIFY(QDir().rename(backups, savedBackups));
+        if (!QFile::link(outside, backups)) {
+            QSKIP("directory symlink creation is unavailable");
+        }
+        QFile sentinel(QDir(outside).filePath(QStringLiteral("sentinel.bak")));
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinel.write("keep"), qint64(4));
+        sentinel.close();
+
+        QVERIFY(!history.storageIsBound());
+        QVERIFY(
+            !history.trackEdit(QDir(project).filePath(QStringLiteral("next.txt")), false, QString()));
+        QVERIFY(!history.truncateAfter(-1));
+        QVERIFY(sentinel.open(QIODevice::ReadOnly));
+        QCOMPARE(sentinel.readAll(), QByteArray("keep"));
+#endif
+    }
+
+    void testTamperedSealCannotInjectADelete()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString   id     = QStringLiteral("tampered-delete");
+        const QString   victim = QDir(dir.path()).filePath(QStringLiteral("only-copy.txt"));
+        QSocFileHistory first(dir.path(), id);
+        QVERIFY(first.makeSnapshot(1));
+        QFile file(victim);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("only copy"), qint64(9));
+        file.close();
+
+        QFile index(first.snapshotsPath());
+        QVERIFY(index.open(QIODevice::ReadOnly));
+        json record = json::parse(index.readAll().constData());
+        index.close();
+        record["files"][victim.toStdString()] = json{{"since", 1}, {"state", nullptr}};
+        const std::string tampered            = record.dump();
+        QVERIFY(index.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(index.write(tampered.data(), tampered.size()), qint64(tampered.size()));
+        QCOMPARE(index.write("\n", 1), qint64(1));
+        index.close();
+
+        QSocFileHistory resumed(dir.path(), id);
+        QVERIFY(!resumed.restoreRefusal(1).isEmpty());
+        const auto report = resumed.applySnapshot(1);
+        QVERIFY(report.targetMissing);
+        QVERIFY(report.restored.isEmpty());
+        QVERIFY(QFileInfo::exists(victim));
+        QFile check(victim);
+        QVERIFY(check.open(QIODevice::ReadOnly));
+        QCOMPARE(check.readAll(), QByteArray("only copy"));
+    }
+
+    void testLocalRestoreRefusesAnAncestorReplacedByASymlink()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("symbolic-link semantics are platform-specific");
+#else
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString real    = QDir(dir.path()).filePath(QStringLiteral("real"));
+        const QString saved   = QDir(dir.path()).filePath(QStringLiteral("saved"));
+        const QString outside = QDir(dir.path()).filePath(QStringLiteral("outside"));
+        QVERIFY(QDir().mkpath(real));
+        QVERIFY(QDir().mkpath(outside));
+        const QString path = QDir(real).filePath(QStringLiteral("file.txt"));
+        QFile         original(path);
+        QVERIFY(original.open(QIODevice::WriteOnly));
+        original.write("baseline");
+        original.close();
+        QSocFileHistory history(dir.path(), QStringLiteral("local-ancestor-link"));
+        QVERIFY(history.trackEdit(path, true, QStringLiteral("baseline")));
+
+        QVERIFY(QDir().rename(real, saved));
+        const QString outsidePath = QDir(outside).filePath(QStringLiteral("file.txt"));
+        QFile         sentinel(outsidePath);
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        sentinel.write("outside");
+        sentinel.close();
+        QVERIFY(QFile::link(outside, real));
+
+        const auto report = history.applySnapshot(0);
+        QVERIFY(report.restored.isEmpty());
+        QCOMPARE(report.failed, QStringList{path});
+        QFile check(outsidePath);
+        QVERIFY(check.open(QIODevice::ReadOnly));
+        QCOMPARE(check.readAll(), QByteArray("outside"));
+#endif
+    }
+
+    void testRewindToAbsentRemovesADanglingSymlinkEntry()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("symbolic-link semantics are platform-specific");
+#else
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString   path = QDir(dir.path()).filePath(QStringLiteral("dangling"));
+        QSocFileHistory history(dir.path(), QStringLiteral("dangling-link"));
+        QVERIFY(history.trackEdit(path, false, QString()));
+        QVERIFY(QFile::link(QDir(dir.path()).filePath(QStringLiteral("missing")), path));
+        QVERIFY(QFileInfo(path).isSymLink());
+
+        const auto report = history.applySnapshot(0);
+        QCOMPARE(report.restored, QStringList{path});
+        QVERIFY(!QFileInfo(path).isSymLink());
+#endif
+    }
+
     /* An operation that starts on one link and finishes on another describes
      * neither tree. A restore stops at the change and names every path it
      * did not get to; a capture writes no turn at all. */
@@ -921,8 +1280,8 @@ private slots:
             tree.bumpOnWrite  = 1; /* the link is replaced during write #1 */
             const auto report = history.applySnapshot(0);
 
-            QCOMPARE(report.restored, QStringList{first});
-            QCOMPARE(report.failed, (QStringList{second, third}));
+            QVERIFY(report.restored.isEmpty());
+            QCOMPARE(report.failed, (QStringList{first, second, third}));
             QVERIFY(report.unknown.isEmpty());
             QVERIFY(report.transportChanged);
             QCOMPARE(tree.writeCalls, 1);

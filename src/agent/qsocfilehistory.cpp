@@ -8,9 +8,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QTextStream>
+#include <QUuid>
 
 #include <algorithm>
+#include <stdexcept>
 
 using json = nlohmann::json;
 
@@ -38,82 +41,376 @@ bool isSha256Hex(const QString &value)
     return true;
 }
 
-/* Three-state existence on local disk. QFileInfo::exists() is also false for
- * a path we were not allowed to stat and for a stale mount handle, so "not
- * there" is a fact only when the parent directory could answer for its
- * children. */
-QSocFileHistory::FileState localPresence(const QString &path)
+QString sha256Bytes(const QByteArray &bytes)
 {
-    if (QFileInfo::exists(path)) {
-        return QSocFileHistory::FileState::Present;
-    }
-    const QFileInfo parent(QFileInfo(path).absolutePath());
-    if (parent.isDir() && parent.isReadable() && parent.isExecutable()) {
-        return QSocFileHistory::FileState::Absent;
-    }
-    return QSocFileHistory::FileState::Unknown;
+    return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
 }
 
-/* The name localAccessor() reports for the local disk. It is also the one tree
- * a record that names none may be acted on: that is where the absolute paths of
- * a session written before the field existed point. */
-QString localTreeName()
+Qt::CaseSensitivity pathCaseSensitivity()
 {
-    return QStringLiteral("local");
+#ifdef Q_OS_WIN
+    return Qt::CaseInsensitive;
+#else
+    return Qt::CaseSensitive;
+#endif
+}
+
+bool pathWithin(const QString &path, const QString &root)
+{
+    QString       prefix    = QDir::fromNativeSeparators(QDir::cleanPath(root));
+    const QString cleanPath = QDir::fromNativeSeparators(QDir::cleanPath(path));
+    if (cleanPath.compare(prefix, pathCaseSensitivity()) == 0) {
+        return true;
+    }
+    if (!prefix.endsWith(QLatin1Char('/'))) {
+        prefix += QLatin1Char('/');
+    }
+    return cleanPath.startsWith(prefix, pathCaseSensitivity());
+}
+
+bool pathInLocalScope(const QString &path, const QString &lexicalRoot, const QString &canonicalRoot)
+{
+    const QString clean = QDir::fromNativeSeparators(
+        QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+    return pathWithin(clean, lexicalRoot) || pathWithin(clean, canonicalRoot);
+}
+
+/* Resolve only the parent. History records the actual file reached by the
+ * original tool, so following a later leaf symlink would switch objects.
+ * Requiring the parent to retain its canonical spelling also rejects an
+ * ancestor that was replaced by a symlink after capture. */
+QString readLocalTreeId(const QString &canonicalRoot)
+{
+    const QString   metadata = QDir(canonicalRoot).filePath(QStringLiteral(".qsoc"));
+    const QFileInfo metadataInfo(metadata);
+    if (!metadataInfo.isDir() || metadataInfo.isSymLink()
+        || metadataInfo.canonicalFilePath().compare(QDir::cleanPath(metadata), pathCaseSensitivity())
+               != 0) {
+        return {};
+    }
+    const QString   treeIdPath = QDir(metadata).filePath(QStringLiteral("tree-id"));
+    const QFileInfo treeIdInfo(treeIdPath);
+    if (treeIdInfo.isSymLink()) {
+        return {};
+    }
+    QFile file(treeIdPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QByteArray bytes = file.readAll().trimmed();
+    if (file.error() != QFileDevice::NoError) {
+        return {};
+    }
+    const QUuid id(QString::fromLatin1(bytes));
+    return id.isNull() ? QString() : id.toString(QUuid::WithoutBraces);
+}
+
+QString ensureLocalTreeId(const QString &canonicalRoot)
+{
+    QString id = readLocalTreeId(canonicalRoot);
+    if (!id.isEmpty()) {
+        return id;
+    }
+    const QString   metadata = QDir(canonicalRoot).filePath(QStringLiteral(".qsoc"));
+    const QFileInfo metadataInfo(metadata);
+    if ((metadataInfo.exists() || metadataInfo.isSymLink())
+            ? (!metadataInfo.isDir() || metadataInfo.isSymLink()
+               || metadataInfo.canonicalFilePath()
+                          .compare(QDir::cleanPath(metadata), pathCaseSensitivity())
+                      != 0)
+            : !QDir(canonicalRoot).mkdir(QStringLiteral(".qsoc"))) {
+        return {};
+    }
+    const QString    path = QDir(metadata).filePath(QStringLiteral("tree-id"));
+    QFile            file(path);
+    const QString    generated = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QByteArray bytes     = generated.toLatin1() + '\n';
+    if (file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+        const bool written = file.write(bytes) == bytes.size() && file.flush()
+                             && file.error() == QFileDevice::NoError;
+        file.close();
+        if (written) {
+            return generated;
+        }
+    }
+    return readLocalTreeId(canonicalRoot);
+}
+
+QString localTreeIdentity(const QString &treeId)
+{
+    if (treeId.isEmpty()) {
+        return {};
+    }
+    return sha256Bytes(treeId.toUtf8());
+}
+
+bool localRootIsBound(const QString &lexicalRoot, const QString &canonicalRoot, const QString &treeId)
+{
+    return !canonicalRoot.isEmpty() && !treeId.isEmpty()
+           && QFileInfo(lexicalRoot).canonicalFilePath() == canonicalRoot
+           && readLocalTreeId(canonicalRoot) == treeId;
+}
+
+bool boundMetadataDirectory(const QString &canonicalRoot, const QString &relativePath)
+{
+    QString current = canonicalRoot;
+    for (const QString &part : relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+        current = QDir(current).filePath(part);
+        const QFileInfo info(current);
+        if (!info.exists() && !info.isSymLink()) {
+            return true;
+        }
+        if (!info.isDir() || info.isSymLink()
+            || info.canonicalFilePath().compare(QDir::cleanPath(current), pathCaseSensitivity())
+                   != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool makeBoundMetadataDirectory(const QString &canonicalRoot, const QString &relativePath)
+{
+    QString current;
+    for (const QString &part : relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+        current                  = current.isEmpty() ? part : QDir(current).filePath(part);
+        const QString   absolute = QDir(canonicalRoot).filePath(current);
+        const QFileInfo info(absolute);
+        if (!info.exists() && !info.isSymLink()) {
+            const QString parentRelative = QFileInfo(current).path();
+            QDir          parent(
+                parentRelative == QStringLiteral(".")
+                    ? canonicalRoot
+                    : QDir(canonicalRoot).filePath(parentRelative));
+            if (!parent.mkdir(QFileInfo(current).fileName())) {
+                return false;
+            }
+        }
+        if (!boundMetadataDirectory(canonicalRoot, current)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<QString> localHistoryEntry(
+    const QString                                &path,
+    const QString                                &lexicalRoot,
+    const QString                                &canonicalRoot,
+    const QString                                &treeId,
+    const QSocFileHistory::WritableEntryResolver &resolver)
+{
+    if (!localRootIsBound(lexicalRoot, canonicalRoot, treeId)) {
+        return std::nullopt;
+    }
+    const QString clean = QDir::fromNativeSeparators(
+        QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+    const QFileInfo info(clean);
+    QString         probe = info.absolutePath();
+    QStringList     tail;
+    QString         canonicalParent;
+    for (;;) {
+        const QFileInfo parent(probe);
+        if (parent.exists() || parent.isSymLink()) {
+            if (!parent.isDir()) {
+                return std::nullopt;
+            }
+            canonicalParent = QDir::fromNativeSeparators(parent.canonicalFilePath());
+            break;
+        }
+        const QString name = parent.fileName();
+        const QString next = parent.absolutePath();
+        if (name.isEmpty() || next == probe) {
+            return std::nullopt;
+        }
+        tail.prepend(name);
+        probe = next;
+    }
+    if (canonicalParent.isEmpty()) {
+        return std::nullopt;
+    }
+    for (const QString &part : std::as_const(tail)) {
+        canonicalParent = QDir(canonicalParent).filePath(part);
+    }
+    const QString entry = QDir::fromNativeSeparators(
+        QDir(canonicalParent).filePath(info.fileName()));
+    if (entry.compare(clean, pathCaseSensitivity()) != 0) {
+        return std::nullopt;
+    }
+    if (!pathWithin(entry, canonicalRoot)) {
+        return std::nullopt;
+    }
+    if (resolver) {
+        QString allowedEntry;
+        if (!resolver(entry, &allowedEntry)
+            || QDir::fromNativeSeparators(allowedEntry).compare(entry, pathCaseSensitivity()) != 0) {
+            return std::nullopt;
+        }
+    }
+    return clean;
+}
+
+QSocFileHistory::FileRecord withIntroducedTurn(
+    const QSocFileHistory::FileRecord &record, int introducedTurn)
+{
+    if (record.isPresent()) {
+        return QSocFileHistory::FileRecord::present(record.sha256(), record.epoch(), introducedTurn);
+    }
+    if (record.isAbsent()) {
+        return QSocFileHistory::FileRecord::absent(record.epoch(), introducedTurn);
+    }
+    return QSocFileHistory::FileRecord::unknown(record.epoch(), introducedTurn);
+}
+
+void evictOldestSnapshot(QList<QSocFileHistory::Snapshot> &snapshots)
+{
+    const QSocFileHistory::Snapshot dropped = snapshots.takeFirst();
+    for (auto droppedIt = dropped.files.cbegin(); droppedIt != dropped.files.cend(); ++droppedIt) {
+        const QSocFileHistory::FileRecord droppedRecord = droppedIt.value();
+        if (droppedRecord.isUnknown() || droppedRecord.introducedTurn() != dropped.turn) {
+            continue;
+        }
+
+        const QString                path             = droppedIt.key();
+        const QSocFileHistory::Epoch epoch            = dropped.epoch;
+        const int                    oldSince         = droppedRecord.introducedTurn();
+        bool                         baselineSurvives = false;
+        int                          newSince         = -1;
+        for (const QSocFileHistory::Snapshot &snap : snapshots) {
+            if (snap.epoch != epoch || !snap.files.contains(path)) {
+                continue;
+            }
+            const QSocFileHistory::FileRecord record = snap.files.value(path);
+            if (record.introducedTurn() != oldSince || record.isUnknown()) {
+                continue;
+            }
+            if (snap.turn == oldSince) {
+                baselineSurvives = true;
+                break;
+            }
+            if (newSince < 0 || snap.turn < newSince) {
+                newSince = snap.turn;
+            }
+        }
+        if (baselineSurvives) {
+            continue;
+        }
+        for (QSocFileHistory::Snapshot &snap : snapshots) {
+            auto recordIt = snap.files.find(path);
+            if (snap.epoch != epoch || recordIt == snap.files.end()
+                || recordIt.value().introducedTurn() != oldSince) {
+                continue;
+            }
+            if (newSince < 0 || snap.turn < newSince) {
+                snap.files.erase(recordIt);
+            } else {
+                recordIt.value() = withIntroducedTurn(recordIt.value(), newSince);
+            }
+        }
+    }
+}
+
+void trimSnapshots(QList<QSocFileHistory::Snapshot> &snapshots)
+{
+    std::stable_sort(snapshots.begin(), snapshots.end(), [](const auto &lhs, const auto &rhs) {
+        return lhs.turn < rhs.turn;
+    });
+    while (snapshots.size() > QSocFileHistory::MAX_SNAPSHOTS) {
+        evictOldestSnapshot(snapshots);
+    }
 }
 
 } // namespace
 
-QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor()
+QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor(
+    const QString &projectRoot, WritableEntryResolver resolver)
 {
+    const QString lexicalRoot
+        = QFileInfo(projectRoot.isEmpty() ? QDir::currentPath() : projectRoot).absoluteFilePath();
+    const QString canonicalRoot = QFileInfo(lexicalRoot).canonicalFilePath();
+    const QString treeId        = ensureLocalTreeId(canonicalRoot);
+    const QString treeIdentity  = localTreeIdentity(treeId);
+    const auto    resolve = [lexicalRoot, canonicalRoot, treeId, resolver](const QString &path) {
+        return localHistoryEntry(path, lexicalRoot, canonicalRoot, treeId, resolver);
+    };
     LiveFileAccessor accessor;
-    accessor.exists = [](const QString &path) { return localPresence(path); };
-    accessor.read   = [](const QString &path) -> LiveRead {
-        QFile file(path);
-        if (file.open(QIODevice::ReadOnly)) {
-            const QByteArray utf8 = file.readAll();
-            file.close();
-            return LiveRead::present(QString::fromUtf8(utf8));
+    accessor.exists = [resolve](const QString &path) {
+        const auto entry = resolve(path);
+        if (!entry.has_value()) {
+            return FileState::Unknown;
         }
-        /* An open that failed says nothing about the content, and the same
-         * stat that could not answer for exists() cannot answer here either:
-         * deciding "absent" from a failed stat is what turns a permission
-         * error into an instruction to unlink. */
-        switch (localPresence(path)) {
-        case FileState::Absent:
+        const QFileInfo info(*entry);
+        if (info.exists() || info.isSymLink()) {
+            return FileState::Present;
+        }
+        const QFileInfo parent(info.absolutePath());
+        if (parent.isDir() && parent.isReadable() && parent.isExecutable()) {
+            return FileState::Absent;
+        }
+        return FileState::Unknown;
+    };
+    accessor.read = [resolve](const QString &path) -> LiveRead {
+        const auto entry = resolve(path);
+        if (!entry.has_value()) {
+            return LiveRead::unknown();
+        }
+        const QFileInfo info(*entry);
+        if (info.isSymLink()) {
+            return LiveRead::unknown();
+        }
+        QFile file(*entry);
+        if (file.open(QIODevice::ReadOnly)) {
+            const QByteArray utf8     = file.readAll();
+            const bool       complete = file.error() == QFileDevice::NoError;
+            file.close();
+            if (complete) {
+                return LiveRead::present(QString::fromUtf8(utf8.constData(), utf8.size()));
+            }
+            return LiveRead::unknown();
+        }
+        const QFileInfo parent(info.absolutePath());
+        if (!info.exists() && !info.isSymLink() && parent.isDir() && parent.isReadable()
+            && parent.isExecutable()) {
             return LiveRead::absent();
-        case FileState::Present:
-        case FileState::Unknown:
-            break;
         }
         return LiveRead::unknown();
     };
-    accessor.write = [](const QString &path, const QString &content) {
-        const QFileInfo info(path);
-        QDir            parent = info.absoluteDir();
-        if (!parent.exists()) {
-            parent.mkpath(QStringLiteral("."));
-        }
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    accessor.write = [resolve](const QString &path, const QString &content) {
+        const auto entry = resolve(path);
+        if (!entry.has_value()) {
             return false;
         }
-        file.write(content.toUtf8());
-        file.close();
-        return true;
+        const QByteArray utf8 = content.toUtf8();
+        QSaveFile        file(*entry);
+        file.setDirectWriteFallback(false);
+        if (!file.open(QIODevice::WriteOnly) || file.write(utf8) != utf8.size()) {
+            file.cancelWriting();
+            return false;
+        }
+        return file.commit();
     };
-    accessor.remove = [](const QString &path) {
-        QFile existing(path);
-        if (!existing.exists()) {
+    accessor.remove = [resolve](const QString &path) {
+        const auto entry = resolve(path);
+        if (!entry.has_value()) {
+            return false;
+        }
+        const QFileInfo info(*entry);
+        if (!info.exists() && !info.isSymLink()) {
             return true;
         }
-        return existing.remove();
+        return QFile::remove(*entry);
     };
-    /* The local disk is one tree that is never replaced underneath a capture,
-     * so it names itself and leaves the link unnumbered. Naming it is what
-     * fences it from a remote workspace reached over SFTP: without a name both
-     * would read as "no discipline" and records would cross between them. */
-    accessor.tree = []() { return localTreeName(); };
+    accessor.inScope = [lexicalRoot, canonicalRoot](const QString &path) {
+        return pathInLocalScope(path, lexicalRoot, canonicalRoot);
+    };
+    accessor.coversPath = [resolve](const QString &path) { return resolve(path).has_value(); };
+    accessor.tree       = [lexicalRoot, canonicalRoot, treeId, treeIdentity]() {
+        if (treeIdentity.isEmpty() || !localRootIsBound(lexicalRoot, canonicalRoot, treeId)) {
+            return QString();
+        }
+        return QStringLiteral("local:") + treeIdentity;
+    };
+    accessor.generation = []() { return QStringLiteral("disk"); };
     return accessor;
 }
 
@@ -127,13 +424,13 @@ QSocFileHistory::EpochRelation QSocFileHistory::relate(const Epoch &record, cons
      * alternative is silently deleting a local file the record was never shown
      * to describe, and a refusal the user can act on beats an unrecoverable
      * false success. */
-    if (record.tree.isEmpty()) {
+    if (record.tree.isEmpty() || live.tree.isEmpty()) {
         return EpochRelation::OtherTree;
     }
     if (record.tree != live.tree) {
         return EpochRelation::OtherTree;
     }
-    if (record.link != 0 && live.link != 0 && record.link != live.link) {
+    if (record.link.isEmpty() || live.link.isEmpty() || record.link != live.link) {
         return EpochRelation::OtherLink;
     }
     return EpochRelation::Same;
@@ -145,24 +442,46 @@ QSocFileHistory::Epoch QSocFileHistory::liveEpoch() const
     if (liveAccessor.tree) {
         epoch.tree = liveAccessor.tree();
     }
-    if (epoch.tree.isEmpty()) {
-        epoch.tree = QStringLiteral("unnamed");
-    }
     if (liveAccessor.generation) {
         epoch.link = liveAccessor.generation();
     }
     return epoch;
 }
 
-QSet<QString> QSocFileHistory::trackedPathsFor(const QString &tree) const
+QSet<QString> QSocFileHistory::trackedPathsFor(const Epoch &epoch, int atTurn) const
 {
-    /* Only the paths actually tracked on this tree. A path carried over from a
-     * snapshot that names no tree is never swept in here: capturing it would
-     * stamp the live tree onto it and promote a fenced record into an
-     * actionable one, so the next rewind could delete, create or overwrite it.
-     * If the session really edits such a path, trackEdit() records it fresh
-     * under the live tree, which is a genuine capture, not a promotion. */
-    return trackedFiles.value(tree);
+    QSet<QString> paths;
+    if (epoch.tree.isEmpty() || epoch.link.isEmpty()) {
+        return paths;
+    }
+    for (const Snapshot &snap : loadSnapshots()) {
+        if (snap.epoch != epoch) {
+            continue;
+        }
+        for (auto it = snap.files.cbegin(); it != snap.files.cend(); ++it) {
+            if (it.value().introducedTurn() <= atTurn) {
+                paths.insert(it.key());
+            }
+        }
+    }
+    return paths;
+}
+
+int QSocFileHistory::introducedTurnFor(const Epoch &epoch, const QString &path) const
+{
+    int introduced = -1;
+    for (const Snapshot &snap : loadSnapshots()) {
+        if (snap.epoch != epoch || !snap.files.contains(path)) {
+            continue;
+        }
+        const int candidate = snap.files.value(path).introducedTurn();
+        if (introduced < 0) {
+            introduced = candidate;
+        } else if (introduced != candidate) {
+            return -1;
+        }
+    }
+    return introduced;
 }
 
 void QSocFileHistory::setLiveAccessor(LiveFileAccessor accessor)
@@ -170,21 +489,26 @@ void QSocFileHistory::setLiveAccessor(LiveFileAccessor accessor)
     liveAccessor = std::move(accessor);
 }
 
-QSocFileHistory::QSocFileHistory(QString projectPath, QString sessionId)
-    : projectPathValue(std::move(projectPath))
-    , sessionIdValue(std::move(sessionId))
-    , liveAccessor(localAccessor())
+bool QSocFileHistory::isPathInScope(const QString &filePath) const
 {
-    /* Seed the trackedFiles set from any pre-existing snapshots so that
-     * a resumed session continues to capture the same paths in its next
-     * makeSnapshot call even if the current turn didn't touch them. Each path
-     * lands under the tree it was observed on. */
-    const auto snaps = loadSnapshots();
-    for (const Snapshot &snap : snaps) {
-        for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
-            trackedFiles[snap.epoch.tree].insert(it.key());
-        }
-    }
+    return !liveAccessor.inScope || liveAccessor.inScope(filePath);
+}
+
+bool QSocFileHistory::coversPath(const QString &filePath) const
+{
+    return isPathInScope(filePath)
+           && (!liveAccessor.coversPath || liveAccessor.coversPath(filePath));
+}
+
+QSocFileHistory::QSocFileHistory(QString projectPath, QString sessionId)
+    : sessionIdValue(std::move(sessionId))
+{
+    const QString root      = projectPath.isEmpty() ? QDir::currentPath() : std::move(projectPath);
+    storageLexicalRootValue = QFileInfo(root).absoluteFilePath();
+    storageCanonicalRootValue = QFileInfo(storageLexicalRootValue).canonicalFilePath();
+    storageTreeIdValue        = ensureLocalTreeId(storageCanonicalRootValue);
+    projectPathValue          = storageLexicalRootValue;
+    liveAccessor              = localAccessor(projectPathValue);
 }
 
 QString QSocFileHistory::historyDir(const QString &projectPath, const QString &sessionId)
@@ -205,135 +529,188 @@ QString QSocFileHistory::sha256Hex(const QString &content)
 
 QString QSocFileHistory::backupPathFor(const QString &sha256) const
 {
-    return QDir(historyDir(projectPathValue, sessionIdValue))
+    return QDir(historyDir(storageCanonicalRootValue, sessionIdValue))
         .filePath(QStringLiteral("backups/") + sha256 + QStringLiteral(".bak"));
 }
 
 QString QSocFileHistory::snapshotsPath() const
 {
-    return QDir(historyDir(projectPathValue, sessionIdValue))
+    return QDir(historyDir(storageCanonicalRootValue, sessionIdValue))
         .filePath(QStringLiteral("snapshots.jsonl"));
 }
 
-void QSocFileHistory::ensureDirs() const
+bool QSocFileHistory::ensureDirs() const
 {
-    const QString root    = historyDir(projectPathValue, sessionIdValue);
-    const QString backups = QDir(root).filePath(QStringLiteral("backups"));
-    QDir().mkpath(root);
-    QDir().mkpath(backups);
+    if (!storageIsBound()) {
+        return false;
+    }
+    const QString relative = QStringLiteral(".qsoc/file-history/%1/backups").arg(sessionIdValue);
+    return makeBoundMetadataDirectory(storageCanonicalRootValue, relative) && storageIsBound();
 }
 
-void QSocFileHistory::writeBackup(const QString &sha256, const QString &content) const
+bool QSocFileHistory::writeBackup(const QString &sha256, const QString &content) const
 {
-    ensureDirs();
-    const QString path = backupPathFor(sha256);
-    if (QFile::exists(path)) {
-        return; /* already deduped by hash */
+    if (!ensureDirs()) {
+        return false;
     }
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return;
+    const QString path = backupPathFor(sha256);
+    if (QFileInfo(path).isSymLink()) {
+        return false;
+    }
+    if (readBackup(sha256).has_value()) {
+        return true;
     }
     const QByteArray utf8 = content.toUtf8();
-    file.write(utf8);
-    file.close();
+    if (QString::fromLatin1(QCryptographicHash::hash(utf8, QCryptographicHash::Sha256).toHex())
+        != sha256) {
+        return false;
+    }
+    QSaveFile file(path);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly) || file.write(utf8) != utf8.size()) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
 }
 
-QString QSocFileHistory::readBackup(const QString &sha256) const
+std::optional<QString> QSocFileHistory::readBackup(const QString &sha256) const
 {
+    if (!storageIsBound()) {
+        return std::nullopt;
+    }
     const QString path = backupPathFor(sha256);
-    QFile         file(path);
+    if (QFileInfo(path).isSymLink()) {
+        return std::nullopt;
+    }
+    QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        return QString();
+        return std::nullopt;
     }
     const QByteArray utf8 = file.readAll();
     file.close();
-    return QString::fromUtf8(utf8);
+    const QString actual = QString::fromLatin1(
+        QCryptographicHash::hash(utf8, QCryptographicHash::Sha256).toHex());
+    if (actual != sha256) {
+        return std::nullopt;
+    }
+    return QString::fromUtf8(utf8.constData(), utf8.size());
 }
 
-void QSocFileHistory::trackEdit(
+bool QSocFileHistory::trackEdit(
     const QString &filePath, bool beforeExists, const QString &beforeContent)
 {
-    /* If this file has already been tracked on this tree earlier in the
-     * session, its baseline (the turn-0 "before the first edit" state) was
-     * captured on the first call, so nothing to do now. Subsequent edits in the
-     * same session will have their post-state captured by makeSnapshot(). A
-     * path tracked only on another tree gets its own baseline below: the same
-     * absolute path is a different file there. */
+    /* A tracked path already has a baseline at its introduction checkpoint, so
+     * later edits need no new one. makeSnapshot() captures their post-state. A
+     * path tracked only on another tree gets its own baseline below because the
+     * same absolute path names a different file there. */
+    if (!coversPath(filePath)) {
+        return false;
+    }
     const Epoch epoch = liveEpoch();
-    if (trackedPathsFor(epoch.tree).contains(filePath)) {
-        return;
+    if (epoch.tree.isEmpty() || epoch.link.isEmpty()) {
+        return false;
     }
-    trackedFiles[epoch.tree].insert(filePath);
+    (void) loadSnapshots();
+    if (indexState == IndexState::Invalid) {
+        return false;
+    }
+    const int existingIntroduction = introducedTurnFor(epoch, filePath);
+    if (existingIntroduction >= 0) {
+        const int introduced    = existingIntroduction;
+        bool      baselineFound = false;
+        for (const Snapshot &snap : loadSnapshots()) {
+            if (snap.epoch != epoch || !snap.files.contains(filePath)) {
+                continue;
+            }
+            const FileRecord record = snap.files.value(filePath);
+            if (snap.turn == introduced && record.introducedTurn() == introduced
+                && !record.isUnknown()) {
+                baselineFound = true;
+            }
+            if (record.isPresent() && !readBackup(record.sha256()).has_value()) {
+                return false;
+            }
+        }
+        return baselineFound;
+    }
 
-    /* The caller already observed the file, so the baseline is never
-     * unknown: it is present with a blob, or absent. */
+    /* The caller already observed the file, so the durable baseline is either
+     * present with a blob or absent. A publication failure rejects the edit. */
     QString sha;
+    bool    backupStored = true;
     if (beforeExists) {
-        sha = sha256Hex(beforeContent);
-        writeBackup(sha, beforeContent);
+        sha          = sha256Hex(beforeContent);
+        backupStored = writeBackup(sha, beforeContent);
     }
+    if (!backupStored) {
+        return false;
+    }
+    const int  baselineTurn   = latestTurn();
+    const auto baselineRecord = [&](const Epoch &recordEpoch) {
+        if (!beforeExists) {
+            return FileRecord::absent(recordEpoch, baselineTurn);
+        }
+        return FileRecord::present(sha, recordEpoch, baselineTurn);
+    };
 
-    /* Merge the baseline into snapshot turn 0 for this tree. If the file
-     * already has an entry there (paranoia: shouldn't happen because we just
-     * added it to trackedFiles), leave the existing record alone. */
+    /* The pre-mutation state belongs to the latest completed turn. This makes
+     * a file first touched later explicit without claiming anything about
+     * older turns. */
     QList<Snapshot> snapshots = loadSnapshots();
     Snapshot       *baseline  = nullptr;
     for (Snapshot &snap : snapshots) {
-        /* Matched on the tree, not on the turn alone: the on-disk form keeps
-         * one epoch per snapshot, so merging a second tree's baseline into this
-         * line would claim this tree for every path already in it. */
-        if (snap.turn == 0 && snap.epoch.tree == epoch.tree) {
+        if (snap.turn == baselineTurn && snap.epoch == epoch) {
             baseline = &snap;
             break;
         }
     }
     if (baseline == nullptr) {
         Snapshot fresh;
-        fresh.turn      = 0;
+        fresh.turn      = baselineTurn;
         fresh.timestamp = QDateTime::currentDateTimeUtc();
         fresh.epoch     = epoch;
-        fresh.files.insert(
-            filePath,
-            beforeExists ? FileRecord::present(sha, fresh.epoch) : FileRecord::absent(fresh.epoch));
-        /* Appended, not prepended: snapshots are flattened in file order for
-         * equal turns, so a baseline written later must win over one written
-         * before it. */
+        fresh.files.insert(filePath, baselineRecord(fresh.epoch));
         snapshots.append(fresh);
     } else if (!baseline->files.contains(filePath)) {
-        baseline->files.insert(
-            filePath,
-            beforeExists ? FileRecord::present(sha, baseline->epoch)
-                         : FileRecord::absent(baseline->epoch));
+        baseline->files.insert(filePath, baselineRecord(baseline->epoch));
     }
-    saveSnapshots(snapshots);
+    trimSnapshots(snapshots);
+    if (!saveSnapshots(snapshots)) {
+        return false;
+    }
+    gcOrphanedBackups();
+    return true;
 }
 
 bool QSocFileHistory::makeSnapshot(int turn)
 {
     if (turn <= 0) {
-        return false; /* turn 0 is reserved for the lazily-populated baseline */
+        return false; /* turn 0 is reserved for pre-first-turn state */
     }
-    const Epoch         entryEpoch = liveEpoch();
-    const QSet<QString> paths      = trackedPathsFor(entryEpoch.tree);
-    if (paths.isEmpty()) {
-        /* Nothing tracked on the bound tree; not an error. Paths tracked on
-         * another tree are deliberately not read here: over this link the same
-         * absolute path names a different file or nothing at all, and "nothing
-         * at all" would be recorded as an instruction to unlink. */
-        return true;
+    (void) loadSnapshots();
+    if (indexState == IndexState::Invalid) {
+        return false;
     }
-    Snapshot snap;
+    const Epoch entryEpoch = liveEpoch();
+    if (entryEpoch.tree.isEmpty() || entryEpoch.link.isEmpty()) {
+        return false;
+    }
+    const QSet<QString> paths = trackedPathsFor(entryEpoch, turn);
+    Snapshot            snap;
     snap.turn      = turn;
     snap.timestamp = QDateTime::currentDateTimeUtc();
     snap.epoch     = entryEpoch;
     bool straddled = false;
+    bool complete  = true;
     for (const QString &path : paths) {
         /* Once the transport has been replaced, the rest of the tree belongs
          * to a tree this snapshot is not describing, so claim nothing about
          * it rather than reading it on the new link. */
         if (straddled) {
-            snap.files.insert(path, FileRecord::unknown(entryEpoch));
+            snap.files
+                .insert(path, FileRecord::unknown(entryEpoch, introducedTurnFor(entryEpoch, path)));
+            complete = false;
             continue;
         }
         const LiveRead live = liveAccessor.read ? liveAccessor.read(path) : LiveRead::unknown();
@@ -344,7 +721,9 @@ bool QSocFileHistory::makeSnapshot(int turn)
          * that this turn created. */
         if (liveEpoch() != entryEpoch) {
             straddled = true;
-            snap.files.insert(path, FileRecord::unknown(entryEpoch));
+            snap.files
+                .insert(path, FileRecord::unknown(entryEpoch, introducedTurnFor(entryEpoch, path)));
+            complete = false;
             continue;
         }
         switch (live.state()) {
@@ -352,41 +731,39 @@ bool QSocFileHistory::makeSnapshot(int turn)
             /* Recorded as unknown, never as absent: absent is an instruction
              * to unlink, and we did not establish that there is nothing
              * there to unlink. */
-            snap.files.insert(path, FileRecord::unknown(entryEpoch));
+            snap.files
+                .insert(path, FileRecord::unknown(entryEpoch, introducedTurnFor(entryEpoch, path)));
+            complete = false;
             break;
         case FileState::Absent:
-            snap.files.insert(path, FileRecord::absent(entryEpoch));
+            snap.files
+                .insert(path, FileRecord::absent(entryEpoch, introducedTurnFor(entryEpoch, path)));
             break;
         case FileState::Present: {
             const QString sha = sha256Hex(live.content());
-            writeBackup(sha, live.content());
-            snap.files.insert(path, FileRecord::present(sha, entryEpoch));
+            if (writeBackup(sha, live.content())) {
+                snap.files.insert(
+                    path, FileRecord::present(sha, entryEpoch, introducedTurnFor(entryEpoch, path)));
+            } else {
+                snap.files.insert(
+                    path, FileRecord::unknown(entryEpoch, introducedTurnFor(entryEpoch, path)));
+                complete = false;
+            }
             break;
         }
         }
     }
 
-    /* Append in-memory, trim to MAX_SNAPSHOTS (baseline is sticky), then
-     * rewrite snapshots.jsonl atomically via saveSnapshots. */
+    /* Append in-memory, trim to MAX_SNAPSHOTS, then rewrite snapshots.jsonl
+     * atomically via saveSnapshots. */
     QList<Snapshot> snapshots = loadSnapshots();
     snapshots.append(snap);
-    /* Keep baseline plus the newest (MAX_SNAPSHOTS - 1) regular turns. */
-    while (snapshots.size() > MAX_SNAPSHOTS) {
-        int dropIndex = -1;
-        for (int i = 0; i < snapshots.size(); i++) {
-            if (snapshots[i].turn != 0) {
-                dropIndex = i;
-                break;
-            }
-        }
-        if (dropIndex < 0) {
-            break;
-        }
-        snapshots.removeAt(dropIndex);
+    trimSnapshots(snapshots);
+    if (!saveSnapshots(snapshots)) {
+        return false;
     }
-    saveSnapshots(snapshots);
     gcOrphanedBackups();
-    return true;
+    return complete;
 }
 
 QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::effectiveStateAt(
@@ -416,21 +793,78 @@ QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::effectiveStateAt(
     return state;
 }
 
+QMap<QString, QSocFileHistory::FileRecord> QSocFileHistory::restoreStateAt(
+    int turn, const Epoch &live, bool *targetExists, bool *targetComplete) const
+{
+    QMap<QString, FileRecord> state;
+    QList<Snapshot>           candidates;
+    const auto                snapshots = loadSnapshots();
+    QSet<QString>             required;
+    for (const Snapshot &snap : snapshots) {
+        if (live.tree.isEmpty() || snap.epoch.tree != live.tree) {
+            continue;
+        }
+        for (auto it = snap.files.cbegin(); it != snap.files.cend(); ++it) {
+            if (it.value().introducedTurn() <= turn) {
+                required.insert(it.key());
+            }
+        }
+        if (snap.turn == turn && snap.epoch != live) {
+            candidates.append(snap);
+        }
+    }
+    for (const Snapshot &snap : snapshots) {
+        if (snap.turn == turn && snap.epoch == live) {
+            candidates.append(snap);
+        }
+    }
+    for (const Snapshot &snap : candidates) {
+        for (auto it = snap.files.cbegin(); it != snap.files.cend(); ++it) {
+            state.insert(it.key(), it.value());
+        }
+    }
+    bool complete = true;
+    for (const QString &path : required) {
+        if (!state.contains(path)) {
+            state.insert(path, FileRecord::unknown(live));
+            complete = false;
+        }
+    }
+    if (targetExists != nullptr) {
+        *targetExists = !candidates.isEmpty();
+    }
+    if (targetComplete != nullptr) {
+        *targetComplete = complete;
+    }
+    return state;
+}
+
 QSocFileHistory::BoundaryPreview QSocFileHistory::previewBoundary(int turn) const
 {
     BoundaryPreview preview;
     const Epoch     live  = liveEpoch();
-    const auto      state = effectiveStateAt(turn, live);
-    QSet<QString>   elsewhere;
+    const auto      state = restoreStateAt(turn, live, nullptr);
+    if (indexState == IndexState::Invalid) {
+        return preview;
+    }
+    QSet<QString> elsewhere;
     for (const Snapshot &snap : loadSnapshots()) {
         if (snap.turn > turn) {
             continue;
         }
         for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
-            /* Recorded at or below the target turn, yet absent from the scoped
-             * state: every record it has belongs to another tree. */
-            if (!it.value().isUnknown() && !state.contains(it.key())) {
+            if (state.contains(it.key())) {
+                continue;
+            }
+            switch (relate(it.value().epoch(), live)) {
+            case EpochRelation::OtherTree:
                 elsewhere.insert(it.key());
+                break;
+            case EpochRelation::OtherLink:
+                preview.otherLink.append(it.key());
+                break;
+            case EpochRelation::Same:
+                break;
             }
         }
     }
@@ -446,11 +880,48 @@ QSocFileHistory::BoundaryPreview QSocFileHistory::previewBoundary(int turn) cons
     return preview;
 }
 
+QString QSocFileHistory::restoreRefusal(int turn) const
+{
+    bool targetExists   = false;
+    bool targetComplete = false;
+    (void) loadSnapshots();
+    if (indexState == IndexState::Invalid) {
+        return QStringLiteral("the file checkpoint index is unreadable or incomplete");
+    }
+    const Epoch live = liveEpoch();
+    if (live.tree.isEmpty() || live.link.isEmpty()) {
+        return QStringLiteral("the working tree identity cannot be established");
+    }
+    const auto state = restoreStateAt(turn, live, &targetExists, &targetComplete);
+    if (!targetExists) {
+        return QStringLiteral("the requested file checkpoint is unavailable for this workspace");
+    }
+    if (!targetComplete) {
+        return QStringLiteral("the requested file checkpoint is incomplete");
+    }
+    for (auto it = state.cbegin(); it != state.cend(); ++it) {
+        if (!it.value().isUnknown() && !coversPath(it.key())) {
+            return QStringLiteral("the working tree no longer covers a required checkpoint path");
+        }
+        if (it.value().isPresent() && !readBackup(it.value().sha256()).has_value()) {
+            return QStringLiteral("a backup required by the file checkpoint is unavailable");
+        }
+    }
+    return {};
+}
+
 QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGeneration across)
 {
     RestoreReport report;
-    const Epoch   entryEpoch = liveEpoch();
-    const auto    state      = effectiveStateAt(turn, entryEpoch);
+    const Epoch   entryEpoch   = liveEpoch();
+    bool          targetExists = false;
+    const auto    state        = restoreStateAt(turn, entryEpoch, &targetExists);
+    if (indexState == IndexState::Invalid || !targetExists) {
+        report.targetMissing = true;
+        report.unknown       = state.keys();
+        std::sort(report.unknown.begin(), report.unknown.end());
+        return report;
+    }
     if (state.isEmpty()) {
         return report;
     }
@@ -487,6 +958,12 @@ QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGe
              * says there is something there. */
             const FileState liveState = liveAccessor.exists ? liveAccessor.exists(path)
                                                             : FileState::Unknown;
+            if (liveEpoch() != entryEpoch) {
+                report.transportChanged = true;
+                report.unknown.append(path);
+                stopped = true;
+                continue;
+            }
             switch (liveState) {
             case FileState::Unknown:
                 report.unknown.append(path);
@@ -494,8 +971,19 @@ QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGe
             case FileState::Absent:
                 break; /* already matches the target turn */
             case FileState::Present:
-                if (liveAccessor.remove && liveAccessor.remove(path)) {
-                    report.restored.append(path);
+                if (liveAccessor.remove) {
+                    const bool removed = liveAccessor.remove(path);
+                    if (liveEpoch() != entryEpoch) {
+                        report.transportChanged = true;
+                        report.failed.append(path);
+                        stopped = true;
+                        break;
+                    }
+                    if (removed) {
+                        report.restored.append(path);
+                    } else {
+                        report.failed.append(path);
+                    }
                 } else {
                     report.failed.append(path);
                 }
@@ -503,15 +991,24 @@ QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGe
             }
             continue;
         }
-        const QString content = readBackup(rec.sha256());
-        if (content.isNull()) {
+        const auto content = readBackup(rec.sha256());
+        if (!content.has_value()) {
             /* Leaving the file alone beats corrupting it, but the caller
              * must not be told the tree is back where it was. */
             report.failed.append(path);
             continue;
         }
-        if (liveAccessor.write && liveAccessor.write(path, content)) {
-            report.restored.append(path);
+        if (liveAccessor.write) {
+            const bool written = liveAccessor.write(path, *content);
+            if (liveEpoch() != entryEpoch) {
+                report.transportChanged = true;
+                report.failed.append(path);
+                stopped = true;
+            } else if (written) {
+                report.restored.append(path);
+            } else {
+                report.failed.append(path);
+            }
         } else {
             report.failed.append(path);
         }
@@ -522,9 +1019,12 @@ QSocFileHistory::RestoreReport QSocFileHistory::applySnapshot(int turn, AcrossGe
     return report;
 }
 
-void QSocFileHistory::truncateAfter(int cutoffTurn)
+bool QSocFileHistory::truncateAfter(int cutoffTurn)
 {
     QList<Snapshot> snapshots = loadSnapshots();
+    if (indexState == IndexState::Invalid) {
+        return false;
+    }
     QList<Snapshot> kept;
     kept.reserve(snapshots.size());
     for (const Snapshot &snap : snapshots) {
@@ -533,9 +1033,12 @@ void QSocFileHistory::truncateAfter(int cutoffTurn)
         }
     }
     if (kept.size() != snapshots.size()) {
-        saveSnapshots(kept);
+        if (!saveSnapshots(kept)) {
+            return false;
+        }
         gcOrphanedBackups();
     }
+    return true;
 }
 
 QList<QSocFileHistory::Snapshot> QSocFileHistory::listSnapshots() const
@@ -555,7 +1058,7 @@ QString QSocFileHistory::contentAt(const QString &filePath, int turn) const
     if (!rec.isPresent()) {
         return QString();
     }
-    return readBackup(rec.sha256());
+    return readBackup(rec.sha256()).value_or(QString());
 }
 
 int QSocFileHistory::latestTurn() const
@@ -572,91 +1075,213 @@ int QSocFileHistory::latestTurn() const
 
 bool QSocFileHistory::isEmpty() const
 {
-    return loadSnapshots().isEmpty();
+    const auto snapshots = loadSnapshots();
+    return indexState == IndexState::Valid && snapshots.isEmpty();
+}
+
+bool QSocFileHistory::storageIsBound() const
+{
+    if (!localRootIsBound(storageLexicalRootValue, storageCanonicalRootValue, storageTreeIdValue)) {
+        return false;
+    }
+    const QString history = QStringLiteral(".qsoc/file-history/%1/backups").arg(sessionIdValue);
+    const QString index   = snapshotsPath();
+    return boundMetadataDirectory(storageCanonicalRootValue, QStringLiteral(".qsoc/sessions"))
+           && boundMetadataDirectory(storageCanonicalRootValue, history)
+           && !QFileInfo(index).isSymLink();
 }
 
 QList<QSocFileHistory::Snapshot> QSocFileHistory::loadSnapshots() const
 {
+    if (!storageIsBound()) {
+        cachedSnapshots.clear();
+        cacheValid = true;
+        indexState = IndexState::Invalid;
+        return {};
+    }
     if (cacheValid) {
         return cachedSnapshots;
     }
     QList<Snapshot> result;
     QFile           file(snapshotsPath());
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!file.exists()) {
         cachedSnapshots = result;
         cacheValid      = true;
+        indexState      = IndexState::Valid;
         return result;
     }
-    QTextStream stream(&file);
-    while (!stream.atEnd()) {
-        const QString line = stream.readLine();
+    if (!file.open(QIODevice::ReadOnly)) {
+        cachedSnapshots.clear();
+        cacheValid = true;
+        indexState = IndexState::Invalid;
+        return {};
+    }
+    const QByteArray contents = file.readAll();
+    const bool       readOk   = file.error() == QFileDevice::NoError;
+    file.close();
+    if (!readOk) {
+        cachedSnapshots.clear();
+        cacheValid = true;
+        indexState = IndexState::Invalid;
+        return {};
+    }
+    for (const QByteArray &rawLine : contents.split('\n')) {
+        const QByteArray line = rawLine.trimmed();
         if (line.isEmpty()) {
             continue;
         }
         try {
-            const json doc = json::parse(line.toStdString());
-            if (!doc.is_object() || !doc.contains("turn") || !doc.contains("files")) {
-                continue;
+            const json doc = json::parse(line.constData(), line.constData() + line.size());
+            if (!doc.is_object() || !doc.contains("turn") || !doc.contains("files")
+                || !doc["turn"].is_number_integer() || doc["turn"].get<int>() < 0
+                || !doc["files"].is_object()) {
+                throw std::runtime_error("invalid snapshot record");
+            }
+            bool trusted = false;
+            if (doc.contains("seal")) {
+                if (!doc["seal"].is_string()) {
+                    throw std::runtime_error("invalid snapshot seal");
+                }
+                const QString expected = QString::fromStdString(doc["seal"].get<std::string>());
+                json          payload  = doc;
+                payload.erase("seal");
+                const std::string serialized = payload.dump();
+                if (!isSha256Hex(expected)
+                    || sha256Bytes(QByteArray::fromStdString(serialized)) != expected) {
+                    throw std::runtime_error("snapshot seal mismatch");
+                }
+                trusted = true;
             }
             Snapshot snap;
             snap.turn = doc["turn"].get<int>();
-            if (doc.contains("ts") && doc["ts"].is_string()) {
+            if (doc.contains("ts")) {
+                if (!doc["ts"].is_string()) {
+                    throw std::runtime_error("invalid snapshot timestamp");
+                }
                 snap.timestamp = QDateTime::fromString(
                     QString::fromStdString(doc["ts"].get<std::string>()), Qt::ISODateWithMs);
+                if (!snap.timestamp.isValid()) {
+                    throw std::runtime_error("invalid snapshot timestamp");
+                }
             }
-            /* A line written before these fields existed names no tree and
-             * reads as link 0. It still loads: what it may be acted on is
-             * relate()'s decision, not the parser's. */
-            if (doc.contains("tree") && doc["tree"].is_string()) {
+            if (trusted && doc.contains("tree")) {
+                if (!doc["tree"].is_string()) {
+                    throw std::runtime_error("invalid snapshot tree");
+                }
                 snap.epoch.tree = QString::fromStdString(doc["tree"].get<std::string>());
             }
-            if (doc.contains("gen") && doc["gen"].is_number_unsigned()) {
-                snap.epoch.link = doc["gen"].get<quint64>();
+            if (trusted && doc.contains("link")) {
+                if (!doc["link"].is_string()) {
+                    throw std::runtime_error("invalid snapshot link");
+                }
+                snap.epoch.link = QString::fromStdString(doc["link"].get<std::string>());
             }
             const auto &files = doc["files"];
-            if (files.is_object()) {
-                for (auto it = files.begin(); it != files.end(); ++it) {
-                    const QString path = QString::fromStdString(it.key());
-                    /* Classified by JSON type plus shape: null is absent, a
-                     * well-formed digest is present, and everything else
-                     * (including a torn value) is unknown. */
-                    FileRecord rec = FileRecord::unknown(snap.epoch);
-                    if (it.value().is_null()) {
-                        rec = FileRecord::absent(snap.epoch);
-                    } else if (it.value().is_string()) {
-                        const QString sha = QString::fromStdString(it.value().get<std::string>());
-                        if (isSha256Hex(sha)) {
-                            rec = FileRecord::present(sha, snap.epoch);
-                        }
-                    }
-                    snap.files.insert(path, rec);
+            for (auto it = files.begin(); it != files.end(); ++it) {
+                const QString path = QString::fromStdString(it.key());
+                if (path.isEmpty()) {
+                    throw std::runtime_error("empty snapshot path");
                 }
+                if (!trusted) {
+                    snap.files.insert(path, FileRecord::unknown(Epoch()));
+                    continue;
+                }
+                if (!it.value().is_object() || !it.value().contains("since")
+                    || !it.value().contains("state") || !it.value()["since"].is_number_integer()) {
+                    throw std::runtime_error("invalid snapshot file record");
+                }
+                const int since = it.value()["since"].get<int>();
+                if (since < 0 || since > snap.turn) {
+                    throw std::runtime_error("invalid snapshot provenance");
+                }
+                const auto &state = it.value()["state"];
+                FileRecord  rec   = FileRecord::unknown(snap.epoch, since);
+                if (state.is_null()) {
+                    rec = FileRecord::absent(snap.epoch, since);
+                } else if (state.is_string()) {
+                    const QString value = QString::fromStdString(state.get<std::string>());
+                    if (isSha256Hex(value)) {
+                        rec = FileRecord::present(value, snap.epoch, since);
+                    } else if (value != QStringLiteral("unknown")) {
+                        throw std::runtime_error("invalid snapshot state");
+                    }
+                } else {
+                    throw std::runtime_error("invalid snapshot state");
+                }
+                snap.files.insert(path, rec);
             }
             result.append(snap);
         } catch (const std::exception &) {
-            /* Skip malformed line — probably a torn write from a crash. */
-            continue;
+            cachedSnapshots.clear();
+            cacheValid = true;
+            indexState = IndexState::Invalid;
+            return {};
         }
     }
-    file.close();
     /* Stable: two snapshots can share a turn (one baseline per tree, plus a
      * legacy baseline that names none), and flattening must take the one
      * written later, not whichever the sort happened to leave last. */
     std::stable_sort(result.begin(), result.end(), [](const Snapshot &lhs, const Snapshot &rhs) {
         return lhs.turn < rhs.turn;
     });
+    const auto provenanceKey = [](const Epoch &epoch, const QString &path) {
+        return QString::number(epoch.tree.size()) + QLatin1Char(':') + epoch.tree
+               + QString::number(epoch.link.size()) + QLatin1Char(':') + epoch.link + path;
+    };
+    QHash<QString, int> introduced;
+    QSet<QString>       baselines;
+    for (const Snapshot &snap : result) {
+        if (snap.epoch.tree.isEmpty() || snap.epoch.link.isEmpty()) {
+            continue;
+        }
+        for (auto it = snap.files.cbegin(); it != snap.files.cend(); ++it) {
+            const QString key   = provenanceKey(snap.epoch, it.key());
+            const int     since = it.value().introducedTurn();
+            if (introduced.contains(key) && introduced.value(key) != since) {
+                cachedSnapshots.clear();
+                cacheValid = true;
+                indexState = IndexState::Invalid;
+                return {};
+            }
+            introduced.insert(key, since);
+            if (snap.turn == since && !it.value().isUnknown()) {
+                baselines.insert(key);
+            }
+        }
+    }
+    for (auto it = introduced.cbegin(); it != introduced.cend(); ++it) {
+        if (!baselines.contains(it.key())) {
+            cachedSnapshots.clear();
+            cacheValid = true;
+            indexState = IndexState::Invalid;
+            return {};
+        }
+    }
     cachedSnapshots = result;
     cacheValid      = true;
+    indexState      = IndexState::Valid;
     return result;
 }
 
-void QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
+bool QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
 {
-    ensureDirs();
+    if (!storageIsBound()) {
+        return false;
+    }
+    if (indexState == IndexState::Unknown) {
+        (void) loadSnapshots();
+    }
+    if (indexState == IndexState::Invalid) {
+        return false;
+    }
+    if (!ensureDirs()) {
+        return false;
+    }
     const QString path = snapshotsPath();
-    QFile         file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        return;
+    QSaveFile     file(path);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return false;
     }
     for (const Snapshot &snap : snapshots) {
         json doc;
@@ -669,29 +1294,47 @@ void QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
         if (!snap.epoch.tree.isEmpty()) {
             doc["tree"] = snap.epoch.tree.toStdString();
         }
-        doc["gen"]    = snap.epoch.link;
+        if (!snap.epoch.link.isEmpty()) {
+            doc["link"] = snap.epoch.link.toStdString();
+        }
         json filesObj = json::object();
         for (auto it = snap.files.begin(); it != snap.files.end(); ++it) {
+            json record;
+            record["since"] = it.value().introducedTurn();
             if (it.value().isPresent()) {
-                filesObj[it.key().toStdString()] = it.value().sha256().toStdString();
+                record["state"] = it.value().sha256().toStdString();
             } else if (it.value().isAbsent()) {
-                filesObj[it.key().toStdString()] = nullptr;
+                record["state"] = nullptr;
             } else {
-                filesObj[it.key().toStdString()] = "unknown";
+                record["state"] = "unknown";
             }
+            filesObj[it.key().toStdString()] = std::move(record);
         }
-        doc["files"]                 = filesObj;
+        doc["files"]              = filesObj;
+        const std::string payload = doc.dump();
+        doc["seal"]               = sha256Bytes(QByteArray::fromStdString(payload)).toStdString();
         const std::string serialized = doc.dump();
-        file.write(serialized.data(), static_cast<qint64>(serialized.size()));
-        file.write("\n", 1);
+        if (file.write(serialized.data(), static_cast<qint64>(serialized.size()))
+                != static_cast<qint64>(serialized.size())
+            || file.write("\n", 1) != 1) {
+            file.cancelWriting();
+            return false;
+        }
     }
-    file.close();
+    if (!file.commit()) {
+        return false;
+    }
     cachedSnapshots = snapshots;
     cacheValid      = true;
+    indexState      = IndexState::Valid;
+    return true;
 }
 
 void QSocFileHistory::gcOrphanedBackups() const
 {
+    if (!storageIsBound()) {
+        return;
+    }
     /* Collect every sha256 still referenced by a surviving snapshot. */
     const auto    snapshots = loadSnapshots();
     QSet<QString> referenced;
@@ -705,16 +1348,19 @@ void QSocFileHistory::gcOrphanedBackups() const
         }
     }
 
-    const QString backupsDir
-        = QDir(historyDir(projectPathValue, sessionIdValue)).filePath(QStringLiteral("backups"));
-    QDir dir(backupsDir);
+    const QString backupsDir = QDir(historyDir(storageCanonicalRootValue, sessionIdValue))
+                                   .filePath(QStringLiteral("backups"));
+    QDir          dir(backupsDir);
     if (!dir.exists()) {
         return;
     }
     const auto entries = dir.entryInfoList({QStringLiteral("*.bak")}, QDir::Files);
     for (const QFileInfo &entry : entries) {
+        if (entry.isSymLink()) {
+            continue;
+        }
         const QString sha = entry.completeBaseName();
-        if (!referenced.contains(sha)) {
+        if (!referenced.contains(sha) && storageIsBound()) {
             QFile::remove(entry.absoluteFilePath());
         }
     }

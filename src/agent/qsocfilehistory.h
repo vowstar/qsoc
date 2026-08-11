@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <utility>
 
 #include <QDateTime>
@@ -22,58 +23,57 @@
  *   File history is a thin checkpoint layer that sits behind the
  *   `edit_file` and `write_file` tools. Its job is to capture enough
  *   state so that rewinding the conversation to an earlier message can
- *   also restore every file the agent edited, and so that `/diff` can
+ *   also restore every covered file the agent edited, and so that `/diff` can
  *   show what actually changed between any two turns.
  *
  *   Storage layout, rooted at `<projectPath>/.qsoc/file-history/<session-id>/`:
  *
  *     backups/<sha256>.bak   - content-addressed backup blobs (deduped)
- *     snapshots.jsonl        - one line per snapshot, append-only
+ *     snapshots.jsonl        - one sealed line per retained snapshot
  *
  *   Each snapshots.jsonl line is a JSON object of the form
  *
  *     {
  *       "turn": <int>,                  // monotonic turn counter
  *       "ts":   "<iso8601>",             // when the snapshot was captured
- *       "tree": "<id>",                  // working tree it describes, absent = unnamed
- *       "gen":  <uint>,                  // link within that tree, 0 = none
+ *       "tree": "<id>",                  // working tree it describes
+ *       "link": "<opaque-id>",           // transport reaching that tree
  *       "files": {                       // files tracked in this snapshot
- *         "/abs/path/to/apb.yaml": "<sha256>",
- *         "/abs/path/to/new.v":    null,     // file was absent at this turn
- *         "/abs/path/to/quiet.v":  "unknown" // state could not be established
- *       }
+ *         "/abs/path/to/apb.yaml": {"since": 0, "state": "<sha256>"},
+ *         "/abs/path/to/new.v":    {"since": 1, "state": null},
+ *         "/abs/path/to/quiet.v":  {"since": 0, "state": "unknown"}
+ *       },
+ *       "seal": "<sha256-of-the-other-fields>"
  *     }
  *
- *   A file value is classified by JSON type and shape, not by a version
- *   field: null is absent, a 64-character lowercase hex string is present,
- *   and anything else (including a torn value) is unknown. A line with no
- *   `"tree"` names no tree: it still loads, and it applies to the local disk,
- *   where the absolute paths of a session written before the field existed
- *   point. It never applies to a workspace reached over a link, which it was
- *   never shown to have been captured on.
+ *   `since` is the last completed turn before the file's first mutation. The
+ *   record at that turn is its durable baseline. Missing or inconsistent
+ *   provenance invalidates the index. Unsealed legacy lines load only as
+ *   untrusted unknown records and can never mutate a working tree.
  *
- *   **Snapshot indexing**: turn 0 is the "baseline" snapshot that captures
- *   the pre-edit state of each tracked file at its first mutation. Turn N
- *   (for N >= 1) is the state *after* the N-th user turn completes (all
- *   tool calls done). Rewinding to user message K means applying snapshot
- *   (K - 1), which is the state right before K's effects.
+ *   **Snapshot indexing**: turn N is the state after the N-th user turn
+ *   completes. A path first edited after turn N stores its pre-edit baseline
+ *   in that checkpoint; turn 0 therefore contains only paths edited before the
+ *   first turn completes. Rewinding to user message K applies snapshot K - 1,
+ *   the state immediately before that message's effects.
  *
- *   **LRU eviction**: snapshots older than MAX_SNAPSHOTS are dropped from
- *   both snapshots.jsonl and any backup blobs they uniquely reference. The
- *   baseline turn 0 is sticky and never evicted while any later snapshot
- *   survives, so rewinding to the very first turn always works.
+ *   **Oldest-turn eviction**: at most MAX_SNAPSHOTS checkpoints survive. When an
+ *   introduction checkpoint is evicted, the earliest retained known state
+ *   becomes that path's new baseline; a path with no retained known state is
+ *   forgotten. Backup blobs referenced only by evicted state are removed.
  *
- *   **Lazy tracking**: only files that the agent has actually written are
- *   ever backed up or snapshotted. Untouched project files are left alone
- *   by every rewind / apply operation. The tracked set is per tree: a path
- *   edited on one tree is not read on another, where the same absolute path
- *   names a different file or nothing at all.
+ *   **Lazy tracking**: only files that the agent has actually written inside
+ *   the bound project or remote workspace are backed up or snapshotted.
+ *   Writes to other allowed local roots continue without a file checkpoint.
+ *   Untouched and uncovered files are left alone by every rewind / apply
+ *   operation. The tracked set is per tree: a path edited on one tree is not
+ *   read on another, where the same absolute path names a different file or
+ *   nothing at all.
  *
- *   **Epochs**: every record carries the epoch it was captured under, a tree
- *   name plus a link number. Records from another tree are dropped when the
- *   effective state is flattened, so a path falls back to its most recent
- *   record on the bound tree; a turn that ran elsewhere cannot have changed
- *   this tree's files, so that record is still the truth about it.
+ *   **Epochs**: every record carries the tree and opaque transport identity
+ *   under which it was captured. Restore uses an exact checkpoint from the
+ *   live epoch when one exists. Missing identities and omitted paths are never
+ *   inferred from older records.
  */
 class QSocFileHistory
 {
@@ -134,15 +134,14 @@ public:
      *          workspace on one host. Absolute paths only mean the same thing
      *          inside one of them. @ref link names the connection reaching
      *          that tree, so a reconnect to the same workspace keeps the tree
-     *          and changes the link. An empty tree names nothing and a link of
-     *          0 numbers nothing; both are what a snapshot written before the
-     *          fields existed reads as. An empty tree is not a wildcard: it is
-     *          an unproven origin, actionable only on the local disk.
+     *          and changes the link. Empty identities are what snapshots
+     *          written before the fields existed read as. They are not
+     *          wildcards and are never actionable.
      */
     struct Epoch
     {
-        QString tree;     /**< Working-tree identity; empty when unnamed. */
-        quint64 link = 0; /**< Connection within that tree; 0 when unnumbered. */
+        QString tree; /**< Working-tree identity; empty when unproven. */
+        QString link; /**< Transport identity; empty when unproven. */
 
         friend bool operator==(const Epoch &lhs, const Epoch &rhs)
         {
@@ -190,21 +189,21 @@ public:
         FileRecord() = default;
 
         /** @brief State could not be established at capture time. */
-        static FileRecord unknown(Epoch epoch)
+        static FileRecord unknown(Epoch epoch, int introducedTurn = 0)
         {
-            return FileRecord(FileState::Unknown, QString(), std::move(epoch));
+            return FileRecord(FileState::Unknown, QString(), std::move(epoch), introducedTurn);
         }
 
         /** @brief The file was not there at capture time. */
-        static FileRecord absent(Epoch epoch)
+        static FileRecord absent(Epoch epoch, int introducedTurn = 0)
         {
-            return FileRecord(FileState::Absent, QString(), std::move(epoch));
+            return FileRecord(FileState::Absent, QString(), std::move(epoch), introducedTurn);
         }
 
         /** @brief The file held the content behind @p sha256. */
-        static FileRecord present(QString sha256, Epoch epoch)
+        static FileRecord present(QString sha256, Epoch epoch, int introducedTurn = 0)
         {
-            return FileRecord(FileState::Present, std::move(sha256), std::move(epoch));
+            return FileRecord(FileState::Present, std::move(sha256), std::move(epoch), introducedTurn);
         }
 
         bool isUnknown() const { return stateValue == FileState::Unknown; }
@@ -217,16 +216,21 @@ public:
         /** @brief Tree and link this record was captured under. */
         const Epoch &epoch() const { return epochValue; }
 
+        /** @brief Last completed turn before this path was first tracked. */
+        int introducedTurn() const { return introducedTurnValue; }
+
     private:
-        FileRecord(FileState state, QString sha256, Epoch epoch)
+        FileRecord(FileState state, QString sha256, Epoch epoch, int introducedTurn)
             : stateValue(state)
             , shaValue(std::move(sha256))
             , epochValue(std::move(epoch))
+            , introducedTurnValue(introducedTurn)
         {}
 
         FileState stateValue = FileState::Unknown;
         QString   shaValue;
         Epoch     epochValue;
+        int       introducedTurnValue = 0;
     };
 
     /**
@@ -263,12 +267,17 @@ public:
      *          never deletes.
      *
      *          `tree` names the file namespace these paths live in and
-     *          `generation` the connection reaching it, so a capture or a
+     *          `generation` the opaque connection reaching it, so a capture or a
      *          restore can tell that the tree it started on is not the tree it
-     *          is finishing on. A backend that names no tree is treated as one
-     *          unnamed tree: its own records stay actionable, but two such
-     *          backends are indistinguishable, so name the tree to be fenced
-     *          apart from another one.
+     *          is finishing on. A backend that names no tree is unproven and
+     *          never actionable. Every backend
+     *          must provide both identities; local disk uses a stable identity
+     *          derived from the canonical project root.
+     *
+     *          `inScope` is the stable checkpoint policy. `coversPath` is the
+     *          live safety fact: a replaced root remains in scope but is no
+     *          longer covered, so the operation must fail instead of silently
+     *          proceeding without history.
      */
     struct LiveFileAccessor
     {
@@ -276,12 +285,17 @@ public:
         std::function<LiveRead(const QString &path)>                     read;
         std::function<bool(const QString &path, const QString &content)> write;
         std::function<bool(const QString &path)>                         remove;
+        std::function<bool(const QString &path)>                         inScope;
+        std::function<bool(const QString &path)>                         coversPath;
         std::function<QString()>                                         tree;
-        std::function<quint64()>                                         generation;
+        std::function<QString()>                                         generation;
     };
 
+    using WritableEntryResolver = std::function<bool(const QString &, QString *)>;
+
     /** @brief Local-disk accessor (the default backend). */
-    static LiveFileAccessor localAccessor();
+    static LiveFileAccessor localAccessor(
+        const QString &projectRoot = QString(), WritableEntryResolver resolver = {});
 
     /**
      * @brief Outcome of putting a snapshot back on the working tree.
@@ -294,17 +308,23 @@ public:
      *          `unknown` is not a flavour of `failed`: "I did not try"
      *          leaves the working tree exactly as the user left it, while
      *          "I tried and it did not happen" may have left it half
-     *          written. isEmpty() deliberately ignores transportChanged so
-     *          callers that test it keep their existing meaning.
+     *          written. A missing target snapshot is also explicit: an older
+     *          state must not masquerade as the requested turn.
      */
     struct RestoreReport
     {
-        QStringList restored;                 /**< Paths whose content was put back. */
-        QStringList failed;                   /**< Paths that could not be put back. */
-        QStringList unknown;                  /**< Paths deliberately left untouched. */
-        bool        transportChanged = false; /**< The link changed mid-restore. */
+        QStringList restored;                      /**< Paths whose content was put back. */
+        QStringList failed;                        /**< Paths that could not be put back. */
+        QStringList unknown;                       /**< Paths deliberately left untouched. */
+        bool        transportChanged      = false; /**< The link changed mid-restore. */
+        bool        targetMissing         = false; /**< The requested checkpoint is absent. */
+        bool        historyTruncateFailed = false; /**< Forward checkpoints remain. */
 
-        bool isEmpty() const { return restored.isEmpty() && failed.isEmpty() && unknown.isEmpty(); }
+        bool isEmpty() const
+        {
+            return restored.isEmpty() && failed.isEmpty() && unknown.isEmpty() && !targetMissing
+                   && !historyTruncateFailed;
+        }
     };
 
     /**
@@ -350,25 +370,31 @@ public:
      */
     void setLiveAccessor(LiveFileAccessor accessor);
 
-    /**
-     * @brief Snapshot cap. Older turns are evicted LRU-style.
-     */
+    /** @brief Whether policy assigns @p filePath to this history store. */
+    bool isPathInScope(const QString &filePath) const;
+
+    /** @brief Whether the live binding can safely reach @p filePath now. */
+    bool coversPath(const QString &filePath) const;
+
+    /** @brief Snapshot cap. Oldest checkpoints are evicted first. */
     static constexpr int MAX_SNAPSHOTS = 100;
 
     /**
      * @brief Record the pre-mutation state of a file before a tool edits it.
      * @details Called by edit_file / write_file immediately before their
-     *          write() happens. The first call for a given file within a
-     *          session captures the baseline version of that file (turn 0).
-     *          Subsequent calls are no-ops once the file is already tracked
-     *          — each turn's post-state is captured in makeSnapshot(), not
-     *          here.
+     *          write() happens. The first call for a given file captures its
+     *          state at the latest completed turn. Subsequent calls are no-ops
+     *          once the file is already tracked; each turn's post-state is
+     *          captured in makeSnapshot(), not here. Uncovered paths return
+     *          false and must be skipped by callers that intentionally permit
+     *          writes outside the checkpoint scope.
      * @param filePath     Absolute path to the file being edited.
      * @param beforeExists true if the file existed on disk before the edit.
      * @param beforeContent Raw content at the time of the call. Ignored when
      *                     beforeExists is false.
+     * @return true only after the baseline index and any blob are durable.
      */
-    void trackEdit(const QString &filePath, bool beforeExists, const QString &beforeContent);
+    bool trackEdit(const QString &filePath, bool beforeExists, const QString &beforeContent);
 
     /**
      * @brief Capture the post-turn state of every tracked file.
@@ -394,13 +420,12 @@ public:
      *            - an absent record unlinks the file, but only once the
      *              accessor confirms it is there;
      *            - a present record overwrites the file from its backup blob.
-     *          Files that appear in LATER snapshots but not in the target
-     *          are also restored: we look back through history to find the
-     *          most recent prior state for them and apply it. Files that
-     *          the agent never touched are not modified.
-     *          Records captured on another tree are dropped before any of
-     *          this, so a path falls back to its most recent record on the
-     *          bound tree and a path with no such record is left alone.
+     *          The target turn must contain an exact checkpoint for the live
+     *          tree. Without one the restore is a no-op reported as missing;
+     *          an older state cannot stand in for a turn recorded elsewhere.
+     *          A tracked path omitted by the exact checkpoint is unknown and
+     *          is never filled from an older turn. Files the agent never
+     *          touched are not modified.
      * @param turn Target snapshot index.
      * @param across Whether to act on records captured over a link that has
      *               since been replaced. An unknown record is never
@@ -410,6 +435,12 @@ public:
      * @return What was put back, what could not be, and what was skipped.
      */
     RestoreReport applySnapshot(int turn, AcrossGeneration across = AcrossGeneration::Refuse);
+
+    /**
+     * @brief Prove a target checkpoint can be read before any rewind mutation.
+     * @return Empty when usable, otherwise a user-facing refusal reason.
+     */
+    QString restoreRefusal(int turn) const;
 
     /**
      * @brief What @ref applySnapshot would refuse to act on at @p turn.
@@ -428,7 +459,7 @@ public:
      *          garbage-collected.
      * @param cutoffTurn Keep snapshots with turn <= cutoffTurn.
      */
-    void truncateAfter(int cutoffTurn);
+    bool truncateAfter(int cutoffTurn);
 
     /**
      * @brief Load the complete snapshot index from disk.
@@ -457,6 +488,9 @@ public:
      */
     bool isEmpty() const;
 
+    /** @brief Whether the local checkpoint store is still bound to its project tree. */
+    bool storageIsBound() const;
+
     /**
      * @brief Return the content-addressed backup path for a given sha256.
      * @details Public for tests; callers should not rely on the layout.
@@ -482,26 +516,29 @@ public:
     static QString sha256Hex(const QString &content);
 
 private:
-    QString          projectPathValue;
-    QString          sessionIdValue;
+    QString projectPathValue;
+    QString sessionIdValue;
+    QString storageCanonicalRootValue;
+    QString storageTreeIdValue;
+    QString storageLexicalRootValue;
+
     LiveFileAccessor liveAccessor;
-    /* Files touched at least once this session, keyed by the tree they were
-     * touched on, so subsequent snapshots capture their post-turn state even
-     * when the file wasn't re-edited in that turn, and so a turn on one tree
-     * never reads a path that only exists on another. The empty key holds
-     * paths from snapshots that name no tree; those are read on the local disk
-     * only, the same tree their records may be acted on. */
-    QHash<QString, QSet<QString>> trackedFiles;
     /* Snapshots loaded lazily on first access; mutations to disk keep this
      * in sync so callers don't pay for repeated reads. */
     mutable QList<Snapshot> cachedSnapshots;
     mutable bool            cacheValid = false;
+    enum class IndexState : std::uint8_t {
+        Unknown,
+        Valid,
+        Invalid,
+    };
+    mutable IndexState indexState = IndexState::Unknown;
 
-    void            ensureDirs() const;
-    void            writeBackup(const QString &sha256, const QString &content) const;
-    QString         readBackup(const QString &sha256) const;
-    QList<Snapshot> loadSnapshots() const;
-    void            saveSnapshots(const QList<Snapshot> &snapshots) const;
+    bool                   ensureDirs() const;
+    bool                   writeBackup(const QString &sha256, const QString &content) const;
+    std::optional<QString> readBackup(const QString &sha256) const;
+    QList<Snapshot>        loadSnapshots() const;
+    bool                   saveSnapshots(const QList<Snapshot> &snapshots) const;
     /* Walk every surviving snapshot, collect referenced sha256 set, and
      * delete any .bak blob that is no longer referenced. */
     void gcOrphanedBackups() const;
@@ -509,12 +546,17 @@ private:
      * snapshots with turn <= N and keeping the latest record per path. A
      * non-empty live.tree drops every record from another tree first. */
     QMap<QString, FileRecord> effectiveStateAt(int turn, const Epoch &live) const;
-    /* Paths to snapshot on the given tree: the ones tracked there, plus, on the
-     * local disk only, the ones from snapshots that name no tree. */
-    QSet<QString> trackedPathsFor(const QString &tree) const;
+    /* Exact checkpoint records plus fail-closed unknowns for tracked paths
+     * the checkpoint does not name. */
+    QMap<QString, FileRecord> restoreStateAt(
+        int turn, const Epoch &live, bool *targetExists, bool *targetComplete = nullptr) const;
+    /* Paths captured in the exact epoch. Empty identities never promote old
+     * records into the live namespace. */
+    QSet<QString> trackedPathsFor(const Epoch &epoch, int atTurn) const;
+    int           introducedTurnFor(const Epoch &epoch, const QString &path) const;
     /* Single sampling point for every epoch check, so the straddle guard, the
      * scoping and the per-record boundary guard can never disagree about what
-     * is bound. Never returns an empty tree: an unnamed backend is one tree. */
+     * is bound. Empty identities remain empty and fail closed. */
     Epoch liveEpoch() const;
 };
 

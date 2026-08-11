@@ -250,6 +250,53 @@ private slots:
         QCOMPARE(builds, 2);
     }
 
+    void transportLinksDoNotCollideAcrossConnectionObjects()
+    {
+        QObject              scratch;
+        QSocRemoteConnection first;
+        QSocRemoteConnection second;
+        QVERIFY(
+            first.adopt(fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"))));
+        QVERIFY(
+            second.adopt(fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"))));
+
+        QCOMPARE(first.generation(), QSocRemoteConnection::Generation{1});
+        QCOMPARE(second.generation(), QSocRemoteConnection::Generation{1});
+        QVERIFY(!first.transportLink().isEmpty());
+        QVERIFY(!second.transportLink().isEmpty());
+        QVERIFY(first.transportLink() != second.transportLink());
+
+        const QString before = first.transportLink();
+        first.teardown();
+        QVERIFY(
+            first.adopt(fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"))));
+        QVERIFY(first.transportLink() != before);
+    }
+
+    void oneAliasOnDifferentEndpointsNamesDifferentTrees()
+    {
+        QObject              scratch;
+        QSocRemoteConnection first;
+        QSocRemoteConnection second;
+        const QString        target    = QStringLiteral("u@alias:22");
+        const QString        workspace = QStringLiteral("/w");
+        QVERIFY(first.adopt(
+            fakeTransport(&scratch, target, workspace, QStringLiteral("u:host-key-a"))));
+        QVERIFY(second.adopt(
+            fakeTransport(&scratch, target, workspace, QStringLiteral("u:host-key-b"))));
+
+        const auto firstFiles  = remoteLiveFileAccessor(&first);
+        const auto secondFiles = remoteLiveFileAccessor(&second);
+        QVERIFY(!firstFiles.tree().isEmpty());
+        QVERIFY(!secondFiles.tree().isEmpty());
+        QVERIFY(firstFiles.tree() != secondFiles.tree());
+        QCOMPARE(
+            QSocFileHistory::relate(
+                {firstFiles.tree(), firstFiles.generation()},
+                {secondFiles.tree(), secondFiles.generation()}),
+            QSocFileHistory::EpochRelation::OtherTree);
+    }
+
     /* An attempt that produced nothing bound nothing, so the counter must not
      * move: a holder from before the attempt is still current. */
     void aFailedReconnectDoesNotBumpGeneration()

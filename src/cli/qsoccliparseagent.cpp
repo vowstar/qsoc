@@ -3059,40 +3059,50 @@ bool QSocCliWorker::runAgentLoop(
      * snapshot/restore reads and writes follow the active transport, so a
      * rewind in remote mode restores the remote working tree over SFTP
      * instead of touching a stale local path. */
-    auto wireRemoteFileHistory = [&currentFileHistory, remoteConn](QSocToolRegistry *reg) {
-        if (currentFileHistory) {
-            auto accessor = remoteLiveFileAccessor(remoteConn);
-            /* The accessor knows which connection is bound; only this call site
-             * knows which tree that connection reaches. Naming it is what stops
-             * a rewind from acting on a local path recorded before /ssh, where
-             * the same absolute path names a different file or none at all.
-             * 0x1F separates the two names so no target and workspace pair can
-             * spell another pair's identity. */
-            accessor.tree = [remoteConn]() -> QString {
-                if (remoteConn == nullptr) {
-                    return QString();
-                }
-                return QStringLiteral("ssh:") + remoteConn->target() + QChar(0x1F)
-                       + remoteConn->workspace();
+    const auto makeLocalFileAccessor = [this, pathContext]() {
+        QSocFileHistory::WritableEntryResolver resolver;
+        if (pathContext != nullptr) {
+            resolver = [pathContext](const QString &path, QString *entry) {
+                return pathContext->resolveWritableEntry(path, entry);
             };
-            currentFileHistory->setLiveAccessor(accessor);
         }
-        if (reg == nullptr) {
+        return QSocFileHistory::localAccessor(sessionProjectPath(projectManager), std::move(resolver));
+    };
+    auto bindFileHistoryTools = [&currentFileHistory](QSocToolRegistry *registry) {
+        if (registry == nullptr) {
             return;
         }
+        if (auto *writeTool = dynamic_cast<QSocToolFileWrite *>(
+                registry->getTool(QStringLiteral("write_file")))) {
+            writeTool->setFileHistory(currentFileHistory.get());
+        }
+        if (auto *editTool = dynamic_cast<QSocToolFileEdit *>(
+                registry->getTool(QStringLiteral("edit_file")))) {
+            editTool->setFileHistory(currentFileHistory.get());
+        }
         if (auto *writeTool = dynamic_cast<QSocToolRemoteFileWrite *>(
-                reg->getTool(QStringLiteral("write_file")))) {
+                registry->getTool(QStringLiteral("write_file")))) {
             writeTool->setFileHistory(currentFileHistory.get());
         }
         if (auto *editTool = dynamic_cast<QSocToolRemoteFileEdit *>(
-                reg->getTool(QStringLiteral("edit_file")))) {
+                registry->getTool(QStringLiteral("edit_file")))) {
             editTool->setFileHistory(currentFileHistory.get());
         }
     };
-    auto restoreLocalFileHistory = [&currentFileHistory]() {
+    auto wireRemoteFileHistory = [&](QSocToolRegistry *registry) {
         if (currentFileHistory) {
-            currentFileHistory->setLiveAccessor(QSocFileHistory::localAccessor());
+            auto accessor = remoteLiveFileAccessor(remoteConn);
+            currentFileHistory->setLiveAccessor(accessor);
         }
+        bindFileHistoryTools(localRegistry);
+        bindFileHistoryTools(registry);
+    };
+    auto restoreLocalFileHistory = [&]() {
+        if (currentFileHistory) {
+            currentFileHistory->setLiveAccessor(makeLocalFileAccessor());
+        }
+        bindFileHistoryTools(localRegistry);
+        bindFileHistoryTools(remoteRegistry);
     };
     json       persistedMessages            = json::array();
     int        lastPersistedIndex           = 0;
@@ -3140,16 +3150,11 @@ bool QSocCliWorker::runAgentLoop(
      * in parseAgent() long before runAgentLoop runs, so we fish tools out by
      * name. Called any time currentFileHistory is rebound. */
     auto wireFileHistoryTools = [&]() {
-        if (auto *registry = agent->getToolRegistry()) {
-            if (auto *tool = dynamic_cast<QSocToolFileWrite *>(
-                    registry->getTool(QStringLiteral("write_file")))) {
-                tool->setFileHistory(currentFileHistory.get());
-            }
-            if (auto *tool = dynamic_cast<QSocToolFileEdit *>(
-                    registry->getTool(QStringLiteral("edit_file")))) {
-                tool->setFileHistory(currentFileHistory.get());
-            }
+        if (currentFileHistory) {
+            currentFileHistory->setLiveAccessor(makeLocalFileAccessor());
         }
+        bindFileHistoryTools(localRegistry);
+        bindFileHistoryTools(remoteRegistry);
     };
 
     /* Checkpoint one turn and tell the user what the checkpoint does not
@@ -3159,7 +3164,7 @@ bool QSocCliWorker::runAgentLoop(
         if (!currentFileHistory || turn <= 0) {
             return;
         }
-        currentFileHistory->makeSnapshot(turn);
+        const bool  complete = currentFileHistory->makeSnapshot(turn);
         QStringList unreadable;
         for (const auto &snap : currentFileHistory->listSnapshots()) {
             if (snap.turn != turn) {
@@ -3171,7 +3176,13 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
         }
+        if (complete && unreadable.isEmpty()) {
+            return;
+        }
         if (unreadable.isEmpty()) {
+            compositor.printContent(
+                QString("(Checkpoint #%1 could not be saved; file rewind to it is disabled)\n")
+                    .arg(turn));
             return;
         }
         compositor.printContent(
@@ -5239,10 +5250,9 @@ bool QSocCliWorker::runAgentLoop(
                          * the live input untouched. */
                         inputMonitor.setInputBuffer(pick.content);
                     }
-                    /* The forward snapshots a retry restores from survive a
-                     * transport change, and so must the counter that names
-                     * them. */
-                    if (restoreConversation && restoreFiles && !result.files.transportChanged) {
+                    /* A partial rewind keeps forward checkpoints, so only a
+                     * complete rewind may move their turn-number high-water. */
+                    if (qsocRewindMovesTurnCounter(request, result)) {
                         turnCounter = request.targetSnapshot;
                     }
                     if (!boundaryNotice.isEmpty()) {

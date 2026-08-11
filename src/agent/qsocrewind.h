@@ -55,6 +55,14 @@ struct QSocRewindResult
     QSocFileHistory::RestoreReport files; /**< Per-path restore outcome. */
 };
 
+/** Whether a rewind completed enough state to move the live turn counter. */
+inline bool qsocRewindMovesTurnCounter(
+    const QSocRewindRequest &request, const QSocRewindResult &result)
+{
+    return request.restoreConversation && request.restoreFiles
+           && result.outcome == QSocRewindResult::Outcome::Done;
+}
+
 /**
  * @brief Asks the workspace whether a file restore may proceed.
  * @details Returns an empty string to allow the rewind, or a user-facing

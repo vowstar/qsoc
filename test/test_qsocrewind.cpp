@@ -39,6 +39,7 @@ public:
     quint64                 gen         = 1;
     int                     bumpOnWrite = 0;
     int                     writeCalls  = 0;
+    bool                    covered     = true;
 
     QSocFileHistory::LiveFileAccessor accessor()
     {
@@ -74,7 +75,10 @@ public:
             files.remove(path);
             return true;
         };
-        acc.generation = [this]() { return gen; };
+        acc.inScope    = [](const QString &) { return true; };
+        acc.coversPath = [this](const QString &) { return covered; };
+        acc.tree       = []() { return QStringLiteral("fake-tree"); };
+        acc.generation = [this]() { return QString::number(gen); };
         return acc;
     }
 };
@@ -191,7 +195,7 @@ private slots:
         tree.files.insert(kPathA, QStringLiteral("turn1 A"));
         tree.files.insert(kPathB, QStringLiteral("turn1 B"));
         tree.unreadable.insert(kPathC);
-        QVERIFY(history->makeSnapshot(1));
+        QVERIFY(!history->makeSnapshot(1));
         tree.unreadable.remove(kPathC);
 
         /* Turn 2: the future a full rewind orphans. */
@@ -242,6 +246,39 @@ private slots:
                 "changed.)\n"));
     }
 
+    void fullRewindWithoutFileHistoryRefusesBeforeMutation()
+    {
+        const QString beforeSession = readAll(session->filePath());
+        const auto    beforeTree    = tree.files;
+        const int     beforeHigh    = snapshotHighWater();
+
+        const QSocRewindResult result
+            = qsocApplyRewind(fullRewind(), session.get(), nullptr, QSocRewindFileGate());
+
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Refused);
+        QVERIFY(result.refusal.contains(QStringLiteral("file history")));
+        QCOMPARE(readAll(session->filePath()), beforeSession);
+        QCOMPARE(tree.files, beforeTree);
+        QCOMPARE(tree.writeCalls, 0);
+        QCOMPARE(snapshotHighWater(), beforeHigh);
+    }
+
+    void uncoveredCheckpointRefusesBeforeConversationRewrite()
+    {
+        const QString beforeSession = readAll(session->filePath());
+        const auto    beforeTree    = tree.files;
+        tree.covered                = false;
+
+        const QSocRewindResult result
+            = qsocApplyRewind(fullRewind(), session.get(), history.get(), QSocRewindFileGate());
+
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Refused);
+        QVERIFY(result.refusal.contains(QStringLiteral("working tree")));
+        QCOMPARE(readAll(session->filePath()), beforeSession);
+        QCOMPARE(tree.files, beforeTree);
+        QCOMPARE(tree.writeCalls, 0);
+    }
+
     /* SPECIFICATION test, not a counterexample: the function under test is
      * new. rewriteMessages is QSaveFile-backed, so a write that fails leaves
      * the session byte-identical, which is what makes it the last step
@@ -289,6 +326,7 @@ private slots:
             = qsocApplyRewind(fullRewind(), session.get(), history.get(), QSocRewindFileGate());
 
         QCOMPARE(result.outcome, QSocRewindResult::Outcome::Partial);
+        QVERIFY(!qsocRewindMovesTurnCounter(fullRewind(), result));
         QCOMPARE(result.files.restored, QStringList{kPathA});
         QCOMPARE(result.files.failed, QStringList{kPathB});
         QCOMPARE(result.files.unknown, QStringList{kPathC});
@@ -311,10 +349,10 @@ private slots:
     /* SPECIFICATION test, not a counterexample: the function under test is
      * new. A full rewind commits every step: the conversation shrinks, the
      * original creation timestamp survives the rewrite, the tree goes back,
-     * and the orphaned future snapshots are dropped while the target stays
-     * readable. A path left alone for unknown state is a partial rewind: it
-     * did not move, and the label has to match the list underneath it. */
-    void fullRewindTruncatesForwardSnapshotsAndKeepsTheTargetReachable()
+     * and the target stays readable. A path left alone for unknown state is a
+     * partial rewind, so forward checkpoints remain available for diagnosis
+     * or retry and the label matches the list underneath it. */
+    void partialRewindKeepsForwardSnapshotsAndTheTargetReachable()
     {
         const QSocRewindResult result
             = qsocApplyRewind(fullRewind(), session.get(), history.get(), QSocRewindFileGate());
@@ -325,7 +363,7 @@ private slots:
         QCOMPARE(QSocSession::readInfo(session->filePath()).createdAt, createdAt);
         QCOMPARE(tree.files.value(kPathA), QStringLiteral("turn1 A"));
         QCOMPARE(tree.files.value(kPathB), QStringLiteral("turn1 B"));
-        QCOMPARE(snapshotHighWater(), 1);
+        QCOMPARE(snapshotHighWater(), 2);
         QCOMPARE(history->contentAt(kPathA, 1), QStringLiteral("turn1 A"));
         QCOMPARE(
             qsocRewindReport(fullRewind(), result),
@@ -350,6 +388,7 @@ private slots:
             = qsocApplyRewind(request, session.get(), history.get(), QSocRewindFileGate());
 
         QCOMPARE(result.outcome, QSocRewindResult::Outcome::Done);
+        QVERIFY(qsocRewindMovesTurnCounter(request, result));
         QVERIFY(result.files.unknown.isEmpty());
         QVERIFY(result.files.failed.isEmpty());
         QCOMPARE(result.files.restored.size(), 3);
@@ -417,6 +456,95 @@ private slots:
             report.contains(QStringLiteral("the checkpoints a retry needs were kept")),
             qPrintable(report));
         QVERIFY2(report.contains(kPathB), qPrintable(report));
+    }
+
+    void anExactLinkCheckpointCannotHideAnotherLinksPath()
+    {
+        const QString splitId = QStringLiteral("rewind-cross-link");
+        QSocSession   splitSession(
+            splitId,
+            QDir(QSocSession::sessionsDir(dir->path())).filePath(splitId + QStringLiteral(".jsonl")));
+        QVERIFY(splitSession.appendMessage(userMessage(QStringLiteral("keep"))));
+
+        FakeTree        splitTree;
+        QSocFileHistory splitHistory(dir->path(), splitId);
+        splitHistory.setLiveAccessor(splitTree.accessor());
+        splitTree.files.insert(kPathA, QStringLiteral("a0"));
+        QVERIFY(splitHistory.trackEdit(kPathA, true, QStringLiteral("a0")));
+        splitTree.files.insert(kPathA, QStringLiteral("a1"));
+        QVERIFY(splitHistory.makeSnapshot(1));
+
+        splitTree.gen = 2;
+        splitTree.files.insert(kPathB, QStringLiteral("b0"));
+        QVERIFY(splitHistory.trackEdit(kPathB, true, QStringLiteral("b0")));
+        splitTree.files.insert(kPathB, QStringLiteral("b1"));
+        QVERIFY(splitHistory.makeSnapshot(2));
+        QVERIFY(splitHistory.trackEdit(kPathA, true, QStringLiteral("a1")));
+        splitTree.files.insert(kPathA, QStringLiteral("a2"));
+        QVERIFY(splitHistory.makeSnapshot(3));
+
+        QSocRewindRequest request;
+        request.restoreConversation = true;
+        request.restoreFiles        = true;
+        request.targetSnapshot      = 1;
+        request.keptMessages        = json::array({userMessage(QStringLiteral("keep"))});
+        const QSocRewindResult result
+            = qsocApplyRewind(request, &splitSession, &splitHistory, QSocRewindFileGate());
+
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Partial);
+        QCOMPARE(result.files.unknown, QStringList{kPathA});
+        QCOMPARE(splitTree.files.value(kPathA), QStringLiteral("a2"));
+        QCOMPARE(splitTree.files.value(kPathB), QStringLiteral("b0"));
+        int latest = 0;
+        for (const auto &snapshot : splitHistory.listSnapshots()) {
+            latest = qMax(latest, snapshot.turn);
+        }
+        QCOMPARE(latest, 3);
+    }
+
+    void missingCheckpointRefusesBeforeConversationRewrite()
+    {
+        QVERIFY(history->truncateAfter(0));
+        const QString beforeSession = readAll(session->filePath());
+        const auto    beforeTree    = tree.files;
+
+        const QSocRewindResult result
+            = qsocApplyRewind(fullRewind(), session.get(), history.get(), QSocRewindFileGate());
+
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Refused);
+        QCOMPARE(readAll(session->filePath()), beforeSession);
+        QCOMPARE(tree.files, beforeTree);
+        QVERIFY(result.refusal.contains(QStringLiteral("checkpoint")));
+    }
+
+    void failedCheckpointTruncationIsPartialAndKeepsTheFuture()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("directory write permissions are not deterministic on Windows");
+#else
+        tree.files.insert(kPathA, QStringLiteral("turn3 A"));
+        tree.files.insert(kPathB, QStringLiteral("turn3 B"));
+        tree.files.insert(kPathC, QStringLiteral("turn3 C"));
+        QVERIFY(history->makeSnapshot(3));
+
+        QSocRewindRequest request = fullRewind();
+        request.targetSnapshot    = 2;
+        const QString root
+            = QSocFileHistory::historyDir(dir->path(), QStringLiteral("rewind-fixture"));
+        const auto oldPermissions = QFileInfo(root).permissions();
+        QVERIFY(QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        const auto restorePermissions = qScopeGuard(
+            [&] { (void) QFile::setPermissions(root, oldPermissions); });
+
+        const QSocRewindResult result
+            = qsocApplyRewind(request, session.get(), history.get(), QSocRewindFileGate());
+
+        QCOMPARE(result.outcome, QSocRewindResult::Outcome::Partial);
+        QVERIFY(result.files.historyTruncateFailed);
+        QCOMPARE(snapshotHighWater(), 3);
+        const QString report = qsocRewindReport(request, result);
+        QVERIFY(report.contains(QStringLiteral("forward checkpoints NOT discarded")));
+#endif
     }
 };
 

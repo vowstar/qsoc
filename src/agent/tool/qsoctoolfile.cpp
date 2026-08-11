@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QTextStream>
 
 /* QSocToolFileRead Implementation */
@@ -133,6 +134,10 @@ QString QSocToolFileRead::execute(const json &arguments)
             const QString    detected = QSocImageAttach::detectMimeByMagic(head);
             if (!detected.isEmpty()) {
                 const QByteArray body = probe.readAll();
+                if (probe.error() != QFileDevice::NoError) {
+                    probe.close();
+                    return QString("Error: Cannot read file completely: %1").arg(filePath);
+                }
                 probe.close();
                 return QSocImageAttach::buildAttachmentResult(filePath, detected, body, llmService);
             }
@@ -168,8 +173,12 @@ QString QSocToolFileRead::execute(const json &arguments)
         in.readLine();
         truncatedLines++;
     }
-
+    const bool readComplete = in.status() == QTextStream::Ok
+                              && file.error() == QFileDevice::NoError;
     file.close();
+    if (!readComplete) {
+        return QString("Error: Cannot read file completely: %1").arg(filePath);
+    }
 
     /* Record a full read so edit_file / write_file can enforce
      * read-before-edit and detect on-disk changes. Hash the whole file the
@@ -177,11 +186,17 @@ QString QSocToolFileRead::execute(const json &arguments)
      * because the agent has not seen the entire file. */
     if (pathContext && offset == 0 && truncatedLines == 0) {
         QFile whole(filePath);
-        if (whole.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream wholeStream(&whole);
-            pathContext->readState().recordRead(filePath, wholeStream.readAll());
-            whole.close();
+        if (!whole.open(QIODevice::ReadOnly)) {
+            return QString("Error: Cannot reopen file to record its content: %1").arg(filePath);
         }
+        const QByteArray bytes    = whole.readAll();
+        const bool       complete = whole.error() == QFileDevice::NoError;
+        whole.close();
+        if (!complete) {
+            return QString("Error: Cannot read file completely: %1").arg(filePath);
+        }
+        pathContext->readState()
+            .recordRead(filePath, QString::fromUtf8(bytes.constData(), bytes.size()));
     }
 
     if (result.isEmpty()) {
@@ -414,22 +429,27 @@ QString QSocToolFileWrite::execute(const json &arguments)
     /* Read-before-overwrite + stale guard for EXISTING files: write_file
      * replaces the whole file, so it must not clobber content the agent
      * never read or a concurrent change. New files need no prior read. */
-    if (pathContext && fileInfo.exists() && fileInfo.isFile()) {
-        QString existingContent;
-        QFile   cur(filePath);
-        if (!cur.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    const bool existedBefore = fileInfo.exists() && fileInfo.isFile();
+    QString    beforeContent;
+    if (existedBefore) {
+        QFile cur(filePath);
+        if (!cur.open(QIODevice::ReadOnly)) {
             return QString("Error: Cannot open file to verify before overwrite: %1").arg(filePath);
         }
-        QTextStream curStream(&cur);
-        existingContent = curStream.readAll();
+        const QByteArray bytes    = cur.readAll();
+        const bool       complete = cur.error() == QFileDevice::NoError;
         cur.close();
-        if (!pathContext->readState().wasRead(filePath)) {
+        if (!complete) {
+            return QString("Error: Cannot read file completely before overwrite: %1").arg(filePath);
+        }
+        beforeContent = QString::fromUtf8(bytes.constData(), bytes.size());
+        if (pathContext && !pathContext->readState().wasRead(filePath)) {
             return QString(
                        "Error: File not read yet: %1. Read it with read_file "
                        "before overwriting.")
                 .arg(filePath);
         }
-        if (pathContext->readState().changedSinceRead(filePath, existingContent)) {
+        if (pathContext && pathContext->readState().changedSinceRead(filePath, beforeContent)) {
             return QString(
                        "Error: File changed on disk since last read: %1. "
                        "Read it again before overwriting.")
@@ -437,42 +457,28 @@ QString QSocToolFileWrite::execute(const json &arguments)
         }
     }
 
-    /* Create parent directories if needed */
-    QDir parentDir = fileInfo.absoluteDir();
-    if (!parentDir.exists()) {
-        if (!parentDir.mkpath(".")) {
-            return QString("Error: Cannot create directory: %1").arg(parentDir.absolutePath());
-        }
-    }
-
     /* Pre-edit snapshot: capture the current content (or mark absent)
-     * BEFORE the overwrite so rewind can restore it later. We use the
-     * freshly-refreshed QFileInfo because parentDir.mkpath may have just
-     * ensured a directory that didn't exist before. */
-    if (fileHistory != nullptr) {
-        QFileInfo beforeInfo(filePath);
-        if (beforeInfo.exists() && beforeInfo.isFile()) {
-            QFile existing(filePath);
-            if (existing.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QTextStream   existingStream(&existing);
-                const QString existingContent = existingStream.readAll();
-                existing.close();
-                fileHistory->trackEdit(filePath, true, existingContent);
-            }
-        } else {
-            fileHistory->trackEdit(filePath, false, QString());
-        }
+     * BEFORE the overwrite so rewind can restore it later. */
+    if (fileHistory != nullptr && fileHistory->isPathInScope(filePath)
+        && !fileHistory->trackEdit(filePath, existedBefore, beforeContent)) {
+        return QString("Error: Cannot save file history before writing: %1").arg(filePath);
     }
 
-    /* Write file */
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    QDir parentDir = fileInfo.absoluteDir();
+    if (!parentDir.exists() && !parentDir.mkpath(".")) {
+        return QString("Error: Cannot create directory: %1").arg(parentDir.absolutePath());
+    }
+
+    const QByteArray bytes = content.toUtf8();
+    QSaveFile        file(filePath);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) {
+        file.cancelWriting();
         return QString("Error: Cannot open file for writing: %1").arg(filePath);
     }
-
-    QTextStream out(&file);
-    out << content;
-    file.close();
+    if (!file.commit()) {
+        return QString("Error: Cannot finish writing file: %1").arg(filePath);
+    }
 
     /* The written content is now the agent's known state, so a follow-up
      * edit / overwrite in the same session needs no re-read. */
@@ -483,7 +489,7 @@ QString QSocToolFileWrite::execute(const json &arguments)
     /* Notify LSP service about the file change. */
     QLspService::instance()->didSave(filePath);
 
-    return QString("Successfully wrote %1 bytes to: %2").arg(content.size()).arg(filePath);
+    return QString("Successfully wrote %1 bytes to: %2").arg(bytes.size()).arg(filePath);
 }
 
 void QSocToolFileWrite::setPathContext(QSocPathContext *pathContext)
@@ -590,13 +596,16 @@ QString QSocToolFileEdit::execute(const json &arguments)
 
     /* Read file */
     QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadOnly)) {
         return QString("Error: Cannot open file for reading: %1").arg(filePath);
     }
-
-    QTextStream readStream(&file);
-    QString     content = readStream.readAll();
+    const QByteArray bytes    = file.readAll();
+    const bool       complete = file.error() == QFileDevice::NoError;
     file.close();
+    if (!complete) {
+        return QString("Error: Cannot read file completely: %1").arg(filePath);
+    }
+    QString content = QString::fromUtf8(bytes.constData(), bytes.size());
 
     /* Read-before-edit + stale-on-disk guard: the agent must have read this
      * exact file via read_file first, and it must not have changed on disk
@@ -641,18 +650,22 @@ QString QSocToolFileEdit::execute(const json &arguments)
 
     /* Pre-edit snapshot: we just finished reading the original content,
      * so it's the exact pre-mutation state the history store needs. */
-    if (fileHistory != nullptr) {
-        fileHistory->trackEdit(filePath, true, content);
+    if (fileHistory != nullptr && fileHistory->isPathInScope(filePath)) {
+        if (!fileHistory->trackEdit(filePath, true, content)) {
+            return QString("Error: Cannot save file history before editing: %1").arg(filePath);
+        }
     }
 
-    /* Write file */
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+    const QByteArray newBytes = newContent.toUtf8();
+    QSaveFile        output(filePath);
+    output.setDirectWriteFallback(false);
+    if (!output.open(QIODevice::WriteOnly) || output.write(newBytes) != newBytes.size()) {
+        output.cancelWriting();
         return QString("Error: Cannot open file for writing: %1").arg(filePath);
     }
-
-    QTextStream writeStream(&file);
-    writeStream << newContent;
-    file.close();
+    if (!output.commit()) {
+        return QString("Error: Cannot finish writing file: %1").arg(filePath);
+    }
 
     /* The agent now knows the post-edit content, so a follow-up edit in the
      * same session is allowed without a re-read. */

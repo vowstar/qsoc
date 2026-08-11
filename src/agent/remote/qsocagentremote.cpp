@@ -708,6 +708,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
         m_writableAnchors.insert(m_path.root(), m_canonicalWorkspace);
     }
     ++m_generation;
+    m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
     return true;
 }
 
@@ -1138,20 +1139,44 @@ QSocFileHistory::LiveFileAccessor remoteLiveFileAccessor(QSocRemoteConnection *c
         }
         return QSocFileHistory::FileState::Unknown;
     };
-    accessor.exists = [conn, mapPresence](const QString &path) {
-        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
-        if (sftp == nullptr) {
+    const auto resolve = [conn](const QString &path) {
+        QString entry;
+        QString err;
+        if (conn == nullptr || !conn->resolveWritableEntry(path, &entry, &err)) {
+            return QString();
+        }
+        return entry;
+    };
+    accessor.exists = [conn, mapPresence, resolve](const QString &path) {
+        QSocSftpClient *sftp  = (conn != nullptr) ? conn->sftp() : nullptr;
+        const QString   entry = resolve(path);
+        if (sftp == nullptr || entry.isEmpty()) {
             return QSocFileHistory::FileState::Unknown;
         }
-        return mapPresence(sftp->presence(path));
+        return mapPresence(sftp->linkPresence(entry));
     };
-    accessor.read = [conn, mapPresence](const QString &path) {
-        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
-        if (sftp == nullptr) {
+    accessor.read = [conn, mapPresence, resolve](const QString &path) {
+        QSocSftpClient *sftp  = (conn != nullptr) ? conn->sftp() : nullptr;
+        const QString   entry = resolve(path);
+        if (sftp == nullptr || entry.isEmpty()) {
             return QSocFileHistory::LiveRead::unknown();
         }
-        QString          err;
-        const QByteArray bytes = sftp->readFile(path, 0, &err);
+        QString resolved;
+        QString err;
+        switch (sftp->realPath(entry, &resolved, &err)) {
+        case QSocSftpClient::Presence::Present:
+            if (resolved != entry) {
+                return QSocFileHistory::LiveRead::unknown();
+            }
+            break;
+        case QSocSftpClient::Presence::Absent:
+            return mapPresence(sftp->linkPresence(entry)) == QSocFileHistory::FileState::Absent
+                       ? QSocFileHistory::LiveRead::absent()
+                       : QSocFileHistory::LiveRead::unknown();
+        case QSocSftpClient::Presence::Unknown:
+            return QSocFileHistory::LiveRead::unknown();
+        }
+        const QByteArray bytes = sftp->readFile(entry, 0, &err);
         /* readFile sets err only on failure, so an empty err means the server
          * answered and a null QByteArray is an empty file, not a failure. */
         if (err.isEmpty()) {
@@ -1162,7 +1187,7 @@ QSocFileHistory::LiveFileAccessor remoteLiveFileAccessor(QSocRemoteConnection *c
          * is there and unreadable is unknown content; lastError() is sticky
          * across calls and lastFailureUncertain() answers a different
          * question, so neither can decide this. */
-        switch (mapPresence(sftp->presence(path))) {
+        switch (mapPresence(sftp->linkPresence(entry))) {
         case QSocFileHistory::FileState::Absent:
             return QSocFileHistory::LiveRead::absent();
         case QSocFileHistory::FileState::Present:
@@ -1171,23 +1196,39 @@ QSocFileHistory::LiveFileAccessor remoteLiveFileAccessor(QSocRemoteConnection *c
         }
         return QSocFileHistory::LiveRead::unknown();
     };
-    accessor.write = [conn](const QString &path, const QString &content) {
-        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
-        if (sftp == nullptr) {
+    accessor.write = [conn, resolve](const QString &path, const QString &content) {
+        QSocSftpClient *sftp  = (conn != nullptr) ? conn->sftp() : nullptr;
+        const QString   entry = resolve(path);
+        if (sftp == nullptr || entry.isEmpty()) {
             return false;
         }
         QString err;
-        return sftp->writeFile(path, content.toUtf8(), &err);
+        return sftp->writeFile(entry, content.toUtf8(), &err);
     };
-    accessor.remove = [conn](const QString &path) {
-        QSocSftpClient *sftp = (conn != nullptr) ? conn->sftp() : nullptr;
-        if (sftp == nullptr) {
+    accessor.remove = [conn, resolve](const QString &path) {
+        QSocSftpClient *sftp  = (conn != nullptr) ? conn->sftp() : nullptr;
+        const QString   entry = resolve(path);
+        if (sftp == nullptr || entry.isEmpty()) {
             return false;
         }
         QString err;
-        return sftp->removeFile(path, &err);
+        return sftp->removeFile(entry, &err);
     };
-    accessor.generation = [conn]() -> quint64 { return (conn != nullptr) ? conn->generation() : 0; };
+    accessor.coversPath = [resolve](const QString &path) { return !resolve(path).isEmpty(); };
+    accessor.tree       = [conn]() {
+        if (conn == nullptr || conn->target().isEmpty() || conn->workspace().isEmpty()) {
+            return QString();
+        }
+        if (conn->canonicalWorkspace().isEmpty() || conn->workspaceTreeId().isEmpty()) {
+            return QString();
+        }
+        if (conn->endpointIdentity().isEmpty()) {
+            return QString();
+        }
+        return QStringLiteral("ssh:") + conn->endpointIdentity() + QChar(0x1F)
+               + conn->canonicalWorkspace() + QChar(0x1F) + conn->workspaceTreeId();
+    };
+    accessor.generation = [conn]() { return (conn != nullptr) ? conn->transportLink() : QString(); };
     return accessor;
 }
 

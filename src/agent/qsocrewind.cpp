@@ -31,6 +31,12 @@ QString fileSummaryOf(const QSocFileHistory::RestoreReport &files)
     if (!files.unknown.isEmpty()) {
         append(QStringLiteral("%1 left alone (state unknown)").arg(files.unknown.size()));
     }
+    if (files.targetMissing) {
+        append(QStringLiteral("target checkpoint unavailable"));
+    }
+    if (files.historyTruncateFailed) {
+        append(QStringLiteral("forward checkpoints NOT discarded"));
+    }
     return summary;
 }
 
@@ -64,8 +70,19 @@ QSocRewindResult qsocApplyRewind(
      * refuse. Adding a fallible step below this point reintroduces the mixed
      * state where the conversation is gone and the tree is not restored. */
     const bool restoringFiles = request.restoreFiles && history != nullptr;
+    if (request.restoreFiles && history == nullptr) {
+        result.refusal = QStringLiteral("file history is unavailable for this session");
+        return result;
+    }
     if (restoringFiles && gate) {
         const QString refusal = gate();
+        if (!refusal.isEmpty()) {
+            result.refusal = refusal;
+            return result;
+        }
+    }
+    if (restoringFiles) {
+        const QString refusal = history->restoreRefusal(request.targetSnapshot);
         if (!refusal.isEmpty()) {
             result.refusal = refusal;
             return result;
@@ -97,13 +114,16 @@ QSocRewindResult qsocApplyRewind(
         /* A restore that straddled two transports left the tree part-way
          * between turns; the forward snapshots are what a retry restores
          * from, so they must survive. */
-        if (request.restoreConversation && !result.files.transportChanged) {
-            history->truncateAfter(request.targetSnapshot);
+        if (request.restoreConversation && result.files.failed.isEmpty()
+            && result.files.unknown.isEmpty() && !result.files.transportChanged
+            && !result.files.targetMissing) {
+            result.files.historyTruncateFailed = !history->truncateAfter(request.targetSnapshot);
         }
     }
     /* A path left alone for unknown state did not move either, so the rewind
      * is not Done: the label has to match the list the report already prints. */
-    result.outcome = (result.files.failed.isEmpty() && result.files.unknown.isEmpty())
+    result.outcome = result.files.failed.isEmpty() && result.files.unknown.isEmpty()
+                             && !result.files.targetMissing && !result.files.historyTruncateFailed
                          ? QSocRewindResult::Outcome::Done
                          : QSocRewindResult::Outcome::Partial;
     return result;
@@ -143,6 +163,15 @@ QString qsocRewindReport(const QSocRewindRequest &request, const QSocRewindResul
         text += QStringLiteral(
             "  the connection changed mid-restore; the tree is part-way between two turns\n"
             "  the checkpoints a retry needs were kept\n");
+    }
+    if (result.files.targetMissing) {
+        text += QStringLiteral(
+            "  the target file checkpoint is unavailable; the working tree was left alone\n"
+            "  later checkpoints were kept\n");
+    }
+    if (result.files.historyTruncateFailed) {
+        text += QStringLiteral(
+            "  forward file checkpoints could not be discarded; the turn counter was kept\n");
     }
     text += pathBlock(QStringLiteral("could not restore"), result.files.failed);
     text += pathBlock(QStringLiteral("left untouched (state unknown)"), result.files.unknown);

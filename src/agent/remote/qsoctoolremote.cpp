@@ -453,7 +453,10 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
 
     /* Checkpoint the pre-write state so rewind can restore the remote file. */
     if (m_fileHistory != nullptr) {
-        m_fileHistory->trackEdit(remotePath, existedBefore, beforeContent);
+        if (!m_fileHistory->trackEdit(remotePath, existedBefore, beforeContent)) {
+            return QStringLiteral("Error: Cannot save file history before writing: %1")
+                .arg(remotePath);
+        }
     }
 
     const QString content = QString::fromStdString(arguments["content"].get<std::string>());
@@ -622,7 +625,10 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     }
     /* Checkpoint the pre-edit content so rewind can restore the remote file. */
     if (m_fileHistory != nullptr) {
-        m_fileHistory->trackEdit(remotePath, true, content);
+        if (!m_fileHistory->trackEdit(remotePath, true, content)) {
+            return QStringLiteral("Error: Cannot save file history before editing: %1")
+                .arg(remotePath);
+        }
     }
     content.replace(first, oldString.size(), newString);
     if (!m_conn->sftp()->writeFile(remotePath, content.toUtf8(), &err)) {
