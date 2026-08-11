@@ -42,10 +42,13 @@ private:
         QObject *scratch, const QString &target, const QString &workspace)
     {
         AgentRemoteState state;
-        state.session   = new QSocSshSession(scratch);
-        state.sftp      = new QSocSftpClient(*state.session);
-        state.targetKey = target;
-        state.workspace = workspace;
+        state.session            = new QSocSshSession(scratch);
+        state.sftp               = new QSocSftpClient(*state.session);
+        state.targetKey          = target;
+        state.endpointIdentity   = target;
+        state.workspace          = workspace;
+        state.canonicalWorkspace = workspace;
+        state.workspaceTreeId    = workspace.isEmpty() ? QString() : QStringLiteral("tree-id");
         return state;
     }
 

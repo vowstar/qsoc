@@ -13,6 +13,9 @@ class QSocSshExec;
 class QSocRemotePathContext;
 class QSocFileHistory;
 
+/** @brief Run a remote shell escape only from the currently verified cwd. */
+QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &command);
+
 /**
  * @brief Remote read_file. Same schema and name as the local tool.
  * @details Reads a remote file via SFTP. Relative paths resolve against the

@@ -595,57 +595,6 @@ QString runShellEscape(const QString &command)
 }
 
 /**
- * @brief Run a `!` shell-escape command on a connected remote session.
- * @details The command runs as `cd <cwd> && /bin/bash -lc <cmd>` so working
- *          directory matches the agent's view. Stdout+stderr are concatenated
- *          the same way as the local variant, and a non-zero exit code (or
- *          abort / timeout) is appended as a footer line.
- */
-QString runRemoteShellEscape(QSocSshSession &session, const QString &cwd, const QString &command)
-{
-    auto shellEscape = [](const QString &value) {
-        QString out = QStringLiteral("'");
-        for (const QChar chr : value) {
-            if (chr == QLatin1Char('\'')) {
-                out += QStringLiteral("'\\''");
-            } else {
-                out += chr;
-            }
-        }
-        out += QLatin1Char('\'');
-        return out;
-    };
-
-    const QString wrapped = QStringLiteral("cd %1 && /bin/bash -lc %2")
-                                .arg(shellEscape(cwd.isEmpty() ? QStringLiteral("/") : cwd))
-                                .arg(shellEscape(command));
-
-    /* A foreground escape may legitimately run long, but not forever: an
-     * unbounded budget also covers the close handshake, and the open and
-     * exec loops never test the abort flag, so a silent host would wedge the
-     * UI thread with only SIGKILL left. */
-    constexpr int       kRemoteShellEscapeMs = 15 * 60 * 1000;
-    QSocSshExec         exec(session);
-    QSocSshExec::Result res = exec.run(wrapped, kRemoteShellEscapeMs);
-
-    QString result = QString::fromUtf8(res.stdoutBytes);
-    if (!res.stderrBytes.isEmpty()) {
-        result += QString::fromUtf8(res.stderrBytes);
-    }
-    if (res.timedOut) {
-        result += QStringLiteral("(timed out)\n");
-    } else if (res.aborted) {
-        result += QStringLiteral("(aborted)\n");
-    } else if (res.exitCode != 0) {
-        result += QStringLiteral("(exit code: %1)\n").arg(res.exitCode);
-    }
-    if (!res.errorText.isEmpty()) {
-        result += QStringLiteral("(%1)\n").arg(res.errorText);
-    }
-    return result;
-}
-
-/**
  * @brief Resolve the project path for session storage.
  * @details Sessions live under <projectPath>/.qsoc/sessions so they move with
  *          the project when the user copies / renames the directory. Falls

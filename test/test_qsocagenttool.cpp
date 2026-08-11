@@ -368,6 +368,61 @@ private slots:
         QVERIFY(!pathContext->isWriteAllowed(siblingFile));
     }
 
+    void testWritableRootRetargetIsRefused_data()
+    {
+        QTest::addColumn<bool>("workingRoot");
+        QTest::newRow("user root") << false;
+        QTest::newRow("working root") << true;
+    }
+
+    void testWritableRootRetargetIsRefused()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This platform does not provide Unix symbolic-link semantics.");
+#else
+        QFETCH(bool, workingRoot);
+        QTemporaryDir boundaryRoot(QDir::home().filePath(".qsoc_test_root_anchor_XXXXXX"));
+        if (!boundaryRoot.isValid()) {
+            QSKIP("No writable directory outside the implicit roots.");
+        }
+        const QString first  = QDir(boundaryRoot.path()).filePath("first");
+        const QString second = QDir(boundaryRoot.path()).filePath("second");
+        const QString root   = QDir(boundaryRoot.path()).filePath("selected");
+        QVERIFY(QDir().mkpath(first));
+        QVERIFY(QDir().mkpath(second));
+        QVERIFY(QFile::link(first, root));
+
+        QSocPathContext context;
+        if (workingRoot) {
+            context.setWorkingDir(root);
+        } else {
+            context.addUserDir(root);
+        }
+        QString       resolved;
+        const QString before = QDir(root).filePath("before.txt");
+        QVERIFY(context.resolveWritablePath(before, &resolved));
+        QCOMPARE(resolved, QDir(first).filePath("before.txt"));
+
+        QVERIFY(QFile::remove(root));
+        QVERIFY(QFile::link(second, root));
+        const QString victim = QDir(root).filePath("victim.txt");
+        QVERIFY(!context.resolveWritablePath(victim, &resolved));
+        QSocToolFileWrite tool(nullptr, &context);
+        const QString     result = tool.execute(
+            json{{"file_path", victim.toStdString()}, {"content", "blocked\n"}});
+        QVERIFY2(result.contains(QStringLiteral("Access denied")), qPrintable(result));
+        QVERIFY(!QFileInfo::exists(QDir(second).filePath("victim.txt")));
+
+        if (workingRoot) {
+            context.setWorkingDir(root);
+        } else {
+            context.addUserDir(root);
+        }
+        QVERIFY(context.resolveWritablePath(victim, &resolved));
+        QCOMPARE(resolved, QDir(second).filePath("victim.txt"));
+#endif
+    }
+
     void testDanglingLinkCannotEscapeWriteBoundary()
     {
 #ifndef Q_OS_UNIX

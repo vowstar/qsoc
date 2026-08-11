@@ -97,6 +97,26 @@ public:
      */
     bool writeFile(const QString &path, const QByteArray &content, QString *errorMessage = nullptr);
 
+    /** @brief Outcome of publishing a file without replacing its name. */
+    enum class CreateOutcome : std::uint8_t {
+        Created,       /**< This call published the new file. */
+        AlreadyExists, /**< Another file already owns the target name. */
+        Failed,        /**< The server rejected the create before publication. */
+        Unknown,       /**< Publication may have happened; no cleanup was attempted. */
+    };
+
+    /**
+     * @brief Publish a new file only when @p path is still absent.
+     * @details Stages the bytes under a random sibling and uses a no-replace
+     *          rename for publication. An unanswered rename leaves the staged
+     *          name untouched because cleanup could race a completed request.
+     */
+    CreateOutcome createFileIfAbsent(
+        const QString &path, const QByteArray &content, QString *errorMessage = nullptr);
+
+    /** @brief Install a test observer immediately before create publication. */
+    void setCreateObserver(std::function<void()> observer);
+
     /** @brief Recursive mkdir. Equivalent to `mkdir -p`. */
     bool mkdirP(const QString &path, QString *errorMessage = nullptr);
 
@@ -215,6 +235,13 @@ public:
     void setOperationTimeoutMs(int timeoutMs);
     int  operationTimeoutMs() const { return m_opBudgetMs; }
 
+    /**
+     * @brief Run a group of SFTP calls against one absolute deadline.
+     * @details Every nested operation consumes the same clock. Cleanup keeps
+     *          its separate bounded window and restores this clock afterward.
+     */
+    bool runWithin(QDeadlineTimer deadline, const std::function<bool()> &operation);
+
 private:
     /** @brief Outcome of one publish step. */
     enum class StepOutcome {
@@ -234,6 +261,7 @@ private:
     {
     public:
         OpScope(QSocSftpClient *client, int budgetMs);
+        OpScope(QSocSftpClient *client, QDeadlineTimer deadline);
         ~OpScope();
         OpScope(const OpScope &)            = delete;
         OpScope &operator=(const OpScope &) = delete;
@@ -308,6 +336,7 @@ private:
 
     std::function<void(PublishStage)> m_publishObserver;
     std::function<void()>             m_dataPhaseObserver;
+    std::function<void()>             m_createObserver;
 };
 
 #endif // QSOCSFTPCLIENT_H

@@ -180,6 +180,9 @@ public:
     /** @brief Last error text, safe for logs. Never contains secrets. */
     QString lastError() const { return m_lastError; }
 
+    /** @brief SHA-256 identity of the host key bound to this session. */
+    QString hostKeyIdentity() const;
+
     /** @brief Per-operation network timeout in milliseconds. Default 30000. */
     void setTimeoutMs(int ms);
     int  timeoutMs() const { return m_timeoutMs; }

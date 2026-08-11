@@ -90,6 +90,10 @@ QString QSocToolFileRead::execute(const json &arguments)
      * on one path spelling (./x, x, a/../x all fold together). */
     filePath = QDir::cleanPath(filePath);
     fileInfo = QFileInfo(filePath);
+    if (!fileInfo.canonicalFilePath().isEmpty()) {
+        filePath = fileInfo.canonicalFilePath();
+        fileInfo = QFileInfo(filePath);
+    }
 
     /* Check if file exists */
     if (!fileInfo.exists()) {
@@ -397,13 +401,15 @@ QString QSocToolFileWrite::execute(const json &arguments)
     /* Canonicalize so read_file / edit_file / write_file key the read-state
      * on one path spelling (./x, x, a/../x all fold together). */
     filePath = QDir::cleanPath(filePath);
-    fileInfo = QFileInfo(filePath);
-
-    /* Security check */
-    if (pathContext && !pathContext->isWriteAllowed(filePath)) {
-        return "Error: Access denied. File must be within an allowed directory "
-               "(project, working, user, or temp).";
+    if (pathContext) {
+        QString resolved;
+        if (!pathContext->resolveWritablePath(filePath, &resolved)) {
+            return "Error: Access denied. File must be within an allowed directory "
+                   "(project, working, user, or temp).";
+        }
+        filePath = resolved;
     }
+    fileInfo = QFileInfo(filePath);
 
     /* Read-before-overwrite + stale guard for EXISTING files: write_file
      * replaces the whole file, so it must not clobber content the agent
@@ -567,13 +573,15 @@ QString QSocToolFileEdit::execute(const json &arguments)
     /* Canonicalize so read_file / edit_file / write_file key the read-state
      * on one path spelling (./x, x, a/../x all fold together). */
     filePath = QDir::cleanPath(filePath);
-    fileInfo = QFileInfo(filePath);
-
-    /* Security check */
-    if (pathContext && !pathContext->isWriteAllowed(filePath)) {
-        return "Error: Access denied. File must be within an allowed directory "
-               "(project, working, user, or temp).";
+    if (pathContext) {
+        QString resolved;
+        if (!pathContext->resolveWritablePath(filePath, &resolved)) {
+            return "Error: Access denied. File must be within an allowed directory "
+                   "(project, working, user, or temp).";
+        }
+        filePath = resolved;
     }
+    fileInfo = QFileInfo(filePath);
 
     /* Check if file exists */
     if (!fileInfo.exists() || !fileInfo.isFile()) {

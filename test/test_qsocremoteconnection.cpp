@@ -24,13 +24,19 @@ private:
      * assertions below are made without instrumenting production code.
      * Carries no path: the connection seeds that from the workspace. */
     static AgentRemoteState fakeTransport(
-        QObject *scratch, const QString &target, const QString &workspace)
+        QObject       *scratch,
+        const QString &target,
+        const QString &workspace,
+        const QString &endpoint = QString())
     {
         AgentRemoteState state;
-        state.session   = new QSocSshSession(scratch);
-        state.sftp      = new QSocSftpClient(*state.session);
-        state.targetKey = target;
-        state.workspace = workspace;
+        state.session            = new QSocSshSession(scratch);
+        state.sftp               = new QSocSftpClient(*state.session);
+        state.targetKey          = target;
+        state.endpointIdentity   = endpoint.isEmpty() ? target : endpoint;
+        state.workspace          = workspace;
+        state.canonicalWorkspace = workspace;
+        state.workspaceTreeId    = workspace.isEmpty() ? QString() : QStringLiteral("tree-id");
         return state;
     }
 

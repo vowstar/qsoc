@@ -46,13 +46,17 @@ QString makeBackupPath(const QString &finalPath)
 } // namespace
 
 QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, int budgetMs)
+    : OpScope(client, QDeadlineTimer(budgetMs))
+{}
+
+QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, QDeadlineTimer deadline)
     : m_client(client)
     , m_owner(!client->m_opActive)
 {
     if (m_owner) {
         m_client->m_opActive             = true;
         m_client->m_lastFailureUncertain = false;
-        m_client->m_deadline             = QDeadlineTimer(budgetMs);
+        m_client->m_deadline             = deadline;
     }
 }
 
@@ -87,6 +91,21 @@ void QSocSftpClient::setError(const QString &msg, QString *sink)
 void QSocSftpClient::setOperationTimeoutMs(int timeoutMs)
 {
     m_opBudgetMs = timeoutMs;
+}
+
+bool QSocSftpClient::runWithin(QDeadlineTimer deadline, const std::function<bool()> &operation)
+{
+    if (!operation) {
+        return false;
+    }
+    if (m_opActive) {
+        return operation();
+    }
+    if (deadline.hasExpired()) {
+        return false;
+    }
+    OpScope scope(this, deadline);
+    return operation();
 }
 
 bool QSocSftpClient::noteTransport(int rc)
@@ -182,6 +201,11 @@ void QSocSftpClient::setPublishObserver(std::function<void(PublishStage)> observ
 void QSocSftpClient::setDataPhaseObserver(std::function<void()> observer)
 {
     m_dataPhaseObserver = std::move(observer);
+}
+
+void QSocSftpClient::setCreateObserver(std::function<void()> observer)
+{
+    m_createObserver = std::move(observer);
 }
 
 /* Error text for a wait that gave up, naming the actual reason so the
@@ -647,6 +671,53 @@ bool QSocSftpClient::writeFile(const QString &path, const QByteArray &content, Q
     return true;
 }
 
+QSocSftpClient::CreateOutcome QSocSftpClient::createFileIfAbsent(
+    const QString &path, const QByteArray &content, QString *errorMessage)
+{
+    OpScope scope(this, m_opBudgetMs);
+    if (!open(errorMessage)) {
+        return CreateOutcome::Failed;
+    }
+
+    const QString tempPath = makeTempPath(path);
+    if (!writeFile(tempPath, content, errorMessage)) {
+        return CreateOutcome::Failed;
+    }
+
+    if (m_createObserver) {
+        m_createObserver();
+    }
+    switch (renameStep(tempPath.toUtf8(), path.toUtf8())) {
+    case StepOutcome::Ok:
+        return CreateOutcome::Created;
+    case StepOutcome::Unknown:
+        setError(
+            waitFailureText(QStringLiteral(
+                                "Cannot tell whether the new file was published at %1; %2 was left "
+                                "in place")
+                                .arg(path, tempPath)),
+            errorMessage);
+        return CreateOutcome::Unknown;
+    case StepOutcome::Failed:
+        break;
+    }
+
+    QString        presenceError;
+    const Presence target = linkPresence(path, &presenceError);
+    if (target == Presence::Unknown) {
+        setError(presenceError, errorMessage);
+        return CreateOutcome::Unknown;
+    }
+
+    (void) removeFile(tempPath, nullptr);
+    if (target == Presence::Present) {
+        return CreateOutcome::AlreadyExists;
+    }
+
+    setError(QStringLiteral("SFTP create failed for %1").arg(path), errorMessage);
+    return CreateOutcome::Failed;
+}
+
 bool QSocSftpClient::mkdirP(const QString &path, QString *errorMessage)
 {
     OpScope scope(this, m_opBudgetMs);
@@ -717,7 +788,7 @@ bool QSocSftpClient::removeFile(const QString &path, QString *errorMessage)
      * An unanswered stat is not: reporting the delete as done would leave
      * the caller believing a file it never removed is gone. */
     QString        presenceErr;
-    const Presence before = presence(path, &presenceErr);
+    const Presence before = linkPresence(path, &presenceErr);
     if (before == Presence::Unknown) {
         setError(presenceErr, errorMessage);
         return false;

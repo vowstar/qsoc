@@ -8,6 +8,7 @@
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
+#include <QHash>
 #include <QMutex>
 #include <QSet>
 
@@ -38,6 +39,8 @@ public:
 
     /* Permission checks */
     bool isWriteAllowed(const QString &path) const;
+    bool resolveWritablePath(const QString &path, QString *resolved) const;
+    bool resolveWritableEntry(const QString &path, QString *entry) const;
 
     /* All writable directories for display */
     QStringList getWritableDirs() const;
@@ -52,11 +55,21 @@ public:
     QSocFileReadState &readState() { return fileReadState; }
 
 private:
-    QSocProjectManager *projectManager = nullptr;
-    QSocFileReadState   fileReadState;
-    QString             workingDir;
-    QStringList         userDirs;
-    mutable QMutex      mutex;
+    struct WritableRoot
+    {
+        QString lexical;
+        QString anchor;
+    };
+
+    void                bindWritableRoot(const QString &dir);
+    QList<WritableRoot> writableRoots() const;
+
+    QSocProjectManager             *projectManager = nullptr;
+    QSocFileReadState               fileReadState;
+    QString                         workingDir;
+    QStringList                     userDirs;
+    mutable QHash<QString, QString> writableAnchors;
+    mutable QMutex                  mutex;
 
     static constexpr int MaxUserDirs = 10;
 };

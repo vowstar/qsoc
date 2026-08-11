@@ -8,6 +8,7 @@
 
 #include <libssh2.h>
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -764,6 +765,23 @@ QString libssh2ErrorString(LIBSSH2_SESSION *session)
 }
 
 } // namespace
+
+QString QSocSshSession::hostKeyIdentity() const
+{
+    if (m_session == nullptr) {
+        return {};
+    }
+    size_t      keyLen  = 0;
+    int         keyType = 0;
+    const char *key     = libssh2_session_hostkey(m_session, &keyLen, &keyType);
+    if (key == nullptr || keyLen == 0) {
+        return {};
+    }
+    QByteArray material = QByteArray::number(keyType) + ':';
+    material.append(key, static_cast<qsizetype>(keyLen));
+    return QString::fromLatin1(
+        QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
+}
 
 QSocSshSession::QSocSshSession(QObject *parent)
     : QObject(parent)

@@ -38,9 +38,12 @@ struct AgentRemoteState
 {
     QSocSshSession         *session = nullptr;
     QSocSftpClient         *sftp    = nullptr;
-    QList<QSocSshSession *> jumps;     /* ProxyJump chain, outlives target */
-    QString                 targetKey; /* "user@alias:port", stable lookup key. */
-    QString                 workspace; /* Remote absolute workspace path. */
+    QList<QSocSshSession *> jumps;              /* ProxyJump chain, outlives target */
+    QString                 targetKey;          /* "user@alias:port", stable lookup key. */
+    QString                 endpointIdentity;   /* User plus final host-key identity. */
+    QString                 workspace;          /* Remote absolute workspace path. */
+    QString                 canonicalWorkspace; /* Host-resolved workspace identity. */
+    QString                 workspaceTreeId;    /* Persistent random id stored in the root. */
 };
 
 /**
@@ -86,7 +89,7 @@ public:
     /**
      * @brief Take ownership of the transport a successful connect produced.
      * @details Drains @p state on success and bumps @ref generation. Refuses
-     *          an incomplete bundle (no session, no SFTP or no workspace)
+     *          an incomplete bundle (no session, SFTP or workspace identity)
      *          without consuming it or changing anything, so a caller can ask
      *          before it frees the transport being replaced.
      *
@@ -122,7 +125,10 @@ public:
     QSocSftpClient        *sftp() const { return m_sftp; }
     QSocRemotePathContext *path() { return &m_path; }
     QString                target() const { return m_target; }
+    QString                endpointIdentity() const { return m_endpointIdentity; }
     QString                workspace() const { return m_workspace; }
+    QString                canonicalWorkspace() const { return m_canonicalWorkspace; }
+    QString                workspaceTreeId() const { return m_workspaceTreeId; }
 
     /** @brief What @ref setWorkingDirectory decided. */
     enum class CwdChange : std::uint8_t {
@@ -162,6 +168,22 @@ public:
     CwdChange setWorkingDirectory(const QString &requested, QString *errorMessage = nullptr);
 
     /**
+     * @brief Resolve a path and prove it remains inside a writable directory.
+     * @details The returned canonical path is the one callers must operate on;
+     *          checking a canonical name and then using the lexical one would
+     *          reopen a symlink escape between history and ordinary tools.
+     */
+    bool resolveWritablePath(
+        const QString &requested, QString *canonicalPath, QString *errorMessage = nullptr) const;
+
+    /** @brief Resolve a writable directory entry without following its leaf. */
+    bool resolveWritableEntry(
+        const QString &requested, QString *entryPath, QString *errorMessage = nullptr) const;
+
+    /** @brief Resolve and verify the working directory bound to this workspace. */
+    bool resolveBoundCwd(QString *canonicalCwd, QString *errorMessage = nullptr) const;
+
+    /**
      * @brief Observe every accepted working-directory change.
      * @details The working directory lives in the path context, but the agent
      *          config carries a copy of it into the system prompt and the hook
@@ -182,6 +204,9 @@ public:
      *          survives @ref teardown.
      */
     Generation generation() const { return m_generation; }
+
+    /** @brief Opaque identity of the currently bound transport. */
+    QString transportLink() const { return m_transportLink; }
 
     /** @brief Whether @p gen names the transport that is bound now. */
     bool isCurrent(Generation gen) const { return gen != 0 && gen == m_generation; }
@@ -312,14 +337,32 @@ private:
     void closeTransport();
 
     /** @brief Ask the host whether @p dir is there. */
-    bool confirmDirectory(const QString &dir) const;
+    bool confirmDirectory(const QString &dir, const QDeadlineTimer *deadline = nullptr) const;
+
+    /** @brief Adopt while bounding the optional cwd verification. */
+    bool adoptWithin(AgentRemoteState &&state, const QDeadlineTimer *deadline);
+
+    /** @brief Verify the canonical root and its persistent tree marker. */
+    bool verifyWorkspaceBinding(QString *canonicalRoot, QString *errorMessage) const;
+
+    /** @brief Resolve one directory and prove it is inside the bound root. */
+    bool resolveBoundDirectory(
+        const QString &dir, QString *canonicalDir, QString *errorMessage) const;
+
+    /** @brief Validate configured writable roots against their bound anchors. */
+    bool canonicalWritableDirs(QStringList *dirs, QString *errorMessage) const;
 
     QSocSshSession                                        *m_session = nullptr;
     QSocSftpClient                                        *m_sftp    = nullptr;
     QList<QSocSshSession *>                                m_jumps;
     QSocRemotePathContext                                  m_path;
     QString                                                m_target;
+    QString                                                m_endpointIdentity;
     QString                                                m_workspace;
+    QString                                                m_canonicalWorkspace;
+    QString                                                m_workspaceTreeId;
+    QString                                                m_transportLink;
+    QHash<QString, QString>                                m_writableAnchors;
     Rebuilder                                              m_rebuilder;
     std::function<bool(QSocSftpClient *, const QString &)> m_directoryProbe;
     std::function<bool()>                                  m_abortProbe;
@@ -352,21 +395,27 @@ bool connectAgentSshSession(
     AgentRemoteState              *state,
     QString                       *errorMessage,
     QSocSshSession::SecretCallback secretCallback = {},
-    std::function<bool()>          abortProbe     = {});
+    std::function<bool()>          abortProbe     = {},
+    QDeadlineTimer                 deadline       = QDeadlineTimer(30000));
 
 /**
- * @brief Ensure the workspace directory exists on the remote host.
- * @details Calls `mkdir -p` via SFTP and records the workspace on @p state.
+ * @brief Ensure and identify the workspace directory on the remote host.
+ * @details Calls `mkdir -p` via SFTP, creates a random persistent tree marker
+ *          when absent, and records both identities on @p state.
  *          The session and SFTP fields of @p state must already be open. The
  *          path context is seeded later, by
  *          `QSocRemoteConnection::adopt()`.
  * @param workspace Remote absolute path.
- * @param state In/out state; reads sftp, writes workspace.
+ * @param state In/out state; reads sftp, writes workspace identities.
  * @param errorMessage Optional sink for failure detail.
+ * @param deadline Absolute budget shared by every workspace operation.
  * @return True on success.
  */
 bool prepareAgentRemoteWorkspace(
-    const QString &workspace, AgentRemoteState *state, QString *errorMessage);
+    const QString    &workspace,
+    AgentRemoteState *state,
+    QString          *errorMessage,
+    QDeadlineTimer    deadline = QDeadlineTimer(30000));
 
 /**
  * @brief Build the remote-mode tool registry.

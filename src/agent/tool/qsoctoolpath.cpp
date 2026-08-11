@@ -9,22 +9,46 @@
 
 namespace {
 
+constexpr Qt::CaseSensitivity pathCaseSensitivity()
+{
+#ifdef Q_OS_WIN
+    return Qt::CaseInsensitive;
+#else
+    return Qt::CaseSensitive;
+#endif
+}
+
 bool pathIsWithin(const QString &path, const QString &directory)
 {
     const QString normalizedPath      = QDir::cleanPath(QDir::fromNativeSeparators(path));
     QString       normalizedDirectory = QDir::cleanPath(QDir::fromNativeSeparators(directory));
-#ifdef Q_OS_WIN
-    constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseInsensitive;
-#else
-    constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseSensitive;
-#endif
-    if (normalizedPath.compare(normalizedDirectory, caseSensitivity) == 0) {
+    if (normalizedPath.compare(normalizedDirectory, pathCaseSensitivity()) == 0) {
         return true;
     }
     if (!normalizedDirectory.endsWith('/')) {
         normalizedDirectory += '/';
     }
-    return normalizedPath.startsWith(normalizedDirectory, caseSensitivity);
+    return normalizedPath.startsWith(normalizedDirectory, pathCaseSensitivity());
+}
+
+QString normalizedRoot(const QString &path)
+{
+    return QDir::fromNativeSeparators(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+}
+
+QString rootKey(const QString &path)
+{
+    const QString normalized = normalizedRoot(path);
+#ifdef Q_OS_WIN
+    return normalized.toCaseFolded();
+#else
+    return normalized;
+#endif
+}
+
+QString canonicalRoot(const QString &path)
+{
+    return QDir::fromNativeSeparators(QFileInfo(normalizedRoot(path)).canonicalFilePath());
 }
 
 } // namespace
@@ -35,7 +59,13 @@ QSocPathContext::QSocPathContext(QObject *parent, QSocProjectManager *projectMan
     : QObject(parent)
     , projectManager(projectManager)
     , workingDir(QDir::currentPath())
-{}
+{
+    bindWritableRoot(workingDir);
+    bindWritableRoot(QDir::tempPath());
+    if (projectManager != nullptr) {
+        bindWritableRoot(projectManager->getProjectPath());
+    }
+}
 
 QString QSocPathContext::getProjectDir() const
 {
@@ -62,7 +92,11 @@ void QSocPathContext::setWorkingDir(const QString &dir)
     QMutexLocker locker(&mutex);
     QFileInfo    info(dir);
     if (info.isDir()) {
-        workingDir = info.absoluteFilePath();
+        workingDir           = normalizedRoot(dir);
+        const QString anchor = canonicalRoot(workingDir);
+        if (!anchor.isEmpty()) {
+            writableAnchors.insert(rootKey(workingDir), anchor);
+        }
     }
 }
 
@@ -76,10 +110,15 @@ void QSocPathContext::addUserDir(const QString &dir)
         return;
     }
 
-    QString absPath = info.absoluteFilePath();
+    const QString absPath = normalizedRoot(dir);
+    const QString anchor  = canonicalRoot(absPath);
+    if (anchor.isEmpty()) {
+        return;
+    }
 
     /* Avoid duplicates */
     if (userDirs.contains(absPath)) {
+        writableAnchors.insert(rootKey(absPath), anchor);
         return;
     }
 
@@ -89,13 +128,13 @@ void QSocPathContext::addUserDir(const QString &dir)
     }
 
     userDirs.append(absPath);
+    writableAnchors.insert(rootKey(absPath), anchor);
 }
 
 void QSocPathContext::removeUserDir(const QString &dir)
 {
     QMutexLocker locker(&mutex);
-    QFileInfo    info(dir);
-    userDirs.removeAll(info.absoluteFilePath());
+    userDirs.removeAll(normalizedRoot(dir));
 }
 
 void QSocPathContext::clearUserDirs()
@@ -106,57 +145,135 @@ void QSocPathContext::clearUserDirs()
 
 bool QSocPathContext::isWriteAllowed(const QString &path) const
 {
-    QStringList dirs = getWritableDirs();
+    return resolveWritablePath(path, nullptr);
+}
 
-    QFileInfo fileInfo(path);
-    QString   canonicalPath = fileInfo.canonicalFilePath();
+bool QSocPathContext::resolveWritablePath(const QString &path, QString *resolved) const
+{
+    const QString absolute = QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath());
+    QString       probe    = QDir::cleanPath(absolute);
+    QStringList   tail;
+    QString       canonicalPath;
+    for (;;) {
+        const QFileInfo info(probe);
+        if (info.exists() || info.isSymLink()) {
+            canonicalPath = info.canonicalFilePath();
+            break;
+        }
+        const QString name = info.fileName();
+        const QString next = info.absolutePath();
+        if (name.isEmpty() || next == probe) {
+            return false;
+        }
+        tail.prepend(name);
+        probe = next;
+    }
     if (canonicalPath.isEmpty()) {
-        if (fileInfo.isSymLink()) {
-            return false;
-        }
-        /* File doesn't exist yet, check parent */
-        QFileInfo parentInfo(fileInfo.absolutePath());
-        canonicalPath = parentInfo.canonicalFilePath();
-        if (canonicalPath.isEmpty()) {
-            return false;
-        }
+        return false;
+    }
+    for (const QString &part : tail) {
+        canonicalPath = QDir(canonicalPath).filePath(part);
     }
 
-    for (const QString &dir : dirs) {
-        QDir    d(dir);
-        QString canonicalDir = d.canonicalPath();
-        if (!canonicalDir.isEmpty() && pathIsWithin(canonicalPath, canonicalDir)) {
+    for (const WritableRoot &root : writableRoots()) {
+        const QString current = canonicalRoot(root.lexical);
+        if (!root.anchor.isEmpty() && current.compare(root.anchor, pathCaseSensitivity()) == 0
+            && pathIsWithin(canonicalPath, root.anchor)) {
+            if (resolved != nullptr) {
+                *resolved = QDir::fromNativeSeparators(QDir::cleanPath(canonicalPath));
+            }
             return true;
         }
     }
     return false;
 }
 
+bool QSocPathContext::resolveWritableEntry(const QString &path, QString *entry) const
+{
+    const QString absolute = QDir::fromNativeSeparators(
+        QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+    const QFileInfo info(absolute);
+    if (info.fileName().isEmpty()) {
+        return false;
+    }
+    QString canonicalParent;
+    if (!resolveWritablePath(info.absolutePath(), &canonicalParent)) {
+        return false;
+    }
+    const QString resolved = QDir::fromNativeSeparators(
+        QDir(canonicalParent).filePath(info.fileName()));
+    if (resolved.compare(absolute, pathCaseSensitivity()) != 0) {
+        return false;
+    }
+    if (entry != nullptr) {
+        *entry = resolved;
+    }
+    return true;
+}
+
 QStringList QSocPathContext::getWritableDirs() const
 {
+    QStringList dirs;
+    for (const WritableRoot &root : writableRoots()) {
+        dirs.append(root.lexical);
+    }
+    return dirs;
+}
+
+void QSocPathContext::bindWritableRoot(const QString &dir)
+{
+    if (dir.isEmpty()) {
+        return;
+    }
+    const QString anchor = canonicalRoot(dir);
+    if (anchor.isEmpty()) {
+        return;
+    }
     QMutexLocker locker(&mutex);
-    QStringList  dirs;
+    writableAnchors.insert(rootKey(dir), anchor);
+}
+
+QList<QSocPathContext::WritableRoot> QSocPathContext::writableRoots() const
+{
+    QMutexLocker        locker(&mutex);
+    QList<WritableRoot> roots;
+    QSet<QString>       seen;
+    const auto          append = [this, &roots, &seen](const QString &dir, bool admitNew) {
+        if (dir.isEmpty()) {
+            return;
+        }
+        const QString lexical = normalizedRoot(dir);
+        const QString key     = rootKey(lexical);
+        if (seen.contains(key)) {
+            return;
+        }
+        seen.insert(key);
+        if (admitNew && !writableAnchors.contains(key)) {
+            const QString anchor = canonicalRoot(lexical);
+            if (!anchor.isEmpty()) {
+                writableAnchors.insert(key, anchor);
+            }
+        }
+        roots.append({lexical, writableAnchors.value(key)});
+    };
 
     /* Project directory */
     if (projectManager) {
-        QString projDir = projectManager->getProjectPath();
-        if (!projDir.isEmpty()) {
-            dirs << projDir;
-        }
+        append(projectManager->getProjectPath(), true);
     }
 
     /* Working directory */
-    if (!workingDir.isEmpty()) {
-        dirs << workingDir;
-    }
+    append(workingDir, false);
 
     /* User directories */
-    dirs << userDirs;
+    for (const QString &dir : userDirs) {
+        append(dir, false);
+    }
 
     /* System temp directory */
-    dirs << QDir::tempPath();
+    append(QDir::tempPath(), false);
 
-    return dirs;
+    return roots;
 }
 
 QString QSocPathContext::getSummary() const

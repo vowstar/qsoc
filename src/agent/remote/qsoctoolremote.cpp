@@ -171,6 +171,39 @@ QSocTool::ResultStatus remoteRunStatus(const QSocSshExec::Result &result)
 
 } // namespace
 
+QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &command)
+{
+    if (conn == nullptr || !conn->isUsable()) {
+        return sessionRefusal(conn);
+    }
+
+    QString cwd;
+    QString err;
+    if (!conn->resolveBoundCwd(&cwd, &err)) {
+        return QStringLiteral("Error: %1").arg(err);
+    }
+
+    constexpr int kRemoteShellEscapeMs = 15 * 60 * 1000;
+    QSocSshExec   exec(*conn->session());
+    const auto    result = exec.run(buildBashCommand(cwd, command), kRemoteShellEscapeMs);
+
+    QString output = QString::fromUtf8(result.stdoutBytes);
+    if (!result.stderrBytes.isEmpty()) {
+        output += QString::fromUtf8(result.stderrBytes);
+    }
+    if (result.timedOut) {
+        output += QStringLiteral("(timed out)\n");
+    } else if (result.aborted) {
+        output += QStringLiteral("(aborted)\n");
+    } else if (result.exitCode != 0) {
+        output += QStringLiteral("(exit code: %1)\n").arg(result.exitCode);
+    }
+    if (!result.errorText.isEmpty()) {
+        output += QStringLiteral("(%1)\n").arg(result.errorText);
+    }
+    return output;
+}
+
 /* read_file */
 
 QSocToolRemoteFileRead::QSocToolRemoteFileRead(
@@ -315,15 +348,14 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     if (!arguments.contains("content") || !arguments["content"].is_string()) {
         return QStringLiteral("Error: content is required");
     }
-    const QString      raw      = QString::fromStdString(arguments["file_path"].get<std::string>());
-    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
-    if (!resolved.error.isEmpty()) {
-        return resolved.error;
+    const QString raw = QString::fromStdString(arguments["file_path"].get<std::string>());
+    QString       remotePath;
+    QString       resolveError;
+    if (m_conn == nullptr) {
+        return QStringLiteral("Error: remote SSH connection is not configured");
     }
-    const QString remotePath = resolved.path;
-    const QString refusal    = writableRefusal(m_pathCtx, m_conn->sftp(), remotePath);
-    if (!refusal.isEmpty()) {
-        return refusal;
+    if (!m_conn->resolveWritablePath(raw, &remotePath, &resolveError)) {
+        return QStringLiteral("Error: %1").arg(resolveError);
     }
 
     /* Read-before-overwrite + stale guard for EXISTING remote files: an
@@ -489,14 +521,13 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (oldString == newString) {
         return QStringLiteral("Error: old_string and new_string are identical");
     }
-    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
-    if (!resolved.error.isEmpty()) {
-        return resolved.error;
+    QString remotePath;
+    QString resolveError;
+    if (m_conn == nullptr) {
+        return QStringLiteral("Error: remote SSH connection is not configured");
     }
-    const QString remotePath = resolved.path;
-    const QString refusal    = writableRefusal(m_pathCtx, m_conn->sftp(), remotePath);
-    if (!refusal.isEmpty()) {
-        return refusal;
+    if (!m_conn->resolveWritablePath(raw, &remotePath, &resolveError)) {
+        return QStringLiteral("Error: %1").arg(resolveError);
     }
     QString          err;
     const QByteArray bytes = m_conn->sftp()->readFile(remotePath, 0, &err);
@@ -595,8 +626,11 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
         }
     }
 
-    const QString cwd = (m_pathCtx != nullptr && !m_pathCtx->cwd().isEmpty()) ? m_pathCtx->cwd()
-                                                                              : QStringLiteral("/");
+    QString cwd;
+    QString resolveError;
+    if (!m_conn->resolveBoundCwd(&cwd, &resolveError)) {
+        return QStringLiteral("Error: %1").arg(resolveError);
+    }
 
     /* Background mode: spawn a detached job under
      * `<workspace>/.qsoc-agent/jobs/<id>/`, return job_id immediately. The
