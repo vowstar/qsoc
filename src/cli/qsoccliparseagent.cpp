@@ -4397,14 +4397,24 @@ bool QSocCliWorker::runAgentLoop(
          * in-session pastedContents. The chip labels in `display` are
          * rewritten with the new ids via a single regex pass. */
         auto recallHistoryEntry = [&](int idx) {
+            /* Load a recalled line without springing the /command completion
+             * popup. Browsing history is not composing a command, and a popup
+             * opened by the recalled text would capture the next Up/Down (it is
+             * checked first, above) and trap the user on that entry. Marking
+             * the exact text dismissed reuses the inputChanged guard; editing
+             * the line changes the text and re-enables completion. */
+            auto loadRecalled = [&](const QString &line) {
+                dismissedFor = line;
+                inputMonitor.setInputBuffer(line);
+            };
             const QString &display = inputHistory[idx];
             if (idx < 0 || idx >= inputHistoryPastes.size()) {
-                inputMonitor.setInputBuffer(display);
+                loadRecalled(display);
                 return;
             }
             const QMap<int, QString> &storedPastes = inputHistoryPastes[idx];
             if (storedPastes.isEmpty()) {
-                inputMonitor.setInputBuffer(display);
+                loadRecalled(display);
                 return;
             }
             /* Allocate fresh ids and fill pastedContents. */
@@ -4435,7 +4445,7 @@ bool QSocCliWorker::runAgentLoop(
                 pos = match.capturedEnd(0);
             }
             rewritten += display.mid(pos);
-            inputMonitor.setInputBuffer(rewritten);
+            loadRecalled(rewritten);
         };
 
         if (key == 'A') { /* Up */
