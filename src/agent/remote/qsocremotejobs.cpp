@@ -5,6 +5,13 @@
 
 #include "agent/qsoctool.h"
 
+#include <QUuid>
+
+QString newRemoteJobId()
+{
+    return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
 namespace {
 
 /* Wrap one value as a single shell word. */
@@ -22,8 +29,9 @@ QString shellQuote(const QString &value)
     return result;
 }
 
-const auto kUnknownScheme = QStringLiteral("unknown:");
-const auto kLogFence      = QStringLiteral("log:");
+const auto kUnknownScheme   = QStringLiteral("unknown:");
+const auto kPidLstartScheme = QStringLiteral("pid_lstart:");
+const auto kLogFence        = QStringLiteral("log:");
 
 /* The host-incarnation part of one token. The signal script prints the four
  * tokens past the `equal` branch only after its own boot comparison answered
@@ -66,7 +74,8 @@ QSocRemoteIdentityMatch compareIdentity(const QString &recorded, const QString &
     if (recorded.isEmpty() || live.isEmpty()) {
         return QSocRemoteIdentityMatch::Unknown;
     }
-    if (recorded.startsWith(kUnknownScheme) || live.startsWith(kUnknownScheme)) {
+    if (recorded.startsWith(kUnknownScheme) || live.startsWith(kUnknownScheme)
+        || recorded.startsWith(kPidLstartScheme) || live.startsWith(kPidLstartScheme)) {
         return QSocRemoteIdentityMatch::Unknown;
     }
     const int recordedColon = recorded.indexOf(QLatin1Char(':'));
@@ -330,9 +339,9 @@ QString identityCompareShell()
      * other, so they must not compare equal. */
     return QStringLiteral(
         "__cmp() { "
-        "case \"$1\" in \"\"|unknown:*|:*) echo unknown; return;; *:*) ;; "
+        "case \"$1\" in \"\"|unknown:*|pid_lstart:*|:*) echo unknown; return;; *:*) ;; "
         "*) echo unknown; return;; esac; "
-        "case \"$2\" in \"\"|unknown:*|:*) echo unknown; return;; *:*) ;; "
+        "case \"$2\" in \"\"|unknown:*|pid_lstart:*|:*) echo unknown; return;; *:*) ;; "
         "*) echo unknown; return;; esac; "
         "[ -n \"${1#*:}\" ] && [ -n \"${2#*:}\" ] || { echo unknown; return; }; "
         "[ \"${1%%:*}\" = \"${2%%:*}\" ] || { echo unknown; return; }; "
@@ -398,7 +407,7 @@ QString jobLaunchScript(
                                     shellQuote(jobId),
                                     bootIdentityProbe(),
                                     pidStartProbe(QStringLiteral("\"$__pid\"")));
-    return QStringLiteral("mkdir -p %1 || exit 1\nnohup /bin/bash -c %2 &\n")
+    return QStringLiteral("mkdir %1 || exit 1\nnohup /bin/bash -c %2 &\n")
         .arg(shellQuote(jobDir), shellQuote(wrapper));
 }
 

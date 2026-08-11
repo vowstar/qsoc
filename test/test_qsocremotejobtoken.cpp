@@ -39,6 +39,20 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void newJobIdsAreOpaqueUuids()
+    {
+        QSet<QString> ids;
+        for (int index = 0; index < 1000; ++index) {
+            const QString id = newRemoteJobId();
+            const QUuid   uuid(id);
+            QVERIFY(!uuid.isNull());
+            QCOMPARE(uuid.toString(QUuid::WithoutBraces), id);
+            QVERIFY(!ids.contains(id));
+            QVERIFY(!id.contains(QLatin1Char('/')));
+            ids.insert(id);
+        }
+    }
+
     /* specification: refuseUnrecordedJob.
      * An id no ledger entry names cannot be tied to a pid by anything the host
      * could be asked, so the refusal is owed before the round trip. */
@@ -180,6 +194,12 @@ private slots:
         QCOMPARE(
             compareIdentity(QStringLiteral("boot_id:x"), QStringLiteral("boot_id:x")),
             QSocRemoteIdentityMatch::Equal);
+    }
+
+    void aSecondResolutionPidTimestampCannotAuthorizeASignal()
+    {
+        const QString stamp = QStringLiteral("pid_lstart:Mon Jan  1 00:00:00 2035");
+        QCOMPARE(compareIdentity(stamp, stamp), QSocRemoteIdentityMatch::Unknown);
     }
 
     /* counterexample: the deciding comparison is generated shell, and its

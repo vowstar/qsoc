@@ -91,6 +91,7 @@ private slots:
     void aRecordWithNoPidSignalsNothing();
     void aTailedLogCannotForgeTheVerdict();
     void aStateFileCannotForgeTheVerdict();
+    void aLaunchDoesNotFollowAnExistingJobDirectory();
     void theShellComparisonAnswersEveryPairLikeItsReference();
 
 private:
@@ -463,6 +464,36 @@ void Test::aStateFileCannotForgeTheVerdict()
     QCOMPARE(parseJobStatusExitCode(status), QStringLiteral("0"));
     QVERIFY(status.contains(QStringLiteral("running=no")));
     QVERIFY(victimSurvives());
+}
+
+void Test::aLaunchDoesNotFollowAnExistingJobDirectory()
+{
+    if (!m_ready) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("a POSIX shell"));
+    }
+
+    const QString root    = m_dir.path() + QStringLiteral("/launch-link");
+    const QString outside = root + QStringLiteral("/outside");
+    const QString jobDir  = root + QStringLiteral("/job");
+    QVERIFY(QDir().mkpath(outside));
+    QVERIFY(QFile::link(outside, jobDir));
+
+    (void) runScript(
+        jobLaunchScript(jobDir, root, QStringLiteral("opaque-job"), QStringLiteral("true")));
+
+    for (const QString &name : {
+             QStringLiteral("command"),
+             QStringLiteral("start_time"),
+             QStringLiteral("boot_id"),
+             QStringLiteral("pid"),
+             QStringLiteral("pid_start"),
+             QStringLiteral("exit_code"),
+             QStringLiteral("output.log"),
+         }) {
+        QVERIFY2(
+            !QFile::exists(outside + QLatin1Char('/') + name),
+            qPrintable(QStringLiteral("launch wrote %1 through a job-directory link").arg(name)));
+    }
 }
 
 void Test::theShellComparisonAnswersEveryPairLikeItsReference()

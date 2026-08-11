@@ -15,6 +15,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstdint>
+
 namespace {
 
 /** @brief One resolved path argument, or the refusal to hand back. */
@@ -23,6 +25,16 @@ struct ResolvedPath
     QString path;
     QString error;
 };
+
+enum class RemoteJobPathUse : std::uint8_t {
+    Create,
+    Inspect,
+};
+
+QString remoteChildPath(const QString &parent, const QString &child)
+{
+    return parent == QStringLiteral("/") ? parent + child : parent + QLatin1Char('/') + child;
+}
 
 /**
  * @brief Turn a tool's path argument into the name the host will operate on.
@@ -54,36 +66,83 @@ ResolvedPath remoteResolve(QSocRemotePathContext *ctx, QSocRemoteConnection *con
     return {{}, QStringLiteral("Error: %1").arg(err)};
 }
 
-/**
- * @brief Empty when @p canonicalPath may be written, the refusal otherwise.
- * @details Both sides are canonicalized on the host: comparing a canonical
- *          path against a lexical writable directory refuses every write in a
- *          workspace that is itself reached through a symlink. A writable
- *          directory the host cannot resolve grants nothing, and a host that
- *          cannot answer at all refuses rather than guesses.
- */
-QString writableRefusal(
-    QSocRemotePathContext *ctx, QSocSftpClient *sftp, const QString &canonicalPath)
+ResolvedPath resolveRemoteJobPath(
+    QSocRemoteConnection *conn, const QString &jobId, RemoteJobPathUse use)
 {
-    QStringList dirs;
-    for (const QString &dir : ctx->writableDirs()) {
-        QString canonical;
-        QString err;
-        switch (sftp->canonicalize(dir, &canonical, &err)) {
-        case QSocSftpClient::Canonical::Ok:
-            dirs.append(canonical);
-            break;
-        case QSocSftpClient::Canonical::Unresolvable:
-            break;
-        case QSocSftpClient::Canonical::Unknown:
-            return QStringLiteral("Error: %1").arg(err);
+    if (conn == nullptr || conn->sftp() == nullptr) {
+        return {{}, QStringLiteral("remote job storage is not connected")};
+    }
+
+    const QString metadata = remoteChildPath(conn->path()->root(), QStringLiteral(".qsoc-agent"));
+    const QString requestedJobsRoot = remoteChildPath(metadata, QStringLiteral("jobs"));
+    const QString canonicalMetadata
+        = remoteChildPath(conn->canonicalWorkspace(), QStringLiteral(".qsoc-agent"));
+    const QString expectedJobsRoot = remoteChildPath(canonicalMetadata, QStringLiteral("jobs"));
+
+    QString jobsRoot;
+    QString err;
+    if (!conn->resolveWritablePath(requestedJobsRoot, &jobsRoot, &err)) {
+        return {{}, err};
+    }
+    if (jobsRoot != expectedJobsRoot) {
+        return {{}, QStringLiteral("remote job storage changed identity")};
+    }
+
+    if (use == RemoteJobPathUse::Create) {
+        if (!conn->sftp()->mkdirP(jobsRoot, &err)) {
+            return {{}, err.isEmpty() ? QStringLiteral("remote job storage cannot be created") : err};
+        }
+        QString verifiedJobsRoot;
+        if (!conn->resolveWritablePath(requestedJobsRoot, &verifiedJobsRoot, &err)) {
+            return {{}, err};
+        }
+        if (verifiedJobsRoot != expectedJobsRoot) {
+            return {{}, QStringLiteral("remote job storage changed identity")};
+        }
+        jobsRoot = verifiedJobsRoot;
+    }
+
+    const QString expectedJobDir = remoteChildPath(jobsRoot, jobId);
+    QString       jobDir;
+    if (!conn->resolveWritablePath(expectedJobDir, &jobDir, &err)) {
+        return {{}, err};
+    }
+    if (jobDir != expectedJobDir) {
+        return {{}, QStringLiteral("remote job directory changed identity")};
+    }
+
+    switch (conn->sftp()->linkPresence(jobDir, &err)) {
+    case QSocSftpClient::Presence::Absent:
+        return {jobDir, {}};
+    case QSocSftpClient::Presence::Unknown:
+        return {{}, err.isEmpty() ? QStringLiteral("remote job directory cannot be inspected") : err};
+    case QSocSftpClient::Presence::Present:
+        break;
+    }
+    if (use == RemoteJobPathUse::Create) {
+        return {{}, QStringLiteral("remote job directory already exists")};
+    }
+
+    static const QStringList stateFiles{
+        QStringLiteral("command"),
+        QStringLiteral("start_time"),
+        QStringLiteral("boot_id"),
+        QStringLiteral("pid"),
+        QStringLiteral("pid_start"),
+        QStringLiteral("exit_code"),
+        QStringLiteral("output.log"),
+    };
+    for (const QString &name : stateFiles) {
+        const QString expected = remoteChildPath(jobDir, name);
+        QString       resolved;
+        if (!conn->resolveWritablePath(expected, &resolved, &err)) {
+            return {{}, err};
+        }
+        if (resolved != expected) {
+            return {{}, QStringLiteral("remote job state changed identity: %1").arg(name)};
         }
     }
-    if (QSocRemotePathContext::isWithinAny(canonicalPath, dirs)) {
-        return {};
-    }
-    return QStringLiteral("Error: remote path is outside writable directories: %1")
-        .arg(canonicalPath);
+    return {jobDir, {}};
 }
 
 /* Wrap a user command for a remote POSIX shell running under bash -lc. */
@@ -640,20 +699,18 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
     const bool background = arguments.contains("background") && arguments["background"].is_boolean()
                             && arguments["background"].get<bool>();
     if (background) {
-        if (m_pathCtx == nullptr || m_pathCtx->root().isEmpty()) {
+        if (m_conn->path()->root().isEmpty()) {
             return QStringLiteral("Error: workspace root is not configured");
         }
-        const QString jobsRoot = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs");
-        /* The transport stamp keeps two jobs launched in the same millisecond
-         * across a reconnect from sharing a directory. */
-        const QString jobId  = QStringLiteral("%1-%2")
-                                   .arg(m_conn->generation())
-                                   .arg(QDateTime::currentMSecsSinceEpoch());
-        const QString jobDir = jobsRoot + QLatin1Char('/') + jobId;
+        const QString      jobId   = newRemoteJobId();
+        const ResolvedPath jobPath = resolveRemoteJobPath(m_conn, jobId, RemoteJobPathUse::Create);
+        if (!jobPath.error.isEmpty()) {
+            return QStringLiteral("Error: %1").arg(jobPath.error);
+        }
 
         QSocSshExec exec(*m_conn->session());
         m_running         = &exec;
-        const auto result = exec.run(jobLaunchScript(jobDir, cwd, jobId, cmd), 10000);
+        const auto result = exec.run(jobLaunchScript(jobPath.path, cwd, jobId, cmd), 10000);
         m_running         = nullptr;
 
         if (remoteRunStatus(result) == QSocTool::ResultStatus::Uncertain) {
@@ -686,7 +743,7 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
         record.pidStart     = report.pidStart;
         record.pid          = report.pid;
         record.launchedMs   = QDateTime::currentMSecsSinceEpoch();
-        QString launched    = composeJobLaunchResult(record, jobDir);
+        QString launched    = composeJobLaunchResult(record, jobPath.path);
         /* Recorded here or the id is unusable: bash_manage identifies a job by
          * what the ledger holds, and a re-observation brief names the ids it
          * wants checked from the same place. */
@@ -864,7 +921,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     if (m_conn == nullptr || !m_conn->isUsable()) {
         return sessionRefusal(m_conn);
     }
-    if (m_pathCtx == nullptr || m_pathCtx->root().isEmpty()) {
+    if (m_conn->path()->root().isEmpty()) {
         return QStringLiteral("Error: workspace root is not configured");
     }
     if (!arguments.contains("job_id") || !arguments["job_id"].is_string()) {
@@ -881,7 +938,18 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     if (jobId.contains(QLatin1Char('/')) || jobId.contains(QStringLiteral(".."))) {
         return QStringLiteral("Error: invalid job_id");
     }
-    const QString jobDir = m_pathCtx->root() + QStringLiteral("/.qsoc-agent/jobs/") + jobId;
+    if (action != QStringLiteral("status") && action != QStringLiteral("output")
+        && action != QStringLiteral("terminate") && action != QStringLiteral("kill")) {
+        return QStringLiteral("Error: unknown action '%1'").arg(action);
+    }
+    const bool signalling = action == QStringLiteral("terminate")
+                            || action == QStringLiteral("kill");
+    if (signalling) {
+        const QString unrecorded = refuseUnrecordedJob(jobId, *m_conn->jobs());
+        if (!unrecorded.isEmpty()) {
+            return unrecorded;
+        }
+    }
     /* What this session recorded for the id. An id it never handed out yields
      * a default record, which the scripts report as unverifiable. */
     const QSocRemoteJobRecord record = m_conn->jobs()->record(jobId);
@@ -917,7 +985,11 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     };
 
     if (action == QStringLiteral("status")) {
-        const auto    result  = runShell(jobStatusScript(jobDir, record), 5000);
+        const ResolvedPath jobPath = resolveRemoteJobPath(m_conn, jobId, RemoteJobPathUse::Inspect);
+        if (!jobPath.error.isEmpty()) {
+            return QStringLiteral("Error: %1").arg(jobPath.error);
+        }
+        const auto    result  = runShell(jobStatusScript(jobPath.path, record), 5000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
@@ -937,6 +1009,10 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         return verdict + jobScriptEvidence(observed) + stderrTail(result);
     }
     if (action == QStringLiteral("output")) {
+        const ResolvedPath jobPath = resolveRemoteJobPath(m_conn, jobId, RemoteJobPathUse::Inspect);
+        if (!jobPath.error.isEmpty()) {
+            return QStringLiteral("Error: %1").arg(jobPath.error);
+        }
         int maxLines = 200;
         if (arguments.contains("max_lines") && arguments["max_lines"].is_number_integer()) {
             maxLines = arguments["max_lines"].get<int>();
@@ -944,7 +1020,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                 maxLines = 200;
             }
         }
-        const auto    result  = runShell(jobOutputScript(jobDir, maxLines, record), 10000);
+        const auto    result  = runShell(jobOutputScript(jobPath.path, maxLines, record), 10000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
@@ -959,18 +1035,12 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                                      : composeJobRefusal(jobId, token);
         return verdict + jobScriptEvidence(observed);
     }
-    if (action == QStringLiteral("terminate") || action == QStringLiteral("kill")) {
+    if (signalling) {
         const bool    hard       = action == QStringLiteral("kill");
         const QString signal     = hard ? QStringLiteral("-KILL") : QStringLiteral("-TERM");
         const QString signalName = hard ? QStringLiteral("SIGKILL") : QStringLiteral("SIGTERM");
-        /* An id this session never handed out cannot be tied to a pid, and
-         * refusing it here costs no round trip. */
-        const QString unrecorded = refuseUnrecordedJob(jobId, *m_conn->jobs());
-        if (!unrecorded.isEmpty()) {
-            return unrecorded;
-        }
-        const auto    result  = runShell(jobSignalScript(record, signal), 5000);
-        const QString failure = queryFailure(result);
+        const auto    result     = runShell(jobSignalScript(record, signal), 5000);
+        const QString failure    = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
         }

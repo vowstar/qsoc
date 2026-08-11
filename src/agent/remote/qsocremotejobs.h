@@ -118,6 +118,9 @@ struct QSocRemoteJobRecord
     bool    settled    = false; /**< An exit code was observed for this job. */
 };
 
+/** @brief New process-independent opaque job id. */
+QString newRemoteJobId();
+
 /**
  * @brief Insertion-ordered set of background jobs, keyed by job id.
  * @details A plain value type: no QObject, no signals, no ownership of
@@ -258,10 +261,10 @@ QSocRemoteJobJudgement judgeSignal(
  * attests to nothing.
  *
  * Portability of the answers: exact on Linux with procfs (`boot_id` and
- * `proc_starttime`), second-resolution on macOS and other BSD hosts
- * (`init_lstart`, `kern_boottime`, `pid_lstart`), and `unknown:` on a host
- * with neither procfs nor a `ps` that takes `-o`. Unknown is the state that
- * says so; it is never silently treated as a match. */
+ * `proc_starttime`), second-resolution host identity on macOS and other BSD
+ * hosts (`init_lstart`, `kern_boottime`), and `unknown:` on a host with neither
+ * procfs nor a `ps` that takes `-o`. The second-resolution `pid_lstart` never
+ * authorizes a signal. Unknown is never silently treated as a match. */
 
 /** @brief Shell expression printing the host boot identity, scheme-tagged. */
 QString bootIdentityProbe();
