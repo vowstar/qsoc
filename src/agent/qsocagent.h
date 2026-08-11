@@ -303,13 +303,11 @@ public:
 
     /**
      * @brief Install the workspace health probe.
-     * @details Consulted after every tool call. When it reports a reason
-     *          the turn ends and the reason is shown to the user, because
-     *          a workspace that cannot serve one call will not serve the
-     *          next: without this the loop feeds the same failure back to
-     *          the model until the iteration cap, burning the whole turn
-     *          and a slice of context to rediscover it. Unset = the
-     *          workspace is assumed usable, which is the local case.
+     * @details Consulted before and after every dispatched tool call. The
+     *          pre-call check catches a shared transport replaced while the
+     *          run waited for the model; the post-call check catches a call
+     *          that killed its own link. A reason ends the turn before another
+     *          tool can act. Unset means the workspace is assumed usable.
      */
     void setWorkspaceHealthProbe(QSocWorkspaceHealthProbe probe)
     {

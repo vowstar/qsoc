@@ -274,7 +274,16 @@ public:
      *          The clock is the failed attempt's own connect timeout, so there
      *          is no sleep, no scheduler and no backoff state to own.
      */
-    ReconnectOutcome reconnect(QString *errorMessage);
+    /**
+     * @param budget Optional caller-owned reconnect counter. A binding shared
+     *               across sibling sub-agents must not share one budget: a
+     *               counter on the connection would let one child's reconnect
+     *               deny another's genuine drop, and a fresh child re-credit a
+     *               spent one. When supplied, this counter is consulted and
+     *               spent instead of the connection's. The main connection has
+     *               no siblings and passes nullptr to use its own.
+     */
+    ReconnectOutcome reconnect(QString *errorMessage, int *budget = nullptr);
 
     /** @brief Attempts spent on the most recent reconnect(). */
     int lastReconnectAttempts() const { return m_lastAttempts; }

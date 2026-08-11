@@ -9,7 +9,9 @@
 #include "agent/remote/qsocagentremote.h"
 
 #include <memory>
+#include <QList>
 #include <QMap>
+#include <QPointer>
 
 class QLLMService;
 class QSocAgent;
@@ -147,17 +149,29 @@ public:
      *          as live. A dropped link is reconnected in the same step.
      *          Exposed so the child's probe and its test share one path.
      */
-    static QString probeBindingHealth(QSocRemoteConnection *conn);
+    static QString probeBindingHealth(QSocRemoteConnection *conn, int *budget = nullptr);
+
+    /** @brief The children a binding's working-directory change fans out to. */
+    using CwdFanout = std::shared_ptr<QList<QPointer<QSocAgent>>>;
 
     /**
-     * @brief Route a binding's working-directory changes into a child's config.
-     * @details The working directory lives on the binding; the child's config
-     *          carries a copy of it into the system prompt and hook envelope.
-     *          This observer is the only path between them, so a reconnect that
-     *          rewinds the directory cannot leave the copy stale. Installed per
-     *          child because the binding is shared across siblings.
+     * @brief Fan a binding's working-directory changes out to every child on it.
+     * @details The shared connection allows exactly one observer. Installing it
+     *          once per binding, over @p fanout, is what lets a cwd change reach
+     *          all registered children rather than the last child's own observer
+     *          replacing the rest. The binding holds @p fanout, so the observer
+     *          touches no child after the binding that owns it is gone.
      */
-    static void bindChildCwd(QSocRemoteConnection *conn, QSocAgent *child);
+    static void installCwdFanout(QSocRemoteConnection *conn, const CwdFanout &fanout);
+
+    /**
+     * @brief Register a child for a binding's working-directory fan-out.
+     * @details The child's config carries the working directory into its system
+     *          prompt and hook envelope. Appending here, rather than replacing
+     *          the connection's single observer, is what stops a sibling on the
+     *          same binding from silently stealing the update from the rest.
+     */
+    static void bindChildCwd(const CwdFanout &fanout, QSocAgent *child);
 
 private:
     /**
@@ -184,6 +198,9 @@ private:
         std::unique_ptr<QObject> owner;
         /* Handle into owner's tree, not a second owner. */
         QSocToolRegistry *registry = nullptr;
+        /* The children a cwd change fans out to. Shared so the observer
+         * installCwdFanout puts on conn and every bindChildCwd name one list. */
+        CwdFanout cwdChildren = std::make_shared<QList<QPointer<QSocAgent>>>();
     };
 
     /**

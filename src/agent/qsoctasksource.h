@@ -64,6 +64,12 @@ inline QString statusWord(Status status)
     return QStringLiteral("unknown");
 }
 
+/** @brief A status the work will not leave: the run is over. */
+inline bool isTerminal(Status status)
+{
+    return status == Status::Completed || status == Status::Failed || status == Status::Aborted;
+}
+
 /**
  * @brief Compact row for list rendering.
  * @details `id` must be stable for the lifetime of the task; the overlay
@@ -128,6 +134,15 @@ public:
 signals:
     /** @brief Shape of listTasks() may have changed; consumers should refresh. */
     void tasksChanged();
+
+    /**
+     * @brief A task reached a terminal state, emitted exactly once per task.
+     * @details The single stop every terminal sink consumes: persistence, the
+     *          parent notification, the foreground waiter and the panel. A task
+     *          cut off while still pending ran no child to signal its end, so
+     *          for that task this is the only stop those sinks can hear.
+     */
+    void taskTerminal(const QString &id, QSocTask::Status state, const QString &text);
 };
 
 #endif /* QSOCTASKSOURCE_H */

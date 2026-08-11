@@ -31,12 +31,6 @@ QString terminalEventKind(QSocTask::Status state)
     return QStringLiteral("error");
 }
 
-bool isTerminal(QSocTask::Status state)
-{
-    return state == QSocTask::Status::Completed || state == QSocTask::Status::Failed
-           || state == QSocTask::Status::Aborted;
-}
-
 } /* namespace */
 
 QSocSubAgentTaskSource::QSocSubAgentTaskSource(QObject *parent)
@@ -308,6 +302,12 @@ void QSocSubAgentTaskSource::markTerminal(
         if (run.id != id) {
             continue;
         }
+        /* Single-shot: a panel kill can race the child's own finish, and both
+         * call here. The first transition owns the terminal event; a second
+         * must not re-persist or re-emit it under a different word. */
+        if (QSocTask::isTerminal(run.status)) {
+            return;
+        }
         run.status = state;
         if (state == QSocTask::Status::Completed) {
             run.finalResult = text;
@@ -318,6 +318,7 @@ void QSocSubAgentTaskSource::markTerminal(
         appendDiskEvent(id, terminalEventKind(state), text);
         writeMeta(run);
         emit tasksChanged();
+        emit taskTerminal(id, state, text);
         if (owner.isNull()) {
             return;
         }

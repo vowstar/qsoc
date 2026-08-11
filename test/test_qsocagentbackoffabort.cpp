@@ -20,6 +20,8 @@
 #include <QHash>
 #include <QHostAddress>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QQueue>
 #include <QScopeGuard>
 #include <QSignalSpy>
@@ -2650,6 +2652,95 @@ private slots:
         QCOMPARE(server.requestCount(), 1);
     }
 
+    /* A sibling can replace a shared remote transport while this run waits
+     * for the model. The first observation of that new generation must close
+     * the whole tool batch before any requested effect reaches dispatch. */
+    void workspaceFenceStopsBeforeDispatchAndClosesTheBatch()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCalls(
+            {QStringLiteral("side_effect_tool"), QStringLiteral("side_effect_tool")});
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   effect;
+        registry.registerTool(&effect);
+        QSocAgent  agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy aborted(&agent, &QSocAgent::runAborted);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+
+        const QString reason     = QStringLiteral("the shared SSH transport was replaced");
+        int           probeCalls = 0;
+        agent.setWorkspaceHealthProbe([&]() -> QString {
+            ++probeCalls;
+            return reason;
+        });
+
+        agent.runStream(QStringLiteral("request two effects"));
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 5000);
+
+        QCOMPARE(effect.executeCount(), 0);
+        QCOMPARE(probeCalls, 1);
+        QCOMPARE(completed.count(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        QCOMPARE(agent.takeStopNotice(), reason);
+
+        const json history = agent.getMessages();
+        QCOMPARE(history.size(), size_t(4));
+        QVERIFY(toolBatchHasExactlyOneResultPerCall(history, 1));
+        QCOMPARE(history[2].value("tool_call_id", std::string()), std::string("call_0"));
+        QCOMPARE(history[3].value("tool_call_id", std::string()), std::string("call_1"));
+        QCOMPARE(history[2].value("_qsoc_tool_state", std::string()), std::string("skipped"));
+        QCOMPARE(history[3].value("_qsoc_tool_state", std::string()), std::string("skipped"));
+    }
+
+    /* A pre-tool hook runs a nested event loop. Losing continuity inside that
+     * loop must be observed again before the requested effect is dispatched. */
+    void workspaceFenceIsRecheckedAfterAPreToolHook()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   effect;
+        registry.registerTool(&effect);
+        QSocAgent  agent(nullptr, &service, &registry, testConfig());
+        QSignalSpy aborted(&agent, &QSocAgent::runAborted);
+
+        HookCommandConfig command;
+        command.command    = QStringLiteral("sleep 0.1");
+        command.timeoutSec = 1;
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("side_effect_tool");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::PreToolUse].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+        agent.setHookManager(&hooks);
+
+        const QString reason     = QStringLiteral("workspace changed during the pre-tool hook");
+        bool          lost       = false;
+        int           probeCalls = 0;
+        agent.setWorkspaceHealthProbe([&]() -> QString {
+            ++probeCalls;
+            if (probeCalls == 1) {
+                QTimer::singleShot(10, &agent, [&lost] { lost = true; });
+            }
+            return lost ? reason : QString();
+        });
+
+        agent.runStream(QStringLiteral("request one effect"));
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 5000);
+
+        QCOMPARE(effect.executeCount(), 0);
+        QVERIFY2(probeCalls >= 2, "the workspace was not probed after the nested hook loop");
+        QCOMPARE(agent.takeStopNotice(), reason);
+    }
+
     /* Counterexample: the terminal path used to re-arm the notice from
      * ActiveRun, so a restarted run delivered it a second time. */
     void workspaceStopNoticeIsDeliveredOnce()
@@ -2695,12 +2786,12 @@ private slots:
         QCOMPARE(queuedNotices.size(), qsizetype(1));
         QCOMPARE(queuedNotices.at(0), reason);
         QCOMPARE(probeCalls, 1);
-        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(effect.executeCount(), 0);
         QCOMPARE(server.requestCount(), 2);
     }
 
-    /* Specification: passes before the change too. Guards the surviving
-     * publish point now that the terminal read is gone. */
+    /* The pre-dispatch fence publishes its reason before the abort signal, so
+     * the signal consumer can take the exact notice that stopped the run. */
     void workspaceStopNoticeStillReachesTheAbortHandler()
     {
         MockServer server;
@@ -2715,8 +2806,12 @@ private slots:
         QSignalSpy aborted(&agent, &QSocAgent::runAborted);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
 
-        const QString reason = QStringLiteral("remote workspace is unusable");
-        agent.setWorkspaceHealthProbe([&]() -> QString { return reason; });
+        const QString reason     = QStringLiteral("remote workspace is unusable");
+        int           probeCalls = 0;
+        agent.setWorkspaceHealthProbe([&]() -> QString {
+            ++probeCalls;
+            return probeCalls == 1 ? QString() : reason;
+        });
 
         QString abortNotice;
         connect(&agent, &QSocAgent::runAborted, &agent, [&](const QString &) {
@@ -2729,7 +2824,8 @@ private slots:
         QCOMPARE(abortNotice, reason);
         QCOMPARE(aborted.count(), 1);
         QCOMPARE(completed.count(), 0);
-        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(probeCalls, 2);
+        QCOMPARE(effect.executeCount(), 0);
         QCOMPARE(server.requestCount(), 1);
     }
 
@@ -2785,7 +2881,7 @@ private slots:
             requestContainsUserMessage(server, 1, brief),
             "the briefing was dropped by the user_prompt_submit hook");
         QCOMPARE(probeCalls, 1);
-        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(effect.executeCount(), 0);
         QCOMPARE(server.requestCount(), 2);
         QCOMPARE(completed.count(), 1);
     }
@@ -2831,7 +2927,7 @@ private slots:
 
         QCOMPARE(server.requestCount(), 1);
         QCOMPARE(probeCalls, 1);
-        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(effect.executeCount(), 0);
         const json response = json::parse(raw.toStdString());
         /* The probe stopped the child, so the spawn did not deliver an answer. */
         QCOMPARE(response.value("status", std::string()), std::string("uncertain"));
@@ -2969,10 +3065,10 @@ private slots:
         QVERIFY2(
             response.value("status", std::string()) != std::string("ok"),
             qPrintable(QStringLiteral("an aborted child reported success to the parent: ") + raw));
-        /* Not "failed": the child ran one tool before it was cut off, so its
-         * effects are unknown rather than absent. */
+        /* Not "failed": the child never produced a final answer. The fence
+         * proves this tool did not run, while the aborted run stays uncertain. */
         QCOMPARE(QSocTool::classifyResult(raw), QSocTool::ResultStatus::Uncertain);
-        QCOMPARE(effect.executeCount(), 1);
+        QCOMPARE(effect.executeCount(), 0);
         QVERIFY2(
             !response.value("result", std::string()).empty(),
             qPrintable(QStringLiteral("the abort lost the child's body: ") + raw));
@@ -3052,6 +3148,212 @@ private slots:
             raw.contains(QStringLiteral("aborted")),
             qPrintable(QStringLiteral("the cancellation stopped saying it was aborted: ") + raw));
         QVERIFY(response.contains("task_id"));
+        /* COUNTEREXAMPLE, single delivery. The inline return above owns the
+         * outcome, so the parent's queue must stay empty: a notification on
+         * top of it reports one stop twice. Settle the loop first so a late
+         * terminal signal had every chance to mis-deliver. */
+        QTest::qWait(150);
+        QCOMPARE(parent.pendingRequestCount(), 0);
+    }
+
+    /* COUNTEREXAMPLE: cancellation triggered by a terminal event must not
+     * overwrite that cached result or deliver it twice. */
+    void aCancelledSpawnReportsTheTerminalItAlreadyHas()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("never read"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+
+        /* Exits 2, so the hook blocks the prompt: the child reaches a real
+         * Failed through runError while start() is still nested. */
+        HookCommandConfig command;
+        command.command = QStringLiteral("exit 2");
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::UserPromptSubmit].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        QSocAgentConfig        config = testConfig();
+        config.autoBackgroundMs       = 0;
+        config.hooks                  = hookConfig;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        tool.setHookManager(&hooks);
+        registry.registerTool(&tool);
+
+        QObject owner;
+        QObject::connect(
+            &tasks,
+            &QSocTaskSource::taskTerminal,
+            &owner,
+            [&registry, &owner](const QString &, QSocTask::Status, const QString &) {
+                registry.abortCalls(&owner);
+            });
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "cancelled with a real outcome"},
+                {"prompt", "do the delegated work"},
+                {"run_in_background", true}},
+            &owner);
+        const json    response = json::parse(raw.toStdString());
+        const QString taskId   = QString::fromStdString(response["task_id"].get<std::string>());
+        const QString inline_  = QString::fromStdString(response["status"].get<std::string>());
+
+        /* The terminal event above requests cancellation synchronously. The
+         * cached failure must still own both the sidecar and inline result. */
+        QString persisted;
+        {
+            QFile metaFile(tasks.metaPathFor(taskId));
+            QVERIFY(metaFile.open(QIODevice::ReadOnly));
+            persisted = QJsonDocument::fromJson(metaFile.readAll())
+                            .object()
+                            .value(QStringLiteral("status"))
+                            .toString();
+        }
+        QCOMPARE(persisted, QStringLiteral("failed"));
+        QCOMPARE(inline_, QStringLiteral("error"));
+        QCOMPARE(QSocTool::classifyResult(raw), QSocTool::ResultStatus::Failed);
+        QTest::qWait(150);
+        QCOMPARE(parent.pendingRequestCount(), 0);
+    }
+
+    /* COUNTEREXAMPLE, lost hand-off. The auto-background timer fires while
+     * start() is nested in a hook's event loop, so its quit() lands before
+     * exec() and Qt resets it on entry. The call then sat out the child's
+     * whole run instead of returning at the timer. The hand-off must return
+     * promptly, and the child's later finish must arrive as the notification
+     * the hand-off promised. */
+    void anAutoBackgroundTimerFiringInsideAHookStillHandsOff()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("child work done"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+
+        HookCommandConfig command;
+        command.command = QStringLiteral("sleep 0.4; exit 0");
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::UserPromptSubmit].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        QSocAgentConfig        config = testConfig();
+        config.autoBackgroundMs       = 20;
+        config.hooks                  = hookConfig;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        tool.setHookManager(&hooks);
+        registry.registerTool(&tool);
+
+        QElapsedTimer clock;
+        clock.start();
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "hand-off under a nested hook"},
+                {"prompt", "do the delegated work"}});
+        const qint64 elapsedMs = clock.elapsed();
+        const json   response  = json::parse(raw.toStdString());
+
+        QVERIFY2(
+            elapsedMs < 3000,
+            qPrintable(QStringLiteral("the hand-off returned only after %1 ms").arg(elapsedMs)));
+        QCOMPARE(
+            QString::fromStdString(response["status"].get<std::string>()),
+            QStringLiteral("async_launched"));
+        /* The promised notification arrives once the child finishes. */
+        QTRY_COMPARE_WITH_TIMEOUT(parent.pendingRequestCount(), 1, 5000);
+    }
+
+    /* COUNTEREXAMPLE, decided is decided. A cancellation lands before the
+     * auto-background timer; the inline return owns the outcome, and the
+     * timer firing later must not re-route it into async_launched plus a
+     * notification. */
+    void aForegroundCancellationBeatsTheAutoBackgroundTimer()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueStream(QStringLiteral("never read"));
+        ScopedLlmConfigHome configHome(server);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QCOMPARE(service.endpointCount(), 1);
+
+        HookCommandConfig command;
+        command.command = QStringLiteral("sleep 0.4; exit 0");
+        HookMatcherConfig matcher;
+        matcher.matcher = QStringLiteral("*");
+        matcher.commands.append(command);
+        QSocHookConfig hookConfig;
+        hookConfig.byEvent[QSocHookEvent::UserPromptSubmit].append(matcher);
+        QSocHookManager hooks;
+        hooks.setConfig(hookConfig);
+
+        QSocAgentDefinitionRegistry definitions;
+        definitions.registerBuiltins();
+        QSocSubAgentTaskSource tasks;
+        QSocToolRegistry       registry;
+        QSocAgentConfig        config = testConfig();
+        config.autoBackgroundMs       = 20;
+        config.hooks                  = hookConfig;
+        QSocAgent     parent(nullptr, &service, &registry, config);
+        QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        tool.setParentAgent(&parent);
+        tool.setHookManager(&hooks);
+        registry.registerTool(&tool);
+
+        /* Fires as soon as any event loop runs, which is the hook's: the
+         * cancellation is delivered before the 20 ms timer. */
+        QObject owner;
+        QTimer::singleShot(0, &owner, [&registry, &owner]() { registry.abortCalls(&owner); });
+
+        const QString raw = registry.executeTool(
+            QStringLiteral("agent"),
+            json{
+                {"subagent_type", "general-purpose"},
+                {"description", "cancelled before the timer"},
+                {"prompt", "do the delegated work"}},
+            &owner);
+        const json response = json::parse(raw.toStdString());
+
+        QCOMPARE(QSocTool::classifyResult(raw), QSocTool::ResultStatus::Uncertain);
+        QVERIFY2(
+            QString::fromStdString(response["status"].get<std::string>())
+                != QStringLiteral("async_launched"),
+            qPrintable(QStringLiteral("a decided cancellation was re-routed to async: ") + raw));
+        /* And the one outcome was not also delivered as a notification. */
+        QTest::qWait(150);
+        QCOMPARE(parent.pendingRequestCount(), 0);
     }
 
     /* Counterexample: the foreground return reported the raw subagent_type

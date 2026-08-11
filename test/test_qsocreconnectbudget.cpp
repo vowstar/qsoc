@@ -124,6 +124,37 @@ private slots:
     }
 
     /*
+     * COUNTEREXAMPLE. Two sub-agents share one binding, so they must not share
+     * one reconnect budget: a counter on the connection lets the first child's
+     * reconnect deny the second child's genuine, unrelated drop, and lets a
+     * fresh child re-credit a spent one. Each child passes its own counter, so
+     * one child spending does not spend or refill another's.
+     */
+    void siblingBudgetsAreIndependent()
+    {
+        QObject              scratch;
+        QSocRemoteConnection conn;
+        bind(&conn, &scratch);
+        int attempts = 0;
+        conn.setRebuilder(failingRebuilder(&attempts));
+        QString err;
+
+        int childA = 0;
+        int childB = 0;
+        /* Child A spends its own budget on a real drop. */
+        QCOMPARE(conn.reconnect(&err, &childA), QSocRemoteConnection::ReconnectOutcome::Exhausted);
+        QCOMPARE(conn.reconnect(&err, &childA), QSocRemoteConnection::ReconnectOutcome::BudgetSpent);
+        /* Child B's first drop is not refused because A reconnected earlier. */
+        QCOMPARE(conn.reconnect(&err, &childB), QSocRemoteConnection::ReconnectOutcome::Exhausted);
+        /* And B's fresh counter did not re-credit A's spent one. */
+        QCOMPARE(conn.reconnect(&err, &childA), QSocRemoteConnection::ReconnectOutcome::BudgetSpent);
+        /* The connection's own counter, used by the main link, is untouched by
+         * either child, so a sibling cannot spend the main connection's budget
+         * either. */
+        QVERIFY(!conn.reconnectBudgetSpent());
+    }
+
+    /*
      * A spent budget is not a permanent refusal. A new user request is a new
      * intent and gets the full budget back. Without this the bound would be a
      * quality reduction rather than a bound: a link that came back between two

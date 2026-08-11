@@ -8,6 +8,7 @@
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocinterrupt.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/tool/qsoctoolagent.h"
@@ -125,6 +126,7 @@ private slots:
     void aBoundBindingReconnectsWhereItUsedToRefuse();
     void aChildProbeSensesTheLossAndAttemptsRecovery();
     void aReconnectKeepsTheChildConfigCwdLive();
+    void aSharedBindingFansCwdToEverySibling();
 
     /* Real loopback sshd: the execute() wiring. Last, it takes the sshd down. */
     void aDispatchedChildCarriesAHostBHealthProbe();
@@ -254,6 +256,7 @@ void Test::initTestCase()
     if (m_fixture.state() != QSocTestSshd::State::Ready) {
         return;
     }
+    QVERIFY(QSocInterrupt::installBridge());
     m_ready = prepare();
 }
 
@@ -406,12 +409,41 @@ void Test::aReconnectKeepsTheChildConfigCwdLive()
     QCOMPARE(conn.path()->cwd(), QStringLiteral("/w/live"));
     QCOMPARE(child.getConfig().remoteWorkingDir, QStringLiteral("/w/stale"));
 
-    /* After the fix: the observer writes the live cwd into the config. */
-    QSocToolAgent::bindChildCwd(&conn, &child);
+    /* After the fix: the fan-out observer writes the live cwd into the config. */
+    auto fanout = QSocToolAgent::CwdFanout(std::make_shared<QList<QPointer<QSocAgent>>>());
+    QSocToolAgent::installCwdFanout(&conn, fanout);
+    QSocToolAgent::bindChildCwd(fanout, &child);
     conn.resetReconnectBudget();
     QCOMPARE(conn.reconnect(&reconnectErr), QSocRemoteConnection::ReconnectOutcome::Reconnected);
     QCOMPARE(conn.path()->cwd(), QStringLiteral("/w/live"));
     QCOMPARE(child.getConfig().remoteWorkingDir, conn.path()->cwd());
+}
+
+/*
+ * Two children dispatched onto one shared binding: a working-directory change on
+ * the connection must reach both, not only the last to register. The old
+ * single-slot observer left every earlier sibling at its stale snapshot, so a
+ * relative write then resolved against a directory its config did not name.
+ */
+void Test::aSharedBindingFansCwdToEverySibling()
+{
+    QObject              scratch;
+    QSocRemoteConnection conn;
+    QVERIFY(conn.adopt(fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"))));
+
+    auto fanout = QSocToolAgent::CwdFanout(std::make_shared<QList<QPointer<QSocAgent>>>());
+    QSocToolAgent::installCwdFanout(&conn, fanout);
+
+    QSocAgentConfig config  = parentConfig();
+    config.remoteWorkingDir = QStringLiteral("/w");
+    QSocAgent first(nullptr, nullptr, nullptr, config);
+    QSocAgent second(nullptr, nullptr, nullptr, config);
+    QSocToolAgent::bindChildCwd(fanout, &first);
+    QSocToolAgent::bindChildCwd(fanout, &second);
+
+    conn.path()->setCwd(QStringLiteral("/w/new"));
+    QCOMPARE(first.getConfig().remoteWorkingDir, QStringLiteral("/w/new"));
+    QCOMPARE(second.getConfig().remoteWorkingDir, QStringLiteral("/w/new"));
 }
 
 /*

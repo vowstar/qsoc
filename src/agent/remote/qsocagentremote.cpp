@@ -586,7 +586,8 @@ QSocRemoteConnection::CwdChange QSocRemoteConnection::setWorkingDirectory(
     return CwdChange::Changed;
 }
 
-QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *errorMessage)
+QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
+    QString *errorMessage, int *budget)
 {
     m_lastAttempts = 0;
     if (m_session != nullptr && m_session->isConnected()) {
@@ -595,13 +596,17 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(QString *
     if (!m_rebuilder || m_target.isEmpty() || m_workspace.isEmpty()) {
         return ReconnectOutcome::Refused;
     }
-    /* Asked before the first attempt, not after it: the budget exists to stop
-     * the second and later tool calls of one turn from each paying a full
-     * connect sequence on the event loop. */
-    if (reconnectBudgetSpent()) {
+    /* The budget belongs to the caller when supplied: a binding shared across
+     * sibling sub-agents cannot share one counter without one child denying or
+     * re-crediting another. The connection owns the counter only for the main
+     * link, which has no siblings. Asked before the first attempt, not after
+     * it: the budget exists to stop the second and later tool calls of one turn
+     * from each paying a full connect sequence on the event loop. */
+    int &used = (budget != nullptr) ? *budget : m_reconnectsUsed;
+    if (used >= kReconnectBudgetPerTurn) {
         return ReconnectOutcome::BudgetSpent;
     }
-    ++m_reconnectsUsed;
+    ++used;
 
     const QString target    = m_target;
     const QString workspace = m_workspace;

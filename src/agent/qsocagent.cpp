@@ -1766,6 +1766,29 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             owner->finishSynchronousRun(run, RunOutcome::Error);
         }
     };
+    const auto workspaceFenceStopsRun = [owner, current, finishBatch]() {
+        if (!current()) {
+            return true;
+        }
+        const QSocWorkspaceHealthProbe probe = owner->workspaceHealthProbe_;
+        if (!probe) {
+            return false;
+        }
+        const QString lost = probe();
+        if (!current()) {
+            return true;
+        }
+        if (lost.isEmpty()) {
+            return false;
+        }
+
+        /* Publish at the detection point: a soft stop may restart on a queued
+         * request without reaching the terminal handler. */
+        owner->lastStopNotice_ = lost;
+        owner->requestStop(StopMode::Soft);
+        finishBatch();
+        return true;
+    };
 
     if (stopBatch()) {
         return false;
@@ -1864,6 +1887,16 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             return false;
         }
 
+        /* A sibling may have replaced a shared remote transport while this
+         * run waited for the model. Check continuity before hooks or a tool can
+         * act on a tree this run has never observed. */
+        if (workspaceFenceStopsRun()) {
+            return false;
+        }
+        if (stopBatch()) {
+            return false;
+        }
+
         if (agentConfig.planMode
             && (functionName == QStringLiteral("bash")
                 || functionName == QStringLiteral("remote_shell_bash"))) {
@@ -1931,6 +1964,18 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             dependencyFailed();
             return false;
         }
+        /* Hooks and policy checks may run nested event loops. A sibling can
+         * replace the shared transport while they are in flight. */
+        if (workspaceFenceStopsRun()) {
+            return false;
+        }
+        if (stopBatch()) {
+            return false;
+        }
+        if (run->tools.isNull()) {
+            dependencyFailed();
+            return false;
+        }
         run->executingToolCallId = toolCallId;
         const QString rawResult  = run->tools->executeTool(functionName, arguments, this);
         if (!current()) {
@@ -1978,21 +2023,10 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             return false;
         }
 
-        /* A workspace that just stopped answering will not answer the next
-         * call either. Ending the turn here is what keeps a dead remote
-         * link from consuming the whole iteration budget on identical
-         * failures. */
-        if (owner->workspaceHealthProbe_) {
-            const QString lost = owner->workspaceHealthProbe_();
-            if (!lost.isEmpty()) {
-                /* Published here rather than at teardown: a soft stop that
-                 * finds a queued request restarts the run instead of
-                 * reaching Terminal, so a notice held until then is dropped
-                 * exactly when an unattended workflow carries on. This is
-                 * the only write, so takeStopNotice() cannot deliver twice. */
-                owner->lastStopNotice_ = lost;
-                owner->requestStop(StopMode::Soft);
-            }
+        /* Keep the post-call check: this is where a call that killed its own
+         * transport is detected before the model can ask for another one. */
+        if (workspaceFenceStopsRun()) {
+            return false;
         }
         if (stopBatch()) {
             return false;

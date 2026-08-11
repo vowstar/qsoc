@@ -7,6 +7,7 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocinterrupt.h"
 #include "agent/tool/qsoctoolagent.h"
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
@@ -317,6 +318,7 @@ void Test::initTestCase()
     if (m_fixture.state() != QSocTestSshd::State::Ready) {
         return; /* the fixture's own state decides skip versus fail */
     }
+    QVERIFY(QSocInterrupt::installBridge());
     m_ready = prepare();
 }
 
