@@ -161,13 +161,14 @@ bool connectReplacementTransport(
     const QString               &workspace,
     AgentRemoteState            *out,
     QString                     *errorMessage,
-    const std::function<bool()> &abortProbe)
+    const std::function<bool()> &abortProbe,
+    QDeadlineTimer               deadline)
 {
     AgentRemoteState fresh;
-    if (!connectAgentSshSession(target, parent, &fresh, errorMessage, {}, abortProbe)) {
+    if (!connectAgentSshSession(target, parent, &fresh, errorMessage, {}, abortProbe, deadline)) {
         return false;
     }
-    if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
+    if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage, deadline)) {
         discardAgentRemoteState(&fresh);
         return false;
     }
@@ -1647,9 +1648,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
                                        const QString    &target,
                                        const QString    &workspace,
                                        AgentRemoteState *out,
-                                       QString          *errorMessage) {
+                                       QString          *errorMessage,
+                                       QDeadlineTimer    deadline) {
             return connectReplacementTransport(
-                this, target, workspace, out, errorMessage, conn->abortProbe());
+                this, target, workspace, out, errorMessage, conn->abortProbe(), deadline);
         });
         cliRemoteRegistry
             = buildAgentRemoteRegistry(this, &cliRemoteConn, socConfig, monitorTaskSource);
@@ -7271,9 +7273,10 @@ bool QSocCliWorker::runAgentLoop(
                                          const QString    &target,
                                          const QString    &workspace,
                                          AgentRemoteState *out,
-                                         QString          *errorMessage) {
+                                         QString          *errorMessage,
+                                         QDeadlineTimer    deadline) {
                 return connectReplacementTransport(
-                    this, target, workspace, out, errorMessage, remoteConn->abortProbe());
+                    this, target, workspace, out, errorMessage, remoteConn->abortProbe(), deadline);
             });
             remoteRegistry
                 = buildAgentRemoteRegistry(this, remoteConn, socConfig, monitorTaskSource);

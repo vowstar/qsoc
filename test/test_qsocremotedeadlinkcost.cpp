@@ -60,7 +60,7 @@ QString builtQsoc()
 /* What one turn on a link that stopped answering may hold the event loop for.
  * Above one tool call plus one bounded reconnect, below the sum of a reconnect
  * per tool call, so the bound distinguishes the two. */
-constexpr qint64 kTurnBudgetMs = 90000;
+constexpr qint64 kTurnBudgetMs = 80000;
 
 } // namespace
 

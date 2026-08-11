@@ -120,6 +120,24 @@ private slots:
         QVERIFY(!session.isConnected());
     }
 
+    /* An expired absolute deadline is stop-now, not the legacy zero value
+     * that means an unlimited configured timeout. */
+    void testExpiredAbsoluteDeadlineDoesNotBecomeUnlimited()
+    {
+        QSocSshSession    session;
+        QSocSshHostConfig host;
+        host.hostname      = QStringLiteral("qsoc.invalid.example.nxdomain.test");
+        host.port          = 22;
+        host.user          = QStringLiteral("nobody");
+        host.strictHostKey = QSocSshHostConfig::StrictHostKey::No;
+
+        QString    err;
+        const auto status = session.connectTo(host, QDeadlineTimer(0), &err);
+        QCOMPARE(status, QSocSshSession::ConnectStatus::Timeout);
+        QVERIFY(!session.isConnected());
+        QVERIFY(err.contains(QStringLiteral("stopped before resolving")));
+    }
+
     /* waitSocket with an invalid fd must report Fatal rather than block,
      * segfault, or claim a timeout the caller would retry through. */
     void testWaitSocketRejectsBadArguments()

@@ -240,10 +240,15 @@ public:
     /**
      * @brief Builds a fresh transport for an existing binding.
      * @details Supplied by whoever created the binding, because only they can
-     *          reach the connect helpers. Fills @p out on success.
+     *          reach the connect helpers. Fills @p out on success and spends
+     *          only the absolute deadline supplied by reconnect().
      */
     using Rebuilder = std::function<bool(
-        const QString &target, const QString &workspace, AgentRemoteState *out, QString *errorMessage)>;
+        const QString    &target,
+        const QString    &workspace,
+        AgentRemoteState *out,
+        QString          *errorMessage,
+        QDeadlineTimer    deadline)>;
 
     void setRebuilder(Rebuilder rebuilder);
 
@@ -296,8 +301,8 @@ public:
      *          required to make the agent re-observe before acting: this
      *          restores the link, it does not resume the work.
      *
-     *          The clock is the failed attempt's own connect timeout, so there
-     *          is no sleep, no scheduler and no backoff state to own.
+     *          Every attempt and bind stage shares one absolute clock, so a
+     *          retry receives only the time the earlier attempt left.
      */
     /**
      * @param budget Optional caller-owned reconnect counter. A binding shared
@@ -310,12 +315,18 @@ public:
      */
     ReconnectOutcome reconnect(QString *errorMessage, int *budget = nullptr);
 
+    /** @brief Reconnect while consuming an existing absolute deadline. */
+    ReconnectOutcome reconnect(QString *errorMessage, int *budget, QDeadlineTimer deadline);
+
     /** @brief Attempts spent on the most recent reconnect(). */
     int lastReconnectAttempts() const { return m_lastAttempts; }
 
 private:
     /** @brief How many times one reconnect() call tries before giving up. */
     static constexpr int kReconnectAttempts = 2;
+
+    /** @brief One absolute budget shared by every attempt and bind stage. */
+    static constexpr int kReconnectDeadlineMs = 30000;
 
     /**
      * @brief How many reconnect() calls one turn may spend.
@@ -387,6 +398,7 @@ private:
  * @param secretCallback Optional synchronous authentication prompt; not retained.
  * @param abortProbe Optional stop predicate, installed on every session in the
  *                   chain so a poll inside any of them can be cut short.
+ * @param deadline Absolute budget supplied to each hop and SFTP startup.
  * @return True on success, false on any connect or SFTP failure.
  */
 bool connectAgentSshSession(

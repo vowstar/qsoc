@@ -64,12 +64,15 @@ private:
      * installs minus the connect sequence. */
     static QSocRemoteConnection::Rebuilder rebuilderOn(QObject *scratch)
     {
-        return
-            [scratch](
-                const QString &target, const QString &workspace, AgentRemoteState *out, QString *) {
-                *out = fakeTransport(scratch, target, workspace);
-                return true;
-            };
+        return [scratch](
+                   const QString    &target,
+                   const QString    &workspace,
+                   AgentRemoteState *out,
+                   QString *,
+                   QDeadlineTimer) {
+            *out = fakeTransport(scratch, target, workspace);
+            return true;
+        };
     }
 
     /* The rebuilder the CLI installs, minus the interactive secret prompt. */
@@ -79,12 +82,13 @@ private:
                    const QString    &target,
                    const QString    &workspace,
                    AgentRemoteState *out,
-                   QString          *errorMessage) {
+                   QString          *errorMessage,
+                   QDeadlineTimer    deadline) {
             AgentRemoteState fresh;
-            if (!connectAgentSshSession(target, parent, &fresh, errorMessage)) {
+            if (!connectAgentSshSession(target, parent, &fresh, errorMessage, {}, {}, deadline)) {
                 return false;
             }
-            if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
+            if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage, deadline)) {
                 discardAgentRemoteState(&fresh);
                 return false;
             }

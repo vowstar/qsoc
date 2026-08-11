@@ -72,15 +72,18 @@ AgentRemoteState fakeTransport(QObject *scratch, const QString &target, const QS
  * its calls, so "a reconnect was attempted" is observable. */
 QSocRemoteConnection::Rebuilder countingRebuilder(QObject *scratch, int *builds)
 {
-    return
-        [scratch,
-         builds](const QString &target, const QString &workspace, AgentRemoteState *out, QString *) {
-            if (builds != nullptr) {
-                ++(*builds);
-            }
-            *out = fakeTransport(scratch, target, workspace);
-            return true;
-        };
+    return [scratch, builds](
+               const QString    &target,
+               const QString    &workspace,
+               AgentRemoteState *out,
+               QString *,
+               QDeadlineTimer) {
+        if (builds != nullptr) {
+            ++(*builds);
+        }
+        *out = fakeTransport(scratch, target, workspace);
+        return true;
+    };
 }
 
 /* An endpoint that accepts a request and never answers it, so the child that

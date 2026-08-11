@@ -174,14 +174,20 @@ void QSocToolAgent::installBindingRecovery(QSocRemoteConnection *conn)
     conn->setRebuilder([](const QString    &target,
                           const QString    &workspace,
                           AgentRemoteState *out,
-                          QString          *errorMessage) {
+                          QString          *errorMessage,
+                          QDeadlineTimer    deadline) {
         AgentRemoteState fresh;
-        if (!connectAgentSshSession(target, nullptr, &fresh, errorMessage, {}, [] {
-                return QSocInterrupt::requested();
-            })) {
+        if (!connectAgentSshSession(
+                target,
+                nullptr,
+                &fresh,
+                errorMessage,
+                {},
+                [] { return QSocInterrupt::requested(); },
+                deadline)) {
             return false;
         }
-        if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage)) {
+        if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage, deadline)) {
             discardAgentRemoteState(&fresh);
             return false;
         }

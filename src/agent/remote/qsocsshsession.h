@@ -56,6 +56,10 @@ public:
      */
     ConnectStatus connectTo(const QSocSshHostConfig &host, QString *errorMessage = nullptr);
 
+    /** @brief Connect while consuming an existing absolute deadline. */
+    ConnectStatus connectTo(
+        const QSocSshHostConfig &host, QDeadlineTimer deadline, QString *errorMessage = nullptr);
+
     /**
      * @brief Connect through a parent session's direct-tcpip channel.
      * @details Implements one hop of ProxyJump: opens a direct-tcpip channel
@@ -66,6 +70,13 @@ public:
      */
     ConnectStatus connectToVia(
         const QSocSshHostConfig &host, QSocSshSession *parent, QString *errorMessage = nullptr);
+
+    /** @brief Connect through a parent while consuming an existing deadline. */
+    ConnectStatus connectToVia(
+        const QSocSshHostConfig &host,
+        QSocSshSession          *parent,
+        QDeadlineTimer           deadline,
+        QString                 *errorMessage = nullptr);
 
     /** @brief Tear down the session and close the underlying socket. */
     void disconnectFromHost();
@@ -186,6 +197,9 @@ public:
     /** @brief Per-operation network timeout in milliseconds. Default 30000. */
     void setTimeoutMs(int ms);
     int  timeoutMs() const { return m_timeoutMs; }
+
+    /** @brief Absolute deadline used by the most recent connect. */
+    QDeadlineTimer connectDeadline() const { return m_connectDeadline; }
 
     /** @brief Outcome of one bounded wait on a session socket. */
     enum class WaitOutcome {

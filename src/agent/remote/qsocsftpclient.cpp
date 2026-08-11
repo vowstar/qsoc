@@ -24,6 +24,26 @@ constexpr int kCleanupMs = 2000;
  * meaningless. 8 outgoing chunks of MAX_SFTP_OUTGOING_SIZE. */
 constexpr qint64 kWriteWindowBytes = 8 * 30000;
 
+class DeadlineOverride
+{
+public:
+    DeadlineOverride(QDeadlineTimer *slot, QDeadlineTimer deadline)
+        : m_slot(slot)
+        , m_saved(*slot)
+    {
+        *m_slot = deadline;
+    }
+
+    ~DeadlineOverride() { *m_slot = m_saved; }
+
+    DeadlineOverride(const DeadlineOverride &)            = delete;
+    DeadlineOverride &operator=(const DeadlineOverride &) = delete;
+
+private:
+    QDeadlineTimer *m_slot;
+    QDeadlineTimer  m_saved;
+};
+
 /* Same dir as the final path; dot-prefix hides it in most ls output. The
  * suffix is random, not a timestamp: two writers inside the same
  * millisecond would otherwise pick the same name, and the file is opened
@@ -225,8 +245,8 @@ bool QSocSftpClient::drainClose(LIBSSH2_SFTP_HANDLE *handle)
      * small one of its own rather than inheriting an expired clock. Its
      * final code still matters: an unfinished close leaves a server-side
      * handle open and libssh2 mid-request. */
-    m_deadline = QDeadlineTimer(kCleanupMs);
-    int rc     = 0;
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    int              rc = 0;
     while ((rc = libssh2_sftp_close(handle)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
             return false;
@@ -244,8 +264,8 @@ bool QSocSftpClient::closeDir(LIBSSH2_SFTP_HANDLE *handle)
     if (handle == nullptr) {
         return true;
     }
-    m_deadline = QDeadlineTimer(kCleanupMs);
-    int rc     = 0;
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    int              rc = 0;
     while ((rc = libssh2_sftp_closedir(handle)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
             return false;
@@ -263,7 +283,7 @@ bool QSocSftpClient::drainUnlink(const QByteArray &path)
     /* The budget comes first: releasing a stranded subsystem and opening the
      * replacement are both requests, and both would otherwise inherit an
      * expired clock and strand themselves on the spot. */
-    m_deadline = QDeadlineTimer(kCleanupMs);
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
     if (!rebuildSubsystem()) {
         return false;
     }
@@ -366,8 +386,8 @@ void QSocSftpClient::close()
         m_stranded = false;
         return;
     }
-    m_deadline = QDeadlineTimer(kCleanupMs);
-    int rc     = 0;
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    int              rc = 0;
     while ((rc = libssh2_sftp_shutdown(m_sftp)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
             break;

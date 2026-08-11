@@ -355,16 +355,51 @@ bool connectAgentSshSession(
     };
 
     QList<QSocSshSession *> localJumps;
-    std::function<QSocSshSession *(const QSocSshHostConfig &, QSocSshSession *, QString *)>
+    QSet<QString>           activeAliases;
+    constexpr int           MAX_PROXY_JUMP_DEPTH = 16;
+    std::function<QSocSshSession *(
+        const QSocSshHostConfig &, const QString &, QSocSshSession *, QString *, int)>
         connectChain;
     connectChain = [&](const QSocSshHostConfig &cfg,
+                       const QString           &configAlias,
                        QSocSshSession          *parentSession,
-                       QString                 *errOut) -> QSocSshSession                 *{
+                       QString                 *errOut,
+                       int                      depth) -> QSocSshSession                      *{
+        if (abortProbe && abortProbe()) {
+            if (errOut != nullptr) {
+                *errOut = QStringLiteral("connection cancelled by user");
+            }
+            return nullptr;
+        }
+        if (deadline.hasExpired()) {
+            if (errOut != nullptr) {
+                *errOut = QStringLiteral("connection did not finish in time");
+            }
+            return nullptr;
+        }
+        if (depth >= MAX_PROXY_JUMP_DEPTH) {
+            if (errOut != nullptr) {
+                *errOut
+                    = QStringLiteral("ProxyJump chain exceeds %1 hops").arg(MAX_PROXY_JUMP_DEPTH);
+            }
+            return nullptr;
+        }
+        const QString aliasKey = configAlias.toCaseFolded();
+        if (activeAliases.contains(aliasKey)) {
+            if (errOut != nullptr) {
+                *errOut = QStringLiteral("ProxyJump cycle includes %1").arg(configAlias);
+            }
+            return nullptr;
+        }
+        activeAliases.insert(aliasKey);
+        const auto leaveAlias = qScopeGuard([&] { activeAliases.remove(aliasKey); });
+
         QSocSshSession *currentParent = parentSession;
         for (const QString &hopAlias : cfg.proxyJump) {
             const QSocSshHostConfig hopCfg = hopConfig(hopAlias);
             QString                 hopErr;
-            QSocSshSession         *hopSession = connectChain(hopCfg, currentParent, &hopErr);
+            QSocSshSession         *hopSession
+                = connectChain(hopCfg, hopAlias, currentParent, &hopErr, depth + 1);
             if (hopSession == nullptr) {
                 if (errOut != nullptr) {
                     *errOut = QStringLiteral("ProxyJump via %1 failed: %2").arg(hopAlias, hopErr);
@@ -387,8 +422,10 @@ bool connectAgentSshSession(
             session->setSecretCallback(secretCallback);
         }
         QSocSshSession::ConnectStatus status
-            = (currentParent != nullptr) ? session->connectToVia(cfg, currentParent, errOut)
-                                         : session->connectTo(cfg, errOut);
+            = (currentParent != nullptr)
+                  ? session->connectToVia(cfg, currentParent, deadline, errOut)
+                  : session->connectTo(cfg, deadline, errOut);
+        deadline = session->connectDeadline();
         session->setSecretCallback({});
         if (status != QSocSshSession::ConnectStatus::Ok) {
             delete session;
@@ -398,7 +435,7 @@ bool connectAgentSshSession(
     };
 
     QString err;
-    auto   *newSession = connectChain(host, nullptr, &err);
+    auto   *newSession = connectChain(host, parsed.rawAlias, nullptr, &err, 0);
     if (newSession == nullptr) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("SSH connect failed: %1").arg(err);
@@ -410,8 +447,12 @@ bool connectAgentSshSession(
         return false;
     }
 
-    auto *newSftp = new QSocSftpClient(*newSession);
-    if (!newSftp->open(&err)) {
+    auto      *newSftp  = new QSocSftpClient(*newSession);
+    const bool sftpOpen = newSftp->runWithin(deadline, [&] { return newSftp->open(&err); });
+    if (!sftpOpen) {
+        if (err.isEmpty() && deadline.hasExpired()) {
+            err = QStringLiteral("SFTP open did not finish in time");
+        }
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("SFTP open failed: %1").arg(err);
         }
@@ -1068,6 +1109,12 @@ QSocRemoteConnection::CwdChange QSocRemoteConnection::setWorkingDirectory(
 QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
     QString *errorMessage, int *budget)
 {
+    return reconnect(errorMessage, budget, QDeadlineTimer(kReconnectDeadlineMs));
+}
+
+QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
+    QString *errorMessage, int *budget, QDeadlineTimer deadline)
+{
     m_lastAttempts = 0;
     if (m_session != nullptr && m_session->isConnected()) {
         return ReconnectOutcome::NotNeeded;
@@ -1094,9 +1141,15 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
         if (m_abortProbe && m_abortProbe()) {
             return ReconnectOutcome::Aborted;
         }
+        if (deadline.hasExpired()) {
+            if (errorMessage != nullptr && errorMessage->isEmpty()) {
+                *errorMessage = QStringLiteral("reconnect did not finish in time");
+            }
+            break;
+        }
         m_lastAttempts = attempt;
         AgentRemoteState fresh;
-        if (!m_rebuilder(target, workspace, &fresh, errorMessage)) {
+        if (!m_rebuilder(target, workspace, &fresh, errorMessage, deadline)) {
             /* A failed attempt leaves the caller exactly as it was, so the
              * previous transport is still ours to free below. */
             continue;
@@ -1117,7 +1170,7 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
          * Background job stamps are deliberately kept: those jobs may still be
          * running, and the agent is told to verify them either way. */
         closeTransport();
-        adopt(std::move(fresh));
+        adoptWithin(std::move(fresh), &deadline);
         return ReconnectOutcome::Reconnected;
     }
     return ReconnectOutcome::Exhausted;

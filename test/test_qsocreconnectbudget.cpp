@@ -56,16 +56,18 @@ private:
      * succeeds, which is the case a turn has to stay bounded through. */
     static QSocRemoteConnection::Rebuilder failingRebuilder(int *attempts)
     {
-        return [attempts](const QString &, const QString &, AgentRemoteState *, QString *why) {
-            ++(*attempts);
-            QElapsedTimer clock;
-            clock.start();
-            while (clock.elapsed() < kAttemptCostMs) {
-                QTest::qSleep(10);
-            }
-            *why = QStringLiteral("the remote host stopped responding");
-            return false;
-        };
+        return
+            [attempts](
+                const QString &, const QString &, AgentRemoteState *, QString *why, QDeadlineTimer) {
+                ++(*attempts);
+                QElapsedTimer clock;
+                clock.start();
+                while (clock.elapsed() < kAttemptCostMs) {
+                    QTest::qSleep(10);
+                }
+                *why = QStringLiteral("the remote host stopped responding");
+                return false;
+            };
     }
 
     /* Bind a transport whose session was never connected: that reads as
@@ -124,6 +126,68 @@ private slots:
         /* Spent means spent, and it must not read as a host that refused. */
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::BudgetSpent);
         QVERIFY(conn.reconnectBudgetSpent());
+    }
+
+    /* Attempts are retries inside one operation, not separate operations. */
+    void attemptsShareOneAbsoluteDeadline()
+    {
+        QObject              scratch;
+        QSocRemoteConnection conn;
+        bind(&conn, &scratch);
+
+        QList<qint64> ends;
+        QList<qint64> remaining;
+        conn.setRebuilder([&ends, &remaining](
+                              const QString &,
+                              const QString &,
+                              AgentRemoteState *,
+                              QString       *why,
+                              QDeadlineTimer deadline) {
+            ends.append(deadline.deadlineNSecs());
+            remaining.append(deadline.remainingTime());
+            if (ends.size() == 1) {
+                QTest::qSleep(40);
+            }
+            *why = QStringLiteral("connect refused");
+            return false;
+        });
+
+        QString err;
+        QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Exhausted);
+        QCOMPARE(ends.size(), 2);
+        QCOMPARE(ends.at(0), ends.at(1));
+        QVERIFY(remaining.at(1) < remaining.at(0));
+    }
+
+    /* A spent clock ends the sequence; it must not buy the next attempt a
+     * fresh timeout. */
+    void anExpiredDeadlineStartsNoSecondAttempt()
+    {
+        QObject              scratch;
+        QSocRemoteConnection conn;
+        bind(&conn, &scratch);
+
+        int attempts = 0;
+        conn.setRebuilder([&attempts](
+                              const QString &,
+                              const QString &,
+                              AgentRemoteState *,
+                              QString       *why,
+                              QDeadlineTimer deadline) {
+            ++attempts;
+            while (!deadline.hasExpired()) {
+                QTest::qSleep(1);
+            }
+            *why = QStringLiteral("connect timed out");
+            return false;
+        });
+
+        QString err;
+        QCOMPARE(
+            conn.reconnect(&err, nullptr, QDeadlineTimer(30)),
+            QSocRemoteConnection::ReconnectOutcome::Exhausted);
+        QCOMPARE(attempts, 1);
+        QCOMPARE(conn.lastReconnectAttempts(), 1);
     }
 
     /*

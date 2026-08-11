@@ -16,6 +16,7 @@
 #include <QtGlobal>
 
 #include <atomic>
+#include <limits>
 
 #ifndef Q_OS_WIN
 #include <sys/socket.h>
@@ -54,26 +55,21 @@ public:
     /** @brief Stop forwarding; both sockets stay open. */
     void blackhole()
     {
-        const QMutexLocker locker(&m_controlLock);
-        m_healOnNextConnection = false;
-        m_blackhole.store(true, std::memory_order_relaxed);
+        m_blackholeThrough.store(std::numeric_limits<int>::max(), std::memory_order_relaxed);
     }
 
     /** @brief Stop forwarding until another client connection is accepted. */
     void blackholeUntilNextConnection()
     {
-        const QMutexLocker locker(&m_controlLock);
-        m_blackhole.store(true, std::memory_order_relaxed);
-        m_healOnNextConnection = true;
+        m_blackholeThrough.store(acceptedConnectionCount(), std::memory_order_relaxed);
+        m_stopReading.store(false, std::memory_order_relaxed);
     }
 
     /** @brief Resume forwarding on the established pair. */
     void heal()
     {
-        const QMutexLocker locker(&m_controlLock);
-        m_healOnNextConnection = false;
         m_stopReading.store(false, std::memory_order_relaxed);
-        m_blackhole.store(false, std::memory_order_relaxed);
+        m_blackholeThrough.store(-1, std::memory_order_relaxed);
     }
 
     /**
@@ -120,7 +116,7 @@ public:
     void halfClose()
     {
         const QMutexLocker locker(&m_socketsLock);
-        m_blackhole.store(true, std::memory_order_relaxed);
+        m_blackholeThrough.store(std::numeric_limits<int>::max(), std::memory_order_relaxed);
         if (m_sockets.isEmpty()) {
             return;
         }
@@ -158,24 +154,17 @@ protected:
         m_port = server.serverPort();
 
         QObject::connect(&server, &QTcpServer::newConnection, &server, [this, &server] {
-            QTcpSocket *downstream = server.nextPendingConnection();
-            {
-                const QMutexLocker locker(&m_controlLock);
-                if (m_healOnNextConnection) {
-                    m_healOnNextConnection = false;
-                    m_stopReading.store(false, std::memory_order_relaxed);
-                    m_blackhole.store(false, std::memory_order_relaxed);
-                }
-            }
-            m_acceptedConnections.fetch_add(1, std::memory_order_relaxed);
-            auto *upstream = new QTcpSocket(downstream);
+            QTcpSocket *downstream   = server.nextPendingConnection();
+            const int   connectionId = m_acceptedConnections.fetch_add(1, std::memory_order_relaxed)
+                                       + 1;
+            auto       *upstream     = new QTcpSocket(downstream);
             upstream->connectToHost(QHostAddress::LocalHost, m_upstreamPort);
             {
                 const QMutexLocker locker(&m_socketsLock);
                 m_sockets = {downstream, upstream};
             }
 
-            auto pump = [this](QTcpSocket *from, QTcpSocket *to) {
+            auto pump = [this, connectionId](QTcpSocket *from, QTcpSocket *to) {
                 /* Leaving the bytes unread is what distinguishes stopReading()
                  * from blackhole(): Qt stops draining the OS socket once its
                  * own buffer is full, the receive window closes, and the peer's
@@ -184,7 +173,7 @@ protected:
                     return;
                 }
                 const QByteArray bytes = from->readAll();
-                if (!m_blackhole.load(std::memory_order_relaxed)) {
+                if (!isBlackholed(connectionId)) {
                     to->write(bytes);
                 }
             };
@@ -204,6 +193,13 @@ protected:
     }
 
 private:
+    bool isBlackholed(int connectionId) const
+    {
+        const int through = m_blackholeThrough.load(std::memory_order_relaxed);
+        return through == std::numeric_limits<int>::max()
+               || (through >= 0 && connectionId <= through);
+    }
+
     static void shutdownSend(QTcpSocket *sock)
     {
 #ifndef Q_OS_WIN
@@ -220,12 +216,10 @@ private:
 
     std::atomic<bool>   m_stopReading{false};
     std::atomic<int>    m_acceptedConnections{0};
+    std::atomic<int>    m_blackholeThrough{-1};
     quint16             m_upstreamPort;
     quint16             m_port = 0;
     QSemaphore          m_listening;
-    std::atomic<bool>   m_blackhole{false};
-    mutable QMutex      m_controlLock;
-    bool                m_healOnNextConnection = false;
     mutable QMutex      m_socketsLock;
     QList<QTcpSocket *> m_sockets;
 };

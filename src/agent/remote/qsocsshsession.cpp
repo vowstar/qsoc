@@ -1684,6 +1684,13 @@ QSocSshSession::ConnectStatus QSocSshSession::authenticate(
 QSocSshSession::ConnectStatus QSocSshSession::connectTo(
     const QSocSshHostConfig &host, QString *errorMessage)
 {
+    armConnectDeadline();
+    return connectTo(host, m_connectDeadline, errorMessage);
+}
+
+QSocSshSession::ConnectStatus QSocSshSession::connectTo(
+    const QSocSshHostConfig &host, QDeadlineTimer deadline, QString *errorMessage)
+{
     /* Occupancy, not health: a session whose transport died still owns a
      * libssh2 handle, and overwriting it here would leak it. */
     if (m_session != nullptr) {
@@ -1693,7 +1700,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectTo(
         return ConnectStatus::AlreadyConnected;
     }
 
-    armConnectDeadline();
+    m_connectDeadline    = deadline;
     ConnectStatus status = openSocket(host.hostname, host.port, errorMessage);
     if (status != ConnectStatus::Ok) {
         clearConnection();
@@ -1729,6 +1736,16 @@ void QSocSshSession::disconnectFromHost()
 QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
     const QSocSshHostConfig &host, QSocSshSession *parent, QString *errorMessage)
 {
+    armConnectDeadline();
+    return connectToVia(host, parent, m_connectDeadline, errorMessage);
+}
+
+QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
+    const QSocSshHostConfig &host,
+    QSocSshSession          *parent,
+    QDeadlineTimer           deadline,
+    QString                 *errorMessage)
+{
     /* Occupancy, not health: a session whose transport died still owns a
      * libssh2 handle, and overwriting it here would leak it. */
     if (m_session != nullptr) {
@@ -1737,7 +1754,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         }
         return ConnectStatus::AlreadyConnected;
     }
-    armConnectDeadline();
+    m_connectDeadline = deadline;
     if (parent == nullptr || !parent->isConnected()) {
         const QString msg = QStringLiteral("Parent ProxyJump session is not connected");
         setError(msg);

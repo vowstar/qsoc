@@ -90,6 +90,19 @@ private slots:
         QCOMPARE(sftp.operationTimeoutMs(), 12345);
     }
 
+    /* An already-spent outer clock must refuse before issuing an SFTP call. */
+    void testExpiredAbsoluteDeadlineRunsNothing()
+    {
+        QSocSshSession session;
+        QSocSftpClient sftp(session);
+        bool           called = false;
+        QVERIFY(!sftp.runWithin(QDeadlineTimer(0), [&called] {
+            called = true;
+            return true;
+        }));
+        QVERIFY(!called);
+    }
+
     /* A stat that never reached a server must report Unknown, never Absent:
      * write_file skips its read-before-overwrite guard on Absent, so the
      * two must stay distinguishable. */

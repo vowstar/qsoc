@@ -43,18 +43,63 @@ private:
     /* A rebuilder that always produces a real transport. */
     static QSocRemoteConnection::Rebuilder rebuilderOn(QObject *scratch, int *builds = nullptr)
     {
-        return
-            [scratch, builds](
-                const QString &target, const QString &workspace, AgentRemoteState *out, QString *) {
-                if (builds != nullptr) {
-                    ++(*builds);
-                }
-                *out = fakeTransport(scratch, target, workspace);
-                return true;
-            };
+        return [scratch, builds](
+                   const QString    &target,
+                   const QString    &workspace,
+                   AgentRemoteState *out,
+                   QString *,
+                   QDeadlineTimer) {
+            if (builds != nullptr) {
+                ++(*builds);
+            }
+            *out = fakeTransport(scratch, target, workspace);
+            return true;
+        };
     }
 
 private slots:
+    void proxyJumpCyclesFailBeforeOpeningANetworkConnection()
+    {
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        QVERIFY(QDir().mkpath(home.filePath(QStringLiteral(".ssh"))));
+        const QByteArray oldHome     = qgetenv("HOME");
+        const bool       hadHome     = qEnvironmentVariableIsSet("HOME");
+        const auto       restoreHome = qScopeGuard(
+            [&] { hadHome ? qputenv("HOME", oldHome) : qunsetenv("HOME"); });
+        QVERIFY(qputenv("HOME", home.path().toUtf8()));
+
+        const auto rejects = [&](const QByteArray &config, const QString &target) {
+            QFile file(home.filePath(QStringLiteral(".ssh/config")));
+            QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(file.write(config), static_cast<qint64>(config.size()));
+            file.close();
+
+            AgentRemoteState state;
+            QString          error;
+            QElapsedTimer    elapsed;
+            elapsed.start();
+            QVERIFY(!connectAgentSshSession(target, this, &state, &error));
+            discardAgentRemoteState(&state);
+            QVERIFY2(elapsed.elapsed() < 1000, qPrintable(QString::number(elapsed.elapsed())));
+            QVERIFY2(error.contains(QStringLiteral("cycle"), Qt::CaseInsensitive), qPrintable(error));
+        };
+
+        rejects(
+            "Host cycle-a\n"
+            "  HostName 192.0.2.1\n"
+            "  ProxyJump cycle-a\n",
+            QStringLiteral("cycle-a"));
+        rejects(
+            "Host cycle-a\n"
+            "  HostName 192.0.2.1\n"
+            "  ProxyJump cycle-b\n"
+            "Host cycle-b\n"
+            "  HostName 192.0.2.2\n"
+            "  ProxyJump cycle-a\n",
+            QStringLiteral("cycle-a"));
+    }
+
     /* A reconnect must free the transport it replaces. adopt() overwrites the
      * pointers, so a missing teardown leaks one session, its SFTP channel and
      * its whole ProxyJump chain on every successful reconnect. */
@@ -93,7 +138,8 @@ private slots:
 
         int builds = 0;
         conn.setRebuilder(
-            [&builds](const QString &, const QString &, AgentRemoteState *, QString *why) {
+            [&builds](
+                const QString &, const QString &, AgentRemoteState *, QString *why, QDeadlineTimer) {
                 ++builds;
                 *why = QStringLiteral("connect refused");
                 return false;
@@ -127,7 +173,9 @@ private slots:
         /* A rebuilder but no identity to rebuild from. */
         QSocRemoteConnection noIdentity;
         noIdentity.setRebuilder(
-            [](const QString &, const QString &, AgentRemoteState *, QString *) { return true; });
+            [](const QString &, const QString &, AgentRemoteState *, QString *, QDeadlineTimer) {
+                return true;
+            });
         QCOMPARE(noIdentity.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Refused);
     }
 
@@ -306,10 +354,11 @@ private slots:
         QVERIFY(conn.adopt(fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"))));
         QCOMPARE(conn.generation(), QSocRemoteConnection::Generation{1});
 
-        conn.setRebuilder([](const QString &, const QString &, AgentRemoteState *, QString *why) {
-            *why = QStringLiteral("connect refused");
-            return false;
-        });
+        conn.setRebuilder(
+            [](const QString &, const QString &, AgentRemoteState *, QString *why, QDeadlineTimer) {
+                *why = QStringLiteral("connect refused");
+                return false;
+            });
         QString err;
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Exhausted);
         QCOMPARE(conn.generation(), QSocRemoteConnection::Generation{1});
@@ -318,7 +367,9 @@ private slots:
         /* A rebuilder that reports success without producing a transport is
          * refused, and that is not a bind either. */
         conn.setRebuilder(
-            [](const QString &, const QString &, AgentRemoteState *, QString *) { return true; });
+            [](const QString &, const QString &, AgentRemoteState *, QString *, QDeadlineTimer) {
+                return true;
+            });
         /* A later turn, so a fresh budget. */
         conn.resetReconnectBudget();
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Exhausted);
