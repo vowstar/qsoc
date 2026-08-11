@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/qsocfilehistory.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
@@ -25,6 +26,7 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QUuid>
 #include <QtTest>
 
 #include <atomic>
@@ -88,6 +90,19 @@ private slots:
     void writeRefusesADeadLinkThatPointsOutOfTheWorkspace();
     void writeRefusesALinkTheHostCannotFollow();
     void writeRefusesADotDotEscape();
+    void writeRefusesAnUnanchoredWritableRoot();
+    void writeRefusesAWorkspaceRootThatRetargeted();
+    void anExistingWorkspaceIdentityIsNeverReplaced();
+    void workspaceIdentityRefusesSymlinkedMetadataBeforeWriting();
+    void concurrentWorkspaceBindingAdoptsOneIdentity();
+    void sameNamedWorkspaceReplacementGetsANewIdentity();
+    void foregroundBashRefusesARetargetedCwd();
+    void shellEscapeRefusesARetargetedCwd();
+    void backgroundBashRefusesARetargetedCwd();
+    void bashManageRefusesEscapingJobState();
+    void reconnectDropsARetargetedCwd();
+    void rewindRechecksSymlinksBeforeWritingOrRemoving();
+    void rewindToAbsentUnlinksOnlyTheLeafSymlink();
     void writeWorksInAWorkspaceReachedThroughASymlink();
     void writeAndEditStillWorkOnAnOrdinaryPath();
 
@@ -103,17 +118,10 @@ private:
      */
     bool bindWorkspace(QSocRemoteConnection *conn, const QString &workspace, QString *error)
     {
-        auto *session = new QSocSshSession();
-        if (session->connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), error)
-            != QSocSshSession::ConnectStatus::Ok) {
-            delete session;
+        AgentRemoteState state;
+        if (!prepareWorkspaceState(&state, workspace, error)) {
             return false;
         }
-        AgentRemoteState state;
-        state.session   = session;
-        state.sftp      = new QSocSftpClient(*session);
-        state.targetKey = QStringLiteral("loopback");
-        state.workspace = workspace;
         if (!conn->adopt(std::move(state))) {
             /* adopt() drains the bundle only after it accepts one, so a
              * refusal leaves the transport here and it is ours to free. */
@@ -122,6 +130,33 @@ private:
             *error = QStringLiteral("adopt refused the staging bundle");
             return false;
         }
+        return true;
+    }
+
+    bool prepareWorkspaceState(AgentRemoteState *state, const QString &workspace, QString *error)
+    {
+        if (!connectRemoteState(state, error)) {
+            return false;
+        }
+        if (!prepareAgentRemoteWorkspace(workspace, state, error)) {
+            discardAgentRemoteState(state);
+            return false;
+        }
+        return true;
+    }
+
+    bool connectRemoteState(AgentRemoteState *state, QString *error)
+    {
+        auto *session = new QSocSshSession();
+        if (session->connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), error)
+            != QSocSshSession::ConnectStatus::Ok) {
+            delete session;
+            return false;
+        }
+        state->session          = session;
+        state->sftp             = new QSocSftpClient(*session);
+        state->targetKey        = QStringLiteral("loopback");
+        state->endpointIdentity = QStringLiteral("loopback:") + session->hostKeyIdentity();
         return true;
     }
 
@@ -1203,6 +1238,412 @@ void Test::writeRefusesADotDotEscape()
         qPrintable(
             QStringLiteral("the write escaped to %1; the tool said: %2").arg(control, result)));
     QVERIFY2(result.contains(QStringLiteral("outside writable directories")), qPrintable(result));
+}
+
+void Test::writeRefusesAnUnanchoredWritableRoot()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape         paths = makeEscape(QStringLiteral("unanchored_writable_root"));
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    conn.path()->setWritableDirs({paths.work, paths.outside});
+
+    const QString victim       = paths.outside + QStringLiteral("/new.txt");
+    const auto    historyFiles = remoteLiveFileAccessor(&conn);
+    QVERIFY(!historyFiles.coversPath(victim));
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString           result = tool.execute(
+        json{{"file_path", victim.toStdString()}, {"content", "blocked\n"}});
+
+    QVERIFY2(!QFileInfo::exists(victim), qPrintable(result));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("no bound identity")), qPrintable(result));
+}
+
+void Test::writeRefusesAWorkspaceRootThatRetargeted()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape         paths  = makeEscape(QStringLiteral("retargeted_workspace_root"));
+    const QString        parked = paths.work + QStringLiteral("-parked");
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    const QString tracked = paths.work + QStringLiteral("/tracked.txt");
+    QVERIFY(spill(tracked, QByteArray("baseline\n")));
+    QTemporaryDir historyRoot;
+    QVERIFY(historyRoot.isValid());
+    QSocFileHistory history(historyRoot.path(), QStringLiteral("retargeted-root"));
+    const auto      historyFiles = remoteLiveFileAccessor(&conn);
+    history.setLiveAccessor(historyFiles);
+    QVERIFY(historyFiles.coversPath(tracked));
+    QVERIFY(history.trackEdit(tracked, true, QStringLiteral("baseline\n")));
+
+    QVERIFY(QDir().rename(paths.work, parked));
+    QVERIFY(QFile::link(paths.outside, paths.work));
+    QVERIFY(!historyFiles.coversPath(tracked));
+    const QString outsideTracked = paths.outside + QStringLiteral("/tracked.txt");
+    QVERIFY(spill(outsideTracked, QByteArray("outside\n")));
+    const QString           victim = paths.outside + QStringLiteral("/new.txt");
+    QSocToolRemoteFileWrite tool(nullptr, &conn, conn.path());
+    const QString result = tool.execute(json{{"file_path", "new.txt"}, {"content", "blocked\n"}});
+
+    QVERIFY2(!QFileInfo::exists(victim), qPrintable(result));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("changed identity")), qPrintable(result));
+    const auto report = history.applySnapshot(0);
+    QVERIFY(report.restored.isEmpty());
+    QCOMPARE(slurp(outsideTracked), QByteArray("outside\n"));
+}
+
+void Test::anExistingWorkspaceIdentityIsNeverReplaced()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths  = makeEscape(QStringLiteral("existing_workspace_identity"));
+    const QString marker = paths.work + QStringLiteral("/.qsoc-agent/tree-id");
+    const QString treeId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QVERIFY(QDir().mkpath(QFileInfo(marker).absolutePath()));
+    QVERIFY(spill(marker, treeId.toUtf8()));
+
+    AgentRemoteState state;
+    QString          err;
+    QVERIFY2(prepareWorkspaceState(&state, paths.work, &err), qPrintable(err));
+    QCOMPARE(state.workspaceTreeId, treeId);
+    QCOMPARE(slurp(marker), treeId.toUtf8());
+    discardAgentRemoteState(&state);
+}
+
+void Test::workspaceIdentityRefusesSymlinkedMetadataBeforeWriting()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths    = makeEscape(QStringLiteral("symlinked_workspace_metadata"));
+    const QString metadata = paths.work + QStringLiteral("/.qsoc-agent");
+    const QString escaped  = paths.outside + QStringLiteral("/tree-id");
+    QVERIFY(QFile::link(paths.outside, metadata));
+
+    AgentRemoteState state;
+    QString          err;
+    QVERIFY2(connectRemoteState(&state, &err), qPrintable(err));
+    QVERIFY(!prepareAgentRemoteWorkspace(paths.work, &state, &err));
+    QVERIFY2(err.contains(QStringLiteral("changed identity")), qPrintable(err));
+    QVERIFY2(!QFileInfo::exists(escaped), "workspace binding wrote a tree id outside its root");
+    discardAgentRemoteState(&state);
+}
+
+void Test::concurrentWorkspaceBindingAdoptsOneIdentity()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape paths = makeEscape(QStringLiteral("concurrent_workspace_binding"));
+    QVERIFY(QDir(paths.work).removeRecursively());
+
+    struct Result
+    {
+        bool    ok = false;
+        QString treeId;
+        QString error;
+    };
+    Result     first;
+    Result     second;
+    QSemaphore ready;
+    QSemaphore publish;
+
+    auto bind = [this, &paths, &ready, &publish](Result *result) {
+        AgentRemoteState state;
+        if (!connectRemoteState(&state, &result->error)) {
+            return;
+        }
+        state.sftp->setCreateObserver([&ready, &publish] {
+            ready.release();
+            publish.acquire();
+        });
+        result->ok = prepareAgentRemoteWorkspace(paths.work, &state, &result->error);
+        if (result->ok) {
+            result->treeId = state.workspaceTreeId;
+        }
+        discardAgentRemoteState(&state);
+    };
+
+    std::thread firstThread(bind, &first);
+    std::thread secondThread(bind, &second);
+    const bool  bothReady = ready.tryAcquire(2, 10000);
+    publish.release(2);
+    firstThread.join();
+    secondThread.join();
+
+    QVERIFY2(bothReady, "both binders did not reach the create publication race");
+    QVERIFY2(first.ok, qPrintable(first.error));
+    QVERIFY2(second.ok, qPrintable(second.error));
+    QCOMPARE(first.treeId, second.treeId);
+    QVERIFY(!first.treeId.isEmpty());
+    QCOMPARE(slurp(paths.work + QStringLiteral("/.qsoc-agent/tree-id")), first.treeId.toUtf8());
+}
+
+void Test::sameNamedWorkspaceReplacementGetsANewIdentity()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape         paths  = makeEscape(QStringLiteral("same_named_workspace_replacement"));
+    const QString        parked = paths.work + QStringLiteral("-parked");
+    QSocRemoteConnection original;
+    QString              err;
+    QVERIFY2(bindWorkspace(&original, paths.work, &err), qPrintable(err));
+    const auto originalFiles = remoteLiveFileAccessor(&original);
+    const auto originalTree  = originalFiles.tree();
+    QVERIFY(!originalTree.isEmpty());
+
+    QVERIFY(QDir().rename(paths.work, parked));
+    QVERIFY(QDir().mkpath(paths.work));
+
+    QSocRemoteConnection replacement;
+    QVERIFY2(bindWorkspace(&replacement, paths.work, &err), qPrintable(err));
+    const auto replacementTree = remoteLiveFileAccessor(&replacement).tree();
+    QVERIFY(!replacementTree.isEmpty());
+    QVERIFY2(
+        replacementTree != originalTree,
+        "a new directory at the same canonical path inherited the old tree identity");
+
+    const QString victim = paths.work + QStringLiteral("/new.txt");
+    QVERIFY(!originalFiles.coversPath(victim));
+    QSocToolRemoteFileWrite writer(nullptr, &original, original.path());
+    const QString           result = writer.execute(
+        json{{"file_path", "new.txt"}, {"content", "wrong tree\n"}});
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("changed identity")), qPrintable(result));
+    QVERIFY(!QFileInfo::exists(victim));
+}
+
+void Test::foregroundBashRefusesARetargetedCwd()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths    = makeEscape(QStringLiteral("foreground_retargeted_cwd"));
+    const QString inside   = paths.work + QStringLiteral("/inside");
+    const QString selected = paths.work + QStringLiteral("/selected");
+    const QString victim   = paths.outside + QStringLiteral("/victim.txt");
+    QVERIFY(QDir().mkpath(inside));
+    QVERIFY(QFile::link(inside, selected));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    QCOMPARE(
+        conn.setWorkingDirectory(QStringLiteral("selected"), &err),
+        QSocRemoteConnection::CwdChange::Changed);
+    QVERIFY(QFile::remove(selected));
+    QVERIFY(QFile::link(paths.outside, selected));
+
+    QSocToolRemoteShellBash shell(nullptr, &conn, conn.path());
+    const QString           result = shell.execute(json{{"command", "printf wrong > victim.txt"}});
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside the workspace")), qPrintable(result));
+    QVERIFY(!QFileInfo::exists(victim));
+}
+
+void Test::shellEscapeRefusesARetargetedCwd()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths    = makeEscape(QStringLiteral("shell_escape_retargeted_cwd"));
+    const QString inside   = paths.work + QStringLiteral("/inside");
+    const QString selected = paths.work + QStringLiteral("/selected");
+    const QString victim   = paths.outside + QStringLiteral("/victim.txt");
+    QVERIFY(QDir().mkpath(inside));
+    QVERIFY(QFile::link(inside, selected));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    QCOMPARE(
+        conn.setWorkingDirectory(QStringLiteral("selected"), &err),
+        QSocRemoteConnection::CwdChange::Changed);
+    QVERIFY(QFile::remove(selected));
+    QVERIFY(QFile::link(paths.outside, selected));
+
+    const QString result
+        = runBoundRemoteShellEscape(&conn, QStringLiteral("printf wrong > victim.txt"));
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside the workspace")), qPrintable(result));
+    QVERIFY2(!QFileInfo::exists(victim), "remote shell escape ran from an unverified cwd");
+}
+
+void Test::backgroundBashRefusesARetargetedCwd()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths    = makeEscape(QStringLiteral("background_retargeted_cwd"));
+    const QString inside   = paths.work + QStringLiteral("/inside");
+    const QString selected = paths.work + QStringLiteral("/selected");
+    const QString victim   = paths.outside + QStringLiteral("/victim.txt");
+    QVERIFY(QDir().mkpath(inside));
+    QVERIFY(QFile::link(inside, selected));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    QCOMPARE(
+        conn.setWorkingDirectory(QStringLiteral("selected"), &err),
+        QSocRemoteConnection::CwdChange::Changed);
+    QVERIFY(QFile::remove(selected));
+    QVERIFY(QFile::link(paths.outside, selected));
+
+    QSocToolRemoteShellBash shell(nullptr, &conn, conn.path());
+    const QString           result = shell.execute(
+        json{{"command", "printf wrong > victim.txt"}, {"background", true}});
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(result.contains(QStringLiteral("outside the workspace")), qPrintable(result));
+    QVERIFY(!QFileInfo::exists(victim));
+}
+
+void Test::bashManageRefusesEscapingJobState()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape     paths      = makeEscape(QStringLiteral("bash_manage_state_escape"));
+    const QString    jobsRoot   = paths.work + QStringLiteral("/.qsoc-agent/jobs");
+    const QString    jobDir     = jobsRoot + QStringLiteral("/escape");
+    const QString    outsideLog = paths.outside + QStringLiteral("/output.log");
+    const QByteArray sentinel("outside sentinel\n");
+    QVERIFY(QDir().mkpath(jobsRoot));
+    QVERIFY(spill(outsideLog, sentinel));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    QSocToolRemoteBashManage manage(nullptr, &conn, conn.path());
+
+    QVERIFY(QFile::link(paths.outside, jobDir));
+    QString result = manage.execute(json{{"job_id", "escape"}, {"action", "output"}});
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(!result.contains(QString::fromUtf8(sentinel).trimmed()), qPrintable(result));
+    QCOMPARE(slurp(outsideLog), sentinel);
+
+    QVERIFY(QFile::remove(jobDir));
+    QVERIFY(QDir().mkpath(jobDir));
+    QVERIFY(QFile::link(outsideLog, jobDir + QStringLiteral("/output.log")));
+    result = manage.execute(json{{"job_id", "escape"}, {"action", "output"}});
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(!result.contains(QString::fromUtf8(sentinel).trimmed()), qPrintable(result));
+    QCOMPARE(slurp(outsideLog), sentinel);
+
+    QVERIFY(QFile::remove(jobDir + QStringLiteral("/output.log")));
+    const QString outsideCode = paths.outside + QStringLiteral("/exit_code");
+    QVERIFY(spill(outsideCode, QByteArray("77\n")));
+    QVERIFY(QFile::link(outsideCode, jobDir + QStringLiteral("/exit_code")));
+    result = manage.execute(json{{"job_id", "escape"}, {"action", "status"}});
+    QVERIFY2(result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QVERIFY2(!result.contains(QStringLiteral("exit_code=77")), qPrintable(result));
+    QCOMPARE(slurp(outsideCode), QByteArray("77\n"));
+}
+
+void Test::reconnectDropsARetargetedCwd()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths    = makeEscape(QStringLiteral("reconnect_retargeted_cwd"));
+    const QString inside   = paths.work + QStringLiteral("/inside");
+    const QString selected = paths.work + QStringLiteral("/selected");
+    const QString expected = paths.work + QStringLiteral("/after.txt");
+    const QString escaped  = paths.outside + QStringLiteral("/after.txt");
+    QVERIFY(QDir().mkpath(inside));
+    QVERIFY(QFile::link(inside, selected));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    const QString treeId = conn.workspaceTreeId();
+    QVERIFY(!treeId.isEmpty());
+    QCOMPARE(
+        conn.setWorkingDirectory(QStringLiteral("selected"), &err),
+        QSocRemoteConnection::CwdChange::Changed);
+    QVERIFY(QFile::remove(selected));
+    QVERIFY(QFile::link(paths.outside, selected));
+
+    conn.setRebuilder([this](
+                          const QString &,
+                          const QString    &workspace,
+                          AgentRemoteState *out,
+                          QString          *why,
+                          QDeadlineTimer) { return prepareWorkspaceState(out, workspace, why); });
+    conn.session()->disconnectFromHost();
+    QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Reconnected);
+    QCOMPARE(conn.workspaceTreeId(), treeId);
+    QCOMPARE(conn.path()->cwd(), paths.work);
+    QVERIFY(!conn.lastReconnectKeptCwd());
+
+    QSocToolRemoteShellBash shell(nullptr, &conn, conn.path());
+    const QString           result = shell.execute(json{{"command", "printf right > after.txt"}});
+    QVERIFY2(result.startsWith(QStringLiteral("status: ok")), qPrintable(result));
+    QCOMPARE(slurp(expected), QByteArray("right"));
+    QVERIFY(!QFileInfo::exists(escaped));
+}
+
+void Test::rewindRechecksSymlinksBeforeWritingOrRemoving()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths       = makeEscape(QStringLiteral("rewind_symlink_escape"));
+    const QString originalDir = paths.work + QStringLiteral("/real");
+    const QString parkedDir   = paths.work + QStringLiteral("/parked");
+    const QString present     = originalDir + QStringLiteral("/present.txt");
+    const QString absent      = originalDir + QStringLiteral("/absent.txt");
+    QVERIFY(QDir().mkpath(originalDir));
+    QVERIFY(spill(present, QByteArray("before\n")));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+
+    QTemporaryDir historyRoot;
+    QVERIFY(historyRoot.isValid());
+    QSocFileHistory history(historyRoot.path(), QStringLiteral("rewind-symlink"));
+    history.setLiveAccessor(remoteLiveFileAccessor(&conn));
+    QVERIFY(history.trackEdit(present, true, QStringLiteral("before\n")));
+    QVERIFY(history.trackEdit(absent, false, QString()));
+
+    QVERIFY(QDir().rename(originalDir, parkedDir));
+    QVERIFY(QFile::link(paths.outside, originalDir));
+    const QString outsidePresent = paths.outside + QStringLiteral("/present.txt");
+    const QString outsideAbsent  = paths.outside + QStringLiteral("/absent.txt");
+    QVERIFY(spill(outsidePresent, QByteArray("outside present\n")));
+    QVERIFY(spill(outsideAbsent, QByteArray("outside absent\n")));
+
+    const auto report = history.applySnapshot(0);
+    QVERIFY(report.restored.isEmpty());
+    QCOMPARE(report.failed, QStringList{present});
+    QCOMPARE(report.unknown, QStringList{absent});
+    QCOMPARE(slurp(outsidePresent), QByteArray("outside present\n"));
+    QCOMPARE(slurp(outsideAbsent), QByteArray("outside absent\n"));
+}
+
+void Test::rewindToAbsentUnlinksOnlyTheLeafSymlink()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    const Escape  paths  = makeEscape(QStringLiteral("rewind_leaf_link"));
+    const QString target = paths.work + QStringLiteral("/target.txt");
+    const QString link   = paths.work + QStringLiteral("/created.txt");
+    QVERIFY(spill(target, QByteArray("only copy\n")));
+
+    QSocRemoteConnection conn;
+    QString              err;
+    QVERIFY2(bindWorkspace(&conn, paths.work, &err), qPrintable(err));
+    QTemporaryDir historyRoot;
+    QVERIFY(historyRoot.isValid());
+    QSocFileHistory history(historyRoot.path(), QStringLiteral("rewind-leaf-link"));
+    history.setLiveAccessor(remoteLiveFileAccessor(&conn));
+    QVERIFY(history.trackEdit(link, false, QString()));
+    QVERIFY(QFile::link(target, link));
+
+    const auto report = history.applySnapshot(0);
+    QCOMPARE(report.restored, QStringList{link});
+    QVERIFY(!QFileInfo(link).isSymLink());
+    QCOMPARE(slurp(target), QByteArray("only copy\n"));
 }
 
 /*
