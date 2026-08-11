@@ -236,6 +236,45 @@ bool QSocSession::appendMeta(const QString &key, const QString &value)
     return appendJsonLine(filePathValue, line);
 }
 
+bool QSocSession::replaceWithMeta(const QList<QPair<QString, QString>> &metadata)
+{
+    const QFileInfo info(filePathValue);
+    QDir            parent = info.absoluteDir();
+    if (!parent.exists() && !parent.mkpath(QStringLiteral("."))) {
+        return false;
+    }
+    QSaveFile file(filePathValue);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return false;
+    }
+    for (const auto &entry : metadata) {
+        nlohmann::json line;
+        line["type"]  = "meta";
+        line["ts"]    = isoNow().toStdString();
+        line["key"]   = entry.first.toStdString();
+        line["value"] = entry.second.toStdString();
+        QByteArray payload;
+        try {
+            payload = QByteArray::fromStdString(line.dump());
+        } catch (const nlohmann::json::exception &) {
+            file.cancelWriting();
+            return false;
+        }
+        payload.append('\n');
+        if (file.write(payload) != payload.size()) {
+            file.cancelWriting();
+            return false;
+        }
+    }
+    if (!file.commit()) {
+        return false;
+    }
+    pendingMeta.clear();
+    persisted = true;
+    return true;
+}
+
 bool QSocSession::appendRun(const RunRecord &record)
 {
     const QString event = runEventName(record.event);

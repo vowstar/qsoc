@@ -118,6 +118,9 @@ public:
      */
     bool appendMeta(const QString &key, const QString &value);
 
+    /** @brief Atomically replace the transcript with the supplied metadata. */
+    bool replaceWithMeta(const QList<QPair<QString, QString>> &metadata);
+
     /**
      * @brief Append one main-agent run lifecycle event.
      * @details Checkpoint records retain the input and goal binding from the
@@ -134,8 +137,7 @@ public:
 
     /**
      * @brief Replace the entire JSONL with the given message list. Used by
-     *        /clear to truncate the session, and by full rewrites when the
-     *        agent compacts in place.
+     *        full rewrites when the agent compacts in place.
      */
     bool rewriteMessages(const nlohmann::json &messages);
 

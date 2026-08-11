@@ -120,12 +120,14 @@ private slots:
         QVERIFY(rows[0].summary.startsWith(QStringLiteral("general-purpose")));
         QCOMPARE(src.runCount(), 1);
         QVERIFY(!src.hasActiveRun());
+        QVERIFY(src.hasUnsettledRun());
 
         /* Admitting it (a slot is free) flips it Running and active. */
         src.start(id, []() {});
         rows = src.listTasks();
         QCOMPARE(rows[0].status, QSocTask::Status::Running);
         QVERIFY(src.hasActiveRun());
+        QVERIFY(src.hasUnsettledRun());
     }
 
     void testAppendTranscriptAccumulates()
@@ -164,6 +166,7 @@ private slots:
         QCOMPARE(rows[0].status, QSocTask::Status::Completed);
         QVERIFY(!rows[0].canKill);
         QVERIFY(!src.hasActiveRun());
+        QVERIFY(!src.hasUnsettledRun());
         const QString tail = src.tailFor(id, 1024);
         QVERIFY(tail.contains(QStringLiteral("=== final ===")));
         QVERIFY(tail.contains(QStringLiteral("the answer is 42")));

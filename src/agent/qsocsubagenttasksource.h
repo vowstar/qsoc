@@ -109,6 +109,9 @@ public:
      */
     bool hasActiveRun() const;
 
+    /** @brief True while any run is Pending or Running. */
+    bool hasUnsettledRun() const;
+
     /**
      * @brief How many runs are currently Running. Used by the
      *        spawn tool to enforce the maxConcurrentSubagents cap

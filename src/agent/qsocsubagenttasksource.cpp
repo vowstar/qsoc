@@ -14,6 +14,7 @@
 #include <QStandardPaths>
 #include <QStringList>
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -360,6 +361,13 @@ void QSocSubAgentTaskSource::setIsolationMetadata(
 bool QSocSubAgentTaskSource::hasActiveRun() const
 {
     return countRunning() > 0;
+}
+
+bool QSocSubAgentTaskSource::hasUnsettledRun() const
+{
+    return std::any_of(runs_.cbegin(), runs_.cend(), [](const RunState &run) {
+        return run.status == QSocTask::Status::Pending || run.status == QSocTask::Status::Running;
+    });
 }
 
 int QSocSubAgentTaskSource::countRunning() const

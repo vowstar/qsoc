@@ -273,7 +273,8 @@ The following commands are available during an interactive session:
     table.hline(),
     [`exit`, `quit`, `/exit`, `/quit`], [Exit the agent],
     [`/branch [name]`], [Fork the current session into a new one],
-    [`/clear`], [Clear conversation history],
+    [`/clear`], [Start a fresh session; the previous session and its file
+      checkpoints remain available to resume],
     [`/compact`], [Compact context and report tokens saved],
     [`/context`], [Show token usage breakdown and suggestions],
     [`/cost`], [Show session token totals and cost (if rates configured)],

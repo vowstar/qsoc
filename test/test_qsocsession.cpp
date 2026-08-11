@@ -103,6 +103,29 @@ private slots:
             QSocSession::readMeta(QStringLiteral("/no/such/file"), QStringLiteral("x")).isEmpty());
     }
 
+    void testReplaceWithMetaPersistsAnEmptySession()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+        QVERIFY(session.replaceWithMeta(
+            {{QStringLiteral("created"), QStringLiteral("2026-08-11T00:00:00Z")},
+             {QStringLiteral("cwd"), tempDir.path()}}));
+
+        QVERIFY(QFileInfo::exists(path));
+        QVERIFY(QSocSession::loadMessages(path).empty());
+        QCOMPARE(
+            QSocSession::readMeta(path, QStringLiteral("created")),
+            QStringLiteral("2026-08-11T00:00:00Z"));
+        QCOMPARE(QSocSession::readMeta(path, QStringLiteral("cwd")), tempDir.path());
+        const QList<QSocSession::Info> sessions = QSocSession::listAll(tempDir.path());
+        QCOMPARE(sessions.size(), 1);
+        QCOMPARE(sessions.first().id, id);
+    }
+
     void testLoadIgnoresPartialTail()
     {
         QTemporaryDir tempDir;

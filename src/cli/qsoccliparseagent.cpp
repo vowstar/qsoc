@@ -3202,35 +3202,41 @@ bool QSocCliWorker::runAgentLoop(
      * creation meta, and rewire the file-writing tools. Used by /project
      * switch; startup uses the same building blocks inline to interleave
      * with the resume path. */
-    auto startFreshSessionAt = [&](const QString             &projectPath,
-                                   const QString             &newId,
-                                   std::unique_ptr<QLockFile> nextLock) {
-        const QString sessionPath
-            = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
-        if (!nextLock) {
-            return false;
-        }
-        currentSession     = std::make_unique<QSocSession>(newId, sessionPath);
-        currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, newId);
-        sessionLock        = std::move(nextLock);
-        currentSession->appendMeta(
-            QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-        currentSession->appendMeta(QStringLiteral("cwd"), projectPath);
-        persistedMessages            = json::array();
-        lastPersistedIndex           = 0;
-        historyInputBlocked          = false;
-        recoveryRequiresUserInput    = false;
-        releaseRecoveryGateAtRequest = false;
-        /* In remote mode the file-writing tools are the SFTP-backed ones and
+    auto startFreshSessionAt =
+        [&](const QString &projectPath, const QString &newId, std::unique_ptr<QLockFile> nextLock) {
+            const QString sessionPath
+                = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
+            if (!nextLock) {
+                return false;
+            }
+            auto nextSession = std::make_unique<QSocSession>(newId, sessionPath);
+            auto nextHistory = std::make_unique<QSocFileHistory>(projectPath, newId);
+            const QList<QPair<QString, QString>> metadata{
+                {QStringLiteral("created"),
+                 QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+                {QStringLiteral("cwd"), projectPath},
+            };
+            if (!nextHistory->storageIsBound() || !nextSession->replaceWithMeta(metadata)) {
+                return false;
+            }
+            currentSession               = std::move(nextSession);
+            currentFileHistory           = std::move(nextHistory);
+            sessionLock                  = std::move(nextLock);
+            persistedMessages            = json::array();
+            lastPersistedIndex           = 0;
+            historyInputBlocked          = false;
+            recoveryRequiresUserInput    = false;
+            releaseRecoveryGateAtRequest = false;
+            /* In remote mode the file-writing tools are the SFTP-backed ones and
          * the live accessor has to follow the transport; wiring only the
          * local tools here would silently checkpoint the local disk. */
-        if (remoteConn->sftp() != nullptr && remoteRegistry != nullptr) {
-            wireRemoteFileHistory(remoteRegistry);
-        } else {
-            wireFileHistoryTools();
-        }
-        return true;
-    };
+            if (agent->getConfig().remoteMode && remoteRegistry != nullptr) {
+                wireRemoteFileHistory(remoteRegistry);
+            } else {
+                wireFileHistoryTools();
+            }
+            return true;
+        };
 
     /* Persist the session after compaction. compact() rewrites the in-memory
      * message array, so the append-only delta path would leave the stale
@@ -6272,23 +6278,33 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
         if (cmd == "/clear") {
+            if (!currentFileHistory || !currentFileHistory->storageIsBound()
+                || (currentSession && QFileInfo(currentSession->filePath()).isSymLink())) {
+                compositor.printContent(
+                    "History clear refused: the project storage binding changed.\n");
+                continue;
+            }
+            if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                    localRegistry->getTool(QStringLiteral("agent")));
+                spawnTool != nullptr && spawnTool->taskSource() != nullptr
+                && spawnTool->taskSource()->hasUnsettledRun()) {
+                compositor.printContent(
+                    "History clear refused: a sub-agent is still pending or running.\n");
+                continue;
+            }
+            const QString projectPath = sessionProjectPath(projectManager);
+            const QString nextId      = QSocSession::generateId();
+            const QString nextPath
+                = QDir(QSocSession::sessionsDir(projectPath)).filePath(nextId + ".jsonl");
+            auto nextLock = lockSession(nextPath);
+            if (!nextLock || !startFreshSessionAt(projectPath, nextId, std::move(nextLock))) {
+                compositor.printContent(
+                    "History clear refused: a fresh session could not be prepared.\n");
+                continue;
+            }
+            agent->clearPendingRequests();
+            pendingAutoInputs.clear();
             agent->clearHistory();
-            if (currentSession) {
-                /* Truncate the existing JSONL in place — keep the same id
-                 * so any in-flight references stay valid, then re-stamp
-                 * the creation metadata so the file isn't entirely empty. */
-                QFile::remove(currentSession->filePath());
-                currentSession->appendMeta(
-                    QStringLiteral("created"),
-                    QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-                currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager));
-            }
-            if (currentFileHistory) {
-                /* Drop every snapshot so future rewinds don't surface ghost
-                 * turns from a cleared history. The next edit will create a
-                 * fresh baseline. */
-                currentFileHistory->truncateAfter(-1);
-            }
             persistedMessages            = json::array();
             lastPersistedIndex           = 0;
             lastMemoryIndex              = 0;
@@ -6309,7 +6325,7 @@ bool QSocCliWorker::runAgentLoop(
             skillSeq = 1;
             statusBarWidget.setContextUsage(
                 0, agent->effectiveContextTokens(), agent->getConfig().compactThreshold);
-            compositor.printContent("History cleared.\n");
+            compositor.printContent(QStringLiteral("History cleared.\n"));
             continue;
         }
         if (cmd == "/help") {
@@ -6751,48 +6767,132 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.printContent("(no active session to branch)\n");
                 continue;
             }
-            const QString projectPath = sessionProjectPath(projectManager);
-            const QString newId       = QSocSession::generateId();
-            const QString newPath
-                = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
+            if (!currentFileHistory || !currentFileHistory->storageIsBound()
+                || QFileInfo(currentSession->filePath()).isSymLink()) {
+                compositor.printContent(
+                    "Session branch refused: the project storage binding changed.\n");
+                continue;
+            }
+            const json branchMessages = agent->getMessages();
+            if (!branchMessages.is_array() || !currentSession->appendSnapshot(branchMessages)) {
+                compositor.printContent(
+                    "Session branch refused: current history could not be persisted.\n");
+                continue;
+            }
+            persistedMessages          = branchMessages;
+            lastPersistedIndex         = static_cast<int>(branchMessages.size());
+            const QString projectPath  = sessionProjectPath(projectManager);
+            const QString newId        = QSocSession::generateId();
+            const QString sessions     = QSocSession::sessionsDir(projectPath);
+            const QString newPath      = QDir(sessions).filePath(newId + ".jsonl");
+            const QString sessionStage = QDir(sessions).filePath(
+                QStringLiteral(".branch-") + newId + ".tmp");
+            const QString srcHist = QSocFileHistory::historyDir(projectPath, currentSession->id());
+            const QString dstHist = QSocFileHistory::historyDir(projectPath, newId);
+            const QString historyParent = QFileInfo(srcHist).absolutePath();
+            const QString historyStage
+                = QDir(historyParent).filePath(QStringLiteral(".branch-") + newId + ".tmp");
+            const QString srcIndex = QDir(srcHist).filePath(QStringLiteral("snapshots.jsonl"));
+            QDir          backupsSrc(QDir(srcHist).filePath(QStringLiteral("backups")));
+            const bool    hasHistory = QFileInfo::exists(srcIndex) || backupsSrc.exists();
 
-            /* Copy session JSONL. */
-            QFile::copy(currentSession->filePath(), newPath);
-
-            /* Append forkedFrom meta to the new session. */
-            QSocSession newSession(newId, newPath);
-            newSession.appendMeta(QStringLiteral("forkedFrom"), currentSession->id());
-            if (!branchName.isEmpty()) {
-                newSession.appendMeta(QStringLiteral("title"), branchName);
+            auto branchLock = lockSession(newPath);
+            if (!branchLock || QFileInfo::exists(newPath) || QFileInfo(newPath).isSymLink()
+                || QFileInfo::exists(sessionStage) || QFileInfo(sessionStage).isSymLink()
+                || QFileInfo::exists(dstHist) || QFileInfo(dstHist).isSymLink()
+                || QFileInfo::exists(historyStage) || QFileInfo(historyStage).isSymLink()
+                || (QFileInfo::exists(srcIndex) && QFileInfo(srcIndex).isSymLink())) {
+                compositor.printContent("Session branch refused: staging is not private.\n");
+                continue;
             }
 
-            /* Copy file-history directory if it exists. */
-            if (currentFileHistory) {
-                const QString srcHist
-                    = QSocFileHistory::historyDir(projectPath, currentSession->id());
-                const QString dstHist = QSocFileHistory::historyDir(projectPath, newId);
-                QDir().mkpath(dstHist);
-                /* Copy snapshots.jsonl */
-                QFile::copy(
-                    QDir(srcHist).filePath(QStringLiteral("snapshots.jsonl")),
-                    QDir(dstHist).filePath(QStringLiteral("snapshots.jsonl")));
-                /* Hard-link (or copy) backup blobs. */
-                QDir          backupsSrc(QDir(srcHist).filePath(QStringLiteral("backups")));
-                const QString backupsDst = QDir(dstHist).filePath(QStringLiteral("backups"));
-                QDir().mkpath(backupsDst);
+            bool        sessionStageOwned = false;
+            bool        historyStageOwned = false;
+            bool        historyPublished  = false;
+            QStringList stagedHistoryFiles;
+            const auto  cleanupStage = qScopeGuard([&] {
+                if (sessionStageOwned) {
+                    QFile::remove(sessionStage);
+                }
+                if (!historyStageOwned) {
+                    return;
+                }
+                for (const QString &file : std::as_const(stagedHistoryFiles)) {
+                    QFile::remove(file);
+                }
+                QDir(historyStage).rmdir(QStringLiteral("backups"));
+                QDir(historyParent).rmdir(QFileInfo(historyStage).fileName());
+            });
+
+            bool      branchOk = QFile::copy(currentSession->filePath(), sessionStage);
+            QFileInfo sessionStageInfo(sessionStage);
+            sessionStageInfo.refresh();
+            sessionStageOwned = sessionStageInfo.exists() && !sessionStageInfo.isSymLink();
+            if (branchOk) {
+                QSocSession stagedSession(newId, sessionStage);
+                branchOk
+                    = stagedSession.appendMeta(QStringLiteral("forkedFrom"), currentSession->id());
+                if (branchOk && !branchName.isEmpty()) {
+                    branchOk = stagedSession.appendMeta(QStringLiteral("title"), branchName);
+                }
+            }
+
+            if (branchOk && hasHistory) {
+                const QString stageName = QFileInfo(historyStage).fileName();
+                branchOk                = QDir(historyParent).mkdir(stageName);
+                historyStageOwned       = branchOk;
+                if (branchOk) {
+                    branchOk = QDir(historyStage).mkdir(QStringLiteral("backups"));
+                }
+            }
+            if (branchOk && hasHistory && QFileInfo::exists(srcIndex)) {
+                const QString stagedIndex
+                    = QDir(historyStage).filePath(QStringLiteral("snapshots.jsonl"));
+                stagedHistoryFiles.append(stagedIndex);
+                branchOk = QFile::copy(srcIndex, stagedIndex);
+            }
+            if (branchOk && hasHistory && backupsSrc.exists()) {
                 const auto entries
                     = backupsSrc.entryInfoList({QStringLiteral("*.bak")}, QDir::Files);
                 for (const QFileInfo &entry : entries) {
-                    const QString dst = QDir(backupsDst).filePath(entry.fileName());
-                    if (!QFile::link(entry.absoluteFilePath(), dst)) {
-                        QFile::copy(entry.absoluteFilePath(), dst);
+                    const QString staged
+                        = QDir(historyStage).filePath(QStringLiteral("backups/") + entry.fileName());
+                    stagedHistoryFiles.append(staged);
+                    if (entry.isSymLink()
+                        || (!QFile::link(entry.absoluteFilePath(), staged)
+                            && !QFile::copy(entry.absoluteFilePath(), staged))) {
+                        branchOk = false;
+                        break;
                     }
                 }
+            }
+            if (branchOk && hasHistory) {
+                branchOk = QDir().rename(historyStage, dstHist);
+                if (branchOk) {
+                    historyStageOwned = false;
+                    historyPublished  = true;
+                }
+            }
+            if (branchOk) {
+                branchOk = QFile::rename(sessionStage, newPath);
+                if (branchOk) {
+                    sessionStageOwned = false;
+                }
+            }
+            if (!branchOk) {
+                compositor.printContent(
+                    historyPublished
+                        ? QStringLiteral(
+                              "Session branch failed before publication; unreferenced history "
+                              "for %1 remains.\n")
+                              .arg(newId.left(8))
+                        : QStringLiteral("Session branch failed; no branch was published.\n"));
+                continue;
             }
 
             const QString label = branchName.isEmpty() ? newId.left(8) : branchName;
             compositor.printContent(
-                QString("(Branched to %1 — resume with: --resume %2)\n").arg(label, newId.left(8)));
+                QString("(Branched to %1, resume with: --resume %2)\n").arg(label, newId.left(8)));
             continue;
         }
         if (cmd.startsWith("/rename")) {
