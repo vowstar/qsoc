@@ -8,6 +8,8 @@ behind one binary; the agent calls into the same tools you would invoke
 by hand, so a prompt is always equivalent to a sequence of explicit
 operations.
 
+![QSoC GUI and agent mode](https://github.com/user-attachments/assets/18ce6680-d869-485f-9dff-a93f8afb51d6)
+
 ## Quick start
 
 ```bash
