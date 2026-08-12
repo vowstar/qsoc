@@ -366,9 +366,12 @@ jobs:
       # QSOC_TEST_DEPS_REQUIRED stays unset here until one run proves an
       # unprivileged sshd comes up on this image; a fixture that starts and
       # then fails already fails on macOS today.
+      # The remote job-control and recovery suite needs that sshd or a Linux
+      # /proc, neither of which this image gives, so exclude it by name and
+      # let remote-loopback-linux stay its gate.
       run: |
         cd build
-        QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure
+        QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocagentremoterecovery|test_qsocremotecwdowner|test_qsocremotedeadlinkcost|test_qsocsshabortlatency|test_qsocremotejobscript"
 
   build-nix:
     runs-on: ubuntu-latest
