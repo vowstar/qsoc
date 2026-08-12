@@ -90,6 +90,13 @@ public:
     int     getToolCallCount() const { return toolCallCount; }
     QString getLastToolDetail() const { return lastToolDetail; }
 
+    /**
+     * @brief User-scriptable status text drawn as its own row above the
+     *        built-in bar. ANSI SGR colors are honored; empty hides the
+     *        row.
+     */
+    void setUserLine(const QString &ansiText);
+
 private:
     QString       currentStatus;
     int           spinnerIndex  = 0;
@@ -118,6 +125,11 @@ private:
     int    ctxUsed_            = 0;
     int    ctxBudget_          = 0;
     double ctxCompactFraction_ = 0.0;
+
+    QString userLine_;
+
+    /** @brief Draw the user line's parsed ANSI spans at row startY. */
+    void renderUserLine(QTuiScreen &screen, int startY, int width) const;
 
     /* Build the context-usage chip text (empty when there is nothing to
      * show). Shared by the idle and running render paths. */

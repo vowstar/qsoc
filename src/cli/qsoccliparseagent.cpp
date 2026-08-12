@@ -66,7 +66,9 @@
 #include "cli/qsocloopscheduler.h"
 #include "cli/qsocpredictioncontroller.h"
 #include "cli/qsocsessiontranscript.h"
+#include "cli/qsocstatusline.h"
 #include "cli/qterminalcapability.h"
+#include "common/config.h"
 #include "common/qlspconfigloader.h"
 #include "common/qlspservice.h"
 #include "common/qlspslangbackend.h"
@@ -3148,6 +3150,60 @@ bool QSocCliWorker::runAgentLoop(
     /* Cumulative session token accounting for /cost. */
     qint64 sessionInputTokens  = 0;
     qint64 sessionOutputTokens = 0;
+
+    /* User-scriptable status line. The command is read from the
+     * user-level config only: a project .qsoc.yml must not be able to
+     * run code just because the repository was opened. */
+    QSocStatusLine statusLine;
+    if (socConfig != nullptr) {
+        const YAML::Node node = socConfig->getUserYamlNode(QStringLiteral("agent.status_line"));
+        try {
+            if (node.IsScalar()) {
+                statusLine.setCommand(QString::fromStdString(node.as<std::string>()));
+            } else if (node.IsMap() && node["command"] && node["command"].IsScalar()) {
+                statusLine.setCommand(QString::fromStdString(node["command"].as<std::string>()));
+                if (node["timeout_ms"] && node["timeout_ms"].IsScalar()) {
+                    statusLine.setTimeoutMs(node["timeout_ms"].as<int>());
+                }
+            }
+        } catch (const YAML::Exception &) {
+            statusLine.setCommand(QString());
+        }
+    }
+    statusLine.setWorkingDirectory(projectManager->getProjectPath());
+    QObject::connect(
+        &statusLine,
+        &QSocStatusLine::textReady,
+        &compositor,
+        [&statusBarWidget, &compositor](const QString &text) {
+            statusBarWidget.setUserLine(text);
+            compositor.invalidate();
+            compositor.render();
+        });
+    auto refreshStatusLine = [&]() {
+        if (!statusLine.enabled()) {
+            return;
+        }
+        nlohmann::json payload;
+        payload["version"] = QSOC_VERSION;
+        payload["model"]   = {{"id", llmService->getCurrentModelId().toStdString()}};
+        payload["effort"]  = agent->getConfig().effortLevel.toStdString();
+        payload["workspace"]
+            = {{"cwd", QDir::currentPath().toStdString()},
+               {"project_dir", projectManager->getProjectPath().toStdString()}};
+        const int used   = agent->estimateMessagesTokens();
+        const int budget = agent->getConfig().maxContextTokens;
+        payload["context"]
+            = {{"used_tokens", used},
+               {"max_tokens", budget},
+               {"used_percentage", budget > 0 ? 100.0 * used / budget : 0.0}};
+        payload["tokens"] = {{"input", sessionInputTokens}, {"output", sessionOutputTokens}};
+        if (currentSession) {
+            payload["session"] = {{"id", currentSession->id().toStdString()}};
+        }
+        statusLine.requestRefresh(payload);
+    };
+    refreshStatusLine();
 
     /* Wire the per-session file-history store into the file-writing tools so
      * their next execute() captures pre-edit backups. Registry was populated
@@ -7078,6 +7134,7 @@ bool QSocCliWorker::runAgentLoop(
             } else {
                 compositor.printContent("Usage: /effort [off|low|medium|high]\n");
             }
+            refreshStatusLine();
             continue;
         }
         if (cmd.startsWith("/model")) {
@@ -7089,6 +7146,7 @@ bool QSocCliWorker::runAgentLoop(
                 statusBarWidget.setEffortLevel(agent->getConfig().effortLevel);
                 compositor.setTitle("QSoC Agent · " + (mid.isEmpty() ? "default" : mid));
             }
+            refreshStatusLine();
             compositor.invalidate();
             compositor.render();
             continue;
@@ -8876,6 +8934,10 @@ bool QSocCliWorker::runAgentLoop(
                 agent->estimateTotalTokens(),
                 agent->effectiveContextTokens(),
                 agent->getConfig().compactThreshold);
+
+            /* Turn settled: refresh the user status line with the new
+             * token and context numbers. */
+            refreshStatusLine();
 
             /* Disconnect all signals to avoid stale connections */
             QObject::disconnect(connToolCalled);

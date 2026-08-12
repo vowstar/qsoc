@@ -421,6 +421,10 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.system_prompt], [Custom system prompt override],
     [agent.predict_input],
     [Predict next input as ghost text: true/false (default: true)],
+    [agent.status_line],
+    [Shell command (or map with `command` and `timeout_ms`) whose stdout
+     becomes an extra status row; see @agent-status-line. Read from the
+     user/system config layers only, never from a project `.qsoc.yml`],
   )],
   caption: [AGENT CONFIGURATION OPTIONS],
   kind: table,

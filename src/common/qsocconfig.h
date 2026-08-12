@@ -118,6 +118,17 @@ public slots:
     YAML::Node getYamlNode(const QString &dotPath) const;
 
     /**
+     * @brief Get a YAML node from the user/system layers only.
+     * @details Same traversal as getYamlNode() but never consults the
+     *          project `.qsoc.yml`. For settings that execute user
+     *          commands (e.g. the status line): a checked-out
+     *          repository must not be able to supply them.
+     * @param dotPath Dot-separated path (e.g., "agent.status_line")
+     * @return YAML::Node at the path, or undefined node if not found
+     */
+    YAML::Node getUserYamlNode(const QString &dotPath) const;
+
+    /**
      * @brief Get the list of MCP server entries from the loaded config.
      * @details Reads the `mcp.servers` YAML sequence (project file first,
      *          then the user/system layers). Invalid entries are skipped.

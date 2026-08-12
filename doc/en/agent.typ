@@ -920,6 +920,58 @@ While a backgrounded run is alive:
   call to continue where a prior run left off, e.g. across a process
   restart.
 
+== Status Line
+<agent-status-line>
+A user-supplied shell command can render an extra status row above the
+built-in bar. Configure it in the user-level configuration:
+
+```yaml
+agent:
+  status_line: "jq -r '.model.id + \" | \" + (.context.used_percentage | floor | tostring) + \"%\"'"
+```
+
+or, with an explicit timeout:
+
+```yaml
+agent:
+  status_line:
+    command: "~/.config/qsoc/statusline.sh"
+    timeout_ms: 5000
+```
+
+The command runs through the platform shell (see @agent-shell-discovery)
+with a JSON snapshot of the session on stdin: `model.id`, `effort`,
+`workspace.cwd`, `workspace.project_dir`, `context.used_tokens`,
+`context.max_tokens`, `context.used_percentage`, `tokens.input`,
+`tokens.output`, `session.id`, and `version`. On exit code 0 the first
+non-empty stdout line is displayed; ANSI SGR colors are honored. A
+non-zero exit, empty output, or timeout clears the row. Refreshes fire
+at startup, after each turn, and on `/model` or `/effort`, debounced so
+rapid changes run the command once.
+
+The key is read from the user and system configuration layers only. A
+project `.qsoc.yml` cannot supply it: checking out a repository must
+never execute code from it.
+
+== Shell Discovery
+<agent-shell-discovery>
+Features that run a command string (the `bash` tool, hooks, monitors,
+the status line) resolve the interpreter the same way on all platforms:
+
+- Unix: `/bin/bash`, else `bash` on `PATH`, else `/bin/sh`.
+- Windows: the `bash.exe` shipped with Git for Windows, derived from the
+  `git` executable on `PATH`. `bash` found directly on `PATH` is never
+  used there, because `System32\bash.exe` launches WSL instead of a
+  host shell.
+- `QSOC_GIT_BASH_PATH` pins an explicit interpreter on any platform. If
+  it is set but invalid, shell execution is disabled rather than
+  silently falling back to a different interpreter.
+
+Executables inside the current working directory are rejected during
+discovery, so a checked-out repository cannot substitute its own shell.
+When no interpreter is found, the affected feature fails with a clear
+message and everything else keeps working.
+
 == Background Tasks
 <agent-tasks>
 A unified task panel lists every long-running activity attached to the

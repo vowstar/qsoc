@@ -3,16 +3,43 @@
 
 #include "tui/qtuistatusbar.h"
 
+#include "tui/qtuiansi.h"
+
 const QStringList QTuiStatusBar::spinnerFrames = {"-", "\\", "|", "/"};
 const QStringList QTuiStatusBar::dotFrames     = {"   ", ".  ", ".. ", "..."};
 
 int QTuiStatusBar::lineCount() const
 {
-    return 1;
+    return userLine_.isEmpty() ? 1 : 2;
+}
+
+void QTuiStatusBar::setUserLine(const QString &ansiText)
+{
+    userLine_ = ansiText;
+}
+
+void QTuiStatusBar::renderUserLine(QTuiScreen &screen, int startY, int width) const
+{
+    /* 2-column right margin, same reasoning as the task pill below. */
+    const int limit = qMax(0, width - 2);
+    int       col   = 0;
+    for (const QTuiAnsi::Span &span : QTuiAnsi::parse(userLine_)) {
+        if (col >= limit) {
+            break;
+        }
+        const QString text = QTuiText::truncate(span.text, limit - col);
+        screen.putString(col, startY, text, span.bold, span.dim, span.inverted, span.fg, span.bg);
+        col += QTuiText::visualWidth(text);
+    }
 }
 
 void QTuiStatusBar::render(QTuiScreen &screen, int startY, int width)
 {
+    if (!userLine_.isEmpty()) {
+        renderUserLine(screen, startY, width);
+        ++startY;
+    }
+
     QString line;
 
     /* Right-aligned task pill (▶ N tasks). Drawn first so the main line

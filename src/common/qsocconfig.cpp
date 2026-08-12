@@ -237,45 +237,58 @@ QSocHookConfig QSocConfig::agentHooks() const
     return QSocHookConfig::parseFromYaml(getYamlNode("agent.hooks"));
 }
 
+namespace {
+
+/* Traverse one YAML file by dot-path segments; undefined node on miss. */
+YAML::Node resolveYamlPath(const QString &filePath, const QStringList &parts)
+{
+    if (!QFile::exists(filePath)) {
+        return {};
+    }
+    try {
+        YAML::Node root = YAML::LoadFile(filePath.toStdString());
+        YAML::Node node = root;
+        for (const QString &part : parts) {
+            if (!node.IsMap() || !node[part.toStdString()]) {
+                return {};
+            }
+            node = node[part.toStdString()];
+        }
+        return node;
+    } catch (const YAML::Exception &) {
+        return {};
+    }
+}
+
+} // namespace
+
 YAML::Node QSocConfig::getYamlNode(const QString &dotPath) const
 {
-    QStringList parts = dotPath.split('.');
-
-    /* Helper: traverse a YAML node by path segments */
-    auto resolve = [&](const QString &filePath) -> YAML::Node {
-        if (!QFile::exists(filePath)) {
-            return {};
-        }
-        try {
-            YAML::Node root = YAML::LoadFile(filePath.toStdString());
-            YAML::Node node = root;
-            for (const QString &part : parts) {
-                if (!node.IsMap() || !node[part.toStdString()]) {
-                    return {};
-                }
-                node = node[part.toStdString()];
-            }
-            return node;
-        } catch (const YAML::Exception &) {
-            return {};
-        }
-    };
+    const QStringList parts = dotPath.split('.');
 
     /* Project config has higher priority */
     if (projectManager) {
         QString projectPath = projectManager->getProjectPath();
         if (!projectPath.isEmpty()) {
-            YAML::Node node = resolve(QDir(projectPath).filePath(CONFIG_FILE_PROJECT));
+            YAML::Node node
+                = resolveYamlPath(QDir(projectPath).filePath(CONFIG_FILE_PROJECT), parts);
             if (node.IsDefined() && !node.IsNull()) {
                 return node;
             }
         }
     }
 
-    /* Walk the remaining layers (env → user → system) in priority order. */
+    return getUserYamlNode(dotPath);
+}
+
+YAML::Node QSocConfig::getUserYamlNode(const QString &dotPath) const
+{
+    const QStringList parts = dotPath.split('.');
+
+    /* Walk the non-project layers (env → user → system) in priority order. */
     const QStringList roots = QSocPaths::resourceDirs(QString());
     for (const QString &root : roots) {
-        YAML::Node node = resolve(QDir(root).filePath(CONFIG_FILE_NAME));
+        YAML::Node node = resolveYamlPath(QDir(root).filePath(CONFIG_FILE_NAME), parts);
         if (node.IsDefined() && !node.IsNull()) {
             return node;
         }
