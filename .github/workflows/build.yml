@@ -268,10 +268,11 @@ jobs:
       run: |
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
         cd build
-        # The loopback sshd fixture is POSIX-only (sshd path lookup, the
-        # password database, /bin/bash on the target), so Windows has no remote
-        # coverage. Excluded by name: letting them skip would look green.
-        ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus"
+        # The loopback sshd fixture and the remote job-control scripts are
+        # POSIX-only (sshd path lookup, the password database, /bin/sh on the
+        # target, POSIX signals), so Windows has no remote coverage. Excluded
+        # by name: letting them skip would look green.
+        ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript"
 
     # ctest records no test output on Windows, so a failure arrives as a bare
     # exit code. Re-run each failed binary with its own log file and print it.
