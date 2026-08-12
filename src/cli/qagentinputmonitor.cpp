@@ -934,26 +934,26 @@ void QAgentInputMonitor::start()
 
 #ifdef Q_OS_WIN
     origStdinHandle = GetStdHandle(STD_INPUT_HANDLE);
-    if (origStdinHandle == INVALID_HANDLE_VALUE) {
-        return;
+    /* A real console gets raw mode; a redirected or headless stdin (pipes,
+     * the test harness) has no console to configure, so skip it and still
+     * activate, mirroring the POSIX non-tty path below. */
+    const bool stdinIsConsole = origStdinHandle != INVALID_HANDLE_VALUE
+                                && GetConsoleMode(origStdinHandle, &origConsoleMode);
+    if (stdinIsConsole) {
+        DWORD mode = origConsoleMode;
+        mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+        mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
+        if (!SetConsoleMode(origStdinHandle, mode)) {
+            return;
+        }
+        termiosSaved = true;
+        /* Enable VT processing on stdout for ANSI escape output */
+        HANDLE hOut    = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD  outMode = 0;
+        GetConsoleMode(hOut, &outMode);
+        SetConsoleMode(
+            hOut, outMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
     }
-    if (!GetConsoleMode(origStdinHandle, &origConsoleMode)) {
-        return;
-    }
-    termiosSaved = true;
-
-    DWORD mode = origConsoleMode;
-    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
-    mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
-    if (!SetConsoleMode(origStdinHandle, mode)) {
-        termiosSaved = false;
-        return;
-    }
-    /* Enable VT processing on stdout for ANSI escape output */
-    HANDLE hOut    = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD  outMode = 0;
-    GetConsoleMode(hOut, &outMode);
-    SetConsoleMode(hOut, outMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
 
     /* Poll console input with a 20ms timer */
     pollTimer = new QTimer(this);
