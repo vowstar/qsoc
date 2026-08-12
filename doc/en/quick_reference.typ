@@ -59,6 +59,7 @@
       [`/model` `/effort`], [switch model or reasoning effort],
       [`/plan`], [read-only mode (*Shift+Tab*)],
       [`/clear` `/compact`], [reset or shrink the context],
+      [`/btw <question>`], [side question, not saved to history],
       [`/cwd` `/project`], [move the working root],
       [`/ssh` `/local`], [remote or local workspace],
       [`/memory` `#<fact>`], [inspect or add a memory],

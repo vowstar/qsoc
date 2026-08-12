@@ -2562,6 +2562,7 @@ bool QSocCliWorker::runAgentLoop(
      * (trailing space) with no arguments yet, so the user can discover
      * what each slash command expects without re-reading help text. */
     static const QMap<QString, QString> kSlashHints{
+        {QStringLiteral("/btw"), QStringLiteral("<question>")},
         {QStringLiteral("/effort"), QStringLiteral("off|low|medium|high")},
         {QStringLiteral("/memory"), QStringLiteral("[<name> | rm <name>]")},
         {QStringLiteral("/model"), QStringLiteral("<model-id>")},
@@ -2631,6 +2632,7 @@ bool QSocCliWorker::runAgentLoop(
     const QStringList slashCommandBuiltins
         = {QStringLiteral("help"),
            QStringLiteral("branch"),
+           QStringLiteral("btw"),
            QStringLiteral("clear"),
            QStringLiteral("compact"),
            QStringLiteral("context"),
@@ -6332,6 +6334,8 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent("Commands:\n");
             compositor.printContent("  exit, /exit  - Exit the agent\n");
             compositor.printContent("  /branch [n]  - Fork session (optionally name it)\n");
+            compositor.printContent(
+                "  /btw <q>     - Quick side question with full context (not saved)\n");
             compositor.printContent("  /clear       - Clear conversation history\n");
             compositor.printContent("  /compact     - Compact conversation context\n");
             compositor.printContent("  /context     - Show token usage breakdown + suggestions\n");
@@ -6460,6 +6464,125 @@ bool QSocCliWorker::runAgentLoop(
             }
             statusBarWidget.setStatus("Ready");
             persistCompactedSession();
+            continue;
+        }
+        if (cmd == "/btw" || cmd.startsWith(QStringLiteral("/btw "))) {
+            const QString question = input.mid(4).trimmed();
+            if (question.isEmpty()) {
+                compositor.printContent("Usage: /btw <question>\n", QTuiScrollView::Dim);
+                continue;
+            }
+            QLLMService *mainLlm = agent->getLLMService();
+            if (mainLlm == nullptr) {
+                compositor.printContent("No LLM service available.\n", QTuiScrollView::Dim);
+                continue;
+            }
+
+            /* Fork the conversation for a one-shot side answer: same system
+             * prompt + history the agent would send, plus the question. The
+             * reply streams into scrollback but never enters agent history,
+             * so the main context is untouched. */
+            json sideMessages = json::array();
+            {
+                const QString sysPrompt = agent->buildSystemPromptWithMemory();
+                if (!sysPrompt.isEmpty()) {
+                    sideMessages.push_back(
+                        {{"role", "system"}, {"content", sysPrompt.toStdString()}});
+                }
+            }
+            for (const auto &msg : agent->getMessages()) {
+                json sanitized = msg;
+                /* Internal annotations; providers reject unknown fields. */
+                sanitized.erase("_usage");
+                sanitized.erase("_img_tokens");
+                sanitized.erase("_qsoc_tool_state");
+                sideMessages.push_back(sanitized);
+            }
+            const QString wrapped = QStringLiteral(
+                                        "<system-reminder>Side question: you are a one-off fork of "
+                                        "the conversation, answering exactly one question in a "
+                                        "single response. The main agent is not interrupted and "
+                                        "will not see this exchange. You have no tools and there "
+                                        "is no follow-up turn: never promise to check, read, or "
+                                        "run anything. Answer from the conversation context and "
+                                        "your own knowledge; if you cannot, say so "
+                                        "directly.</system-reminder>\n\n%1")
+                                        .arg(question);
+            sideMessages.push_back({{"role", "user"}, {"content", wrapped.toStdString()}});
+
+            /* Clone the service so the fork inherits the user's endpoint,
+             * model, effort, and fallback strategy without disturbing the
+             * main service's stream state. No tools on the wire: the fork
+             * must answer, not act. */
+            QLLMService *sideLlm = mainLlm->clone(nullptr);
+            statusBarWidget.setStatus("Answering");
+            compositor.render();
+
+            QEventLoop btwLoop;
+            bool       btwDone = false;
+            QString    btwError;
+            auto       reasoningCollapser = std::make_shared<ReasoningNewlineCollapser>();
+            auto       connBtwChunk       = QObject::connect(
+                sideLlm, &QLLMService::streamChunk, &btwLoop, [&compositor](const QString &chunk) {
+                    compositor.appendAssistantChunk(chunk);
+                });
+            auto connBtwReasoning = QObject::connect(
+                sideLlm,
+                &QLLMService::streamReasoningChunk,
+                &btwLoop,
+                [&compositor, reasoningCollapser](const QString &chunk) {
+                    const QString filtered = reasoningCollapser->feed(chunk);
+                    if (!filtered.isEmpty()) {
+                        compositor.appendReasoningChunk(filtered);
+                    }
+                });
+            auto connBtwDone = QObject::connect(
+                sideLlm, &QLLMService::streamComplete, &btwLoop, [&btwDone, &btwLoop](const json &) {
+                    btwDone = true;
+                    btwLoop.quit();
+                });
+            auto connBtwError = QObject::connect(
+                sideLlm,
+                &QLLMService::streamError,
+                &btwLoop,
+                [&btwDone, &btwError, &btwLoop](const QString &error) {
+                    btwDone  = true;
+                    btwError = error;
+                    btwLoop.quit();
+                });
+            auto connBtwEsc = QObject::connect(
+                &inputMonitor, &QAgentInputMonitor::escPressed, sideLlm, &QLLMService::abortStream);
+
+            const QString effortLevel = agent->getConfig().effortLevel;
+            QString       modelOverride;
+            if (!effortLevel.isEmpty() && !agent->getConfig().reasoningModel.isEmpty()) {
+                modelOverride = agent->getConfig().reasoningModel;
+            }
+            sideLlm->sendChatCompletionStream(
+                sideMessages,
+                json::array(),
+                agent->getConfig().temperature,
+                effortLevel,
+                modelOverride);
+            /* streamError can fire synchronously (e.g. no endpoint); exec()
+             * after quit() would hang forever. */
+            if (!btwDone) {
+                btwLoop.exec();
+            }
+
+            QObject::disconnect(connBtwChunk);
+            QObject::disconnect(connBtwReasoning);
+            QObject::disconnect(connBtwDone);
+            QObject::disconnect(connBtwError);
+            QObject::disconnect(connBtwEsc);
+            compositor.finishStream();
+            if (!btwError.isEmpty()) {
+                compositor
+                    .printContent(QStringLiteral("Error: %1\n").arg(btwError), QTuiScrollView::Dim);
+            }
+            compositor.printContent("\n");
+            statusBarWidget.setStatus("Ready");
+            sideLlm->deleteLater();
             continue;
         }
         if (cmd == "/agents-history") {

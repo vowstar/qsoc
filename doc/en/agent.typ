@@ -273,6 +273,12 @@ The following commands are available during an interactive session:
     table.hline(),
     [`exit`, `quit`, `/exit`, `/quit`], [Exit the agent],
     [`/branch [name]`], [Fork the current session into a new one],
+    [`/btw <question>`],
+    [Ask a quick side question with the full conversation context. The
+     answer streams into the scrollback but is not added to the session
+     history, so the main context is untouched. The fork uses the
+     configured model and effort, has no tools, and answers in a single
+     turn; *Esc* cancels.],
     [`/clear`], [Start a fresh session; the previous session and its file
       checkpoints remain available to resume],
     [`/compact`], [Compact context and report tokens saved],
