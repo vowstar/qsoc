@@ -2699,6 +2699,9 @@ private slots:
      * loop must be observed again before the requested effect is dispatched. */
     void workspaceFenceIsRecheckedAfterAPreToolHook()
     {
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
         MockServer server;
         QVERIFY(server.listen());
         server.enqueueToolCall(QStringLiteral("side_effect_tool"));
@@ -3085,6 +3088,9 @@ private slots:
      * honest flavour is uncertain rather than failed. */
     void aCancelledBackgroundSpawnIsNotReportedAsDone()
     {
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
         MockServer server;
         QVERIFY(server.listen());
         server.enqueueStream(QStringLiteral("never read"));
@@ -3160,6 +3166,9 @@ private slots:
      * overwrite that cached result or deliver it twice. */
     void aCancelledSpawnReportsTheTerminalItAlreadyHas()
     {
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
         MockServer server;
         QVERIFY(server.listen());
         server.enqueueStream(QStringLiteral("never read"));
@@ -3241,6 +3250,9 @@ private slots:
      * the hand-off promised. */
     void anAutoBackgroundTimerFiringInsideAHookStillHandsOff()
     {
+#ifdef Q_OS_WIN
+        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
+#endif
         MockServer server;
         QVERIFY(server.listen());
         server.enqueueStream(QStringLiteral("child work done"));
