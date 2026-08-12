@@ -162,7 +162,7 @@ private slots:
         struct sigaction action    = {};
         struct sigaction oldAction = {};
         action.sa_handler          = recordSignal;
-        QVERIFY(::sigemptyset(&action.sa_mask) == 0);
+        QVERIFY(sigemptyset(&action.sa_mask) == 0);
         QVERIFY(::sigaction(SIGUSR1, &action, &oldAction) == 0);
         const auto restoreSignal = qScopeGuard(
             [&] { (void) ::sigaction(SIGUSR1, &oldAction, nullptr); });

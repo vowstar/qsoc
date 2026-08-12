@@ -327,8 +327,8 @@ private slots:
 
         sigset_t signalSet;
         sigset_t previousSet;
-        QVERIFY(::sigemptyset(&signalSet) == 0);
-        QVERIFY(::sigaddset(&signalSet, SIGINT) == 0);
+        QVERIFY(sigemptyset(&signalSet) == 0);
+        QVERIFY(sigaddset(&signalSet, SIGINT) == 0);
         QVERIFY(::sigprocmask(SIG_UNBLOCK, &signalSet, &previousSet) == 0);
         const auto restoreMask = qScopeGuard(
             [&] { (void) ::sigprocmask(SIG_SETMASK, &previousSet, nullptr); });
@@ -340,7 +340,8 @@ private slots:
         QVERIFY(QSocInterrupt::byteFallbackReady());
         sigset_t blockedSet;
         QVERIFY(::sigprocmask(SIG_SETMASK, nullptr, &blockedSet) == 0);
-        QCOMPARE(::sigismember(&blockedSet, SIGINT), 1);
+        /* macOS sigismember expands to the raw mask bit, not a canonical 1. */
+        QVERIFY(sigismember(&blockedSet, SIGINT) != 0);
 
         QCOMPARE(::raise(SIGINT), 0);
         QVERIFY2(!QSocInterrupt::requested(), "a blocked signal ran the unavailable handler");

@@ -57,11 +57,11 @@ bool blockSigintAfterInstallFailure()
 {
     sigset_t signalSet;
     sigset_t previousSet;
-    if (::sigemptyset(&signalSet) != 0 || ::sigaddset(&signalSet, SIGINT) != 0
+    if (sigemptyset(&signalSet) != 0 || sigaddset(&signalSet, SIGINT) != 0
         || ::sigprocmask(SIG_BLOCK, &signalSet, &previousSet) != 0) {
         return false;
     }
-    if (::sigismember(&previousSet, SIGINT) == 0) {
+    if (sigismember(&previousSet, SIGINT) == 0) {
         g_unblockSigintAfterInstall = true;
     }
     g_byteFallbackReady = true;
@@ -81,7 +81,7 @@ bool restoreSigintMaskAfterInstall()
         return true;
     }
     sigset_t signalSet;
-    if (::sigemptyset(&signalSet) != 0 || ::sigaddset(&signalSet, SIGINT) != 0
+    if (sigemptyset(&signalSet) != 0 || sigaddset(&signalSet, SIGINT) != 0
         || ::sigprocmask(SIG_UNBLOCK, &signalSet, nullptr) != 0) {
         return false;
     }
@@ -177,7 +177,7 @@ bool installBridge()
 
     struct sigaction action = {};
     action.sa_handler       = sigintHandler;
-    if (::sigemptyset(&action.sa_mask) != 0) {
+    if (sigemptyset(&action.sa_mask) != 0) {
         return failBridgeInstall();
     }
     action.sa_flags = 0;
