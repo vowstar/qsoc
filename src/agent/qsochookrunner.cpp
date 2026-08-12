@@ -3,6 +3,8 @@
 
 #include "agent/qsochookrunner.h"
 
+#include "common/qsocshellpath.h"
+
 #include <QEventLoop>
 #include <QPointer>
 #include <QProcess>
@@ -64,6 +66,15 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
     m_phase     = Phase::Running;
     m_timeoutMs = cfg.timeoutSec > 0 ? cfg.timeoutSec * 1000 : 10000;
 
+    const QString shellExe = QSocShellPath::bashPath();
+    if (shellExe.isEmpty()) {
+        m_result.status       = Status::StartFailed;
+        m_result.errorMessage = QStringLiteral("no usable POSIX shell (see QSOC_GIT_BASH_PATH)");
+        claimTerminal();
+        QTimer::singleShot(0, this, &QSocHookRunner::publishResult);
+        return;
+    }
+
     m_process = new QProcess(this);
     m_process->setProcessChannelMode(QProcess::SeparateChannels);
     connect(
@@ -72,8 +83,7 @@ void QSocHookRunner::start(const HookCommandConfig &cfg, const nlohmann::json &p
         this,
         &QSocHookRunner::handleProcessFinished);
 
-    m_process
-        ->start(QStringLiteral("/bin/bash"), QStringList() << QStringLiteral("-c") << cfg.command);
+    m_process->start(shellExe, QStringList() << QStringLiteral("-c") << cfg.command);
 
     const bool started = m_process->waitForStarted(5000);
     if (!started) {

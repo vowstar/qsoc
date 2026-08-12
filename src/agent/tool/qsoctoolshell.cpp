@@ -3,6 +3,8 @@
 
 #include "agent/tool/qsoctoolshell.h"
 
+#include "common/qsocshellpath.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
@@ -695,6 +697,12 @@ QString QSocToolShellBash::execute(const json &arguments)
         workingDir = QDir::currentPath();
     }
 
+    const QString shellExe = QSocShellPath::bashPath();
+    if (shellExe.isEmpty()) {
+        return "Error: No usable POSIX shell found. Install bash (Git for "
+               "Windows on Windows) or set QSOC_GIT_BASH_PATH.";
+    }
+
     /* Create temp dir for output */
     auto *tempDir = new QTemporaryDir(QDir::tempPath() + "/qsoc-bash-XXXXXX");
     if (!tempDir->isValid()) {
@@ -724,7 +732,7 @@ QString QSocToolShellBash::execute(const json &arguments)
     process->setProcessChannelMode(QProcess::MergedChannels);
     process->setStandardOutputFile(outputPath, QIODevice::Append);
 
-    process->start("/bin/bash", QStringList() << "-c" << command);
+    process->start(shellExe, QStringList() << "-c" << command);
 
     if (!process->waitForStarted(5000)) {
         QString error

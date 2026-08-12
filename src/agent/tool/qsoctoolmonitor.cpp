@@ -3,6 +3,8 @@
 
 #include "agent/tool/qsoctoolmonitor.h"
 
+#include "common/qsocshellpath.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -94,13 +96,17 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startLocal(
     if (workingDir.isEmpty()) {
         workingDir = QDir::currentPath();
     }
+    const QString shellExe = QSocShellPath::bashPath();
+    if (shellExe.isEmpty()) {
+        return {false, {}, {}, QStringLiteral("no usable POSIX shell (see QSOC_GIT_BASH_PATH)")};
+    }
     return startProcess(
         command,
         description,
         timeoutMs,
         persistent,
         name,
-        QStringLiteral("/bin/bash"),
+        shellExe,
         QStringList() << QStringLiteral("-lc") << command,
         workingDir,
         false);
