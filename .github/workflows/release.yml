@@ -58,7 +58,7 @@ jobs:
           xcb-util-wm-devel
         git config --global --add safe.directory '*'
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -135,7 +135,7 @@ jobs:
           AppDir "QSoC-${VERSION}-x86_64.AppImage"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: linux-appimage
         path: QSoC-*-x86_64.AppImage
@@ -144,7 +144,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -200,7 +200,7 @@ jobs:
         if ($LASTEXITCODE -ne 0) { throw "qsoc.exe failed with exit code $LASTEXITCODE" }
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: windows-exe
         path: deploy/
@@ -209,7 +209,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -268,7 +268,7 @@ jobs:
         ls -la "$DMG_FINAL"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: macos-dmg
         path: QSoC-*.dmg
@@ -277,7 +277,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         submodules: recursive
 
@@ -310,7 +310,7 @@ jobs:
         ls -la doc-pdf/
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: docs-pdf
         path: doc-pdf/*.pdf
@@ -320,12 +320,12 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
 
     - name: Generate release notes
       run: |
@@ -345,7 +345,7 @@ jobs:
         ls -la docs-pdf/
 
     - name: Create Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         files: |
           linux-appimage/QSoC-*-x86_64.AppImage
