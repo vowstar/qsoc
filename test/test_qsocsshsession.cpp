@@ -5,6 +5,7 @@
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
 #include "qsoc_test.h"
+#include "qsoc_test_sshd.h"
 
 #include <QHostAddress>
 #include <QTcpServer>
@@ -47,6 +48,38 @@ private slots:
         QCOMPARE(session.rawSession(), static_cast<LIBSSH2_SESSION *>(nullptr));
         QCOMPARE(session.socketFd(), -1);
         QVERIFY(QSocLibSsh2Init::useCount() >= 1);
+    }
+
+    void testRawHostKeyPrecedesCertificate()
+    {
+        QSocTestSshd fixture;
+        fixture.enableHostCertificate();
+        fixture.start();
+        QSOC_REQUIRE_SSHD(fixture);
+
+        QFile publicKey(fixture.root() + QStringLiteral("/host_rsa.pub"));
+        QVERIFY(publicKey.open(QIODevice::ReadOnly));
+        const QByteArray knownHost = QByteArrayLiteral("[127.0.0.1]:")
+                                     + QByteArray::number(fixture.port()) + QByteArrayLiteral(" ")
+                                     + publicKey.readAll();
+        publicKey.close();
+
+        const QString knownHostsPath = fixture.root() + QStringLiteral("/known_hosts");
+        QFile         knownHosts(knownHostsPath);
+        QVERIFY(knownHosts.open(QIODevice::WriteOnly));
+        QCOMPARE(knownHosts.write(knownHost), knownHost.size());
+        knownHosts.close();
+
+        QSocSshHostConfig host  = fixture.hostConfig();
+        host.strictHostKey      = QSocSshHostConfig::StrictHostKey::Yes;
+        host.userKnownHostsFile = knownHostsPath;
+
+        QSocSshSession session;
+        QString        error;
+        const auto     status = session.connectTo(host, &error);
+        QVERIFY2(
+            status == QSocSshSession::ConnectStatus::Ok,
+            qPrintable(QStringLiteral("%1\n--- sshd ---\n%2").arg(error, fixture.log())));
     }
 
     /* Unresolvable hostname surfaces as NetworkError, never a crash. The

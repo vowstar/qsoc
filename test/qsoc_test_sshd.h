@@ -63,6 +63,9 @@ public:
      */
     void setExtraConfig(const QStringList &directives) { m_extraConfig = directives; }
 
+    /** @brief Offer a runtime-generated host certificate with the raw key. */
+    void enableHostCertificate() { m_hostCertificate = true; }
+
     /** @brief Bring up sshd. False unless state() becomes Ready. */
     bool start()
     {
@@ -106,6 +109,9 @@ public:
         if (!runKeygen(keygen, hostKey)) {
             return fail(QStringLiteral("could not generate the host key"));
         }
+        if (m_hostCertificate && !generateHostCertificate(keygen, root, hostKey)) {
+            return fail(QStringLiteral("could not generate the host certificate"));
+        }
         if (!runKeygen(keygen, m_keyPath)) {
             return fail(QStringLiteral("could not generate the client key"));
         }
@@ -147,6 +153,9 @@ public:
                           .arg(hostKey)
                           .arg(root)
                           .arg(authKeys);
+        if (m_hostCertificate) {
+            cfg += QStringLiteral("HostCertificate %1-cert.pub\n").arg(hostKey);
+        }
         for (const QString &directive : m_extraConfig) {
             cfg += directive + QLatin1Char('\n');
         }
@@ -302,6 +311,30 @@ private:
                && QFile::exists(keyPath);
     }
 
+    static bool generateHostCertificate(
+        const QString &keygen, const QString &root, const QString &hostKey)
+    {
+        const QString caKey = root + QStringLiteral("/host_ca");
+        if (!runKeygen(keygen, caKey)) {
+            return false;
+        }
+        QProcess proc;
+        proc.start(
+            keygen,
+            {QStringLiteral("-s"),
+             caKey,
+             QStringLiteral("-I"),
+             QStringLiteral("qsoc-test-host"),
+             QStringLiteral("-h"),
+             QStringLiteral("-n"),
+             QStringLiteral("127.0.0.1"),
+             QStringLiteral("-q"),
+             hostKey + QStringLiteral(".pub")});
+        return proc.waitForStarted(5000) && proc.waitForFinished(15000)
+               && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0
+               && QFile::exists(hostKey + QStringLiteral("-cert.pub"));
+    }
+
     bool fail(const QString &detail)
     {
         m_failure = detail;
@@ -319,7 +352,8 @@ private:
     QString       m_workDir;
     QString       m_logPath;
     QStringList   m_extraConfig;
-    int           m_port = 0;
+    bool          m_hostCertificate = false;
+    int           m_port            = 0;
 };
 
 /**

@@ -54,7 +54,7 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     # and running them together has produced a mock that never started. A
     # shared lock keeps `ctest -jN` from interleaving them without forcing the
     # whole suite serial.
-    if(${TARGET_NAME} MATCHES "^test_qsoc(sftp_loopback|sftpstranded|sshexecstatus|sshagentbudget|sshstrandedchannel|agentremoterecovery|remoteguardafterreconnect|toolagenthostdispatch|toolagentbindinglifetime|toolagenthostbindingrecovery|remotecwdowner|remotecwdpublish|remotedeadlinkcost)$")
+    if(${TARGET_NAME} MATCHES "^test_qsoc(sftp_loopback|sftpstranded|sshexecstatus|sshagentbudget|sshsession|sshstrandedchannel|agentremoterecovery|remoteguardafterreconnect|toolagenthostdispatch|toolagentbindinglifetime|toolagenthostbindingrecovery|remotecwdowner|remotecwdpublish|remotedeadlinkcost)$")
         set_tests_properties(${TARGET_NAME} PROPERTIES RESOURCE_LOCK "qsoc_loopback_sshd")
     endif()
 
