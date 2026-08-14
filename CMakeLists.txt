@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.23)
 
 include(GNUInstallDirs)
 
@@ -150,7 +150,6 @@ else()
     set(GPDS_BUILD_STATIC ON CACHE BOOL "Build static library.")
     set(GPDS_BUILD_SHARED OFF CACHE BOOL "Build shared library.")
     add_subdirectory(external/gpds)
-    add_library(gpds::gpds-static ALIAS gpds-static)
     set(GPDS_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/gpds/gpds"
     )
@@ -238,6 +237,8 @@ else()
     set(WITH_DEMO OFF CACHE BOOL "disable antlr4 demo")
     set(WITH_LIBCXX OFF CACHE BOOL "disable antlr4 libcxx")
     set(ANTLR_BUILD_CPP_TESTS OFF CACHE BOOL "disable antlr4 build cpp tests")
+    # antlr4 defaults to the static CRT (/MT); qsoc links Qt's /MD
+    set(WITH_STATIC_CRT OFF CACHE BOOL "link antlr4 against the shared CRT" FORCE)
     add_subdirectory(external/antlr4/runtime/Cpp)
     set(ANTLR4_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/antlr4/runtime/Cpp/runtime/src"
@@ -350,6 +351,15 @@ set(LIBSSH2_BUILD_DOCS       OFF       CACHE BOOL   "libssh2 no docs"         FO
 set(LIBSSH2_USE_PKGCONFIG    OFF       CACHE BOOL   "libssh2 no pkg-config"   FORCE)
 set(ENABLE_ZLIB_COMPRESSION  OFF       CACHE BOOL   "libssh2 no zlib"         FORCE)
 add_subdirectory(external/libssh2)
+target_compile_definitions(libssh2_static PRIVATE
+    LIBSSH2_3DES_ENABLE
+    LIBSSH2_HMAC_RIPEMD_ENABLE
+    LIBSSH2_HMAC_SHA1_ENABLE
+    LIBSSH2_KEX_SHA1_ENABLE
+    LIBSSH2_MD5_ENABLE
+    LIBSSH2_MD5_PEM_ENABLE
+    LIBSSH2_RSA_SHA1_ENABLE
+)
 set(LIBSSH2_INCLUDE_DIRS
     "${CMAKE_CURRENT_SOURCE_DIR}/external/libssh2/include"
 )

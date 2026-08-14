@@ -53,6 +53,24 @@ constexpr int kTeardownMs = 2000;
  * user asked for is honoured inside one, instead of after the whole attempt. */
 constexpr int kPollSliceMs = 200;
 
+/* Keep raw keys ahead of their certificate variants because verifyHostKey()
+ * checks raw known_hosts entries. */
+constexpr char kHostKeyMethods[]
+    = "ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,"
+      "ecdsa-sha2-nistp256-cert-v01@openssh.com,"
+      "ecdsa-sha2-nistp384-cert-v01@openssh.com,"
+      "ecdsa-sha2-nistp521-cert-v01@openssh.com,"
+      "rsa-sha2-512,rsa-sha2-256,"
+      "rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,"
+      "ssh-rsa,ssh-rsa-cert-v01@openssh.com";
+
+void configureSessionMethods(LIBSSH2_SESSION *session)
+{
+    (void) libssh2_session_method_pref(session, LIBSSH2_METHOD_HOSTKEY, kHostKeyMethods);
+    (void) libssh2_session_method_pref(
+        session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
+}
+
 void closeSocketFd(socket_fd_t sockFd)
 {
 #ifdef Q_OS_WIN
@@ -1195,13 +1213,7 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
     }
 
     libssh2_session_set_blocking(m_session, 0);
-
-    /* Modern OpenSSH (>= 8.8) drops ssh-rsa (SHA-1) from its default
-     * PubkeyAcceptedAlgorithms. Explicitly order rsa-sha2-512 ahead of
-     * rsa-sha2-256 (and the legacy ssh-rsa as a last resort) so RSA
-     * userauth negotiates a SHA-2 signature the server still accepts. */
-    libssh2_session_method_pref(
-        m_session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
+    configureSessionMethods(m_session);
 
     int rc = 0;
     while ((rc = libssh2_session_handshake(m_session, nativeSocket(m_socket)))
@@ -1818,10 +1830,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
         return ConnectStatus::HandshakeFailed;
     }
     libssh2_session_set_blocking(m_session, 0);
-    /* Same SHA-2 ordering as the direct path so tunneled userauth also
-     * works against servers that dropped ssh-rsa (SHA-1). */
-    libssh2_session_method_pref(
-        m_session, LIBSSH2_METHOD_SIGN_ALGO, "rsa-sha2-512,rsa-sha2-256,ssh-rsa");
+    configureSessionMethods(m_session);
     libssh2_session_callback_set2(
         m_session,
         LIBSSH2_CALLBACK_SEND,

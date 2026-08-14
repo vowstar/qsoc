@@ -1083,8 +1083,7 @@ literal string (useful for testing or custom deployments).
 <agent-remote>
 QSoC can drive a workspace on a remote host over SSH without installing
 anything on that host. The transport is `libssh2` linked statically against
-`mbedTLS 3.6 LTS` (shipped as git submodules); mbedTLS 4.x is not yet
-supported by libssh2.
+`mbedTLS 3.6 LTS` (shipped as git submodules).
 
 === Connecting
 <agent-remote-connect>
