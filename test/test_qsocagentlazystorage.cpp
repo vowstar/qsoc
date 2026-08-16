@@ -696,7 +696,7 @@ void Test::firstPromptPersistsAndCanContinue()
     mock.setStandardOutputFile(QDir(fixture.path()).filePath(QStringLiteral("mock.out")));
     const QString mockErr = QDir(fixture.path()).filePath(QStringLiteral("mock.err"));
     mock.setStandardErrorFile(mockErr);
-    mock.start(python, {mockScript, QString::number(port), QStringLiteral("none")});
+    mock.start(python, {QStringLiteral("-u"), mockScript, QString::number(port), QStringLiteral("none")});
     QVERIFY(mock.waitForStarted(5000));
     const bool mockReady = waitForMockReady(mock, port, mockErr, 15000);
     QByteArray mockErrLog;
