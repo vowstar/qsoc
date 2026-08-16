@@ -62,17 +62,15 @@ bool waitForPort(int port, int timeoutMs)
     return false;
 }
 
-bool waitForMockReady(QProcess &mock, int port, const QString &errPath, int timeoutMs)
+bool waitForMockReady(QProcess &mock, int port, int timeoutMs)
 {
+    // The mock's MOCK_READY line only proves the interpreter reached main(),
+    // not that the server bound, so a TCP connect is the readiness proof.
     QElapsedTimer clock;
     clock.start();
     while (clock.elapsed() < timeoutMs) {
         if (mock.state() == QProcess::NotRunning) {
             return false;
-        }
-        QFile err(errPath);
-        if (err.open(QIODevice::ReadOnly) && err.readAll().contains("MOCK_READY")) {
-            return true;
         }
         QTcpSocket probe;
         probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(port));
@@ -693,21 +691,42 @@ void Test::firstPromptPersistsAndCanContinue()
     BoundedProcess mock;
     mock.setProcessEnvironment(mockEnvironment);
     mock.setWorkingDirectory(fixture.path());
-    mock.setStandardOutputFile(QDir(fixture.path()).filePath(QStringLiteral("mock.out")));
+    const QString mockOut = QDir(fixture.path()).filePath(QStringLiteral("mock.out"));
     const QString mockErr = QDir(fixture.path()).filePath(QStringLiteral("mock.err"));
+    mock.setStandardOutputFile(mockOut);
     mock.setStandardErrorFile(mockErr);
     mock.start(python, {QStringLiteral("-u"), mockScript, QString::number(port), QStringLiteral("none")});
     QVERIFY(mock.waitForStarted(5000));
-    const bool mockReady = waitForMockReady(mock, port, mockErr, 15000);
+    const bool mockReady = waitForMockReady(mock, port, 15000);
     QByteArray mockErrLog;
     QFile      errFile(mockErr);
     if (errFile.open(QIODevice::ReadOnly)) {
         mockErrLog = errFile.readAll().right(2048);
     }
+    QByteArray mockOutLog;
+    QFile      outFile(mockOut);
+    if (outFile.open(QIODevice::ReadOnly)) {
+        mockOutLog = outFile.readAll().right(2048);
+    }
+    const QString mockState = [&mock]() {
+        switch (mock.state()) {
+        case QProcess::NotRunning: return QStringLiteral("NotRunning");
+        case QProcess::Starting:   return QStringLiteral("Starting");
+        case QProcess::Running:    return QStringLiteral("Running");
+        }
+        return QStringLiteral("unknown");
+    }();
     QVERIFY2(
         mockReady,
-        qPrintable(QStringLiteral("the local mock endpoint did not start: %1")
-                       .arg(QString::fromUtf8(mockErrLog))));
+        qPrintable(QStringLiteral(
+                       "the local mock endpoint did not start"
+                       " (state=%1 exitCode=%2 exitStatus=%3)\nstderr: %4\nstdout: %5")
+                       .arg(mockState)
+                       .arg(mock.exitCode())
+                       .arg(mock.exitStatus() == QProcess::NormalExit ? QStringLiteral("NormalExit")
+                                                                      : QStringLiteral("CrashExit"))
+                       .arg(QString::fromUtf8(mockErrLog))
+                       .arg(QString::fromUtf8(mockOutLog))));
 
     QString sessionPath;
     {
