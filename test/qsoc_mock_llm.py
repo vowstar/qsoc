@@ -297,11 +297,11 @@ def _bind_server():
     # readiness window instead of dying on a transient EADDRINUSE. On the
     # final failure, announce it on both streams in case the caller captures
     # only one of them.
-    for attempt in range(200):
+    for attempt in range(1200):
         try:
             return http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
         except OSError as exc:
-            if attempt == 199:
+            if attempt == 1199:
                 message = "MOCK_BIND_FAILED %d: %s\n" % (PORT, exc)
                 for stream in (sys.stdout, sys.stderr):
                     try:
