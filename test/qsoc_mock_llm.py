@@ -269,7 +269,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main():
     threading.Thread(target=lambda: (time.sleep(TTL), os._exit(0)), daemon=True).start()
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server = _bind_server()
     if bool(TLS_CERT) != bool(TLS_KEY):
         raise ValueError("MOCK_TLS_CERT and MOCK_TLS_KEY must be set together")
     if TLS_CERT:
@@ -282,6 +282,19 @@ def main():
     sys.stderr.write("MOCK_READY %d\n" % PORT)
     sys.stderr.flush()
     server.serve_forever()
+
+
+def _bind_server():
+    # The test picks a port by binding then closing a QTcpServer. macOS can
+    # hold that port briefly after close, so retry the bind instead of dying
+    # on a transient EADDRINUSE.
+    for attempt in range(20):
+        try:
+            return http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+        except OSError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
 
 
 if __name__ == "__main__":
