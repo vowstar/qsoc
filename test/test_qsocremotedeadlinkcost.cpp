@@ -405,19 +405,14 @@ void Test::aFlappingLinkIsNotReconnectedOncePerToolCall()
 {
     REQUIRE_COST_FIXTURE();
     m_relay->heal();
-    startAgent();
+    startAgent(1);
 
-    QVERIFY2(waitFor([this] { return wireRequests() >= 1; }, 60000), "the model was never asked");
-
-    const int beforeCut = wireRequests();
-    m_relay->blackhole();
-    /* Heal only once the failure has been observed, so the reconnect has
-     * something to succeed against. The predicate is the observation, not a
-     * sleep. */
+    /* The second request proves one remote tool completed before the cut. */
     QVERIFY2(
-        waitFor([this, beforeCut] { return wireRequests() > beforeCut; }, 240000),
-        "the workspace failure was never reported to the model");
-    m_relay->heal();
+        waitFor([this] { return wireRequests() >= 2; }, 60000),
+        "the first remote tool never completed");
+
+    m_relay->blackholeUntilNextConnection();
     QVERIFY2(
         waitFor([this] { return agentOutput().contains("re-established"); }, 240000),
         "the link was never re-established");
