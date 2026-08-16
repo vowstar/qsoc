@@ -122,23 +122,29 @@ public:
     ::_exit(127);
 }
 
-void installPty(int slaveFd)
+void installPty(const char *slavePath, int inheritedSlaveFd)
 {
     if (::setsid() < 0) {
         failPtyChild();
     }
-#ifdef TIOCSCTTY
-    if (::ioctl(slaveFd, TIOCSCTTY, 0) < 0) {
+    // The inherited fd was opened with O_NOCTTY, so reopen by name. After
+    // setsid() the child is a session leader with no controlling terminal, so
+    // this open() assigns the slave as its controlling terminal on Linux and
+    // macOS alike.
+    const int ttyFd = ::open(slavePath, O_RDWR);
+    if (ttyFd < 0) {
         failPtyChild();
     }
-#endif
     for (int fd : {STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO}) {
-        if (::dup2(slaveFd, fd) != fd) {
+        if (::dup2(ttyFd, fd) != fd) {
             failPtyChild();
         }
     }
-    if (slaveFd > STDERR_FILENO) {
-        ::close(slaveFd);
+    if (ttyFd > STDERR_FILENO) {
+        ::close(ttyFd);
+    }
+    if (inheritedSlaveFd > STDERR_FILENO) {
+        ::close(inheritedSlaveFd);
     }
 }
 
@@ -169,7 +175,8 @@ public:
             closeDescriptors();
             return false;
         }
-        slaveFd_ = ::open(slaveName, O_RDWR | O_NOCTTY);
+        slavePath_ = slaveName;
+        slaveFd_   = ::open(slaveName, O_RDWR | O_NOCTTY);
         if (slaveFd_ < 0) {
             closeDescriptors();
             return false;
@@ -193,8 +200,10 @@ public:
         setWorkingDirectory(workingDirectory);
         setProcessEnvironment(environment);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        const int childSlave = slaveFd_;
-        setChildProcessModifier([childSlave]() { installPty(childSlave); });
+        const int   childSlave     = slaveFd_;
+        const char *childSlavePath = slavePath_.constData();
+        setChildProcessModifier(
+            [childSlave, childSlavePath]() { installPty(childSlavePath, childSlave); });
 #endif
         start(program, arguments);
         const bool started = waitForStarted(5000);
@@ -322,7 +331,7 @@ public:
 
 protected:
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-    void setupChildProcess() override { installPty(slaveFd_); }
+    void setupChildProcess() override { installPty(slavePath_.constData(), slaveFd_); }
 #endif
 
 private:
@@ -362,6 +371,7 @@ private:
     }
 
     QByteArray output_;
+    QByteArray slavePath_;
     int        masterFd_ = -1;
     int        slaveFd_  = -1;
 };
