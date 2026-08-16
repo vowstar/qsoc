@@ -268,6 +268,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
+    # Announce that the interpreter reached main() before anything else can
+    # fail. This tells a caller "the script started" apart from "the server
+    # bound and is accepting". The marker is written to both streams because
+    # a caller may capture only one of them. A TCP connect to the port
+    # remains the readiness proof.
+    marker = "MOCK_READY %d\n" % PORT
+    sys.stdout.write(marker)
+    sys.stdout.flush()
+    sys.stderr.write(marker)
+    sys.stderr.flush()
     threading.Thread(target=lambda: (time.sleep(TTL), os._exit(0)), daemon=True).start()
     server = _bind_server()
     if bool(TLS_CERT) != bool(TLS_KEY):
@@ -277,22 +287,28 @@ def main():
         context.load_cert_chain(TLS_CERT, TLS_KEY)
         context.set_alpn_protocols(["h2", "http/1.1"])
         server.socket = context.wrap_socket(server.socket, server_side=True)
-    # The socket is bound and the accept queue is live. Announce readiness so
-    # a caller can wait on this line instead of racing a TCP connect probe.
-    sys.stderr.write("MOCK_READY %d\n" % PORT)
-    sys.stderr.flush()
+    # The socket is bound and the accept queue is live. Serve forever.
     server.serve_forever()
 
 
 def _bind_server():
     # The test picks a port by binding then closing a QTcpServer. macOS can
-    # hold that port briefly after close, so retry the bind instead of dying
-    # on a transient EADDRINUSE.
-    for attempt in range(20):
+    # hold that port briefly after close, so retry the bind across the whole
+    # readiness window instead of dying on a transient EADDRINUSE. On the
+    # final failure, announce it on both streams in case the caller captures
+    # only one of them.
+    for attempt in range(200):
         try:
             return http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-        except OSError:
-            if attempt == 19:
+        except OSError as exc:
+            if attempt == 199:
+                message = "MOCK_BIND_FAILED %d: %s\n" % (PORT, exc)
+                for stream in (sys.stdout, sys.stderr):
+                    try:
+                        stream.write(message)
+                        stream.flush()
+                    except OSError:
+                        pass
                 raise
             time.sleep(0.05)
 
