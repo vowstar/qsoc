@@ -277,6 +277,10 @@ def main():
         context.load_cert_chain(TLS_CERT, TLS_KEY)
         context.set_alpn_protocols(["h2", "http/1.1"])
         server.socket = context.wrap_socket(server.socket, server_side=True)
+    # The socket is bound and the accept queue is live. Announce readiness so
+    # a caller can wait on this line instead of racing a TCP connect probe.
+    sys.stderr.write("MOCK_READY %d\n" % PORT)
+    sys.stderr.flush()
     server.serve_forever()
 
 

@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 #endif
 
@@ -53,7 +54,29 @@ bool waitForPort(int port, int timeoutMs)
     while (clock.elapsed() < timeoutMs) {
         QTcpSocket probe;
         probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(port));
-        if (probe.waitForConnected(100)) {
+        if (probe.waitForConnected(200)) {
+            return true;
+        }
+        QTest::qWait(20);
+    }
+    return false;
+}
+
+bool waitForMockReady(QProcess &mock, int port, const QString &errPath, int timeoutMs)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (clock.elapsed() < timeoutMs) {
+        if (mock.state() == QProcess::NotRunning) {
+            return false;
+        }
+        QFile err(errPath);
+        if (err.open(QIODevice::ReadOnly) && err.readAll().contains("MOCK_READY")) {
+            return true;
+        }
+        QTcpSocket probe;
+        probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(port));
+        if (probe.waitForConnected(200)) {
             return true;
         }
         QTest::qWait(20);
@@ -145,6 +168,24 @@ void installPty(const char *slavePath, int inheritedSlaveFd)
     }
     if (inheritedSlaveFd > STDERR_FILENO) {
         ::close(inheritedSlaveFd);
+    }
+
+    // Put the slave into raw input before exec so the agent's first read does
+    // not race the terminal's canonical default. A cooked pty would echo the
+    // typed line itself and hold it in the canonical buffer, and the CR
+    // terminator the test sends only commits a line when ICRNL maps it to NL,
+    // which Linux does by default and macOS does not. With ECHO and ICANON off
+    // from the start, the typed line is only echoed by the agent's compositor
+    // (after its raw-mode input monitor is active), so the test's echo wait
+    // doubles as a readiness gate and CR always arrives as CR.
+    struct termios raw;
+    if (::tcgetattr(STDIN_FILENO, &raw) == 0) {
+        raw.c_iflag &= ~static_cast<tcflag_t>(ICRNL | INLCR | IXON);
+        raw.c_oflag &= ~static_cast<tcflag_t>(OPOST);
+        raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+        raw.c_cc[VMIN]  = 1;
+        raw.c_cc[VTIME] = 0;
+        (void) ::tcsetattr(STDIN_FILENO, TCSANOW, &raw);
     }
 }
 
@@ -561,6 +602,8 @@ void Test::unsafeProjectSwitchKeepsCurrentSession()
         isolatedEnvironment(fixture.path())));
     QVERIFY2(
         agent.waitForOutput("Type 'exit' to exit", 15000), agent.output().right(8192).constData());
+    QVERIFY2(
+        agent.waitForOutput("(New session ", 15000), agent.output().right(8192).constData());
     const QRegularExpression sessionPattern(QStringLiteral(R"(\(New session ([0-9A-Fa-f]{8})\))"));
     const QRegularExpressionMatch sessionMatch = sessionPattern.match(
         QString::fromUtf8(agent.output()));
@@ -651,10 +694,20 @@ void Test::firstPromptPersistsAndCanContinue()
     mock.setProcessEnvironment(mockEnvironment);
     mock.setWorkingDirectory(fixture.path());
     mock.setStandardOutputFile(QDir(fixture.path()).filePath(QStringLiteral("mock.out")));
-    mock.setStandardErrorFile(QDir(fixture.path()).filePath(QStringLiteral("mock.err")));
+    const QString mockErr = QDir(fixture.path()).filePath(QStringLiteral("mock.err"));
+    mock.setStandardErrorFile(mockErr);
     mock.start(python, {mockScript, QString::number(port), QStringLiteral("none")});
     QVERIFY(mock.waitForStarted(5000));
-    QVERIFY2(waitForPort(port, 5000), "the local mock endpoint did not start");
+    const bool mockReady = waitForMockReady(mock, port, mockErr, 15000);
+    QByteArray mockErrLog;
+    QFile      errFile(mockErr);
+    if (errFile.open(QIODevice::ReadOnly)) {
+        mockErrLog = errFile.readAll().right(2048);
+    }
+    QVERIFY2(
+        mockReady,
+        qPrintable(QStringLiteral("the local mock endpoint did not start: %1")
+                       .arg(QString::fromUtf8(mockErrLog))));
 
     QString sessionPath;
     {
