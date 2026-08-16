@@ -64,7 +64,7 @@ QSocLoopScheduler::~QSocLoopScheduler()
 
 bool QSocLoopScheduler::isOwner() const
 {
-    return isOwner_;
+    return storageState_ != StorageState::NonOwner;
 }
 
 QString QSocLoopScheduler::tasksPath() const
@@ -87,12 +87,8 @@ void QSocLoopScheduler::setProjectDir(const QString &dir)
      * tasks were created against the previous project's REPL context;
      * carrying them over silently would surprise the user. */
     jobs_.clear();
-    isOwner_ = projectDir_.isEmpty();
-    if (projectDir_.isEmpty())
-        return;
-    QDir(projectDir_).mkpath(QStringLiteral(".qsoc"));
-    loadFromDisk();
-    isOwner_ = tryAcquireLock();
+    storageState_ = projectDir_.isEmpty() ? StorageState::MemoryOnly : StorageState::Dormant;
+    discoverDurableStorage();
 }
 
 void QSocLoopScheduler::loadFromDisk()
@@ -136,10 +132,62 @@ void QSocLoopScheduler::loadFromDisk()
     }
 }
 
+void QSocLoopScheduler::reloadDurableJobs()
+{
+    QList<Job> sessionOnly;
+    for (const auto &job : jobs_) {
+        if (!job.durable)
+            sessionOnly.append(job);
+    }
+    jobs_.clear();
+    loadFromDisk();
+    for (const auto &job : sessionOnly)
+        jobs_.append(job);
+}
+
+void QSocLoopScheduler::discoverDurableStorage()
+{
+    if (storageState_ != StorageState::Dormant || !QFileInfo::exists(tasksPath()))
+        return;
+    storageState_ = tryAcquireLock() ? StorageState::Owner : StorageState::NonOwner;
+    reloadDurableJobs();
+}
+
+void QSocLoopScheduler::refreshDurableJobs()
+{
+    if (storageState_ == StorageState::Dormant) {
+        discoverDurableStorage();
+    } else if (storageState_ == StorageState::NonOwner) {
+        reloadDurableJobs();
+    }
+}
+
+bool QSocLoopScheduler::ensureDurableStorage()
+{
+    if (storageState_ == StorageState::MemoryOnly || storageState_ == StorageState::Owner)
+        return true;
+
+    discoverDurableStorage();
+    if (storageState_ == StorageState::Owner)
+        return true;
+
+    if (storageState_ == StorageState::Dormant
+        && !QDir(projectDir_).mkpath(QStringLiteral(".qsoc"))) {
+        return false;
+    }
+
+    const bool acquired = tryAcquireLock();
+    storageState_       = acquired ? StorageState::Owner : StorageState::NonOwner;
+    reloadDurableJobs();
+    return acquired;
+}
+
 bool QSocLoopScheduler::persist()
 {
-    if (projectDir_.isEmpty())
+    if (storageState_ == StorageState::MemoryOnly || storageState_ == StorageState::Dormant)
         return true;
+    if (storageState_ != StorageState::Owner)
+        return false;
     QJsonArray arr;
     for (const auto &job : jobs_) {
         if (!job.durable)
@@ -290,9 +338,10 @@ QString QSocLoopScheduler::addJob(
         return QString();
     if (jobs_.size() >= kMaxJobs)
         return QString();
-    /* Non-owner cannot mutate durable on-disk state; session-only is fine
-     * because non-owners run their own in-memory list and never persist. */
-    if (durable && !projectDir_.isEmpty() && !isOwner_)
+    if (durable && !ensureDurableStorage())
+        return QString();
+    /* Acquiring a previously dormant store reloads tasks written by a peer. */
+    if (jobs_.size() >= kMaxJobs)
         return QString();
 
     Job job;
@@ -314,11 +363,12 @@ QString QSocLoopScheduler::addJob(
 
 bool QSocLoopScheduler::removeJob(const QString &id)
 {
+    refreshDurableJobs();
     for (int i = 0; i < jobs_.size(); ++i) {
         if (jobs_[i].id != id)
             continue;
         const Job stash = jobs_[i];
-        if (stash.durable && !projectDir_.isEmpty() && !isOwner_)
+        if (stash.durable && storageState_ == StorageState::NonOwner)
             return false;
         jobs_.removeAt(i);
         if (stash.durable && !persist()) {
@@ -333,6 +383,7 @@ bool QSocLoopScheduler::removeJob(const QString &id)
 
 bool QSocLoopScheduler::clearJobs()
 {
+    refreshDurableJobs();
     /* If any durable task exists in durable mode, only the owner can clear. */
     bool anyDurable = false;
     for (const auto &job : jobs_) {
@@ -341,11 +392,13 @@ bool QSocLoopScheduler::clearJobs()
             break;
         }
     }
-    if (anyDurable && !projectDir_.isEmpty() && !isOwner_)
+    if (anyDurable && storageState_ == StorageState::NonOwner)
         return false;
-    QList<Job> stash = jobs_;
+    const bool rewriteOwnedStore = storageState_ == StorageState::Owner
+                                   && QFileInfo::exists(tasksPath());
+    QList<Job> stash             = jobs_;
     jobs_.clear();
-    if (!persist()) {
+    if ((anyDurable || rewriteOwnedStore) && !persist()) {
         jobs_ = stash;
         return false;
     }
@@ -360,20 +413,7 @@ int QSocLoopScheduler::activeJobCount() const
 
 QList<QSocLoopScheduler::Job> QSocLoopScheduler::listJobs()
 {
-    if (!projectDir_.isEmpty() && !isOwner_) {
-        /* Re-read durable tasks from disk; preserve session-only ones
-         * (which only exist in our memory) by stashing them across the
-         * reload. */
-        QList<Job> sessionOnly;
-        for (const auto &job : jobs_) {
-            if (!job.durable)
-                sessionOnly.append(job);
-        }
-        jobs_.clear();
-        loadFromDisk();
-        for (const auto &job : sessionOnly)
-            jobs_.append(job);
-    }
+    refreshDurableJobs();
     return jobs_;
 }
 
@@ -385,18 +425,11 @@ void QSocLoopScheduler::tick()
      * tasks. Non-owners silently re-probe each tick so a crashed owner is
      * taken over without a restart. Session-only tasks always fire (they
      * are private to this process). */
-    if (!projectDir_.isEmpty() && !isOwner_) {
+    discoverDurableStorage();
+    if (storageState_ == StorageState::NonOwner) {
         if (tryAcquireLock()) {
-            isOwner_ = true;
-            QList<Job> sessionOnly;
-            for (const auto &job : jobs_) {
-                if (!job.durable)
-                    sessionOnly.append(job);
-            }
-            jobs_.clear();
-            loadFromDisk();
-            for (const auto &job : sessionOnly)
-                jobs_.append(job);
+            storageState_ = StorageState::Owner;
+            reloadDurableJobs();
         }
         /* Even if we just took over, fall through to evaluate this tick. */
     }
@@ -410,8 +443,10 @@ void QSocLoopScheduler::tick()
      * advanced; recurring tasks update lastFiredAt to anchor next match. */
     QList<QPair<QString, QString>> due;
     QList<QString>                 oneShotsToErase;
-    bool                           anyMutation = false;
+    bool                           anyDurableMutation = false;
     for (auto &job : jobs_) {
+        if (job.durable && storageState_ == StorageState::NonOwner)
+            continue;
         const qint64 anchor = job.lastFiredAt > 0 ? job.lastFiredAt : job.createdAt;
         const qint64 next   = QSocCron::nextRunMs(job.cron, anchor);
         if (next == 0 || now < next)
@@ -419,7 +454,7 @@ void QSocLoopScheduler::tick()
         due.append(qMakePair(job.prompt, job.id));
         if (job.recurring) {
             job.lastFiredAt = now;
-            anyMutation     = true;
+            anyDurableMutation |= job.durable;
         } else {
             oneShotsToErase.append(job.id);
         }
@@ -427,13 +462,13 @@ void QSocLoopScheduler::tick()
     for (const QString &eraseId : oneShotsToErase) {
         for (int i = 0; i < jobs_.size(); ++i) {
             if (jobs_[i].id == eraseId) {
+                anyDurableMutation |= jobs_[i].durable;
                 jobs_.removeAt(i);
-                anyMutation = true;
                 break;
             }
         }
     }
-    if (anyMutation && !persist() && !persistDegraded_) {
+    if (anyDurableMutation && !persist() && !persistDegraded_) {
         persistDegraded_ = true;
         emit persistFailed(tasksPath());
     }

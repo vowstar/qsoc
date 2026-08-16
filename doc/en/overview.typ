@@ -82,7 +82,8 @@ directory. Every later command reads and writes inside that tree:
      add project settings],
     [`.qsoc/`],
     [Agent state: sessions, plans, sub-agent definitions, skills, memory, and
-     the remote workspace binding. Created by the agent on first run],
+     the remote workspace binding. Created on the first durable state write;
+     opening and exiting the agent leaves an unused project untouched],
   )],
   caption: [PROJECT LAYOUT],
   kind: table,

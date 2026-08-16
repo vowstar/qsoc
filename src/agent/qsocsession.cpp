@@ -53,6 +53,24 @@ QString recoveryClaimPath(const QString &runId)
     return QDir(directory).filePath(QString::fromLatin1(name) + QStringLiteral(".claim"));
 }
 
+std::optional<QByteArray> jsonLinePayload(const nlohmann::json &line)
+{
+    QByteArray payload;
+    try {
+        payload = QByteArray::fromStdString(line.dump());
+    } catch (const nlohmann::json::exception &) {
+        return std::nullopt;
+    }
+    payload.append('\n');
+    return payload;
+}
+
+bool sessionPathIsRegular(const QString &filePath)
+{
+    const QFileInfo info(filePath);
+    return info.isFile() && !info.isSymLink();
+}
+
 bool appendJsonLine(const QString &filePath, const nlohmann::json &line)
 {
     QFileInfo fileInfo(filePath);
@@ -65,14 +83,11 @@ bool appendJsonLine(const QString &filePath, const nlohmann::json &line)
     if (!file.open(QIODevice::Append | QIODevice::Text)) {
         return false;
     }
-    QByteArray payload;
-    try {
-        payload = QByteArray::fromStdString(line.dump());
-    } catch (const nlohmann::json::exception &) {
+    const auto payload = jsonLinePayload(line);
+    if (!payload.has_value()) {
         return false;
     }
-    payload.append('\n');
-    return file.write(payload) == payload.size() && file.flush();
+    return file.write(*payload) == payload->size() && file.flush();
 }
 
 QString runEventName(QSocSession::RunEvent event)
@@ -174,15 +189,92 @@ void sanitizeLoadedMessage(nlohmann::json *message)
 
 } // namespace
 
-QSocSession::QSocSession(QString sessionId, QString filePath)
+QSocSession::QSocSession(QString sessionId, QString filePath, StorageMode storageMode)
     : sessionIdValue(std::move(sessionId))
     , filePathValue(std::move(filePath))
-    , persisted(QFile::exists(filePathValue))
-{}
+    , storageModeValue(storageMode)
+{
+    const QFileInfo info(filePathValue);
+    if (storageModeValue == StorageMode::Auto) {
+        storageModeValue = info.exists() || info.isSymLink() ? StorageMode::Existing
+                                                             : StorageMode::Fresh;
+    }
+    persisted = storageModeValue == StorageMode::Existing && sessionPathIsRegular(filePathValue);
+}
+
+void QSocSession::setWriteBarrier(std::function<bool()> barrier)
+{
+    writeBarrier = std::move(barrier);
+}
+
+bool QSocSession::prepareWrite() const
+{
+    if (storageModeValue == StorageMode::Existing) {
+        if (!sessionPathIsRegular(filePathValue)) {
+            return false;
+        }
+    }
+    return !writeBarrier || writeBarrier();
+}
+
+bool QSocSession::writeFreshPayload(const QByteArray &payload)
+{
+    const QFileInfo info(filePathValue);
+    QDir            parent = info.absoluteDir();
+    if (!parent.exists() && !parent.mkpath(QStringLiteral("."))) {
+        return false;
+    }
+    QFile file(filePathValue);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::NewOnly)) {
+        return false;
+    }
+    if (file.write(payload) != payload.size() || !file.flush()) {
+        return false;
+    }
+    file.close();
+    pendingMeta.clear();
+    storageModeValue = StorageMode::Existing;
+    persisted        = true;
+    return true;
+}
+
+bool QSocSession::appendRecord(const nlohmann::json &line)
+{
+    if (!persisted && storageModeValue == StorageMode::Fresh) {
+        QByteArray payload;
+        for (const auto &kv : std::as_const(pendingMeta)) {
+            nlohmann::json metaLine;
+            metaLine["type"]   = "meta";
+            metaLine["ts"]     = isoNow().toStdString();
+            metaLine["key"]    = kv.first.toStdString();
+            metaLine["value"]  = kv.second.toStdString();
+            const auto encoded = jsonLinePayload(metaLine);
+            if (!encoded.has_value()) {
+                return false;
+            }
+            payload.append(*encoded);
+        }
+        const auto encoded = jsonLinePayload(line);
+        if (!encoded.has_value()) {
+            return false;
+        }
+        payload.append(*encoded);
+        return writeFreshPayload(payload);
+    }
+    if (!flushPendingMeta() || !appendJsonLine(filePathValue, line)) {
+        return false;
+    }
+    storageModeValue = StorageMode::Existing;
+    persisted        = true;
+    return true;
+}
 
 bool QSocSession::flushPendingMeta()
 {
-    if (persisted || pendingMeta.isEmpty()) {
+    if (persisted) {
+        return true;
+    }
+    if (pendingMeta.isEmpty()) {
         return true;
     }
     for (const auto &kv : std::as_const(pendingMeta)) {
@@ -196,13 +288,14 @@ bool QSocSession::flushPendingMeta()
         }
     }
     pendingMeta.clear();
-    persisted = true;
+    storageModeValue = StorageMode::Existing;
+    persisted        = true;
     return true;
 }
 
 bool QSocSession::appendMessage(const nlohmann::json &message)
 {
-    if (!flushPendingMeta()) {
+    if (!prepareWrite()) {
         return false;
     }
 
@@ -215,18 +308,20 @@ bool QSocSession::appendMessage(const nlohmann::json &message)
     for (auto it = message.begin(); it != message.end(); ++it) {
         line[it.key()] = it.value();
     }
-    if (!appendJsonLine(filePathValue, line)) {
-        return false;
-    }
-    persisted = true;
-    return true;
+    return appendRecord(line);
 }
 
 bool QSocSession::appendMeta(const QString &key, const QString &value)
 {
     if (!persisted) {
+        if (storageModeValue == StorageMode::Existing) {
+            return false;
+        }
         pendingMeta.append(qMakePair(key, value));
         return true;
+    }
+    if (!prepareWrite()) {
+        return false;
     }
     nlohmann::json line;
     line["type"]  = "meta";
@@ -238,6 +333,25 @@ bool QSocSession::appendMeta(const QString &key, const QString &value)
 
 bool QSocSession::replaceWithMeta(const QList<QPair<QString, QString>> &metadata)
 {
+    if (!prepareWrite()) {
+        return false;
+    }
+    QByteArray payload;
+    for (const auto &entry : metadata) {
+        nlohmann::json line;
+        line["type"]       = "meta";
+        line["ts"]         = isoNow().toStdString();
+        line["key"]        = entry.first.toStdString();
+        line["value"]      = entry.second.toStdString();
+        const auto encoded = jsonLinePayload(line);
+        if (!encoded.has_value()) {
+            return false;
+        }
+        payload.append(*encoded);
+    }
+    if (!persisted && storageModeValue == StorageMode::Fresh) {
+        return writeFreshPayload(payload);
+    }
     const QFileInfo info(filePathValue);
     QDir            parent = info.absoluteDir();
     if (!parent.exists() && !parent.mkpath(QStringLiteral("."))) {
@@ -248,30 +362,16 @@ bool QSocSession::replaceWithMeta(const QList<QPair<QString, QString>> &metadata
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
-    for (const auto &entry : metadata) {
-        nlohmann::json line;
-        line["type"]  = "meta";
-        line["ts"]    = isoNow().toStdString();
-        line["key"]   = entry.first.toStdString();
-        line["value"] = entry.second.toStdString();
-        QByteArray payload;
-        try {
-            payload = QByteArray::fromStdString(line.dump());
-        } catch (const nlohmann::json::exception &) {
-            file.cancelWriting();
-            return false;
-        }
-        payload.append('\n');
-        if (file.write(payload) != payload.size()) {
-            file.cancelWriting();
-            return false;
-        }
+    if (file.write(payload) != payload.size()) {
+        file.cancelWriting();
+        return false;
     }
     if (!file.commit()) {
         return false;
     }
     pendingMeta.clear();
-    persisted = true;
+    storageModeValue = StorageMode::Existing;
+    persisted        = true;
     return true;
 }
 
@@ -286,7 +386,7 @@ bool QSocSession::appendRun(const RunRecord &record)
         || (record.event == RunEvent::ToolStarted && record.toolCallId.trimmed().isEmpty())) {
         return false;
     }
-    if (!flushPendingMeta()) {
+    if (!prepareWrite()) {
         return false;
     }
 
@@ -322,27 +422,19 @@ bool QSocSession::appendRun(const RunRecord &record)
     if (!record.toolCallId.isEmpty()) {
         line["tool_call_id"] = record.toolCallId.toStdString();
     }
-    if (!appendJsonLine(filePathValue, line)) {
-        return false;
-    }
-    persisted = true;
-    return true;
+    return appendRecord(line);
 }
 
 bool QSocSession::appendSnapshot(const nlohmann::json &messages)
 {
-    if (!messages.is_array() || !flushPendingMeta()) {
+    if (!messages.is_array() || !prepareWrite()) {
         return false;
     }
     nlohmann::json line;
     line["type"]     = "snapshot";
     line["ts"]       = isoNow().toStdString();
     line["messages"] = messages;
-    if (!appendJsonLine(filePathValue, line)) {
-        return false;
-    }
-    persisted = true;
-    return true;
+    return appendRecord(line);
 }
 
 bool QSocSession::rewriteMessages(const nlohmann::json &messages)
@@ -356,6 +448,29 @@ bool QSocSession::rewriteMessages(const nlohmann::json &messages)
         pendingMeta.clear();
         return true;
     }
+    if (!prepareWrite()) {
+        return false;
+    }
+
+    QByteArray payload;
+    if (messages.is_array()) {
+        for (const auto &msg : messages) {
+            nlohmann::json line;
+            line["type"] = "message";
+            line["ts"]   = isoNow().toStdString();
+            for (auto it = msg.begin(); it != msg.end(); ++it) {
+                line[it.key()] = it.value();
+            }
+            const auto encoded = jsonLinePayload(line);
+            if (!encoded.has_value()) {
+                return false;
+            }
+            payload.append(*encoded);
+        }
+    }
+    if (!persisted && storageModeValue == StorageMode::Fresh) {
+        return writeFreshPayload(payload);
+    }
 
     QFileInfo fileInfo(filePathValue);
     QDir      parentDir = fileInfo.absoluteDir();
@@ -367,32 +482,15 @@ bool QSocSession::rewriteMessages(const nlohmann::json &messages)
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
-    if (messages.is_array()) {
-        for (const auto &msg : messages) {
-            nlohmann::json line;
-            line["type"] = "message";
-            line["ts"]   = isoNow().toStdString();
-            for (auto it = msg.begin(); it != msg.end(); ++it) {
-                line[it.key()] = it.value();
-            }
-            QByteArray payload;
-            try {
-                payload = QByteArray::fromStdString(line.dump());
-            } catch (const nlohmann::json::exception &) {
-                file.cancelWriting();
-                return false;
-            }
-            payload.append('\n');
-            if (file.write(payload) != payload.size()) {
-                file.cancelWriting();
-                return false;
-            }
-        }
+    if (file.write(payload) != payload.size()) {
+        file.cancelWriting();
+        return false;
     }
     if (!file.commit()) {
         return false;
     }
-    persisted = !emptyRewrite;
+    storageModeValue = StorageMode::Existing;
+    persisted        = true;
     pendingMeta.clear();
     return true;
 }
@@ -400,7 +498,10 @@ bool QSocSession::rewriteMessages(const nlohmann::json &messages)
 QString QSocSession::readMeta(const QString &filePath, const QString &key)
 {
     QString value;
-    QFile   file(filePath);
+    if (!sessionPathIsRegular(filePath)) {
+        return value;
+    }
+    QFile file(filePath);
     if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return value;
     }
@@ -431,7 +532,10 @@ QString QSocSession::readMeta(const QString &filePath, const QString &key)
 QMap<QString, QString> QSocSession::readMetas(const QString &filePath, const QStringList &keys)
 {
     QMap<QString, QString> out;
-    QFile                  file(filePath);
+    if (!sessionPathIsRegular(filePath)) {
+        return out;
+    }
+    QFile file(filePath);
     if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return out;
     }
@@ -464,7 +568,10 @@ QMap<QString, QString> QSocSession::readMetas(const QString &filePath, const QSt
 nlohmann::json QSocSession::loadMessages(const QString &filePath)
 {
     nlohmann::json messages = nlohmann::json::array();
-    QFile          file(filePath);
+    if (!sessionPathIsRegular(filePath)) {
+        return messages;
+    }
+    QFile file(filePath);
     if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return messages;
     }
@@ -580,7 +687,10 @@ bool QSocSession::removeRecoveryClaim(const QString &runId)
 std::optional<QSocSession::RunRecord> QSocSession::latestRun(const QString &filePath)
 {
     std::optional<RunRecord> current;
-    QFile                    file(filePath);
+    if (!sessionPathIsRegular(filePath)) {
+        return current;
+    }
+    QFile file(filePath);
     if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return current;
     }
@@ -742,7 +852,7 @@ QSocSession::Info QSocSession::readInfo(const QString &filePath)
     info.path = filePath;
 
     QFileInfo fileInfo(filePath);
-    if (!fileInfo.exists()) {
+    if (!sessionPathIsRegular(filePath)) {
         return info;
     }
 
@@ -832,6 +942,9 @@ QList<QSocSession::Info> QSocSession::listAll(const QString &projectPath)
     const auto entries = dir.entryInfoList({QStringLiteral("*.jsonl")}, QDir::Files, QDir::Time);
     result.reserve(entries.size());
     for (const QFileInfo &entry : entries) {
+        if (!entry.isFile() || entry.isSymLink()) {
+            continue;
+        }
         result.append(readInfo(entry.absoluteFilePath()));
     }
     /* Sort by lastModified descending so the most recent session is at the

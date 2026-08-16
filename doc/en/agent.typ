@@ -1034,8 +1034,9 @@ with the returned `task_id` to stop it.
 == Scheduled Prompts
 <agent-loop>
 `/loop` runs a prompt on a cron schedule. Jobs are persisted to
-`<project>/.qsoc/loop.yml` and gated by a per-project file lock so only
-one qsoc session fires them at a time.
+`<project>/.qsoc/loops.json` and gated by a per-project file lock so only
+one qsoc session fires them at a time. A project without saved jobs remains
+untouched until its first durable job is added.
 
 === Subcommands
 <agent-loop-cmds>
@@ -1351,7 +1352,9 @@ are refused until that root is selected again.
 == Sessions
 <agent-persistence>
 Each session is persisted as `.qsoc/sessions/<id>.jsonl` under the project
-directory, one JSON event per line (messages plus metadata). This enables:
+directory, one JSON event per line (messages plus metadata). New-session
+metadata stays in memory until the first durable record; starting, inspecting,
+and exiting an unused agent does not create `.qsoc/`. This enables:
 
 - `qsoc agent --continue`: resume the most recent session
 - `qsoc agent --resume [id]`: pick a session from a list, or load one by id /
@@ -1376,8 +1379,9 @@ user-added directories, and the OS temp directory, remain writable but are not
 checkpointed and are never changed by rewind.
 
 Each checkpoint names the tree that produced it. A local tree is bound to the
-project's `.qsoc/tree-id`; a remote tree is bound to the authenticated host,
-the host-resolved workspace, and its `.qsoc-agent/tree-id`. Replacing either
+project's `.qsoc/tree-id`, created when the first local checkpoint needs to be
+written; a remote tree is bound to the authenticated host, the host-resolved
+workspace, and its `.qsoc-agent/tree-id`. Replacing either
 directory without its bound marker, reaching a different endpoint, or loading
 an old checkpoint that has no tree identity leaves its files untouched. A
 copied marker denotes the same logical tree. A damaged or incomplete checkpoint

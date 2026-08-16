@@ -33,6 +33,7 @@ class QLockFile;
  *          2. Durable (setProjectDir called): tasks with durable=true
  *             round-trip through `<dir>/.qsoc/loops.json`;
  *             `<dir>/.qsoc/loops.lock` makes one of N sessions the owner.
+ *             A new project stays memory-only until its first durable task.
  *             Only the owner fires durable tasks AND only the owner
  *             accepts add/remove/clear; non-owner mutate is refused so
  *             the on-disk task list cannot drift behind the owner's
@@ -62,16 +63,16 @@ public:
 
     /**
      * @brief Bind to a project dir for durable storage + cross-session lock.
-     * @details Creates `<dir>/.qsoc/loops.json` and `<dir>/.qsoc/loops.lock`.
-     *          Loads any persisted durable tasks into memory. Only the
-     *          lock owner fires; non-owner sessions stay quiet to avoid
-     *          double-fire. Pass an empty string to operate purely in-memory.
+     * @details Loads and locks existing durable storage. A project without
+     *          loops.json remains untouched until the first durable add.
+     *          Only the lock owner fires durable tasks. Pass an empty string
+     *          to operate purely in-memory.
      */
     void setProjectDir(const QString &dir);
 
     /**
-     * @brief Whether this instance currently owns the on-disk fire lock.
-     * @details Always true in pure in-memory mode (no project dir bound).
+     * @brief Whether this instance may mutate durable tasks.
+     * @details True in pure in-memory mode and before durable storage exists.
      */
     bool isOwner() const;
 
@@ -184,16 +185,27 @@ private slots:
     void tick();
 
 private:
+    enum class StorageState {
+        MemoryOnly,
+        Dormant,
+        Owner,
+        NonOwner,
+    };
+
     static QString allocateId();
 
     /**
      * @brief Atomically rewrite loops.json from durable jobs in jobs_.
      * @return true on success, including the in-memory-only case where
-     *         there is nothing to write. false only on open/write/commit
-     *         failure under durable mode with at least one durable job.
+     *         there is nothing to write. false on open/write/commit
+     *         failure while an on-disk store is owned.
      */
     bool    persist();
     void    loadFromDisk();
+    void    reloadDurableJobs();
+    void    discoverDurableStorage();
+    void    refreshDurableJobs();
+    bool    ensureDurableStorage();
     bool    tryAcquireLock();
     void    releaseLock();
     QString lockPath() const;
@@ -203,7 +215,7 @@ private:
     QList<Job> jobs_;
 
     QString                    projectDir_;
-    bool                       isOwner_ = true;
+    StorageState               storageState_ = StorageState::MemoryOnly;
     std::unique_ptr<QLockFile> lockFile_;
     bool                       persistDegraded_ = false;
 };

@@ -9,12 +9,17 @@
 #include <nlohmann/json.hpp>
 #include <QDir>
 #include <QFile>
+#include <QSemaphore>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QtCore>
 #include <QtTest>
 
+#include <thread>
+
 using json = nlohmann::json;
+
+namespace {
 
 class Test : public QObject
 {
@@ -88,6 +93,106 @@ private slots:
         const QString dir
             = QSocFileHistory::historyDir(QStringLiteral("/tmp/proj"), QStringLiteral("abc"));
         QCOMPARE(dir, QStringLiteral("/tmp/proj/.qsoc/file-history/abc"));
+    }
+
+    void testReadOnlyHistoryLeavesProjectPristine()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString path     = writeFile(tempDir.filePath("existing.txt"), "content");
+        const QString metadata = tempDir.filePath(QStringLiteral(".qsoc"));
+
+        QSocFileHistory history(tempDir.path(), QStringLiteral("read-only"));
+
+        QVERIFY(history.storageIsBound());
+        QVERIFY(history.isPathInScope(path));
+        QVERIFY(history.coversPath(path));
+        QVERIFY(history.listSnapshots().isEmpty());
+        QCOMPARE(history.latestTurn(), 0);
+        QVERIFY(history.isEmpty());
+        QVERIFY(history.contentAt(path, 0).isNull());
+        QVERIFY(history.previewBoundary(0).isEmpty());
+        QVERIFY(!history.restoreRefusal(0).isEmpty());
+        QVERIFY(!QFileInfo::exists(metadata));
+    }
+
+    void testFirstTrackedEditCreatesStorage()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString   path     = writeFile(tempDir.filePath("existing.txt"), "content");
+        const QString   metadata = tempDir.filePath(QStringLiteral(".qsoc"));
+        QSocFileHistory history(tempDir.path(), QStringLiteral("lazy-write"));
+
+        QVERIFY(!QFileInfo::exists(metadata));
+        QVERIFY(history.trackEdit(path, true, QStringLiteral("content")));
+        QVERIFY(QFileInfo::exists(tempDir.filePath(QStringLiteral(".qsoc/tree-id"))));
+        QVERIFY(QFileInfo::exists(history.snapshotsPath()));
+    }
+
+    void testConcurrentFirstWritesConvergeOnOneTreeIdentity()
+    {
+        for (int iteration = 0; iteration < 8; ++iteration) {
+            QTemporaryDir tempDir;
+            QVERIFY(tempDir.isValid());
+            const QString   firstPath  = writeFile(tempDir.filePath("first.txt"), "first");
+            const QString   secondPath = writeFile(tempDir.filePath("second.txt"), "second");
+            QSocFileHistory first(tempDir.path(), QStringLiteral("lazy-first"));
+            QSocFileHistory second(tempDir.path(), QStringLiteral("lazy-second"));
+            QSemaphore      ready;
+            QSemaphore      start;
+            bool            firstOk  = false;
+            bool            secondOk = false;
+
+            auto persist = [&ready, &start](
+                               QSocFileHistory *history,
+                               const QString   &path,
+                               const QString   &content,
+                               bool            *result) {
+                ready.release();
+                start.acquire();
+                *result = history->trackEdit(path, true, content);
+            };
+            std::thread firstThread(persist, &first, firstPath, QStringLiteral("first"), &firstOk);
+            std::thread
+                secondThread(persist, &second, secondPath, QStringLiteral("second"), &secondOk);
+            ready.acquire(2);
+            start.release(2);
+            firstThread.join();
+            secondThread.join();
+
+            QVERIFY(firstOk);
+            QVERIFY(secondOk);
+            const auto firstSnapshots  = first.listSnapshots();
+            const auto secondSnapshots = second.listSnapshots();
+            QCOMPARE(firstSnapshots.size(), 1);
+            QCOMPARE(secondSnapshots.size(), 1);
+            QCOMPARE(firstSnapshots.constFirst().epoch.tree, secondSnapshots.constFirst().epoch.tree);
+        }
+    }
+
+    void testDelayedTreeIdentityPublicationCanRetry()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString path = writeFile(tempDir.filePath("existing.txt"), "content");
+        QVERIFY(QDir().mkpath(tempDir.filePath(QStringLiteral(".qsoc"))));
+        const QString treeIdPath = tempDir.filePath(QStringLiteral(".qsoc/tree-id"));
+        QFile         emptyTreeId(treeIdPath);
+        QVERIFY(emptyTreeId.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        emptyTreeId.close();
+        QSocFileHistory history(tempDir.path(), QStringLiteral("delayed-tree-id"));
+        const bool      firstAttempt = history.trackEdit(path, true, QStringLiteral("content"));
+        QVERIFY(!firstAttempt);
+
+        QFile publishedTreeId(treeIdPath);
+        QVERIFY(publishedTreeId.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const QByteArray bytes = QUuid::createUuid().toString(QUuid::WithoutBraces).toLatin1()
+                                 + '\n';
+        QCOMPARE(publishedTreeId.write(bytes), bytes.size());
+        QVERIFY(publishedTreeId.flush());
+        publishedTreeId.close();
+        QVERIFY(history.trackEdit(path, true, QStringLiteral("content")));
     }
 
     void testTrackEditCreatesBaselineSnapshot()
@@ -224,7 +329,9 @@ private slots:
         QVERIFY(tempDir.isValid());
         QSocFileHistory history(tempDir.path(), QStringLiteral("empty-checkpoint"));
 
+        QVERIFY(!QFileInfo::exists(tempDir.filePath(QStringLiteral(".qsoc"))));
         QVERIFY(history.makeSnapshot(1));
+        QVERIFY(QFileInfo::exists(tempDir.filePath(QStringLiteral(".qsoc/tree-id"))));
         const auto report = history.applySnapshot(1);
         QVERIFY(!report.targetMissing);
         QVERIFY(report.isEmpty());
@@ -1002,6 +1109,8 @@ private slots:
         QVERIFY(!store.contains(rpath)); /* deleted via accessor.remove */
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsocfilehistory.moc"

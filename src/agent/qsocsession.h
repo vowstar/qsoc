@@ -4,6 +4,7 @@
 #ifndef QSOCSESSION_H
 #define QSOCSESSION_H
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QList>
 #include <QMap>
@@ -13,6 +14,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <optional>
 
 /**
@@ -33,6 +35,12 @@
 class QSocSession
 {
 public:
+    enum class StorageMode {
+        Auto,
+        Fresh,
+        Existing,
+    };
+
     enum class RunEvent {
         Invalid,
         Started,
@@ -90,15 +98,20 @@ public:
 
     /**
      * @brief Construct a session bound to a JSONL file path. The file is not
-     *        created until the first message is appended; meta entries
+     *        created until the first durable record is appended; meta entries
      *        recorded before that point are buffered in memory and flushed
-     *        together with the first message, so a REPL that opens and
+     *        together with that record, so a REPL that opens and
      *        exits without any user activity leaves no JSONL on disk.
+     *        Fresh mode claims the leaf with NewOnly on its first durable
+     *        record; Existing mode accepts only a regular, non-symlink leaf.
      */
-    QSocSession(QString sessionId, QString filePath);
+    QSocSession(QString sessionId, QString filePath, StorageMode storageMode = StorageMode::Auto);
 
     QString id() const { return sessionIdValue; }
     QString filePath() const { return filePathValue; }
+
+    /** @brief Install a guard that must succeed immediately before any disk write. */
+    void setWriteBarrier(std::function<bool()> barrier);
 
     /**
      * @brief Append a single OpenAI-style message to the session JSONL.
@@ -112,7 +125,7 @@ public:
 
     /**
      * @brief Append a metadata key/value pair. Latest wins on load.
-     * @details Buffered until the first message is appended; the buffer
+     * @details Buffered until the first durable record is appended; the buffer
      *          is then flushed in insertion order. Calling appendMeta
      *          alone never creates the on-disk file.
      */
@@ -220,12 +233,17 @@ public:
     static QString generateId();
 
 private:
+    bool prepareWrite() const;
     bool flushPendingMeta();
+    bool appendRecord(const nlohmann::json &line);
+    bool writeFreshPayload(const QByteArray &payload);
 
     QString                        sessionIdValue;
     QString                        filePathValue;
-    QList<QPair<QString, QString>> pendingMeta; /* Flushed on first message */
-    bool                           persisted = false;
+    QList<QPair<QString, QString>> pendingMeta; /* Flushed on first durable record */
+    std::function<bool()>          writeBarrier;
+    StorageMode                    storageModeValue = StorageMode::Auto;
+    bool                           persisted        = false;
 };
 
 #endif // QSOCSESSION_H

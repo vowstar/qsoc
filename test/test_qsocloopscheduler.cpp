@@ -53,33 +53,11 @@ bool isShortHexId(const QString &str)
     return re.match(str).hasMatch();
 }
 
-} /* namespace */
-
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class TestQSocLoopScheduler : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase()
-    {
-        TestApp::instance();
-#ifdef Q_OS_WIN
-        QSKIP("requires a POSIX shell (/bin/bash); not supported on Windows");
-#endif
-    }
-
     /* ---- parseLoopArgs (cron-based) ---- */
 
     void parseLoopArgs_leadingInterval()
@@ -198,6 +176,28 @@ private slots:
 
     /* ---- durable persistence ---- */
 
+    void pristineProject_readOnlyAndSessionOnlyStayLazy()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString qsocDir = QDir(tmp.path()).filePath(QStringLiteral(".qsoc"));
+
+        QSocLoopScheduler sched;
+        sched.setProjectDir(tmp.path());
+        QVERIFY(sched.isOwner());
+        QVERIFY(!QFileInfo::exists(qsocDir));
+        QCOMPARE(sched.listJobs().size(), 0);
+        QVERIFY(sched.clearJobs());
+        QVERIFY(QMetaObject::invokeMethod(&sched, "tick", Qt::DirectConnection));
+        QVERIFY(!QFileInfo::exists(qsocDir));
+
+        QVERIFY(!sched.addJob("*/5 * * * *", "ephemeral", true, false).isEmpty());
+        QCOMPARE(sched.listJobs().size(), 1);
+        QVERIFY(QMetaObject::invokeMethod(&sched, "tick", Qt::DirectConnection));
+        QVERIFY(sched.clearJobs());
+        QVERIFY(!QFileInfo::exists(qsocDir));
+    }
+
     void persist_roundTrip_acrossInstances()
     {
         QTemporaryDir tmp;
@@ -232,6 +232,7 @@ private slots:
             a.setProjectDir(tmp.path());
             QVERIFY(!a.addJob("*/5 * * * *", "ephemeral", true, false).isEmpty());
             QCOMPARE(a.listJobs().size(), 1);
+            QVERIFY(!QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral(".qsoc"))));
         }
         QSocLoopScheduler b;
         b.setProjectDir(tmp.path());
@@ -263,9 +264,93 @@ private slots:
         QSocLoopScheduler sched;
         sched.setProjectDir(tmp.path());
         QCOMPARE(sched.listJobs().size(), 0);
+        QVERIFY(sched.clearJobs());
+
+        QVERIFY(out.open(QIODevice::ReadOnly));
+        const QJsonDocument rewritten = QJsonDocument::fromJson(out.readAll());
+        QCOMPARE(rewritten.object().value(QStringLiteral("schema")).toInt(), 2);
+        QVERIFY(rewritten.object().value(QStringLiteral("tasks")).toArray().isEmpty());
     }
 
     /* ---- locking ---- */
+
+    void firstDurableAdd_refreshesLateStorage()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocLoopScheduler late;
+        late.setProjectDir(tmp.path());
+
+        {
+            QSocLoopScheduler first;
+            first.setProjectDir(tmp.path());
+            QVERIFY(!first.addJob("*/5 * * * *", "alpha", true, true).isEmpty());
+        }
+
+        QVERIFY(!late.addJob("*/2 * * * *", "beta", true, true).isEmpty());
+        const auto jobs = late.listJobs();
+        QCOMPARE(jobs.size(), 2);
+        QCOMPARE(jobs[0].prompt, QString("alpha"));
+        QCOMPARE(jobs[1].prompt, QString("beta"));
+    }
+
+    void concurrentFirstWrite_onlyLockOwnerPersists()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocLoopScheduler first;
+        QSocLoopScheduler second;
+        first.setProjectDir(tmp.path());
+        second.setProjectDir(tmp.path());
+        QVERIFY(!QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral(".qsoc"))));
+
+        const QString id = first.addJob("*/5 * * * *", "alpha", true, true);
+        QVERIFY(!id.isEmpty());
+        QVERIFY(second.addJob("*/2 * * * *", "beta", true, true).isEmpty());
+        QVERIFY(!second.isOwner());
+        const auto jobs = second.listJobs();
+        QCOMPARE(jobs.size(), 1);
+        QCOMPARE(jobs.first().id, id);
+    }
+
+    void lateStorage_removeRefreshesBeforeLookup()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocLoopScheduler late;
+        late.setProjectDir(tmp.path());
+
+        QString id;
+        {
+            QSocLoopScheduler first;
+            first.setProjectDir(tmp.path());
+            id = first.addJob("*/5 * * * *", "alpha", true, true);
+            QVERIFY(!id.isEmpty());
+        }
+
+        QVERIFY(late.removeJob(id));
+        QVERIFY(late.isOwner());
+        QCOMPARE(late.listJobs().size(), 0);
+    }
+
+    void lateStorage_clearRejectsLiveOwner()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocLoopScheduler late;
+        late.setProjectDir(tmp.path());
+
+        QSocLoopScheduler first;
+        first.setProjectDir(tmp.path());
+        const QString id = first.addJob("*/5 * * * *", "alpha", true, true);
+        QVERIFY(!id.isEmpty());
+
+        QVERIFY(!late.clearJobs());
+        QVERIFY(!late.isOwner());
+        const auto jobs = late.listJobs();
+        QCOMPARE(jobs.size(), 1);
+        QCOMPARE(jobs.first().id, id);
+    }
 
     void lock_secondInstance_isNotOwner()
     {
@@ -274,6 +359,7 @@ private slots:
         QSocLoopScheduler first;
         first.setProjectDir(tmp.path());
         QVERIFY(first.isOwner());
+        QVERIFY(!first.addJob("*/5 * * * *", "alpha", true, true).isEmpty());
 
         QSocLoopScheduler second;
         second.setProjectDir(tmp.path());
@@ -290,12 +376,14 @@ private slots:
         QSocLoopScheduler rooted;
         rooted.setProjectDir(projA.path());
         QVERIFY(rooted.isOwner());
+        QVERIFY(!rooted.addJob("*/5 * * * *", "alpha", true, true).isEmpty());
 
         QSocLoopScheduler rover;
         rover.setProjectDir(projA.path());
         QVERIFY(!rover.isOwner());
 
-        rover.setProjectDir(projB.path());
+        rooted.setProjectDir(projB.path());
+        QVERIFY(QMetaObject::invokeMethod(&rover, "tick", Qt::DirectConnection));
         QVERIFY(rover.isOwner());
     }
 
@@ -399,6 +487,9 @@ private slots:
 
     void persist_failure_rollsBackInMemory()
     {
+#ifdef Q_OS_WIN
+        QSKIP("Windows directory permissions cannot reliably force a write failure");
+#endif
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         QSocLoopScheduler sched;
@@ -418,6 +509,8 @@ private slots:
         QCOMPARE(jobs.first().prompt, QString("alpha"));
     }
 };
+
+} /* namespace */
 
 QSOC_TEST_MAIN(TestQSocLoopScheduler)
 #include "test_qsocloopscheduler.moc"

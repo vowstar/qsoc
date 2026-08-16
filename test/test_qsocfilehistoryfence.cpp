@@ -20,6 +20,8 @@
 
 using json = nlohmann::json;
 
+namespace {
+
 /**
  * @brief In-memory stand-in for a working tree behind a replaceable link.
  * @details Holds the files, the tree identity and transport generation the
@@ -1126,6 +1128,58 @@ private slots:
         QCOMPARE(sentinel.readAll(), QByteArray("keep"));
     }
 
+    void testRootReplacementBeforeFirstCheckpointStaysPristine()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString project = dir.filePath(QStringLiteral("project"));
+        const QString saved   = dir.filePath(QStringLiteral("saved"));
+        QVERIFY(QDir().mkpath(project));
+        QSocFileHistory history(project, QStringLiteral("lazy-replaced-root"));
+        QVERIFY(!QFileInfo::exists(QDir(project).filePath(QStringLiteral(".qsoc"))));
+
+        QVERIFY(QDir().rename(project, saved));
+        QVERIFY(QDir().mkpath(project));
+        const QString replacement = QDir(project).filePath(QStringLiteral("replacement.txt"));
+
+        QVERIFY(!history.storageIsBound());
+        QVERIFY(!history.trackEdit(replacement, false, QString()));
+        QVERIFY(!QFileInfo::exists(QDir(project).filePath(QStringLiteral(".qsoc"))));
+        QVERIFY(!QFileInfo::exists(QDir(saved).filePath(QStringLiteral(".qsoc"))));
+    }
+
+    void testCopiedMarkerKeepsBoundTreeWritable()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString project = dir.filePath(QStringLiteral("project"));
+        const QString saved   = dir.filePath(QStringLiteral("saved"));
+        const QString id      = QStringLiteral("copied-marker");
+        QVERIFY(QDir().mkpath(project));
+        QSocFileHistory history(project, id);
+        const QString   first = QDir(project).filePath(QStringLiteral("first.txt"));
+        QVERIFY(history.trackEdit(first, false, QString()));
+
+        QVERIFY(QDir().rename(project, saved));
+        const QString replacementHistory = QSocFileHistory::historyDir(project, id);
+        QVERIFY(QDir().mkpath(replacementHistory));
+        QVERIFY(
+            QFile::copy(
+                QDir(saved).filePath(QStringLiteral(".qsoc/tree-id")),
+                QDir(project).filePath(QStringLiteral(".qsoc/tree-id"))));
+        QVERIFY(
+            QFile::copy(
+                QDir(QSocFileHistory::historyDir(saved, id))
+                    .filePath(QStringLiteral("snapshots.jsonl")),
+                QDir(replacementHistory).filePath(QStringLiteral("snapshots.jsonl"))));
+
+        const QString second = QDir(project).filePath(QStringLiteral("second.txt"));
+        QVERIFY(history.storageIsBound());
+        QVERIFY(history.trackEdit(second, false, QString()));
+        QVERIFY(history.makeSnapshot(1));
+        QVERIFY(history.listSnapshots().constFirst().files.contains(second));
+    }
+
     void testCheckpointMetadataSymlinkCannotEscapeTheProject()
     {
 #ifndef Q_OS_UNIX
@@ -1334,6 +1388,8 @@ private slots:
         }
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsocfilehistoryfence.moc"
