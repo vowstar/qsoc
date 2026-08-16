@@ -41,8 +41,6 @@ QSocSession::RunRecord startedRun(
     };
 }
 
-} // namespace
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -208,6 +206,32 @@ private slots:
         QCOMPARE(static_cast<int>(sessions.size()), 2);
         QCOMPARE(sessions.first().id, idB);
         QCOMPARE(sessions.last().id, idA);
+    }
+
+    void testListAllAndResolveIgnoreSymbolicLinks()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("Symbolic-link creation is not generally available");
+#else
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString target = tempDir.filePath(QStringLiteral("target.jsonl"));
+        QSocSession   targetSession(QStringLiteral("target"), target);
+        QVERIFY(targetSession.appendMessage({{"role", "user"}, {"content", "sentinel"}}));
+
+        const QString sessions = QSocSession::sessionsDir(tempDir.path());
+        QVERIFY(QDir().mkpath(sessions));
+        const QString linked = QDir(sessions).filePath(QStringLiteral("linked-session.jsonl"));
+        QVERIFY(QFile::link(target, linked));
+        const QString dangling = QDir(sessions).filePath(QStringLiteral("dangling-session.jsonl"));
+        QVERIFY(QFile::link(tempDir.filePath(QStringLiteral("missing.jsonl")), dangling));
+
+        QVERIFY(QSocSession::listAll(tempDir.path()).isEmpty());
+        QVERIFY(QSocSession::resolveId(tempDir.path(), QStringLiteral("linked-session")).isEmpty());
+        QVERIFY(
+            QSocSession::resolveId(tempDir.path(), QStringLiteral("dangling-session")).isEmpty());
+#endif
     }
 
     void testResolveIdMatchesPrefix()
@@ -413,7 +437,158 @@ private slots:
         } /* destructor: nothing should land on disk */
 
         QVERIFY2(!QFile::exists(path), "meta-only session must not create the JSONL file");
+        QVERIFY2(
+            !QFileInfo::exists(QDir(tempDir.path()).filePath(QStringLiteral(".qsoc"))),
+            "meta-only session must not create project storage");
         QCOMPARE(QSocSession::listAll(tempDir.path()).size(), qsizetype(0));
+    }
+
+    void testFreshSessionRejectsOccupiedPath()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString path = tempDir.filePath(QStringLiteral("occupied.jsonl"));
+        QFile         occupied(path);
+        QVERIFY(occupied.open(QIODevice::WriteOnly));
+        QCOMPARE(occupied.write("sentinel"), qint64(8));
+        occupied.close();
+
+        QSocSession session(QStringLiteral("fresh"), path, QSocSession::StorageMode::Fresh);
+        QVERIFY(session.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+        QVERIFY(!session.appendRun(startedRun(QStringLiteral("occupied-run"), QStringLiteral("x"))));
+        QVERIFY(occupied.open(QIODevice::ReadOnly));
+        QCOMPARE(occupied.readAll(), QByteArray("sentinel"));
+    }
+
+    void testFreshSessionRejectsLateCollision()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString path = tempDir.filePath(QStringLiteral("late.jsonl"));
+        QSocSession   session(QStringLiteral("fresh"), path, QSocSession::StorageMode::Fresh);
+        QVERIFY(session.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+
+        QFile occupied(path);
+        QVERIFY(occupied.open(QIODevice::WriteOnly));
+        QCOMPARE(occupied.write("sentinel"), qint64(8));
+        occupied.close();
+
+        QVERIFY(!session.appendRun(startedRun(QStringLiteral("late-run"), QStringLiteral("x"))));
+        QVERIFY(occupied.open(QIODevice::ReadOnly));
+        QCOMPARE(occupied.readAll(), QByteArray("sentinel"));
+    }
+
+    void testAutoSessionRejectsLateCollision()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString path = tempDir.filePath(QStringLiteral("late-auto.jsonl"));
+        QSocSession   session(QStringLiteral("auto"), path);
+        QVERIFY(session.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+
+        QFile occupied(path);
+        QVERIFY(occupied.open(QIODevice::WriteOnly));
+        QCOMPARE(occupied.write("sentinel"), qint64(8));
+        occupied.close();
+
+        QVERIFY(!session.appendRun(startedRun(QStringLiteral("late-run"), QStringLiteral("x"))));
+        QVERIFY(occupied.open(QIODevice::ReadOnly));
+        QCOMPARE(occupied.readAll(), QByteArray("sentinel"));
+    }
+
+    void testAutoSessionRejectsLateSymbolicLink()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("Symbolic-link creation is not generally available");
+#else
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString path   = tempDir.filePath(QStringLiteral("late-auto.jsonl"));
+        const QString target = tempDir.filePath(QStringLiteral("target.jsonl"));
+        QSocSession   session(QStringLiteral("auto"), path);
+        QVERIFY(session.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+
+        QFile targetFile(target);
+        QVERIFY(targetFile.open(QIODevice::WriteOnly));
+        QCOMPARE(targetFile.write("sentinel"), qint64(8));
+        targetFile.close();
+        QVERIFY(QFile::link(target, path));
+
+        QVERIFY(!session.appendRun(startedRun(QStringLiteral("late-run"), QStringLiteral("x"))));
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        QCOMPARE(targetFile.readAll(), QByteArray("sentinel"));
+#endif
+    }
+
+    void testFreshSessionRejectsSymbolicLink()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("Symbolic-link creation is not generally available");
+#else
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString target = tempDir.filePath(QStringLiteral("target.jsonl"));
+        QFile         targetFile(target);
+        QVERIFY(targetFile.open(QIODevice::WriteOnly));
+        QCOMPARE(targetFile.write("sentinel"), qint64(8));
+        targetFile.close();
+
+        const QString path = tempDir.filePath(QStringLiteral("candidate.jsonl"));
+        QSocSession   linked(QStringLiteral("linked"), path, QSocSession::StorageMode::Fresh);
+        QVERIFY(linked.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+        QVERIFY(QFile::link(target, path));
+        QVERIFY(!linked.appendRun(startedRun(QStringLiteral("linked-run"), QStringLiteral("x"))));
+        QSocSession autoLinked(QStringLiteral("auto-linked"), path);
+        QVERIFY(!autoLinked.appendRun(
+            startedRun(QStringLiteral("auto-linked-run"), QStringLiteral("x"))));
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        QCOMPARE(targetFile.readAll(), QByteArray("sentinel"));
+
+        const QString dangling = tempDir.filePath(QStringLiteral("dangling.jsonl"));
+        const QString missing  = tempDir.filePath(QStringLiteral("missing.jsonl"));
+        QSocSession
+            danglingSession(QStringLiteral("dangling"), dangling, QSocSession::StorageMode::Fresh);
+        QVERIFY(danglingSession.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+        QVERIFY(QFile::link(missing, dangling));
+        QVERIFY(!danglingSession.appendRun(
+            startedRun(QStringLiteral("dangling-run"), QStringLiteral("x"))));
+        QSocSession autoDangling(QStringLiteral("auto-dangling"), dangling);
+        QVERIFY(!autoDangling.appendRun(
+            startedRun(QStringLiteral("auto-dangling-run"), QStringLiteral("x"))));
+        QVERIFY(!QFileInfo::exists(missing));
+        QVERIFY(QFileInfo(dangling).isSymLink());
+#endif
+    }
+
+    void testExistingSessionRejectsLeafReplacement()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("Symbolic-link creation is not generally available");
+#else
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString path = tempDir.filePath(QStringLiteral("session.jsonl"));
+        QSocSession   session(QStringLiteral("existing"), path);
+        QVERIFY(session.appendMessage({{"role", "user"}, {"content", "first"}}));
+        QVERIFY(QFile::remove(path));
+
+        const QString target = tempDir.filePath(QStringLiteral("target.jsonl"));
+        QFile         targetFile(target);
+        QVERIFY(targetFile.open(QIODevice::WriteOnly));
+        QCOMPARE(targetFile.write("sentinel"), qint64(8));
+        targetFile.close();
+        QVERIFY(QFile::link(target, path));
+
+        QVERIFY(!session.appendMeta(QStringLiteral("title"), QStringLiteral("blocked")));
+        QVERIFY(targetFile.open(QIODevice::ReadOnly));
+        QCOMPARE(targetFile.readAll(), QByteArray("sentinel"));
+#endif
     }
 
     void testFirstMessageFlushesBufferedMeta()
@@ -423,7 +598,7 @@ private slots:
 
         const QString id   = QSocSession::generateId();
         const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
-        QSocSession   session(id, path);
+        QSocSession   session(id, path, QSocSession::StorageMode::Fresh);
         session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-04-27T00:00:00Z"));
         session.appendMeta(QStringLiteral("cwd"), tempDir.path());
         QVERIFY(!QFile::exists(path));
@@ -447,13 +622,56 @@ private slots:
         const QString id   = QSocSession::generateId();
         const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
         QSocSession   session(id, path);
+        int           barrierCalls = 0;
+        session.setWriteBarrier([&]() {
+            barrierCalls++;
+            return true;
+        });
         session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-04-27T00:00:00Z"));
 
         QVERIFY(session.rewriteMessages(json::array()));
 
+        QCOMPARE(barrierCalls, 0);
         QVERIFY2(
             !QFile::exists(path),
             "/clear on a never-persisted session must not create the JSONL file");
+        QVERIFY(!QFileInfo::exists(QDir(tempDir.path()).filePath(QStringLiteral(".qsoc"))));
+    }
+
+    void testWriteBarrierGuardsFirstPersistence()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path, QSocSession::StorageMode::Fresh);
+        bool          allow = false;
+        int           calls = 0;
+        session.setWriteBarrier([&]() {
+            calls++;
+            return allow;
+        });
+
+        QVERIFY(session.appendMeta(QStringLiteral("created"), QStringLiteral("now")));
+        QCOMPARE(calls, 0);
+        QVERIFY(!QFileInfo::exists(QDir(tempDir.path()).filePath(QStringLiteral(".qsoc"))));
+
+        const auto started = startedRun(QStringLiteral("run-a"), QStringLiteral("start"));
+        QVERIFY(!session.appendRun(started));
+        QCOMPARE(calls, 1);
+        QVERIFY(!QFileInfo::exists(QDir(tempDir.path()).filePath(QStringLiteral(".qsoc"))));
+
+        allow = true;
+        QVERIFY(session.appendRun(started));
+        QCOMPARE(calls, 2);
+        QVERIFY(QFile::exists(path));
+
+        const qint64 persistedSize = QFileInfo(path).size();
+        allow                      = false;
+        QVERIFY(!session.appendMeta(QStringLiteral("title"), QStringLiteral("blocked")));
+        QCOMPARE(calls, 3);
+        QCOMPARE(QFileInfo(path).size(), persistedSize);
     }
 
     void testAppendFailureIsReported()
@@ -896,6 +1114,8 @@ private slots:
         QCOMPARE(restored[0]["content"].get<std::string>(), std::string("preserved"));
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsocsession.moc"

@@ -277,7 +277,9 @@ public:
      *          `inScope` is the stable checkpoint policy. `coversPath` is the
      *          live safety fact: a replaced root remains in scope but is no
      *          longer covered, so the operation must fail instead of silently
-     *          proceeding without history.
+     *          proceeding without history. `ensureIdentity`, when present,
+     *          establishes a lazy identity immediately before checkpoint
+     *          persistence begins.
      */
     struct LiveFileAccessor
     {
@@ -289,6 +291,7 @@ public:
         std::function<bool(const QString &path)>                         coversPath;
         std::function<QString()>                                         tree;
         std::function<QString()>                                         generation;
+        std::function<bool()>                                            ensureIdentity;
     };
 
     using WritableEntryResolver = std::function<bool(const QString &, QString *)>;
@@ -488,7 +491,7 @@ public:
      */
     bool isEmpty() const;
 
-    /** @brief Whether the local checkpoint store is still bound to its project tree. */
+    /** @brief Whether the local checkpoint store is bound or can still bind safely. */
     bool storageIsBound() const;
 
     /**
@@ -519,6 +522,7 @@ private:
     QString projectPathValue;
     QString sessionIdValue;
     QString storageCanonicalRootValue;
+    QString storageRootIdentityValue;
     QString storageTreeIdValue;
     QString storageLexicalRootValue;
 
@@ -534,6 +538,8 @@ private:
     };
     mutable IndexState indexState = IndexState::Unknown;
 
+    bool                   ensureStorageBinding();
+    bool                   ensureWritableBindings();
     bool                   ensureDirs() const;
     bool                   writeBackup(const QString &sha256, const QString &content) const;
     std::optional<QString> readBackup(const QString &sha256) const;

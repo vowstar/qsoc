@@ -10,10 +10,21 @@
 #include <QFileInfo>
 #include <QSaveFile>
 #include <QTextStream>
+#include <QThread>
 #include <QUuid>
 
 #include <algorithm>
+#include <memory>
 #include <stdexcept>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -75,6 +86,59 @@ bool pathInLocalScope(const QString &path, const QString &lexicalRoot, const QSt
     return pathWithin(clean, lexicalRoot) || pathWithin(clean, canonicalRoot);
 }
 
+QString localRootIdentity(const QString &canonicalRoot)
+{
+    if (canonicalRoot.isEmpty()) {
+        return {};
+    }
+#ifdef Q_OS_WIN
+    const QString native = QDir::toNativeSeparators(canonicalRoot);
+    const HANDLE  handle = CreateFileW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return {};
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    const bool                 read = GetFileInformationByHandle(handle, &info) != 0;
+    CloseHandle(handle);
+    if (!read || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        return {};
+    }
+    return QStringLiteral("%1:%2:%3")
+        .arg(info.dwVolumeSerialNumber)
+        .arg(info.nFileIndexHigh)
+        .arg(info.nFileIndexLow);
+#else
+    struct stat      info{};
+    const QByteArray encoded = QFile::encodeName(canonicalRoot);
+    if (::stat(encoded.constData(), &info) != 0 || !S_ISDIR(info.st_mode)) {
+        return {};
+    }
+    return QStringLiteral("%1:%2")
+        .arg(static_cast<qulonglong>(info.st_dev))
+        .arg(static_cast<qulonglong>(info.st_ino));
+#endif
+}
+
+bool localRootMatches(
+    const QString &lexicalRoot, const QString &canonicalRoot, const QString &rootIdentity)
+{
+    return !canonicalRoot.isEmpty() && !rootIdentity.isEmpty()
+           && QFileInfo(lexicalRoot).canonicalFilePath() == canonicalRoot
+           && localRootIdentity(canonicalRoot) == rootIdentity;
+}
+
+bool localRootPathMatches(const QString &lexicalRoot, const QString &canonicalRoot)
+{
+    return !canonicalRoot.isEmpty() && QFileInfo(lexicalRoot).canonicalFilePath() == canonicalRoot;
+}
+
 /* Resolve only the parent. History records the actual file reached by the
  * original tool, so following a later leaf symlink would switch objects.
  * Requiring the parent to retain its canonical spelling also rejects an
@@ -105,6 +169,18 @@ QString readLocalTreeId(const QString &canonicalRoot)
     return id.isNull() ? QString() : id.toString(QUuid::WithoutBraces);
 }
 
+QString waitForLocalTreeId(const QString &canonicalRoot)
+{
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const QString id = readLocalTreeId(canonicalRoot);
+        if (!id.isEmpty()) {
+            return id;
+        }
+        QThread::msleep(1);
+    }
+    return {};
+}
+
 QString ensureLocalTreeId(const QString &canonicalRoot)
 {
     QString id = readLocalTreeId(canonicalRoot);
@@ -113,12 +189,13 @@ QString ensureLocalTreeId(const QString &canonicalRoot)
     }
     const QString   metadata = QDir(canonicalRoot).filePath(QStringLiteral(".qsoc"));
     const QFileInfo metadataInfo(metadata);
-    if ((metadataInfo.exists() || metadataInfo.isSymLink())
-            ? (!metadataInfo.isDir() || metadataInfo.isSymLink()
-               || metadataInfo.canonicalFilePath()
-                          .compare(QDir::cleanPath(metadata), pathCaseSensitivity())
-                      != 0)
-            : !QDir(canonicalRoot).mkdir(QStringLiteral(".qsoc"))) {
+    if (!metadataInfo.exists() && !metadataInfo.isSymLink()) {
+        (void) QDir(canonicalRoot).mkdir(QStringLiteral(".qsoc"));
+    }
+    const QFileInfo boundMetadata(metadata);
+    if (!boundMetadata.isDir() || boundMetadata.isSymLink()
+        || boundMetadata.canonicalFilePath().compare(QDir::cleanPath(metadata), pathCaseSensitivity())
+               != 0) {
         return {};
     }
     const QString    path = QDir(metadata).filePath(QStringLiteral("tree-id"));
@@ -132,8 +209,9 @@ QString ensureLocalTreeId(const QString &canonicalRoot)
         if (written) {
             return generated;
         }
+        return {};
     }
-    return readLocalTreeId(canonicalRoot);
+    return waitForLocalTreeId(canonicalRoot);
 }
 
 QString localTreeIdentity(const QString &treeId)
@@ -146,8 +224,7 @@ QString localTreeIdentity(const QString &treeId)
 
 bool localRootIsBound(const QString &lexicalRoot, const QString &canonicalRoot, const QString &treeId)
 {
-    return !canonicalRoot.isEmpty() && !treeId.isEmpty()
-           && QFileInfo(lexicalRoot).canonicalFilePath() == canonicalRoot
+    return localRootPathMatches(lexicalRoot, canonicalRoot) && !treeId.isEmpty()
            && readLocalTreeId(canonicalRoot) == treeId;
 }
 
@@ -183,7 +260,13 @@ bool makeBoundMetadataDirectory(const QString &canonicalRoot, const QString &rel
                     ? canonicalRoot
                     : QDir(canonicalRoot).filePath(parentRelative));
             if (!parent.mkdir(QFileInfo(current).fileName())) {
-                return false;
+                const QFileInfo created(absolute);
+                if (!created.isDir() || created.isSymLink()
+                    || created.canonicalFilePath()
+                               .compare(QDir::cleanPath(absolute), pathCaseSensitivity())
+                           != 0) {
+                    return false;
+                }
             }
         }
         if (!boundMetadataDirectory(canonicalRoot, current)) {
@@ -197,10 +280,16 @@ std::optional<QString> localHistoryEntry(
     const QString                                &path,
     const QString                                &lexicalRoot,
     const QString                                &canonicalRoot,
+    const QString                                &rootIdentity,
     const QString                                &treeId,
-    const QSocFileHistory::WritableEntryResolver &resolver)
+    const QSocFileHistory::WritableEntryResolver &resolver,
+    bool                                          requireIdentity)
 {
-    if (!localRootIsBound(lexicalRoot, canonicalRoot, treeId)) {
+    if (treeId.isEmpty()) {
+        if (requireIdentity || !localRootMatches(lexicalRoot, canonicalRoot, rootIdentity)) {
+            return std::nullopt;
+        }
+    } else if (!localRootIsBound(lexicalRoot, canonicalRoot, treeId)) {
         return std::nullopt;
     }
     const QString clean = QDir::fromNativeSeparators(
@@ -328,14 +417,19 @@ QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor(
     const QString lexicalRoot
         = QFileInfo(projectRoot.isEmpty() ? QDir::currentPath() : projectRoot).absoluteFilePath();
     const QString canonicalRoot = QFileInfo(lexicalRoot).canonicalFilePath();
-    const QString treeId        = ensureLocalTreeId(canonicalRoot);
-    const QString treeIdentity  = localTreeIdentity(treeId);
-    const auto    resolve = [lexicalRoot, canonicalRoot, treeId, resolver](const QString &path) {
-        return localHistoryEntry(path, lexicalRoot, canonicalRoot, treeId, resolver);
+    const QString rootIdentity  = localRootIdentity(canonicalRoot);
+    const auto    treeId        = std::make_shared<QString>(readLocalTreeId(canonicalRoot));
+    const auto    resolve       = [lexicalRoot,
+                                   canonicalRoot,
+                                   rootIdentity,
+                                   treeId,
+                                   resolver](const QString &path, bool requireIdentity) {
+        return localHistoryEntry(
+            path, lexicalRoot, canonicalRoot, rootIdentity, *treeId, resolver, requireIdentity);
     };
     LiveFileAccessor accessor;
     accessor.exists = [resolve](const QString &path) {
-        const auto entry = resolve(path);
+        const auto entry = resolve(path, false);
         if (!entry.has_value()) {
             return FileState::Unknown;
         }
@@ -350,7 +444,7 @@ QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor(
         return FileState::Unknown;
     };
     accessor.read = [resolve](const QString &path) -> LiveRead {
-        const auto entry = resolve(path);
+        const auto entry = resolve(path, false);
         if (!entry.has_value()) {
             return LiveRead::unknown();
         }
@@ -376,7 +470,7 @@ QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor(
         return LiveRead::unknown();
     };
     accessor.write = [resolve](const QString &path, const QString &content) {
-        const auto entry = resolve(path);
+        const auto entry = resolve(path, true);
         if (!entry.has_value()) {
             return false;
         }
@@ -390,7 +484,7 @@ QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor(
         return file.commit();
     };
     accessor.remove = [resolve](const QString &path) {
-        const auto entry = resolve(path);
+        const auto entry = resolve(path, true);
         if (!entry.has_value()) {
             return false;
         }
@@ -403,14 +497,26 @@ QSocFileHistory::LiveFileAccessor QSocFileHistory::localAccessor(
     accessor.inScope = [lexicalRoot, canonicalRoot](const QString &path) {
         return pathInLocalScope(path, lexicalRoot, canonicalRoot);
     };
-    accessor.coversPath = [resolve](const QString &path) { return resolve(path).has_value(); };
-    accessor.tree       = [lexicalRoot, canonicalRoot, treeId, treeIdentity]() {
-        if (treeIdentity.isEmpty() || !localRootIsBound(lexicalRoot, canonicalRoot, treeId)) {
+    accessor.coversPath = [resolve](const QString &path) {
+        return resolve(path, false).has_value();
+    };
+    accessor.tree = [lexicalRoot, canonicalRoot, treeId]() {
+        const QString treeIdentity = localTreeIdentity(*treeId);
+        if (treeIdentity.isEmpty() || !localRootIsBound(lexicalRoot, canonicalRoot, *treeId)) {
             return QString();
         }
         return QStringLiteral("local:") + treeIdentity;
     };
-    accessor.generation = []() { return QStringLiteral("disk"); };
+    accessor.generation     = []() { return QStringLiteral("disk"); };
+    accessor.ensureIdentity = [lexicalRoot, canonicalRoot, rootIdentity, treeId]() {
+        if (treeId->isEmpty()) {
+            if (!localRootMatches(lexicalRoot, canonicalRoot, rootIdentity)) {
+                return false;
+            }
+            *treeId = ensureLocalTreeId(canonicalRoot);
+        }
+        return localRootIsBound(lexicalRoot, canonicalRoot, *treeId);
+    };
     return accessor;
 }
 
@@ -506,7 +612,8 @@ QSocFileHistory::QSocFileHistory(QString projectPath, QString sessionId)
     const QString root      = projectPath.isEmpty() ? QDir::currentPath() : std::move(projectPath);
     storageLexicalRootValue = QFileInfo(root).absoluteFilePath();
     storageCanonicalRootValue = QFileInfo(storageLexicalRootValue).canonicalFilePath();
-    storageTreeIdValue        = ensureLocalTreeId(storageCanonicalRootValue);
+    storageRootIdentityValue  = localRootIdentity(storageCanonicalRootValue);
+    storageTreeIdValue        = readLocalTreeId(storageCanonicalRootValue);
     projectPathValue          = storageLexicalRootValue;
     liveAccessor              = localAccessor(projectPathValue);
 }
@@ -539,9 +646,28 @@ QString QSocFileHistory::snapshotsPath() const
         .filePath(QStringLiteral("snapshots.jsonl"));
 }
 
-bool QSocFileHistory::ensureDirs() const
+bool QSocFileHistory::ensureStorageBinding()
 {
     if (!storageIsBound()) {
+        return false;
+    }
+    if (storageTreeIdValue.isEmpty()) {
+        storageTreeIdValue = ensureLocalTreeId(storageCanonicalRootValue);
+    }
+    return !storageTreeIdValue.isEmpty() && storageIsBound();
+}
+
+bool QSocFileHistory::ensureWritableBindings()
+{
+    if (!ensureStorageBinding()) {
+        return false;
+    }
+    return !liveAccessor.ensureIdentity || liveAccessor.ensureIdentity();
+}
+
+bool QSocFileHistory::ensureDirs() const
+{
+    if (storageTreeIdValue.isEmpty() || !storageIsBound()) {
         return false;
     }
     const QString relative = QStringLiteral(".qsoc/file-history/%1/backups").arg(sessionIdValue);
@@ -607,12 +733,15 @@ bool QSocFileHistory::trackEdit(
     if (!coversPath(filePath)) {
         return false;
     }
-    const Epoch epoch = liveEpoch();
-    if (epoch.tree.isEmpty() || epoch.link.isEmpty()) {
-        return false;
-    }
     (void) loadSnapshots();
     if (indexState == IndexState::Invalid) {
+        return false;
+    }
+    if (!ensureWritableBindings() || !coversPath(filePath)) {
+        return false;
+    }
+    const Epoch epoch = liveEpoch();
+    if (epoch.tree.isEmpty() || epoch.link.isEmpty()) {
         return false;
     }
     const int existingIntroduction = introducedTurnFor(epoch, filePath);
@@ -690,6 +819,9 @@ bool QSocFileHistory::makeSnapshot(int turn)
     }
     (void) loadSnapshots();
     if (indexState == IndexState::Invalid) {
+        return false;
+    }
+    if (!ensureWritableBindings()) {
         return false;
     }
     const Epoch entryEpoch = liveEpoch();
@@ -1033,7 +1165,7 @@ bool QSocFileHistory::truncateAfter(int cutoffTurn)
         }
     }
     if (kept.size() != snapshots.size()) {
-        if (!saveSnapshots(kept)) {
+        if (!ensureStorageBinding() || !saveSnapshots(kept)) {
             return false;
         }
         gcOrphanedBackups();
@@ -1081,7 +1213,28 @@ bool QSocFileHistory::isEmpty() const
 
 bool QSocFileHistory::storageIsBound() const
 {
-    if (!localRootIsBound(storageLexicalRootValue, storageCanonicalRootValue, storageTreeIdValue)) {
+    const bool rootMatches
+        = storageTreeIdValue.isEmpty()
+              ? localRootMatches(
+                    storageLexicalRootValue, storageCanonicalRootValue, storageRootIdentityValue)
+              : localRootPathMatches(storageLexicalRootValue, storageCanonicalRootValue);
+    if (!rootMatches) {
+        return false;
+    }
+    QString         currentTreeId = readLocalTreeId(storageCanonicalRootValue);
+    const QString   metadata = QDir(storageCanonicalRootValue).filePath(QStringLiteral(".qsoc"));
+    const QFileInfo treeIdInfo(QDir(metadata).filePath(QStringLiteral("tree-id")));
+    if (storageTreeIdValue.isEmpty()) {
+        if ((treeIdInfo.exists() || treeIdInfo.isSymLink()) && currentTreeId.isEmpty()) {
+            if (treeIdInfo.isSymLink()) {
+                return false;
+            }
+            currentTreeId = waitForLocalTreeId(storageCanonicalRootValue);
+            if (currentTreeId.isEmpty()) {
+                return false;
+            }
+        }
+    } else if (currentTreeId != storageTreeIdValue) {
         return false;
     }
     const QString history = QStringLiteral(".qsoc/file-history/%1/backups").arg(sessionIdValue);
@@ -1095,8 +1248,8 @@ QList<QSocFileHistory::Snapshot> QSocFileHistory::loadSnapshots() const
 {
     if (!storageIsBound()) {
         cachedSnapshots.clear();
-        cacheValid = true;
-        indexState = IndexState::Invalid;
+        cacheValid = false;
+        indexState = storageTreeIdValue.isEmpty() ? IndexState::Unknown : IndexState::Invalid;
         return {};
     }
     if (cacheValid) {
@@ -1265,7 +1418,7 @@ QList<QSocFileHistory::Snapshot> QSocFileHistory::loadSnapshots() const
 
 bool QSocFileHistory::saveSnapshots(const QList<Snapshot> &snapshots) const
 {
-    if (!storageIsBound()) {
+    if (storageTreeIdValue.isEmpty() || !storageIsBound()) {
         return false;
     }
     if (indexState == IndexState::Unknown) {

@@ -613,6 +613,18 @@ QString sessionProjectPath(QSocProjectManager *pmanager)
     return projectPath;
 }
 
+bool freshSessionPathAvailable(const QString &sessionPath)
+{
+    const QFileInfo info(sessionPath);
+    return !info.exists() && !info.isSymLink();
+}
+
+bool existingSessionPathIsRegular(const QString &sessionPath)
+{
+    const QFileInfo info(sessionPath);
+    return info.isFile() && !info.isSymLink();
+}
+
 std::unique_ptr<QLockFile> lockSession(const QString &sessionPath)
 {
     const QFileInfo sessionInfo(sessionPath);
@@ -3044,7 +3056,7 @@ bool QSocCliWorker::runAgentLoop(
             1, QCoreApplication::translate("main", "Error: terminal input setup failed."));
     }
 
-    /* Session storage. Each interactive REPL run owns one session JSONL
+    /* Session storage. Each persisted interactive session owns one JSONL
      * under <projectPath>/.qsoc/sessions/<id>.jsonl. lastPersistedIndex
      * tracks how many entries from agent->getMessages() have already hit
      * disk so each turn only appends the delta. resumeSessionId is the
@@ -3053,6 +3065,7 @@ bool QSocCliWorker::runAgentLoop(
     std::unique_ptr<QSocSession>          currentSession;
     std::unique_ptr<QSocFileHistory>      currentFileHistory;
     std::unique_ptr<QLockFile>            sessionLock;
+    QString                               sessionLockPath;
     QSocSessionRecovery::Action           pendingRecoveryAction = QSocSessionRecovery::Action::Wait;
     QString                               pendingRecoveryInput;
     QString                               pendingRecoveryRunId;
@@ -3060,6 +3073,32 @@ bool QSocCliWorker::runAgentLoop(
     std::optional<QSocSession::RunRecord> pendingRecoveryContext;
     QString                               recoveryNotice;
     QString                               activeRunId;
+    const auto                            installSessionWriteBarrier =
+        [&sessionLock, &sessionLockPath](QSocSession *session, QSocFileHistory *history) {
+            if (session == nullptr) {
+                return;
+            }
+            const QString sessionPath = session->filePath();
+            session->setWriteBarrier([&sessionLock, &sessionLockPath, sessionPath, history]() {
+                if (history != nullptr && !history->storageIsBound()) {
+                    return false;
+                }
+                if (sessionLock) {
+                    return sessionLockPath == sessionPath;
+                }
+                auto nextLock = lockSession(sessionPath);
+                if (!nextLock) {
+                    return false;
+                }
+                if (history != nullptr && !history->storageIsBound()) {
+                    nextLock->unlock();
+                    return false;
+                }
+                sessionLock     = std::move(nextLock);
+                sessionLockPath = sessionPath;
+                return true;
+            });
+        };
 
     /* File-history transport wiring. Backups stay local; only the live
      * snapshot/restore reads and writes follow the active transport, so a
@@ -3256,45 +3295,58 @@ bool QSocCliWorker::runAgentLoop(
             + unreadable.join(QStringLiteral("\n    ")) + QLatin1Char('\n'));
     };
 
-    /* Create a fresh session + file history rooted at projectPath, stamp
-     * creation meta, and rewire the file-writing tools. Used by /project
-     * switch; startup uses the same building blocks inline to interleave
-     * with the resume path. */
-    auto startFreshSessionAt =
-        [&](const QString &projectPath, const QString &newId, std::unique_ptr<QLockFile> nextLock) {
-            const QString sessionPath
-                = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
-            if (!nextLock) {
-                return false;
-            }
-            auto nextSession = std::make_unique<QSocSession>(newId, sessionPath);
-            auto nextHistory = std::make_unique<QSocFileHistory>(projectPath, newId);
-            const QList<QPair<QString, QString>> metadata{
-                {QStringLiteral("created"),
-                 QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
-                {QStringLiteral("cwd"), projectPath},
-            };
-            if (!nextHistory->storageIsBound() || !nextSession->replaceWithMeta(metadata)) {
-                return false;
-            }
-            currentSession               = std::move(nextSession);
-            currentFileHistory           = std::move(nextHistory);
-            sessionLock                  = std::move(nextLock);
-            persistedMessages            = json::array();
-            lastPersistedIndex           = 0;
-            historyInputBlocked          = false;
-            recoveryRequiresUserInput    = false;
-            releaseRecoveryGateAtRequest = false;
-            /* In remote mode the file-writing tools are the SFTP-backed ones and
+    struct FreshSessionCandidate
+    {
+        std::unique_ptr<QSocSession>     session;
+        std::unique_ptr<QSocFileHistory> history;
+    };
+
+    /* Prepare a fresh session without changing the active one or writing the
+     * candidate project. Activation happens only after every check succeeds. */
+    auto prepareFreshSessionAt = [&](const QString &projectPath, const QString &newId) {
+        const QString sessionPath
+            = QDir(QSocSession::sessionsDir(projectPath)).filePath(newId + ".jsonl");
+        if (!freshSessionPathAvailable(sessionPath)) {
+            return std::unique_ptr<FreshSessionCandidate>();
+        }
+        auto nextSession
+            = std::make_unique<QSocSession>(newId, sessionPath, QSocSession::StorageMode::Fresh);
+        auto nextHistory = std::make_unique<QSocFileHistory>(projectPath, newId);
+        if (!nextHistory->storageIsBound()) {
+            return std::unique_ptr<FreshSessionCandidate>();
+        }
+        installSessionWriteBarrier(nextSession.get(), nextHistory.get());
+        if (!nextSession->appendMeta(
+                QStringLiteral("created"),
+                QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
+            || !nextSession->appendMeta(QStringLiteral("cwd"), projectPath)) {
+            return std::unique_ptr<FreshSessionCandidate>();
+        }
+        auto candidate     = std::make_unique<FreshSessionCandidate>();
+        candidate->session = std::move(nextSession);
+        candidate->history = std::move(nextHistory);
+        return candidate;
+    };
+
+    auto activateFreshSession = [&](std::unique_ptr<FreshSessionCandidate> candidate) {
+        sessionLock.reset();
+        sessionLockPath.clear();
+        currentSession               = std::move(candidate->session);
+        currentFileHistory           = std::move(candidate->history);
+        persistedMessages            = json::array();
+        lastPersistedIndex           = 0;
+        historyInputBlocked          = false;
+        recoveryRequiresUserInput    = false;
+        releaseRecoveryGateAtRequest = false;
+        /* In remote mode the file-writing tools are the SFTP-backed ones and
          * the live accessor has to follow the transport; wiring only the
          * local tools here would silently checkpoint the local disk. */
-            if (agent->getConfig().remoteMode && remoteRegistry != nullptr) {
-                wireRemoteFileHistory(remoteRegistry);
-            } else {
-                wireFileHistoryTools();
-            }
-            return true;
-        };
+        if (agent->getConfig().remoteMode && remoteRegistry != nullptr) {
+            wireRemoteFileHistory(remoteRegistry);
+        } else {
+            wireFileHistoryTools();
+        }
+    };
 
     /* Persist the session after compaction. compact() rewrites the in-memory
      * message array, so the append-only delta path would leave the stale
@@ -3854,20 +3906,55 @@ bool QSocCliWorker::runAgentLoop(
             sessionId = resolved;
         }
 
-        if (sessionId.isEmpty()) {
+        const bool freshSession = sessionId.isEmpty();
+        if (freshSession) {
             sessionId = QSocSession::generateId();
         }
         const QString sessionPath
             = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
-        sessionLock = lockSession(sessionPath);
-        if (!sessionLock) {
+        const bool sessionExists = existingSessionPathIsRegular(sessionPath);
+        if (freshSession && !freshSessionPathAvailable(sessionPath)) {
             inputMonitor.stop();
             compositor.stop();
-            QSocConsole::warn() << "Session is already open in another process:" << sessionId;
+            QSocConsole::warn() << "Could not prepare a fresh session path:" << sessionId;
             return false;
         }
-        currentSession     = std::make_unique<QSocSession>(sessionId, sessionPath);
+        if (!freshSession && !sessionExists) {
+            inputMonitor.stop();
+            compositor.stop();
+            QSocConsole::warn() << "Session is not a regular file:" << sessionId;
+            return false;
+        }
         currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, sessionId);
+        if (!currentFileHistory->storageIsBound()) {
+            inputMonitor.stop();
+            compositor.stop();
+            QSocConsole::warn() << "Project storage binding is unsafe for session:" << sessionId;
+            return false;
+        }
+        if (freshSession) {
+            currentSession = std::make_unique<QSocSession>(
+                sessionId, sessionPath, QSocSession::StorageMode::Fresh);
+        } else {
+            auto nextLock = lockSession(sessionPath);
+            if (!nextLock
+                || !existingSessionPathIsRegular(sessionPath)
+                // cppcheck-suppress knownConditionTrueFalse
+                || !currentFileHistory->storageIsBound()) {
+                if (nextLock && nextLock->isLocked()) {
+                    nextLock->unlock();
+                }
+                inputMonitor.stop();
+                compositor.stop();
+                QSocConsole::warn() << "Session could not be locked safely:" << sessionId;
+                return false;
+            }
+            sessionLock     = std::move(nextLock);
+            sessionLockPath = sessionPath;
+            currentSession  = std::make_unique<QSocSession>(
+                sessionId, sessionPath, QSocSession::StorageMode::Existing);
+        }
+        installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
 
         /* --ssh startup: the remote tools were built before this history
          * existed, so wire them now to checkpoint remote edits for rewind. */
@@ -3877,7 +3964,7 @@ bool QSocCliWorker::runAgentLoop(
 
         /* Resume an existing session if the JSONL already exists; otherwise
          * stamp the new session with creation metadata. */
-        if (QFile::exists(sessionPath)) {
+        if (sessionExists) {
             const json restored = QSocSession::loadMessages(sessionPath);
             if (restored.is_array()) {
                 json visibleMessages       = restored;
@@ -6352,14 +6439,13 @@ bool QSocCliWorker::runAgentLoop(
             }
             const QString projectPath = sessionProjectPath(projectManager);
             const QString nextId      = QSocSession::generateId();
-            const QString nextPath
-                = QDir(QSocSession::sessionsDir(projectPath)).filePath(nextId + ".jsonl");
-            auto nextLock = lockSession(nextPath);
-            if (!nextLock || !startFreshSessionAt(projectPath, nextId, std::move(nextLock))) {
+            auto          candidate   = prepareFreshSessionAt(projectPath, nextId);
+            if (!candidate) {
                 compositor.printContent(
                     "History clear refused: a fresh session could not be prepared.\n");
                 continue;
             }
+            activateFreshSession(std::move(candidate));
             agent->clearPendingRequests();
             pendingAutoInputs.clear();
             agent->clearHistory();
@@ -7972,11 +8058,9 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            const QString nextSessionId   = QSocSession::generateId();
-            const QString nextSessionPath = QDir(QSocSession::sessionsDir(canonical))
-                                                .filePath(nextSessionId + QStringLiteral(".jsonl"));
-            auto          nextSessionLock = lockSession(nextSessionPath);
-            if (!nextSessionLock) {
+            const QString nextSessionId = QSocSession::generateId();
+            auto          nextSession   = prepareFreshSessionAt(canonical, nextSessionId);
+            if (!nextSession) {
                 compositor.printContent(
                     QStringLiteral("Could not prepare a session in the new project.\n"));
                 continue;
@@ -8030,10 +8114,7 @@ bool QSocCliWorker::runAgentLoop(
             /* The previous conversation is about the previous project; its
              * JSONL stays on disk but the in-memory agent starts clean. */
             agent->clearHistory();
-            if (!startFreshSessionAt(canonical, nextSessionId, std::move(nextSessionLock))) {
-                compositor.printContent(QStringLiteral("Could not lock the new session.\n"));
-                continue;
-            }
+            activateFreshSession(std::move(nextSession));
             lastPersistedIndex = 0;
             lastMemoryIndex    = 0;
             turnCounter        = 0;
