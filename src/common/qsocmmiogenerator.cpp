@@ -14,33 +14,6 @@
 
 namespace {
 
-enum class MmioAccess { ReadWrite, ReadOnly };
-
-struct MmioField
-{
-    QString    path;
-    quint32    lsb    = 0;
-    quint32    width  = 1;
-    MmioAccess access = MmioAccess::ReadOnly;
-    quint32    reset  = 0;
-    quint32    value  = 0;
-    QString    input;
-    QString    output;
-    QString    storage;
-};
-
-struct MmioRegister
-{
-    quint32          offset = 0;
-    QList<MmioField> fields;
-};
-
-struct MmioConfig
-{
-    QString             moduleName;
-    QList<MmioRegister> registers;
-};
-
 const QSet<QString> kGeneratorKeys = {"kind", "bus", "register"};
 const QSet<QString> kRegisterKeys  = {"offset", "field", "description"};
 const QSet<QString> kFieldKeys
@@ -126,7 +99,7 @@ bool parseIdentifier(const YAML::Node &node, const QString &path, QString *value
 }
 
 bool parseUnsigned(
-    const YAML::Node &node, const QString &path, quint64 maximum, quint32 *value, QStringList *errors)
+    const YAML::Node &node, const QString &path, quint64 maximum, quint64 *value, QStringList *errors)
 {
     QString text;
     if (!parseScalar(node, path, &text, errors)) {
@@ -147,30 +120,48 @@ bool parseUnsigned(
         appendError(errors, "RANGE", path, QString("must be at most %1").arg(maximum));
         return false;
     }
+    *value = parsed;
+    return true;
+}
+
+bool parseUnsigned32(
+    const YAML::Node &node, const QString &path, quint32 maximum, quint32 *value, QStringList *errors)
+{
+    quint64 parsed = 0;
+    if (!parseUnsigned(node, path, maximum, &parsed, errors)) {
+        return false;
+    }
     *value = static_cast<quint32>(parsed);
     return true;
 }
 
-void validateDescription(const YAML::Node &node, const QString &path, QStringList *errors)
+void parseDescription(
+    const YAML::Node &node, const QString &path, QString *description, QStringList *errors)
 {
-    if (node && !node.IsScalar()) {
-        appendError(errors, "TYPE", path, "must be a scalar");
+    if (!node) {
+        description->clear();
+        return;
     }
+    if (!node.IsScalar()) {
+        appendError(errors, "TYPE", path, "must be a scalar");
+        return;
+    }
+    *description = QString::fromStdString(node.Scalar());
 }
 
 bool parseFieldShape(
-    const YAML::Node &node, const QString &path, MmioField *field, QStringList *errors)
+    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
 {
     bool valid = true;
     if (!node["lsb"]) {
         appendError(errors, "REQUIRED", path + ".lsb", "property is required");
         valid = false;
     } else {
-        valid = parseUnsigned(node["lsb"], path + ".lsb", 31, &field->lsb, errors) && valid;
+        valid = parseUnsigned32(node["lsb"], path + ".lsb", 31, &field->lsb, errors) && valid;
     }
 
     if (node["width"]) {
-        valid = parseUnsigned(node["width"], path + ".width", 32, &field->width, errors) && valid;
+        valid = parseUnsigned32(node["width"], path + ".width", 32, &field->width, errors) && valid;
         if (field->width == 0) {
             appendError(errors, "RANGE", path + ".width", "must be at least 1");
             valid = false;
@@ -183,7 +174,8 @@ bool parseFieldShape(
     return valid;
 }
 
-bool parseAccess(const YAML::Node &node, const QString &path, MmioField *field, QStringList *errors)
+bool parseAccess(
+    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
 {
     QString access;
     if (!node["access"]) {
@@ -194,18 +186,18 @@ bool parseAccess(const YAML::Node &node, const QString &path, MmioField *field, 
         return false;
     }
     if (access == "rw") {
-        field->access = MmioAccess::ReadWrite;
+        field->access = QSocMmioAccess::ReadWrite;
         return true;
     }
     if (access == "ro") {
-        field->access = MmioAccess::ReadOnly;
+        field->access = QSocMmioAccess::ReadOnly;
         return true;
     }
     appendError(errors, "ACCESS", path + ".access", "must be rw or ro");
     return false;
 }
 
-bool valueFitsWidth(quint32 value, quint32 width)
+bool valueFitsWidth(quint64 value, quint32 width)
 {
     const quint64 maximum = width == 32 ? std::numeric_limits<quint32>::max()
                                         : (quint64(1) << width) - 1;
@@ -213,21 +205,21 @@ bool valueFitsWidth(quint32 value, quint32 width)
 }
 
 bool parseReadWriteField(
-    const YAML::Node &node, const QString &path, MmioField *field, QStringList *errors)
+    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
 {
     bool valid = true;
     if (!node["reset"]) {
         appendError(errors, "REQUIRED", path + ".reset", "property is required for rw fields");
         valid = false;
     } else {
-        valid = parseUnsigned(
-                    node["reset"],
-                    path + ".reset",
-                    std::numeric_limits<quint32>::max(),
-                    &field->reset,
-                    errors)
-                && valid;
-        if (valid && !valueFitsWidth(field->reset, field->width)) {
+        quint64    resetValue = 0;
+        const bool resetValid = parseUnsigned(
+            node["reset"], path + ".reset", std::numeric_limits<quint32>::max(), &resetValue, errors);
+        if (resetValid) {
+            field->resetValue = resetValue;
+        }
+        valid = resetValid && valid;
+        if (valid && !valueFitsWidth(*field->resetValue, field->width)) {
             appendError(errors, "RANGE", path + ".reset", "value does not fit field width");
             valid = false;
         }
@@ -241,13 +233,14 @@ bool parseReadWriteField(
         valid = false;
     }
     if (node["output"]) {
-        valid = parseIdentifier(node["output"], path + ".output", &field->output, errors) && valid;
+        valid = parseIdentifier(node["output"], path + ".output", &field->outputPort, errors)
+                && valid;
     }
     return valid;
 }
 
 bool parseReadOnlyField(
-    const YAML::Node &node, const QString &path, MmioField *field, QStringList *errors)
+    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
 {
     bool valid       = true;
     int  sourceCount = node["input"] ? 1 : 0;
@@ -265,17 +258,21 @@ bool parseReadOnlyField(
         valid = false;
     }
     if (node["input"]) {
-        valid = parseIdentifier(node["input"], path + ".input", &field->input, errors) && valid;
+        valid = parseIdentifier(node["input"], path + ".input", &field->inputPort, errors) && valid;
     }
     if (node["value"]) {
-        valid = parseUnsigned(
-                    node["value"],
-                    path + ".value",
-                    std::numeric_limits<quint32>::max(),
-                    &field->value,
-                    errors)
-                && valid;
-        if (valid && !valueFitsWidth(field->value, field->width)) {
+        quint64    constantValue = 0;
+        const bool valueValid    = parseUnsigned(
+            node["value"],
+            path + ".value",
+            std::numeric_limits<quint32>::max(),
+            &constantValue,
+            errors);
+        if (valueValid) {
+            field->constantValue = constantValue;
+        }
+        valid = valueValid && valid;
+        if (valid && !valueFitsWidth(*field->constantValue, field->width)) {
             appendError(errors, "RANGE", path + ".value", "value does not fit field width");
             valid = false;
         }
@@ -284,20 +281,22 @@ bool parseReadOnlyField(
 }
 
 bool parseField(
-    const QString    &name,
-    const YAML::Node &node,
-    const QString    &path,
-    MmioField        *field,
-    QStringList      *errors)
+    const QString     &name,
+    const YAML::Node  &node,
+    const QString     &path,
+    QSocMmioFieldPlan *field,
+    QStringList       *errors)
 {
     if (!validateMap(node, kFieldKeys, path, errors)) {
         return false;
     }
-    validateDescription(node["description"], path + ".description", errors);
+    field->name = name;
+    parseDescription(node["description"], path + ".description", &field->description, errors);
 
     bool valid = QSocVerilogUtils::isValidVerilogIdentifier(name);
     if (!valid) {
         appendError(errors, "IDENTIFIER", path, "field name must be a Verilog identifier");
+        valid = false;
     }
     const bool shapeValid  = parseFieldShape(node, path, field, errors);
     const bool accessValid = parseAccess(node, path, field, errors);
@@ -305,23 +304,24 @@ bool parseField(
     if (!accessValid) {
         return false;
     }
-    if (field->access == MmioAccess::ReadWrite) {
+    if (field->access == QSocMmioAccess::ReadWrite) {
         return parseReadWriteField(node, path, field, errors) && valid;
     }
     return parseReadOnlyField(node, path, field, errors) && valid;
 }
 
-bool claimSideband(const MmioField &field, QSet<QString> *ports, QStringList *errors)
+bool claimSideband(
+    const QSocMmioFieldPlan &field, const QString &path, QSet<QString> *ports, QStringList *errors)
 {
-    const QString name = field.input.isEmpty() ? field.output : field.input;
+    const QString name = field.inputPort.isEmpty() ? field.outputPort : field.inputPort;
     if (name.isEmpty()) {
         return true;
     }
     static const QRegularExpression storageNamePattern(QStringLiteral("^mmio_field_[0-9]+_q$"));
     if (ports->contains(name) || kInternalNames.contains(name)
         || storageNamePattern.match(name).hasMatch()) {
-        const QString key = field.input.isEmpty() ? ".output" : ".input";
-        appendError(errors, "CONFLICT", field.path + key, "port name is already in use");
+        const QString key = field.inputPort.isEmpty() ? ".output" : ".input";
+        appendError(errors, "CONFLICT", path + key, "port name is already in use");
         return false;
     }
     ports->insert(name);
@@ -329,11 +329,11 @@ bool claimSideband(const MmioField &field, QSet<QString> *ports, QStringList *er
 }
 
 bool parseFields(
-    const YAML::Node &node,
-    const QString    &path,
-    QList<MmioField> *fields,
-    QSet<QString>    *ports,
-    QStringList      *errors)
+    const YAML::Node         &node,
+    const QString            &path,
+    QList<QSocMmioFieldPlan> *fields,
+    QSet<QString>            *ports,
+    QStringList              *errors)
 {
     if (!node || !node.IsMap()) {
         appendError(errors, "TYPE", path, "must be a map");
@@ -362,8 +362,7 @@ bool parseFields(
         }
         seenFields.insert(name);
 
-        MmioField field;
-        field.path = fieldPath;
+        QSocMmioFieldPlan field;
         if (!parseField(name, it->second, fieldPath, &field, errors)) {
             valid = false;
             continue;
@@ -375,7 +374,7 @@ bool parseFields(
             continue;
         }
         occupied |= mask;
-        if (!claimSideband(field, ports, errors)) {
+        if (!claimSideband(field, fieldPath, ports, errors)) {
             valid = false;
             continue;
         }
@@ -385,21 +384,23 @@ bool parseFields(
 }
 
 bool parseRegister(
-    const QString    &name,
-    const YAML::Node &node,
-    const QString    &path,
-    MmioRegister     *reg,
-    QSet<QString>    *ports,
-    QStringList      *errors)
+    const QString        &name,
+    const YAML::Node     &node,
+    const QString        &path,
+    QSocMmioRegisterPlan *reg,
+    QSet<QString>        *ports,
+    QStringList          *errors)
 {
     if (!validateMap(node, kRegisterKeys, path, errors)) {
         return false;
     }
-    validateDescription(node["description"], path + ".description", errors);
+    reg->name = name;
+    parseDescription(node["description"], path + ".description", &reg->description, errors);
 
     bool valid = QSocVerilogUtils::isValidVerilogIdentifier(name);
     if (!valid) {
         appendError(errors, "IDENTIFIER", path, "register name must be a Verilog identifier");
+        valid = false;
     }
     if (!node["offset"]) {
         appendError(errors, "REQUIRED", path + ".offset", "property is required");
@@ -409,10 +410,10 @@ bool parseRegister(
                     node["offset"],
                     path + ".offset",
                     std::numeric_limits<quint32>::max(),
-                    &reg->offset,
+                    &reg->byteOffset,
                     errors)
                 && valid;
-        if (valid && (reg->offset & 3U) != 0) {
+        if (valid && (reg->byteOffset & 3ULL) != 0) {
             appendError(errors, "ALIGNMENT", path + ".offset", "must be 4-byte aligned");
             valid = false;
         }
@@ -425,7 +426,7 @@ bool parseRegister(
 }
 
 bool parseRegisters(
-    const YAML::Node &node, MmioConfig *config, QSet<QString> *ports, QStringList *errors)
+    const YAML::Node &node, QSocMmioPlan *plan, QSet<QString> *ports, QStringList *errors)
 {
     const QString path = "generator.register";
     if (!node || !node.IsMap()) {
@@ -439,7 +440,7 @@ bool parseRegisters(
 
     bool                    valid = true;
     QSet<QString>           names;
-    QHash<quint32, QString> offsets;
+    QHash<quint64, QString> offsets;
     for (YAML::const_iterator it = node.begin(); it != node.end(); ++it) {
         if (!it->first.IsScalar()) {
             appendError(errors, "TYPE", path, "register names must be scalar");
@@ -455,30 +456,30 @@ bool parseRegisters(
         }
         names.insert(name);
 
-        MmioRegister reg;
+        QSocMmioRegisterPlan reg;
         if (!parseRegister(name, it->second, registerPath, &reg, ports, errors)) {
             valid = false;
             continue;
         }
-        if (offsets.contains(reg.offset)) {
+        if (offsets.contains(reg.byteOffset)) {
             appendError(
                 errors,
                 "DUPLICATE",
                 registerPath + ".offset",
-                QString("duplicates %1").arg(offsets.value(reg.offset)));
+                QString("duplicates %1").arg(offsets.value(reg.byteOffset)));
             valid = false;
             continue;
         }
-        offsets.insert(reg.offset, registerPath + ".offset");
-        config->registers.append(reg);
+        offsets.insert(reg.byteOffset, registerPath + ".offset");
+        plan->registers.append(reg);
     }
     return valid;
 }
 
-bool parseConfig(const QSocModuleDefinition &definition, MmioConfig *config, QStringList *errors)
+bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors)
 {
-    config->moduleName = definition.moduleName;
-    bool valid         = true;
+    plan->moduleName = definition.moduleName;
+    bool valid       = true;
     if (!QSocVerilogUtils::isValidVerilogIdentifier(definition.moduleName)) {
         appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
         valid = false;
@@ -542,7 +543,7 @@ bool parseConfig(const QSocModuleDefinition &definition, MmioConfig *config, QSt
         return false;
     }
     QSet<QString> ports = kFixedPorts;
-    return parseRegisters(generator["register"], config, &ports, errors) && valid;
+    return parseRegisters(generator["register"], plan, &ports, errors) && valid;
 }
 
 QString packedRange(quint32 width)
@@ -550,7 +551,7 @@ QString packedRange(quint32 width)
     return width == 1 ? QString() : QString(" [%1:0]").arg(width - 1);
 }
 
-QString bitRange(const MmioField &field)
+QString bitRange(const QSocMmioFieldPlan &field)
 {
     if (field.width == 1) {
         return QString("[%1]").arg(field.lsb);
@@ -558,34 +559,35 @@ QString bitRange(const MmioField &field)
     return QString("[%1:%2]").arg(field.lsb + field.width - 1).arg(field.lsb);
 }
 
-QString verilogLiteral(quint32 width, quint32 value)
+QString verilogLiteral(quint32 width, quint64 value)
 {
     return QString("%1'h%2").arg(width).arg(QString::number(value, 16));
 }
 
-void sortConfig(MmioConfig *config)
+void sortPlan(QSocMmioPlan *plan)
 {
     std::sort(
-        config->registers.begin(),
-        config->registers.end(),
-        [](const MmioRegister &left, const MmioRegister &right) {
-            return left.offset < right.offset;
+        plan->registers.begin(),
+        plan->registers.end(),
+        [](const QSocMmioRegisterPlan &left, const QSocMmioRegisterPlan &right) {
+            return left.byteOffset < right.byteOffset;
         });
-    int storageIndex = 0;
-    for (MmioRegister &reg : config->registers) {
+    for (QSocMmioRegisterPlan &reg : plan->registers) {
         std::sort(
             reg.fields.begin(),
             reg.fields.end(),
-            [](const MmioField &left, const MmioField &right) { return left.lsb < right.lsb; });
-        for (MmioField &field : reg.fields) {
-            if (field.access == MmioAccess::ReadWrite) {
-                field.storage = QString("mmio_field_%1_q").arg(storageIndex++);
-            }
-        }
+            [](const QSocMmioFieldPlan &left, const QSocMmioFieldPlan &right) {
+                return left.lsb < right.lsb;
+            });
     }
 }
 
-QStringList modulePorts(const MmioConfig &config)
+QString storageName(int index)
+{
+    return QString("mmio_field_%1_q").arg(index);
+}
+
+QStringList modulePorts(const QSocMmioPlan &plan)
 {
     QStringList ports = {
         "input  wire        clk_i",         "input  wire        rst_ni",
@@ -600,25 +602,26 @@ QStringList modulePorts(const MmioConfig &config)
         "output reg  [1:0]  s_axi_rresp",   "output reg         s_axi_rvalid",
         "input  wire        s_axi_rready",
     };
-    for (const MmioRegister &reg : config.registers) {
-        for (const MmioField &field : reg.fields) {
-            if (!field.input.isEmpty()) {
-                ports.append(QString("input  wire%1 %2").arg(packedRange(field.width), field.input));
-            }
-            if (!field.output.isEmpty()) {
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (!field.inputPort.isEmpty()) {
                 ports.append(
-                    QString("output wire%1 %2").arg(packedRange(field.width), field.output));
+                    QString("input  wire%1 %2").arg(packedRange(field.width), field.inputPort));
+            }
+            if (!field.outputPort.isEmpty()) {
+                ports.append(
+                    QString("output wire%1 %2").arg(packedRange(field.width), field.outputPort));
             }
         }
     }
     return ports;
 }
 
-void appendHeader(QStringList *lines, const MmioConfig &config)
+void appendHeader(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("// Generated by QSoC. Do not edit.");
-    lines->append(QString("module %1 (").arg(config.moduleName));
-    const QStringList ports = modulePorts(config);
+    lines->append(QString("module %1 (").arg(plan.moduleName));
+    const QStringList ports = modulePorts(plan);
     for (qsizetype index = 0; index < ports.size(); ++index) {
         const QString suffix = index + 1 == ports.size() ? QString() : QString(",");
         lines->append("    " + ports.at(index) + suffix);
@@ -627,15 +630,17 @@ void appendHeader(QStringList *lines, const MmioConfig &config)
     lines->append(QString());
 }
 
-void appendStorage(QStringList *lines, const MmioConfig &config)
+void appendStorage(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("localparam [1:0] AXI_RESP_OKAY   = 2'b00;");
     lines->append("localparam [1:0] AXI_RESP_SLVERR = 2'b10;");
     lines->append(QString());
-    for (const MmioRegister &reg : config.registers) {
-        for (const MmioField &field : reg.fields) {
-            if (field.access == MmioAccess::ReadWrite) {
-                lines->append(QString("reg%1 %2;").arg(packedRange(field.width), field.storage));
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access == QSocMmioAccess::ReadWrite) {
+                lines->append(
+                    QString("reg%1 %2;").arg(packedRange(field.width), storageName(storageIndex++)));
             }
         }
     }
@@ -647,15 +652,15 @@ void appendStorage(QStringList *lines, const MmioConfig &config)
     lines->append(QString());
 }
 
-void appendAddressFunction(QStringList *lines, const MmioConfig &config)
+void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("function address_is_mapped;");
     lines->append("    input [31:0] address;");
     lines->append("    begin");
     lines->append("        case (address)");
-    for (const MmioRegister &reg : config.registers) {
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
         lines->append(QString("            32'h%1: address_is_mapped = 1'b1;")
-                          .arg(reg.offset, 8, 16, QLatin1Char('0')));
+                          .arg(reg.byteOffset, 8, 16, QLatin1Char('0')));
     }
     lines->append("            default: address_is_mapped = 1'b0;");
     lines->append("        endcase");
@@ -664,29 +669,34 @@ void appendAddressFunction(QStringList *lines, const MmioConfig &config)
     lines->append(QString());
 }
 
-QString readSource(const MmioField &field)
+QString readSource(const QSocMmioFieldPlan &field, const QString &fieldStorageName)
 {
-    if (field.access == MmioAccess::ReadWrite) {
-        return field.storage;
+    if (field.access == QSocMmioAccess::ReadWrite) {
+        return fieldStorageName;
     }
-    if (!field.input.isEmpty()) {
-        return field.input;
+    if (!field.inputPort.isEmpty()) {
+        return field.inputPort;
     }
-    return verilogLiteral(field.width, field.value);
+    return verilogLiteral(field.width, *field.constantValue);
 }
 
-void appendReadFunction(QStringList *lines, const MmioConfig &config)
+void appendReadFunction(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("function [31:0] read_register;");
     lines->append("    input [31:0] address;");
     lines->append("    begin");
     lines->append("        read_register = 32'b0;");
     lines->append("        case (address)");
-    for (const MmioRegister &reg : config.registers) {
-        lines->append(QString("            32'h%1: begin").arg(reg.offset, 8, 16, QLatin1Char('0')));
-        for (const MmioField &field : reg.fields) {
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        lines->append(
+            QString("            32'h%1: begin").arg(reg.byteOffset, 8, 16, QLatin1Char('0')));
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            const QString fieldStorageName = field.access == QSocMmioAccess::ReadWrite
+                                                 ? storageName(storageIndex++)
+                                                 : QString();
             lines->append(QString("                read_register%1 = %2;")
-                              .arg(bitRange(field), readSource(field)));
+                              .arg(bitRange(field), readSource(field, fieldStorageName)));
         }
         lines->append("            end");
     }
@@ -715,12 +725,17 @@ void appendWriteWires(QStringList *lines)
     lines->append(QString());
 }
 
-void appendOutputAssignments(QStringList *lines, const MmioConfig &config)
+void appendOutputAssignments(QStringList *lines, const QSocMmioPlan &plan)
 {
-    for (const MmioRegister &reg : config.registers) {
-        for (const MmioField &field : reg.fields) {
-            if (!field.output.isEmpty()) {
-                lines->append(QString("assign %1 = %2;").arg(field.output, field.storage));
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access != QSocMmioAccess::ReadWrite) {
+                continue;
+            }
+            const QString fieldStorageName = storageName(storageIndex++);
+            if (!field.outputPort.isEmpty()) {
+                lines->append(QString("assign %1 = %2;").arg(field.outputPort, fieldStorageName));
             }
         }
     }
@@ -729,26 +744,28 @@ void appendOutputAssignments(QStringList *lines, const MmioConfig &config)
     }
 }
 
-void appendWriteCase(QStringList *lines, const MmioConfig &config)
+void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("            case (write_address)");
-    for (const MmioRegister &reg : config.registers) {
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
         bool hasWriteField = false;
-        for (const MmioField &field : reg.fields) {
-            hasWriteField = hasWriteField || field.access == MmioAccess::ReadWrite;
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            hasWriteField = hasWriteField || field.access == QSocMmioAccess::ReadWrite;
         }
         if (!hasWriteField) {
             continue;
         }
         lines->append(
-            QString("                32'h%1: begin").arg(reg.offset, 8, 16, QLatin1Char('0')));
-        for (const MmioField &field : reg.fields) {
-            if (field.access != MmioAccess::ReadWrite) {
+            QString("                32'h%1: begin").arg(reg.byteOffset, 8, 16, QLatin1Char('0')));
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access != QSocMmioAccess::ReadWrite) {
                 continue;
             }
-            const QString range = bitRange(field);
-            lines->append(
-                QString("                    %1 <= (%1 & ~write_mask%2)").arg(field.storage, range));
+            const QString fieldStorageName = storageName(storageIndex++);
+            const QString range            = bitRange(field);
+            lines->append(QString("                    %1 <= (%1 & ~write_mask%2)")
+                              .arg(fieldStorageName, range));
             lines->append(
                 QString("                        | (write_data%1 & write_mask%1);").arg(range));
         }
@@ -758,7 +775,7 @@ void appendWriteCase(QStringList *lines, const MmioConfig &config)
     lines->append("            endcase");
 }
 
-void appendWriteProcess(QStringList *lines, const MmioConfig &config)
+void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("always @(posedge clk_i or negedge rst_ni) begin");
     lines->append("    if (!rst_ni) begin");
@@ -769,11 +786,14 @@ void appendWriteProcess(QStringList *lines, const MmioConfig &config)
     lines->append("        wstrb_q      <= 4'b0;");
     lines->append("        s_axi_bresp  <= AXI_RESP_OKAY;");
     lines->append("        s_axi_bvalid <= 1'b0;");
-    for (const MmioRegister &reg : config.registers) {
-        for (const MmioField &field : reg.fields) {
-            if (field.access == MmioAccess::ReadWrite) {
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access == QSocMmioAccess::ReadWrite) {
                 lines->append(QString("        %1 <= %2;")
-                                  .arg(field.storage, verilogLiteral(field.width, field.reset)));
+                                  .arg(
+                                      storageName(storageIndex++),
+                                      verilogLiteral(field.width, *field.resetValue)));
             }
         }
     }
@@ -796,7 +816,7 @@ void appendWriteProcess(QStringList *lines, const MmioConfig &config)
     lines->append("            s_axi_bresp  <= address_is_mapped(write_address)");
     lines->append("                            ? AXI_RESP_OKAY : AXI_RESP_SLVERR;");
     lines->append("            if (address_is_mapped(write_address)) begin");
-    appendWriteCase(lines, config);
+    appendWriteCase(lines, plan);
     lines->append("            end");
     lines->append("        end");
     lines->append("    end");
@@ -826,17 +846,16 @@ void appendReadProcess(QStringList *lines)
     lines->append("endmodule");
 }
 
-QString buildVerilog(MmioConfig config)
+QString buildVerilog(const QSocMmioPlan &plan)
 {
-    sortConfig(&config);
     QStringList lines;
-    appendHeader(&lines, config);
-    appendStorage(&lines, config);
-    appendAddressFunction(&lines, config);
-    appendReadFunction(&lines, config);
+    appendHeader(&lines, plan);
+    appendStorage(&lines, plan);
+    appendAddressFunction(&lines, plan);
+    appendReadFunction(&lines, plan);
     appendWriteWires(&lines);
-    appendOutputAssignments(&lines, config);
-    appendWriteProcess(&lines, config);
+    appendOutputAssignments(&lines, plan);
+    appendWriteProcess(&lines, plan);
     appendReadProcess(&lines);
     return lines.join('\n') + '\n';
 }
@@ -864,11 +883,37 @@ YAML::Node QSocMmioGenerator::createDraftGenerator()
 
 QStringList QSocMmioGenerator::validate(const QSocModuleDefinition &definition)
 {
-    MmioConfig  config;
     QStringList errors;
-    parseConfig(definition, &config, &errors);
-    errors.sort(Qt::CaseSensitive);
+    buildPlan(definition, nullptr, &errors);
     return errors;
+}
+
+bool QSocMmioGenerator::buildPlan(
+    const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors)
+{
+    if (plan) {
+        *plan = QSocMmioPlan();
+    }
+
+    QSocMmioPlan localPlan;
+    QStringList  localErrors;
+    const bool   valid = parsePlan(definition, &localPlan, &localErrors);
+    localErrors.sort(Qt::CaseSensitive);
+    if (!valid || !localErrors.isEmpty()) {
+        if (errors) {
+            *errors = localErrors;
+        }
+        return false;
+    }
+
+    sortPlan(&localPlan);
+    if (errors) {
+        errors->clear();
+    }
+    if (plan) {
+        *plan = localPlan;
+    }
+    return true;
 }
 
 bool QSocMmioGenerator::generateVerilog(
@@ -877,10 +922,9 @@ bool QSocMmioGenerator::generateVerilog(
     if (verilog) {
         verilog->clear();
     }
-    MmioConfig  config;
-    QStringList localErrors;
-    if (!parseConfig(definition, &config, &localErrors) || !localErrors.isEmpty()) {
-        localErrors.sort(Qt::CaseSensitive);
+    QSocMmioPlan plan;
+    QStringList  localErrors;
+    if (!buildPlan(definition, &plan, &localErrors)) {
         if (errors) {
             *errors = localErrors;
         }
@@ -890,7 +934,7 @@ bool QSocMmioGenerator::generateVerilog(
         errors->clear();
     }
     if (verilog) {
-        *verilog = buildVerilog(config);
+        *verilog = buildVerilog(plan);
     }
     return true;
 }
