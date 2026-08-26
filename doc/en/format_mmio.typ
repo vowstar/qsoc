@@ -123,10 +123,39 @@ responses while backpressured. Unmapped or misaligned accesses return
 writes. A read and write to the same register on one clock edge returns the
 old value.
 
+== Formal Collateral
+<mmio-formal-collateral>
+Add `--with-formal` to generate a matching formal harness and SymbiYosys job:
+
+```bash
+qsoc generate module --with-formal -l <library> <module>
+```
+
+The command selects three files in the same output directory:
+`<module>.v`, `<module>_formal.sv`, and `<module>_formal.sby`. Generation checks
+all selected targets before opening or replacing a selected output file. If any
+target exists, the command fails without replacing any selected file unless
+`-f` or `--force` is present.
+
+Generation does not run the job. From `output/<library>/<module>/`, run the
+proof or cover task explicitly:
+
+```bash
+sby -f <module>_formal.sby prove
+sby -f <module>_formal.sby cover
+```
+
+The generated job also has a `bmc` task for bounded counterexamples; omit the
+task name to run `prove`, `bmc`, and `cover`. The harness follows the selected
+address width, data width, register layout, resets, sidebands, byte strobes,
+responses, and backpressure. It covers the generated AXI4-Lite slave only. No
+UVM testbench is generated. The harness holds reset active for two clock steps
+before release; it does not explore reset reassertion during traffic.
+
 == Current Limits
 <mmio-current-limits>
 This CLI slice supports one AXI4-Lite slave with a 32- or 64-bit data port and
-one configurable local address port. It emits Verilog only. It does not
-allocate a system address, create a netlist instance, insert a bus bridge,
-cross clock domains, or generate register arrays and extended access types.
-Use a wrapper for those functions.
+one configurable local address port. Optional formal collateral targets that
+same slave. It does not allocate a system address, create a netlist instance,
+insert a bus bridge, cross clock domains, or generate register arrays and
+extended access types. Use a wrapper for those functions.
