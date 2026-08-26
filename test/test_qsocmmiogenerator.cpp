@@ -5,6 +5,7 @@
 #include "common/qsocmodulemanager.h"
 #include "qsoc_test.h"
 
+#include <limits>
 #include <QDir>
 #include <QFile>
 #include <QProcess>
@@ -124,6 +125,43 @@ QSocModuleDefinition makeDescribedDefinition()
     registers["identification"]["description"]                       = "Device identification";
     registers["identification"]["field"]["device_id"]["description"] = "Device identifier";
     return definition;
+}
+
+QSocModuleDefinition makeExplicitDefaultDefinition()
+{
+    QSocModuleDefinition definition = makeValidDefinition();
+    YAML::Node           generator  = definition.extraAttributes["generator"];
+    generator["data_width"]         = 32;
+    generator["address_width"]      = 32;
+    return definition;
+}
+
+QSocModuleDefinition makeWidthDefinition(
+    quint32 dataWidth, quint32 addressWidth, const QString &byteOffset)
+{
+    const QString resetValue = dataWidth == 64 ? QString("0xffffffffffffffff")
+                                               : QString("0xffffffff");
+    const QString body       = QString(R"(
+generator:
+  kind: mmio
+  bus: axi4_lite
+  data_width: %1
+  address_width: %2
+  register:
+    scratch:
+      offset: %3
+      field:
+        data:
+          lsb: 0
+          width: %1
+          access: rw
+          reset: %4
+          output: scratch_o
+)")
+                                   .arg(dataWidth)
+                                   .arg(addressWidth)
+                                   .arg(byteOffset, resetValue);
+    return makeDefinition(body, "width_ctrl");
 }
 
 bool hasErrorPath(const QStringList &errors, const QString &path)
@@ -704,6 +742,215 @@ endmodule
 )";
 }
 
+QString widthProtocolTestbench(
+    quint32        dataWidth,
+    quint32        addressWidth,
+    const QString &mappedAddress,
+    const QString &unmappedAddress)
+{
+    QString bench = R"VERILOG(`timescale 1ns/1ps
+module tb;
+reg                         clk_i;
+reg                         rst_ni;
+reg  [@ADDRESS_MSB@:0]      s_axi_awaddr;
+reg  [2:0]                  s_axi_awprot;
+reg                         s_axi_awvalid;
+wire                        s_axi_awready;
+reg  [@DATA_MSB@:0]         s_axi_wdata;
+reg  [@STROBE_MSB@:0]       s_axi_wstrb;
+reg                         s_axi_wvalid;
+wire                        s_axi_wready;
+wire [1:0]                  s_axi_bresp;
+wire                        s_axi_bvalid;
+reg                         s_axi_bready;
+reg  [@ADDRESS_MSB@:0]      s_axi_araddr;
+reg  [2:0]                  s_axi_arprot;
+reg                         s_axi_arvalid;
+wire                        s_axi_arready;
+wire [@DATA_MSB@:0]         s_axi_rdata;
+wire [1:0]                  s_axi_rresp;
+wire                        s_axi_rvalid;
+reg                         s_axi_rready;
+wire [@DATA_MSB@:0]         scratch_o;
+reg  [@DATA_MSB@:0]         expected;
+reg  [@DATA_MSB@:0]         byte_mask;
+reg  [@STROBE_MSB@:0]       lane_strobe;
+integer                     failures;
+integer                     lane;
+
+localparam [1:0] AXI_RESP_OKAY   = 2'b00;
+localparam [1:0] AXI_RESP_SLVERR = 2'b10;
+localparam [@ADDRESS_MSB@:0] MAPPED_ADDRESS = @MAPPED_ADDRESS@;
+localparam [@ADDRESS_MSB@:0] UNMAPPED_ADDRESS = @UNMAPPED_ADDRESS@;
+localparam [@DATA_MSB@:0] DATA_PATTERN = @DATA_PATTERN@;
+
+width_ctrl dut (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .s_axi_awaddr(s_axi_awaddr),
+    .s_axi_awprot(s_axi_awprot),
+    .s_axi_awvalid(s_axi_awvalid),
+    .s_axi_awready(s_axi_awready),
+    .s_axi_wdata(s_axi_wdata),
+    .s_axi_wstrb(s_axi_wstrb),
+    .s_axi_wvalid(s_axi_wvalid),
+    .s_axi_wready(s_axi_wready),
+    .s_axi_bresp(s_axi_bresp),
+    .s_axi_bvalid(s_axi_bvalid),
+    .s_axi_bready(s_axi_bready),
+    .s_axi_araddr(s_axi_araddr),
+    .s_axi_arprot(s_axi_arprot),
+    .s_axi_arvalid(s_axi_arvalid),
+    .s_axi_arready(s_axi_arready),
+    .s_axi_rdata(s_axi_rdata),
+    .s_axi_rresp(s_axi_rresp),
+    .s_axi_rvalid(s_axi_rvalid),
+    .s_axi_rready(s_axi_rready),
+    .scratch_o(scratch_o)
+);
+
+task check_value;
+    input condition;
+    input [8*64-1:0] label;
+    begin
+        if (condition !== 1'b1) begin
+            failures = failures + 1;
+            $display("TEST_FAIL %0s", label);
+        end
+    end
+endtask
+
+task write_access;
+    input [@ADDRESS_MSB@:0] address;
+    input [@DATA_MSB@:0] data;
+    input [@STROBE_MSB@:0] strobe;
+    input [1:0] response;
+    begin
+        @(negedge clk_i);
+        s_axi_awaddr  = address;
+        s_axi_awvalid = 1'b1;
+        s_axi_wdata   = data;
+        s_axi_wstrb   = strobe;
+        s_axi_wvalid  = 1'b1;
+        while (!(s_axi_awready === 1'b1 && s_axi_wready === 1'b1))
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1;
+        s_axi_awvalid = 1'b0;
+        s_axi_wvalid  = 1'b0;
+        while (s_axi_bvalid !== 1'b1)
+            @(posedge clk_i);
+        #1 check_value(s_axi_bresp === response, "write response");
+        @(negedge clk_i);
+        s_axi_bready = 1'b1;
+        @(posedge clk_i);
+        #1 s_axi_bready = 1'b0;
+        check_value(s_axi_bvalid === 1'b0, "write response accepted");
+    end
+endtask
+
+task read_access;
+    input [@ADDRESS_MSB@:0] address;
+    input [@DATA_MSB@:0] data;
+    input [1:0] response;
+    begin
+        @(negedge clk_i);
+        s_axi_araddr  = address;
+        s_axi_arvalid = 1'b1;
+        while (s_axi_arready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_arvalid = 1'b0;
+        while (s_axi_rvalid !== 1'b1)
+            @(posedge clk_i);
+        #1;
+        check_value(s_axi_rdata === data, "read data");
+        check_value(s_axi_rresp === response, "read response");
+        @(negedge clk_i);
+        s_axi_rready = 1'b1;
+        @(posedge clk_i);
+        #1 s_axi_rready = 1'b0;
+        check_value(s_axi_rvalid === 1'b0, "read response accepted");
+    end
+endtask
+
+initial begin
+    clk_i = 1'b0;
+    forever #5 clk_i = ~clk_i;
+end
+
+initial begin
+    #10000;
+    $display("TEST_FAIL timeout");
+    $finish;
+end
+
+initial begin
+    failures      = 0;
+    rst_ni        = 1'b0;
+    s_axi_awaddr  = {@ADDRESS_WIDTH@{1'b0}};
+    s_axi_awprot  = 3'b0;
+    s_axi_awvalid = 1'b0;
+    s_axi_wdata   = {@DATA_WIDTH@{1'b0}};
+    s_axi_wstrb   = {@STROBE_WIDTH@{1'b0}};
+    s_axi_wvalid  = 1'b0;
+    s_axi_bready  = 1'b0;
+    s_axi_araddr  = {@ADDRESS_WIDTH@{1'b0}};
+    s_axi_arprot  = 3'b0;
+    s_axi_arvalid = 1'b0;
+    s_axi_rready  = 1'b0;
+
+    repeat (3) @(posedge clk_i);
+    #1 check_value(scratch_o === {@DATA_WIDTH@{1'b1}}, "full-width reset");
+    @(negedge clk_i);
+    rst_ni = 1'b1;
+    @(posedge clk_i);
+    #1;
+
+    expected = {@DATA_WIDTH@{1'b1}};
+    for (lane = 0; lane < @STROBE_WIDTH@; lane = lane + 1) begin
+        lane_strobe       = {@STROBE_WIDTH@{1'b0}};
+        lane_strobe[lane] = 1'b1;
+        byte_mask = {{@DATA_PAD@{1'b0}}, 8'hff} << (lane * 8);
+        expected  = (expected & ~byte_mask) | (DATA_PATTERN & byte_mask);
+        write_access(MAPPED_ADDRESS, DATA_PATTERN, lane_strobe, AXI_RESP_OKAY);
+        check_value(scratch_o === expected, "byte lane write");
+        read_access(MAPPED_ADDRESS, expected, AXI_RESP_OKAY);
+    end
+
+    write_access(
+        UNMAPPED_ADDRESS,
+        {@DATA_WIDTH@{1'b0}},
+        {@STROBE_WIDTH@{1'b1}},
+        AXI_RESP_SLVERR);
+    check_value(scratch_o === expected, "unmapped write ignored");
+    read_access(UNMAPPED_ADDRESS, {@DATA_WIDTH@{1'b0}}, AXI_RESP_SLVERR);
+
+    if (failures == 0)
+        $display("TEST_PASS");
+    else
+        $display("TEST_FAIL count=%0d", failures);
+    $finish;
+end
+endmodule
+)VERILOG";
+
+    const quint32 strobeWidth = dataWidth / 8;
+    bench.replace("@ADDRESS_MSB@", QString::number(addressWidth - 1));
+    bench.replace("@DATA_MSB@", QString::number(dataWidth - 1));
+    bench.replace("@STROBE_MSB@", QString::number(strobeWidth - 1));
+    bench.replace("@MAPPED_ADDRESS@", mappedAddress);
+    bench.replace("@UNMAPPED_ADDRESS@", unmappedAddress);
+    bench.replace(
+        "@DATA_PATTERN@",
+        dataWidth == 64 ? QString("64'h8877665544332211") : QString("32'h44332211"));
+    bench.replace("@ADDRESS_WIDTH@", QString::number(addressWidth));
+    bench.replace("@DATA_WIDTH@", QString::number(dataWidth));
+    bench.replace("@STROBE_WIDTH@", QString::number(strobeWidth));
+    bench.replace("@DATA_PAD@", QString::number(dataWidth - 8));
+    return bench;
+}
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -713,6 +960,7 @@ private slots:
     void planPreservesSemantics();
     void planIsCanonicalAndSelfContained();
     void generatedVerilogMatchesFrozenBaseline();
+    void widthsParameterizePlanAndVerilog();
     void validMapGeneratesAxiLiteSlave();
     void sourceOrderDoesNotChangeGeneratedVerilog();
     void duplicateModuleNameIsRejected();
@@ -720,6 +968,8 @@ private slots:
     void invalidMap_data();
     void invalidMap();
     void generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable();
+    void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable_data();
+    void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable();
 };
 
 void Test::planPreservesSemantics()
@@ -730,6 +980,8 @@ void Test::planPreservesSemantics()
     QVERIFY(errors.isEmpty());
 
     QCOMPARE(plan.moduleName, QString("timer_ctrl"));
+    QCOMPARE(plan.dataWidth, quint32(32));
+    QCOMPARE(plan.addressWidth, quint32(32));
     QCOMPARE(plan.registers.size(), qsizetype(4));
 
     const QSocMmioRegisterPlan &identification = plan.registers.at(0);
@@ -805,6 +1057,7 @@ void Test::generatedVerilogMatchesFrozenBaseline()
 {
     QString     verilog;
     QString     describedVerilog;
+    QString     explicitVerilog;
     QStringList errors;
     QVERIFY(QSocMmioGenerator::generateVerilog(makeValidDefinition(), &verilog, &errors));
     QVERIFY(errors.isEmpty());
@@ -812,6 +1065,52 @@ void Test::generatedVerilogMatchesFrozenBaseline()
     QVERIFY(
         QSocMmioGenerator::generateVerilog(makeDescribedDefinition(), &describedVerilog, &errors));
     QCOMPARE(describedVerilog, verilog);
+    QVERIFY(
+        QSocMmioGenerator::generateVerilog(
+            makeExplicitDefaultDefinition(), &explicitVerilog, &errors));
+    QCOMPARE(explicitVerilog, frozenBaselineVerilog());
+}
+
+void Test::widthsParameterizePlanAndVerilog()
+{
+    QStringList  errors;
+    QSocMmioPlan defaultPlan;
+    QSocMmioPlan explicitPlan;
+    QVERIFY(QSocMmioGenerator::buildPlan(makeValidDefinition(), &defaultPlan, &errors));
+    QVERIFY(QSocMmioGenerator::buildPlan(makeExplicitDefaultDefinition(), &explicitPlan, &errors));
+    QCOMPARE(explicitPlan, defaultPlan);
+
+    const QSocModuleDefinition wideDefinition = makeWidthDefinition(64, 13, "0x1ff8");
+    QSocMmioPlan               widePlan;
+    QVERIFY(QSocMmioGenerator::buildPlan(wideDefinition, &widePlan, &errors));
+    QVERIFY(errors.isEmpty());
+    QCOMPARE(widePlan.dataWidth, quint32(64));
+    QCOMPARE(widePlan.addressWidth, quint32(13));
+    QCOMPARE(widePlan.registers.constFirst().byteOffset, quint64(0x1ff8));
+    QCOMPARE(widePlan.registers.constFirst().fields.constFirst().width, quint32(64));
+    QCOMPARE(
+        widePlan.registers.constFirst().fields.constFirst().resetValue,
+        std::optional<quint64>(std::numeric_limits<quint64>::max()));
+
+    QString verilog;
+    QVERIFY(QSocMmioGenerator::generateVerilog(wideDefinition, &verilog, &errors));
+    QVERIFY(verilog.contains("input  wire [12:0] s_axi_awaddr"));
+    QVERIFY(verilog.contains("input  wire [63:0] s_axi_wdata"));
+    QVERIFY(verilog.contains("input  wire [7:0]  s_axi_wstrb"));
+    QVERIFY(verilog.contains("output reg  [63:0] s_axi_rdata"));
+    QVERIFY(verilog.contains("13'h1ff8: address_is_mapped"));
+    QVERIFY(verilog.contains("function [63:0] read_register;"));
+    QVERIFY(verilog.contains("wire [63:0] write_mask"));
+    QVERIFY(verilog.contains("write_strobe[7]"));
+    QVERIFY(verilog.contains("write_strobe[0]"));
+    QVERIFY(verilog.contains("64'hffffffffffffffff"));
+
+    QVERIFY(QSocMmioGenerator::validate(makeWidthDefinition(32, 2, "0")).isEmpty());
+    QVERIFY(QSocMmioGenerator::validate(makeWidthDefinition(64, 3, "0")).isEmpty());
+    QVERIFY(QSocMmioGenerator::validate(makeWidthDefinition(32, 12, "0xffc")).isEmpty());
+    QVERIFY(QSocMmioGenerator::validate(makeWidthDefinition(64, 12, "0xff8")).isEmpty());
+    QVERIFY(
+        QSocMmioGenerator::validate(makeWidthDefinition(64, 64, "0xfffffffffffffff8")).isEmpty());
 }
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -829,6 +1128,8 @@ void Test::draftIsRecognizedAndIncomplete()
     const YAML::Node generator = definition.extraAttributes["generator"];
     QCOMPARE(QString::fromStdString(generator["kind"].as<std::string>()), "mmio");
     QCOMPARE(QString::fromStdString(generator["bus"].as<std::string>()), "axi4_lite");
+    QVERIFY(!generator["data_width"]);
+    QVERIFY(!generator["address_width"]);
     QVERIFY(generator["register"].IsMap());
     QCOMPARE(generator["register"].size(), std::size_t(0));
 }
@@ -964,6 +1265,118 @@ generator:
 
     QTest::newRow("unknown-generator-key") << head + "  extra: true\n  register: {}\n"
                                            << QString("generator.extra") << QString("timer_ctrl");
+    QTest::newRow("invalid-data-width") << head + R"(  data_width: 16
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.data_width") << QString("timer_ctrl");
+    QTest::newRow("null-data-width") << head + R"(  data_width: null
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.data_width") << QString("timer_ctrl");
+    QTest::newRow("address-too-narrow-32") << head + R"(  address_width: 1
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.address_width") << QString("timer_ctrl");
+    QTest::newRow("address-too-narrow-64") << head + R"(  data_width: 64
+  address_width: 2
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.address_width") << QString("timer_ctrl");
+    QTest::newRow("address-too-wide") << head + R"(  address_width: 65
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.address_width")
+                                      << QString("timer_ctrl");
+    QTest::newRow("null-address-width") << head + R"(  address_width: null
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.address_width") << QString("timer_ctrl");
+    QTest::newRow("wide-unaligned-offset") << head + R"(  data_width: 64
+  address_width: 13
+  register:
+    control:
+      offset: 4
+      field:
+        data: {lsb: 0, width: 64, access: rw, reset: 0}
+)" << QString("generator.register.control.offset")
+                                           << QString("timer_ctrl");
+    QTest::newRow("wide-offset-out-of-range") << head + R"(  data_width: 64
+  address_width: 13
+  register:
+    control:
+      offset: 0x2000
+      field:
+        data: {lsb: 0, width: 64, access: rw, reset: 0}
+)" << QString("generator.register.control.offset")
+                                              << QString("timer_ctrl");
+    QTest::newRow("wide-lsb-out-of-range") << head + R"(  data_width: 64
+  register:
+    control:
+      offset: 0
+      field:
+        data: {lsb: 64, access: rw, reset: 0}
+)" << QString("generator.register.control.field.data.lsb")
+                                           << QString("timer_ctrl");
+    QTest::newRow("wide-field-width-out-of-range") << head + R"(  data_width: 64
+  register:
+    control:
+      offset: 0
+      field:
+        data: {lsb: 0, width: 65, access: rw, reset: 0}
+)" << QString("generator.register.control.field.data.width")
+                                                   << QString("timer_ctrl");
+    QTest::newRow("wide-field-crosses-beat") << head + R"(  data_width: 64
+  register:
+    control:
+      offset: 0
+      field:
+        data: {lsb: 63, width: 2, access: rw, reset: 0}
+)" << QString("generator.register.control.field.data")
+                                             << QString("timer_ctrl");
+    QTest::newRow("wide-reset-out-of-range") << head + R"(  data_width: 64
+  register:
+    control:
+      offset: 0
+      field:
+        data: {lsb: 0, width: 64, access: rw, reset: 0x10000000000000000}
+)" << QString("generator.register.control.field.data.reset")
+                                             << QString("timer_ctrl");
+    QTest::newRow("wide-value-out-of-range") << head + R"(  data_width: 64
+  register:
+    status:
+      offset: 0
+      field:
+        data: {lsb: 0, width: 64, access: ro, value: 0x10000000000000000}
+)" << QString("generator.register.status.field.data.value")
+                                             << QString("timer_ctrl");
+    QTest::newRow("bus-map-is-not-a-second-syntax") << R"(
+generator:
+  kind: mmio
+  bus: {protocol: axi4_lite, data_width: 64}
+  register:
+    control:
+      offset: 0
+      field:
+        enable: {lsb: 0, access: rw, reset: 0}
+)" << QString("generator.bus") << QString("timer_ctrl");
     QTest::newRow("unknown-register-key") << head + R"(  register:
     control:
       offset: 0
@@ -1177,6 +1590,78 @@ void Test::generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable()
     const QString outputPath = QDir(directory.path()).filePath("timer_ctrl.out");
     writeTextFile(sourcePath, verilog);
     writeTextFile(benchPath, protocolTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(compiler, {"-g2001", "-s", "tb", "-o", outputPath, sourcePath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished());
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+    QVERIFY(QFile::exists(outputPath));
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished());
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable_data()
+{
+    QTest::addColumn<quint32>("dataWidth");
+    QTest::addColumn<quint32>("addressWidth");
+    QTest::addColumn<QString>("byteOffset");
+    QTest::addColumn<QString>("mappedAddress");
+    QTest::addColumn<QString>("unmappedAddress");
+
+    QTest::newRow("minimum-32") << quint32(32) << quint32(2) << QString("0") << QString("2'h0")
+                                << QString("2'h1");
+    QTest::newRow("local-64") << quint32(64) << quint32(13) << QString("0x1ff8")
+                              << QString("13'h1ff8") << QString("13'h0");
+    QTest::newRow("maximum-address-64")
+        << quint32(64) << quint32(64) << QString("0xfffffffffffffff8")
+        << QString("64'hfffffffffffffff8") << QString("64'h0");
+}
+
+void Test::generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable()
+{
+    QFETCH(quint32, dataWidth);
+    QFETCH(quint32, addressWidth);
+    QFETCH(QString, byteOffset);
+    QFETCH(QString, mappedAddress);
+    QFETCH(QString, unmappedAddress);
+
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QString     verilog;
+    QStringList errors;
+    QVERIFY(
+        QSocMmioGenerator::generateVerilog(
+            makeWidthDefinition(dataWidth, addressWidth, byteOffset), &verilog, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+    QVERIFY(verilog.contains(mappedAddress + ": address_is_mapped"));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = QDir(directory.path()).filePath("width_ctrl.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("width_ctrl.out");
+    writeTextFile(sourcePath, verilog);
+    writeTextFile(
+        benchPath, widthProtocolTestbench(dataWidth, addressWidth, mappedAddress, unmappedAddress));
 
     QProcess process;
     process.setWorkingDirectory(directory.path());

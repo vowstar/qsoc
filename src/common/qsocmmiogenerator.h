@@ -44,6 +44,8 @@ struct QSocMmioRegisterPlan
 struct QSocMmioPlan
 {
     QString                     moduleName;
+    quint32                     dataWidth    = 32;
+    quint32                     addressWidth = 32;
     QList<QSocMmioRegisterPlan> registers;
 
     bool operator==(const QSocMmioPlan &) const = default;

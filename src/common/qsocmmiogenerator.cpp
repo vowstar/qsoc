@@ -14,7 +14,7 @@
 
 namespace {
 
-const QSet<QString> kGeneratorKeys = {"kind", "bus", "register"};
+const QSet<QString> kGeneratorKeys = {"kind", "bus", "data_width", "address_width", "register"};
 const QSet<QString> kRegisterKeys  = {"offset", "field", "description"};
 const QSet<QString> kFieldKeys
     = {"lsb", "width", "access", "reset", "input", "output", "value", "description"};
@@ -149,26 +149,75 @@ void parseDescription(
     *description = QString::fromStdString(node.Scalar());
 }
 
+quint64 maximumForWidth(quint32 width)
+{
+    return width == 64 ? std::numeric_limits<quint64>::max() : (quint64(1) << width) - 1;
+}
+
+bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *plan, QStringList *errors)
+{
+    bool valid = true;
+    if (generator["data_width"]) {
+        quint32    dataWidth = 0;
+        const bool parsed    = parseUnsigned32(
+            generator["data_width"], "generator.data_width", 64, &dataWidth, errors);
+        if (parsed && dataWidth != 32 && dataWidth != 64) {
+            appendError(errors, "RANGE", "generator.data_width", "must be 32 or 64");
+            valid = false;
+        } else if (parsed) {
+            plan->dataWidth = dataWidth;
+        } else {
+            valid = false;
+        }
+    }
+
+    if (generator["address_width"]) {
+        quint32    addressWidth = 0;
+        const bool parsed       = parseUnsigned32(
+            generator["address_width"], "generator.address_width", 64, &addressWidth, errors);
+        const quint32 minimum = plan->dataWidth == 64 ? 3 : 2;
+        if (parsed && addressWidth < minimum) {
+            appendError(
+                errors,
+                "RANGE",
+                "generator.address_width",
+                QString("must be between %1 and 64").arg(minimum));
+            valid = false;
+        } else if (parsed) {
+            plan->addressWidth = addressWidth;
+        } else {
+            valid = false;
+        }
+    }
+    return valid;
+}
+
 bool parseFieldShape(
-    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
+    const YAML::Node  &node,
+    const QString     &path,
+    quint32            dataWidth,
+    QSocMmioFieldPlan *field,
+    QStringList       *errors)
 {
     bool valid = true;
     if (!node["lsb"]) {
         appendError(errors, "REQUIRED", path + ".lsb", "property is required");
         valid = false;
     } else {
-        valid = parseUnsigned32(node["lsb"], path + ".lsb", 31, &field->lsb, errors) && valid;
+        valid = parseUnsigned32(node["lsb"], path + ".lsb", dataWidth - 1, &field->lsb, errors)
+                && valid;
     }
 
     if (node["width"]) {
-        valid = parseUnsigned32(node["width"], path + ".width", 32, &field->width, errors) && valid;
+        valid = parseUnsigned32(node["width"], path + ".width", dataWidth, &field->width, errors)
+                && valid;
         if (field->width == 0) {
             appendError(errors, "RANGE", path + ".width", "must be at least 1");
             valid = false;
         }
     }
-    if (valid && field->lsb + field->width > 32) {
-        appendError(errors, "RANGE", path, "field must fit within 32 bits");
+    if (valid && field->lsb + field->width > dataWidth) {
+        appendError(errors, "RANGE", path, QString("field must fit within %1 bits").arg(dataWidth));
         valid = false;
     }
     return valid;
@@ -199,13 +248,15 @@ bool parseAccess(
 
 bool valueFitsWidth(quint64 value, quint32 width)
 {
-    const quint64 maximum = width == 32 ? std::numeric_limits<quint32>::max()
-                                        : (quint64(1) << width) - 1;
-    return value <= maximum;
+    return value <= maximumForWidth(width);
 }
 
 bool parseReadWriteField(
-    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
+    const YAML::Node  &node,
+    const QString     &path,
+    quint32            dataWidth,
+    QSocMmioFieldPlan *field,
+    QStringList       *errors)
 {
     bool valid = true;
     if (!node["reset"]) {
@@ -214,7 +265,7 @@ bool parseReadWriteField(
     } else {
         quint64    resetValue = 0;
         const bool resetValid = parseUnsigned(
-            node["reset"], path + ".reset", std::numeric_limits<quint32>::max(), &resetValue, errors);
+            node["reset"], path + ".reset", maximumForWidth(dataWidth), &resetValue, errors);
         if (resetValid) {
             field->resetValue = resetValue;
         }
@@ -240,7 +291,11 @@ bool parseReadWriteField(
 }
 
 bool parseReadOnlyField(
-    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
+    const YAML::Node  &node,
+    const QString     &path,
+    quint32            dataWidth,
+    QSocMmioFieldPlan *field,
+    QStringList       *errors)
 {
     bool valid       = true;
     int  sourceCount = node["input"] ? 1 : 0;
@@ -263,11 +318,7 @@ bool parseReadOnlyField(
     if (node["value"]) {
         quint64    constantValue = 0;
         const bool valueValid    = parseUnsigned(
-            node["value"],
-            path + ".value",
-            std::numeric_limits<quint32>::max(),
-            &constantValue,
-            errors);
+            node["value"], path + ".value", maximumForWidth(dataWidth), &constantValue, errors);
         if (valueValid) {
             field->constantValue = constantValue;
         }
@@ -284,6 +335,7 @@ bool parseField(
     const QString     &name,
     const YAML::Node  &node,
     const QString     &path,
+    quint32            dataWidth,
     QSocMmioFieldPlan *field,
     QStringList       *errors)
 {
@@ -298,16 +350,16 @@ bool parseField(
         appendError(errors, "IDENTIFIER", path, "field name must be a Verilog identifier");
         valid = false;
     }
-    const bool shapeValid  = parseFieldShape(node, path, field, errors);
+    const bool shapeValid  = parseFieldShape(node, path, dataWidth, field, errors);
     const bool accessValid = parseAccess(node, path, field, errors);
     valid                  = shapeValid && accessValid && valid;
     if (!accessValid) {
         return false;
     }
     if (field->access == QSocMmioAccess::ReadWrite) {
-        return parseReadWriteField(node, path, field, errors) && valid;
+        return parseReadWriteField(node, path, dataWidth, field, errors) && valid;
     }
-    return parseReadOnlyField(node, path, field, errors) && valid;
+    return parseReadOnlyField(node, path, dataWidth, field, errors) && valid;
 }
 
 bool claimSideband(
@@ -331,6 +383,7 @@ bool claimSideband(
 bool parseFields(
     const YAML::Node         &node,
     const QString            &path,
+    quint32                   dataWidth,
     QList<QSocMmioFieldPlan> *fields,
     QSet<QString>            *ports,
     QStringList              *errors)
@@ -363,11 +416,11 @@ bool parseFields(
         seenFields.insert(name);
 
         QSocMmioFieldPlan field;
-        if (!parseField(name, it->second, fieldPath, &field, errors)) {
+        if (!parseField(name, it->second, fieldPath, dataWidth, &field, errors)) {
             valid = false;
             continue;
         }
-        const quint64 mask = ((quint64(1) << field.width) - 1) << field.lsb;
+        const quint64 mask = maximumForWidth(field.width) << field.lsb;
         if ((occupied & mask) != 0) {
             appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
             valid = false;
@@ -387,6 +440,7 @@ bool parseRegister(
     const QString        &name,
     const YAML::Node     &node,
     const QString        &path,
+    const QSocMmioPlan   &plan,
     QSocMmioRegisterPlan *reg,
     QSet<QString>        *ports,
     QStringList          *errors)
@@ -406,15 +460,20 @@ bool parseRegister(
         appendError(errors, "REQUIRED", path + ".offset", "property is required");
         valid = false;
     } else {
-        valid = parseUnsigned(
-                    node["offset"],
-                    path + ".offset",
-                    std::numeric_limits<quint32>::max(),
-                    &reg->byteOffset,
-                    errors)
-                && valid;
-        if (valid && (reg->byteOffset & 3ULL) != 0) {
-            appendError(errors, "ALIGNMENT", path + ".offset", "must be 4-byte aligned");
+        valid                   = parseUnsigned(
+                                      node["offset"],
+                                      path + ".offset",
+                                      maximumForWidth(plan.addressWidth),
+                                      &reg->byteOffset,
+                                      errors)
+                                  && valid;
+        const quint64 byteCount = plan.dataWidth / 8;
+        if (valid && (reg->byteOffset & (byteCount - 1)) != 0) {
+            appendError(
+                errors,
+                "ALIGNMENT",
+                path + ".offset",
+                QString("must be %1-byte aligned").arg(byteCount));
             valid = false;
         }
     }
@@ -422,7 +481,8 @@ bool parseRegister(
         appendError(errors, "REQUIRED", path + ".field", "property is required");
         return false;
     }
-    return parseFields(node["field"], path + ".field", &reg->fields, ports, errors) && valid;
+    return parseFields(node["field"], path + ".field", plan.dataWidth, &reg->fields, ports, errors)
+           && valid;
 }
 
 bool parseRegisters(
@@ -457,7 +517,7 @@ bool parseRegisters(
         names.insert(name);
 
         QSocMmioRegisterPlan reg;
-        if (!parseRegister(name, it->second, registerPath, &reg, ports, errors)) {
+        if (!parseRegister(name, it->second, registerPath, *plan, &reg, ports, errors)) {
             valid = false;
             continue;
         }
@@ -525,6 +585,9 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
         valid = false;
     }
 
+    const bool widthsValid = parseBusWidths(generator, plan, errors);
+    valid                  = widthsValid && valid;
+
     if (definition.hasParameterSection || !definition.parameters.isEmpty()) {
         appendError(errors, "MANUAL_SECTION", "module.parameter", "is not allowed for MMIO modules");
         valid = false;
@@ -540,6 +603,9 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
 
     if (!generator["register"]) {
         appendError(errors, "REQUIRED", "generator.register", "property is required");
+        return false;
+    }
+    if (!widthsValid) {
         return false;
     }
     QSet<QString> ports = kFixedPorts;
@@ -562,6 +628,17 @@ QString bitRange(const QSocMmioFieldPlan &field)
 QString verilogLiteral(quint32 width, quint64 value)
 {
     return QString("%1'h%2").arg(width).arg(QString::number(value, 16));
+}
+
+QString zeroLiteral(quint32 width)
+{
+    return QString("%1'b0").arg(width);
+}
+
+QString addressLiteral(const QSocMmioPlan &plan, quint64 byteOffset)
+{
+    const int digits = static_cast<int>((plan.addressWidth + 3) / 4);
+    return QString("%1'h%2").arg(plan.addressWidth).arg(byteOffset, digits, 16, QLatin1Char('0'));
 }
 
 void sortPlan(QSocMmioPlan *plan)
@@ -590,16 +667,26 @@ QString storageName(int index)
 QStringList modulePorts(const QSocMmioPlan &plan)
 {
     QStringList ports = {
-        "input  wire        clk_i",         "input  wire        rst_ni",
-        "input  wire [31:0] s_axi_awaddr",  "input  wire [2:0]  s_axi_awprot",
-        "input  wire        s_axi_awvalid", "output wire        s_axi_awready",
-        "input  wire [31:0] s_axi_wdata",   "input  wire [3:0]  s_axi_wstrb",
-        "input  wire        s_axi_wvalid",  "output wire        s_axi_wready",
-        "output reg  [1:0]  s_axi_bresp",   "output reg         s_axi_bvalid",
-        "input  wire        s_axi_bready",  "input  wire [31:0] s_axi_araddr",
-        "input  wire [2:0]  s_axi_arprot",  "input  wire        s_axi_arvalid",
-        "output wire        s_axi_arready", "output reg  [31:0] s_axi_rdata",
-        "output reg  [1:0]  s_axi_rresp",   "output reg         s_axi_rvalid",
+        "input  wire        clk_i",
+        "input  wire        rst_ni",
+        QString("input  wire [%1:0] s_axi_awaddr").arg(plan.addressWidth - 1),
+        "input  wire [2:0]  s_axi_awprot",
+        "input  wire        s_axi_awvalid",
+        "output wire        s_axi_awready",
+        QString("input  wire [%1:0] s_axi_wdata").arg(plan.dataWidth - 1),
+        QString("input  wire [%1:0]  s_axi_wstrb").arg(plan.dataWidth / 8 - 1),
+        "input  wire        s_axi_wvalid",
+        "output wire        s_axi_wready",
+        "output reg  [1:0]  s_axi_bresp",
+        "output reg         s_axi_bvalid",
+        "input  wire        s_axi_bready",
+        QString("input  wire [%1:0] s_axi_araddr").arg(plan.addressWidth - 1),
+        "input  wire [2:0]  s_axi_arprot",
+        "input  wire        s_axi_arvalid",
+        "output wire        s_axi_arready",
+        QString("output reg  [%1:0] s_axi_rdata").arg(plan.dataWidth - 1),
+        "output reg  [1:0]  s_axi_rresp",
+        "output reg         s_axi_rvalid",
         "input  wire        s_axi_rready",
     };
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
@@ -645,22 +732,22 @@ void appendStorage(QStringList *lines, const QSocMmioPlan &plan)
         }
     }
     lines->append("reg        aw_pending_q;");
-    lines->append("reg [31:0] awaddr_q;");
+    lines->append(QString("reg [%1:0] awaddr_q;").arg(plan.addressWidth - 1));
     lines->append("reg        w_pending_q;");
-    lines->append("reg [31:0] wdata_q;");
-    lines->append("reg [3:0]  wstrb_q;");
+    lines->append(QString("reg [%1:0] wdata_q;").arg(plan.dataWidth - 1));
+    lines->append(QString("reg [%1:0]  wstrb_q;").arg(plan.dataWidth / 8 - 1));
     lines->append(QString());
 }
 
 void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("function address_is_mapped;");
-    lines->append("    input [31:0] address;");
+    lines->append(QString("    input [%1:0] address;").arg(plan.addressWidth - 1));
     lines->append("    begin");
     lines->append("        case (address)");
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
-        lines->append(QString("            32'h%1: address_is_mapped = 1'b1;")
-                          .arg(reg.byteOffset, 8, 16, QLatin1Char('0')));
+        lines->append(QString("            %1: address_is_mapped = 1'b1;")
+                          .arg(addressLiteral(plan, reg.byteOffset)));
     }
     lines->append("            default: address_is_mapped = 1'b0;");
     lines->append("        endcase");
@@ -682,15 +769,14 @@ QString readSource(const QSocMmioFieldPlan &field, const QString &fieldStorageNa
 
 void appendReadFunction(QStringList *lines, const QSocMmioPlan &plan)
 {
-    lines->append("function [31:0] read_register;");
-    lines->append("    input [31:0] address;");
+    lines->append(QString("function [%1:0] read_register;").arg(plan.dataWidth - 1));
+    lines->append(QString("    input [%1:0] address;").arg(plan.addressWidth - 1));
     lines->append("    begin");
-    lines->append("        read_register = 32'b0;");
+    lines->append("        read_register = " + zeroLiteral(plan.dataWidth) + ";");
     lines->append("        case (address)");
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
-        lines->append(
-            QString("            32'h%1: begin").arg(reg.byteOffset, 8, 16, QLatin1Char('0')));
+        lines->append(QString("            %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         for (const QSocMmioFieldPlan &field : reg.fields) {
             const QString fieldStorageName = field.access == QSocMmioAccess::ReadWrite
                                                  ? storageName(storageIndex++)
@@ -707,17 +793,29 @@ void appendReadFunction(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(QString());
 }
 
-void appendWriteWires(QStringList *lines)
+void appendWriteWires(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("wire aw_take = s_axi_awvalid && s_axi_awready;");
     lines->append("wire w_take  = s_axi_wvalid && s_axi_wready;");
-    lines->append("wire [31:0] write_address = aw_pending_q ? awaddr_q : s_axi_awaddr;");
-    lines->append("wire [31:0] write_data    = w_pending_q ? wdata_q : s_axi_wdata;");
-    lines->append("wire [3:0]  write_strobe  = w_pending_q ? wstrb_q : s_axi_wstrb;");
+    lines->append(QString("wire [%1:0] write_address = aw_pending_q ? awaddr_q : s_axi_awaddr;")
+                      .arg(plan.addressWidth - 1));
+    lines->append(QString("wire [%1:0] write_data    = w_pending_q ? wdata_q : s_axi_wdata;")
+                      .arg(plan.dataWidth - 1));
+    lines->append(QString("wire [%1:0]  write_strobe  = w_pending_q ? wstrb_q : s_axi_wstrb;")
+                      .arg(plan.dataWidth / 8 - 1));
     lines->append("wire write_fire = !s_axi_bvalid && (aw_pending_q || aw_take)");
     lines->append("                  && (w_pending_q || w_take);");
-    lines->append("wire [31:0] write_mask = {{8{write_strobe[3]}}, {8{write_strobe[2]}},");
-    lines->append("                          {8{write_strobe[1]}}, {8{write_strobe[0]}}};");
+    QStringList lanes;
+    for (int lane = static_cast<int>(plan.dataWidth / 8) - 1; lane >= 0; --lane) {
+        lanes.append(QString("{8{write_strobe[%1]}}").arg(lane));
+    }
+    for (qsizetype index = 0; index < lanes.size(); index += 2) {
+        const QString prefix = index == 0
+                                   ? QString("wire [%1:0] write_mask = {").arg(plan.dataWidth - 1)
+                                   : QString(26, QLatin1Char(' '));
+        const QString suffix = index + 2 >= lanes.size() ? QString("};") : QString(",");
+        lines->append(prefix + lanes.mid(index, 2).join(", ") + suffix);
+    }
     lines->append(QString());
     lines->append("assign s_axi_awready = rst_ni && !aw_pending_q && !s_axi_bvalid;");
     lines->append("assign s_axi_wready  = rst_ni && !w_pending_q && !s_axi_bvalid;");
@@ -757,7 +855,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan)
             continue;
         }
         lines->append(
-            QString("                32'h%1: begin").arg(reg.byteOffset, 8, 16, QLatin1Char('0')));
+            QString("                %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         for (const QSocMmioFieldPlan &field : reg.fields) {
             if (field.access != QSocMmioAccess::ReadWrite) {
                 continue;
@@ -780,10 +878,10 @@ void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("always @(posedge clk_i or negedge rst_ni) begin");
     lines->append("    if (!rst_ni) begin");
     lines->append("        aw_pending_q <= 1'b0;");
-    lines->append("        awaddr_q     <= 32'b0;");
+    lines->append("        awaddr_q     <= " + zeroLiteral(plan.addressWidth) + ";");
     lines->append("        w_pending_q  <= 1'b0;");
-    lines->append("        wdata_q      <= 32'b0;");
-    lines->append("        wstrb_q      <= 4'b0;");
+    lines->append("        wdata_q      <= " + zeroLiteral(plan.dataWidth) + ";");
+    lines->append("        wstrb_q      <= " + zeroLiteral(plan.dataWidth / 8) + ";");
     lines->append("        s_axi_bresp  <= AXI_RESP_OKAY;");
     lines->append("        s_axi_bvalid <= 1'b0;");
     int storageIndex = 0;
@@ -824,11 +922,11 @@ void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(QString());
 }
 
-void appendReadProcess(QStringList *lines)
+void appendReadProcess(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("always @(posedge clk_i or negedge rst_ni) begin");
     lines->append("    if (!rst_ni) begin");
-    lines->append("        s_axi_rdata  <= 32'b0;");
+    lines->append("        s_axi_rdata  <= " + zeroLiteral(plan.dataWidth) + ";");
     lines->append("        s_axi_rresp  <= AXI_RESP_OKAY;");
     lines->append("        s_axi_rvalid <= 1'b0;");
     lines->append("    end else begin");
@@ -853,10 +951,10 @@ QString buildVerilog(const QSocMmioPlan &plan)
     appendStorage(&lines, plan);
     appendAddressFunction(&lines, plan);
     appendReadFunction(&lines, plan);
-    appendWriteWires(&lines);
+    appendWriteWires(&lines, plan);
     appendOutputAssignments(&lines, plan);
     appendWriteProcess(&lines, plan);
-    appendReadProcess(&lines);
+    appendReadProcess(&lines, plan);
     return lines.join('\n') + '\n';
 }
 
