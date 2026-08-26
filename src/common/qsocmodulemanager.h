@@ -61,7 +61,12 @@ struct QSocModuleDefinition
 {
     QString                       libraryName;
     QString                       moduleName;
-    bool                          isNullDefinition = false;
+    bool                          isNullDefinition       = false;
+    bool                          hasParameterSection    = false;
+    bool                          hasPortSection         = false;
+    bool                          hasBusSection          = false;
+    bool                          hasDuplicateModuleName = false;
+    QStringList                   duplicateKeys;
     YAML::Node                    extraAttributes;
     QList<QSocModulePort>         ports;
     QList<QSocModuleParameter>    parameters;

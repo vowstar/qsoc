@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QSet>
 
 namespace {
@@ -561,7 +562,15 @@ QSocModuleDefinition QSocModuleManager::getModuleDefinition(
         definition.moduleName  = moduleName;
         return definition;
     }
-    return moduleYamlToDefinition(libraryName, moduleName, moduleYaml);
+    QSocModuleDefinition definition  = moduleYamlToDefinition(libraryName, moduleName, moduleYaml);
+    int                  moduleCount = 0;
+    for (YAML::const_iterator it = libraryYaml.begin(); it != libraryYaml.end(); ++it) {
+        if (it->first.IsScalar() && QString::fromStdString(it->first.Scalar()) == moduleName) {
+            ++moduleCount;
+        }
+    }
+    definition.hasDuplicateModuleName = moduleCount > 1;
+    return definition;
 }
 
 bool QSocModuleManager::createLibrary(const QString &libraryName)
@@ -787,6 +796,25 @@ QSocModuleDefinition QSocModuleManager::moduleYamlToDefinition(
     definition.isNullDefinition = !node || node.IsNull();
     if (definition.isNullDefinition || !node.IsMap()) {
         return definition;
+    }
+
+    QSet<QString> seenKeys;
+    for (YAML::const_iterator it = node.begin(); it != node.end(); ++it) {
+        if (!it->first.IsScalar()) {
+            continue;
+        }
+        const QString key = QString::fromStdString(it->first.Scalar());
+        if (key == "parameter") {
+            definition.hasParameterSection = true;
+        } else if (key == "port") {
+            definition.hasPortSection = true;
+        } else if (key == "bus") {
+            definition.hasBusSection = true;
+        }
+        if (seenKeys.contains(key) && !definition.duplicateKeys.contains(key)) {
+            definition.duplicateKeys.append(key);
+        }
+        seenKeys.insert(key);
     }
 
     copyMapExcept(node, definition.extraAttributes, kModuleFields);
@@ -1394,7 +1422,6 @@ bool QSocModuleManager::load(const QString &libraryName)
         QSocConsole::error() << "projectManager is null or invalid module path.";
         return false;
     }
-
     /* Check if library file exists */
     if (!isLibraryFileExist(libraryName)) {
         QSocConsole::error() << "Library file does not exist for basename:" << libraryName;
@@ -1552,12 +1579,23 @@ bool QSocModuleManager::save(const QString &libraryName)
     /* Serialize and save to file */
     const QString filePath
         = QDir(projectManager->getModulePath()).filePath(libraryName + ".soc_mod");
-    std::ofstream outputFileStream(filePath.toStdString());
-    if (!outputFileStream.is_open()) {
-        QSocConsole::error() << "Unable to open file for writing:" << filePath;
+    const QByteArray outputData = QByteArray::fromStdString(YAML::Dump(dataToSave));
+    QSaveFile        outputFile(filePath);
+    outputFile.setDirectWriteFallback(false);
+    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QSocConsole::error() << "Unable to open file for writing:" << filePath
+                             << outputFile.errorString();
         return false;
     }
-    outputFileStream << dataToSave;
+    if (outputFile.write(outputData) != outputData.size()) {
+        QSocConsole::error() << "Unable to write file:" << filePath << outputFile.errorString();
+        outputFile.cancelWriting();
+        return false;
+    }
+    if (!outputFile.commit()) {
+        QSocConsole::error() << "Unable to commit file:" << filePath << outputFile.errorString();
+        return false;
+    }
     return true;
 }
 
