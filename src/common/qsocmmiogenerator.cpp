@@ -3,6 +3,7 @@
 
 #include "common/qsocmmiogenerator.h"
 
+#include "common/qsocmmioformal.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocverilogutils.h"
 
@@ -641,6 +642,28 @@ QString addressLiteral(const QSocMmioPlan &plan, quint64 byteOffset)
     return QString("%1'h%2").arg(plan.addressWidth).arg(byteOffset, digits, 16, QLatin1Char('0'));
 }
 
+QString localAddressName(const QSocMmioPlan &plan, const QString &base)
+{
+    QSet<QString> usedNames = kFixedPorts;
+    usedNames.unite(kInternalNames);
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (!field.inputPort.isEmpty()) {
+                usedNames.insert(field.inputPort);
+            }
+            if (!field.outputPort.isEmpty()) {
+                usedNames.insert(field.outputPort);
+            }
+        }
+    }
+
+    QString name = base;
+    while (usedNames.contains(name)) {
+        name += QLatin1Char('_');
+    }
+    return name;
+}
+
 void sortPlan(QSocMmioPlan *plan)
 {
     std::sort(
@@ -741,10 +764,11 @@ void appendStorage(QStringList *lines, const QSocMmioPlan &plan)
 
 void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan)
 {
+    const QString addressName = localAddressName(plan, QStringLiteral("address"));
     lines->append("function address_is_mapped;");
-    lines->append(QString("    input [%1:0] address;").arg(plan.addressWidth - 1));
+    lines->append(QString("    input [%1:0] %2;").arg(plan.addressWidth - 1).arg(addressName));
     lines->append("    begin");
-    lines->append("        case (address)");
+    lines->append(QString("        case (%1)").arg(addressName));
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         lines->append(QString("            %1: address_is_mapped = 1'b1;")
                           .arg(addressLiteral(plan, reg.byteOffset)));
@@ -769,11 +793,12 @@ QString readSource(const QSocMmioFieldPlan &field, const QString &fieldStorageNa
 
 void appendReadFunction(QStringList *lines, const QSocMmioPlan &plan)
 {
+    const QString addressName = localAddressName(plan, QStringLiteral("address"));
     lines->append(QString("function [%1:0] read_register;").arg(plan.dataWidth - 1));
-    lines->append(QString("    input [%1:0] address;").arg(plan.addressWidth - 1));
+    lines->append(QString("    input [%1:0] %2;").arg(plan.addressWidth - 1).arg(addressName));
     lines->append("    begin");
     lines->append("        read_register = " + zeroLiteral(plan.dataWidth) + ";");
-    lines->append("        case (address)");
+    lines->append(QString("        case (%1)").arg(addressName));
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         lines->append(QString("            %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
@@ -1033,6 +1058,31 @@ bool QSocMmioGenerator::generateVerilog(
     }
     if (verilog) {
         *verilog = buildVerilog(plan);
+    }
+    return true;
+}
+
+bool QSocMmioGenerator::generateFormalCollateral(
+    const QSocModuleDefinition &definition,
+    QSocMmioFormalCollateral   *collateral,
+    QStringList                *errors)
+{
+    if (collateral) {
+        *collateral = QSocMmioFormalCollateral();
+    }
+    QSocMmioPlan plan;
+    QStringList  localErrors;
+    if (!buildPlan(definition, &plan, &localErrors)) {
+        if (errors) {
+            *errors = localErrors;
+        }
+        return false;
+    }
+    if (errors) {
+        errors->clear();
+    }
+    if (collateral) {
+        *collateral = QSocMmioFormal::generate(plan);
     }
     return true;
 }

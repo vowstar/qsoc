@@ -135,6 +135,9 @@ private slots:
     void malformedGeneratorKindReportsPath();
     void validateAndGenerateRejectOrdinaryModule();
     void generateUsesNestedPathAndRequiresForceToOverwrite();
+    void generateWithFormalWritesAndReplacesCollateral();
+    void formalConflictLeavesAllArtifactsUntouched();
+    void formalLockLeavesAllArtifactsUntouched();
     void generateRefusesLockedOutputWithoutChangingContent();
     void invalidGeneratorDoesNotReplaceOutput();
 };
@@ -360,7 +363,12 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
         = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl.v");
     const CommandResult generated = runCommand(arguments);
     QCOMPARE(generated.exitCode, 0);
+    QCOMPARE(generated.output, QStringLiteral("Generated MMIO Verilog: %1").arg(outputPath));
     QVERIFY2(QFile::exists(outputPath), qPrintable(generated.output));
+    QVERIFY(!QFile::exists(
+        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sv")));
+    QVERIFY(!QFile::exists(
+        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sby")));
 
     writeTextFile(outputPath, "sentinel\n");
     const CommandResult refused = runCommand(arguments);
@@ -370,6 +378,13 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
     QCOMPARE(outputFile.readAll(), QByteArray("sentinel\n"));
     outputFile.close();
 
+    const QString formalSystemVerilogPath
+        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sv");
+    const QString formalSbyPath
+        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sby");
+    writeTextFile(formalSystemVerilogPath, "formal sentinel\n");
+    writeTextFile(formalSbyPath, "runner sentinel\n");
+
     arguments.insert(arguments.size() - 1, "-f");
     const CommandResult replaced = runCommand(arguments);
     QCOMPARE(replaced.exitCode, 0);
@@ -377,6 +392,111 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
     const QByteArray verilog = outputFile.readAll();
     QVERIFY(verilog.contains("module timer_ctrl"));
     QVERIFY(!verilog.contains("sentinel"));
+    QFile formalSystemVerilogFile(formalSystemVerilogPath);
+    QVERIFY(formalSystemVerilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(formalSystemVerilogFile.readAll(), QByteArray("formal sentinel\n"));
+    QFile formalSbyFile(formalSbyPath);
+    QVERIFY(formalSbyFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(formalSbyFile.readAll(), QByteArray("runner sentinel\n"));
+}
+
+void Test::generateWithFormalWritesAndReplacesCollateral()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+
+    QStringList arguments = {"qsoc", "generate", "module", "--with-formal", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+
+    const QDir    projectDirectory(directory.path());
+    const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
+    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
+    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
+    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+
+    const CommandResult generated = runCommand(arguments);
+    QCOMPARE(generated.exitCode, 0);
+    QVERIFY2(generated.output.contains(formalSystemVerilogPath), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains(formalSbyPath), qPrintable(generated.output));
+    QVERIFY(QFile::exists(verilogPath));
+    QVERIFY(QFile::exists(formalSystemVerilogPath));
+    QVERIFY(QFile::exists(formalSbyPath));
+
+    writeTextFile(verilogPath, "sentinel\n");
+    writeTextFile(formalSystemVerilogPath, "sentinel\n");
+    writeTextFile(formalSbyPath, "sentinel\n");
+    arguments.insert(arguments.size() - 1, "-f");
+
+    const CommandResult replaced = runCommand(arguments);
+    QCOMPARE(replaced.exitCode, 0);
+    for (const QString &path : {verilogPath, formalSystemVerilogPath, formalSbyPath}) {
+        QFile outputFile(path);
+        QVERIFY(outputFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray contents = outputFile.readAll();
+        QVERIFY(!contents.isEmpty());
+        QVERIFY(!contents.contains("sentinel"));
+    }
+}
+
+void Test::formalConflictLeavesAllArtifactsUntouched()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+
+    QDir projectDirectory(directory.path());
+    QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
+    const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
+    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
+    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
+    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+    writeTextFile(formalSbyPath, "sentinel\n");
+
+    QStringList arguments = {"qsoc", "generate", "module", "--with-formal", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+    const CommandResult generated = runCommand(arguments);
+
+    QCOMPARE(generated.exitCode, 1);
+    QVERIFY2(generated.output.contains(formalSbyPath), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains("already exists"), qPrintable(generated.output));
+    QVERIFY(!QFile::exists(verilogPath));
+    QVERIFY(!QFile::exists(formalSystemVerilogPath));
+    QFile formalSbyFile(formalSbyPath);
+    QVERIFY(formalSbyFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(formalSbyFile.readAll(), QByteArray("sentinel\n"));
+}
+
+void Test::formalLockLeavesAllArtifactsUntouched()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+
+    QDir projectDirectory(directory.path());
+    QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
+    const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
+    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
+    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
+    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+
+    QLockFile formalLock(formalSbyPath + QStringLiteral(".lock"));
+    QVERIFY(formalLock.tryLock());
+
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-formal", "-f", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+    const CommandResult generated = runCommand(arguments);
+
+    QCOMPARE(generated.exitCode, 1);
+    QVERIFY2(generated.output.contains(formalSbyPath), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains("output file is locked"), qPrintable(generated.output));
+    QVERIFY(!QFile::exists(verilogPath));
+    QVERIFY(!QFile::exists(formalSystemVerilogPath));
+    QVERIFY(!QFile::exists(formalSbyPath));
 }
 
 void Test::generateRefusesLockedOutputWithoutChangingContent()
@@ -417,11 +537,16 @@ void Test::invalidGeneratorDoesNotReplaceOutput()
 
     QDir projectDirectory(directory.path());
     QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
-    const QString outputPath = projectDirectory.filePath(
-        "output/peripheral/timer_ctrl/timer_ctrl.v");
-    writeTextFile(outputPath, "sentinel\n");
+    const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
+    const QString outputPath      = QDir(outputDirectory).filePath("timer_ctrl.v");
+    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
+    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+    writeTextFile(outputPath, "verilog sentinel\n");
+    writeTextFile(formalSystemVerilogPath, "formal sentinel\n");
+    writeTextFile(formalSbyPath, "runner sentinel\n");
 
-    QStringList arguments = {"qsoc", "generate", "module", "-f", "-l", "peripheral"};
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-formal", "-f", "-l", "peripheral"};
     arguments.append(projectOptions(directory));
     arguments.append("timer_ctrl");
     const CommandResult generated = runCommand(arguments);
@@ -429,7 +554,13 @@ void Test::invalidGeneratorDoesNotReplaceOutput()
 
     QFile outputFile(outputPath);
     QVERIFY(outputFile.open(QIODevice::ReadOnly | QIODevice::Text));
-    QCOMPARE(outputFile.readAll(), QByteArray("sentinel\n"));
+    QCOMPARE(outputFile.readAll(), QByteArray("verilog sentinel\n"));
+    QFile formalSystemVerilogFile(formalSystemVerilogPath);
+    QVERIFY(formalSystemVerilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(formalSystemVerilogFile.readAll(), QByteArray("formal sentinel\n"));
+    QFile formalSbyFile(formalSbyPath);
+    QVERIFY(formalSbyFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QCOMPARE(formalSbyFile.readAll(), QByteArray("runner sentinel\n"));
 }
 
 } // namespace

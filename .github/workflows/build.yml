@@ -43,6 +43,11 @@ jobs:
         p7zip-full
         python3
         python3-py7zr
+    - name: Install formal tools
+      if: github.event_name == 'pull_request'
+      uses: YosysHQ/setup-oss-cad-suite@v4
+      with:
+        version: '2026-08-25'
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:

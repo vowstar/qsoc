@@ -312,8 +312,8 @@ The generate command provides functionality for generating different types of ou
 
 === Generated Module Options
 <generated-module-options>
-`generate module` validates one generated module and writes its Verilog output
-under `output/<library>/<module>/`. It does not run HDL verification.
+`generate module` validates one generated module and writes its RTL output under
+`output/<library>/<module>/`. By default it writes only `<module>.v`.
 
 #figure(
   align(center)[#table(
@@ -323,13 +323,20 @@ under `output/<library>/<module>/`. It does not run HDL verification.
     table.hline(),
     [`generate module -l <library> <module>`],
     [Generates one module selected by exact name],
-    [`-f`, `--force`], [Replaces an existing generated Verilog file],
+    [`--with-formal`],
+    [Also generates `<module>_formal.sv` and `<module>_formal.sby`],
+    [`-f`, `--force`], [Replaces every selected output file],
     [`-d`, `--directory <path>`], [Selects the project directory],
     [`-p`, `--project <name>`], [Selects the project],
   )],
   caption: [GENERATED MODULE OPTIONS],
   kind: table,
 )
+
+`--with-formal` generates verification collateral but does not run a proof.
+Before opening or replacing a selected output file, generation checks every
+selected target. Without `--force`, one existing target rejects the operation
+without replacing any selected file.
 
 === Verilog Generation Options
 <verilog-generation>
