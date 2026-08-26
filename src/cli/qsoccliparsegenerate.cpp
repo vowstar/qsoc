@@ -4,8 +4,10 @@
 #include "cli/qsoccliworker.h"
 #include "common/qsocconfig.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qsocmmiogenerator.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "common/qsocverilogutils.h"
 #include "common/qsocyamlutils.h"
 
 #include <fstream>
@@ -14,7 +16,27 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QLockFile>
+#include <QSaveFile>
 #include <QTextStream>
+
+namespace {
+
+bool isValidLibraryBasename(const QString &name)
+{
+    if (name.isEmpty() || name == "." || name == "..") {
+        return false;
+    }
+    const QString invalidChars = "\\/:*?\"<>|.";
+    for (const QChar character : invalidChars) {
+        if (name.contains(character)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
 
 bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
 {
@@ -25,6 +47,7 @@ bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
         QCoreApplication::translate(
             "main",
             "verilog    Generate Verilog code from netlist file.\n"
+            "module     Generate Verilog for a generated module.\n"
             "template   Generate files from Jinja2 templates.\n"
             "stub       Generate stub files for modules."),
         "generate <subcommand> [subcommand options]");
@@ -39,6 +62,11 @@ bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
     if (command == "verilog") {
         nextArguments.removeOne(command);
         if (!parseGenerateVerilog(nextArguments)) {
+            return false;
+        }
+    } else if (command == "module") {
+        nextArguments.removeOne(command);
+        if (!parseGenerateModule(nextArguments)) {
             return false;
         }
     } else if (command == "template") {
@@ -57,6 +85,145 @@ bool QSocCliWorker::parseGenerate(const QStringList &appArguments)
     }
 
     return true;
+}
+
+bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
+{
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"l", "library"},
+         QCoreApplication::translate("main", "The exact module library name."),
+         "library name"},
+        {{"f", "force"},
+         QCoreApplication::translate("main", "Replace an existing generated Verilog file.")},
+    });
+    parser.addPositionalArgument(
+        "module", QCoreApplication::translate("main", "The exact module name."), "<module>");
+
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
+
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.size() != 1) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: expected one module name."));
+    }
+    if (!parser.isSet("library")) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing library name."));
+    }
+
+    const QString libraryName = parser.value("library");
+    const QString moduleName  = positionalArgs.first();
+    if (!isValidLibraryBasename(libraryName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid library name: %1.").arg(libraryName));
+    }
+    if (!QSocVerilogUtils::isValidVerilogIdentifier(moduleName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module name: %1.").arg(moduleName));
+    }
+
+    if (!loadSelectedProject()) {
+        return false;
+    }
+    if (!projectManager->isValidModulePath()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module directory: %1")
+                .arg(projectManager->getModulePath()));
+    }
+    if (!projectManager->isValidOutputPath()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid output directory: %1")
+                .arg(projectManager->getOutputPath()));
+    }
+    if (!moduleManager->load(libraryName)
+        || !moduleManager->listModulesInLibrary(libraryName).contains(moduleName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: module not found: %1/%2.")
+                .arg(libraryName, moduleName));
+    }
+
+    const QSocModuleDefinition definition
+        = moduleManager->getModuleDefinition(libraryName, moduleName);
+    if (!definition.extraAttributes["generator"]) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
+                .arg(libraryName, moduleName));
+    }
+    QString     verilog;
+    QStringList errors;
+    if (!QSocMmioGenerator::generateVerilog(definition, &verilog, &errors)) {
+        QStringList messages;
+        messages.reserve(errors.size());
+        for (const QString &error : errors) {
+            messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+        }
+        if (messages.isEmpty()) {
+            messages.append(QCoreApplication::translate("main", "Error: MMIO generation failed."));
+        }
+        return showError(1, messages.join('\n'));
+    }
+
+    QDir          outputDirectory(projectManager->getOutputPath());
+    const QString relativeDirectory = QStringLiteral("%1/%2").arg(libraryName, moduleName);
+    if (!outputDirectory.mkpath(relativeDirectory)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: could not create output directory: %1")
+                .arg(outputDirectory.filePath(relativeDirectory)));
+    }
+
+    const QString outputPath = outputDirectory.filePath(
+        QStringLiteral("%1/%2.v").arg(relativeDirectory, moduleName));
+    QLockFile outputLock(outputPath + QStringLiteral(".lock"));
+    if (!outputLock.tryLock()) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: output file is locked: %1").arg(outputPath));
+    }
+    if (QFile::exists(outputPath) && !parser.isSet("force")) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: output file already exists: %1")
+                .arg(outputPath));
+    }
+
+    QSaveFile outputFile(outputPath);
+    outputFile.setDirectWriteFallback(false);
+    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: could not open output file: %1")
+                .arg(outputFile.errorString()));
+    }
+    const QByteArray bytes = verilog.toUtf8();
+    if (outputFile.write(bytes) != bytes.size()) {
+        const QString error = outputFile.errorString();
+        outputFile.cancelWriting();
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: could not write output file: %1").arg(error));
+    }
+    if (!outputFile.commit()) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: could not commit output file: %1")
+                .arg(outputFile.errorString()));
+    }
+
+    return showInfo(
+        0, QCoreApplication::translate("main", "Generated MMIO Verilog: %1").arg(outputPath));
 }
 
 bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)

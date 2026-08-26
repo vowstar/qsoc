@@ -174,6 +174,22 @@ private:
     bool parseModule(const QStringList &appArguments);
 
     /**
+     * @brief Parse the module create command line arguments.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleCreate(const QStringList &appArguments);
+
+    /**
+     * @brief Parse the module validate command line arguments.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseModuleValidate(const QStringList &appArguments);
+
+    /**
      * @brief Parse the module import command line arguments.
      * @details This function will parse the module import command line
      *          arguments.
@@ -327,6 +343,14 @@ private:
     bool parseGenerate(const QStringList &appArguments);
 
     /**
+     * @brief Parse generated module Verilog arguments.
+     * @param appArguments command line arguments.
+     * @retval true Parse successfully.
+     * @retval false Parse failed.
+     */
+    bool parseGenerateModule(const QStringList &appArguments);
+
+    /**
      * @brief Parse the generate verilog command line arguments.
      * @details This function will parse the generate verilog command line arguments.
      * @param appArguments command line arguments.
@@ -415,6 +439,13 @@ private:
      * @retval false Parsing failed or a terminal option was handled.
      */
     bool parseOptions(const QStringList &appArguments);
+
+    /**
+     * @brief Load the project selected by common command-line options.
+     * @retval true Project loaded successfully.
+     * @retval false Project selection or loading failed.
+     */
+    bool loadSelectedProject();
 
     /**
      * @brief Show application name and version and emit exit with exitCode.
