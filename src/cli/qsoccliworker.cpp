@@ -7,6 +7,7 @@
 #include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 
+#include <QRegularExpression>
 #include <QString>
 #include <QTextStream>
 #include <QTimer>
@@ -73,6 +74,40 @@ bool QSocCliWorker::parseOptions(const QStringList &appArguments)
     if (parser.isSet("help")) {
         showHelp(0);
         return false;
+    }
+    return true;
+}
+
+bool QSocCliWorker::loadSelectedProject()
+{
+    if (parser.isSet("directory")) {
+        projectManager->setProjectPath(parser.value("directory"));
+    }
+
+    if (parser.isSet("project")) {
+        const QString projectName = parser.value("project");
+        if (!projectManager->load(projectName)) {
+            return showErrorWithHelp(
+                1,
+                QCoreApplication::translate("main", "Error: could not load project: %1.")
+                    .arg(projectName));
+        }
+        return true;
+    }
+
+    const QStringList projectNameList = projectManager->list(QRegularExpression(".*"));
+    if (projectNameList.size() > 1) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate(
+                "main",
+                "Error: multiple projects found, please specify the project name.\n"
+                "Available projects are:\n%1\n")
+                .arg(projectNameList.join('\n')));
+    }
+    if (!projectManager->loadFirst()) {
+        return showErrorWithHelp(
+            1, QCoreApplication::translate("main", "Error: could not load a project."));
     }
     return true;
 }

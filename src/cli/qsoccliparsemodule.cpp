@@ -4,9 +4,32 @@
 #include "cli/qsoccliworker.h"
 
 #include "common/qslangdriver.h"
+#include "common/qsocmmiogenerator.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "common/qsocverilogutils.h"
 #include "common/qstaticdatasedes.h"
+
+#include <QDir>
+#include <QLockFile>
+
+namespace {
+
+bool isValidLibraryBasename(const QString &name)
+{
+    if (name.isEmpty() || name == "." || name == "..") {
+        return false;
+    }
+    const QString invalidChars = "\\/:*?\"<>|.";
+    for (const QChar character : invalidChars) {
+        if (name.contains(character)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
 
 bool QSocCliWorker::parseModule(const QStringList &appArguments)
 {
@@ -16,11 +39,13 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
         "subcommand",
         QCoreApplication::translate(
             "main",
-            "import   Import Verilog modules into module libraries.\n"
-            "remove   Remove modules from specified libraries.\n"
-            "list     List all modules within designated libraries.\n"
-            "show     Show detailed information on a chosen module.\n"
-            "bus      Manage bus interfaces of modules."),
+            "create     Create a generated module draft.\n"
+            "validate   Validate a generated module.\n"
+            "import     Import Verilog modules into module libraries.\n"
+            "remove     Remove modules from specified libraries.\n"
+            "list       List all modules within designated libraries.\n"
+            "show       Show detailed information on a chosen module.\n"
+            "bus        Manage bus interfaces of modules."),
         "module <subcommand> [subcommand options]");
 
     parser.parse(appArguments);
@@ -30,7 +55,17 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
     }
     const QString &command       = positionalArgs.first();
     QStringList    nextArguments = appArguments;
-    if (command == "import") {
+    if (command == "create") {
+        nextArguments.removeOne(command);
+        if (!parseModuleCreate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "validate") {
+        nextArguments.removeOne(command);
+        if (!parseModuleValidate(nextArguments)) {
+            return false;
+        }
+    } else if (command == "import") {
         nextArguments.removeOne(command);
         if (!parseModuleImport(nextArguments)) {
             return false;
@@ -61,6 +96,201 @@ bool QSocCliWorker::parseModule(const QStringList &appArguments)
     }
 
     return true;
+}
+
+bool QSocCliWorker::parseModuleCreate(const QStringList &appArguments)
+{
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"l", "library"},
+         QCoreApplication::translate("main", "The exact module library name."),
+         "library name"},
+        {"generator", QCoreApplication::translate("main", "The generator kind."), "generator kind"},
+    });
+    parser.addPositionalArgument(
+        "module", QCoreApplication::translate("main", "The exact module name."), "<module>");
+
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
+
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.size() != 1) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: expected one module name."));
+    }
+    if (!parser.isSet("library")) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing library name."));
+    }
+    if (!parser.isSet("generator")) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: missing generator kind."));
+    }
+
+    const QString libraryName = parser.value("library");
+    const QString moduleName  = positionalArgs.first();
+    if (!isValidLibraryBasename(libraryName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid library name: %1.").arg(libraryName));
+    }
+    if (!QSocVerilogUtils::isValidVerilogIdentifier(moduleName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module name: %1.").arg(moduleName));
+    }
+    if (parser.value("generator") != QStringLiteral("mmio")) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: unsupported generator kind: %1.")
+                .arg(parser.value("generator")));
+    }
+
+    if (!loadSelectedProject()) {
+        return false;
+    }
+    if (!projectManager->isValidModulePath()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module directory: %1")
+                .arg(projectManager->getModulePath()));
+    }
+
+    const QString libraryPath
+        = QDir(projectManager->getModulePath()).filePath(libraryName + QStringLiteral(".soc_mod"));
+    QLockFile libraryLock(libraryPath + QStringLiteral(".lock"));
+    if (!libraryLock.tryLock()) {
+        QString message;
+        switch (libraryLock.error()) {
+        case QLockFile::LockFailedError:
+            message = QCoreApplication::translate("main", "Error: module library is locked: %1")
+                          .arg(libraryPath);
+            break;
+        case QLockFile::PermissionError:
+            message = QCoreApplication::translate(
+                          "main", "Error: permission denied while locking module library: %1")
+                          .arg(libraryPath);
+            break;
+        case QLockFile::NoError:
+        case QLockFile::UnknownError:
+            message = QCoreApplication::translate("main", "Error: could not lock module library: %1")
+                          .arg(libraryPath);
+            break;
+        }
+        return showError(1, message);
+    }
+
+    if (moduleManager->isLibraryFileExist(libraryName)) {
+        if (!moduleManager->load(libraryName)) {
+            return showError(1, QCoreApplication::translate("main", "Error: could not load library."));
+        }
+        if (moduleManager->listModulesInLibrary(libraryName).contains(moduleName)) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: module already exists: %1/%2.")
+                    .arg(libraryName, moduleName));
+        }
+    }
+
+    QSocModuleDefinition definition;
+    definition.libraryName                  = libraryName;
+    definition.moduleName                   = moduleName;
+    definition.extraAttributes["generator"] = QSocMmioGenerator::createDraftGenerator();
+    if (!moduleManager->replaceModuleDefinition(definition)) {
+        return showError(
+            1, QCoreApplication::translate("main", "Error: could not create MMIO module draft."));
+    }
+
+    return showInfo(
+        0,
+        QCoreApplication::translate("main", "Created MMIO module draft: %1/%2.")
+            .arg(libraryName, moduleName));
+}
+
+bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
+{
+    parser.clearPositionalArguments();
+    parser.addOptions({
+        {{"d", "directory"},
+         QCoreApplication::translate("main", "The path to the project directory."),
+         "project directory"},
+        {{"p", "project"}, QCoreApplication::translate("main", "The project name."), "project name"},
+        {{"l", "library"},
+         QCoreApplication::translate("main", "The exact module library name."),
+         "library name"},
+    });
+    parser.addPositionalArgument(
+        "module", QCoreApplication::translate("main", "The exact module name."), "<module>");
+
+    if (!parseOptions(appArguments)) {
+        return false;
+    }
+
+    const QStringList positionalArgs = parser.positionalArguments();
+    if (positionalArgs.size() != 1) {
+        return showHelpOrError(
+            1, QCoreApplication::translate("main", "Error: expected one module name."));
+    }
+    if (!parser.isSet("library")) {
+        return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing library name."));
+    }
+
+    const QString libraryName = parser.value("library");
+    const QString moduleName  = positionalArgs.first();
+    if (!isValidLibraryBasename(libraryName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid library name: %1.").arg(libraryName));
+    }
+    if (!QSocVerilogUtils::isValidVerilogIdentifier(moduleName)) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module name: %1.").arg(moduleName));
+    }
+
+    if (!loadSelectedProject()) {
+        return false;
+    }
+    if (!projectManager->isValidModulePath()) {
+        return showErrorWithHelp(
+            1,
+            QCoreApplication::translate("main", "Error: invalid module directory: %1")
+                .arg(projectManager->getModulePath()));
+    }
+    if (!moduleManager->load(libraryName)
+        || !moduleManager->listModulesInLibrary(libraryName).contains(moduleName)) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: module not found: %1/%2.")
+                .arg(libraryName, moduleName));
+    }
+
+    const QSocModuleDefinition definition
+        = moduleManager->getModuleDefinition(libraryName, moduleName);
+    if (!definition.extraAttributes["generator"]) {
+        return showError(
+            1,
+            QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
+                .arg(libraryName, moduleName));
+    }
+    const QStringList errors = QSocMmioGenerator::validate(definition);
+    if (!errors.isEmpty()) {
+        QStringList messages;
+        messages.reserve(errors.size());
+        for (const QString &error : errors) {
+            messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+        }
+        return showError(1, messages.join('\n'));
+    }
+
+    return showInfo(
+        0,
+        QCoreApplication::translate("main", "MMIO source is valid: %1/%2.")
+            .arg(libraryName, moduleName));
 }
 
 bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)

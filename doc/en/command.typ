@@ -19,7 +19,9 @@ commands and subcommands are available:
     [], [remove], [Remove a project],
     [], [list], [List all projects],
     [], [show], [Show project details],
-    [module], [import], [Import Verilog modules into module libraries],
+    [module], [create], [Create a generated module draft],
+    [], [validate], [Validate a generated module],
+    [], [import], [Import Verilog modules into module libraries],
     [], [remove], [Remove modules from specified libraries],
     [], [list], [List all modules within designated libraries],
     [], [show], [Show detailed information on a chosen module],
@@ -33,6 +35,9 @@ commands and subcommands are available:
     [Reserved. Schematic editing is available in the GUI, not on the
      command line],
     [generate],
+    [module],
+    [Generate Verilog for a generated module],
+    [],
     [verilog],
     [Generate Verilog code and unconnected port reports from netlist files],
     [],
@@ -126,6 +131,29 @@ take only `-d, --directory` plus a project name or regex.
 == Module Command Options
 <module-options>
 The module command provides functionality for managing hardware modules.
+
+=== MMIO Module Lifecycle
+<module-mmio>
+MMIO source management uses exact library and module names. `create` writes an
+empty draft; edit the `.soc_mod` file before validation and generation. The
+source format is documented in @mmio-source-format.
+
+#figure(
+  align(center)[#table(
+    columns: (0.45fr, 1fr),
+    align: (auto, left),
+    table.header([Command or option], [Effect]),
+    table.hline(),
+    [`module create --generator mmio -l <library> <module>`],
+    [Creates an empty MMIO draft without replacing an existing module],
+    [`module validate -l <library> <module>`],
+    [Validates the current MMIO source structure without writing files],
+    [`-d`, `--directory <path>`], [Selects the project directory],
+    [`-p`, `--project <name>`], [Selects the project],
+  )],
+  caption: [MMIO MODULE COMMANDS],
+  kind: table,
+)
 
 === Module Import Options
 <module-import>
@@ -281,6 +309,27 @@ or regex) and take a bus name or regex.
 == Generate Command Options
 <generate-options>
 The generate command provides functionality for generating different types of outputs.
+
+=== Generated Module Options
+<generated-module-options>
+`generate module` validates one generated module and writes its Verilog output
+under `output/<library>/<module>/`. It does not run HDL verification.
+
+#figure(
+  align(center)[#table(
+    columns: (0.45fr, 1fr),
+    align: (auto, left),
+    table.header([Command or option], [Effect]),
+    table.hline(),
+    [`generate module -l <library> <module>`],
+    [Generates one module selected by exact name],
+    [`-f`, `--force`], [Replaces an existing generated Verilog file],
+    [`-d`, `--directory <path>`], [Selects the project directory],
+    [`-p`, `--project <name>`], [Selects the project],
+  )],
+  caption: [GENERATED MODULE OPTIONS],
+  kind: table,
+)
 
 === Verilog Generation Options
 <verilog-generation>
