@@ -51,6 +51,12 @@ struct QSocMmioPlan
     bool operator==(const QSocMmioPlan &) const = default;
 };
 
+struct QSocMmioFormalCollateral
+{
+    QString systemVerilog;
+    QString sby;
+};
+
 class QSocMmioGenerator
 {
 public:
@@ -61,6 +67,10 @@ public:
         const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors = nullptr);
     static bool generateVerilog(
         const QSocModuleDefinition &definition, QString *verilog, QStringList *errors = nullptr);
+    static bool generateFormalCollateral(
+        const QSocModuleDefinition &definition,
+        QSocMmioFormalCollateral   *collateral,
+        QStringList                *errors = nullptr);
 };
 
 #endif // QSOCMMIOGENERATOR_H
