@@ -33,6 +33,7 @@ private:
 struct FormalNames
 {
     QString     resetShift;
+    QString     runtimeReset;
     QString     dutInstance;
     QString     responseOkay;
     QString     responseSlverr;
@@ -137,6 +138,7 @@ FormalNames allocateNames(const QSocMmioPlan &plan)
 
     FormalNames names;
     names.resetShift     = identifiers.take("formal_reset_q");
+    names.runtimeReset   = identifiers.take("formal_runtime_reset_ni");
     names.dutInstance    = identifiers.take("formal_dut");
     names.responseOkay   = identifiers.take("FORMAL_AXI_RESP_OKAY");
     names.responseSlverr = identifiers.take("FORMAL_AXI_RESP_SLVERR");
@@ -183,21 +185,31 @@ FormalNames allocateNames(const QSocMmioPlan &plan)
  *
  * The default builds a two-cycle reset from an `initial` value. A tool that
  * ignores `initial` blocks defines `FORMAL_EXTERNAL_RESET` and drives
- * `formal_reset_ni` as a port instead.
+ * `formal_reset_ni` as a port instead. Either way a free input may pull
+ * reset again at any time, so re-entering reset stays under proof. The
+ * request is registered first: an asynchronous reset that moves on the
+ * clock edge itself races the sampling of the properties, and the tools do
+ * not agree on who wins.
  */
 void appendClockAndReset(QStringList *lines, const FormalNames &names)
 {
     lines->append(QString("reg %1;").arg(names.pastValid));
+    lines->append(QString("(* anyseq *) reg %1;").arg(names.runtimeReset));
+    lines->append(QString("reg %1_q;").arg(names.runtimeReset));
+    lines->append("always @(posedge clk_i)");
+    lines->append(QString("    %1_q <= %1;").arg(names.runtimeReset));
     lines->append("`ifdef FORMAL_EXTERNAL_RESET");
-    lines->append("wire rst_ni = formal_reset_ni;");
+    lines->append(QString("wire rst_ni = formal_reset_ni && (!%1 || %2_q);")
+                      .arg(names.pastValid, names.runtimeReset));
     lines->append("`else");
-    lines->append(QString("reg [1:0] %1;").arg(names.resetShift));
-    lines->append(QString("wire rst_ni = %1[1];").arg(names.resetShift));
+    lines->append(QString("reg [2:0] %1;").arg(names.resetShift));
+    lines->append(QString("wire rst_ni = %1[1] && (!%1[2] || %2_q);")
+                      .arg(names.resetShift, names.runtimeReset));
     lines->append(QString());
-    lines->append(QString("initial %1 = 2'b00;").arg(names.resetShift));
+    lines->append(QString("initial %1 = 3'b000;").arg(names.resetShift));
     lines->append(QString());
     lines->append("always @(posedge clk_i)");
-    lines->append(QString("    %1 <= {%1[0], 1'b1};").arg(names.resetShift));
+    lines->append(QString("    %1 <= {%1[1:0], 1'b1};").arg(names.resetShift));
     lines->append("`endif");
     lines->append(QString());
 }
@@ -416,7 +428,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
 
 void appendWriteModel(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
 {
-    lines->append("always @(posedge clk_i) begin");
+    lines->append("always @(posedge clk_i or negedge rst_ni) begin");
     lines->append("    if (!rst_ni) begin");
     lines->append(QString("        %1 <= 1'b0;").arg(names.awPending));
     lines->append(QString("        %1 <= %2;").arg(names.awAddress, zeroLiteral(plan.addressWidth)));
@@ -469,7 +481,7 @@ void appendWriteModel(QStringList *lines, const QSocMmioPlan &plan, const Formal
 
 void appendReadModel(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
 {
-    lines->append("always @(posedge clk_i) begin");
+    lines->append("always @(posedge clk_i or negedge rst_ni) begin");
     lines->append("    if (!rst_ni) begin");
     lines->append(QString("        %1 <= 1'b0;").arg(names.rValid));
     lines->append(QString("        %1 <= %2;").arg(names.rData, zeroLiteral(plan.dataWidth)));
@@ -574,6 +586,60 @@ void appendCovers(QStringList *lines, const QSocMmioPlan &plan, const FormalName
     }
 }
 
+void appendResetCovers(QStringList *lines, const FormalNames &names)
+{
+    lines->append(QString("    if (%1 && !rst_ni && $past(rst_ni)) begin").arg(names.pastValid));
+    lines->append(QString("        cover($past(%1 && !%2));").arg(names.awPending, names.wPending));
+    lines->append(QString("        cover($past(%1 && !%2));").arg(names.wPending, names.awPending));
+    lines->append(QString("        cover($past(%1));").arg(names.bValid));
+    lines->append(QString("        cover($past(%1));").arg(names.rValid));
+    lines->append("    end");
+}
+
+void appendResetAssertions(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
+{
+    lines->append("    if (!rst_ni) begin");
+    lines->append("        assert(!s_axi_awready);");
+    lines->append("        assert(!s_axi_wready);");
+    lines->append("        assert(!s_axi_arready);");
+    lines->append("        assert(!s_axi_bvalid);");
+    lines->append(QString("        assert(s_axi_bresp == %1);").arg(names.responseOkay));
+    lines->append("        assert(!s_axi_rvalid);");
+    lines->append(QString("        assert(s_axi_rdata == %1);").arg(zeroLiteral(plan.dataWidth)));
+    lines->append(QString("        assert(s_axi_rresp == %1);").arg(names.responseOkay));
+    lines->append(QString("        assert(!%1);").arg(names.awPending));
+    lines->append(
+        QString("        assert(%1 == %2);").arg(names.awAddress, zeroLiteral(plan.addressWidth)));
+    lines->append(QString("        assert(!%1);").arg(names.wPending));
+    lines->append(
+        QString("        assert(%1 == %2);").arg(names.wData, zeroLiteral(plan.dataWidth)));
+    lines->append(
+        QString("        assert(%1 == %2);").arg(names.wStrobe, zeroLiteral(plan.dataWidth / 8)));
+    lines->append(QString("        assert(!%1);").arg(names.bValid));
+    lines->append(QString("        assert(%1 == %2);").arg(names.bResponse, names.responseOkay));
+    lines->append(QString("        assert(!%1);").arg(names.rValid));
+    lines->append(
+        QString("        assert(%1 == %2);").arg(names.rData, zeroLiteral(plan.dataWidth)));
+    lines->append(QString("        assert(%1 == %2);").arg(names.rResponse, names.responseOkay));
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access != QSocMmioAccess::ReadWrite) {
+                continue;
+            }
+            const QString resetValue = verilogLiteral(field.width, *field.resetValue);
+            lines->append(
+                QString("        assert(%1 == %2);").arg(names.fields.at(storageIndex), resetValue));
+            if (!field.outputPort.isEmpty()) {
+                lines->append(
+                    QString("        assert(%1 == %2);").arg(field.outputPort, resetValue));
+            }
+            ++storageIndex;
+        }
+    }
+    lines->append("    end");
+}
+
 void appendProperties(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
 {
     lines->append("`ifdef FORMAL_EXTERNAL_RESET");
@@ -596,6 +662,10 @@ void appendProperties(QStringList *lines, const QSocMmioPlan &plan, const Formal
     appendOutputAssertions(lines, plan, names);
     appendCovers(lines, plan, names);
     lines->append("    end");
+    lines->append(QString());
+    appendResetCovers(lines, names);
+    lines->append(QString());
+    appendResetAssertions(lines, plan, names);
     lines->append("end");
     lines->append(QString());
 }
