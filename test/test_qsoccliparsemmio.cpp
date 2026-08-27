@@ -330,7 +330,7 @@ void Test::malformedGeneratorKindReportsPath()
     QTemporaryDir directory;
     createProject(directory);
     QString malformed = validModule;
-    malformed.replace("kind: mmio", "kind: iomux");
+    malformed.replace("kind: mmio", "kind: pinmux");
     writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), malformed);
 
     QStringList validateArguments = {"qsoc", "module", "validate", "-l", "peripheral"};

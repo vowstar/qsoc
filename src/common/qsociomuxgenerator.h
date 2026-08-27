@@ -78,6 +78,9 @@ public:
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
     static QString generateCoreVerilog(const QSocIomuxPlan &plan);
     static QString generateConnVerilog(const QSocIomuxPlan &plan);
+    static QString generateRegsVerilog(const QSocIomuxPlan &plan);
+    static QString generateTopVerilog(const QSocIomuxPlan &plan);
+    static QString generateFileList(const QSocIomuxPlan &plan);
     static QString generateReport(const QSocIomuxPlan &plan);
 };
 
