@@ -282,7 +282,7 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
     if (!definition.extraAttributes["generator"]) {
         return showError(
             1,
-            QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
+            QCoreApplication::translate("main", "Error: module does not declare a generator: %1/%2.")
                 .arg(libraryName, moduleName));
     }
     if (QSocIomuxGenerator::isIomux(definition)) {
@@ -302,13 +302,14 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
             0,
             QCoreApplication::translate(
                 "main",
-                "IOMUX source is valid: %1/%2. %3 pins, %4 HS slots%5, %6 selector "
-                "registers, %7 registers total. Reset selects slot 0, RX broadcasts. "
+                "IOMUX source is valid: %1/%2. Pins: %3, HS slots: %4%5, routes: %6, "
+                "selector registers: %7, registers total: %8. Reset selects slot 0, RX broadcasts. "
                 "Integration pending merge.")
                 .arg(libraryName, moduleName)
                 .arg(plan.pinCount)
                 .arg(plan.hsSlots)
                 .arg(defaultedSlots ? QStringLiteral(" (default)") : QString())
+                .arg(plan.routes.size())
                 .arg(plan.mmio.registers.size() - 1)
                 .arg(plan.mmio.registers.size()));
     }

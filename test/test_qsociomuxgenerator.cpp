@@ -7,6 +7,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QMap>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -110,6 +111,7 @@ QSocModuleDefinition makeSimulationDefinition()
         slot: 1
         function: uart0
         signal: tx
+        input_value: {link: uart0_loop}
         output_value: {link: uart0_tx}
         output_enable: 1
       - pin: 1
@@ -153,6 +155,7 @@ reg        gpio0_oe_r;
 reg        uart0_tx_r;
 reg        spi_mode_r;
 wire       gpio0_in_w;
+wire       uart0_loop_w;
 wire       uart0_rx_w;
 integer    failures;
 
@@ -164,6 +167,7 @@ iomux0_conn u_conn (
     .hs_p0_s0_input_value_o(gpio0_in_w),
     .hs_p0_s0_output_value_i(gpio0_out_r),
     .hs_p0_s0_output_enable_i(gpio0_oe_r),
+    .hs_p0_s1_input_value_o(uart0_loop_w),
     .hs_p0_s1_output_value_i(uart0_tx_r),
     .hs_p1_s0_output_value_i(spi_mode_r),
     .hs_p1_s1_input_value_o(uart0_rx_w)
@@ -235,15 +239,85 @@ initial begin
     sel1 = 2'd0;
     #1;
     check_value(gpio0_in_w === 1'b1, "p0 rx sink sees pad input");
+    check_value(uart0_loop_w === 1'b1, "p0 second rx sink sees pad input");
     check_value(uart0_rx_w === 1'b1, "p1 rx sink sees pad with selector elsewhere");
     pad_in = 2'b00;
     #1;
     check_value(gpio0_in_w === 1'b0, "p0 rx sink tracks pad input");
+    check_value(uart0_loop_w === 1'b0, "p0 second rx sink tracks pad input");
     check_value(uart0_rx_w === 1'b0, "p1 rx sink tracks pad input");
     sel0 = 2'd0;
     #1;
     check_value(pad_ov[1] === 1'b0, "p1 pad ignores p0 selector change");
     check_value(pad_oe[1] === 1'b1, "p1 pad ignores p0 selector change");
+    if (failures == 0)
+        $display("TEST_PASS");
+    else
+        $display("TEST_FAIL count=%0d", failures);
+    $finish;
+end
+endmodule
+)VERILOG");
+}
+
+QString fiveSlotTestbench()
+{
+    return QString(R"VERILOG(module tb;
+reg  [0:0] pad_in;
+wire [0:0] pad_ie;
+wire [0:0] pad_ov;
+wire [0:0] pad_oe;
+reg  [4:0] tx_ie;
+reg  [4:0] tx_ov;
+reg  [4:0] tx_oe;
+wire [4:0] rx_val;
+reg  [2:0] sel;
+integer   failures;
+
+iomux0_core dut (
+    .pad_input_value_i(pad_in),
+    .pad_input_enable_o(pad_ie),
+    .pad_output_value_o(pad_ov),
+    .pad_output_enable_o(pad_oe),
+    .tx_input_enable_i(tx_ie),
+    .tx_output_value_i(tx_ov),
+    .tx_output_enable_i(tx_oe),
+    .rx_input_value_o(rx_val),
+    .pin_0_select_i(sel)
+);
+
+task check_value;
+    input condition;
+    input [255:0] label;
+    begin
+        if (condition !== 1'b1) begin
+            failures = failures + 1;
+            $display("CHECK_FAIL %0s", label);
+        end
+    end
+endtask
+
+initial begin
+    failures = 0;
+    pad_in = 1'b0;
+    tx_ie = 5'b11111;
+    tx_ov = 5'b11111;
+    tx_oe = 5'b11111;
+    sel = 3'd0;
+    #1;
+    check_value({pad_ie, pad_ov, pad_oe} === 3'b111, "slot 0 is valid");
+    sel = 3'd4;
+    #1;
+    check_value({pad_ie, pad_ov, pad_oe} === 3'b111, "slot 4 is valid");
+    sel = 3'd5;
+    #1;
+    check_value({pad_ie, pad_ov, pad_oe} === 3'b000, "code 5 drives zero");
+    sel = 3'd6;
+    #1;
+    check_value({pad_ie, pad_ov, pad_oe} === 3'b000, "code 6 drives zero");
+    sel = 3'd7;
+    #1;
+    check_value({pad_ie, pad_ov, pad_oe} === 3'b000, "code 7 drives zero");
     if (failures == 0)
         $display("TEST_PASS");
     else
@@ -500,6 +574,42 @@ const QSocMmioFieldPlan *findField(
     return nullptr;
 }
 
+QMap<QString, QString> wrapperPortSignatures(const QString &top, const QString &moduleName)
+{
+    const int headerStart = int(top.indexOf(QString("module %1 (").arg(moduleName)));
+    const int headerEnd   = int(top.indexOf(");", headerStart));
+    if (headerStart < 0 || headerEnd < 0) {
+        return {};
+    }
+
+    QMap<QString, QString>          signatures;
+    static const QRegularExpression declarationPattern(QStringLiteral(
+        "^\\s*(input|output)\\s+wire\\s+(?:(\\[[0-9]+:0\\])\\s+)?"
+        "([A-Za-z_][A-Za-z0-9_$]*)"));
+    const QString                   header = top.mid(headerStart, headerEnd - headerStart);
+    for (const QString &line : header.split('\n')) {
+        const QRegularExpressionMatch match = declarationPattern.match(line);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        signatures.insert(match.captured(3), match.captured(1) + " logic" + match.captured(2));
+    }
+    return signatures;
+}
+
+QMap<QString, QString> projectionPortSignatures(const YAML::Node &projection)
+{
+    QMap<QString, QString> signatures;
+    for (const auto &portPair : projection["port"]) {
+        const QString name      = QString::fromStdString(portPair.first.as<std::string>());
+        const QString direction = QString::fromStdString(
+            portPair.second["direction"].as<std::string>());
+        const QString type = QString::fromStdString(portPair.second["type"].as<std::string>());
+        signatures.insert(name, direction + " " + type);
+    }
+    return signatures;
+}
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -523,6 +633,7 @@ private slots:
     void projectionMatchesWrapperHeader();
     void integrationNetlistConnectsEverythingOnce();
     void routingSimulationWhenIverilogIsAvailable();
+    void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
 };
@@ -812,10 +923,13 @@ void Test::reportListsRoutesAndLayout()
     QVERIFY(report.contains("capability: 0x00020002 at offset 0x0"));
     QVERIFY(report.contains("reset: every selector resets to 0 and selects slot 0"));
     QVERIFY(report.contains("pin 0 selector word 0 lsb 0 offset 0x4"));
+    QVERIFY(report.contains("pin 1 selector word 0 lsb 4 offset 0x4"));
     QVERIFY(report.contains("  slot 1 function uart0 signal tx"));
     QVERIFY(report.contains("    input_value: no sink"));
     QVERIFY(report.contains("    output_value: link uart0_tx"));
     QVERIFY(report.contains("    input_enable: constant 1"));
+    QVERIFY(report.contains("  unused slots: none"));
+    QVERIFY(report.contains("  unused slots: 0"));
     QVERIFY(report.contains("undeclared pin/slot pairs drive a zero tx bundle"));
 }
 
@@ -996,47 +1110,8 @@ void Test::projectionMatchesWrapperHeader()
     QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &plan));
     const YAML::Node projection = QSocIomuxGenerator::describeModuleYaml(plan);
 
-    const QString top         = QSocIomuxGenerator::generateTopVerilog(plan);
-    const int     headerStart = int(top.indexOf("module iomux0 ("));
-    const QString header = top.mid(headerStart, int(top.indexOf(");", headerStart)) - headerStart);
-    const QStringList lines = header.split('\n');
-
-    int declared = 0;
-    for (const QString &line : lines) {
-        if (line.contains("input ") || line.contains("output ")) {
-            ++declared;
-        }
-    }
-    QCOMPARE(declared, int(projection["port"].size()));
-
-    for (const auto &portPair : projection["port"]) {
-        const QString name      = QString::fromStdString(portPair.first.as<std::string>());
-        const QString direction = QString::fromStdString(
-            portPair.second["direction"].as<std::string>());
-        const QString type  = QString::fromStdString(portPair.second["type"].as<std::string>());
-        bool          found = false;
-        for (const QString &line : lines) {
-            QString   trimmed      = line.trimmed();
-            const int commentStart = int(trimmed.indexOf(" /*"));
-            if (commentStart >= 0) {
-                trimmed = trimmed.left(commentStart);
-            }
-            if (trimmed.endsWith(",")) {
-                trimmed.chop(1);
-            }
-            if (!trimmed.endsWith(" " + name)) {
-                continue;
-            }
-            found = true;
-            QVERIFY2(trimmed.startsWith(direction), qPrintable(line));
-            if (type.contains('[')) {
-                const QString range = type.mid(int(type.indexOf('[')));
-                QVERIFY2(trimmed.contains(range), qPrintable(line));
-            }
-            break;
-        }
-        QVERIFY2(found, qPrintable(name));
-    }
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QCOMPARE(wrapperPortSignatures(top, plan.moduleName), projectionPortSignatures(projection));
 
     QCOMPARE(
         QString::fromStdString(projection["bus"]["control"]["bus"].as<std::string>()),
@@ -1049,6 +1124,19 @@ void Test::projectionMatchesWrapperHeader()
         QString::fromStdString(projection["bus"]["control"]["mapping"]["awaddr"].as<std::string>()),
         QString("s_axi_awaddr"));
     QVERIFY(!projection["port"]["pin_0_select_o"]);
+
+    QSocIomuxPlan singlePinPlan;
+    QVERIFY(
+        QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 8)), &singlePinPlan));
+    const YAML::Node singlePinProjection = QSocIomuxGenerator::describeModuleYaml(singlePinPlan);
+    const QString    singlePinTop        = QSocIomuxGenerator::generateTopVerilog(singlePinPlan);
+    QCOMPARE(
+        wrapperPortSignatures(singlePinTop, singlePinPlan.moduleName),
+        projectionPortSignatures(singlePinProjection));
+    QCOMPARE(
+        QString::fromStdString(
+            singlePinProjection["port"]["pad_input_value_i"]["type"].as<std::string>()),
+        QString("logic"));
 }
 
 void Test::integrationNetlistConnectsEverythingOnce()
@@ -1105,6 +1193,52 @@ void Test::routingSimulationWhenIverilogIsAvailable()
     process.setWorkingDirectory(directory.path());
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start(compiler, {"-g2001", "-s", "tb", "-o", outputPath, corePath, connPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished());
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished());
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 5, 32, 8)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString corePath   = QDir(directory.path()).filePath("iomux0_core.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(corePath, QSocIomuxGenerator::generateCoreVerilog(plan));
+    writeTextFile(benchPath, fiveSlotTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(compiler, {"-g2001", "-s", "tb", "-o", outputPath, corePath, benchPath});
     QVERIFY(process.waitForStarted());
     QVERIFY(process.waitForFinished());
     QCOMPARE(process.exitStatus(), QProcess::NormalExit);

@@ -191,6 +191,101 @@ std::optional<int> provenBuiltInWidth(const QString &type)
     return static_cast<int>(width);
 }
 
+std::optional<QPair<int, int>> provenBuiltInBounds(const QString &type)
+{
+    const QString trimmedType = type.trimmed();
+    if (trimmedType.isEmpty()) {
+        return qMakePair(0, 0);
+    }
+    static const QRegularExpression typeRegex(
+        R"(^\s*(?:logic|wire|reg|bit|tri)(?:\s+(?:signed|unsigned))?)"
+        R"(\s*(?:\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\])?\s*$)",
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression rangeRegex(R"(^\s*\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]\s*$)");
+    QRegularExpressionMatch         match = typeRegex.match(trimmedType);
+    if (!match.hasMatch()) {
+        match = rangeRegex.match(trimmedType);
+    }
+    if (!match.hasMatch()) {
+        return std::nullopt;
+    }
+    if (match.captured(1).isEmpty()) {
+        return qMakePair(0, 0);
+    }
+
+    bool         msbOk = false;
+    const qint64 msb   = match.captured(1).toLongLong(&msbOk);
+    qint64       lsb   = 0;
+    bool         lsbOk = msbOk;
+    if (!match.captured(2).isEmpty()) {
+        lsb = match.captured(2).toLongLong(&lsbOk);
+    }
+    if (!msbOk || !lsbOk || msb > std::numeric_limits<int>::max()
+        || lsb > std::numeric_limits<int>::max()) {
+        return std::nullopt;
+    }
+    const qint64 low   = qMin(msb, lsb);
+    const qint64 high  = qMax(msb, lsb);
+    const qint64 width = high - low + 1;
+    if (width <= 0 || width > QSocNumberInfo::MaximumDeclaredWidth) {
+        return std::nullopt;
+    }
+    return qMakePair(static_cast<int>(low), static_cast<int>(high));
+}
+
+bool strictIomuxWidthsMatch(const QList<QSocGenerateManager::PortDetailInfo> &portDetails)
+{
+    static const QRegularExpression selectRegex(R"(^\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\]$)");
+    std::optional<QPair<int, int>>  carrierBounds;
+    std::optional<int>              carrierWidth;
+
+    for (const QSocGenerateManager::PortDetailInfo &detail : portDetails) {
+        const std::optional<QPair<int, int>> nativeBounds = provenBuiltInBounds(detail.width);
+        if (!nativeBounds.has_value()) {
+            return false;
+        }
+        if (detail.bitSelect.isEmpty()) {
+            const int nativeWidth = nativeBounds->second - nativeBounds->first + 1;
+            if (carrierWidth.has_value() && *carrierWidth != nativeWidth) {
+                return false;
+            }
+            carrierWidth = nativeWidth;
+            if (!carrierBounds.has_value() || nativeBounds->second > carrierBounds->second) {
+                carrierBounds = nativeBounds;
+            }
+        }
+    }
+    if (!carrierBounds.has_value()) {
+        return false;
+    }
+
+    for (const QSocGenerateManager::PortDetailInfo &detail : portDetails) {
+        if (detail.bitSelect.isEmpty()) {
+            continue;
+        }
+        const std::optional<QPair<int, int>> nativeBounds = provenBuiltInBounds(detail.width);
+        const QRegularExpressionMatch        match        = selectRegex.match(detail.bitSelect);
+        if (!nativeBounds.has_value() || !match.hasMatch()) {
+            return false;
+        }
+        bool      msbOk = false;
+        const int msb   = match.captured(1).toInt(&msbOk);
+        int       lsb   = msb;
+        bool      lsbOk = msbOk;
+        if (!match.captured(2).isEmpty()) {
+            lsb = match.captured(2).toInt(&lsbOk);
+        }
+        const int low         = qMin(msb, lsb);
+        const int high        = qMax(msb, lsb);
+        const int nativeWidth = nativeBounds->second - nativeBounds->first + 1;
+        if (!msbOk || !lsbOk || low < carrierBounds->first || high > carrierBounds->second
+            || high - low + 1 != nativeWidth) {
+            return false;
+        }
+    }
+    return true;
+}
+
 struct TieClassification
 {
     QSocNumberInfo::NumericTextKind kind;
@@ -766,6 +861,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
     }
     QMap<QString, QPair<QStringList, QStringList>> instanceGuards;
     QSet<QString>                                  emittableInstanceNames;
+    QSet<QString>                                  iomuxInstanceNames;
     if (netlistData["instance"] && netlistData["instance"].IsMap()) {
         QSet<QString> seenInstanceNames;
         for (auto instanceIter = netlistData["instance"].begin();
@@ -789,6 +885,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
             if (parseMacroCondition(instanceIter->second, instanceName, ifdefList, ifndefList)) {
                 emittableInstanceNames.insert(instanceName);
                 instanceGuards.insert(instanceName, qMakePair(ifdefList, ifndefList));
+                if (isIomuxInstance(instanceName)) {
+                    iomuxInstanceNames.insert(instanceName);
+                }
             } else {
                 /* A dropped instance leaves a clean-looking file with a
                    missing block; the run must fail instead. */
@@ -1322,8 +1421,17 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                     }
                 }
 
+                bool touchesIomux = false;
+                for (const PortDetailInfo &detail : portDetails) {
+                    touchesIomux = touchesIomux
+                                   || (detail.type == PortType::Module
+                                       && iomuxInstanceNames.contains(detail.instanceName));
+                }
+
                 /* Check port width consistency */
-                const bool hasWidthMismatch = !checkPortWidthConsistency(portConnections);
+                const bool hasWidthMismatch = touchesIomux
+                                                  ? !strictIomuxWidthsMatch(portDetails)
+                                                  : !checkPortWidthConsistency(portConnections);
                 if (hasWidthMismatch) {
                     QSocConsole::warn() << "Port width mismatch detected for net" << netName;
                 }
@@ -1334,6 +1442,42 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                 const bool isUndriven   = (dirStatus == PortDirectionStatus::Undriven);
                 const bool isMultidrive = (dirStatus == PortDirectionStatus::Multidrive)
                                           || (dirStatus == PortDirectionStatus::MultidriveOutputs);
+
+                const bool hasDuplicateConnection = duplicateConnectionNets.contains(netName);
+                bool       hasUnknownDirection    = false;
+                for (const PortDetailInfo &detail : portDetails) {
+                    const QString direction = detail.direction.toLower();
+                    hasUnknownDirection     = hasUnknownDirection
+                                              || (direction != "input" && direction != "output"
+                                                  && direction != "inout" && direction != "in"
+                                                  && direction != "out");
+                }
+                if (touchesIomux
+                    && (hasWidthMismatch || isUndriven || isMultidrive || hasDuplicateConnection
+                        || hasUnknownDirection || portDetails.size() < 2)) {
+                    QStringList reasons;
+                    if (hasWidthMismatch) {
+                        reasons.append(QStringLiteral("width mismatch"));
+                    }
+                    if (isUndriven) {
+                        reasons.append(QStringLiteral("missing driver"));
+                    }
+                    if (isMultidrive) {
+                        reasons.append(QStringLiteral("multiple drivers"));
+                    }
+                    if (hasDuplicateConnection) {
+                        reasons.append(QStringLiteral("duplicate endpoint"));
+                    }
+                    if (hasUnknownDirection) {
+                        reasons.append(QStringLiteral("unresolved direction"));
+                    }
+                    if (portDetails.size() < 2) {
+                        reasons.append(QStringLiteral("missing peer"));
+                    }
+                    QSocConsole::error()
+                        << "Generated IOMUX net" << netName << "is invalid:" << reasons.join(", ");
+                    emissionRejected = true;
+                }
 
                 if (isUndriven) {
                     QSocConsole::warn()
@@ -1352,7 +1496,6 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                     QSocConsole::warn() << "Net" << netName << "has multiple output/inout ports";
                 }
 
-                const bool hasDuplicateConnection = duplicateConnectionNets.contains(netName);
                 if (hasDuplicateConnection) {
                     out << "    /* FIXME: Net " << netName
                         << " has port-routing conflicts (duplicate within the net "
@@ -1910,6 +2053,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                         /* Check if this port has a connection */
                         if (portMap.contains(portName)) {
                             QString wireConnection = portMap[portName];
+                            if (iomuxInstanceNames.contains(instanceName)
+                                && wireConnection.trimmed().isEmpty()) {
+                                QSocConsole::error()
+                                    << "Generated IOMUX instance" << instanceName
+                                    << "has no connection for public port" << portName;
+                                emissionRejected = true;
+                            }
 
                             /* `invert: true` on an output (or inout) port
                                would emit `.port(~wire)` - illegal because
@@ -1937,6 +2087,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
                                 QString("        .%1(%2)").arg(portName).arg(wireConnection));
                         } else {
                             /* Port exists in module but has no connection */
+                            if (iomuxInstanceNames.contains(instanceName)) {
+                                QSocConsole::error() << "Generated IOMUX instance" << instanceName
+                                                     << "is missing public port" << portName;
+                                emissionRejected = true;
+                            }
                             QString direction = "signal";
                             QString displayWidth;
 

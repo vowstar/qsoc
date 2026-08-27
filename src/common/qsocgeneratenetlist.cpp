@@ -145,11 +145,6 @@ bool QSocGenerateManager::processNetlist()
             return false;
         }
 
-        /* Generated modules must resolve before any expansion */
-        if (hasInstances && !preflightGeneratedModules()) {
-            return false;
-        }
-
         /* Expand bus links before processing */
         if (!expandBusLink()) {
             QSocConsole::error() << "Failed to expand bus links";
@@ -159,6 +154,11 @@ bool QSocGenerateManager::processNetlist()
         /* Expand bus uplinks before processing */
         if (!expandBusUplink()) {
             QSocConsole::error() << "Failed to expand bus uplinks";
+            return false;
+        }
+
+        /* Generated modules and their expanded buses must resolve before processing */
+        if (hasInstances && !preflightGeneratedModules()) {
             return false;
         }
 
@@ -2813,6 +2813,25 @@ bool QSocGenerateManager::doBitRangesProvideFullCoverage(const QStringList &rang
     return true;
 }
 
+bool QSocGenerateManager::isIomuxInstance(const QString &instanceName) const
+{
+    if (!moduleManager || !netlistData["instance"]
+        || !netlistData["instance"][instanceName.toStdString()]
+        || !netlistData["instance"][instanceName.toStdString()]["module"]
+        || !netlistData["instance"][instanceName.toStdString()]["module"].IsScalar()) {
+        return false;
+    }
+    const QString moduleName = QString::fromStdString(
+        netlistData["instance"][instanceName.toStdString()]["module"].as<std::string>());
+    if (!moduleManager->isModuleExist(moduleName)) {
+        return false;
+    }
+    const YAML::Node stored    = moduleManager->getModuleYaml(moduleName);
+    const YAML::Node generator = stored["generator"];
+    return generator && generator.IsMap() && generator["kind"] && generator["kind"].IsScalar()
+           && generator["kind"].Scalar() == "iomux";
+}
+
 bool QSocGenerateManager::preflightGeneratedModules()
 {
     if (!moduleManager || !netlistData["instance"] || !netlistData["instance"].IsMap()) {
@@ -2829,7 +2848,7 @@ bool QSocGenerateManager::preflightGeneratedModules()
             continue;
         }
         const QString moduleName = QString::fromStdString(instanceNode["module"].as<std::string>());
-        if (generatedModules.contains(moduleName) || !moduleManager->isModuleExist(moduleName)) {
+        if (!moduleManager->isModuleExist(moduleName)) {
             continue;
         }
         const YAML::Node stored = moduleManager->getModuleYaml(moduleName);

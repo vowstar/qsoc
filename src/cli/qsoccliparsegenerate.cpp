@@ -220,7 +220,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
     if (!definition.extraAttributes["generator"]) {
         return showError(
             1,
-            QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
+            QCoreApplication::translate("main", "Error: module does not declare a generator: %1/%2.")
                 .arg(libraryName, moduleName));
     }
     if (QSocIomuxGenerator::isIomux(definition)) {
@@ -568,6 +568,19 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
     /* Load and merge all netlist files */
     YAML::Node mergedNetlist;
     QString    outputFileName;
+    const auto isIomuxInstance = [this](const YAML::Node &instanceNode) {
+        if (!instanceNode || !instanceNode.IsMap() || !instanceNode["module"]
+            || !instanceNode["module"].IsScalar()) {
+            return false;
+        }
+        const QString moduleName = QString::fromStdString(instanceNode["module"].as<std::string>());
+        if (!moduleManager->isModuleExist(moduleName)) {
+            return false;
+        }
+        const YAML::Node generator = moduleManager->getModuleYaml(moduleName)["generator"];
+        return generator && generator.IsMap() && generator["kind"] && generator["kind"].IsScalar()
+               && generator["kind"].Scalar() == "iomux";
+    };
 
     for (int i = 0; i < filePathList.size(); ++i) {
         const QString &netlistFilePath = filePathList.at(i);
@@ -593,6 +606,26 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
                 const QFileInfo fileInfo(netlistFilePath);
                 outputFileName = fileInfo.baseName();
             } else {
+                if (mergedNetlist["instance"] && mergedNetlist["instance"].IsMap()
+                    && currentNetlist["instance"] && currentNetlist["instance"].IsMap()) {
+                    for (const auto &instancePair : currentNetlist["instance"]) {
+                        if (!instancePair.first.IsScalar()) {
+                            continue;
+                        }
+                        const std::string instanceName = instancePair.first.as<std::string>();
+                        const YAML::Node  existing     = mergedNetlist["instance"][instanceName];
+                        if (existing
+                            && (isIomuxInstance(existing) || isIomuxInstance(instancePair.second))) {
+                            return showError(
+                                1,
+                                QCoreApplication::translate(
+                                    "main",
+                                    "Error: generated IOMUX instance is declared in more than one "
+                                    "merged netlist: %1")
+                                    .arg(QString::fromStdString(instanceName)));
+                        }
+                    }
+                }
                 /* For subsequent files, merge them using the QSocYamlUtils mergeNodes function */
                 mergedNetlist = QSocYamlUtils::mergeNodes(mergedNetlist, currentNetlist);
 

@@ -608,6 +608,11 @@ private:
     bool preflightGeneratedModules();
 
     /**
+     * @brief Return whether an instance names an IOMUX generator.
+     */
+    bool isIomuxInstance(const QString &instanceName) const;
+
+    /**
      * @brief Process link and uplink connections in the netlist
      * @return true if successful, false on error
      */

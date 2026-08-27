@@ -789,6 +789,33 @@ QList<EndpointPort> endpointPorts(const QSocIomuxPlan &plan)
     return ports;
 }
 
+bool isControlPort(const QSocMmioPortDescription &port)
+{
+    return port.name == "clk_i" || port.name == "rst_ni" || port.name.startsWith("s_axi_");
+}
+
+QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
+{
+    QList<QSocMmioPortDescription> ports;
+    for (const QSocMmioPortDescription &port : QSocMmioGenerator::describePorts(plan.mmio)) {
+        if (isControlPort(port)) {
+            ports.append(port);
+        }
+    }
+    ports.append({"pad_input_value_i", "input", plan.pinCount});
+    ports.append({"pad_input_enable_o", "output", plan.pinCount});
+    ports.append({"pad_output_value_o", "output", plan.pinCount});
+    ports.append({"pad_output_enable_o", "output", plan.pinCount});
+    for (const EndpointPort &endpoint : endpointPorts(plan)) {
+        ports.append(
+            {endpointPortName(endpoint),
+             endpoint.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
+                                                        : QStringLiteral("input"),
+             1});
+    }
+    return ports;
+}
+
 const QSocIomuxRoutePlan *findRoute(const QSocIomuxPlan &plan, quint32 pin, quint32 slot)
 {
     for (const QSocIomuxRoutePlan &route : plan.routes) {
@@ -1030,48 +1057,30 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     if (plan.pinCount == 0 || plan.hsSlots == 0) {
         return QString();
     }
-    const quint32                        width     = selectorWidth(plan.hsSlots);
-    const quint64                        dense     = quint64(plan.hsSlots) * plan.pinCount;
-    const QList<EndpointPort>            endpoints = endpointPorts(plan);
-    const QList<QSocMmioPortDescription> regsPorts = QSocMmioGenerator::describePorts(plan.mmio);
-    const auto                           isControlPort = [](const QSocMmioPortDescription &port) {
-        return port.name == "clk_i" || port.name == "rst_ni" || port.name.startsWith("s_axi_");
-    };
+    const quint32                        width       = selectorWidth(plan.hsSlots);
+    const quint64                        dense       = quint64(plan.hsSlots) * plan.pinCount;
+    const QList<EndpointPort>            endpoints   = endpointPorts(plan);
+    const QList<QSocMmioPortDescription> regsPorts   = QSocMmioGenerator::describePorts(plan.mmio);
+    const QList<QSocMmioPortDescription> publicPorts = publicPortDescriptions(plan);
 
     QStringList lines;
     lines.append(QString("module %1 (").arg(plan.moduleName));
-    QStringList declarations;
-    QStringList comments;
-    for (const QSocMmioPortDescription &port : regsPorts) {
-        if (!isControlPort(port)) {
-            continue;
-        }
-        const QString keyword = port.direction == "output" ? QStringLiteral("output")
-                                                           : QStringLiteral("input ");
+    QStringList     declarations;
+    QStringList     comments;
+    const qsizetype firstEndpoint = publicPorts.size() - endpoints.size();
+    for (qsizetype index = 0; index < publicPorts.size(); ++index) {
+        const QSocMmioPortDescription &port = publicPorts.at(index);
+        const QString keyword               = port.direction == "output" ? QStringLiteral("output")
+                                                                         : QStringLiteral("input ");
         if (port.width == 1) {
             declarations.append(QString("    %1 wire %2").arg(keyword, port.name));
         } else {
             declarations.append(
                 QString("    %1 wire [%2:0] %3").arg(keyword).arg(port.width - 1).arg(port.name));
         }
-        comments.append(QString());
-    }
-    declarations.append(
-        QString("    input  wire %1 pad_input_value_i").arg(vectorRange(plan.pinCount)));
-    declarations.append(
-        QString("    output wire %1 pad_input_enable_o").arg(vectorRange(plan.pinCount)));
-    declarations.append(
-        QString("    output wire %1 pad_output_value_o").arg(vectorRange(plan.pinCount)));
-    declarations.append(
-        QString("    output wire %1 pad_output_enable_o").arg(vectorRange(plan.pinCount)));
-    for (int index = 0; index < 4; ++index) {
-        comments.append(QString());
-    }
-    for (const EndpointPort &port : endpoints) {
-        const QString direction = port.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
-                                                                         : QStringLiteral("input ");
-        declarations.append(QString("    %1 wire %2").arg(direction, endpointPortName(port)));
-        comments.append(endpointComment(port));
+        comments.append(
+            index < firstEndpoint ? QString()
+                                  : endpointComment(endpoints.at(index - firstEndpoint)));
     }
     for (qsizetype index = 0; index < declarations.size(); ++index) {
         const QString suffix = index + 1 == declarations.size() ? QString() : QString(",");
@@ -1201,11 +1210,8 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
     if (plan.pinCount == 0 || plan.hsSlots == 0) {
         return module;
     }
-    const QList<QSocMmioPortDescription> regsPorts = QSocMmioGenerator::describePorts(plan.mmio);
-    for (const QSocMmioPortDescription &port : regsPorts) {
-        if (port.name != "clk_i" && port.name != "rst_ni" && !port.name.startsWith("s_axi_")) {
-            continue;
-        }
+    const QList<QSocMmioPortDescription> ports = publicPortDescriptions(plan);
+    for (const QSocMmioPortDescription &port : ports) {
         YAML::Node portNode(YAML::NodeType::Map);
         portNode["type"]      = port.width == 1
                                     ? std::string("logic")
@@ -1213,30 +1219,11 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
         portNode["direction"] = port.direction.toStdString();
         module["port"][port.name.toStdString()] = portNode;
     }
-    const QString padType = plan.pinCount == 1 ? QStringLiteral("logic")
-                                               : QString("logic[%1:0]").arg(plan.pinCount - 1);
-    const std::array<std::pair<std::string, std::string>, 4> pads
-        = {std::pair<std::string, std::string>{"pad_input_value_i", "input"},
-           std::pair<std::string, std::string>{"pad_input_enable_o", "output"},
-           std::pair<std::string, std::string>{"pad_output_value_o", "output"},
-           std::pair<std::string, std::string>{"pad_output_enable_o", "output"}};
-    for (const auto &[name, direction] : pads) {
-        YAML::Node portNode(YAML::NodeType::Map);
-        portNode["type"]      = padType.toStdString();
-        portNode["direction"] = direction;
-        module["port"][name]  = portNode;
-    }
-    for (const EndpointPort &port : endpointPorts(plan)) {
-        YAML::Node portNode(YAML::NodeType::Map);
-        portNode["type"]      = "logic";
-        portNode["direction"] = port.role == QSocIomuxRole::InputValue ? "output" : "input";
-        module["port"][endpointPortName(port).toStdString()] = portNode;
-    }
     YAML::Node control(YAML::NodeType::Map);
     control["bus"]  = "axi4_lite";
     control["mode"] = "slave";
     YAML::Node mapping(YAML::NodeType::Map);
-    for (const QSocMmioPortDescription &port : regsPorts) {
+    for (const QSocMmioPortDescription &port : ports) {
         if (!port.name.startsWith("s_axi_")) {
             continue;
         }
@@ -1281,39 +1268,51 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     lines.append("rx: pad input broadcasts to every declared sink regardless of the selector");
     lines.append(QString());
 
-    quint32 lastPin = std::numeric_limits<quint32>::max();
-    for (const QSocIomuxRoutePlan &route : plan.routes) {
-        if (route.pin != lastPin) {
-            lastPin = route.pin;
-            lines.append(QString("pin %1 selector word %2 lsb %3 offset 0x%4")
-                             .arg(route.pin)
-                             .arg(route.pin / lanes)
-                             .arg((route.pin % lanes) * kSelectorLane)
-                             .arg(QString::number(quint64(1 + route.pin / lanes) * byteCount, 16)));
-        }
-        lines.append(QString("  slot %1 function %2 signal %3")
-                         .arg(route.slot)
-                         .arg(route.function, route.signal));
-        for (const QSocIomuxRole role : kRoles) {
-            const QSocIomuxEndpointPlan &endpoint = routeRole(route, role);
-            QString                      value;
-            if (!endpoint.link.isEmpty()) {
-                value = QString("link %1").arg(endpoint.link);
-                if (endpoint.bit.has_value()) {
-                    value += QString(" bit %1").arg(*endpoint.bit);
-                }
-                if (endpoint.invert) {
-                    value += " invert";
-                }
-            } else if (endpoint.constant.has_value()) {
-                value = QString("constant %1").arg(*endpoint.constant);
-            } else if (role == QSocIomuxRole::InputValue) {
-                value = QStringLiteral("no sink");
-            } else {
-                value = QStringLiteral("constant 0");
+    qsizetype routeIndex = 0;
+    for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+        lines.append(QString("pin %1 selector word %2 lsb %3 offset 0x%4")
+                         .arg(pin)
+                         .arg(pin / lanes)
+                         .arg((pin % lanes) * kSelectorLane)
+                         .arg(QString::number(quint64(1 + pin / lanes) * byteCount, 16)));
+        QStringList unusedSlots;
+        for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
+            const bool hasRoute = routeIndex < plan.routes.size()
+                                  && plan.routes.at(routeIndex).pin == pin
+                                  && plan.routes.at(routeIndex).slot == slot;
+            if (!hasRoute) {
+                unusedSlots.append(QString::number(slot));
+                continue;
             }
-            lines.append(QString("    %1: %2").arg(roleKey(role), value));
+
+            const QSocIomuxRoutePlan &route = plan.routes.at(routeIndex++);
+            lines.append(QString("  slot %1 function %2 signal %3")
+                             .arg(route.slot)
+                             .arg(route.function, route.signal));
+            for (const QSocIomuxRole role : kRoles) {
+                const QSocIomuxEndpointPlan &endpoint = routeRole(route, role);
+                QString                      value;
+                if (!endpoint.link.isEmpty()) {
+                    value = QString("link %1").arg(endpoint.link);
+                    if (endpoint.bit.has_value()) {
+                        value += QString(" bit %1").arg(*endpoint.bit);
+                    }
+                    if (endpoint.invert) {
+                        value += " invert";
+                    }
+                } else if (endpoint.constant.has_value()) {
+                    value = QString("constant %1").arg(*endpoint.constant);
+                } else if (role == QSocIomuxRole::InputValue) {
+                    value = QStringLiteral("no sink");
+                } else {
+                    value = QStringLiteral("constant 0");
+                }
+                lines.append(QString("    %1: %2").arg(roleKey(role), value));
+            }
         }
+        lines.append(
+            QString("  unused slots: %1")
+                .arg(unusedSlots.isEmpty() ? QStringLiteral("none") : unusedSlots.join(", ")));
     }
     lines.append(QString());
     lines.append("undeclared pin/slot pairs drive a zero tx bundle");

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsociomuxgenerator.h"
 #include "common/qsocmmiogenerator.h"
+#include "common/qsocmmiouvm.h"
 #include "common/qsocmodulemanager.h"
 #include "qsoc_test.h"
 
@@ -214,11 +216,36 @@ generator:
 )");
 }
 
+QSocModuleDefinition makeIomuxDefinition()
+{
+    return makeDefinition(QStringLiteral("iomux0"), R"(
+generator:
+  kind: iomux
+  bus: axi4_lite
+  data_width: 32
+  address_width: 8
+  pin_count: 9
+  hs_slots: 5
+  integration:
+    instance: u_iomux0
+    clock: clk_iomux
+    reset: rst_iomux_n
+    control: iomux_control
+    pad:
+      input_value: pad_input_value
+      input_enable: pad_input_enable
+      output_value: pad_output_value
+      output_enable: pad_output_enable
+  route: []
+)");
+}
+
 enum UvmFixture {
     Mixed32Fixture,
     Wide64Fixture,
     FirstRoSingleBitFixture,
     AllRoFixture,
+    IomuxRegsFixture,
 };
 
 QSocModuleDefinition makeFixtureDefinition(int fixture)
@@ -435,12 +462,31 @@ void Test::generatedTestbenchPassesVerilator_data()
     QTest::newRow("first-ro-single-bit-rw")
         << int(FirstRoSingleBitFixture) << QStringLiteral("first_ro_ctrl");
     QTest::newRow("all-ro-registers") << int(AllRoFixture) << QStringLiteral("read_only_ctrl");
+    QTest::newRow("iomux-registers") << int(IomuxRegsFixture) << QStringLiteral("iomux0_regs");
 }
 
 void Test::generatedTestbenchPassesVerilator()
 {
     QFETCH(int, fixture);
     QFETCH(QString, moduleName);
+
+    QString               verilog;
+    QSocMmioUvmCollateral collateral;
+    QStringList           errors;
+    if (fixture == IomuxRegsFixture) {
+        QSocIomuxPlan plan;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(makeIomuxDefinition(), &plan, &errors),
+            qPrintable(errors.join('\n')));
+        verilog    = QSocIomuxGenerator::generateRegsVerilog(plan);
+        collateral = QSocMmioUvm::generate(plan.mmio);
+    } else {
+        const QSocModuleDefinition definition = makeFixtureDefinition(fixture);
+        QVERIFY(QSocMmioGenerator::generateVerilog(definition, &verilog, &errors));
+        QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+        QVERIFY(QSocMmioGenerator::generateUvmCollateral(definition, &collateral, &errors));
+        QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+    }
 
     const QString verilator = QStandardPaths::findExecutable(QStringLiteral("verilator"));
     const QString make      = QStandardPaths::findExecutable(QStringLiteral("make"));
@@ -450,15 +496,6 @@ void Test::generatedTestbenchPassesVerilator()
         || !findUvmSources(&uvmSourceDirectory, &uvmPackagePath)) {
         QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("verilator, make, and UVM_HOME/src/uvm_pkg.sv"));
     }
-
-    const QSocModuleDefinition definition = makeFixtureDefinition(fixture);
-    QString                    verilog;
-    QSocMmioUvmCollateral      collateral;
-    QStringList                errors;
-    QVERIFY(QSocMmioGenerator::generateVerilog(definition, &verilog, &errors));
-    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
-    QVERIFY(QSocMmioGenerator::generateUvmCollateral(definition, &collateral, &errors));
-    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
