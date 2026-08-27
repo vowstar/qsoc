@@ -264,6 +264,19 @@ public slots:
     YAML::Node getModuleYaml(const QString &moduleName);
 
     /**
+     * @brief Get the module YAML resolved for netlist generation.
+     * @details Ordinary modules return their stored definition. Valid
+     *          generator modules return their derived public port and bus
+     *          view. Recognized but invalid generator modules return a null
+     *          node and report errors; callers must not fall back to the
+     *          raw definition.
+     * @param[in] moduleName The module name.
+     * @param[out] errors Diagnostics when a generator module is invalid.
+     * @return YAML node of the resolved module, null on generator failure.
+     */
+    YAML::Node getResolvedModuleYaml(const QString &moduleName, QStringList *errors = nullptr);
+
+    /**
      * @brief Save the library YAML object to library file.
      * @details This function will save the library YAML object to library file.
      * @param libraryName The basename of the library file without ext.

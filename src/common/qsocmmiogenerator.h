@@ -85,6 +85,7 @@ public:
     static bool    canonicalizePlan(QSocMmioPlan *plan, QStringList *errors = nullptr);
     static QString generateVerilog(const QSocMmioPlan &plan);
     static QList<QSocMmioPortDescription> describePorts(const QSocMmioPlan &plan);
+    static YAML::Node                     describeModuleYaml(const QSocMmioPlan &plan);
     static bool                           generateVerilog(
         const QSocModuleDefinition &definition, QString *verilog, QStringList *errors = nullptr);
     static bool generateFormalCollateral(
