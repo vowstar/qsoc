@@ -964,7 +964,7 @@ private slots:
     void validMapGeneratesAxiLiteSlave();
     void sourceOrderDoesNotChangeGeneratedVerilog();
     void duplicateModuleNameIsRejected();
-    void invalidDescriptionsDoNotStopDiagnostics();
+    void sourceDiagnosticsDoNotStopPlanDiagnostics();
     void invalidMap_data();
     void invalidMap();
     void describePortsMatchesGeneratedHeader();
@@ -1206,7 +1206,7 @@ void Test::duplicateModuleNameIsRejected()
     QVERIFY(verilog.isEmpty());
 }
 
-void Test::invalidDescriptionsDoNotStopDiagnostics()
+void Test::sourceDiagnosticsDoNotStopPlanDiagnostics()
 {
     const QSocModuleDefinition fieldDefinition = makeDefinition(R"(
 generator:
@@ -1227,6 +1227,14 @@ generator:
     const QStringList          fieldErrors     = QSocMmioGenerator::validate(fieldDefinition);
     QVERIFY(hasErrorPath(fieldErrors, "generator.register.control.field.low.description"));
     QVERIFY(hasErrorPath(fieldErrors, "generator.register.control.field.high"));
+    QCOMPARE(
+        fieldErrors.count(
+            "MMIO_TYPE generator.register.control.field.low.description: must be a scalar"),
+        1);
+    QCOMPARE(
+        fieldErrors.count(
+            "MMIO_OVERLAP generator.register.control.field.high: field overlaps another field"),
+        1);
 
     const QSocModuleDefinition registerDefinition = makeDefinition(R"(
 generator:
@@ -1246,6 +1254,35 @@ generator:
     const QStringList          registerErrors     = QSocMmioGenerator::validate(registerDefinition);
     QVERIFY(hasErrorPath(registerErrors, "generator.register.control.description"));
     QVERIFY(hasErrorPath(registerErrors, "generator.register.status.offset"));
+    QCOMPARE(
+        registerErrors.count("MMIO_TYPE generator.register.control.description: must be a scalar"),
+        1);
+    QCOMPARE(
+        registerErrors.count(
+            "MMIO_DUPLICATE generator.register.status.offset: duplicates "
+            "generator.register.control.offset"),
+        1);
+
+    const QSocModuleDefinition manualDefinition = makeDefinition(R"(
+parameter: {}
+generator:
+  kind: mmio
+  bus: axi4_lite
+  register:
+    control:
+      offset: 0
+      field:
+        low: {lsb: 0, width: 2, access: rw, reset: 0}
+        high: {lsb: 1, width: 2, access: rw, reset: 0}
+)");
+    const QStringList          manualErrors     = QSocMmioGenerator::validate(manualDefinition);
+    QCOMPARE(
+        manualErrors.count("MMIO_MANUAL_SECTION module.parameter: is not allowed for MMIO modules"),
+        1);
+    QCOMPARE(
+        manualErrors.count(
+            "MMIO_OVERLAP generator.register.control.field.high: field overlaps another field"),
+        1);
 }
 
 void Test::invalidMap_data()
@@ -1266,6 +1303,10 @@ generator:
         enable: {lsb: 0, access: rw, reset: 0}
 )";
 
+    QTest::newRow("wrong-kind") << QString(validGenerator).replace("kind: mmio", "kind: iomux")
+                                << QString("generator.kind") << QString("timer_ctrl");
+    QTest::newRow("wrong-bus") << QString(validGenerator).replace("bus: axi4_lite", "bus: apb4")
+                               << QString("generator.bus") << QString("timer_ctrl");
     QTest::newRow("unknown-generator-key") << head + "  extra: true\n  register: {}\n"
                                            << QString("generator.extra") << QString("timer_ctrl");
     QTest::newRow("invalid-data-width") << head + R"(  data_width: 16
@@ -1672,6 +1713,87 @@ void Test::canonicalizeRejectsConstructedInvalidPlan()
     missingReset.registers[1].fields[0].resetValue.reset();
     QVERIFY(!QSocMmioGenerator::canonicalizePlan(&missingReset, &errors));
     QVERIFY2(errors.join('\n').contains("MMIO_REQUIRED"), qPrintable(errors.join('\n')));
+
+    QSocMmioPlan invalidDataWidth = valid;
+    invalidDataWidth.dataWidth    = 16;
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&invalidDataWidth, &errors));
+    QVERIFY2(
+        errors.contains("MMIO_RANGE generator.data_width: must be 32 or 64"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan emptyRegisters = valid;
+    emptyRegisters.registers.clear();
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&emptyRegisters, &errors));
+    QVERIFY2(
+        errors.contains("MMIO_EMPTY generator.register: must contain at least one register"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan         duplicateRegister = valid;
+    QSocMmioRegisterPlan duplicate         = duplicateRegister.registers.at(1);
+    duplicate.byteOffset                   = 0x14;
+    duplicateRegister.registers.append(duplicate);
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&duplicateRegister, &errors));
+    QVERIFY2(
+        errors.contains("MMIO_DUPLICATE generator.register.control: register is duplicated"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan      duplicateField  = valid;
+    QSocMmioFieldPlan duplicateEnable = duplicateField.registers.at(1).fields.at(0);
+    duplicateEnable.lsb               = 2;
+    duplicateEnable.outputPort        = "enable_2_o";
+    duplicateField.registers[1].fields.append(duplicateEnable);
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&duplicateField, &errors));
+    QVERIFY2(
+        errors.contains(
+            "MMIO_DUPLICATE generator.register.control.field.enable: field is duplicated"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan invalidSideband                     = valid;
+    invalidSideband.registers[2].fields[0].inputPort = "9bad";
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&invalidSideband, &errors));
+    QVERIFY2(
+        errors.contains(
+            "MMIO_IDENTIFIER generator.register.status.field.busy.input: must be a Verilog "
+            "identifier"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan sidebandCollision                     = valid;
+    sidebandCollision.registers[2].fields[0].inputPort = "clk_i";
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&sidebandCollision, &errors));
+    QVERIFY2(
+        errors.contains(
+            "MMIO_CONFLICT generator.register.status.field.busy.input: port name is already in "
+            "use"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan invalidReadWrite                         = valid;
+    invalidReadWrite.registers[1].fields[0].inputPort     = "source_i";
+    invalidReadWrite.registers[1].fields[0].constantValue = 0;
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&invalidReadWrite, &errors));
+    QVERIFY2(
+        hasErrorPath(errors, "generator.register.control.field.enable.input"),
+        qPrintable(errors.join('\n')));
+    QVERIFY2(
+        hasErrorPath(errors, "generator.register.control.field.enable.value"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan invalidReadOnly                      = valid;
+    invalidReadOnly.registers[2].fields[0].resetValue = 0;
+    invalidReadOnly.registers[2].fields[0].outputPort = "busy_o";
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&invalidReadOnly, &errors));
+    QVERIFY2(
+        hasErrorPath(errors, "generator.register.status.field.busy.reset"),
+        qPrintable(errors.join('\n')));
+    QVERIFY2(
+        hasErrorPath(errors, "generator.register.status.field.busy.output"),
+        qPrintable(errors.join('\n')));
+
+    QSocMmioPlan invalidAccess                  = valid;
+    invalidAccess.registers[2].fields[0].access = static_cast<QSocMmioAccess>(99);
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&invalidAccess, &errors));
+    QVERIFY2(
+        errors.contains("MMIO_ACCESS generator.register.status.field.busy.access: must be rw or ro"),
+        qPrintable(errors.join('\n')));
 }
 
 void Test::generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable()

@@ -88,18 +88,6 @@ bool parseScalar(const YAML::Node &node, const QString &path, QString *value, QS
     return true;
 }
 
-bool parseIdentifier(const YAML::Node &node, const QString &path, QString *value, QStringList *errors)
-{
-    if (!parseScalar(node, path, value, errors)) {
-        return false;
-    }
-    if (!QSocVerilogUtils::isValidVerilogIdentifier(*value)) {
-        appendError(errors, "IDENTIFIER", path, "must be a Verilog identifier");
-        return false;
-    }
-    return true;
-}
-
 bool parseUnsigned(
     const YAML::Node &node, const QString &path, quint64 maximum, quint64 *value, QStringList *errors)
 {
@@ -162,65 +150,58 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *plan, QStringList
     if (generator["data_width"]) {
         quint32    dataWidth = 0;
         const bool parsed    = parseUnsigned32(
-            generator["data_width"], "generator.data_width", 64, &dataWidth, errors);
-        if (parsed && dataWidth != 32 && dataWidth != 64) {
-            appendError(errors, "RANGE", "generator.data_width", "must be 32 or 64");
-            valid = false;
-        } else if (parsed) {
+            generator["data_width"],
+            "generator.data_width",
+            std::numeric_limits<quint32>::max(),
+            &dataWidth,
+            errors);
+        if (parsed) {
             plan->dataWidth = dataWidth;
-        } else {
-            valid = false;
         }
+        valid = parsed && valid;
     }
 
     if (generator["address_width"]) {
         quint32    addressWidth = 0;
         const bool parsed       = parseUnsigned32(
-            generator["address_width"], "generator.address_width", 64, &addressWidth, errors);
-        const quint32 minimum = plan->dataWidth == 64 ? 3 : 2;
-        if (parsed && addressWidth < minimum) {
-            appendError(
-                errors,
-                "RANGE",
-                "generator.address_width",
-                QString("must be between %1 and 64").arg(minimum));
-            valid = false;
-        } else if (parsed) {
+            generator["address_width"],
+            "generator.address_width",
+            std::numeric_limits<quint32>::max(),
+            &addressWidth,
+            errors);
+        if (parsed) {
             plan->addressWidth = addressWidth;
-        } else {
-            valid = false;
         }
+        valid = parsed && valid;
     }
     return valid;
 }
 
 bool parseFieldShape(
-    const YAML::Node  &node,
-    const QString     &path,
-    quint32            dataWidth,
-    QSocMmioFieldPlan *field,
-    QStringList       *errors)
+    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
 {
     bool valid = true;
     if (!node["lsb"]) {
         appendError(errors, "REQUIRED", path + ".lsb", "property is required");
         valid = false;
     } else {
-        valid = parseUnsigned32(node["lsb"], path + ".lsb", dataWidth - 1, &field->lsb, errors)
+        valid = parseUnsigned32(
+                    node["lsb"],
+                    path + ".lsb",
+                    std::numeric_limits<quint32>::max(),
+                    &field->lsb,
+                    errors)
                 && valid;
     }
 
     if (node["width"]) {
-        valid = parseUnsigned32(node["width"], path + ".width", dataWidth, &field->width, errors)
+        valid = parseUnsigned32(
+                    node["width"],
+                    path + ".width",
+                    std::numeric_limits<quint32>::max(),
+                    &field->width,
+                    errors)
                 && valid;
-        if (field->width == 0) {
-            appendError(errors, "RANGE", path + ".width", "must be at least 1");
-            valid = false;
-        }
-    }
-    if (valid && field->lsb + field->width > dataWidth) {
-        appendError(errors, "RANGE", path, QString("field must fit within %1 bits").arg(dataWidth));
-        valid = false;
     }
     return valid;
 }
@@ -253,82 +234,37 @@ bool valueFitsWidth(quint64 value, quint32 width)
     return value <= maximumForWidth(width);
 }
 
-bool parseReadWriteField(
-    const YAML::Node  &node,
-    const QString     &path,
-    quint32            dataWidth,
-    QSocMmioFieldPlan *field,
-    QStringList       *errors)
+bool parseFieldValues(
+    const YAML::Node &node, const QString &path, QSocMmioFieldPlan *field, QStringList *errors)
 {
     bool valid = true;
-    if (!node["reset"]) {
-        appendError(errors, "REQUIRED", path + ".reset", "property is required for rw fields");
-        valid = false;
-    } else {
+    if (node["reset"]) {
         quint64    resetValue = 0;
         const bool resetValid = parseUnsigned(
-            node["reset"], path + ".reset", maximumForWidth(dataWidth), &resetValue, errors);
+            node["reset"], path + ".reset", std::numeric_limits<quint64>::max(), &resetValue, errors);
         if (resetValid) {
             field->resetValue = resetValue;
         }
         valid = resetValid && valid;
-        if (valid && !valueFitsWidth(*field->resetValue, field->width)) {
-            appendError(errors, "RANGE", path + ".reset", "value does not fit field width");
-            valid = false;
-        }
     }
     if (node["input"]) {
-        appendError(errors, "ACCESS", path + ".input", "is not allowed for rw fields");
-        valid = false;
-    }
-    if (node["value"]) {
-        appendError(errors, "ACCESS", path + ".value", "is not allowed for rw fields");
-        valid = false;
+        valid = parseScalar(node["input"], path + ".input", &field->inputPort, errors) && valid;
     }
     if (node["output"]) {
-        valid = parseIdentifier(node["output"], path + ".output", &field->outputPort, errors)
-                && valid;
-    }
-    return valid;
-}
-
-bool parseReadOnlyField(
-    const YAML::Node  &node,
-    const QString     &path,
-    quint32            dataWidth,
-    QSocMmioFieldPlan *field,
-    QStringList       *errors)
-{
-    bool valid       = true;
-    int  sourceCount = node["input"] ? 1 : 0;
-    sourceCount += node["value"] ? 1 : 0;
-    if (sourceCount != 1) {
-        appendError(errors, "SOURCE", path, "ro fields require exactly one of input or value");
-        valid = false;
-    }
-    if (node["reset"]) {
-        appendError(errors, "ACCESS", path + ".reset", "is not allowed for ro fields");
-        valid = false;
-    }
-    if (node["output"]) {
-        appendError(errors, "ACCESS", path + ".output", "is not allowed for ro fields");
-        valid = false;
-    }
-    if (node["input"]) {
-        valid = parseIdentifier(node["input"], path + ".input", &field->inputPort, errors) && valid;
+        valid = parseScalar(node["output"], path + ".output", &field->outputPort, errors) && valid;
     }
     if (node["value"]) {
         quint64    constantValue = 0;
         const bool valueValid    = parseUnsigned(
-            node["value"], path + ".value", maximumForWidth(dataWidth), &constantValue, errors);
+            node["value"],
+            path + ".value",
+            std::numeric_limits<quint64>::max(),
+            &constantValue,
+            errors);
         if (valueValid) {
             field->constantValue = constantValue;
         }
         valid = valueValid && valid;
-        if (valid && !valueFitsWidth(*field->constantValue, field->width)) {
-            appendError(errors, "RANGE", path + ".value", "value does not fit field width");
-            valid = false;
-        }
     }
     return valid;
 }
@@ -337,7 +273,6 @@ bool parseField(
     const QString     &name,
     const YAML::Node  &node,
     const QString     &path,
-    quint32            dataWidth,
     QSocMmioFieldPlan *field,
     QStringList       *errors)
 {
@@ -347,21 +282,10 @@ bool parseField(
     field->name = name;
     parseDescription(node["description"], path + ".description", &field->description, errors);
 
-    bool valid = QSocVerilogUtils::isValidVerilogIdentifier(name);
-    if (!valid) {
-        appendError(errors, "IDENTIFIER", path, "field name must be a Verilog identifier");
-        valid = false;
-    }
-    const bool shapeValid  = parseFieldShape(node, path, dataWidth, field, errors);
+    const bool shapeValid  = parseFieldShape(node, path, field, errors);
     const bool accessValid = parseAccess(node, path, field, errors);
-    valid                  = shapeValid && accessValid && valid;
-    if (!accessValid) {
-        return false;
-    }
-    if (field->access == QSocMmioAccess::ReadWrite) {
-        return parseReadWriteField(node, path, dataWidth, field, errors) && valid;
-    }
-    return parseReadOnlyField(node, path, dataWidth, field, errors) && valid;
+    const bool valuesValid = parseFieldValues(node, path, field, errors);
+    return shapeValid && accessValid && valuesValid;
 }
 
 bool claimSideband(
@@ -385,23 +309,15 @@ bool claimSideband(
 bool parseFields(
     const YAML::Node         &node,
     const QString            &path,
-    quint32                   dataWidth,
     QList<QSocMmioFieldPlan> *fields,
-    QSet<QString>            *ports,
     QStringList              *errors)
 {
     if (!node || !node.IsMap()) {
         appendError(errors, "TYPE", path, "must be a map");
         return false;
     }
-    if (node.size() == 0) {
-        appendError(errors, "EMPTY", path, "must contain at least one field");
-        return false;
-    }
 
-    bool          valid    = true;
-    quint64       occupied = 0;
-    QSet<QString> seenFields;
+    bool valid = true;
     for (YAML::const_iterator it = node.begin(); it != node.end(); ++it) {
         if (!it->first.IsScalar()) {
             appendError(errors, "TYPE", path, "field names must be scalar");
@@ -410,26 +326,9 @@ bool parseFields(
         }
         const QString name      = QString::fromStdString(it->first.Scalar());
         const QString fieldPath = path + "." + name;
-        if (seenFields.contains(name)) {
-            appendError(errors, "DUPLICATE", fieldPath, "field is duplicated");
-            valid = false;
-            continue;
-        }
-        seenFields.insert(name);
 
         QSocMmioFieldPlan field;
-        if (!parseField(name, it->second, fieldPath, dataWidth, &field, errors)) {
-            valid = false;
-            continue;
-        }
-        const quint64 mask = maximumForWidth(field.width) << field.lsb;
-        if ((occupied & mask) != 0) {
-            appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
-            valid = false;
-            continue;
-        }
-        occupied |= mask;
-        if (!claimSideband(field, fieldPath, ports, errors)) {
+        if (!parseField(name, it->second, fieldPath, &field, errors)) {
             valid = false;
             continue;
         }
@@ -442,9 +341,7 @@ bool parseRegister(
     const QString        &name,
     const YAML::Node     &node,
     const QString        &path,
-    const QSocMmioPlan   &plan,
     QSocMmioRegisterPlan *reg,
-    QSet<QString>        *ports,
     QStringList          *errors)
 {
     if (!validateMap(node, kRegisterKeys, path, errors)) {
@@ -453,56 +350,35 @@ bool parseRegister(
     reg->name = name;
     parseDescription(node["description"], path + ".description", &reg->description, errors);
 
-    bool valid = QSocVerilogUtils::isValidVerilogIdentifier(name);
-    if (!valid) {
-        appendError(errors, "IDENTIFIER", path, "register name must be a Verilog identifier");
-        valid = false;
-    }
+    bool valid = true;
     if (!node["offset"]) {
         appendError(errors, "REQUIRED", path + ".offset", "property is required");
         valid = false;
     } else {
-        valid                   = parseUnsigned(
-                                      node["offset"],
-                                      path + ".offset",
-                                      maximumForWidth(plan.addressWidth),
-                                      &reg->byteOffset,
-                                      errors)
-                                  && valid;
-        const quint64 byteCount = plan.dataWidth / 8;
-        if (valid && (reg->byteOffset & (byteCount - 1)) != 0) {
-            appendError(
-                errors,
-                "ALIGNMENT",
-                path + ".offset",
-                QString("must be %1-byte aligned").arg(byteCount));
-            valid = false;
-        }
+        valid = parseUnsigned(
+                    node["offset"],
+                    path + ".offset",
+                    std::numeric_limits<quint64>::max(),
+                    &reg->byteOffset,
+                    errors)
+                && valid;
     }
     if (!node["field"]) {
         appendError(errors, "REQUIRED", path + ".field", "property is required");
         return false;
     }
-    return parseFields(node["field"], path + ".field", plan.dataWidth, &reg->fields, ports, errors)
-           && valid;
+    return parseFields(node["field"], path + ".field", &reg->fields, errors) && valid;
 }
 
-bool parseRegisters(
-    const YAML::Node &node, QSocMmioPlan *plan, QSet<QString> *ports, QStringList *errors)
+bool parseRegisters(const YAML::Node &node, QSocMmioPlan *plan, QStringList *errors)
 {
     const QString path = "generator.register";
     if (!node || !node.IsMap()) {
         appendError(errors, "TYPE", path, "must be a map");
         return false;
     }
-    if (node.size() == 0) {
-        appendError(errors, "EMPTY", path, "must contain at least one register");
-        return false;
-    }
 
-    bool                    valid = true;
-    QSet<QString>           names;
-    QHash<quint64, QString> offsets;
+    bool valid = true;
     for (YAML::const_iterator it = node.begin(); it != node.end(); ++it) {
         if (!it->first.IsScalar()) {
             appendError(errors, "TYPE", path, "register names must be scalar");
@@ -511,28 +387,12 @@ bool parseRegisters(
         }
         const QString name         = QString::fromStdString(it->first.Scalar());
         const QString registerPath = path + "." + name;
-        if (names.contains(name)) {
-            appendError(errors, "DUPLICATE", registerPath, "register is duplicated");
-            valid = false;
-            continue;
-        }
-        names.insert(name);
 
         QSocMmioRegisterPlan reg;
-        if (!parseRegister(name, it->second, registerPath, *plan, &reg, ports, errors)) {
+        if (!parseRegister(name, it->second, registerPath, &reg, errors)) {
             valid = false;
             continue;
         }
-        if (offsets.contains(reg.byteOffset)) {
-            appendError(
-                errors,
-                "DUPLICATE",
-                registerPath + ".offset",
-                QString("duplicates %1").arg(offsets.value(reg.byteOffset)));
-            valid = false;
-            continue;
-        }
-        offsets.insert(reg.byteOffset, registerPath + ".offset");
         plan->registers.append(reg);
     }
     return valid;
@@ -541,11 +401,6 @@ bool parseRegisters(
 bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors)
 {
     plan->moduleName = definition.moduleName;
-    bool valid       = true;
-    if (!QSocVerilogUtils::isValidVerilogIdentifier(definition.moduleName)) {
-        appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
-        valid = false;
-    }
 
     if (definition.hasDuplicateModuleName) {
         appendError(
@@ -553,11 +408,9 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
             "DUPLICATE",
             "module.name",
             QString("%1 is duplicated in the library").arg(definition.moduleName));
-        valid = false;
     }
     for (const QString &key : definition.duplicateKeys) {
         appendError(errors, "DUPLICATE", "module." + key, "property is duplicated");
-        valid = false;
     }
 
     const YAML::Node generator = definition.extraAttributes["generator"];
@@ -568,50 +421,43 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
     QString kind;
     if (!generator["kind"]) {
         appendError(errors, "REQUIRED", "generator.kind", "property is required");
-        valid = false;
-    } else if (!parseScalar(generator["kind"], "generator.kind", &kind, errors) || kind != "mmio") {
-        if (!kind.isEmpty()) {
+    } else {
+        const bool kindDecodable = parseScalar(generator["kind"], "generator.kind", &kind, errors);
+        // cppcheck-suppress knownConditionTrueFalse
+        if (kindDecodable && kind != "mmio") {
             appendError(errors, "KIND", "generator.kind", "must be mmio");
         }
-        valid = false;
     }
 
     QString bus;
     if (!generator["bus"]) {
         appendError(errors, "REQUIRED", "generator.bus", "property is required");
-        valid = false;
-    } else if (!parseScalar(generator["bus"], "generator.bus", &bus, errors) || bus != "axi4_lite") {
-        if (!bus.isEmpty()) {
+    } else {
+        const bool busDecodable = parseScalar(generator["bus"], "generator.bus", &bus, errors);
+        // cppcheck-suppress knownConditionTrueFalse
+        if (busDecodable && bus != "axi4_lite") {
             appendError(errors, "BUS", "generator.bus", "must be axi4_lite");
         }
-        valid = false;
     }
 
-    const bool widthsValid = parseBusWidths(generator, plan, errors);
-    valid                  = widthsValid && valid;
+    const bool widthsDecodable = parseBusWidths(generator, plan, errors);
 
     if (definition.hasParameterSection || !definition.parameters.isEmpty()) {
         appendError(errors, "MANUAL_SECTION", "module.parameter", "is not allowed for MMIO modules");
-        valid = false;
     }
     if (definition.hasPortSection || !definition.ports.isEmpty()) {
         appendError(errors, "MANUAL_SECTION", "module.port", "is not allowed for MMIO modules");
-        valid = false;
     }
     if (definition.hasBusSection || !definition.busInterfaces.isEmpty()) {
         appendError(errors, "MANUAL_SECTION", "module.bus", "is not allowed for MMIO modules");
-        valid = false;
     }
 
     if (!generator["register"]) {
         appendError(errors, "REQUIRED", "generator.register", "property is required");
         return false;
     }
-    if (!widthsValid) {
-        return false;
-    }
-    QSet<QString> ports = kFixedPorts;
-    return parseRegisters(generator["register"], plan, &ports, errors) && valid;
+    const bool registersDecodable = parseRegisters(generator["register"], plan, errors);
+    return widthsDecodable && registersDecodable;
 }
 
 QString packedRange(quint32 width)
@@ -777,32 +623,57 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                 continue;
             }
             fieldNames.insert(field.name);
+            bool fieldShapeValid = true;
             if (field.width == 0) {
                 appendError(errors, "RANGE", fieldPath + ".width", "must be at least 1");
-                valid = false;
-                continue;
+                valid           = false;
+                fieldShapeValid = false;
+            } else if (field.width > plan.dataWidth) {
+                appendError(
+                    errors,
+                    "RANGE",
+                    fieldPath + ".width",
+                    QString("must be at most %1").arg(plan.dataWidth));
+                valid           = false;
+                fieldShapeValid = false;
             }
-            if (quint64(field.lsb) + field.width > plan.dataWidth) {
+            if (field.lsb >= plan.dataWidth) {
+                appendError(
+                    errors,
+                    "RANGE",
+                    fieldPath + ".lsb",
+                    QString("must be at most %1").arg(plan.dataWidth - 1));
+                valid           = false;
+                fieldShapeValid = false;
+            } else if (fieldShapeValid && quint64(field.lsb) + field.width > plan.dataWidth) {
                 appendError(
                     errors,
                     "RANGE",
                     fieldPath,
                     QString("field must fit within %1 bits").arg(plan.dataWidth));
-                valid = false;
-                continue;
+                valid           = false;
+                fieldShapeValid = false;
             }
-            const quint64 mask = maximumForWidth(field.width) << field.lsb;
-            if ((occupied & mask) != 0) {
-                appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
-                valid = false;
-                continue;
-            }
-            occupied |= mask;
-            for (const QString &portName : {field.inputPort, field.outputPort}) {
-                if (!portName.isEmpty() && !QSocVerilogUtils::isValidVerilogIdentifier(portName)) {
-                    appendError(errors, "IDENTIFIER", fieldPath, "must be a Verilog identifier");
+            if (fieldShapeValid) {
+                const quint64 mask = maximumForWidth(field.width) << field.lsb;
+                if ((occupied & mask) != 0) {
+                    appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
                     valid = false;
+                } else {
+                    occupied |= mask;
                 }
+            }
+            if (!field.inputPort.isEmpty()
+                && !QSocVerilogUtils::isValidVerilogIdentifier(field.inputPort)) {
+                appendError(
+                    errors, "IDENTIFIER", fieldPath + ".input", "must be a Verilog identifier");
+                valid = false;
+            }
+            if (!field.outputPort.isEmpty()
+                && !QSocVerilogUtils::isValidVerilogIdentifier(field.outputPort)) {
+                appendError(
+                    errors, "IDENTIFIER", fieldPath + ".output", "must be a Verilog identifier");
+                valid = false;
             }
             if (field.access == QSocMmioAccess::ReadWrite) {
                 if (!field.resetValue.has_value()) {
@@ -812,16 +683,24 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                         fieldPath + ".reset",
                         "property is required for rw fields");
                     valid = false;
-                } else if (!valueFitsWidth(*field.resetValue, field.width)) {
+                } else if (
+                    field.width > 0 && field.width <= plan.dataWidth
+                    && !valueFitsWidth(*field.resetValue, field.width)) {
                     appendError(
                         errors, "RANGE", fieldPath + ".reset", "value does not fit field width");
                     valid = false;
                 }
-                if (!field.inputPort.isEmpty() || field.constantValue.has_value()) {
-                    appendError(errors, "ACCESS", fieldPath, "rw fields drive only an output");
+                if (!field.inputPort.isEmpty()) {
+                    appendError(
+                        errors, "ACCESS", fieldPath + ".input", "is not allowed for rw fields");
                     valid = false;
                 }
-            } else {
+                if (field.constantValue.has_value()) {
+                    appendError(
+                        errors, "ACCESS", fieldPath + ".value", "is not allowed for rw fields");
+                    valid = false;
+                }
+            } else if (field.access == QSocMmioAccess::ReadOnly) {
                 const int sources = (field.inputPort.isEmpty() ? 0 : 1)
                                     + (field.constantValue.has_value() ? 1 : 0);
                 if (sources != 1) {
@@ -832,16 +711,26 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                         "ro fields require exactly one of input or value");
                     valid = false;
                 }
-                if (field.constantValue.has_value()
+                if (field.constantValue.has_value() && field.width > 0
+                    && field.width <= plan.dataWidth
                     && !valueFitsWidth(*field.constantValue, field.width)) {
                     appendError(
                         errors, "RANGE", fieldPath + ".value", "value does not fit field width");
                     valid = false;
                 }
-                if (field.resetValue.has_value() || !field.outputPort.isEmpty()) {
-                    appendError(errors, "ACCESS", fieldPath, "ro fields have no reset or output");
+                if (field.resetValue.has_value()) {
+                    appendError(
+                        errors, "ACCESS", fieldPath + ".reset", "is not allowed for ro fields");
                     valid = false;
                 }
+                if (!field.outputPort.isEmpty()) {
+                    appendError(
+                        errors, "ACCESS", fieldPath + ".output", "is not allowed for ro fields");
+                    valid = false;
+                }
+            } else {
+                appendError(errors, "ACCESS", fieldPath + ".access", "must be rw or ro");
+                valid = false;
             }
             valid = claimSideband(field, fieldPath, &ports, errors) && valid;
         }
@@ -1182,7 +1071,13 @@ bool QSocMmioGenerator::buildPlan(
 
     QSocMmioPlan localPlan;
     QStringList  localErrors;
-    const bool   valid = parsePlan(definition, &localPlan, &localErrors);
+    const bool   parsed = parsePlan(definition, &localPlan, &localErrors);
+    bool         valid  = parsed;
+    if (parsed) {
+        QStringList canonicalErrors;
+        valid = canonicalizePlan(&localPlan, &canonicalErrors);
+        localErrors.append(canonicalErrors);
+    }
     localErrors.sort(Qt::CaseSensitive);
     if (!valid || !localErrors.isEmpty()) {
         if (errors) {
@@ -1191,12 +1086,6 @@ bool QSocMmioGenerator::buildPlan(
         return false;
     }
 
-    if (!canonicalizePlan(&localPlan, &localErrors)) {
-        if (errors) {
-            *errors = localErrors;
-        }
-        return false;
-    }
     if (errors) {
         errors->clear();
     }
