@@ -115,7 +115,8 @@ Generation writes six files under `output/<library>/<module>/`:
 the public wrapper, the `<module>.f` file list, the `<module>.iomux.rpt`
 route report, and the `<module>_integration.soc_net` fragment. Selector
 sidebands stay inside the wrapper and never reach the public interface. Each
-endpoint port carries a `function.signal` comment in the wrapper header.
+endpoint port carries a `function.signal` comment in the wrapper header. The
+report shows each selector location and lists unused slots per pin.
 
 == Integration
 <iomux-integration>
@@ -131,7 +132,9 @@ The fragment instantiates the public wrapper once and connects the clock, the
 reset, the four pad vectors, the control bus, and every non-constant endpoint
 exactly once. The control link must carry exactly one master before the merge
 and exactly one master and one slave after it. An invalid generator source
-blocks the whole netlist instead of falling back to a stale module view.
+blocks the whole netlist instead of falling back to a stale module view. A
+generated IOMUX instance name may not already exist in another merged input.
+Any failed generated-module check leaves an existing top-level output untouched.
 
 == Formal Collateral
 <iomux-formal-collateral>
