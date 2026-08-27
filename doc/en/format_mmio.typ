@@ -148,9 +148,11 @@ sby -f <module>_formal.sby cover
 The generated job also has a `bmc` task for bounded counterexamples; omit the
 task name to run `prove`, `bmc`, and `cover`. The harness follows the selected
 address width, data width, register layout, resets, sidebands, byte strobes,
-responses, and backpressure. It covers the generated AXI4-Lite slave only. No
-The harness holds reset active for two clock steps before release; it does not
-explore reset reassertion during traffic.
+responses, and backpressure. It covers the generated AXI4-Lite slave only.
+The harness holds reset active for two clock steps, guarantees one active
+cycle, and then allows reset to reassert during traffic. It checks bus
+quiescence and register state during reset, and covers reset aborts with a
+pending write address, write data, write response, or read response.
 
 == UVM Testbench
 <mmio-uvm-testbench>
