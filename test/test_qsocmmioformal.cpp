@@ -250,7 +250,7 @@ CommandResult runCommand(
         result.output = process.errorString().toUtf8();
         return result;
     }
-    result.finished = process.waitForFinished(120000);
+    result.finished = process.waitForFinished(600000);
     if (!result.finished) {
         process.kill();
         process.waitForFinished();
