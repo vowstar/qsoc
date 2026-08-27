@@ -688,6 +688,167 @@ QString storageName(int index)
     return QString("mmio_field_%1_q").arg(index);
 }
 
+bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
+{
+    bool valid = true;
+    if (!QSocVerilogUtils::isValidVerilogIdentifier(plan.moduleName)) {
+        appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
+        valid = false;
+    }
+    if (plan.dataWidth != 32 && plan.dataWidth != 64) {
+        appendError(errors, "RANGE", "generator.data_width", "must be 32 or 64");
+        return false;
+    }
+    const quint32 minimumAddressWidth = plan.dataWidth == 64 ? 3 : 2;
+    if (plan.addressWidth < minimumAddressWidth || plan.addressWidth > 64) {
+        appendError(
+            errors,
+            "RANGE",
+            "generator.address_width",
+            QString("must be between %1 and 64").arg(minimumAddressWidth));
+        return false;
+    }
+    if (plan.registers.isEmpty()) {
+        appendError(errors, "EMPTY", "generator.register", "must contain at least one register");
+        return false;
+    }
+
+    QSet<QString>           registerNames;
+    QHash<quint64, QString> offsets;
+    QSet<QString>           ports     = kFixedPorts;
+    const quint64           byteCount = plan.dataWidth / 8;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        const QString registerPath = "generator.register." + reg.name;
+        if (!QSocVerilogUtils::isValidVerilogIdentifier(reg.name)) {
+            appendError(
+                errors, "IDENTIFIER", registerPath, "register name must be a Verilog identifier");
+            valid = false;
+        }
+        if (registerNames.contains(reg.name)) {
+            appendError(errors, "DUPLICATE", registerPath, "register is duplicated");
+            valid = false;
+            continue;
+        }
+        registerNames.insert(reg.name);
+        if (reg.byteOffset > maximumForWidth(plan.addressWidth)) {
+            appendError(
+                errors,
+                "RANGE",
+                registerPath + ".offset",
+                QString("must be at most %1").arg(maximumForWidth(plan.addressWidth)));
+            valid = false;
+        }
+        if ((reg.byteOffset & (byteCount - 1)) != 0) {
+            appendError(
+                errors,
+                "ALIGNMENT",
+                registerPath + ".offset",
+                QString("must be %1-byte aligned").arg(byteCount));
+            valid = false;
+        }
+        if (offsets.contains(reg.byteOffset)) {
+            appendError(
+                errors,
+                "DUPLICATE",
+                registerPath + ".offset",
+                QString("duplicates %1").arg(offsets.value(reg.byteOffset)));
+            valid = false;
+        } else {
+            offsets.insert(reg.byteOffset, registerPath + ".offset");
+        }
+        if (reg.fields.isEmpty()) {
+            appendError(errors, "EMPTY", registerPath + ".field", "must contain at least one field");
+            valid = false;
+            continue;
+        }
+
+        quint64       occupied = 0;
+        QSet<QString> fieldNames;
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            const QString fieldPath = registerPath + ".field." + field.name;
+            if (!QSocVerilogUtils::isValidVerilogIdentifier(field.name)) {
+                appendError(
+                    errors, "IDENTIFIER", fieldPath, "field name must be a Verilog identifier");
+                valid = false;
+            }
+            if (fieldNames.contains(field.name)) {
+                appendError(errors, "DUPLICATE", fieldPath, "field is duplicated");
+                valid = false;
+                continue;
+            }
+            fieldNames.insert(field.name);
+            if (field.width == 0) {
+                appendError(errors, "RANGE", fieldPath + ".width", "must be at least 1");
+                valid = false;
+                continue;
+            }
+            if (quint64(field.lsb) + field.width > plan.dataWidth) {
+                appendError(
+                    errors,
+                    "RANGE",
+                    fieldPath,
+                    QString("field must fit within %1 bits").arg(plan.dataWidth));
+                valid = false;
+                continue;
+            }
+            const quint64 mask = maximumForWidth(field.width) << field.lsb;
+            if ((occupied & mask) != 0) {
+                appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
+                valid = false;
+                continue;
+            }
+            occupied |= mask;
+            for (const QString &portName : {field.inputPort, field.outputPort}) {
+                if (!portName.isEmpty() && !QSocVerilogUtils::isValidVerilogIdentifier(portName)) {
+                    appendError(errors, "IDENTIFIER", fieldPath, "must be a Verilog identifier");
+                    valid = false;
+                }
+            }
+            if (field.access == QSocMmioAccess::ReadWrite) {
+                if (!field.resetValue.has_value()) {
+                    appendError(
+                        errors,
+                        "REQUIRED",
+                        fieldPath + ".reset",
+                        "property is required for rw fields");
+                    valid = false;
+                } else if (!valueFitsWidth(*field.resetValue, field.width)) {
+                    appendError(
+                        errors, "RANGE", fieldPath + ".reset", "value does not fit field width");
+                    valid = false;
+                }
+                if (!field.inputPort.isEmpty() || field.constantValue.has_value()) {
+                    appendError(errors, "ACCESS", fieldPath, "rw fields drive only an output");
+                    valid = false;
+                }
+            } else {
+                const int sources = (field.inputPort.isEmpty() ? 0 : 1)
+                                    + (field.constantValue.has_value() ? 1 : 0);
+                if (sources != 1) {
+                    appendError(
+                        errors,
+                        "SOURCE",
+                        fieldPath,
+                        "ro fields require exactly one of input or value");
+                    valid = false;
+                }
+                if (field.constantValue.has_value()
+                    && !valueFitsWidth(*field.constantValue, field.width)) {
+                    appendError(
+                        errors, "RANGE", fieldPath + ".value", "value does not fit field width");
+                    valid = false;
+                }
+                if (field.resetValue.has_value() || !field.outputPort.isEmpty()) {
+                    appendError(errors, "ACCESS", fieldPath, "ro fields have no reset or output");
+                    valid = false;
+                }
+            }
+            valid = claimSideband(field, fieldPath, &ports, errors) && valid;
+        }
+    }
+    return valid;
+}
+
 QStringList modulePorts(const QSocMmioPlan &plan)
 {
     QStringList ports = {
@@ -1030,7 +1191,12 @@ bool QSocMmioGenerator::buildPlan(
         return false;
     }
 
-    sortPlan(&localPlan);
+    if (!canonicalizePlan(&localPlan, &localErrors)) {
+        if (errors) {
+            *errors = localErrors;
+        }
+        return false;
+    }
     if (errors) {
         errors->clear();
     }
@@ -1038,6 +1204,66 @@ bool QSocMmioGenerator::buildPlan(
         *plan = localPlan;
     }
     return true;
+}
+
+bool QSocMmioGenerator::canonicalizePlan(QSocMmioPlan *plan, QStringList *errors)
+{
+    QStringList localErrors;
+    const bool  valid = validatePlanInvariants(*plan, &localErrors);
+    localErrors.sort(Qt::CaseSensitive);
+    if (!valid || !localErrors.isEmpty()) {
+        if (errors) {
+            *errors = localErrors;
+        }
+        return false;
+    }
+    sortPlan(plan);
+    if (errors) {
+        errors->clear();
+    }
+    return true;
+}
+
+QString QSocMmioGenerator::generateVerilog(const QSocMmioPlan &plan)
+{
+    return buildVerilog(plan);
+}
+
+QList<QSocMmioPortDescription> QSocMmioGenerator::describePorts(const QSocMmioPlan &plan)
+{
+    QList<QSocMmioPortDescription> ports
+        = {{"clk_i", "input", 1},
+           {"rst_ni", "input", 1},
+           {"s_axi_awaddr", "input", plan.addressWidth},
+           {"s_axi_awprot", "input", 3},
+           {"s_axi_awvalid", "input", 1},
+           {"s_axi_awready", "output", 1},
+           {"s_axi_wdata", "input", plan.dataWidth},
+           {"s_axi_wstrb", "input", plan.dataWidth / 8},
+           {"s_axi_wvalid", "input", 1},
+           {"s_axi_wready", "output", 1},
+           {"s_axi_bresp", "output", 2},
+           {"s_axi_bvalid", "output", 1},
+           {"s_axi_bready", "input", 1},
+           {"s_axi_araddr", "input", plan.addressWidth},
+           {"s_axi_arprot", "input", 3},
+           {"s_axi_arvalid", "input", 1},
+           {"s_axi_arready", "output", 1},
+           {"s_axi_rdata", "output", plan.dataWidth},
+           {"s_axi_rresp", "output", 2},
+           {"s_axi_rvalid", "output", 1},
+           {"s_axi_rready", "input", 1}};
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (!field.inputPort.isEmpty()) {
+                ports.append({field.inputPort, "input", field.width});
+            }
+            if (!field.outputPort.isEmpty()) {
+                ports.append({field.outputPort, "output", field.width});
+            }
+        }
+    }
+    return ports;
 }
 
 bool QSocMmioGenerator::generateVerilog(
