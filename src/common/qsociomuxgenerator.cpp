@@ -759,11 +759,9 @@ struct EndpointPort
     const QSocIomuxEndpointPlan *endpoint;
 };
 
-QString endpointPortName(const EndpointPort &port)
+QString endpointName(const EndpointPort &port)
 {
-    const QString suffix = port.role == QSocIomuxRole::InputValue ? QStringLiteral("o")
-                                                                  : QStringLiteral("i");
-    return QString("hs_p%1_s%2_%3_%4").arg(port.pin).arg(port.slot).arg(roleKey(port.role), suffix);
+    return QSocIomuxGenerator::endpointPortName(port.pin, port.slot, port.role);
 }
 
 QString endpointComment(const EndpointPort &port)
@@ -808,7 +806,7 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
     ports.append({"pad_output_enable_o", "output", plan.pinCount});
     for (const EndpointPort &endpoint : endpointPorts(plan)) {
         ports.append(
-            {endpointPortName(endpoint),
+            {endpointName(endpoint),
              endpoint.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
                                                         : QStringLiteral("input"),
              1});
@@ -845,7 +843,7 @@ QString txLaneExpression(const QSocIomuxPlan &plan, quint32 pin, quint32 slot, Q
     const QSocIomuxEndpointPlan &endpoint = routeRole(*route, role);
     if (!endpoint.link.isEmpty()) {
         EndpointPort  port{pin, slot, role, route, &endpoint};
-        const QString name = endpointPortName(port);
+        const QString name = endpointName(port);
         return endpoint.invert ? name + " ^ 1'b1" : name;
     }
     if (endpoint.constant.has_value() && *endpoint.constant == 1) {
@@ -855,6 +853,13 @@ QString txLaneExpression(const QSocIomuxPlan &plan, quint32 pin, quint32 slot, Q
 }
 
 } // namespace
+
+QString QSocIomuxGenerator::endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role)
+{
+    const QString suffix = role == QSocIomuxRole::InputValue ? QStringLiteral("o")
+                                                             : QStringLiteral("i");
+    return QString("hs_p%1_s%2_%3_%4").arg(pin).arg(slot).arg(roleKey(role), suffix);
+}
 
 bool QSocIomuxGenerator::isIomux(const QSocModuleDefinition &definition)
 {
@@ -1002,7 +1007,7 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
     for (const EndpointPort &port : ports) {
         const QString direction = port.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
                                                                          : QStringLiteral("input ");
-        declarations.append(QString("    %1 wire %2").arg(direction, endpointPortName(port)));
+        declarations.append(QString("    %1 wire %2").arg(direction, endpointName(port)));
         comments.append(endpointComment(port));
     }
     for (qsizetype index = 0; index < declarations.size(); ++index) {
@@ -1036,7 +1041,7 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
         const QString expression = port.endpoint->invert
                                        ? QString("rx_input_value_i[%1] ^ 1'b1").arg(index)
                                        : QString("rx_input_value_i[%1]").arg(index);
-        lines.append(QString("assign %1 = %2;").arg(endpointPortName(port), expression));
+        lines.append(QString("assign %1 = %2;").arg(endpointName(port), expression));
     }
     lines.append(QString());
     lines.append("endmodule");
@@ -1121,7 +1126,7 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_enable_o(tx_output_enable_w)",
            "    .rx_input_value_i(rx_input_value_w)"};
     for (const EndpointPort &port : endpoints) {
-        connConnections.append(QString("    .%1(%1)").arg(endpointPortName(port)));
+        connConnections.append(QString("    .%1(%1)").arg(endpointName(port)));
     }
     lines.append(QString("%1_conn u_conn (").arg(plan.moduleName));
     for (qsizetype index = 0; index < connConnections.size(); ++index) {
@@ -1190,7 +1195,7 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
     lines.append("      pad_output_enable_o:");
     lines.append(QString("        link: %1").arg(integration.padOutputEnable));
     for (const EndpointPort &port : endpointPorts(plan)) {
-        lines.append(QString("      %1:").arg(endpointPortName(port)));
+        lines.append(QString("      %1:").arg(endpointName(port)));
         lines.append(QString("        link: %1").arg(port.endpoint->link));
         if (port.endpoint->bit.has_value()) {
             lines.append(QString("        bits: \"[%1]\"").arg(*port.endpoint->bit));

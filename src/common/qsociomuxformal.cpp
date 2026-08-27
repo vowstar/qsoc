@@ -20,28 +20,6 @@ quint32 selectorWidth(quint32 hsSlots)
     return 3;
 }
 
-QString roleKey(QSocIomuxRole role)
-{
-    switch (role) {
-    case QSocIomuxRole::InputValue:
-        return QStringLiteral("input_value");
-    case QSocIomuxRole::InputEnable:
-        return QStringLiteral("input_enable");
-    case QSocIomuxRole::OutputValue:
-        return QStringLiteral("output_value");
-    case QSocIomuxRole::OutputEnable:
-        return QStringLiteral("output_enable");
-    }
-    return QString();
-}
-
-QString endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role)
-{
-    const QString suffix = role == QSocIomuxRole::InputValue ? QStringLiteral("o")
-                                                             : QStringLiteral("i");
-    return QString("hs_p%1_s%2_%3_%4").arg(pin).arg(slot).arg(roleKey(role), suffix);
-}
-
 const QSocIomuxEndpointPlan &routeRole(const QSocIomuxRoutePlan &route, QSocIomuxRole role)
 {
     switch (role) {
@@ -76,7 +54,7 @@ QString expectedRoleExpression(
     }
     const QSocIomuxEndpointPlan &endpoint = routeRole(*route, role);
     if (!endpoint.link.isEmpty()) {
-        const QString name = endpointPortName(pin, slot, role);
+        const QString name = QSocIomuxGenerator::endpointPortName(pin, slot, role);
         return endpoint.invert ? name + " ^ 1'b1" : name;
     }
     if (endpoint.constant.has_value() && *endpoint.constant == 1) {
@@ -102,7 +80,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
             if (endpoint.link.isEmpty()) {
                 continue;
             }
-            const QString name = endpointPortName(route.pin, route.slot, role);
+            const QString name = QSocIomuxGenerator::endpointPortName(route.pin, route.slot, role);
             if (role == QSocIomuxRole::InputValue) {
                 rxPorts.append(name);
             } else {
@@ -155,7 +133,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
             if (routeRole(route, role).link.isEmpty()) {
                 continue;
             }
-            const QString name = endpointPortName(route.pin, route.slot, role);
+            const QString name = QSocIomuxGenerator::endpointPortName(route.pin, route.slot, role);
             connConnections.append(QString("    .%1(%1)").arg(name));
         }
     }
@@ -222,7 +200,8 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
         if (endpoint.link.isEmpty()) {
             continue;
         }
-        const QString name = endpointPortName(route.pin, route.slot, QSocIomuxRole::InputValue);
+        const QString name
+            = QSocIomuxGenerator::endpointPortName(route.pin, route.slot, QSocIomuxRole::InputValue);
         const QString expression = endpoint.invert
                                        ? QString("pad_input_value_i[%1] ^ 1'b1").arg(route.pin)
                                        : QString("pad_input_value_i[%1]").arg(route.pin);

@@ -82,6 +82,7 @@ public:
     static QStringList validate(const QSocModuleDefinition &definition);
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
+    static QString    endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role);
     static QString    generateCoreVerilog(const QSocIomuxPlan &plan);
     static QString    generateConnVerilog(const QSocIomuxPlan &plan);
     static QString    generateRegsVerilog(const QSocIomuxPlan &plan);
