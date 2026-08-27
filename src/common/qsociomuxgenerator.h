@@ -68,6 +68,12 @@ struct QSocIomuxPlan
     bool operator==(const QSocIomuxPlan &) const = default;
 };
 
+struct QSocIomuxFormalCollateral
+{
+    QString systemVerilog;
+    QString sby;
+};
+
 class QSocIomuxGenerator
 {
 public:
