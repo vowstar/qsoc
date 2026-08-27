@@ -153,13 +153,48 @@ The generated job also has a `bmc` task for bounded counterexamples; omit the
 task name to run `prove`, `bmc`, and `cover`. The harness follows the selected
 address width, data width, register layout, resets, sidebands, byte strobes,
 responses, and backpressure. It covers the generated AXI4-Lite slave only. No
-UVM testbench is generated. The harness holds reset active for two clock steps
-before release; it does not explore reset reassertion during traffic.
+The harness holds reset active for two clock steps before release; it does not
+explore reset reassertion during traffic.
+
+== UVM Testbench
+<mmio-uvm-testbench>
+Add `--with-uvm` to generate a deterministic, self-checking UVM testbench:
+
+```bash
+qsoc generate module --with-uvm -l <library> <module>
+```
+
+The command selects `<module>.v`, `<module>_uvm_if.sv`,
+`<module>_uvm_pkg.sv`, `<module>_uvm_tb.sv`, and `<module>_uvm.f`. The file
+list contains relative generated sources; the UVM library remains an external
+dependency. Set `UVM_HOME` to the UVM checkout root and run from the generated
+module directory. The following invocation is verified with UVM 2020.3.1 and
+Verilator 5.050:
+
+```bash
+verilator --binary --timing --threads 1 -Wno-fatal \
+  +define+UVM_NO_DPI -I"$UVM_HOME/src" "$UVM_HOME/src/uvm_pkg.sv" \
+  --top-module <module>_uvm_tb -f <module>_uvm.f
+./obj_dir/V<module>_uvm_tb
+```
+
+Generation does not compile or run the testbench. The directed sequence runs
+twice with a reset between runs. It checks reset reads, RW and RO fields,
+constants, reserved bits, byte strobes, all write-address and write-data
+orders, response causality and backpressure, error responses, and that illegal
+writes have no side effects. Each channel has a 64-cycle timeout, followed by a
+three-cycle final drain. It follows the generated widths and sideband bindings.
+This is a module-specific MMIO testbench, not reusable AXI verification IP. A
+UVM error or fatal report makes the simulation process fail.
+
+`--with-formal` and `--with-uvm` are independent and may be combined. The
+combined command selects seven files. Generation locks and checks every
+selected target before writing; `--force` replaces only the selected set.
 
 == Current Limits
 <mmio-current-limits>
 This CLI slice supports one AXI4-Lite slave with a 32- or 64-bit data port and
-one configurable local address port. Optional formal collateral targets that
-same slave. It does not allocate a system address, create a netlist instance,
-insert a bus bridge, cross clock domains, or generate register arrays and
-extended access types. Use a wrapper for those functions.
+one configurable local address port. Optional formal and UVM collateral target
+that same slave. It does not allocate a system address, create a netlist
+instance, insert a bus bridge, cross clock domains, or generate register arrays
+and extended access types. Use a wrapper for those functions.

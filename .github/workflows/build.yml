@@ -18,6 +18,13 @@ jobs:
     - uses: actions/checkout@v7
       with:
         submodules: recursive
+    - name: Checkout UVM
+      if: github.event_name == 'pull_request'
+      uses: actions/checkout@v7
+      with:
+        repository: accellera-official/uvm-core
+        ref: 78c06547a2a0a29b3dc9dcafae62b75b2ff61544
+        path: .ci/uvm-core
     - name: Install depends
       run: >-
         sudo apt update &&
@@ -38,6 +45,7 @@ jobs:
         libxrender-dev
         iverilog
         linguist-qt6
+        make
         ninja-build
         openssh-server
         p7zip-full
@@ -104,6 +112,7 @@ jobs:
         # openssh-server and python3 are installed above, so a fixture that
         # cannot find sshd is a broken job declaration, not a developer machine.
         QSOC_TEST_DEPS_REQUIRED: '1'
+        UVM_HOME: ${{ github.workspace }}/.ci/uvm-core
       uses: coactions/setup-xvfb@v1
       with:
         working-directory: build

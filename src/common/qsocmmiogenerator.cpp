@@ -4,6 +4,7 @@
 #include "common/qsocmmiogenerator.h"
 
 #include "common/qsocmmioformal.h"
+#include "common/qsocmmiouvm.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocverilogutils.h"
 
@@ -1083,6 +1084,29 @@ bool QSocMmioGenerator::generateFormalCollateral(
     }
     if (collateral) {
         *collateral = QSocMmioFormal::generate(plan);
+    }
+    return true;
+}
+
+bool QSocMmioGenerator::generateUvmCollateral(
+    const QSocModuleDefinition &definition, QSocMmioUvmCollateral *collateral, QStringList *errors)
+{
+    if (collateral) {
+        *collateral = QSocMmioUvmCollateral();
+    }
+    QSocMmioPlan plan;
+    QStringList  localErrors;
+    if (!buildPlan(definition, &plan, &localErrors)) {
+        if (errors) {
+            *errors = localErrors;
+        }
+        return false;
+    }
+    if (errors) {
+        errors->clear();
+    }
+    if (collateral) {
+        *collateral = QSocMmioUvm::generate(plan);
     }
     return true;
 }

@@ -325,6 +325,8 @@ The generate command provides functionality for generating different types of ou
     [Generates one module selected by exact name],
     [`--with-formal`],
     [Also generates `<module>_formal.sv` and `<module>_formal.sby`],
+    [`--with-uvm`],
+    [Also generates the UVM interface, package, testbench, and file list],
     [`-f`, `--force`], [Replaces every selected output file],
     [`-d`, `--directory <path>`], [Selects the project directory],
     [`-p`, `--project <name>`], [Selects the project],
@@ -333,10 +335,11 @@ The generate command provides functionality for generating different types of ou
   kind: table,
 )
 
-`--with-formal` generates verification collateral but does not run a proof.
-Before opening or replacing a selected output file, generation checks every
-selected target. Without `--force`, one existing target rejects the operation
-without replacing any selected file.
+`--with-formal` and `--with-uvm` generate verification collateral but do not
+run it. The options are independent and may be combined. Before opening or
+replacing a selected output file, generation checks every selected target.
+Without `--force`, one existing target rejects the operation without replacing
+any selected file. `--force` replaces only the selected set.
 
 === Verilog Generation Options
 <verilog-generation>
