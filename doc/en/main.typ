@@ -56,6 +56,7 @@
     #include "format_netlist.typ"
     #include "format_bus.typ"
     #include "format_mmio.typ"
+    #include "format_iomux.typ"
     #include "format_logic.typ"
     #include "format_fsm.typ"
     #include "format_reset.typ"
