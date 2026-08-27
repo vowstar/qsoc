@@ -322,6 +322,8 @@ void Test::generateWithFormalAndUvmTargetsRegs()
     QStringList   paths           = artifactPaths(outputDirectory);
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_formal.sv"));
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_formal.sby"));
+    paths.append(QDir(outputDirectory).filePath("iomux0_hs_formal.sv"));
+    paths.append(QDir(outputDirectory).filePath("iomux0_hs_formal.sby"));
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_if.sv"));
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_pkg.sv"));
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_tb.sv"));
@@ -331,6 +333,11 @@ void Test::generateWithFormalAndUvmTargetsRegs()
     }
     const QString sby = readTextFile(QDir(outputDirectory).filePath("iomux0_regs_formal.sby"));
     QVERIFY2(sby.contains("iomux0_regs.v"), qPrintable(sby));
+    const QString hsSby = readTextFile(QDir(outputDirectory).filePath("iomux0_hs_formal.sby"));
+    QVERIFY2(hsSby.contains("prep -top iomux0_hs_formal"), qPrintable(hsSby));
+    QVERIFY2(
+        generated.output.contains("covers iomux0_regs only, not routing"),
+        qPrintable(generated.output));
 }
 
 void Test::invalidSourceProducesNoArtifacts()

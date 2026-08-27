@@ -617,6 +617,7 @@ class Test : public QObject
 private slots:
     void draftIsRecognizedAndIncomplete();
     void planPreservesSemantics();
+    void endpointPortNamesAreStable();
     void omittedSlotCountMatchesExplicitDefault();
     void sourceOrderDoesNotChangeGeneratedVerilog();
     void selectorLayoutMatchesFrozenKnownAnswer_data();
@@ -697,6 +698,22 @@ void Test::planPreservesSemantics()
     const QSocMmioFieldPlan *pinCountField = findField(plan.mmio, "capability", "pin_count");
     QVERIFY(pinCountField != nullptr);
     QCOMPARE(pinCountField->constantValue.value(), quint64(2));
+}
+
+void Test::endpointPortNamesAreStable()
+{
+    QCOMPARE(
+        QSocIomuxGenerator::endpointPortName(2, 3, QSocIomuxRole::InputValue),
+        QString("hs_p2_s3_input_value_o"));
+    QCOMPARE(
+        QSocIomuxGenerator::endpointPortName(2, 3, QSocIomuxRole::InputEnable),
+        QString("hs_p2_s3_input_enable_i"));
+    QCOMPARE(
+        QSocIomuxGenerator::endpointPortName(2, 3, QSocIomuxRole::OutputValue),
+        QString("hs_p2_s3_output_value_i"));
+    QCOMPARE(
+        QSocIomuxGenerator::endpointPortName(2, 3, QSocIomuxRole::OutputEnable),
+        QString("hs_p2_s3_output_enable_i"));
 }
 
 void Test::omittedSlotCountMatchesExplicitDefault()
