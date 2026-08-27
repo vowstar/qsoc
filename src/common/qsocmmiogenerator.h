@@ -51,6 +51,15 @@ struct QSocMmioPlan
     bool operator==(const QSocMmioPlan &) const = default;
 };
 
+struct QSocMmioPortDescription
+{
+    QString name;
+    QString direction;
+    quint32 width = 1;
+
+    bool operator==(const QSocMmioPortDescription &) const = default;
+};
+
 struct QSocMmioFormalCollateral
 {
     QString systemVerilog;
@@ -73,7 +82,10 @@ public:
     static QStringList validate(const QSocModuleDefinition &definition);
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors = nullptr);
-    static bool generateVerilog(
+    static bool    canonicalizePlan(QSocMmioPlan *plan, QStringList *errors = nullptr);
+    static QString generateVerilog(const QSocMmioPlan &plan);
+    static QList<QSocMmioPortDescription> describePorts(const QSocMmioPlan &plan);
+    static bool                           generateVerilog(
         const QSocModuleDefinition &definition, QString *verilog, QStringList *errors = nullptr);
     static bool generateFormalCollateral(
         const QSocModuleDefinition &definition,
