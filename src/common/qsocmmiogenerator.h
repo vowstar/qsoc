@@ -57,6 +57,14 @@ struct QSocMmioFormalCollateral
     QString sby;
 };
 
+struct QSocMmioUvmCollateral
+{
+    QString interfaceSource;
+    QString packageSource;
+    QString testbenchSource;
+    QString fileList;
+};
+
 class QSocMmioGenerator
 {
 public:
@@ -70,6 +78,10 @@ public:
     static bool generateFormalCollateral(
         const QSocModuleDefinition &definition,
         QSocMmioFormalCollateral   *collateral,
+        QStringList                *errors = nullptr);
+    static bool generateUvmCollateral(
+        const QSocModuleDefinition &definition,
+        QSocMmioUvmCollateral      *collateral,
         QStringList                *errors = nullptr);
 };
 

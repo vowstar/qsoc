@@ -110,6 +110,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
          QCoreApplication::translate("main", "Replace existing requested output files.")},
         {"with-formal",
          QCoreApplication::translate("main", "Generate formal verification collateral.")},
+        {"with-uvm", QCoreApplication::translate("main", "Generate a UVM testbench.")},
     });
     parser.addPositionalArgument(
         "module", QCoreApplication::translate("main", "The exact module name."), "<module>");
@@ -200,6 +201,20 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         return showError(1, messages.join('\n'));
     }
 
+    QSocMmioUvmCollateral uvmCollateral;
+    const bool            withUvm = parser.isSet("with-uvm");
+    if (withUvm && !QSocMmioGenerator::generateUvmCollateral(definition, &uvmCollateral, &errors)) {
+        QStringList messages;
+        messages.reserve(errors.size());
+        for (const QString &error : errors) {
+            messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+        }
+        if (messages.isEmpty()) {
+            messages.append(QCoreApplication::translate("main", "Error: UVM generation failed."));
+        }
+        return showError(1, messages.join('\n'));
+    }
+
     QDir          outputDirectory(projectManager->getOutputPath());
     const QString relativeDirectory = QStringLiteral("%1/%2").arg(libraryName, moduleName);
     if (!outputDirectory.mkpath(relativeDirectory)) {
@@ -221,6 +236,24 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             QStringLiteral("%1/%2_formal.sby").arg(relativeDirectory, moduleName));
         artifacts.push_back({formalSystemVerilogPath, formalCollateral.systemVerilog.toUtf8()});
         artifacts.push_back({formalSbyPath, formalCollateral.sby.toUtf8()});
+    }
+    QString uvmInterfacePath;
+    QString uvmPackagePath;
+    QString uvmTestbenchPath;
+    QString uvmFileListPath;
+    if (withUvm) {
+        uvmInterfacePath = outputDirectory.filePath(
+            QStringLiteral("%1/%2_uvm_if.sv").arg(relativeDirectory, moduleName));
+        uvmPackagePath = outputDirectory.filePath(
+            QStringLiteral("%1/%2_uvm_pkg.sv").arg(relativeDirectory, moduleName));
+        uvmTestbenchPath = outputDirectory.filePath(
+            QStringLiteral("%1/%2_uvm_tb.sv").arg(relativeDirectory, moduleName));
+        uvmFileListPath = outputDirectory.filePath(
+            QStringLiteral("%1/%2_uvm.f").arg(relativeDirectory, moduleName));
+        artifacts.push_back({uvmInterfacePath, uvmCollateral.interfaceSource.toUtf8()});
+        artifacts.push_back({uvmPackagePath, uvmCollateral.packageSource.toUtf8()});
+        artifacts.push_back({uvmTestbenchPath, uvmCollateral.testbenchSource.toUtf8()});
+        artifacts.push_back({uvmFileListPath, uvmCollateral.fileList.toUtf8()});
     }
 
     std::vector<std::unique_ptr<QLockFile>> outputLocks;
@@ -276,15 +309,20 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         }
     }
 
+    QStringList messages = {
+        QCoreApplication::translate("main", "Generated MMIO Verilog: %1").arg(outputPath),
+    };
     if (withFormal) {
-        return showInfo(
-            0,
-            QCoreApplication::translate(
-                "main", "Generated MMIO Verilog: %1\nGenerated MMIO formal collateral: %2, %3")
-                .arg(outputPath, formalSystemVerilogPath, formalSbyPath));
+        messages.append(
+            QCoreApplication::translate("main", "Generated MMIO formal collateral: %1, %2")
+                .arg(formalSystemVerilogPath, formalSbyPath));
     }
-    return showInfo(
-        0, QCoreApplication::translate("main", "Generated MMIO Verilog: %1").arg(outputPath));
+    if (withUvm) {
+        messages.append(
+            QCoreApplication::translate("main", "Generated MMIO UVM testbench: %1, %2, %3, %4")
+                .arg(uvmInterfacePath, uvmPackagePath, uvmTestbenchPath, uvmFileListPath));
+    }
+    return showInfo(0, messages.join('\n'));
 }
 
 bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
