@@ -254,6 +254,236 @@ endmodule
 )VERILOG");
 }
 
+QSocModuleDefinition makeTailDefinition(
+    quint32 pinCount, quint32 hsSlots, quint32 dataWidth, quint32 addressWidth)
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: %1
+    address_width: %2
+    pin_count: %3
+    hs_slots: %4
+%5    route:
+      - pin: 0
+        slot: 0
+        function: head
+        signal: oe
+        output_enable: 1
+      - pin: %6
+        slot: 0
+        function: tail
+        signal: oe
+        output_enable: 1
+      - pin: %6
+        slot: %7
+        function: tail
+        signal: hi
+        input_value: {link: tail_rx}
+        input_enable: 1
+        output_value: 1
+)")
+                              .arg(dataWidth)
+                              .arg(addressWidth)
+                              .arg(pinCount)
+                              .arg(hsSlots)
+                              .arg(integrationBlock())
+                              .arg(pinCount - 1)
+                              .arg(hsSlots - 1));
+}
+
+QString axiTestbench()
+{
+    return QString(R"VERILOG(`timescale 1ns/1ps
+module tb;
+reg               clk_i;
+reg               rst_ni;
+reg  [@AW@-1:0]   s_axi_awaddr;
+reg  [2:0]        s_axi_awprot;
+reg               s_axi_awvalid;
+wire              s_axi_awready;
+reg  [@DW@-1:0]   s_axi_wdata;
+reg  [@SW@-1:0]   s_axi_wstrb;
+reg               s_axi_wvalid;
+wire              s_axi_wready;
+wire [1:0]        s_axi_bresp;
+wire              s_axi_bvalid;
+reg               s_axi_bready;
+reg  [@AW@-1:0]   s_axi_araddr;
+reg  [2:0]        s_axi_arprot;
+reg               s_axi_arvalid;
+wire              s_axi_arready;
+wire [@DW@-1:0]   s_axi_rdata;
+wire [1:0]        s_axi_rresp;
+wire              s_axi_rvalid;
+reg               s_axi_rready;
+reg  [@P@-1:0]    pad_in;
+wire [@P@-1:0]    pad_ie;
+wire [@P@-1:0]    pad_ov;
+wire [@P@-1:0]    pad_oe;
+wire              tail_rx_w;
+reg  [@DW@-1:0]   rdata;
+integer           failures;
+
+iomux0 dut (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .s_axi_awaddr(s_axi_awaddr),
+    .s_axi_awprot(s_axi_awprot),
+    .s_axi_awvalid(s_axi_awvalid),
+    .s_axi_awready(s_axi_awready),
+    .s_axi_wdata(s_axi_wdata),
+    .s_axi_wstrb(s_axi_wstrb),
+    .s_axi_wvalid(s_axi_wvalid),
+    .s_axi_wready(s_axi_wready),
+    .s_axi_bresp(s_axi_bresp),
+    .s_axi_bvalid(s_axi_bvalid),
+    .s_axi_bready(s_axi_bready),
+    .s_axi_araddr(s_axi_araddr),
+    .s_axi_arprot(s_axi_arprot),
+    .s_axi_arvalid(s_axi_arvalid),
+    .s_axi_arready(s_axi_arready),
+    .s_axi_rdata(s_axi_rdata),
+    .s_axi_rresp(s_axi_rresp),
+    .s_axi_rvalid(s_axi_rvalid),
+    .s_axi_rready(s_axi_rready),
+    .pad_input_value_i(pad_in),
+    .pad_input_enable_o(pad_ie),
+    .pad_output_value_o(pad_ov),
+    .pad_output_enable_o(pad_oe),
+    .hs_p@PIN@_s@HISLOT@_input_value_o(tail_rx_w)
+);
+
+always #5 clk_i = ~clk_i;
+
+task check_value;
+    input condition;
+    input [8*64-1:0] label;
+    begin
+        if (condition !== 1'b1) begin
+            failures = failures + 1;
+            $display("TEST_FAIL %0s", label);
+        end
+    end
+endtask
+
+task axi_write;
+    input [@AW@-1:0] address;
+    input [@DW@-1:0] data;
+    input [@SW@-1:0] strobe;
+    begin
+        @(negedge clk_i);
+        s_axi_awaddr  = address;
+        s_axi_awvalid = 1'b1;
+        while (s_axi_awready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_awvalid = 1'b0;
+        @(negedge clk_i);
+        s_axi_wdata  = data;
+        s_axi_wstrb  = strobe;
+        s_axi_wvalid = 1'b1;
+        while (s_axi_wready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_wvalid = 1'b0;
+        s_axi_bready = 1'b1;
+        while (s_axi_bvalid !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_bready = 1'b0;
+    end
+endtask
+
+task axi_read;
+    input [@AW@-1:0] address;
+    begin
+        @(negedge clk_i);
+        s_axi_araddr  = address;
+        s_axi_arvalid = 1'b1;
+        while (s_axi_arready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_arvalid = 1'b0;
+        while (s_axi_rvalid !== 1'b1)
+            @(negedge clk_i);
+        rdata = s_axi_rdata;
+        s_axi_rready = 1'b1;
+        @(posedge clk_i);
+        #1 s_axi_rready = 1'b0;
+    end
+endtask
+
+initial begin
+    failures      = 0;
+    clk_i         = 1'b0;
+    rst_ni        = 1'b0;
+    pad_in        = {@P@{1'b0}};
+    s_axi_awaddr  = {@AW@{1'b0}};
+    s_axi_awprot  = 3'b000;
+    s_axi_awvalid = 1'b0;
+    s_axi_wdata   = {@DW@{1'b0}};
+    s_axi_wstrb   = {@SW@{1'b0}};
+    s_axi_wvalid  = 1'b0;
+    s_axi_bready  = 1'b0;
+    s_axi_araddr  = {@AW@{1'b0}};
+    s_axi_arprot  = 3'b000;
+    s_axi_arvalid = 1'b0;
+    s_axi_rready  = 1'b0;
+    repeat (4) @(negedge clk_i);
+    rst_ni = 1'b1;
+    repeat (2) @(negedge clk_i);
+
+    check_value(pad_oe[@PIN@] === 1'b1, "reset selects slot 0 oe");
+    check_value(pad_ie[@PIN@] === 1'b0, "reset slot 0 ie low");
+    check_value(pad_ov[@PIN@] === 1'b0, "reset slot 0 ov low");
+    check_value(pad_oe[0] === 1'b1, "reset pin 0 slot 0 oe");
+
+    axi_read({@AW@{1'b0}});
+    check_value(rdata[31:0] === 32'h@CAP@, "capability value");
+
+    pad_in[@PIN@] = 1'b1;
+    @(negedge clk_i);
+    check_value(tail_rx_w === 1'b1, "rx sink sees pad before select");
+
+    axi_write(@AW@'h@SEL_OFFSET@, @DW@'h@CODE@ << @LANE_LSB@, {@SW@{1'b1}});
+    repeat (2) @(negedge clk_i);
+    check_value(pad_ie[@PIN@] === 1'b1, "selected slot drives ie");
+    check_value(pad_ov[@PIN@] === 1'b1, "selected slot drives ov");
+    check_value(pad_oe[@PIN@] === 1'b0, "selected slot releases oe");
+
+    axi_read(@AW@'h@SEL_OFFSET@);
+    check_value(rdata === (@DW@'h@CODE@ << @LANE_LSB@), "selector readback reserved zero");
+
+    check_value(tail_rx_w === 1'b1, "rx sink sees pad after select");
+    pad_in[@PIN@] = 1'b0;
+    @(negedge clk_i);
+    check_value(tail_rx_w === 1'b0, "rx sink tracks pad");
+
+    axi_write({@AW@{1'b0}}, {@DW@{1'b1}}, {@SW@{1'b1}});
+    axi_read({@AW@{1'b0}});
+    check_value(rdata[31:0] === 32'h@CAP@, "capability write ignored");
+
+    axi_write(@AW@'h@W0_OFFSET@, @DW@'h@CODE@, {@SW@{1'b1}});
+    repeat (2) @(negedge clk_i);
+    check_value(pad_oe[0] === 1'b0, "pin 0 undeclared slot drives zero");
+    axi_write(@AW@'h@W0_OFFSET@, {@DW@{1'b0}}, @KEEP_STRB@);
+    repeat (2) @(negedge clk_i);
+    check_value(pad_oe[0] === 1'b0, "byte strobe leaves pin 0 lane");
+    axi_write(@AW@'h@W0_OFFSET@, {@DW@{1'b0}}, {@SW@{1'b1}});
+    repeat (2) @(negedge clk_i);
+    check_value(pad_oe[0] === 1'b1, "full strobe restores slot 0");
+
+    if (failures == 0)
+        $display("TEST_PASS");
+    else
+        $display("TEST_FAIL count=%0d", failures);
+    $finish;
+end
+endmodule
+)VERILOG");
+}
+
 const QSocMmioFieldPlan *findField(
     const QSocMmioPlan &mmio, const QString &registerName, const QString &fieldName)
 {
@@ -289,7 +519,10 @@ private slots:
     void reportListsRoutesAndLayout();
     void invalidSource_data();
     void invalidSource();
+    void regsAndTopEmittersComposePlan();
     void routingSimulationWhenIverilogIsAvailable();
+    void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
+    void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -725,6 +958,36 @@ void Test::invalidSource()
     QVERIFY2(found, qPrintable(expectedError + "\nactual:\n" + errors.join('\n')));
 }
 
+void Test::regsAndTopEmittersComposePlan()
+{
+    QSocIomuxPlan plan;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &plan));
+
+    const QString regs = QSocIomuxGenerator::generateRegsVerilog(plan);
+    QVERIFY(regs.contains("module iomux0_regs ("));
+    QVERIFY(regs.contains("pin_0_select_o"));
+    QVERIFY(regs.contains("pin_1_select_o"));
+
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains("module iomux0_core ("));
+    QVERIFY(top.contains("module iomux0 ("));
+    QVERIFY(top.contains("iomux0_regs u_regs ("));
+    QVERIFY(top.contains("iomux0_conn u_conn ("));
+    QVERIFY(top.contains("iomux0_core u_core ("));
+    QVERIFY(top.contains("/* uart0.tx */"));
+
+    const int     headerEnd = int(top.indexOf(");", top.indexOf("module iomux0 (")));
+    const QString header
+        = top.mid(top.indexOf("module iomux0 ("), headerEnd - int(top.indexOf("module iomux0 (")));
+    QVERIFY(!header.contains("pin_0_select"));
+    QVERIFY(header.contains("pad_input_value_i"));
+    QVERIFY(header.contains("hs_p0_s0_input_value_o"));
+
+    QCOMPARE(
+        QSocIomuxGenerator::generateFileList(plan),
+        QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
+}
+
 void Test::routingSimulationWhenIverilogIsAvailable()
 {
     const QString compiler = QStandardPaths::findExecutable("iverilog");
@@ -770,6 +1033,99 @@ void Test::routingSimulationWhenIverilogIsAvailable()
     QCOMPARE(simulation.exitCode(), 0);
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable_data()
+{
+    QTest::addColumn<quint32>("pinCount");
+    QTest::addColumn<quint32>("hsSlots");
+    QTest::addColumn<quint32>("dataWidth");
+
+    QTest::newRow("2-2-32") << 2U << 2U << 32U;
+    QTest::newRow("185-4-32") << 185U << 4U << 32U;
+    QTest::newRow("185-4-64") << 185U << 4U << 64U;
+    QTest::newRow("256-8-32") << 256U << 8U << 32U;
+    QTest::newRow("256-8-64") << 256U << 8U << 64U;
+}
+
+void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QFETCH(quint32, pinCount);
+    QFETCH(quint32, hsSlots);
+    QFETCH(quint32, dataWidth);
+    const quint32 addressWidth = 8;
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makeTailDefinition(pinCount, hsSlots, dataWidth, addressWidth), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    const quint32 pin        = pinCount - 1;
+    const quint32 byteCount  = dataWidth / 8;
+    const quint32 lanes      = dataWidth / 4;
+    const quint32 code       = hsSlots - 1;
+    const quint64 selOffset  = quint64(1 + pin / lanes) * byteCount;
+    const quint32 laneLsb    = (pin % lanes) * 4;
+    const quint32 capability = pinCount | (hsSlots << 16);
+    const QString keepStrobe = QString("%1'h%2").arg(byteCount).arg(
+        QString::number((quint64(1) << byteCount) - 2, 16));
+
+    QString bench = axiTestbench();
+    bench.replace("@AW@", QString::number(addressWidth));
+    bench.replace("@DW@", QString::number(dataWidth));
+    bench.replace("@SW@", QString::number(byteCount));
+    bench.replace("@P@", QString::number(pinCount));
+    bench.replace("@PIN@", QString::number(pin));
+    bench.replace("@HISLOT@", QString::number(hsSlots - 1));
+    bench.replace("@CAP@", QString("%1").arg(capability, 8, 16, QLatin1Char('0')));
+    bench.replace("@SEL_OFFSET@", QString::number(selOffset, 16));
+    bench.replace("@W0_OFFSET@", QString::number(byteCount, 16));
+    bench.replace("@LANE_LSB@", QString::number(laneLsb));
+    bench.replace("@CODE@", QString::number(code, 16));
+    bench.replace("@KEEP_STRB@", keepStrobe);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(benchPath, bench);
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 

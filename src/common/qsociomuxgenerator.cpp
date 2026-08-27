@@ -868,6 +868,9 @@ bool QSocIomuxGenerator::buildPlan(
     if (valid && localErrors.isEmpty()) {
         valid = composeMmio(&localPlan, &localErrors);
     }
+    if (valid && localErrors.isEmpty()) {
+        valid = QSocMmioGenerator::canonicalizePlan(&localPlan.mmio, &localErrors);
+    }
     localErrors.sort(Qt::CaseSensitive);
     if (!valid || !localErrors.isEmpty()) {
         if (errors) {
@@ -1012,6 +1015,144 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
     lines.append("endmodule");
     lines.append(QString());
     return lines.join('\n');
+}
+
+QString QSocIomuxGenerator::generateRegsVerilog(const QSocIomuxPlan &plan)
+{
+    if (plan.pinCount == 0 || plan.hsSlots == 0) {
+        return QString();
+    }
+    return QSocMmioGenerator::generateVerilog(plan.mmio);
+}
+
+QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
+{
+    if (plan.pinCount == 0 || plan.hsSlots == 0) {
+        return QString();
+    }
+    const quint32                        width     = selectorWidth(plan.hsSlots);
+    const quint64                        dense     = quint64(plan.hsSlots) * plan.pinCount;
+    const QList<EndpointPort>            endpoints = endpointPorts(plan);
+    const QList<QSocMmioPortDescription> regsPorts = QSocMmioGenerator::describePorts(plan.mmio);
+    const auto                           isControlPort = [](const QSocMmioPortDescription &port) {
+        return port.name == "clk_i" || port.name == "rst_ni" || port.name.startsWith("s_axi_");
+    };
+
+    QStringList lines;
+    lines.append(QString("module %1 (").arg(plan.moduleName));
+    QStringList declarations;
+    QStringList comments;
+    for (const QSocMmioPortDescription &port : regsPorts) {
+        if (!isControlPort(port)) {
+            continue;
+        }
+        const QString keyword = port.direction == "output" ? QStringLiteral("output")
+                                                           : QStringLiteral("input ");
+        if (port.width == 1) {
+            declarations.append(QString("    %1 wire %2").arg(keyword, port.name));
+        } else {
+            declarations.append(
+                QString("    %1 wire [%2:0] %3").arg(keyword).arg(port.width - 1).arg(port.name));
+        }
+        comments.append(QString());
+    }
+    declarations.append(
+        QString("    input  wire %1 pad_input_value_i").arg(vectorRange(plan.pinCount)));
+    declarations.append(
+        QString("    output wire %1 pad_input_enable_o").arg(vectorRange(plan.pinCount)));
+    declarations.append(
+        QString("    output wire %1 pad_output_value_o").arg(vectorRange(plan.pinCount)));
+    declarations.append(
+        QString("    output wire %1 pad_output_enable_o").arg(vectorRange(plan.pinCount)));
+    for (int index = 0; index < 4; ++index) {
+        comments.append(QString());
+    }
+    for (const EndpointPort &port : endpoints) {
+        const QString direction = port.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
+                                                                         : QStringLiteral("input ");
+        declarations.append(QString("    %1 wire %2").arg(direction, endpointPortName(port)));
+        comments.append(endpointComment(port));
+    }
+    for (qsizetype index = 0; index < declarations.size(); ++index) {
+        const QString suffix = index + 1 == declarations.size() ? QString() : QString(",");
+        lines.append(declarations.at(index) + suffix + comments.at(index));
+    }
+    lines.append(");");
+    lines.append(QString());
+
+    lines.append(QString("wire %1 tx_input_enable_w;").arg(vectorRange(dense)));
+    lines.append(QString("wire %1 tx_output_value_w;").arg(vectorRange(dense)));
+    lines.append(QString("wire %1 tx_output_enable_w;").arg(vectorRange(dense)));
+    lines.append(QString("wire %1 rx_input_value_w;").arg(vectorRange(dense)));
+    for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+        lines.append(QString("wire %1 pin_%2_select_w;").arg(vectorRange(width)).arg(pin));
+    }
+    lines.append(QString());
+
+    QStringList regsConnections;
+    for (const QSocMmioPortDescription &port : regsPorts) {
+        if (isControlPort(port)) {
+            regsConnections.append(QString("    .%1(%1)").arg(port.name));
+        }
+    }
+    for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+        regsConnections.append(QString("    .pin_%1_select_o(pin_%1_select_w)").arg(pin));
+    }
+    lines.append(QString("%1_regs u_regs (").arg(plan.moduleName));
+    for (qsizetype index = 0; index < regsConnections.size(); ++index) {
+        const QString suffix = index + 1 == regsConnections.size() ? QString() : QString(",");
+        lines.append(regsConnections.at(index) + suffix);
+    }
+    lines.append(");");
+    lines.append(QString());
+
+    QStringList connConnections
+        = {"    .tx_input_enable_o(tx_input_enable_w)",
+           "    .tx_output_value_o(tx_output_value_w)",
+           "    .tx_output_enable_o(tx_output_enable_w)",
+           "    .rx_input_value_i(rx_input_value_w)"};
+    for (const EndpointPort &port : endpoints) {
+        connConnections.append(QString("    .%1(%1)").arg(endpointPortName(port)));
+    }
+    lines.append(QString("%1_conn u_conn (").arg(plan.moduleName));
+    for (qsizetype index = 0; index < connConnections.size(); ++index) {
+        const QString suffix = index + 1 == connConnections.size() ? QString() : QString(",");
+        lines.append(connConnections.at(index) + suffix);
+    }
+    lines.append(");");
+    lines.append(QString());
+
+    QStringList coreConnections
+        = {"    .pad_input_value_i(pad_input_value_i)",
+           "    .pad_input_enable_o(pad_input_enable_o)",
+           "    .pad_output_value_o(pad_output_value_o)",
+           "    .pad_output_enable_o(pad_output_enable_o)",
+           "    .tx_input_enable_i(tx_input_enable_w)",
+           "    .tx_output_value_i(tx_output_value_w)",
+           "    .tx_output_enable_i(tx_output_enable_w)",
+           "    .rx_input_value_o(rx_input_value_w)"};
+    for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+        coreConnections.append(QString("    .pin_%1_select_i(pin_%1_select_w)").arg(pin));
+    }
+    lines.append(QString("%1_core u_core (").arg(plan.moduleName));
+    for (qsizetype index = 0; index < coreConnections.size(); ++index) {
+        const QString suffix = index + 1 == coreConnections.size() ? QString() : QString(",");
+        lines.append(coreConnections.at(index) + suffix);
+    }
+    lines.append(");");
+    lines.append(QString());
+    lines.append("endmodule");
+    lines.append(QString());
+
+    return generateCoreVerilog(plan) + "\n" + lines.join('\n');
+}
+
+QString QSocIomuxGenerator::generateFileList(const QSocIomuxPlan &plan)
+{
+    if (plan.pinCount == 0 || plan.hsSlots == 0) {
+        return QString();
+    }
+    return QString("%1_regs.v\n%1_conn.v\n%1.v\n").arg(plan.moduleName);
 }
 
 QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
