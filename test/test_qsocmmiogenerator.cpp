@@ -968,6 +968,7 @@ private slots:
     void invalidMap_data();
     void invalidMap();
     void describePortsMatchesGeneratedHeader();
+    void moduleProjectionMatchesDescribedPorts();
     void canonicalizeRejectsConstructedInvalidPlan();
     void generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable_data();
@@ -1612,6 +1613,28 @@ void Test::describePortsMatchesGeneratedHeader()
         }
         QVERIFY2(found, qPrintable(port.name));
     }
+}
+
+void Test::moduleProjectionMatchesDescribedPorts()
+{
+    QSocMmioPlan plan;
+    QVERIFY(QSocMmioGenerator::buildPlan(makeValidDefinition(), &plan));
+    const QList<QSocMmioPortDescription> ports      = QSocMmioGenerator::describePorts(plan);
+    const YAML::Node                     projection = QSocMmioGenerator::describeModuleYaml(plan);
+
+    QCOMPARE(int(projection["port"].size()), int(ports.size()));
+    for (const QSocMmioPortDescription &port : ports) {
+        const YAML::Node portNode = projection["port"][port.name.toStdString()];
+        QVERIFY2(portNode.IsMap(), qPrintable(port.name));
+        QCOMPARE(QString::fromStdString(portNode["direction"].as<std::string>()), port.direction);
+        const QString expectedType = port.width == 1 ? QString("logic")
+                                                     : QString("logic[%1:0]").arg(port.width - 1);
+        QCOMPARE(QString::fromStdString(portNode["type"].as<std::string>()), expectedType);
+    }
+    QCOMPARE(
+        QString::fromStdString(projection["bus"]["control"]["mode"].as<std::string>()),
+        QString("slave"));
+    QCOMPARE(int(projection["bus"]["control"]["mapping"].size()), 19);
 }
 
 void Test::canonicalizeRejectsConstructedInvalidPlan()

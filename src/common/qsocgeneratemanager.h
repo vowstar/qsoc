@@ -599,6 +599,15 @@ private:
     bool emissionRejected = false;
 
     /**
+     * @brief Resolve every generated module before netlist processing.
+     * @details Refuses the whole netlist when a generated module is invalid
+     *          or when a bus net joined by a generated module does not carry
+     *          exactly one master and one slave.
+     * @return true if all generated modules resolve, false otherwise.
+     */
+    bool preflightGeneratedModules();
+
+    /**
      * @brief Process link and uplink connections in the netlist
      * @return true if successful, false on error
      */

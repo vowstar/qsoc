@@ -809,7 +809,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
         if (!moduleManager || !moduleManager->isModuleExist(moduleName)) {
             return InstancePortRole::Unowned;
         }
-        const YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+        const YAML::Node moduleData = moduleManager->getResolvedModuleYaml(moduleName);
         if (!moduleData["port"] || !moduleData["port"].IsMap()
             || !moduleData["port"][portName.toStdString()]) {
             return InstancePortRole::Dropped;
@@ -1237,7 +1237,8 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
                             /* Get module definition */
                             if (moduleManager && moduleManager->isModuleExist(moduleName)) {
-                                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+                                YAML::Node moduleData = moduleManager->getResolvedModuleYaml(
+                                    moduleName);
 
                                 if (moduleData["port"] && moduleData["port"].IsMap()
                                     && moduleData["port"][portName.toStdString()]) {
@@ -1884,7 +1885,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
             /* Get module definition to ensure all ports are listed */
             if (moduleManager && moduleManager->isModuleExist(moduleName)) {
-                YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+                YAML::Node moduleData = moduleManager->getResolvedModuleYaml(moduleName);
 
                 if (moduleData["port"] && moduleData["port"].IsMap()) {
                     /* Get the existing connections map for this instance */

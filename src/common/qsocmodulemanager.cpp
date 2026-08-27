@@ -2,7 +2,10 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmodulemanager.h"
+
 #include "common/qsocconsole.h"
+#include "common/qsociomuxgenerator.h"
+#include "common/qsocmmiogenerator.h"
 #include "common/qsocverilogutils.h"
 #include "common/qstaticregex.h"
 #include "common/qstaticstringweaver.h"
@@ -1307,6 +1310,42 @@ YAML::Node QSocModuleManager::getModuleYaml(const QString &moduleName)
     result = moduleData[moduleName.toStdString()];
 
     return result;
+}
+
+YAML::Node QSocModuleManager::getResolvedModuleYaml(const QString &moduleName, QStringList *errors)
+{
+    if (errors) {
+        errors->clear();
+    }
+    const YAML::Node stored = getModuleYaml(moduleName);
+    if (!stored || !stored["generator"]) {
+        return stored;
+    }
+
+    const QSocModuleDefinition definition = moduleYamlToDefinition(QString(), moduleName, stored);
+    QStringList                localErrors;
+    if (QSocIomuxGenerator::isIomux(definition)) {
+        QSocIomuxPlan plan;
+        if (QSocIomuxGenerator::buildPlan(definition, &plan, &localErrors)) {
+            return QSocIomuxGenerator::describeModuleYaml(plan);
+        }
+    } else if (QSocMmioGenerator::isMmio(definition)) {
+        QSocMmioPlan plan;
+        if (QSocMmioGenerator::buildPlan(definition, &plan, &localErrors)) {
+            return QSocMmioGenerator::describeModuleYaml(plan);
+        }
+    } else {
+        localErrors.append(
+            QString("GENERATOR_KIND module %1: unsupported generator kind").arg(moduleName));
+    }
+    if (localErrors.isEmpty()) {
+        localErrors.append(
+            QString("GENERATOR module %1: generator source is invalid").arg(moduleName));
+    }
+    if (errors) {
+        *errors = localErrors;
+    }
+    return {};
 }
 
 bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::Node &libraryYaml)

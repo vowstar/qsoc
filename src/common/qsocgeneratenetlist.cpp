@@ -145,6 +145,11 @@ bool QSocGenerateManager::processNetlist()
             return false;
         }
 
+        /* Generated modules must resolve before any expansion */
+        if (hasInstances && !preflightGeneratedModules()) {
+            return false;
+        }
+
         /* Expand bus links before processing */
         if (!expandBusLink()) {
             QSocConsole::error() << "Failed to expand bus links";
@@ -250,7 +255,7 @@ bool QSocGenerateManager::processNetlist()
                             /* Get module data */
                             YAML::Node moduleData;
                             try {
-                                moduleData = moduleManager->getModuleYaml(
+                                moduleData = moduleManager->getResolvedModuleYaml(
                                     QString::fromStdString(moduleName));
                             } catch (const YAML::Exception &e) {
                                 QSocConsole::warn() << "failed to get module data:" << e.what();
@@ -411,7 +416,7 @@ bool QSocGenerateManager::processNetlist()
                                     continue;
                                 }
 
-                                YAML::Node moduleData = moduleManager->getModuleYaml(
+                                YAML::Node moduleData = moduleManager->getResolvedModuleYaml(
                                     QString::fromStdString(conn.moduleName));
 
                                 if (!moduleData["bus"] || !moduleData["bus"].IsMap()) {
@@ -739,7 +744,8 @@ bool QSocGenerateManager::expandBusUplink()
 
             YAML::Node moduleData;
             try {
-                moduleData = moduleManager->getModuleYaml(QString::fromStdString(moduleName));
+                moduleData = moduleManager->getResolvedModuleYaml(
+                    QString::fromStdString(moduleName));
             } catch (const YAML::Exception &e) {
                 QSocConsole::warn() << "failed to get module data for bus uplink:" << e.what();
                 continue;
@@ -1068,7 +1074,7 @@ bool QSocGenerateManager::checkPortWidthConsistency(const QList<PortConnection> 
 
                 /* Get port width from module definition */
                 if (moduleManager && moduleManager->isModuleExist(moduleName)) {
-                    YAML::Node moduleData = moduleManager->getModuleYaml(moduleName);
+                    YAML::Node moduleData = moduleManager->getResolvedModuleYaml(moduleName);
 
                     if (moduleData["port"] && moduleData["port"].IsMap()
                         && moduleData["port"][portName.toStdString()]["type"]
@@ -1470,7 +1476,8 @@ bool QSocGenerateManager::processLinkConnections()
             /* Get module data for port information */
             YAML::Node moduleData;
             try {
-                moduleData = moduleManager->getModuleYaml(QString::fromStdString(moduleName));
+                moduleData = moduleManager->getResolvedModuleYaml(
+                    QString::fromStdString(moduleName));
             } catch (const YAML::Exception &e) {
                 QSocConsole::warn()
                     << "Error getting module data for" << moduleName.c_str() << ":" << e.what();
@@ -2803,5 +2810,97 @@ bool QSocGenerateManager::doBitRangesProvideFullCoverage(const QStringList &rang
         }
     }
 
+    return true;
+}
+
+bool QSocGenerateManager::preflightGeneratedModules()
+{
+    if (!moduleManager || !netlistData["instance"] || !netlistData["instance"].IsMap()) {
+        return true;
+    }
+
+    QSet<QString> generatedModules;
+    for (const auto &instancePair : netlistData["instance"]) {
+        if (!instancePair.first.IsScalar() || !instancePair.second.IsMap()) {
+            continue;
+        }
+        const YAML::Node &instanceNode = instancePair.second;
+        if (!instanceNode["module"] || !instanceNode["module"].IsScalar()) {
+            continue;
+        }
+        const QString moduleName = QString::fromStdString(instanceNode["module"].as<std::string>());
+        if (generatedModules.contains(moduleName) || !moduleManager->isModuleExist(moduleName)) {
+            continue;
+        }
+        const YAML::Node stored = moduleManager->getModuleYaml(moduleName);
+        if (!stored || !stored["generator"]) {
+            continue;
+        }
+        QStringList      errors;
+        const YAML::Node resolved = moduleManager->getResolvedModuleYaml(moduleName, &errors);
+        if (!resolved || resolved.IsNull()) {
+            QSocConsole::error() << "Generated module" << moduleName
+                                 << "is invalid and blocks netlist generation";
+            for (const QString &error : errors) {
+                QSocConsole::error() << error;
+            }
+            return false;
+        }
+        generatedModules.insert(moduleName);
+    }
+
+    if (generatedModules.isEmpty() || !netlistData["bus"] || !netlistData["bus"].IsMap()) {
+        return true;
+    }
+
+    for (const auto &busPair : netlistData["bus"]) {
+        if (!busPair.first.IsScalar() || !busPair.second.IsSequence()) {
+            continue;
+        }
+        const QString netName          = QString::fromStdString(busPair.first.as<std::string>());
+        bool          touchesGenerated = false;
+        int           connections      = 0;
+        int           masters          = 0;
+        int           slaves           = 0;
+        for (const auto &connectionNode : busPair.second) {
+            if (!connectionNode.IsMap() || !connectionNode["instance"]
+                || !connectionNode["instance"].IsScalar() || !connectionNode["port"]
+                || !connectionNode["port"].IsScalar()) {
+                continue;
+            }
+            ++connections;
+            const auto instanceName = connectionNode["instance"].as<std::string>();
+            const auto portName     = connectionNode["port"].as<std::string>();
+            if (!netlistData["instance"][instanceName]
+                || !netlistData["instance"][instanceName]["module"]
+                || !netlistData["instance"][instanceName]["module"].IsScalar()) {
+                continue;
+            }
+            const QString moduleName = QString::fromStdString(
+                netlistData["instance"][instanceName]["module"].as<std::string>());
+            touchesGenerated = touchesGenerated || generatedModules.contains(moduleName);
+            if (!moduleManager->isModuleExist(moduleName)) {
+                continue;
+            }
+            const YAML::Node resolved = moduleManager->getResolvedModuleYaml(moduleName);
+            if (!resolved || resolved.IsNull() || !resolved["bus"] || !resolved["bus"].IsMap()
+                || !resolved["bus"][portName] || !resolved["bus"][portName]["mode"]
+                || !resolved["bus"][portName]["mode"].IsScalar()) {
+                continue;
+            }
+            const auto mode = resolved["bus"][portName]["mode"].as<std::string>();
+            if (mode == "master") {
+                ++masters;
+            } else if (mode == "slave") {
+                ++slaves;
+            }
+        }
+        if (touchesGenerated && (connections != 2 || masters != 1 || slaves != 1)) {
+            QSocConsole::error()
+                << "Bus net" << netName
+                << "must carry exactly one master and one slave to join a generated module";
+            return false;
+        }
+    }
     return true;
 }
