@@ -312,8 +312,10 @@ The generate command provides functionality for generating different types of ou
 
 === Generated Module Options
 <generated-module-options>
-`generate module` validates one generated module and writes its RTL output under
-`output/<library>/<module>/`. By default it writes only `<module>.v`.
+`generate module` validates one generated module and writes its output under
+`output/<library>/<module>/`. MMIO writes `<module>.v`; IOMUX writes its wrapper,
+register block, connection layer, file list, route report, and integration
+fragment as described in @iomux-generated-artifacts.
 
 #figure(
   align(center)[#table(
@@ -324,7 +326,7 @@ The generate command provides functionality for generating different types of ou
     [`generate module -l <library> <module>`],
     [Generates one module selected by exact name],
     [`--with-formal`],
-    [Also generates `<module>_formal.sv` and `<module>_formal.sby`],
+    [Also generates the formal jobs supported by that generator],
     [`--with-uvm`],
     [Also generates the UVM interface, package, testbench, and file list],
     [`-f`, `--force`], [Replaces every selected output file],
