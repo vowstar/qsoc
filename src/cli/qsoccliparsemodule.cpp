@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 
 #include "common/qslangdriver.h"
+#include "common/qsociomuxgenerator.h"
 #include "common/qsocmmiogenerator.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
@@ -143,11 +144,12 @@ bool QSocCliWorker::parseModuleCreate(const QStringList &appArguments)
             1,
             QCoreApplication::translate("main", "Error: invalid module name: %1.").arg(moduleName));
     }
-    if (parser.value("generator") != QStringLiteral("mmio")) {
+    const QString generatorKind = parser.value("generator");
+    if (generatorKind != QStringLiteral("mmio") && generatorKind != QStringLiteral("iomux")) {
         return showErrorWithHelp(
             1,
             QCoreApplication::translate("main", "Error: unsupported generator kind: %1.")
-                .arg(parser.value("generator")));
+                .arg(generatorKind));
     }
 
     if (!loadSelectedProject()) {
@@ -196,19 +198,25 @@ bool QSocCliWorker::parseModuleCreate(const QStringList &appArguments)
         }
     }
 
+    const QString kindLabel = generatorKind == QStringLiteral("iomux") ? QStringLiteral("IOMUX")
+                                                                       : QStringLiteral("MMIO");
     QSocModuleDefinition definition;
     definition.libraryName                  = libraryName;
     definition.moduleName                   = moduleName;
-    definition.extraAttributes["generator"] = QSocMmioGenerator::createDraftGenerator();
+    definition.extraAttributes["generator"] = generatorKind == QStringLiteral("iomux")
+                                                  ? QSocIomuxGenerator::createDraftGenerator()
+                                                  : QSocMmioGenerator::createDraftGenerator();
     if (!moduleManager->replaceModuleDefinition(definition)) {
         return showError(
-            1, QCoreApplication::translate("main", "Error: could not create MMIO module draft."));
+            1,
+            QCoreApplication::translate("main", "Error: could not create %1 module draft.")
+                .arg(kindLabel));
     }
 
     return showInfo(
         0,
-        QCoreApplication::translate("main", "Created MMIO module draft: %1/%2.")
-            .arg(libraryName, moduleName));
+        QCoreApplication::translate("main", "Created %1 module draft: %2/%3.")
+            .arg(kindLabel, libraryName, moduleName));
 }
 
 bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
@@ -277,6 +285,34 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
                 .arg(libraryName, moduleName));
     }
+    if (QSocIomuxGenerator::isIomux(definition)) {
+        const QStringList errors = QSocIomuxGenerator::validate(definition);
+        if (!errors.isEmpty()) {
+            QStringList messages;
+            messages.reserve(errors.size());
+            for (const QString &error : errors) {
+                messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+            }
+            return showError(1, messages.join('\n'));
+        }
+        QSocIomuxPlan plan;
+        QSocIomuxGenerator::buildPlan(definition, &plan);
+        const bool defaultedSlots = !definition.extraAttributes["generator"]["hs_slots"];
+        return showInfo(
+            0,
+            QCoreApplication::translate(
+                "main",
+                "IOMUX source is valid: %1/%2. %3 pins, %4 HS slots%5, %6 selector "
+                "registers, %7 registers total. Reset selects slot 0, RX broadcasts. "
+                "Integration pending merge.")
+                .arg(libraryName, moduleName)
+                .arg(plan.pinCount)
+                .arg(plan.hsSlots)
+                .arg(defaultedSlots ? QStringLiteral(" (default)") : QString())
+                .arg(plan.mmio.registers.size() - 1)
+                .arg(plan.mmio.registers.size()));
+    }
+
     const QStringList errors = QSocMmioGenerator::validate(definition);
     if (!errors.isEmpty()) {
         QStringList messages;

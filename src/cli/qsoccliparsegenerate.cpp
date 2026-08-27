@@ -4,7 +4,10 @@
 #include "cli/qsoccliworker.h"
 #include "common/qsocconfig.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qsociomuxgenerator.h"
+#include "common/qsocmmioformal.h"
 #include "common/qsocmmiogenerator.h"
+#include "common/qsocmmiouvm.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "common/qsocverilogutils.h"
@@ -29,6 +32,53 @@ struct GeneratedArtifact
     QString    path;
     QByteArray contents;
 };
+
+QString writeGeneratedArtifacts(const std::vector<GeneratedArtifact> &artifacts, bool force)
+{
+    std::vector<std::unique_ptr<QLockFile>> outputLocks;
+    outputLocks.reserve(artifacts.size());
+    for (const GeneratedArtifact &artifact : artifacts) {
+        auto outputLock = std::make_unique<QLockFile>(artifact.path + QStringLiteral(".lock"));
+        if (!outputLock->tryLock()) {
+            return QCoreApplication::translate("main", "Error: output file is locked: %1")
+                .arg(artifact.path);
+        }
+        outputLocks.push_back(std::move(outputLock));
+    }
+    if (!force) {
+        for (const GeneratedArtifact &artifact : artifacts) {
+            if (QFile::exists(artifact.path)) {
+                return QCoreApplication::translate("main", "Error: output file already exists: %1")
+                    .arg(artifact.path);
+            }
+        }
+    }
+
+    std::vector<std::unique_ptr<QSaveFile>> outputFiles;
+    outputFiles.reserve(artifacts.size());
+    for (const GeneratedArtifact &artifact : artifacts) {
+        auto outputFile = std::make_unique<QSaveFile>(artifact.path);
+        outputFile->setDirectWriteFallback(false);
+        if (!outputFile->open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return QCoreApplication::translate("main", "Error: could not open output file: %1")
+                .arg(outputFile->errorString());
+        }
+        if (outputFile->write(artifact.contents) != artifact.contents.size()) {
+            const QString error = outputFile->errorString();
+            outputFile->cancelWriting();
+            return QCoreApplication::translate("main", "Error: could not write output file: %1")
+                .arg(error);
+        }
+        outputFiles.push_back(std::move(outputFile));
+    }
+    for (const std::unique_ptr<QSaveFile> &outputFile : outputFiles) {
+        if (!outputFile->commit()) {
+            return QCoreApplication::translate("main", "Error: could not commit output file: %1")
+                .arg(outputFile->errorString());
+        }
+    }
+    return QString();
+}
 
 bool isValidLibraryBasename(const QString &name)
 {
@@ -172,6 +222,108 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
                 .arg(libraryName, moduleName));
     }
+    if (QSocIomuxGenerator::isIomux(definition)) {
+        QSocIomuxPlan plan;
+        QStringList   planErrors;
+        if (!QSocIomuxGenerator::buildPlan(definition, &plan, &planErrors)) {
+            QStringList messages;
+            messages.reserve(planErrors.size());
+            for (const QString &error : planErrors) {
+                messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+            }
+            if (messages.isEmpty()) {
+                messages.append(
+                    QCoreApplication::translate("main", "Error: IOMUX generation failed."));
+            }
+            return showError(1, messages.join('\n'));
+        }
+
+        const QStringList libraryModules = moduleManager->listModulesInLibrary(libraryName);
+        for (const QString &suffix :
+             {QStringLiteral("_regs"), QStringLiteral("_conn"), QStringLiteral("_core")}) {
+            const QString derived = moduleName + suffix;
+            if (libraryModules.contains(derived)) {
+                return showError(
+                    1,
+                    QCoreApplication::translate(
+                        "main", "Error: generated module name collides with %1/%2.")
+                        .arg(libraryName, derived));
+            }
+        }
+
+        QDir          outputDirectory(projectManager->getOutputPath());
+        const QString relativeDirectory = QStringLiteral("%1/%2").arg(libraryName, moduleName);
+        if (!outputDirectory.mkpath(relativeDirectory)) {
+            return showError(
+                1,
+                QCoreApplication::translate("main", "Error: could not create output directory: %1")
+                    .arg(outputDirectory.filePath(relativeDirectory)));
+        }
+        const auto outputFilePath = [&](const QString &fileName) {
+            return outputDirectory.filePath(
+                QStringLiteral("%1/%2").arg(relativeDirectory, fileName));
+        };
+        const QString regsPath   = outputFilePath(moduleName + QStringLiteral("_regs.v"));
+        const QString connPath   = outputFilePath(moduleName + QStringLiteral("_conn.v"));
+        const QString topPath    = outputFilePath(moduleName + QStringLiteral(".v"));
+        const QString listPath   = outputFilePath(moduleName + QStringLiteral(".f"));
+        const QString reportPath = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
+
+        std::vector<GeneratedArtifact> artifacts
+            = {{regsPath, QSocIomuxGenerator::generateRegsVerilog(plan).toUtf8()},
+               {connPath, QSocIomuxGenerator::generateConnVerilog(plan).toUtf8()},
+               {topPath, QSocIomuxGenerator::generateTopVerilog(plan).toUtf8()},
+               {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
+               {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()}};
+        QString formalSystemVerilogPath;
+        QString formalSbyPath;
+        if (parser.isSet("with-formal")) {
+            const QSocMmioFormalCollateral collateral = QSocMmioFormal::generate(plan.mmio);
+            formalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sv"));
+            formalSbyPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sby"));
+            artifacts.push_back({formalSystemVerilogPath, collateral.systemVerilog.toUtf8()});
+            artifacts.push_back({formalSbyPath, collateral.sby.toUtf8()});
+        }
+        QString uvmInterfacePath;
+        QString uvmPackagePath;
+        QString uvmTestbenchPath;
+        QString uvmFileListPath;
+        if (parser.isSet("with-uvm")) {
+            const QSocMmioUvmCollateral collateral = QSocMmioUvm::generate(plan.mmio);
+            uvmInterfacePath = outputFilePath(moduleName + QStringLiteral("_regs_uvm_if.sv"));
+            uvmPackagePath   = outputFilePath(moduleName + QStringLiteral("_regs_uvm_pkg.sv"));
+            uvmTestbenchPath = outputFilePath(moduleName + QStringLiteral("_regs_uvm_tb.sv"));
+            uvmFileListPath  = outputFilePath(moduleName + QStringLiteral("_regs_uvm.f"));
+            artifacts.push_back({uvmInterfacePath, collateral.interfaceSource.toUtf8()});
+            artifacts.push_back({uvmPackagePath, collateral.packageSource.toUtf8()});
+            artifacts.push_back({uvmTestbenchPath, collateral.testbenchSource.toUtf8()});
+            artifacts.push_back({uvmFileListPath, collateral.fileList.toUtf8()});
+        }
+
+        const QString writeError = writeGeneratedArtifacts(artifacts, parser.isSet("force"));
+        if (!writeError.isEmpty()) {
+            return showError(1, writeError);
+        }
+
+        QStringList messages = {
+            QCoreApplication::translate("main", "Generated IOMUX Verilog: %1, %2, %3")
+                .arg(regsPath, connPath, topPath),
+            QCoreApplication::translate("main", "Generated IOMUX file list: %1").arg(listPath),
+            QCoreApplication::translate("main", "Generated IOMUX report: %1").arg(reportPath),
+        };
+        if (parser.isSet("with-formal")) {
+            messages.append(
+                QCoreApplication::translate("main", "Generated MMIO formal collateral: %1, %2")
+                    .arg(formalSystemVerilogPath, formalSbyPath));
+        }
+        if (parser.isSet("with-uvm")) {
+            messages.append(
+                QCoreApplication::translate("main", "Generated MMIO UVM testbench: %1, %2, %3, %4")
+                    .arg(uvmInterfacePath, uvmPackagePath, uvmTestbenchPath, uvmFileListPath));
+        }
+        return showInfo(0, messages.join('\n'));
+    }
+
     QString     verilog;
     QStringList errors;
     if (!QSocMmioGenerator::generateVerilog(definition, &verilog, &errors)) {
@@ -256,57 +408,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         artifacts.push_back({uvmFileListPath, uvmCollateral.fileList.toUtf8()});
     }
 
-    std::vector<std::unique_ptr<QLockFile>> outputLocks;
-    outputLocks.reserve(artifacts.size());
-    for (const GeneratedArtifact &artifact : artifacts) {
-        auto outputLock = std::make_unique<QLockFile>(artifact.path + QStringLiteral(".lock"));
-        if (!outputLock->tryLock()) {
-            return showError(
-                1,
-                QCoreApplication::translate("main", "Error: output file is locked: %1")
-                    .arg(artifact.path));
-        }
-        outputLocks.push_back(std::move(outputLock));
-    }
-    if (!parser.isSet("force")) {
-        for (const GeneratedArtifact &artifact : artifacts) {
-            if (QFile::exists(artifact.path)) {
-                return showError(
-                    1,
-                    QCoreApplication::translate("main", "Error: output file already exists: %1")
-                        .arg(artifact.path));
-            }
-        }
-    }
-
-    std::vector<std::unique_ptr<QSaveFile>> outputFiles;
-    outputFiles.reserve(artifacts.size());
-    for (const GeneratedArtifact &artifact : artifacts) {
-        auto outputFile = std::make_unique<QSaveFile>(artifact.path);
-        outputFile->setDirectWriteFallback(false);
-        if (!outputFile->open(QIODevice::WriteOnly | QIODevice::Text)) {
-            return showError(
-                1,
-                QCoreApplication::translate("main", "Error: could not open output file: %1")
-                    .arg(outputFile->errorString()));
-        }
-        if (outputFile->write(artifact.contents) != artifact.contents.size()) {
-            const QString error = outputFile->errorString();
-            outputFile->cancelWriting();
-            return showError(
-                1,
-                QCoreApplication::translate("main", "Error: could not write output file: %1")
-                    .arg(error));
-        }
-        outputFiles.push_back(std::move(outputFile));
-    }
-    for (const std::unique_ptr<QSaveFile> &outputFile : outputFiles) {
-        if (!outputFile->commit()) {
-            return showError(
-                1,
-                QCoreApplication::translate("main", "Error: could not commit output file: %1")
-                    .arg(outputFile->errorString()));
-        }
+    const QString writeError = writeGeneratedArtifacts(artifacts, parser.isSet("force"));
+    if (!writeError.isEmpty()) {
+        return showError(1, writeError);
     }
 
     QStringList messages = {
