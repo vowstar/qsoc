@@ -600,8 +600,7 @@ void Test::unsafeProjectSwitchKeepsCurrentSession()
         isolatedEnvironment(fixture.path())));
     QVERIFY2(
         agent.waitForOutput("Type 'exit' to exit", 15000), agent.output().right(8192).constData());
-    QVERIFY2(
-        agent.waitForOutput("(New session ", 15000), agent.output().right(8192).constData());
+    QVERIFY2(agent.waitForOutput("(New session ", 15000), agent.output().right(8192).constData());
     const QRegularExpression sessionPattern(QStringLiteral(R"(\(New session ([0-9A-Fa-f]{8})\))"));
     const QRegularExpressionMatch sessionMatch = sessionPattern.match(
         QString::fromUtf8(agent.output()));
@@ -695,7 +694,8 @@ void Test::firstPromptPersistsAndCanContinue()
     const QString mockErr = QDir(fixture.path()).filePath(QStringLiteral("mock.err"));
     mock.setStandardOutputFile(mockOut);
     mock.setStandardErrorFile(mockErr);
-    mock.start(python, {QStringLiteral("-u"), mockScript, QString::number(port), QStringLiteral("none")});
+    mock.start(
+        python, {QStringLiteral("-u"), mockScript, QString::number(port), QStringLiteral("none")});
     QVERIFY(mock.waitForStarted(5000));
     const bool mockReady = waitForMockReady(mock, port, 45000);
     QByteArray mockErrLog;
@@ -710,9 +710,12 @@ void Test::firstPromptPersistsAndCanContinue()
     }
     const QString mockState = [&mock]() {
         switch (mock.state()) {
-        case QProcess::NotRunning: return QStringLiteral("NotRunning");
-        case QProcess::Starting:   return QStringLiteral("Starting");
-        case QProcess::Running:    return QStringLiteral("Running");
+        case QProcess::NotRunning:
+            return QStringLiteral("NotRunning");
+        case QProcess::Starting:
+            return QStringLiteral("Starting");
+        case QProcess::Running:
+            return QStringLiteral("Running");
         }
         return QStringLiteral("unknown");
     }();
@@ -723,8 +726,9 @@ void Test::firstPromptPersistsAndCanContinue()
                        " (state=%1 exitCode=%2 exitStatus=%3)\nstderr: %4\nstdout: %5")
                        .arg(mockState)
                        .arg(mock.exitCode())
-                       .arg(mock.exitStatus() == QProcess::NormalExit ? QStringLiteral("NormalExit")
-                                                                      : QStringLiteral("CrashExit"))
+                       .arg(
+                           mock.exitStatus() == QProcess::NormalExit ? QStringLiteral("NormalExit")
+                                                                     : QStringLiteral("CrashExit"))
                        .arg(QString::fromUtf8(mockErrLog))
                        .arg(QString::fromUtf8(mockOutLog))));
 
