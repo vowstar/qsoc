@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/qsocconfig.h"
 #include "common/qsocgeneratemanager.h"
+#include "common/qsociomuxformal.h"
 #include "common/qsociomuxgenerator.h"
 #include "common/qsocmmioformal.h"
 #include "common/qsocmmiogenerator.h"
@@ -280,12 +281,19 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
         QString formalSystemVerilogPath;
         QString formalSbyPath;
+        QString hsFormalSystemVerilogPath;
+        QString hsFormalSbyPath;
         if (parser.isSet("with-formal")) {
             const QSocMmioFormalCollateral collateral = QSocMmioFormal::generate(plan.mmio);
             formalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sv"));
             formalSbyPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sby"));
             artifacts.push_back({formalSystemVerilogPath, collateral.systemVerilog.toUtf8()});
             artifacts.push_back({formalSbyPath, collateral.sby.toUtf8()});
+            const QSocIomuxFormalCollateral hsCollateral = QSocIomuxFormal::generate(plan);
+            hsFormalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sv"));
+            hsFormalSbyPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sby"));
+            artifacts.push_back({hsFormalSystemVerilogPath, hsCollateral.systemVerilog.toUtf8()});
+            artifacts.push_back({hsFormalSbyPath, hsCollateral.sby.toUtf8()});
         }
         QString uvmInterfacePath;
         QString uvmPackagePath;
@@ -320,11 +328,22 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             messages.append(
                 QCoreApplication::translate("main", "Generated MMIO formal collateral: %1, %2")
                     .arg(formalSystemVerilogPath, formalSbyPath));
+            messages.append(
+                QCoreApplication::translate("main", "Generated HS formal collateral: %1, %2")
+                    .arg(hsFormalSystemVerilogPath, hsFormalSbyPath));
         }
         if (parser.isSet("with-uvm")) {
             messages.append(
-                QCoreApplication::translate("main", "Generated MMIO UVM testbench: %1, %2, %3, %4")
-                    .arg(uvmInterfacePath, uvmPackagePath, uvmTestbenchPath, uvmFileListPath));
+                QCoreApplication::translate(
+                    "main",
+                    "Generated MMIO UVM testbench (covers %1_regs only, not routing): "
+                    "%2, %3, %4, %5")
+                    .arg(
+                        moduleName,
+                        uvmInterfacePath,
+                        uvmPackagePath,
+                        uvmTestbenchPath,
+                        uvmFileListPath));
         }
         return showInfo(0, messages.join('\n'));
     }
