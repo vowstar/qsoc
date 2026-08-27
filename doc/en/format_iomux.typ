@@ -135,6 +135,9 @@ and exactly one master and one slave after it. An invalid generator source
 blocks the whole netlist instead of falling back to a stale module view. A
 generated IOMUX instance name may not already exist in another merged input.
 Any failed generated-module check leaves an existing top-level output untouched.
+Routes may cover individual bits of a wider vector; unlisted bits remain outside
+the generated IOMUX connections, and partial coverage does not emit a width
+`FIXME`.
 
 == Formal Collateral
 <iomux-formal-collateral>
