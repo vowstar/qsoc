@@ -76,12 +76,14 @@ public:
     static QStringList validate(const QSocModuleDefinition &definition);
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
-    static QString generateCoreVerilog(const QSocIomuxPlan &plan);
-    static QString generateConnVerilog(const QSocIomuxPlan &plan);
-    static QString generateRegsVerilog(const QSocIomuxPlan &plan);
-    static QString generateTopVerilog(const QSocIomuxPlan &plan);
-    static QString generateFileList(const QSocIomuxPlan &plan);
-    static QString generateReport(const QSocIomuxPlan &plan);
+    static QString    generateCoreVerilog(const QSocIomuxPlan &plan);
+    static QString    generateConnVerilog(const QSocIomuxPlan &plan);
+    static QString    generateRegsVerilog(const QSocIomuxPlan &plan);
+    static QString    generateTopVerilog(const QSocIomuxPlan &plan);
+    static QString    generateFileList(const QSocIomuxPlan &plan);
+    static QString    generateIntegrationNetlist(const QSocIomuxPlan &plan);
+    static YAML::Node describeModuleYaml(const QSocIomuxPlan &plan);
+    static QString    generateReport(const QSocIomuxPlan &plan);
 };
 
 #endif // QSOCIOMUXGENERATOR_H

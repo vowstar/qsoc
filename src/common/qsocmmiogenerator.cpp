@@ -1155,6 +1155,33 @@ QList<QSocMmioPortDescription> QSocMmioGenerator::describePorts(const QSocMmioPl
     return ports;
 }
 
+YAML::Node QSocMmioGenerator::describeModuleYaml(const QSocMmioPlan &plan)
+{
+    YAML::Node                           module(YAML::NodeType::Map);
+    const QList<QSocMmioPortDescription> ports = describePorts(plan);
+    for (const QSocMmioPortDescription &port : ports) {
+        YAML::Node portNode(YAML::NodeType::Map);
+        portNode["type"]      = port.width == 1
+                                    ? std::string("logic")
+                                    : QString("logic[%1:0]").arg(port.width - 1).toStdString();
+        portNode["direction"] = port.direction.toStdString();
+        module["port"][port.name.toStdString()] = portNode;
+    }
+    YAML::Node control(YAML::NodeType::Map);
+    control["bus"]  = "axi4_lite";
+    control["mode"] = "slave";
+    YAML::Node mapping(YAML::NodeType::Map);
+    for (const QSocMmioPortDescription &port : ports) {
+        if (!port.name.startsWith("s_axi_")) {
+            continue;
+        }
+        mapping[port.name.mid(6).toStdString()] = port.name.toStdString();
+    }
+    control["mapping"]       = mapping;
+    module["bus"]["control"] = control;
+    return module;
+}
+
 bool QSocMmioGenerator::generateVerilog(
     const QSocModuleDefinition &definition, QString *verilog, QStringList *errors)
 {

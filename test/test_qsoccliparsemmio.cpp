@@ -361,14 +361,14 @@ void Test::validateAndGenerateRejectOrdinaryModule()
     validateArguments.append("timer_ctrl");
     const CommandResult validated = runCommand(validateArguments);
     QCOMPARE(validated.exitCode, 1);
-    QVERIFY2(validated.output.contains("not an MMIO generator"), qPrintable(validated.output));
+    QVERIFY2(validated.output.contains("does not declare a generator"), qPrintable(validated.output));
 
     QStringList generateArguments = {"qsoc", "generate", "module", "-l", "peripheral"};
     generateArguments.append(projectOptions(directory));
     generateArguments.append("timer_ctrl");
     const CommandResult generated = runCommand(generateArguments);
     QCOMPARE(generated.exitCode, 1);
-    QVERIFY2(generated.output.contains("not an MMIO generator"), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains("does not declare a generator"), qPrintable(generated.output));
     QVERIFY(!QFile::exists(
         QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl.v")));
 }

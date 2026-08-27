@@ -237,8 +237,8 @@ void Test::validateReportsSummaryWithDefaultMarker()
     QVERIFY2(result.output.contains("IOMUX source is valid"), qPrintable(result.output));
     QVERIFY2(
         result.output.contains(
-            "2 pins, 4 HS slots (default), 1 selector registers, "
-            "2 registers total"),
+            "Pins: 2, HS slots: 4 (default), routes: 1, selector registers: 1, "
+            "registers total: 2"),
         qPrintable(result.output));
     QVERIFY2(result.output.contains("Reset selects slot 0, RX broadcasts"), qPrintable(result.output));
     QVERIFY2(result.output.contains("Integration pending merge"), qPrintable(result.output));
@@ -258,7 +258,9 @@ void Test::validateReportsExplicitSlotsWithoutMarker()
 
     const CommandResult result = runCommand(arguments);
     QCOMPARE(result.exitCode, 0);
-    QVERIFY2(result.output.contains("2 pins, 4 HS slots, 1 selector"), qPrintable(result.output));
+    QVERIFY2(
+        result.output.contains("Pins: 2, HS slots: 4, routes: 1, selector registers: 1"),
+        qPrintable(result.output));
     QVERIFY2(!result.output.contains("(default)"), qPrintable(result.output));
 }
 

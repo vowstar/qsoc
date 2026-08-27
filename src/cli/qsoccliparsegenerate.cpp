@@ -219,7 +219,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
     if (!definition.extraAttributes["generator"]) {
         return showError(
             1,
-            QCoreApplication::translate("main", "Error: module is not an MMIO generator: %1/%2.")
+            QCoreApplication::translate("main", "Error: module does not declare a generator: %1/%2.")
                 .arg(libraryName, moduleName));
     }
     if (QSocIomuxGenerator::isIomux(definition)) {
@@ -263,18 +263,21 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             return outputDirectory.filePath(
                 QStringLiteral("%1/%2").arg(relativeDirectory, fileName));
         };
-        const QString regsPath   = outputFilePath(moduleName + QStringLiteral("_regs.v"));
-        const QString connPath   = outputFilePath(moduleName + QStringLiteral("_conn.v"));
-        const QString topPath    = outputFilePath(moduleName + QStringLiteral(".v"));
-        const QString listPath   = outputFilePath(moduleName + QStringLiteral(".f"));
-        const QString reportPath = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
+        const QString regsPath        = outputFilePath(moduleName + QStringLiteral("_regs.v"));
+        const QString connPath        = outputFilePath(moduleName + QStringLiteral("_conn.v"));
+        const QString topPath         = outputFilePath(moduleName + QStringLiteral(".v"));
+        const QString listPath        = outputFilePath(moduleName + QStringLiteral(".f"));
+        const QString reportPath      = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
+        const QString integrationPath = outputFilePath(
+            moduleName + QStringLiteral("_integration.soc_net"));
 
         std::vector<GeneratedArtifact> artifacts
             = {{regsPath, QSocIomuxGenerator::generateRegsVerilog(plan).toUtf8()},
                {connPath, QSocIomuxGenerator::generateConnVerilog(plan).toUtf8()},
                {topPath, QSocIomuxGenerator::generateTopVerilog(plan).toUtf8()},
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
-               {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()}};
+               {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
+               {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
         QString formalSystemVerilogPath;
         QString formalSbyPath;
         if (parser.isSet("with-formal")) {
@@ -310,6 +313,8 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                 .arg(regsPath, connPath, topPath),
             QCoreApplication::translate("main", "Generated IOMUX file list: %1").arg(listPath),
             QCoreApplication::translate("main", "Generated IOMUX report: %1").arg(reportPath),
+            QCoreApplication::translate("main", "Generated IOMUX integration netlist: %1")
+                .arg(integrationPath),
         };
         if (parser.isSet("with-formal")) {
             messages.append(
@@ -544,6 +549,19 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
     /* Load and merge all netlist files */
     YAML::Node mergedNetlist;
     QString    outputFileName;
+    const auto isIomuxInstance = [this](const YAML::Node &instanceNode) {
+        if (!instanceNode || !instanceNode.IsMap() || !instanceNode["module"]
+            || !instanceNode["module"].IsScalar()) {
+            return false;
+        }
+        const QString moduleName = QString::fromStdString(instanceNode["module"].as<std::string>());
+        if (!moduleManager->isModuleExist(moduleName)) {
+            return false;
+        }
+        const YAML::Node generator = moduleManager->getModuleYaml(moduleName)["generator"];
+        return generator && generator.IsMap() && generator["kind"] && generator["kind"].IsScalar()
+               && generator["kind"].Scalar() == "iomux";
+    };
 
     for (int i = 0; i < filePathList.size(); ++i) {
         const QString &netlistFilePath = filePathList.at(i);
@@ -569,6 +587,26 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
                 const QFileInfo fileInfo(netlistFilePath);
                 outputFileName = fileInfo.baseName();
             } else {
+                if (mergedNetlist["instance"] && mergedNetlist["instance"].IsMap()
+                    && currentNetlist["instance"] && currentNetlist["instance"].IsMap()) {
+                    for (const auto &instancePair : currentNetlist["instance"]) {
+                        if (!instancePair.first.IsScalar()) {
+                            continue;
+                        }
+                        const std::string instanceName = instancePair.first.as<std::string>();
+                        const YAML::Node  existing     = mergedNetlist["instance"][instanceName];
+                        if (existing
+                            && (isIomuxInstance(existing) || isIomuxInstance(instancePair.second))) {
+                            return showError(
+                                1,
+                                QCoreApplication::translate(
+                                    "main",
+                                    "Error: generated IOMUX instance is declared in more than one "
+                                    "merged netlist: %1")
+                                    .arg(QString::fromStdString(instanceName)));
+                        }
+                    }
+                }
                 /* For subsequent files, merge them using the QSocYamlUtils mergeNodes function */
                 mergedNetlist = QSocYamlUtils::mergeNodes(mergedNetlist, currentNetlist);
 
