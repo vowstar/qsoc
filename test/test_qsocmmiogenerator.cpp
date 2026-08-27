@@ -967,6 +967,8 @@ private slots:
     void invalidDescriptionsDoNotStopDiagnostics();
     void invalidMap_data();
     void invalidMap();
+    void describePortsMatchesGeneratedHeader();
+    void canonicalizeRejectsConstructedInvalidPlan();
     void generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable_data();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable();
@@ -1569,6 +1571,84 @@ void Test::invalidMap()
     QVERIFY(!QSocMmioGenerator::generateVerilog(definition, &verilog, &generationErrors));
     QVERIFY(verilog.isEmpty());
     QVERIFY2(hasErrorPath(generationErrors, path), qPrintable(generationErrors.join('\n')));
+}
+
+void Test::describePortsMatchesGeneratedHeader()
+{
+    QSocMmioPlan plan;
+    QVERIFY(QSocMmioGenerator::buildPlan(makeValidDefinition(), &plan));
+    const QList<QSocMmioPortDescription> ports = QSocMmioGenerator::describePorts(plan);
+
+    QString verilog;
+    QVERIFY(QSocMmioGenerator::generateVerilog(makeValidDefinition(), &verilog));
+    QCOMPARE(QSocMmioGenerator::generateVerilog(plan), verilog);
+
+    const QString     header   = verilog.mid(0, verilog.indexOf(");"));
+    const QStringList lines    = header.split('\n');
+    int               declared = 0;
+    for (const QString &line : lines) {
+        if (line.contains("input ") || line.contains("output ")) {
+            ++declared;
+        }
+    }
+    QCOMPARE(declared, int(ports.size()));
+
+    for (const QSocMmioPortDescription &port : ports) {
+        bool found = false;
+        for (const QString &line : lines) {
+            QString trimmed = line.trimmed();
+            if (trimmed.endsWith(",")) {
+                trimmed.chop(1);
+            }
+            if (!trimmed.endsWith(" " + port.name)) {
+                continue;
+            }
+            found = true;
+            QVERIFY2(trimmed.startsWith(port.direction), qPrintable(line));
+            if (port.width > 1) {
+                QVERIFY2(trimmed.contains(QString("[%1:0]").arg(port.width - 1)), qPrintable(line));
+            }
+            break;
+        }
+        QVERIFY2(found, qPrintable(port.name));
+    }
+}
+
+void Test::canonicalizeRejectsConstructedInvalidPlan()
+{
+    QSocMmioPlan valid;
+    QVERIFY(QSocMmioGenerator::buildPlan(makeValidDefinition(), &valid));
+    QSocMmioPlan canonical = valid;
+    QVERIFY(QSocMmioGenerator::canonicalizePlan(&canonical));
+    QVERIFY(canonical == valid);
+
+    QStringList       errors;
+    QSocMmioPlan      overlap  = valid;
+    QSocMmioFieldPlan clashing = overlap.registers.constFirst().fields.constFirst();
+    clashing.name              = "clashing";
+    overlap.registers[0].fields.append(clashing);
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&overlap, &errors));
+    QVERIFY2(errors.join('\n').contains("MMIO_OVERLAP"), qPrintable(errors.join('\n')));
+
+    QSocMmioPlan misaligned            = valid;
+    misaligned.registers[0].byteOffset = 2;
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&misaligned, &errors));
+    QVERIFY2(errors.join('\n').contains("MMIO_ALIGNMENT"), qPrintable(errors.join('\n')));
+
+    QSocMmioPlan duplicateOffset            = valid;
+    duplicateOffset.registers[1].byteOffset = duplicateOffset.registers[0].byteOffset;
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&duplicateOffset, &errors));
+    QVERIFY2(errors.join('\n').contains("MMIO_DUPLICATE"), qPrintable(errors.join('\n')));
+
+    QSocMmioPlan outOfRange               = valid;
+    outOfRange.registers[0].fields[0].lsb = 30;
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&outOfRange, &errors));
+    QVERIFY2(errors.join('\n').contains("MMIO_RANGE"), qPrintable(errors.join('\n')));
+
+    QSocMmioPlan missingReset = valid;
+    missingReset.registers[1].fields[0].resetValue.reset();
+    QVERIFY(!QSocMmioGenerator::canonicalizePlan(&missingReset, &errors));
+    QVERIFY2(errors.join('\n').contains("MMIO_REQUIRED"), qPrintable(errors.join('\n')));
 }
 
 void Test::generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable()
