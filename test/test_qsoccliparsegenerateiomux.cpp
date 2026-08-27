@@ -630,7 +630,9 @@ void Test::sparseVectorCarrierMerges()
     writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), baseNetlist);
     const CommandResult merged = mergeTop(directory);
     QCOMPARE(merged.exitCode, 0);
-    QVERIFY(!readTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.v")).isEmpty());
+    const QString top = readTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.v"));
+    QVERIFY(!top.isEmpty());
+    QVERIFY2(!top.contains("FIXME"), qPrintable(top));
 }
 
 void Test::combinationalVectorCarrierMerges()
