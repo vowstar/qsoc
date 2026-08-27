@@ -263,18 +263,21 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             return outputDirectory.filePath(
                 QStringLiteral("%1/%2").arg(relativeDirectory, fileName));
         };
-        const QString regsPath   = outputFilePath(moduleName + QStringLiteral("_regs.v"));
-        const QString connPath   = outputFilePath(moduleName + QStringLiteral("_conn.v"));
-        const QString topPath    = outputFilePath(moduleName + QStringLiteral(".v"));
-        const QString listPath   = outputFilePath(moduleName + QStringLiteral(".f"));
-        const QString reportPath = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
+        const QString regsPath        = outputFilePath(moduleName + QStringLiteral("_regs.v"));
+        const QString connPath        = outputFilePath(moduleName + QStringLiteral("_conn.v"));
+        const QString topPath         = outputFilePath(moduleName + QStringLiteral(".v"));
+        const QString listPath        = outputFilePath(moduleName + QStringLiteral(".f"));
+        const QString reportPath      = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
+        const QString integrationPath = outputFilePath(
+            moduleName + QStringLiteral("_integration.soc_net"));
 
         std::vector<GeneratedArtifact> artifacts
             = {{regsPath, QSocIomuxGenerator::generateRegsVerilog(plan).toUtf8()},
                {connPath, QSocIomuxGenerator::generateConnVerilog(plan).toUtf8()},
                {topPath, QSocIomuxGenerator::generateTopVerilog(plan).toUtf8()},
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
-               {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()}};
+               {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
+               {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
         QString formalSystemVerilogPath;
         QString formalSbyPath;
         if (parser.isSet("with-formal")) {
@@ -310,6 +313,8 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                 .arg(regsPath, connPath, topPath),
             QCoreApplication::translate("main", "Generated IOMUX file list: %1").arg(listPath),
             QCoreApplication::translate("main", "Generated IOMUX report: %1").arg(reportPath),
+            QCoreApplication::translate("main", "Generated IOMUX integration netlist: %1")
+                .arg(integrationPath),
         };
         if (parser.isSet("with-formal")) {
             messages.append(

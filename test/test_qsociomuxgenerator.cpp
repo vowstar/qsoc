@@ -520,6 +520,8 @@ private slots:
     void invalidSource_data();
     void invalidSource();
     void regsAndTopEmittersComposePlan();
+    void projectionMatchesWrapperHeader();
+    void integrationNetlistConnectsEverythingOnce();
     void routingSimulationWhenIverilogIsAvailable();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
@@ -986,6 +988,93 @@ void Test::regsAndTopEmittersComposePlan()
     QCOMPARE(
         QSocIomuxGenerator::generateFileList(plan),
         QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
+}
+
+void Test::projectionMatchesWrapperHeader()
+{
+    QSocIomuxPlan plan;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &plan));
+    const YAML::Node projection = QSocIomuxGenerator::describeModuleYaml(plan);
+
+    const QString top         = QSocIomuxGenerator::generateTopVerilog(plan);
+    const int     headerStart = int(top.indexOf("module iomux0 ("));
+    const QString header = top.mid(headerStart, int(top.indexOf(");", headerStart)) - headerStart);
+    const QStringList lines = header.split('\n');
+
+    int declared = 0;
+    for (const QString &line : lines) {
+        if (line.contains("input ") || line.contains("output ")) {
+            ++declared;
+        }
+    }
+    QCOMPARE(declared, int(projection["port"].size()));
+
+    for (const auto &portPair : projection["port"]) {
+        const QString name      = QString::fromStdString(portPair.first.as<std::string>());
+        const QString direction = QString::fromStdString(
+            portPair.second["direction"].as<std::string>());
+        const QString type  = QString::fromStdString(portPair.second["type"].as<std::string>());
+        bool          found = false;
+        for (const QString &line : lines) {
+            QString   trimmed      = line.trimmed();
+            const int commentStart = int(trimmed.indexOf(" /*"));
+            if (commentStart >= 0) {
+                trimmed = trimmed.left(commentStart);
+            }
+            if (trimmed.endsWith(",")) {
+                trimmed.chop(1);
+            }
+            if (!trimmed.endsWith(" " + name)) {
+                continue;
+            }
+            found = true;
+            QVERIFY2(trimmed.startsWith(direction), qPrintable(line));
+            if (type.contains('[')) {
+                const QString range = type.mid(int(type.indexOf('[')));
+                QVERIFY2(trimmed.contains(range), qPrintable(line));
+            }
+            break;
+        }
+        QVERIFY2(found, qPrintable(name));
+    }
+
+    QCOMPARE(
+        QString::fromStdString(projection["bus"]["control"]["bus"].as<std::string>()),
+        QString("axi4_lite"));
+    QCOMPARE(
+        QString::fromStdString(projection["bus"]["control"]["mode"].as<std::string>()),
+        QString("slave"));
+    QCOMPARE(int(projection["bus"]["control"]["mapping"].size()), 19);
+    QCOMPARE(
+        QString::fromStdString(projection["bus"]["control"]["mapping"]["awaddr"].as<std::string>()),
+        QString("s_axi_awaddr"));
+    QVERIFY(!projection["port"]["pin_0_select_o"]);
+}
+
+void Test::integrationNetlistConnectsEverythingOnce()
+{
+    QSocIomuxPlan plan;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &plan));
+    const QString fragment = QSocIomuxGenerator::generateIntegrationNetlist(plan);
+
+    QCOMPARE(fragment.count("module: iomux0"), 1);
+    QCOMPARE(fragment.count("clk_i:"), 1);
+    QCOMPARE(fragment.count("link: clk_iomux"), 1);
+    QCOMPARE(fragment.count("rst_ni:"), 1);
+    QCOMPARE(fragment.count("pad_input_value_i:"), 1);
+    QCOMPARE(fragment.count("pad_input_enable_o:"), 1);
+    QCOMPARE(fragment.count("pad_output_value_o:"), 1);
+    QCOMPARE(fragment.count("pad_output_enable_o:"), 1);
+    QCOMPARE(fragment.count("hs_p0_s0_input_value_o:"), 1);
+    QCOMPARE(fragment.count("bits: \"[0]\""), 3);
+    QCOMPARE(fragment.count("port: control"), 1);
+    QCOMPARE(fragment.count("iomux_control:"), 1);
+    QVERIFY(!fragment.contains("hs_p0_s1_output_enable"));
+    QVERIFY(!fragment.contains("FIXME"));
+
+    const YAML::Node parsed = YAML::Load(fragment.toStdString());
+    QVERIFY(parsed["instance"]["u_iomux0"]["module"].IsScalar());
+    QCOMPARE(int(parsed["bus"]["iomux_control"].size()), 1);
 }
 
 void Test::routingSimulationWhenIverilogIsAvailable()
