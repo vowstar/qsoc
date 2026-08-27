@@ -176,12 +176,14 @@ verilator --binary --timing --threads 1 -Wno-fatal \
 ./obj_dir/V<module>_uvm_tb
 ```
 
-Generation does not compile or run the testbench. The directed sequence checks
-reset reads, RW and RO fields, constants, reserved bits, byte strobes,
-independent write-address and write-data order, response backpressure, and
-error responses. It follows the generated widths and sideband bindings. This
-is a module-specific MMIO testbench, not reusable AXI verification IP. A UVM
-error or fatal report makes the simulation process fail.
+Generation does not compile or run the testbench. The directed sequence runs
+twice with a reset between runs. It checks reset reads, RW and RO fields,
+constants, reserved bits, byte strobes, all write-address and write-data
+orders, response causality and backpressure, error responses, and that illegal
+writes have no side effects. Each channel has a 64-cycle timeout, followed by a
+three-cycle final drain. It follows the generated widths and sideband bindings.
+This is a module-specific MMIO testbench, not reusable AXI verification IP. A
+UVM error or fatal report makes the simulation process fail.
 
 `--with-formal` and `--with-uvm` are independent and may be combined. The
 combined command selects seven files. Generation locks and checks every

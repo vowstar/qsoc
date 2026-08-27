@@ -197,26 +197,40 @@ void appendDriver(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("        endfunction");
     lines->append(QString());
     lines->append(QString("        task send_aw(%1_item item);").arg(prefix));
+    lines->append("            int unsigned wait_cycles;");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_awaddr = item.address;");
     lines->append("            vif.s_axi_awvalid = 1'b1;");
-    lines->append("            do @(posedge vif.clk_i); while (!vif.s_axi_awready);");
+    lines->append("            wait_cycles = 0;");
+    lines->append("            do begin");
+    lines->append("                @(posedge vif.clk_i);");
+    lines->append("                if (++wait_cycles > CHANNEL_TIMEOUT_CYCLES)");
+    lines->append(
+        "                    `uvm_fatal(\"AW_TIMEOUT\", \"write address was not accepted\")");
+    lines->append("            end while (vif.s_axi_awready !== 1'b1);");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_awvalid = 1'b0;");
     lines->append("        endtask");
     lines->append(QString());
     lines->append(QString("        task send_w(%1_item item);").arg(prefix));
+    lines->append("            int unsigned wait_cycles;");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_wdata = item.data;");
     lines->append("            vif.s_axi_wstrb = item.strobe;");
     lines->append("            vif.s_axi_wvalid = 1'b1;");
-    lines->append("            do @(posedge vif.clk_i); while (!vif.s_axi_wready);");
+    lines->append("            wait_cycles = 0;");
+    lines->append("            do begin");
+    lines->append("                @(posedge vif.clk_i);");
+    lines->append("                if (++wait_cycles > CHANNEL_TIMEOUT_CYCLES)");
+    lines->append("                    `uvm_fatal(\"W_TIMEOUT\", \"write data was not accepted\")");
+    lines->append("            end while (vif.s_axi_wready !== 1'b1);");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_wvalid = 1'b0;");
     lines->append("        endtask");
     lines->append(QString());
     lines->append(QString("        task drive_write(%1_item item);").arg(prefix));
     lines->append("            bit [1:0] held_response;");
+    lines->append("            int unsigned wait_cycles;");
     lines->append("            case (item.write_order)");
     lines->append("                WRITE_AW_FIRST: begin");
     lines->append("                    send_aw(item);");
@@ -244,7 +258,13 @@ void appendDriver(QStringList *lines, const QSocMmioPlan &plan)
         "stalled\")");
     lines->append("            end");
     lines->append("            vif.s_axi_bready = 1'b1;");
-    lines->append("            do @(posedge vif.clk_i); while (!vif.s_axi_bvalid);");
+    lines->append("            wait_cycles = 0;");
+    lines->append("            do begin");
+    lines->append("                @(posedge vif.clk_i);");
+    lines->append("                if (++wait_cycles > CHANNEL_TIMEOUT_CYCLES)");
+    lines->append(
+        "                    `uvm_fatal(\"B_TIMEOUT\", \"write response was not produced\")");
+    lines->append("            end while (vif.s_axi_bvalid !== 1'b1);");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_bready = 1'b0;");
     lines->append("        endtask");
@@ -252,10 +272,17 @@ void appendDriver(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(QString("        task drive_read(%1_item item);").arg(prefix));
     lines->append("            bit [1:0] held_response;");
     lines->append("            data_t held_data;");
+    lines->append("            int unsigned wait_cycles;");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_araddr = item.address;");
     lines->append("            vif.s_axi_arvalid = 1'b1;");
-    lines->append("            do @(posedge vif.clk_i); while (!vif.s_axi_arready);");
+    lines->append("            wait_cycles = 0;");
+    lines->append("            do begin");
+    lines->append("                @(posedge vif.clk_i);");
+    lines->append("                if (++wait_cycles > CHANNEL_TIMEOUT_CYCLES)");
+    lines->append(
+        "                    `uvm_fatal(\"AR_TIMEOUT\", \"read address was not accepted\")");
+    lines->append("            end while (vif.s_axi_arready !== 1'b1);");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_arvalid = 1'b0;");
     lines->append("            if (item.hold_response) begin");
@@ -272,7 +299,13 @@ void appendDriver(QStringList *lines, const QSocMmioPlan &plan)
         "                    `uvm_fatal(\"R_STABILITY\", \"read response changed while stalled\")");
     lines->append("            end");
     lines->append("            vif.s_axi_rready = 1'b1;");
-    lines->append("            do @(posedge vif.clk_i); while (!vif.s_axi_rvalid);");
+    lines->append("            wait_cycles = 0;");
+    lines->append("            do begin");
+    lines->append("                @(posedge vif.clk_i);");
+    lines->append("                if (++wait_cycles > CHANNEL_TIMEOUT_CYCLES)");
+    lines->append(
+        "                    `uvm_fatal(\"R_TIMEOUT\", \"read response was not produced\")");
+    lines->append("            end while (vif.s_axi_rvalid !== 1'b1);");
     lines->append("            @(negedge vif.clk_i);");
     lines->append("            vif.s_axi_rready = 1'b0;");
     lines->append("        endtask");
@@ -312,6 +345,9 @@ void appendMonitor(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(QString("        `uvm_component_utils(%1_monitor)").arg(prefix));
     lines->append(QString("        virtual %1 vif;").arg(interfaceName));
     lines->append(QString("        uvm_analysis_port #(%1_item) observed;").arg(prefix));
+    lines->append("        bit aw_pending;");
+    lines->append("        bit w_pending;");
+    lines->append("        bit ar_pending;");
     lines->append(QString());
     lines->append(
         QString("        function new(string name = \"%1_monitor\", uvm_component parent = null);")
@@ -329,10 +365,16 @@ void appendMonitor(QStringList *lines, const QSocMmioPlan &plan)
         "                `uvm_fatal(\"NO_VIF\", \"MMIO virtual interface was not configured\")");
     lines->append("        endfunction");
     lines->append(QString());
+    lines->append("        function bit is_idle();");
+    lines->append("            return !aw_pending && !w_pending && !ar_pending");
+    lines->append("                && vif.s_axi_awvalid === 1'b0");
+    lines->append("                && vif.s_axi_wvalid === 1'b0");
+    lines->append("                && vif.s_axi_arvalid === 1'b0");
+    lines->append("                && vif.s_axi_bvalid === 1'b0");
+    lines->append("                && vif.s_axi_rvalid === 1'b0;");
+    lines->append("        endfunction");
+    lines->append(QString());
     lines->append("        task run_phase(uvm_phase phase);");
-    lines->append("            bit aw_pending;");
-    lines->append("            bit w_pending;");
-    lines->append("            bit ar_pending;");
     lines->append("            bit b_held;");
     lines->append("            bit r_held;");
     lines->append("            addr_t aw_address;");
@@ -351,6 +393,13 @@ void appendMonitor(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("            forever begin");
     lines->append("                @(posedge vif.clk_i);");
     lines->append("                if (!vif.rst_ni) begin");
+    lines->append("                    if (vif.s_axi_awready !== 1'b0");
+    lines->append("                        || vif.s_axi_wready !== 1'b0");
+    lines->append("                        || vif.s_axi_arready !== 1'b0");
+    lines->append("                        || vif.s_axi_bvalid !== 1'b0");
+    lines->append("                        || vif.s_axi_rvalid !== 1'b0)");
+    lines->append(
+        "                        `uvm_fatal(\"RESET\", \"MMIO bus was not idle during reset\")");
     lines->append("                    aw_pending = 1'b0;");
     lines->append("                    w_pending = 1'b0;");
     lines->append("                    ar_pending = 1'b0;");
@@ -377,6 +426,29 @@ void appendMonitor(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("                        held_rresp = vif.s_axi_rresp;");
     lines->append("                        held_rdata = vif.s_axi_rdata;");
     lines->append("                    end");
+    lines->append("                    if (vif.s_axi_bvalid === 1'b1");
+    lines->append("                        && (!aw_pending || !w_pending))");
+    lines->append(
+        "                        `uvm_fatal(\"B_ORDER\", \"write response lacked a request\")");
+    lines->append("                    if (vif.s_axi_bvalid === 1'b1");
+    lines->append("                        && vif.s_axi_bresp !== RESP_OKAY");
+    lines->append("                        && vif.s_axi_bresp !== RESP_SLVERR)");
+    lines->append(
+        "                        `uvm_fatal(\"B_RESPONSE\", \"write response was not supported\")");
+    lines->append(
+        "                    if (vif.s_axi_bvalid === 1'b1 && vif.s_axi_bready === 1'b1) begin");
+    lines->append(
+        QString("                        item = %1_item::type_id::create(\"observed_write\");")
+            .arg(prefix));
+    lines->append("                        item.write = 1'b1;");
+    lines->append("                        item.address = aw_address;");
+    lines->append("                        item.data = write_data;");
+    lines->append("                        item.strobe = write_strobe;");
+    lines->append("                        item.response = vif.s_axi_bresp;");
+    lines->append("                        observed.write(item);");
+    lines->append("                        aw_pending = 1'b0;");
+    lines->append("                        w_pending = 1'b0;");
+    lines->append("                    end");
     lines->append("                    if (vif.s_axi_awvalid && vif.s_axi_awready) begin");
     lines->append("                        if (aw_pending)");
     lines->append(
@@ -393,34 +465,16 @@ void appendMonitor(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("                        write_data = vif.s_axi_wdata;");
     lines->append("                        write_strobe = vif.s_axi_wstrb;");
     lines->append("                    end");
-    lines->append("                    if (vif.s_axi_bvalid && vif.s_axi_bready) begin");
-    lines->append("                        if (!aw_pending || !w_pending)");
+    lines->append("                    if (vif.s_axi_rvalid === 1'b1 && !ar_pending)");
     lines->append(
-        "                            `uvm_fatal(\"B_ORDER\", \"write response lacked a request\")");
+        "                        `uvm_fatal(\"R_ORDER\", \"read response lacked a request\")");
+    lines->append("                    if (vif.s_axi_rvalid === 1'b1");
+    lines->append("                        && vif.s_axi_rresp !== RESP_OKAY");
+    lines->append("                        && vif.s_axi_rresp !== RESP_SLVERR)");
     lines->append(
-        QString("                        item = %1_item::type_id::create(\"observed_write\");")
-            .arg(prefix));
-    lines->append("                        item.write = 1'b1;");
-    lines->append("                        item.address = aw_address;");
-    lines->append("                        item.data = write_data;");
-    lines->append("                        item.strobe = write_strobe;");
-    lines->append("                        item.response = vif.s_axi_bresp;");
-    lines->append("                        observed.write(item);");
-    lines->append("                        aw_pending = 1'b0;");
-    lines->append("                        w_pending = 1'b0;");
-    lines->append("                    end");
-    lines->append("                    if (vif.s_axi_arvalid && vif.s_axi_arready) begin");
-    lines->append("                        if (ar_pending)");
+        "                        `uvm_fatal(\"R_RESPONSE\", \"read response was not supported\")");
     lines->append(
-        "                            `uvm_fatal(\"AR_ORDER\", \"second read address was "
-        "accepted\")");
-    lines->append("                        ar_pending = 1'b1;");
-    lines->append("                        ar_address = vif.s_axi_araddr;");
-    lines->append("                    end");
-    lines->append("                    if (vif.s_axi_rvalid && vif.s_axi_rready) begin");
-    lines->append("                        if (!ar_pending)");
-    lines->append(
-        "                            `uvm_fatal(\"R_ORDER\", \"read response lacked a request\")");
+        "                    if (vif.s_axi_rvalid === 1'b1 && vif.s_axi_rready === 1'b1) begin");
     lines->append(
         QString("                        item = %1_item::type_id::create(\"observed_read\");")
             .arg(prefix));
@@ -431,6 +485,14 @@ void appendMonitor(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("                        item.response = vif.s_axi_rresp;");
     lines->append("                        observed.write(item);");
     lines->append("                        ar_pending = 1'b0;");
+    lines->append("                    end");
+    lines->append("                    if (vif.s_axi_arvalid && vif.s_axi_arready) begin");
+    lines->append("                        if (ar_pending)");
+    lines->append(
+        "                            `uvm_fatal(\"AR_ORDER\", \"second read address was "
+        "accepted\")");
+    lines->append("                        ar_pending = 1'b1;");
+    lines->append("                        ar_address = vif.s_axi_araddr;");
     lines->append("                    end");
     lines->append("                end");
     lines->append("            end");
@@ -458,6 +520,14 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("            super.new(name, parent);");
     lines->append("        endfunction");
     lines->append(QString());
+    lines->append("        function void reset_model();");
+    for (qsizetype index = 0; index < plan.registers.size(); ++index) {
+        lines->append(QString("            reference_%1 = %2;")
+                          .arg(index)
+                          .arg(dataLiteral(plan, resetValue(plan.registers.at(index)))));
+    }
+    lines->append("        endfunction");
+    lines->append(QString());
     lines->append("        function void build_phase(uvm_phase phase);");
     lines->append("            super.build_phase(phase);");
     lines->append(
@@ -466,11 +536,7 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(
         "                `uvm_fatal(\"NO_VIF\", \"MMIO virtual interface was not configured\")");
     lines->append("            observed_count = 0;");
-    for (qsizetype index = 0; index < plan.registers.size(); ++index) {
-        lines->append(QString("            reference_%1 = %2;")
-                          .arg(index)
-                          .arg(dataLiteral(plan, resetValue(plan.registers.at(index)))));
-    }
+    lines->append("            reset_model();");
     lines->append("        endfunction");
     lines->append(QString());
     lines->append("        function bit address_mapped(addr_t address);");
@@ -574,7 +640,6 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("            if (item.write) begin");
     lines->append("                if (address_mapped(item.address)) begin");
     lines->append("                    apply_write(item.address, item.data, item.strobe);");
-    lines->append("                    check_outputs(item.address);");
     lines->append("                end");
     lines->append("            end else if (item.data !== expected_read(item.address)) begin");
     lines->append(
@@ -582,6 +647,8 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
         "%0h\",");
     lines->append("                    item.address, item.data, expected_read(item.address)))");
     lines->append("            end");
+    lines->append("            if (address_mapped(item.address))");
+    lines->append("                check_outputs(item.address);");
     lines->append("            ++observed_count;");
     lines->append("        endfunction");
     lines->append("    endclass");
@@ -640,19 +707,25 @@ int appendSequence(QStringList *lines, const QSocMmioPlan &plan)
         ++transactionCount;
     }
 
-    const QSocMmioRegisterPlan &firstRegister = plan.registers.first();
+    qsizetype orderRegisterIndex = 0;
+    for (qsizetype registerIndex = 0; registerIndex < plan.registers.size(); ++registerIndex) {
+        if (writableMask(plan.registers.at(registerIndex)) != 0) {
+            orderRegisterIndex = registerIndex;
+            break;
+        }
+    }
+    const QSocMmioRegisterPlan &orderRegister = plan.registers.at(orderRegisterIndex);
     for (quint32 order = 0; order < 3; ++order) {
-        lines->append(QString("            send_write(%1, %2, '0, %3, %4);")
-                          .arg(addressLiteral(plan, firstRegister.byteOffset))
-                          .arg(dataLiteral(plan, writePattern(plan, 0, order)))
+        lines->append(QString("            send_write(%1, %2, '1, %3, %4);")
+                          .arg(addressLiteral(plan, orderRegister.byteOffset))
+                          .arg(dataLiteral(plan, writePattern(plan, orderRegisterIndex, order)))
                           .arg(order)
                           .arg(heldWrite ? "1'b0" : "1'b1"));
         heldWrite = true;
-        ++transactionCount;
+        lines->append(QString("            send_read(%1, 1'b0);")
+                          .arg(addressLiteral(plan, orderRegister.byteOffset)));
+        transactionCount += 2;
     }
-    lines->append(QString("            send_read(%1, 1'b0);")
-                      .arg(addressLiteral(plan, firstRegister.byteOffset)));
-    ++transactionCount;
 
     int writeOrder = 0;
     for (qsizetype registerIndex = 0; registerIndex < plan.registers.size(); ++registerIndex) {
@@ -703,6 +776,11 @@ int appendSequence(QStringList *lines, const QSocMmioPlan &plan)
             QString("            send_read(%1, 1'b0);").arg(addressLiteral(plan, *unmapped)));
         transactionCount += 2;
     }
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        lines->append(
+            QString("            send_read(%1, 1'b0);").arg(addressLiteral(plan, reg.byteOffset)));
+        ++transactionCount;
+    }
     lines->append("        endtask");
     lines->append("    endclass");
     lines->append(QString());
@@ -711,7 +789,9 @@ int appendSequence(QStringList *lines, const QSocMmioPlan &plan)
 
 void appendEnvironmentAndTest(QStringList *lines, const QSocMmioPlan &plan, int transactionCount)
 {
-    const QString prefix = plan.moduleName + QStringLiteral("_uvm");
+    const QString prefix                   = plan.moduleName + QStringLiteral("_uvm");
+    const QString interfaceName            = prefix + QStringLiteral("_if");
+    const int     expectedTransactionCount = transactionCount * 2;
     lines->append(QString("    class %1_env extends uvm_env;").arg(prefix));
     lines->append(QString("        `uvm_component_utils(%1_env)").arg(prefix));
     lines->append(QString("        uvm_sequencer #(%1_item) sequencer;").arg(prefix));
@@ -748,6 +828,7 @@ void appendEnvironmentAndTest(QStringList *lines, const QSocMmioPlan &plan, int 
     lines->append(QString());
     lines->append(QString("    class %1_test extends uvm_test;").arg(prefix));
     lines->append(QString("        `uvm_component_utils(%1_test)").arg(prefix));
+    lines->append(QString("        virtual %1 vif;").arg(interfaceName));
     lines->append(QString("        %1_env env;").arg(prefix));
     lines->append(QString());
     lines->append(
@@ -758,23 +839,46 @@ void appendEnvironmentAndTest(QStringList *lines, const QSocMmioPlan &plan, int 
     lines->append(QString());
     lines->append("        function void build_phase(uvm_phase phase);");
     lines->append("            super.build_phase(phase);");
+    lines->append(
+        QString("            if (!uvm_config_db #(virtual %1)::get(this, \"\", \"vif\", vif))")
+            .arg(interfaceName));
+    lines->append(
+        "                `uvm_fatal(\"NO_VIF\", \"MMIO virtual interface was not configured\")");
     lines->append(QString("            env = %1_env::type_id::create(\"env\", this);").arg(prefix));
     lines->append("        endfunction");
+    lines->append(QString());
+    lines->append("        task apply_reset();");
+    lines->append("            vif.rst_ni = 1'b0;");
+    lines->append("            env.scoreboard.reset_model();");
+    lines->append("            repeat (RESET_CYCLES) @(posedge vif.clk_i);");
+    lines->append("            @(negedge vif.clk_i);");
+    lines->append("            vif.rst_ni = 1'b1;");
+    lines->append("        endtask");
     lines->append(QString());
     lines->append("        task run_phase(uvm_phase phase);");
     lines->append(QString("            %1_sequence sequenceHandle;").arg(prefix));
     lines->append("            phase.raise_objection(this);");
+    lines->append("            apply_reset();");
     lines->append(
-        QString("            sequenceHandle = %1_sequence::type_id::create(\"sequence_handle\");")
+        QString("            sequenceHandle = %1_sequence::type_id::create(\"initial_sequence\");")
             .arg(prefix));
     lines->append("            sequenceHandle.start(env.sequencer);");
+    lines->append("            apply_reset();");
     lines->append(
-        QString("            if (env.scoreboard.observed_count != %1)").arg(transactionCount));
+        QString(
+            "            sequenceHandle = %1_sequence::type_id::create(\"post_reset_sequence\");")
+            .arg(prefix));
+    lines->append("            sequenceHandle.start(env.sequencer);");
+    lines->append("            repeat (DRAIN_CYCLES) @(posedge vif.clk_i);");
+    lines->append("            if (!env.monitor.is_idle())");
+    lines->append("                `uvm_fatal(\"DRAIN\", \"MMIO bus did not become idle\")");
+    lines->append(QString("            if (env.scoreboard.observed_count != %1)")
+                      .arg(expectedTransactionCount));
     lines->append(
         QStringLiteral(
             "                `uvm_fatal(\"COUNT\", $sformatf(\"observed %0d transactions, "
             "expected ")
-        + QString::number(transactionCount) + QStringLiteral("\","));
+        + QString::number(expectedTransactionCount) + QStringLiteral("\","));
     lines->append("                    env.scoreboard.observed_count))");
     lines->append(
         QStringLiteral("            `uvm_info(\"QSOC_UVM_PASS\", $sformatf(\"")
@@ -797,6 +901,9 @@ QString buildPackage(const QSocMmioPlan &plan)
         QString("    localparam int unsigned ADDR_WIDTH = %1;").arg(plan.addressWidth),
         QString("    localparam int unsigned DATA_WIDTH = %1;").arg(plan.dataWidth),
         QString("    localparam int unsigned STRB_WIDTH = %1;").arg(plan.dataWidth / 8),
+        "    localparam int unsigned CHANNEL_TIMEOUT_CYCLES = 64;",
+        "    localparam int unsigned RESET_CYCLES = 4;",
+        "    localparam int unsigned DRAIN_CYCLES = 3;",
         "    localparam bit [1:0] RESP_OKAY = 2'b00;",
         "    localparam bit [1:0] RESP_SLVERR = 2'b10;",
         "    localparam int unsigned WRITE_TOGETHER = 0;",
@@ -874,23 +981,23 @@ QString buildTestbench(const QSocMmioPlan &plan)
     lines.append("        bus.clk_i = 1'b0;");
     lines.append("        forever #5ns bus.clk_i = ~bus.clk_i;");
     lines.append("    end");
-    lines.append(QString());
-    lines.append("    initial begin");
-    lines.append("        bus.rst_ni = 1'b0;");
-    int inputIndex = 0;
+    QStringList inputInitializers;
+    int         inputIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
             if (!field.inputPort.isEmpty()) {
-                lines.append(
+                inputInitializers.append(
                     QString("        bus.%1 = %2;")
                         .arg(field.inputPort, literal(field.width, inputValue(field, inputIndex++))));
             }
         }
     }
-    lines.append("        repeat (4) @(posedge bus.clk_i);");
-    lines.append("        @(negedge bus.clk_i);");
-    lines.append("        bus.rst_ni = 1'b1;");
-    lines.append("    end");
+    if (!inputInitializers.isEmpty()) {
+        lines.append(QString());
+        lines.append("    initial begin");
+        lines.append(inputInitializers);
+        lines.append("    end");
+    }
     lines.append(QString());
     lines.append("    initial begin");
     lines.append(QString("        uvm_config_db #(virtual %1)::set(null, \"*\", \"vif\", bus);")

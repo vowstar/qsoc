@@ -160,6 +160,82 @@ generator:
 )");
 }
 
+QSocModuleDefinition makeFirstRoSingleBitDefinition()
+{
+    return makeDefinition(QStringLiteral("first_ro_ctrl"), R"(
+generator:
+  kind: mmio
+  bus: axi4_lite
+  data_width: 32
+  address_width: 8
+  register:
+    status:
+      offset: 0x00
+      field:
+        ready:
+          lsb: 0
+          access: ro
+          value: 1
+    control:
+      offset: 0x04
+      field:
+        enable:
+          lsb: 0
+          access: rw
+          reset: 0
+          output: enable_o
+)");
+}
+
+QSocModuleDefinition makeAllRoDefinition()
+{
+    return makeDefinition(QStringLiteral("read_only_ctrl"), R"(
+generator:
+  kind: mmio
+  bus: axi4_lite
+  data_width: 32
+  address_width: 8
+  register:
+    identity:
+      offset: 0x00
+      field:
+        code:
+          lsb: 0
+          width: 8
+          access: ro
+          value: 0xa5
+    status:
+      offset: 0x04
+      field:
+        ready:
+          lsb: 0
+          access: ro
+          input: ready_i
+)");
+}
+
+enum UvmFixture {
+    Mixed32Fixture,
+    Wide64Fixture,
+    FirstRoSingleBitFixture,
+    AllRoFixture,
+};
+
+QSocModuleDefinition makeFixtureDefinition(int fixture)
+{
+    switch (fixture) {
+    case Mixed32Fixture:
+        return makeUvm32Definition();
+    case Wide64Fixture:
+        return makeUvm64Definition();
+    case FirstRoSingleBitFixture:
+        return makeFirstRoSingleBitDefinition();
+    case AllRoFixture:
+        return makeAllRoDefinition();
+    }
+    return {};
+}
+
 QSocModuleDefinition makeInvalidDefinition()
 {
     return makeDefinition(QStringLiteral("invalid_ctrl"), R"(
@@ -319,6 +395,22 @@ void Test::collateralHasExpectedStructure()
     QVERIFY(collateral.packageSource.contains(QStringLiteral("package %1_uvm_pkg").arg(moduleName)));
     QVERIFY(collateral.packageSource.contains(QStringLiteral("extends uvm_test")));
     QVERIFY(collateral.packageSource.contains(QStringLiteral("QSOC_UVM_PASS")));
+    const qsizetype writeCausalityIndex = collateral.packageSource.indexOf(QStringLiteral(
+        "if (vif.s_axi_bvalid === 1'b1\n"
+        "                        && (!aw_pending || !w_pending))"));
+    const qsizetype writeAddressIndex   = collateral.packageSource.indexOf(
+        QStringLiteral("aw_address = vif.s_axi_awaddr"));
+    const qsizetype writeDataIndex = collateral.packageSource.indexOf(
+        QStringLiteral("write_data = vif.s_axi_wdata"));
+    const qsizetype readCausalityIndex = collateral.packageSource.indexOf(
+        QStringLiteral("if (vif.s_axi_rvalid === 1'b1 && !ar_pending)"));
+    const qsizetype readAddressIndex = collateral.packageSource.indexOf(
+        QStringLiteral("ar_address = vif.s_axi_araddr"));
+    QVERIFY(writeCausalityIndex >= 0);
+    QVERIFY(writeAddressIndex > writeCausalityIndex);
+    QVERIFY(writeDataIndex > writeCausalityIndex);
+    QVERIFY(readCausalityIndex >= 0);
+    QVERIFY(readAddressIndex > readCausalityIndex);
     QVERIFY(collateral.testbenchSource.contains(QStringLiteral("module %1_uvm_tb").arg(moduleName)));
     QVERIFY(collateral.testbenchSource.contains(QStringLiteral("run_test")));
     QVERIFY(collateral.testbenchSource.contains(QStringLiteral("QSOC_UVM_FAILED")));
@@ -335,16 +427,19 @@ void Test::collateralHasExpectedStructure()
 
 void Test::generatedTestbenchPassesVerilator_data()
 {
-    QTest::addColumn<bool>("wide");
+    QTest::addColumn<int>("fixture");
     QTest::addColumn<QString>("moduleName");
 
-    QTest::newRow("32-bit-mixed-registers") << false << QStringLiteral("timer_ctrl");
-    QTest::newRow("64-bit-wide-registers") << true << QStringLiteral("wide_ctrl");
+    QTest::newRow("32-bit-mixed-registers") << int(Mixed32Fixture) << QStringLiteral("timer_ctrl");
+    QTest::newRow("64-bit-wide-registers") << int(Wide64Fixture) << QStringLiteral("wide_ctrl");
+    QTest::newRow("first-ro-single-bit-rw")
+        << int(FirstRoSingleBitFixture) << QStringLiteral("first_ro_ctrl");
+    QTest::newRow("all-ro-registers") << int(AllRoFixture) << QStringLiteral("read_only_ctrl");
 }
 
 void Test::generatedTestbenchPassesVerilator()
 {
-    QFETCH(bool, wide);
+    QFETCH(int, fixture);
     QFETCH(QString, moduleName);
 
     const QString verilator = QStandardPaths::findExecutable(QStringLiteral("verilator"));
@@ -356,7 +451,7 @@ void Test::generatedTestbenchPassesVerilator()
         QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("verilator, make, and UVM_HOME/src/uvm_pkg.sv"));
     }
 
-    const QSocModuleDefinition definition = wide ? makeUvm64Definition() : makeUvm32Definition();
+    const QSocModuleDefinition definition = makeFixtureDefinition(fixture);
     QString                    verilog;
     QSocMmioUvmCollateral      collateral;
     QStringList                errors;
@@ -367,8 +462,9 @@ void Test::generatedTestbenchPassesVerilator()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QDir outputDirectory(directory.path());
-    writeTextFile(outputDirectory.filePath(moduleName + QStringLiteral(".v")), verilog);
+    const QDir    outputDirectory(directory.path());
+    const QString verilogPath = outputDirectory.filePath(moduleName + QStringLiteral(".v"));
+    writeTextFile(verilogPath, verilog);
     writeTextFile(
         outputDirectory.filePath(moduleName + QStringLiteral("_uvm_if.sv")),
         collateral.interfaceSource);
@@ -437,6 +533,94 @@ void Test::generatedTestbenchPassesVerilator()
         failureResult.exitStatus != QProcess::NormalExit || failureResult.exitCode != 0,
         failureResult.output.constData());
     QVERIFY2(failureResult.output.contains("QSOC_UVM_FAILED"), failureResult.output.constData());
+
+    if (fixture == FirstRoSingleBitFixture) {
+        QString       mutatedVerilog = verilog;
+        const QString writeGuard     = QStringLiteral(
+            "            if (address_is_mapped(write_address)) begin");
+        QVERIFY(mutatedVerilog.contains(writeGuard));
+        mutatedVerilog.replace(writeGuard, QStringLiteral("            if (1'b1) begin"));
+
+        const QString   defaultWrite = QStringLiteral("                default: begin end");
+        const qsizetype defaultIndex = mutatedVerilog.lastIndexOf(defaultWrite);
+        QVERIFY(defaultIndex >= 0);
+        mutatedVerilog.replace(
+            defaultIndex,
+            defaultWrite.size(),
+            QStringLiteral("                default: mmio_field_0_q <= 1'b1;"));
+        mutatedVerilog.replace(QStringLiteral("s_axi_bvalid"), QStringLiteral("s_axi_bvalid_q"));
+        mutatedVerilog.replace(QStringLiteral("s_axi_rvalid"), QStringLiteral("s_axi_rvalid_q"));
+        const QString bValidPort = QStringLiteral("output reg         s_axi_bvalid_q");
+        const QString rValidPort = QStringLiteral("output reg         s_axi_rvalid_q");
+        QVERIFY(mutatedVerilog.contains(bValidPort));
+        QVERIFY(mutatedVerilog.contains(rValidPort));
+        mutatedVerilog.replace(bValidPort, QStringLiteral("output wire        s_axi_bvalid"));
+        mutatedVerilog.replace(rValidPort, QStringLiteral("output wire        s_axi_rvalid"));
+        const QString   moduleHeaderEnd = QStringLiteral(");\n\n");
+        const qsizetype headerEndIndex  = mutatedVerilog.indexOf(moduleHeaderEnd);
+        QVERIFY(headerEndIndex >= 0);
+        mutatedVerilog.insert(
+            headerEndIndex + moduleHeaderEnd.size(),
+            QStringLiteral(
+                "reg s_axi_bvalid_q;\n"
+                "reg s_axi_rvalid_q;\n"
+                "reg inject_premature_write;\n"
+                "reg inject_premature_read;\n"
+                "\n"
+                "initial begin\n"
+                "    inject_premature_write = $test$plusargs(\"QSOC_PREMATURE_WRITE\");\n"
+                "    inject_premature_read  = $test$plusargs(\"QSOC_PREMATURE_READ\");\n"
+                "end\n"
+                "\n"
+                "assign s_axi_bvalid = inject_premature_write\n"
+                "                      ? rst_ni && s_axi_awvalid && s_axi_wvalid\n"
+                "                      : s_axi_bvalid_q;\n"
+                "assign s_axi_rvalid = inject_premature_read\n"
+                "                      ? rst_ni && s_axi_arvalid\n"
+                "                      : s_axi_rvalid_q;\n"
+                "\n"));
+        writeTextFile(verilogPath, mutatedVerilog);
+
+        const QString mutatedObjectDirectory = outputDirectory.filePath(
+            QStringLiteral("obj_dir_mutated"));
+        QStringList     mutatedArguments = arguments;
+        const qsizetype mdirIndex        = mutatedArguments.indexOf(QStringLiteral("--Mdir"));
+        QVERIFY(mdirIndex >= 0 && mdirIndex + 1 < mutatedArguments.size());
+        mutatedArguments[mdirIndex + 1] = mutatedObjectDirectory;
+        const CommandResult mutatedCompile
+            = runCommand(directory.path(), verilator, mutatedArguments, 300000);
+        QVERIFY2(mutatedCompile.started, mutatedCompile.output.constData());
+        QVERIFY2(mutatedCompile.finished, mutatedCompile.output.constData());
+        QCOMPARE(mutatedCompile.exitStatus, QProcess::NormalExit);
+        QVERIFY2(mutatedCompile.exitCode == 0, mutatedCompile.output.constData());
+
+        const QString mutatedBinary = QDir(mutatedObjectDirectory).filePath(binaryName);
+        QVERIFY2(QFileInfo::exists(mutatedBinary), qPrintable(mutatedBinary));
+        const CommandResult mutatedRun = runCommand(directory.path(), mutatedBinary, {}, 60000);
+        QVERIFY2(mutatedRun.started, mutatedRun.output.constData());
+        QVERIFY2(mutatedRun.finished, mutatedRun.output.constData());
+        QVERIFY2(
+            mutatedRun.exitStatus != QProcess::NormalExit || mutatedRun.exitCode != 0,
+            mutatedRun.output.constData());
+        QVERIFY2(mutatedRun.output.contains("READ_DATA"), mutatedRun.output.constData());
+        QVERIFY2(mutatedRun.output.contains("QSOC_UVM_FAILED"), mutatedRun.output.constData());
+
+        const QList<QPair<QString, QByteArray>> protocolFaults{
+            {QStringLiteral("+QSOC_PREMATURE_WRITE"), QByteArray("B_ORDER")},
+            {QStringLiteral("+QSOC_PREMATURE_READ"), QByteArray("R_ORDER")},
+        };
+        for (const auto &[plusArgument, expectedFailure] : protocolFaults) {
+            const CommandResult protocolRun
+                = runCommand(directory.path(), mutatedBinary, {plusArgument}, 60000);
+            QVERIFY2(protocolRun.started, protocolRun.output.constData());
+            QVERIFY2(protocolRun.finished, protocolRun.output.constData());
+            QVERIFY2(
+                protocolRun.exitStatus != QProcess::NormalExit || protocolRun.exitCode != 0,
+                protocolRun.output.constData());
+            QVERIFY2(protocolRun.output.contains(expectedFailure), protocolRun.output.constData());
+            QVERIFY2(protocolRun.output.contains("QSOC_UVM_FAILED"), protocolRun.output.constData());
+        }
+    }
 }
 
 } // namespace
