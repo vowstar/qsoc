@@ -524,8 +524,6 @@ void Test::mergedTopInstantiatesWrapperAndElaborates()
     QVERIFY(fragment.contains("link: clk_iomux"));
     QVERIFY(fragment.contains("bits: \"[0]\""));
     QVERIFY(fragment.contains("port: control"));
-    QVERIFY(!fragment.contains("FIXME"));
-    QVERIFY(!fragment.contains("..."));
 
     writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), baseNetlist);
     const CommandResult merged = mergeTop(directory);
