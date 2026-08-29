@@ -99,6 +99,35 @@ QSocModuleDefinition makeTailDefinition()
                               .arg(integrationBlock()));
 }
 
+QSocModuleDefinition makeSlotCountDefinition(quint32 hsSlots)
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 8
+    pin_count: 3
+    hs_slots: %2
+%1    route:
+      - pin: 0
+        slot: 0
+        function: gpio0
+        signal: data0
+        input_value: {link: gpio0_in, bit: 0}
+        input_enable: 1
+        output_value: {link: gpio0_out, bit: 0}
+        output_enable: {link: gpio0_oe, bit: 0}
+      - pin: 2
+        slot: 1
+        function: tail
+        signal: oe
+        input_value: {link: tail_in, invert: true}
+        output_enable: 1
+)")
+                              .arg(integrationBlock())
+                              .arg(hsSlots));
+}
+
 void writeTextFile(const QString &path, const QString &text)
 {
     QFile file(path);
@@ -148,11 +177,46 @@ class Test : public QObject
 
 private slots:
     void collateralAssertsBundlesBroadcastAndInvalidCodes();
+    void assertionCountCoversEverySlotOfEveryPin_data();
+    void assertionCountCoversEverySlotOfEveryPin();
     void sourceOrderDoesNotChangeCollateral();
     void emptyPlanProducesNoCollateral();
     void generatedCollateralPassesSbyWhenAvailable();
     void tailPinSelectorDisconnectFailsBmcWhenAvailable();
 };
+
+void Test::assertionCountCoversEverySlotOfEveryPin_data()
+{
+    QTest::addColumn<quint32>("hsSlots");
+    QTest::newRow("2") << 2u;
+    QTest::newRow("3") << 3u;
+    QTest::newRow("4-default") << 4u;
+    QTest::newRow("5") << 5u;
+    QTest::newRow("8") << 8u;
+}
+
+void Test::assertionCountCoversEverySlotOfEveryPin()
+{
+    QFETCH(quint32, hsSlots);
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeSlotCountDefinition(hsSlots), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QSocIomuxFormalCollateral collateral = QSocIomuxFormal::generate(plan);
+
+    QVERIFY(!collateral.systemVerilog.isEmpty());
+    QVERIFY(!collateral.sby.isEmpty());
+
+    /* Three bundle assertions per (pin, slot), one per RX sink, and one all-zero
+     * block of three only when the selector field has codes above hs_slots. */
+    const quint32 width      = hsSlots <= 2 ? 1u : (hsSlots <= 4 ? 2u : 3u);
+    const bool    hasInvalid = hsSlots < (1u << width);
+    const int     expected   = int(3 * plan.pinCount * hsSlots) + 2
+                               + (hasInvalid ? int(3 * plan.pinCount) : 0);
+    QCOMPARE(collateral.systemVerilog.count("assert ("), expected);
+    QCOMPARE(collateral.systemVerilog.count("cover ("), int(2 * hsSlots));
+}
 
 void Test::collateralAssertsBundlesBroadcastAndInvalidCodes()
 {
@@ -184,15 +248,46 @@ void Test::sourceOrderDoesNotChangeCollateral()
     QVERIFY(QSocIomuxGenerator::buildPlan(makeSmallDefinition(), &plan, nullptr));
     const QSocIomuxFormalCollateral first = QSocIomuxFormal::generate(plan);
 
-    QSocIomuxPlan reversedPlan = plan;
-    std::reverse(reversedPlan.routes.begin(), reversedPlan.routes.end());
-    std::sort(
-        reversedPlan.routes.begin(),
-        reversedPlan.routes.end(),
-        [](const QSocIomuxRoutePlan &left, const QSocIomuxRoutePlan &right) {
-            return left.pin != right.pin ? left.pin < right.pin : left.slot < right.slot;
-        });
-    const QSocIomuxFormalCollateral second = QSocIomuxFormal::generate(reversedPlan);
+    /* Permute the source text rather than the parsed plan: re-sorting a plan with
+     * the comparator the generator already applied cannot detect anything. */
+    const QSocModuleDefinition reordered = makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 8
+    pin_count: 2
+    hs_slots: 3
+%1    route:
+      - pin: 1
+        slot: 1
+        function: uart0
+        signal: rx
+        input_enable: 1
+        input_value: {link: uart0_rx}
+      - pin: 1
+        slot: 0
+        function: spi0
+        signal: mode
+        output_enable: 1
+        output_value: {link: spi_mode, invert: true}
+      - pin: 0
+        slot: 0
+        function: gpio0
+        signal: data0
+        output_enable: {link: gpio0_oe, bit: 0}
+        output_value: {link: gpio0_out, bit: 0}
+        input_enable: 1
+        input_value: {link: gpio0_in, bit: 0}
+)")
+                                                              .arg(integrationBlock()));
+
+    QSocIomuxPlan reorderedPlan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(reordered, &reorderedPlan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(reorderedPlan, plan);
+    const QSocIomuxFormalCollateral second = QSocIomuxFormal::generate(reorderedPlan);
     QCOMPARE(second.systemVerilog, first.systemVerilog);
     QCOMPARE(second.sby, first.sby);
 }
