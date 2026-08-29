@@ -26,3 +26,6 @@ Desktop.ini
 /*.*.user
 /*.*.user*
 /*.local
+
+# Bytecode from throwaway Python dropped into test/ by a skill
+__pycache__/
