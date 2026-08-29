@@ -2070,6 +2070,7 @@ private slots:
     void omittedSlotCountMatchesExplicitDefault();
     void sourceOrderDoesNotChangeGeneratedVerilog();
     void generatedArtifactsMatchFrozenBaseline();
+    void reportRejectsPlanInconsistentWithPinCount();
     void selectorLayoutMatchesFrozenKnownAnswer_data();
     void selectorLayoutMatchesFrozenKnownAnswer();
     void pinCountBoundaryFollowsLaneFormula_data();
@@ -2225,6 +2226,30 @@ void Test::generatedArtifactsMatchFrozenBaseline()
 
     compareText(QSocIomuxGenerator::generateRegsVerilog(wide), frozenWide64RegsVerilog());
     compareText(QSocIomuxGenerator::generateReport(wide), frozenWide64Report());
+}
+
+void Test::reportRejectsPlanInconsistentWithPinCount()
+{
+    QSocIomuxPlan built;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &built));
+    QVERIFY(!QSocIomuxGenerator::generateReport(built).isEmpty());
+
+    QSocIomuxPlan capabilityOnly = built;
+    capabilityOnly.mmio.registers.remove(1, capabilityOnly.mmio.registers.size() - 1);
+    QCOMPARE(capabilityOnly.mmio.registers.size(), 1);
+    QVERIFY(QSocIomuxGenerator::generateReport(capabilityOnly).isEmpty());
+
+    QSocIomuxPlan pinCountOutrunsRegisters = built;
+    pinCountOutrunsRegisters.pinCount      = 256;
+    QVERIFY(QSocIomuxGenerator::generateReport(pinCountOutrunsRegisters).isEmpty());
+
+    QSocIomuxPlan noRegisters  = built;
+    noRegisters.mmio.registers = {};
+    QVERIFY(QSocIomuxGenerator::generateReport(noRegisters).isEmpty());
+
+    QSocIomuxPlan unsupportedWidth  = built;
+    unsupportedWidth.mmio.dataWidth = 0;
+    QVERIFY(QSocIomuxGenerator::generateReport(unsupportedWidth).isEmpty());
 }
 
 void Test::sourceOrderDoesNotChangeGeneratedVerilog()
@@ -2399,6 +2424,7 @@ void Test::apertureExceedingAddressWidthIsRejected()
     QCOMPARE(plan, QSocIomuxPlan());
     QCOMPARE(errors.size(), 1);
     QVERIFY(errors.constFirst().startsWith("IOMUX_RANGE generator.address_width"));
+    QVERIFY(errors.constFirst().contains("aperture needs 132 bytes"));
     QVERIFY(errors.constFirst().contains("minimum address_width is 8"));
     QVERIFY(
         QSocIomuxGenerator::generateCoreVerilog(plan).isEmpty()
@@ -2406,6 +2432,13 @@ void Test::apertureExceedingAddressWidthIsRejected()
         && QSocIomuxGenerator::generateReport(plan).isEmpty());
 
     QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(256, 8, 32, 8)), &plan));
+
+    QVERIFY(!QSocIomuxGenerator::buildPlan(
+        makeDefinition(sourceForConfig(256, 8, 64, 7)), &plan, &errors));
+    QCOMPARE(errors.size(), 1);
+    QVERIFY(errors.constFirst().contains("aperture needs 136 bytes"));
+    QVERIFY(errors.constFirst().contains("minimum address_width is 8"));
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(256, 8, 64, 8)), &plan));
 
     QVERIFY(
         !QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 2)), &plan, &errors));
