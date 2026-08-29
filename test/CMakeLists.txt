@@ -34,7 +34,14 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/../resource"
 )
 
+# Per-test policy is declared at the call site. A misspelled keyword is a
+# configure error, unlike a name missing from a regex or a property variable.
 function(QT_ADD_TEST_TARGET TARGET_NAME)
+    cmake_parse_arguments(T "" "LOCK" "LABELS" ${ARGN})
+    if(T_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "${TARGET_NAME}: unknown option ${T_UNPARSED_ARGUMENTS}")
+    endif()
+
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
 
     # GUI tests need the offscreen platform plugin.
@@ -54,8 +61,14 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     # and running them together has produced a mock that never started. A
     # shared lock keeps `ctest -jN` from interleaving them without forcing the
     # whole suite serial.
-    if(${TARGET_NAME} MATCHES "^test_qsoc(sftp_loopback|sftpstranded|sshexecstatus|sshagentbudget|sshsession|sshstrandedchannel|agentremoterecovery|remoteguardafterreconnect|toolagenthostdispatch|toolagentbindinglifetime|toolagenthostbindingrecovery|remotecwdowner|remotecwdpublish|remotedeadlinkcost)$")
-        set_tests_properties(${TARGET_NAME} PROPERTIES RESOURCE_LOCK "qsoc_loopback_sshd")
+    if(T_LOCK)
+        set_tests_properties(${TARGET_NAME} PROPERTIES RESOURCE_LOCK "${T_LOCK}")
+    endif()
+
+    # Labels group a feature that spans several files. A test may carry more
+    # than one, which a filename or a directory cannot express.
+    if(T_LABELS)
+        set_tests_properties(${TARGET_NAME} PROPERTIES LABELS "${T_LABELS}")
     endif()
 
     set(_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/${TARGET_NAME}.cpp")
@@ -119,7 +132,6 @@ qt_add_test_target("test_qsoccliparsegenerateconnectedtarget")
 qt_add_test_target("test_qsoccliparsegeneratefsmlogic")
 qt_add_test_target("test_qsoccliparsegeneratemerge")
 qt_add_test_target("test_qsoccliparsegeneratemultidriverguard")
-qt_add_test_target("test_qtuiscrollviewgraphicslayer")
 qt_add_test_target("test_qsoccliparsegeneratepowerlogic")
 qt_add_test_target("test_qsoccliparsegeneratereportunconnected")
 qt_add_test_target("test_qsocgenerateconnectedtargetmap")
@@ -138,15 +150,20 @@ qt_add_test_target("test_qsoccliparsegeneratetemplaterdl")
 qt_add_test_target("test_qsoccliparsegeneratetemplateregex")
 qt_add_test_target("test_qsoccliparsegeneratetoplevelport")
 qt_add_test_target("test_qsoccliparsemodule")
-qt_add_test_target("test_qsoccliparsemmio")
-qt_add_test_target("test_qsocmmiogenerator")
-qt_add_test_target("test_qsociomuxgenerator")
-qt_add_test_target("test_qsoccliparseiomux")
-qt_add_test_target("test_qsoccliparsegenerateiomux")
-qt_add_test_target("test_qsociomuxformal")
-qt_add_test_target("test_qsocmmioformal")
-qt_add_test_target("test_qsocmmiouvm")
-set_tests_properties(test_qsocmmiouvm PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE)
+qt_add_test_target("test_qsoccliparsemmio" LABELS "mmio")
+qt_add_test_target("test_qsocmmiogenerator" LABELS "mmio")
+qt_add_test_target("test_qsociomuxgenerator" LABELS "iomux")
+qt_add_test_target("test_qsoccliparseiomux" LABELS "iomux")
+qt_add_test_target("test_qsoccliparsegenerateiomux" LABELS "iomux")
+qt_add_test_target("test_qsociomuxformal" LABELS "iomux")
+qt_add_test_target("test_qsocmmioformal" LABELS "mmio")
+qt_add_test_target("test_qsocmmiouvm" LABELS "mmio;iomux")
+# Each row drives two verilator elaborations of UVM, budgeted at 300s each,
+# so a row can legitimately outlast QtTest's 300s default function watchdog.
+# A shared CI runner is about six times slower than a developer machine.
+set_tests_properties(
+    test_qsocmmiouvm
+    PROPERTIES TIMEOUT 3000 RUN_SERIAL TRUE ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=900000")
 qt_add_test_target("test_qsocmodulemanagerphase0")
 qt_add_test_target("test_qsoccliparsemodulebus")
 qt_add_test_target("test_qsoccliparseproject")
@@ -223,6 +240,7 @@ qt_add_test_target("test_qsochistoryorder")
 qt_add_test_target("test_qtuiscrollviewblocks")
 qt_add_test_target("test_qtuicompositorstreaming")
 qt_add_test_target("test_qtuiscrollviewfocuscopy")
+qt_add_test_target("test_qtuiscrollviewgraphicslayer")
 qt_add_test_target("test_qtuiblockfold")
 qt_add_test_target("test_qtuipathpicker")
 qt_add_test_target("test_qsoctoolplanmode")
@@ -263,12 +281,12 @@ qt_add_test_target("test_qlspservice")
 qt_add_test_target("test_qsocsshconfigparser")
 qt_add_test_target("test_qsocremotepathcontext")
 qt_add_test_target("test_qsoctoolresult")
-qt_add_test_target("test_qsocagentremoterecovery")
+qt_add_test_target("test_qsocagentremoterecovery" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocremoteconnection")
 qt_add_test_target("test_qsocreconnectbudget")
-qt_add_test_target("test_qsocremotecwdowner")
-qt_add_test_target("test_qsocremotecwdpublish")
-qt_add_test_target("test_qsocremotedeadlinkcost")
+qt_add_test_target("test_qsocremotecwdowner" LOCK qsoc_loopback_sshd)
+qt_add_test_target("test_qsocremotecwdpublish" LOCK qsoc_loopback_sshd)
+qt_add_test_target("test_qsocremotedeadlinkcost" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocsshabortlatency")
 add_dependencies(test_qsocsshabortlatency qsoc)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -285,7 +303,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         "-Wl,--wrap=read"
     )
 endif()
-qt_add_test_target("test_qsocsshagentbudget")
+qt_add_test_target("test_qsocsshagentbudget" LOCK qsoc_loopback_sshd)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_definitions(
         test_qsocsshagentbudget PRIVATE QSOC_TEST_WRAP_AUTH_TRANSPORT=1
@@ -295,25 +313,36 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         "-Wl,--wrap=libssh2_userauth_publickey_fromfile_ex"
     )
 endif()
-qt_add_test_target("test_qsocsshstrandedchannel")
-qt_add_test_target("test_qsocremoteguardafterreconnect")
-qt_add_test_target("test_qsoctoolagenthostdispatch")
-qt_add_test_target("test_qsoctoolagentbindinglifetime")
-qt_add_test_target("test_qsoctoolagenthostbindingrecovery")
+qt_add_test_target("test_qsocsshstrandedchannel" LOCK qsoc_loopback_sshd)
+qt_add_test_target("test_qsocremoteguardafterreconnect" LOCK qsoc_loopback_sshd)
+qt_add_test_target("test_qsoctoolagenthostdispatch" LOCK qsoc_loopback_sshd)
+qt_add_test_target("test_qsoctoolagentbindinglifetime" LOCK qsoc_loopback_sshd)
+qt_add_test_target("test_qsoctoolagenthostbindingrecovery" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocremotejobtoken")
 qt_add_test_target("test_qsocremotejobscript")
-qt_add_test_target("test_qsocsshsession")
+qt_add_test_target("test_qsocsshsession" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocsshexec")
-qt_add_test_target("test_qsocsshexecstatus")
+qt_add_test_target("test_qsocsshexecstatus" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocsftpclient")
-qt_add_test_target("test_qsocsftp_loopback")
+qt_add_test_target("test_qsocsftp_loopback" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocsshpubderive")
 qt_add_test_target("test_qlongtaskmonitor")
 qt_add_test_target("test_qsocpredictioncontroller")
 qt_add_test_target("test_qsocmemoryrecall")
 qt_add_test_target("test_qsocmemoryextractor")
 qt_add_test_target("test_qsocmemorydream")
-qt_add_test_target("test_qsocsftpstranded")
+qt_add_test_target("test_qsocsftpstranded" LOCK qsoc_loopback_sshd)
+# Registration is explicit above, so a new test file that nobody registered is
+# silently absent. Glob here to assert, never to register: a stale glob can only
+# make this check miss, it can never make a test disappear.
+file(GLOB _QSOC_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/test_*.cpp")
+foreach(_src IN LISTS _QSOC_TEST_SOURCES)
+    get_filename_component(_name "${_src}" NAME_WE)
+    if(NOT TARGET ${_name})
+        message(FATAL_ERROR "${_name}.cpp exists but no qt_add_test_target registers it")
+    endif()
+endforeach()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_definitions(
         test_qsocsftpstranded PRIVATE QSOC_TEST_WRAP_LIBSSH2_TEARDOWN=1
