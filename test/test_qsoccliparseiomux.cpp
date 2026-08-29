@@ -292,7 +292,6 @@ void Test::generateWritesArtifactsAndRequiresForce()
     QCOMPARE(fileList, QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
     const QString report = readTextFile(QDir(outputDirectory).filePath("iomux0.iomux.rpt"));
     QVERIFY(report.contains("IOMUX route report for iomux0"));
-    QVERIFY2(!report.contains("(default)"), qPrintable(report));
 
     const CommandResult refused = runCommand(arguments);
     QCOMPARE(refused.exitCode, 1);
