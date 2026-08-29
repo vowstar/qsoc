@@ -30,7 +30,7 @@
  * ordering is decided by observed progress rather than by a race.
  *
  * A dependency this fixture cannot supply itself (sshd, ssh-keygen, a login
- * name, python3, a built qsoc) skips these cases, unless
+ * name, a built qsoc) skips these cases, unless
  * QSOC_TEST_DEPS_REQUIRED is set, which CI does after installing the lot.
  * Anything else, a fixture that has its dependencies and still will not come
  * up, always fails: QtTest exits 0 on a skip, so a silent skip is
@@ -150,7 +150,7 @@ private:
     QString       m_missing;
     QString       m_failure;
     QString       m_qsoc;
-    QString       m_mockScript;
+    QString       m_mockBinary;
     QString       m_workspace;
     QString       m_requestLog;
     QString       m_home;
@@ -180,9 +180,6 @@ void Test::initTestCase()
     }
 
     QStringList absent;
-    if (QStandardPaths::findExecutable(QStringLiteral("python3")).isEmpty()) {
-        absent << QStringLiteral("python3");
-    }
     m_qsoc = builtQsoc();
     if (m_qsoc.isEmpty()) {
         absent << QStringLiteral("a built qsoc binary");
@@ -190,9 +187,9 @@ void Test::initTestCase()
     /* The tracked copy, not one under .claude: that directory is ignored here,
      * so a fresh clone would find nothing and every case below would skip
      * while still looking like coverage. */
-    m_mockScript = QDir(QStringLiteral(QT_TESTCASE_SOURCEDIR)).absoluteFilePath("qsoc_mock_llm.py");
-    if (!QFile::exists(m_mockScript)) {
-        absent << QStringLiteral("qsoc_mock_llm.py");
+    m_mockBinary = QString::fromUtf8(QSOC_MOCK_LLM_PATH);
+    if (!QFile::exists(m_mockBinary)) {
+        absent << QStringLiteral("qsoc_mock_llm");
     }
     if (!absent.isEmpty()) {
         m_missing = absent.join(QStringLiteral(", "));
@@ -332,9 +329,7 @@ void Test::startAgent(const QString &query, int toolCallCap)
     m_mock.setProcessEnvironment(mockEnv);
     m_mock.setStandardOutputFile(m_dir.path() + QStringLiteral("/mock.log"));
     m_mock.setStandardErrorFile(m_dir.path() + QStringLiteral("/mock.err"));
-    m_mock.start(
-        QStandardPaths::findExecutable(QStringLiteral("python3")),
-        {m_mockScript, QString::number(m_mockPort), QStringLiteral("none")});
+    m_mock.start(m_mockBinary, {QString::number(m_mockPort), QStringLiteral("none")});
     QVERIFY(m_mock.waitForStarted(5000));
     QVERIFY(waitFor(
         [this] {

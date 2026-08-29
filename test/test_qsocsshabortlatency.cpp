@@ -463,14 +463,9 @@ private slots:
         if (qsoc.isEmpty()) {
             QSKIP("a built qsoc binary is required");
         }
-        const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
-        if (python.isEmpty()) {
-            QSKIP("python3 is required");
-        }
-        const QString mockScript
-            = QDir(QStringLiteral(QT_TESTCASE_SOURCEDIR)).absoluteFilePath("qsoc_mock_llm.py");
-        if (!QFile::exists(mockScript)) {
-            QFAIL("the tracked mock LLM script is missing");
+        const QString mockBinary = QString::fromUtf8(QSOC_MOCK_LLM_PATH);
+        if (!QFile::exists(mockBinary)) {
+            QFAIL("the mock LLM helper was not built");
         }
 
         QTemporaryDir dir(QDir::tempPath() + QStringLiteral("/test_qsoc_nostream-XXXXXX"));
@@ -534,7 +529,7 @@ private slots:
         mockEnv.insert(QStringLiteral("MOCK_REQUEST_LOG"), requestLog);
         mock.setProcessEnvironment(mockEnv);
         mock.setWorkingDirectory(dir.path());
-        mock.start(python, {mockScript, QString::number(port), QStringLiteral("none")});
+        mock.start(mockBinary, {QString::number(port), QStringLiteral("none")});
         QVERIFY(mock.waitForStarted(5000));
 
         QElapsedTimer readyClock;
