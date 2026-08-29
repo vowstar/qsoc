@@ -544,11 +544,6 @@ quint32 selectorWordCount(quint32 pinCount, quint32 dataWidth)
     return (pinCount + lanes - 1) / lanes;
 }
 
-quint64 apertureBytes(quint32 pinCount, quint32 dataWidth)
-{
-    return quint64(1 + selectorWordCount(pinCount, dataWidth)) * (dataWidth / 8);
-}
-
 bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 {
     const quint32 dataWidth = plan->mmio.dataWidth;
@@ -556,29 +551,6 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     const quint32 lanes     = pinsPerWord(dataWidth);
     const quint32 words     = selectorWordCount(plan->pinCount, dataWidth);
     const quint32 width     = selectorWidth(plan->hsSlots);
-    const quint64 aperture  = apertureBytes(plan->pinCount, dataWidth);
-
-    const quint64 available = plan->mmio.addressWidth >= 64
-                                  ? std::numeric_limits<quint64>::max()
-                                  : (quint64(1) << plan->mmio.addressWidth);
-    if (aperture > available) {
-        quint32 minimumWidth = 2;
-        while ((quint64(1) << minimumWidth) < aperture) {
-            ++minimumWidth;
-        }
-        appendError(
-            errors,
-            "RANGE",
-            "generator.address_width",
-            QString(
-                "aperture needs %1 bytes but %2-bit addressing provides %3 bytes, minimum "
-                "address_width is %4")
-                .arg(aperture)
-                .arg(plan->mmio.addressWidth)
-                .arg(available)
-                .arg(minimumWidth));
-        return false;
-    }
 
     QSocMmioRegisterPlan capability;
     capability.name       = QStringLiteral("capability");
@@ -618,6 +590,29 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
             selector.fields.append(field);
         }
         plan->mmio.registers.append(selector);
+    }
+
+    const quint64 aperture  = plan->mmio.registers.constLast().byteOffset + byteCount;
+    const quint64 available = plan->mmio.addressWidth >= 64
+                                  ? std::numeric_limits<quint64>::max()
+                                  : (quint64(1) << plan->mmio.addressWidth);
+    if (aperture > available) {
+        quint32 minimumWidth = 2;
+        while ((quint64(1) << minimumWidth) < aperture) {
+            ++minimumWidth;
+        }
+        appendError(
+            errors,
+            "RANGE",
+            "generator.address_width",
+            QString(
+                "aperture needs %1 bytes but %2-bit addressing provides %3 bytes, minimum "
+                "address_width is %4")
+                .arg(aperture)
+                .arg(plan->mmio.addressWidth)
+                .arg(available)
+                .arg(minimumWidth));
+        return false;
     }
     return true;
 }
@@ -1241,15 +1236,20 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
 
 QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
 {
-    if (plan.pinCount == 0 || plan.hsSlots == 0) {
+    const quint32 dataWidth = plan.mmio.dataWidth;
+    if (plan.pinCount == 0 || plan.hsSlots == 0 || (dataWidth != 32 && dataWidth != 64)) {
         return QString();
     }
-    const quint32 dataWidth       = plan.mmio.dataWidth;
+    /* The report indexes composed registers, so refuse a plan whose register list
+     * does not match the layout its own pin count implies. */
+    const QList<QSocMmioRegisterPlan> &registers = plan.mmio.registers;
+    if (registers.size() != qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth)) {
+        return QString();
+    }
     const quint32 byteCount       = dataWidth / 8;
     const quint32 lanes           = pinsPerWord(dataWidth);
-    const quint32 words           = selectorWordCount(plan.pinCount, dataWidth);
     const quint32 width           = selectorWidth(plan.hsSlots);
-    const quint64 aperture        = apertureBytes(plan.pinCount, dataWidth);
+    const quint64 aperture        = registers.constLast().byteOffset + byteCount;
     const quint32 capabilityValue = plan.pinCount | (plan.hsSlots << 16);
 
     QStringList lines;
@@ -1262,10 +1262,10 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                      .arg(width)
                      .arg(kSelectorLane));
     lines.append(QString("selector registers: %1 at offset 0x%2 to 0x%3")
-                     .arg(words)
-                     .arg(QString::number(byteCount, 16))
-                     .arg(QString::number(quint64(words) * byteCount, 16)));
-    lines.append(QString("registers total: %1").arg(words + 1));
+                     .arg(registers.size() - 1)
+                     .arg(QString::number(registers.at(1).byteOffset, 16))
+                     .arg(QString::number(registers.constLast().byteOffset, 16)));
+    lines.append(QString("registers total: %1").arg(registers.size()));
     lines.append(QString("aperture: %1 bytes").arg(aperture));
     lines.append(
         QString("capability: 0x%1 at offset 0x0").arg(capabilityValue, 8, 16, QLatin1Char('0')));
@@ -1279,7 +1279,7 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                          .arg(pin)
                          .arg(pin / lanes)
                          .arg((pin % lanes) * kSelectorLane)
-                         .arg(QString::number(quint64(1 + pin / lanes) * byteCount, 16)));
+                         .arg(QString::number(registers.at(1 + pin / lanes).byteOffset, 16)));
         QStringList unusedSlots;
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
             const bool hasRoute = routeIndex < plan.routes.size()
