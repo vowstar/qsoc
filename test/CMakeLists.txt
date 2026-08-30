@@ -164,7 +164,12 @@ qt_add_test_target("test_qsoccliparsegenerateiomux" LABELS "iomux")
 qt_add_test_target("test_qsociomuxformal" LABELS "iomux")
 qt_add_test_target("test_qsocmmioformal" LABELS "mmio")
 qt_add_test_target("test_qsocmmiouvm" LABELS "mmio;iomux")
-set_tests_properties(test_qsocmmiouvm PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE)
+# Each row drives two verilator elaborations of UVM, budgeted at 300s each,
+# so a row can legitimately outlast QtTest's 300s default function watchdog.
+# A shared CI runner is about six times slower than a developer machine.
+set_tests_properties(
+    test_qsocmmiouvm
+    PROPERTIES TIMEOUT 3000 RUN_SERIAL TRUE ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=900000")
 qt_add_test_target("test_qsocmodulemanagerphase0")
 qt_add_test_target("test_qsoccliparsemodulebus")
 qt_add_test_target("test_qsoccliparseproject")
