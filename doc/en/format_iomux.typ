@@ -128,6 +128,19 @@ nothing behaves exactly as if the option were absent. `input_value` reads
 the pad through two flip-flops in the bus clock domain, so a pad edge takes
 two bus cycles to become readable.
 
+`generator.option.interrupt` appends four enable banks and four pending
+banks, one bit per pin in each, for the high level, the low level, the
+rising edge, and the falling edge. It also adds an `irq_o` output that
+carries one line per `data_width` pins.
+
+A pending bit records its event whether or not the matching enable is set,
+so a pin that reaches no interrupt line can still be polled. The enable
+gates `irq_o` alone. Software clears a pending bit by writing one to it,
+and a set that lands on the same cycle as that write wins, so an event
+cannot vanish into its own acknowledgement. Edge detection compares the
+second synchronizer stage against a third, so the pad must hold a level for
+one bus cycle to register as an edge.
+
 #figure(
   align(center)[#table(
     columns: 5,

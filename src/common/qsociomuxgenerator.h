@@ -61,7 +61,8 @@ struct QSocIomuxIntegrationPlan
  */
 struct QSocIomuxOptionPlan
 {
-    bool gpio = false;
+    bool gpio      = false;
+    bool interrupt = false;
 
     bool operator==(const QSocIomuxOptionPlan &) const = default;
 };
