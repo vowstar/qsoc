@@ -696,5 +696,16 @@ QString buildSby(const QSocMmioPlan &plan)
 
 QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
+    /* The reference model here mirrors read-write storage only. A write-one-clear
+     * field would keep its storage slot but not its behaviour, so the proof would
+     * compare the design against a model of a different register. Emit nothing
+     * rather than a proof that means something else. */
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access == QSocMmioAccess::WriteOneClear) {
+                return {};
+            }
+        }
+    }
     return {buildSystemVerilog(plan), buildSby(plan)};
 }
