@@ -2247,6 +2247,7 @@ private slots:
     void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
+    void registerTakeoverDrivesPadWhenIverilogIsAvailable();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -3030,6 +3031,175 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable_data()
     QTest::newRow("185-4-64") << 185U << 4U << 64U;
     QTest::newRow("256-8-32") << 256U << 8U << 32U;
     QTest::newRow("256-8-64") << 256U << 8U << 64U;
+}
+
+QSocModuleDefinition makeGpioDefinition()
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      gpio: true
+%1    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+)")
+                              .arg(integrationBlock()));
+}
+
+QString gpioTestbench()
+{
+    return QString(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid = 0, wvalid = 0, arvalid = 0, bready = 1, rready = 1;
+    reg  [31:0] wdata;
+    reg  [3:0]  wstrb = 4'hf;
+    wire        awready, wready, bvalid, arready, rvalid;
+    wire [1:0]  bresp, rresp;
+    wire [31:0] rdata;
+    reg  [1:0]  pad_in = 2'b00;
+    wire [1:0]  pad_ie, pad_ov, pad_oe;
+    reg         uart0_tx = 0;
+    integer     fails = 0;
+    reg  [31:0] v;
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid),
+        .s_axi_awready(awready), .s_axi_wdata(wdata), .s_axi_wstrb(wstrb),
+        .s_axi_wvalid(wvalid), .s_axi_wready(wready), .s_axi_bresp(bresp),
+        .s_axi_bvalid(bvalid), .s_axi_bready(bready), .s_axi_araddr(araddr),
+        .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid),
+        .s_axi_rready(rready), .pad_input_value_i(pad_in),
+        .pad_input_enable_o(pad_ie), .pad_output_value_o(pad_ov),
+        .pad_output_enable_o(pad_oe), .hs_p0_s0_output_value_i(uart0_tx));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin
+            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
+            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            wait (bvalid); @(posedge clk);
+        end
+    endtask
+
+    task rd(input [11:0] a);
+        begin
+            @(posedge clk); araddr <= a; arvalid <= 1;
+            wait (arready); @(posedge clk); arvalid <= 0;
+            wait (rvalid); v = rdata; @(posedge clk);
+        end
+    endtask
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        rd(12'h000);
+        if (v !== 32'h00020002) begin
+            $display("TEST_FAIL capability %h", v); fails = fails + 1;
+        end
+        uart0_tx = 1; repeat (2) @(posedge clk);
+        chk("fast_ov", pad_ov[0], 1'b1);
+        chk("fast_oe", pad_oe[0], 1'b1);
+        wr(12'h010, 32'h00000000);
+        wr(12'h014, 32'h00000001);
+        wr(12'h018, 32'h00000014);
+        repeat (2) @(posedge clk);
+        chk("reg_ov_low", pad_ov[0], 1'b0);
+        chk("reg_oe_high", pad_oe[0], 1'b1);
+        wr(12'h010, 32'h00000001);
+        repeat (2) @(posedge clk);
+        chk("reg_ov_high", pad_ov[0], 1'b1);
+        uart0_tx = 0; repeat (2) @(posedge clk);
+        chk("fast_ignored", pad_ov[0], 1'b1);
+        uart0_tx = 1;
+        wr(12'h018, 32'h00000020);
+        repeat (2) @(posedge clk);
+        chk("oe_from_slot_ov_high", pad_oe[0], 1'b1);
+        uart0_tx = 0; repeat (2) @(posedge clk);
+        chk("oe_from_slot_ov_low", pad_oe[0], 1'b0);
+        wr(12'h018, 32'h00000030);
+        repeat (2) @(posedge clk);
+        chk("oe_reserved", pad_oe[0], 1'b0);
+        pad_in = 2'b10; repeat (4) @(posedge clk);
+        rd(12'h008);
+        chk("readback_pin1", v[1], 1'b1);
+        chk("readback_pin0", v[0], 1'b0);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::registerTakeoverDrivesPadWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeGpioDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QVERIFY(plan.option.gpio);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(benchPath, gpioTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
 void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()

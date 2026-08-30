@@ -56,11 +56,22 @@ struct QSocIomuxIntegrationPlan
     bool operator==(const QSocIomuxIntegrationPlan &) const = default;
 };
 
+/**
+ * @brief Optional register blocks layered on top of the selector fabric.
+ */
+struct QSocIomuxOptionPlan
+{
+    bool gpio = false;
+
+    bool operator==(const QSocIomuxOptionPlan &) const = default;
+};
+
 struct QSocIomuxPlan
 {
     QString                   moduleName;
     quint32                   pinCount = 0;
     quint32                   hsSlots  = 0;
+    QSocIomuxOptionPlan       option;
     QList<QSocIomuxRoutePlan> routes;
     QSocIomuxIntegrationPlan  integration;
     QSocMmioPlan              mmio;
