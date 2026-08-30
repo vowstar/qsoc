@@ -82,6 +82,15 @@ selector resets to 0 and therefore selects slot 0. The pad input value
 broadcasts to every declared `input_value` sink of that pin regardless of the
 selector. `invert` applies one XOR inside the connection fabric.
 
+`rst_ni` is asynchronous, so a selector takes its reset value as soon as the
+reset asserts. Before the reset source itself drives `rst_ni`, and while an
+inserted scan chain shifts, the selector registers hold no defined value and
+`pad_output_enable_o` follows them. Slot 0 also carries whatever the route
+table declares for it, not a guaranteed-safe bundle. A design that must not
+drive its pads before firmware runs takes that guarantee from the pad cell
+power-on state or from isolation outside this module; the generator emits
+neither.
+
 == Register Layout
 <iomux-register-layout>
 Offset 0 is a read-only `capability` register: bits `[15:0]` hold
@@ -137,7 +146,8 @@ generated IOMUX instance name may not already exist in another merged input.
 Any failed generated-module check leaves an existing top-level output untouched.
 Routes may cover individual bits of a wider vector; unlisted bits remain outside
 the generated IOMUX connections, and partial coverage does not emit a width
-`FIXME`.
+`FIXME`. Those bits stay undriven unless another merged input drives them, and
+read as `z` in simulation.
 
 == Formal Collateral
 <iomux-formal-collateral>
