@@ -14,7 +14,22 @@
 
 struct QSocModuleDefinition;
 
-enum class QSocMmioAccess { ReadWrite, ReadOnly };
+/**
+ * @brief How software reaches a field.
+ *
+ * WriteOneClear holds a bit that hardware sets through `inputPort` and that
+ * software clears by writing one. A set that lands on the same cycle as the
+ * clearing write wins, so an event cannot vanish into the acknowledgement.
+ */
+enum class QSocMmioAccess { ReadWrite, ReadOnly, WriteOneClear };
+
+/**
+ * @brief Whether a field owns a storage element in the generated register file.
+ */
+inline bool qsocMmioHasStorage(QSocMmioAccess access)
+{
+    return access == QSocMmioAccess::ReadWrite || access == QSocMmioAccess::WriteOneClear;
+}
 
 struct QSocMmioFieldPlan
 {

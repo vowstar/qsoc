@@ -675,7 +675,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                     errors, "IDENTIFIER", fieldPath + ".output", "must be a Verilog identifier");
                 valid = false;
             }
-            if (field.access == QSocMmioAccess::ReadWrite) {
+            if (qsocMmioHasStorage(field.access)) {
                 if (!field.resetValue.has_value()) {
                     appendError(
                         errors,
@@ -690,7 +690,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                         errors, "RANGE", fieldPath + ".reset", "value does not fit field width");
                     valid = false;
                 }
-                if (!field.inputPort.isEmpty()) {
+                if (field.access == QSocMmioAccess::ReadWrite && !field.inputPort.isEmpty()) {
                     appendError(
                         errors, "ACCESS", fieldPath + ".input", "is not allowed for rw fields");
                     valid = false;
@@ -699,6 +699,17 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                     appendError(
                         errors, "ACCESS", fieldPath + ".value", "is not allowed for rw fields");
                     valid = false;
+                }
+                if (field.access == QSocMmioAccess::WriteOneClear) {
+                    if (field.width != 1) {
+                        appendError(errors, "RANGE", fieldPath + ".width", "must be 1 for w1c");
+                        valid = false;
+                    }
+                    if (field.inputPort.isEmpty()) {
+                        appendError(
+                            errors, "REQUIRED", fieldPath + ".input", "w1c needs a set source");
+                        valid = false;
+                    }
                 }
             } else if (field.access == QSocMmioAccess::ReadOnly) {
                 const int sources = (field.inputPort.isEmpty() ? 0 : 1)
@@ -729,7 +740,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                     valid = false;
                 }
             } else {
-                appendError(errors, "ACCESS", fieldPath + ".access", "must be rw or ro");
+                appendError(errors, "ACCESS", fieldPath + ".access", "must be rw, ro, or w1c");
                 valid = false;
             }
             valid = claimSideband(field, fieldPath, &ports, errors) && valid;
@@ -799,7 +810,7 @@ void appendStorage(QStringList *lines, const QSocMmioPlan &plan)
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access == QSocMmioAccess::ReadWrite) {
+            if (qsocMmioHasStorage(field.access)) {
                 lines->append(
                     QString("reg%1 %2;").arg(packedRange(field.width), storageName(storageIndex++)));
             }
@@ -833,7 +844,7 @@ void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan)
 
 QString readSource(const QSocMmioFieldPlan &field, const QString &fieldStorageName)
 {
-    if (field.access == QSocMmioAccess::ReadWrite) {
+    if (qsocMmioHasStorage(field.access)) {
         return fieldStorageName;
     }
     if (!field.inputPort.isEmpty()) {
@@ -854,7 +865,7 @@ void appendReadFunction(QStringList *lines, const QSocMmioPlan &plan)
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         lines->append(QString("            %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            const QString fieldStorageName = field.access == QSocMmioAccess::ReadWrite
+            const QString fieldStorageName = qsocMmioHasStorage(field.access)
                                                  ? storageName(storageIndex++)
                                                  : QString();
             lines->append(QString("                read_register%1 = %2;")
@@ -904,7 +915,7 @@ void appendOutputAssignments(QStringList *lines, const QSocMmioPlan &plan)
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access != QSocMmioAccess::ReadWrite) {
+            if (!qsocMmioHasStorage(field.access)) {
                 continue;
             }
             const QString fieldStorageName = storageName(storageIndex++);
@@ -925,7 +936,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan)
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         bool hasWriteField = false;
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            hasWriteField = hasWriteField || field.access == QSocMmioAccess::ReadWrite;
+            hasWriteField = hasWriteField || qsocMmioHasStorage(field.access);
         }
         if (!hasWriteField) {
             continue;
@@ -933,11 +944,17 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan)
         lines->append(
             QString("                %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access != QSocMmioAccess::ReadWrite) {
+            if (!qsocMmioHasStorage(field.access)) {
                 continue;
             }
             const QString fieldStorageName = storageName(storageIndex++);
             const QString range            = bitRange(field);
+            if (field.access == QSocMmioAccess::WriteOneClear) {
+                lines->append(QString("                    %1 <= %1").arg(fieldStorageName));
+                lines->append(
+                    QString("                        & ~(write_data%1 & write_mask%1);").arg(range));
+                continue;
+            }
             lines->append(QString("                    %1 <= (%1 & ~write_mask%2)")
                               .arg(fieldStorageName, range));
             lines->append(
@@ -947,6 +964,31 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan)
     }
     lines->append("                default: begin end");
     lines->append("            endcase");
+}
+
+/**
+ * @brief Emit the hardware set for every write-one-clear field.
+ *
+ * This runs after the bus write in the same block, so a set that lands on the
+ * cycle software acknowledges the old event keeps the new one.
+ */
+void appendHardwareSet(QStringList *lines, const QSocMmioPlan &plan)
+{
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (!qsocMmioHasStorage(field.access)) {
+                continue;
+            }
+            const QString fieldStorageName = storageName(storageIndex++);
+            if (field.access != QSocMmioAccess::WriteOneClear || field.inputPort.isEmpty()) {
+                continue;
+            }
+            /* Conditional, so a cycle with no event leaves the bus write intact. */
+            lines->append(QString("        if (%1)").arg(field.inputPort));
+            lines->append(QString("            %1 <= 1'b1;").arg(fieldStorageName));
+        }
+    }
 }
 
 void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
@@ -963,7 +1005,7 @@ void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access == QSocMmioAccess::ReadWrite) {
+            if (qsocMmioHasStorage(field.access)) {
                 lines->append(QString("        %1 <= %2;")
                                   .arg(
                                       storageName(storageIndex++),
@@ -993,6 +1035,7 @@ void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
     appendWriteCase(lines, plan);
     lines->append("            end");
     lines->append("        end");
+    appendHardwareSet(lines, plan);
     lines->append("    end");
     lines->append("end");
     lines->append(QString());
