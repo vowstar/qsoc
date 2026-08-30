@@ -1792,7 +1792,8 @@ void Test::canonicalizeRejectsConstructedInvalidPlan()
     invalidAccess.registers[2].fields[0].access = static_cast<QSocMmioAccess>(99);
     QVERIFY(!QSocMmioGenerator::canonicalizePlan(&invalidAccess, &errors));
     QVERIFY2(
-        errors.contains("MMIO_ACCESS generator.register.status.field.busy.access: must be rw or ro"),
+        errors.contains(
+            "MMIO_ACCESS generator.register.status.field.busy.access: must be rw, ro, or w1c"),
         qPrintable(errors.join('\n')));
 }
 
