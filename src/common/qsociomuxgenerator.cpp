@@ -1246,11 +1246,21 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     if (registers.size() != qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth)) {
         return QString();
     }
-    const quint32 byteCount       = dataWidth / 8;
-    const quint32 lanes           = pinsPerWord(dataWidth);
-    const quint32 width           = selectorWidth(plan.hsSlots);
-    const quint64 aperture        = registers.constLast().byteOffset + byteCount;
-    const quint32 capabilityValue = plan.pinCount | (plan.hsSlots << 16);
+    const quint32 byteCount = dataWidth / 8;
+    const quint32 lanes     = pinsPerWord(dataWidth);
+    const quint32 width     = selectorWidth(plan.hsSlots);
+    const quint64 aperture  = registers.constLast().byteOffset + byteCount;
+    /* Fold the composed capability register so the report cannot publish a value
+     * the read function does not emit. */
+    quint64 capabilityValue = 0;
+    for (const QSocMmioFieldPlan &field : registers.constFirst().fields) {
+        if (!field.constantValue.has_value()) {
+            continue;
+        }
+        /* The read function emits a width-sized literal, which Verilog truncates. */
+        const quint64 mask = field.width >= 64 ? ~quint64(0) : ((quint64(1) << field.width) - 1);
+        capabilityValue |= (*field.constantValue & mask) << field.lsb;
+    }
 
     QStringList lines;
     lines.append(QString("IOMUX route report for %1").arg(plan.moduleName));
@@ -1267,8 +1277,8 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                      .arg(QString::number(registers.constLast().byteOffset, 16)));
     lines.append(QString("registers total: %1").arg(registers.size()));
     lines.append(QString("aperture: %1 bytes").arg(aperture));
-    lines.append(
-        QString("capability: 0x%1 at offset 0x0").arg(capabilityValue, 8, 16, QLatin1Char('0')));
+    lines.append(QString("capability: 0x%1 at offset 0x0")
+                     .arg(capabilityValue, int(dataWidth / 4), 16, QLatin1Char('0')));
     lines.append("reset: every selector resets to 0 and selects slot 0");
     lines.append("rx: pad input broadcasts to every declared sink regardless of the selector");
     lines.append(QString());
