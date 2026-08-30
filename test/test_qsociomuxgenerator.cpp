@@ -2248,6 +2248,7 @@ private slots:
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
     void registerTakeoverDrivesPadWhenIverilogIsAvailable();
+    void interruptRecordsEventsWhenIverilogIsAvailable();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -3149,6 +3150,163 @@ module tb;
     end
 endmodule
 )");
+}
+
+QSocModuleDefinition makeInterruptDefinition()
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      gpio: true
+      interrupt: true
+%1    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+)")
+                              .arg(integrationBlock()));
+}
+
+QString interruptTestbench()
+{
+    return QString(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid=0, wvalid=0, arvalid=0, bready=1, rready=1;
+    reg  [31:0] wdata;  reg [3:0] wstrb = 4'hf;
+    wire awready, wready, bvalid, arready, rvalid;
+    wire [1:0] bresp, rresp;  wire [31:0] rdata;
+    reg  [1:0] pad_in = 2'b00;
+    wire [1:0] pad_ie, pad_ov, pad_oe;
+    wire       irq;
+    reg        uart0_tx = 0;
+    integer    fails = 0;  reg [31:0] v;
+
+    iomux0 dut (.clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid), .s_axi_awready(awready),
+        .s_axi_wdata(wdata), .s_axi_wstrb(wstrb), .s_axi_wvalid(wvalid), .s_axi_wready(wready),
+        .s_axi_bresp(bresp), .s_axi_bvalid(bvalid), .s_axi_bready(bready),
+        .s_axi_araddr(araddr), .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid), .s_axi_rready(rready),
+        .pad_input_value_i(pad_in), .pad_input_enable_o(pad_ie),
+        .pad_output_value_o(pad_ov), .pad_output_enable_o(pad_oe),
+        .irq_o(irq), .hs_p0_s0_output_value_i(uart0_tx));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin @(posedge clk); awaddr<=a; wdata<=d; awvalid<=1; wvalid<=1;
+        wait(awready&&wready); @(posedge clk); awvalid<=0; wvalid<=0;
+        wait(bvalid); @(posedge clk); end
+    endtask
+    task rd(input [11:0] a);
+        begin @(posedge clk); araddr<=a; arvalid<=1; wait(arready);
+        @(posedge clk); arvalid<=0; wait(rvalid); v=rdata; @(posedge clk); end
+    endtask
+    task chk(input [255:0] n, input g, input e);
+        begin if (g!==e) begin $display("TEST_FAIL %0s got=%b exp=%b", n, g, e); fails=fails+1; end end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (6) @(posedge clk);
+
+        /* fix 1: pending records the event with every enable still at zero */
+        rd(12'h034);
+        chk("low_pend_set_without_enable", v[0], 1'b1);
+        chk("irq_quiet_without_enable", irq, 1'b0);
+        rd(12'h030);
+        chk("high_pend_clear", v[0], 1'b0);
+
+        /* fix 2: a clear that lands while the source still fires keeps the bit */
+        wr(12'h034, 32'h00000001);
+        repeat (2) @(posedge clk);
+        rd(12'h034);
+        chk("set_beats_clear", v[0], 1'b1);
+
+        /* once the source stops, the same write clears it */
+        pad_in = 2'b01;
+        repeat (4) @(posedge clk);
+        wr(12'h034, 32'h00000001);
+        repeat (2) @(posedge clk);
+        rd(12'h034);
+        chk("clear_when_idle", v[0], 1'b0);
+
+        /* the rising edge was recorded on the way up */
+        rd(12'h038);
+        chk("rise_pend_set", v[0], 1'b1);
+
+        /* enable gates the line, not the bit */
+        wr(12'h028, 32'h00000001);
+        repeat (2) @(posedge clk);
+        chk("irq_after_enable", irq, 1'b1);
+        wr(12'h038, 32'h00000001);
+        repeat (2) @(posedge clk);
+        chk("irq_after_ack", irq, 1'b0);
+
+        if (fails == 0) $display("TEST_PASS"); else $display("TEST_FAIL count %0d", fails);
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::interruptRecordsEventsWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeInterruptDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QVERIFY(plan.option.interrupt);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(benchPath, interruptTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler, {"-g2012", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
 void Test::registerTakeoverDrivesPadWhenIverilogIsAvailable()

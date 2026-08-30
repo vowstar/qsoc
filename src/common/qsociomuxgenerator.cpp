@@ -24,7 +24,7 @@ const QSet<QString> kGeneratorKeys
        "option",
        "integration",
        "route"};
-const QSet<QString> kOptionKeys      = {"gpio"};
+const QSet<QString> kOptionKeys      = {"gpio", "interrupt"};
 const QSet<QString> kIntegrationKeys = {"instance", "clock", "reset", "control", "pad"};
 const QSet<QString> kPadKeys = {"input_value", "input_enable", "output_value", "output_enable"};
 const QSet<QString> kRouteKeys
@@ -633,6 +633,54 @@ void composeGpio(QSocIomuxPlan *plan)
     }
 }
 
+/**
+ * @brief Append the interrupt enable and pending banks.
+ *
+ * Pending records the event whether or not the enable is set, so a design can
+ * poll a pin it never wired to an interrupt line. The enable gates the output
+ * only. The reference this follows gates the set as well, which makes polling
+ * impossible and loses an event that arrives while the enable is off.
+ */
+void composeInterrupt(QSocIomuxPlan *plan)
+{
+    const quint32 dataWidth = plan->mmio.dataWidth;
+    const quint32 byteCount = dataWidth / 8;
+    const quint32 words     = (plan->pinCount + dataWidth - 1) / dataWidth;
+    quint64       offset    = plan->mmio.registers.constLast().byteOffset + byteCount;
+
+    const char *kinds[] = {"high", "low", "rise", "fall"};
+
+    for (bool pending : {false, true}) {
+        for (const char *kind : kinds) {
+            for (quint32 word = 0; word < words; ++word) {
+                QSocMmioRegisterPlan bank;
+                bank.name = QString("%1_int_%2_%3").arg(kind, pending ? "pend" : "en").arg(word);
+                bank.byteOffset = offset;
+                offset += byteCount;
+                const quint32 first = word * dataWidth;
+                const quint32 last  = std::min(plan->pinCount, first + dataWidth);
+                for (quint32 pin = first; pin < last; ++pin) {
+                    QSocMmioFieldPlan field;
+                    field.name
+                        = QString("pin_%1_%2_int_%3").arg(pin).arg(kind, pending ? "pend" : "en");
+                    field.lsb        = pin - first;
+                    field.width      = 1;
+                    field.resetValue = 0;
+                    field.access     = pending ? QSocMmioAccess::WriteOneClear
+                                               : QSocMmioAccess::ReadWrite;
+                    if (pending) {
+                        field.inputPort = QString("pin_%1_%2_detect_i").arg(pin).arg(kind);
+                    }
+                    field.outputPort
+                        = QString("pin_%1_%2_int_%3_o").arg(pin).arg(kind, pending ? "pend" : "en");
+                    bank.fields.append(field);
+                }
+                plan->mmio.registers.append(bank);
+            }
+        }
+    }
+}
+
 bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 {
     const quint32 dataWidth = plan->mmio.dataWidth;
@@ -683,6 +731,9 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 
     if (plan->option.gpio) {
         composeGpio(plan);
+    }
+    if (plan->option.interrupt) {
+        composeInterrupt(plan);
     }
 
     const quint64 aperture  = plan->mmio.registers.constLast().byteOffset + byteCount;
@@ -818,10 +869,20 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         const YAML::Node option = generator["option"];
         if (!validateMap(option, kOptionKeys, "generator.option", errors)) {
             valid = false;
-        } else if (option["gpio"]) {
-            valid
-                = parseStrictBool(option["gpio"], "generator.option.gpio", &plan->option.gpio, errors)
-                  && valid;
+        } else {
+            if (option["gpio"]) {
+                valid = parseStrictBool(
+                            option["gpio"], "generator.option.gpio", &plan->option.gpio, errors)
+                        && valid;
+            }
+            if (option["interrupt"]) {
+                valid = parseStrictBool(
+                            option["interrupt"],
+                            "generator.option.interrupt",
+                            &plan->option.interrupt,
+                            errors)
+                        && valid;
+            }
         }
     }
 
@@ -891,6 +952,12 @@ bool isControlPort(const QSocMmioPortDescription &port)
     return port.name == "clk_i" || port.name == "rst_ni" || port.name.startsWith("s_axi_");
 }
 
+quint32 interruptLineCount(const QSocIomuxPlan &plan)
+{
+    const quint32 dataWidth = plan.mmio.dataWidth;
+    return dataWidth == 0 ? 0 : (plan.pinCount + dataWidth - 1) / dataWidth;
+}
+
 QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
 {
     QList<QSocMmioPortDescription> ports;
@@ -903,6 +970,11 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
     ports.append({"pad_input_enable_o", "output", plan.pinCount});
     ports.append({"pad_output_value_o", "output", plan.pinCount});
     ports.append({"pad_output_enable_o", "output", plan.pinCount});
+    if (plan.option.interrupt) {
+        /* Endpoints stay last, because the wrapper aligns route comments by
+         * counting back from the end of this list. */
+        ports.append({"irq_o", "output", interruptLineCount(plan)});
+    }
     for (const EndpointPort &endpoint : endpointPorts(plan)) {
         ports.append(
             {endpointName(endpoint),
@@ -1250,20 +1322,50 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     }
     lines.append(QString());
 
-    if (plan.option.gpio) {
-        /* The pad value crosses into the bus clock before software can read it.
-         * Interrupt detection will observe the same two stages. */
-        lines.append(QString("reg %1 pad_input_sync_q;").arg(vectorRange(plan.pinCount)));
+    const bool needsSync = plan.option.gpio || plan.option.interrupt;
+    if (needsSync) {
+        /* The pad value crosses into the bus clock before anything samples it.
+         * Edge detection compares the second stage against a third. */
         lines.append(QString("reg %1 pad_input_meta_q;").arg(vectorRange(plan.pinCount)));
+        lines.append(QString("reg %1 pad_input_sync_q;").arg(vectorRange(plan.pinCount)));
+        if (plan.option.interrupt) {
+            lines.append(QString("reg %1 pad_input_prev_q;").arg(vectorRange(plan.pinCount)));
+        }
         lines.append("always @(posedge clk_i or negedge rst_ni) begin");
         lines.append("    if (!rst_ni) begin");
         lines.append(QString("        pad_input_meta_q <= %1'b0;").arg(plan.pinCount));
         lines.append(QString("        pad_input_sync_q <= %1'b0;").arg(plan.pinCount));
+        if (plan.option.interrupt) {
+            lines.append(QString("        pad_input_prev_q <= %1'b0;").arg(plan.pinCount));
+        }
         lines.append("    end else begin");
         lines.append("        pad_input_meta_q <= pad_input_value_i;");
         lines.append("        pad_input_sync_q <= pad_input_meta_q;");
+        if (plan.option.interrupt) {
+            lines.append("        pad_input_prev_q <= pad_input_sync_q;");
+        }
         lines.append("    end");
         lines.append("end");
+        lines.append(QString());
+    }
+
+    if (plan.option.interrupt) {
+        for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+            lines.append(QString("wire pin_%1_high_detect_w = pad_input_sync_q[%1];").arg(pin));
+            lines.append(QString("wire pin_%1_low_detect_w  = ~pad_input_sync_q[%1];").arg(pin));
+            lines.append(QString(
+                             "wire pin_%1_rise_detect_w = pad_input_sync_q[%1]"
+                             " & ~pad_input_prev_q[%1];")
+                             .arg(pin));
+            lines.append(QString(
+                             "wire pin_%1_fall_detect_w = ~pad_input_sync_q[%1]"
+                             " & pad_input_prev_q[%1];")
+                             .arg(pin));
+            for (const char *kind : {"high", "low", "rise", "fall"}) {
+                lines.append(QString("wire pin_%1_%2_int_en_w;").arg(pin).arg(QString(kind)));
+                lines.append(QString("wire pin_%1_%2_int_pend_w;").arg(pin).arg(QString(kind)));
+            }
+        }
         lines.append(QString());
     }
 
@@ -1288,6 +1390,19 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
               "output_enable_src"}) {
             regsConnections.append(
                 QString("    .pin_%1_%2_o(pin_%1_%2_w)").arg(pin).arg(QString(role)));
+        }
+    }
+    if (plan.option.interrupt) {
+        for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+            for (const char *kind : {"high", "low", "rise", "fall"}) {
+                const QString k = QString(kind);
+                regsConnections.append(
+                    QString("    .pin_%1_%2_detect_i(pin_%1_%2_detect_w)").arg(pin).arg(k));
+                regsConnections.append(
+                    QString("    .pin_%1_%2_int_en_o(pin_%1_%2_int_en_w)").arg(pin).arg(k));
+                regsConnections.append(
+                    QString("    .pin_%1_%2_int_pend_o(pin_%1_%2_int_pend_w)").arg(pin).arg(k));
+            }
         }
     }
     lines.append(QString("%1_regs u_regs (").arg(plan.moduleName));
@@ -1339,6 +1454,28 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
                 QString("    .pin_%1_%2_i(pin_%1_%2_w)").arg(pin).arg(QString(role)));
         }
     }
+    if (plan.option.interrupt) {
+        const quint32 dataWidth = plan.mmio.dataWidth;
+        for (quint32 line = 0; line < interruptLineCount(plan); ++line) {
+            const quint32 first = line * dataWidth;
+            const quint32 last  = std::min(plan.pinCount, first + dataWidth);
+            QStringList   terms;
+            for (quint32 pin = first; pin < last; ++pin) {
+                for (const char *kind : {"high", "low", "rise", "fall"}) {
+                    terms.append(QString("(pin_%1_%2_int_pend_w & pin_%1_%2_int_en_w)")
+                                     .arg(pin)
+                                     .arg(QString(kind)));
+                }
+            }
+            /* The enable gates the line, never the pending bit, so a disabled
+             * source still records its event for a poll to find. */
+            const QString target = interruptLineCount(plan) == 1 ? QStringLiteral("irq_o")
+                                                                 : QString("irq_o[%1]").arg(line);
+            lines.append(QString("assign %1 = %2;").arg(target, terms.join("\n    | ")));
+        }
+        lines.append(QString());
+    }
+
     lines.append(QString("%1_core u_core (").arg(plan.moduleName));
     for (qsizetype index = 0; index < coreConnections.size(); ++index) {
         const QString suffix = index + 1 == coreConnections.size() ? QString() : QString(",");
@@ -1439,10 +1576,13 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     /* The report indexes composed registers, so refuse a plan whose register list
      * does not match the layout its own pin count implies. */
     const QList<QSocMmioRegisterPlan> &registers = plan.mmio.registers;
-    qsizetype expected = qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth);
+    qsizetype     expected  = qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth);
+    const quint32 bankWords = (plan.pinCount + dataWidth - 1) / dataWidth;
     if (plan.option.gpio) {
-        const quint32 words = (plan.pinCount + dataWidth - 1) / dataWidth;
-        expected += qsizetype(4) * words + qsizetype(plan.pinCount);
+        expected += qsizetype(4) * bankWords + qsizetype(plan.pinCount);
+    }
+    if (plan.option.interrupt) {
+        expected += qsizetype(8) * bankWords;
     }
     if (registers.size() != expected) {
         return QString();
@@ -1477,12 +1617,24 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                      .arg(selectorWords)
                      .arg(QString::number(registers.at(1).byteOffset, 16))
                      .arg(QString::number(registers.at(selectorWords).byteOffset, 16)));
+    qsizetype cursor = qsizetype(1) + selectorWords;
     if (plan.option.gpio) {
-        const qsizetype first = qsizetype(1) + selectorWords;
+        const qsizetype count = qsizetype(4) * bankWords + qsizetype(plan.pinCount);
         lines.append(QString("gpio registers: %1 at offset 0x%2 to 0x%3")
-                         .arg(registers.size() - first)
-                         .arg(QString::number(registers.at(first).byteOffset, 16))
-                         .arg(QString::number(registers.constLast().byteOffset, 16)));
+                         .arg(count)
+                         .arg(QString::number(registers.at(cursor).byteOffset, 16))
+                         .arg(QString::number(registers.at(cursor + count - 1).byteOffset, 16)));
+        cursor += count;
+    }
+    if (plan.option.interrupt) {
+        const qsizetype count = qsizetype(8) * bankWords;
+        lines.append(QString("interrupt registers: %1 at offset 0x%2 to 0x%3")
+                         .arg(count)
+                         .arg(QString::number(registers.at(cursor).byteOffset, 16))
+                         .arg(QString::number(registers.at(cursor + count - 1).byteOffset, 16)));
+        lines.append(QString("interrupt lines: %1, one per %2 pins")
+                         .arg(interruptLineCount(plan))
+                         .arg(dataWidth));
     }
     lines.append(QString("registers total: %1").arg(registers.size()));
     lines.append(QString("aperture: %1 bytes").arg(aperture));
