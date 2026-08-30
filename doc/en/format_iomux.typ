@@ -33,6 +33,8 @@ iomux0:
     address_width: 8
     pin_count: 2
     hs_slots: 2
+    option:
+      gpio: true
     integration:
       instance: u_iomux0
       clock: clk_iomux
@@ -102,6 +104,29 @@ field crosses a byte and one write strobe never splits a selector. Selector
 offsets depend only on `pin_count` and `data_width`, never on `hs_slots`.
 Generation fails when `2^address_width` cannot hold the aperture and reports
 the minimum usable width.
+
+`generator.option.gpio` appends the registers that let software drive and
+read a pin. Four banked vectors follow the selectors, each holding one bit
+per pin: read-only `input_value`, then `input_enable`, `output_value`, and
+`output_enable`. One `pin_src_ctrl` word per pin follows them, so one store
+reconfigures a pin without a read-modify-write and without touching its
+neighbours. That word holds `input_enable_src` at bit 0, `output_value_src`
+at bits `[3:2]`, and `output_enable_src` at bits `[5:4]`.
+
+A source field selects where the pad signal comes from. `output_value_src`
+takes 0 for the selected slot, 1 for the register, 2 for the slot input
+enable, and 3 for the slot output enable. `output_enable_src` takes 0 for
+the selected slot, 1 for the register, 2 for the slot output value, and 3
+to stop driving. A cross tap reads the slot output and never the source mux
+output, so no combination of the two fields closes a loop. Setting
+`output_enable_src` to 2 gives open drain that software can switch off
+again, while a route that declares `output_value: 0` with an inverted
+`output_enable` link gives the same shape fixed at generation time.
+
+Every source field resets to 0, so a design that enables `gpio` and writes
+nothing behaves exactly as if the option were absent. `input_value` reads
+the pad through two flip-flops in the bus clock domain, so a pad edge takes
+two bus cycles to become readable.
 
 #figure(
   align(center)[#table(
