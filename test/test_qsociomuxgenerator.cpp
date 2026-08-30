@@ -1600,7 +1600,7 @@ selector: 2-bit field in a fixed 4-bit lane per pin
 selector registers: 2 at offset 0x8 to 0x10
 registers total: 3
 aperture: 24 bytes
-capability: 0x00040011 at offset 0x0
+capability: 0x0000000000040011 at offset 0x0
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -1692,7 +1692,7 @@ selector: 3-bit field in a fixed 4-bit lane per pin
 selector registers: 2 at offset 0x8 to 0x10
 registers total: 3
 aperture: 24 bytes
-capability: 0x00080020 at offset 0x0
+capability: 0x0000000000080020 at offset 0x0
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -2229,6 +2229,7 @@ private slots:
     void sourceOrderDoesNotChangeGeneratedVerilog();
     void generatedArtifactsMatchFrozenBaseline();
     void reportRejectsPlanInconsistentWithPinCount();
+    void reportCapabilityFollowsComposedRegister();
     void selectorLayoutMatchesFrozenKnownAnswer_data();
     void selectorLayoutMatchesFrozenKnownAnswer();
     void pinCountBoundaryFollowsLaneFormula_data();
@@ -2423,6 +2424,57 @@ void Test::reportRejectsPlanInconsistentWithPinCount()
     QSocIomuxPlan unsupportedWidth  = built;
     unsupportedWidth.mmio.dataWidth = 0;
     QVERIFY(QSocIomuxGenerator::generateReport(unsupportedWidth).isEmpty());
+}
+
+void Test::reportCapabilityFollowsComposedRegister()
+{
+    /* A capability field the composer gains must reach the report on its own.
+     * A second encoder in generateReport would keep publishing the old value
+     * while the read function already returns the new one. */
+    QSocMmioFieldPlan spare;
+    spare.name          = QStringLiteral("spare");
+    spare.width         = 1;
+    spare.access        = QSocMmioAccess::ReadOnly;
+    spare.constantValue = 1;
+
+    QSocIomuxPlan narrow;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &narrow));
+    spare.lsb = 24;
+    narrow.mmio.registers[0].fields.append(spare);
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(narrow).contains("capability: 0x01020002 at offset 0x0"));
+
+    /* A 64-bit capability register reaches past bit 31. A narrower accumulator
+     * or a fixed print width drops such a field while the read function still
+     * emits it. */
+    QSocIomuxPlan wide;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeWide64Definition(), &wide));
+    spare.lsb = 32;
+    wide.mmio.registers[0].fields.append(spare);
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(wide).contains(
+            "capability: 0x0000000100040011 at offset 0x0"));
+
+    /* generateReport is public and accepts a register no composer builds. A
+     * full-width field must not shift the mask past the accumulator, and a
+     * field carrying no constant must not be dereferenced. */
+    QSocMmioFieldPlan full;
+    full.name          = QStringLiteral("full");
+    full.width         = 64;
+    full.access        = QSocMmioAccess::ReadOnly;
+    full.constantValue = ~quint64(0);
+
+    QSocMmioFieldPlan unset;
+    unset.name   = QStringLiteral("unset");
+    unset.width  = 1;
+    unset.access = QSocMmioAccess::ReadOnly;
+
+    QSocIomuxPlan hostile;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeWide64Definition(), &hostile));
+    hostile.mmio.registers[0].fields = {full, unset};
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(hostile).contains(
+            "capability: 0xffffffffffffffff at offset 0x0"));
 }
 
 void Test::sourceOrderDoesNotChangeGeneratedVerilog()
