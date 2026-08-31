@@ -492,6 +492,7 @@ private slots:
     void controlBusRequiresExactlyOneMasterAndSlave();
     void generatedIntegrationRejectsInvalidAssemblyAndKeepsSentinel_data();
     void generatedIntegrationRejectsInvalidAssemblyAndKeepsSentinel();
+    void padCellPortsAcceptLibraryDirectionSpelling();
 };
 
 QStringList      Test::messages;
@@ -814,6 +815,64 @@ void Test::generatedIntegrationRejectsInvalidAssemblyAndKeepsSentinel()
     QVERIFY2(merged.exitCode != 0, qPrintable(merged.output));
     QVERIFY2(merged.output.contains(expectedDiagnostic), qPrintable(merged.output));
     QCOMPARE(readTextFile(topPath), sentinel);
+}
+
+void Test::padCellPortsAcceptLibraryDirectionSpelling()
+{
+    /* The library writes input/output/inout; the pad cell check must read
+     * them as the in/out/inout it compares against. */
+    QString moduleText = moduleLibrary;
+    moduleText += R"(gpio_pad_ps:
+  port:
+    PAD: {type: logic, direction: inout}
+    C: {type: logic, direction: output}
+    IE: {type: logic, direction: input}
+    I: {type: logic, direction: input}
+    OE: {type: logic, direction: input}
+    PE: {type: logic, direction: input}
+    PS: {type: logic, direction: input}
+)";
+    const QString oldPad = R"(      pad:
+        input_value: pad_input_value
+        input_enable: pad_input_enable
+        output_value: pad_output_value
+        output_enable: pad_output_enable
+)";
+    QVERIFY(moduleText.contains(oldPad));
+    moduleText.replace(oldPad, "      pad:\n        io: chip_gpio\n");
+    const QString integration = "    integration:\n";
+    QVERIFY(moduleText.contains(integration));
+    moduleText.replace(
+        integration,
+        R"(    option:
+      pad_control: true
+    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+    integration:
+)");
+
+    QTemporaryDir directory;
+    createProject(directory, moduleText);
+    const CommandResult generated = generateModule(directory);
+    QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
+    const QString padPath = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_pad.v");
+    const QString pad = readTextFile(padPath);
+    QVERIFY2(pad.contains("gpio_pad_ps u_pad_3 ("), qPrintable(pad));
+    const QString report = readTextFile(
+        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0.iomux.rpt"));
+    QVERIFY2(report.contains("pad control registers: 4"), qPrintable(report));
 }
 
 } // namespace

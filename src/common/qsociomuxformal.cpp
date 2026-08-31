@@ -7,6 +7,7 @@
 
 #include "common/qsociomuxgenerator.h"
 
+#include <utility>
 #include <QStringList>
 
 namespace {
@@ -65,6 +66,109 @@ QString expectedRoleExpression(
     return QStringLiteral("1'b0");
 }
 
+/**
+ * @brief What the core must drive on one pad control for one selected slot.
+ *
+ * `slotIe`, `slotOv` and `slotOe` are the bundle the slot carries. With no
+ * option on this is that bundle; the gpio source fields and the inversion
+ * bank are layered on exactly as the core layers them.
+ */
+QString expectedPadExpression(
+    const QSocIomuxPlan &plan,
+    quint32              pin,
+    QSocIomuxRole        role,
+    const QString       &slotIe,
+    const QString       &slotOv,
+    const QString       &slotOe)
+{
+    QString expression;
+    QString roleName;
+    switch (role) {
+    case QSocIomuxRole::InputEnable:
+        roleName   = QStringLiteral("input_enable");
+        expression = plan.option.gpio
+                         ? QString("pin_%1_input_enable_src_i ? pin_%1_input_enable_i : (%2)")
+                               .arg(pin)
+                               .arg(slotIe)
+                         : slotIe;
+        break;
+    case QSocIomuxRole::OutputValue:
+        roleName   = QStringLiteral("output_value");
+        expression = plan.option.gpio
+                         ? QString(
+                               "pin_%1_output_value_src_i == 2'd1 ? pin_%1_output_value_i"
+                               " : pin_%1_output_value_src_i == 2'd2 ? (%2)"
+                               " : pin_%1_output_value_src_i == 2'd3 ? (%3) : (%4)")
+                               .arg(pin)
+                               .arg(slotIe, slotOe, slotOv)
+                         : slotOv;
+        break;
+    case QSocIomuxRole::InputValue:
+        return QString();
+    case QSocIomuxRole::OutputEnable:
+        roleName   = QStringLiteral("output_enable");
+        expression = plan.option.gpio
+                         ? QString(
+                               "pin_%1_output_enable_src_i == 2'd1 ? pin_%1_output_enable_i"
+                               " : pin_%1_output_enable_src_i == 2'd2 ? (%2)"
+                               " : pin_%1_output_enable_src_i == 2'd3 ? 1'b0 : (%3)")
+                               .arg(pin)
+                               .arg(slotOv, slotOe)
+                         : slotOe;
+        break;
+    }
+    if (plan.option.invert) {
+        expression = QString("(%1) ^ pin_%2_%3_inv_i").arg(expression).arg(pin).arg(roleName);
+    }
+    return expression;
+}
+
+/**
+ * @brief The pad selector code assertions for one pin under one selector value.
+ *
+ * `route` is the route the selector picks, or null for an unrouted or invalid
+ * code, where every constant is zero.
+ */
+void appendPadCodeAssertions(
+    QStringList *lines, const QSocIomuxPlan &plan, quint32 pin, const QSocIomuxRoutePlan *route)
+{
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    const auto expected = [&](const QString &constant, const char *reg, const char *src) {
+        return plan.option.padControl ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4")
+                                            .arg(pin)
+                                            .arg(QString(src), QString(reg), constant)
+                                      : constant;
+    };
+    if (encoding.hasPull()) {
+        const int code = route ? encoding.routePullCode(*route) : 0;
+        lines->append(
+            QString("        assert (pad_pull_select_w[%1:%2] == (%3));")
+                .arg((pin + 1) * encoding.pullWidth - 1)
+                .arg(pin * encoding.pullWidth)
+                .arg(expected(
+                    QString("%1'd%2").arg(encoding.pullWidth).arg(code), "pull", "pull_src")));
+    }
+    if (encoding.weaves) {
+        const bool keep = route && encoding.routeWeavesKeeper(*route);
+        const bool osc  = route && encoding.routeWeavesOscillator(*route);
+        lines->append(QString("        assert (pad_keep_w[%1] == (%2));")
+                          .arg(pin)
+                          .arg(expected(keep ? "1'b1" : "1'b0", "keep", "pull_src")));
+        lines->append(QString("        assert (pad_osc_w[%1] == (%2));")
+                          .arg(pin)
+                          .arg(expected(osc ? "1'b1" : "1'b0", "osc", "pull_src")));
+    }
+    if (encoding.hasDrive()) {
+        const int code = route ? encoding.routeDriveCode(*route) : 0;
+        lines->append(
+            QString("        assert (pad_drive_select_w[%1:%2] == (%3));")
+                .arg((pin + 1) * encoding.driveWidth - 1)
+                .arg(pin * encoding.driveWidth)
+                .arg(expected(
+                    QString("%1'd%2").arg(encoding.driveWidth).arg(code), "drive", "drive_src")));
+    }
+}
+
 QString buildSystemVerilog(const QSocIomuxPlan &plan)
 {
     const quint32 width = selectorWidth(plan.hsSlots);
@@ -99,6 +203,14 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         declarations.append(
             QString("    input logic [%1:0] pin_%2_select_i").arg(width - 1).arg(pin));
+        /* Every option register is a free input, so the proof covers each
+         * source and inversion setting rather than the reset one alone. */
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            declarations.append(
+                port.width == 1
+                    ? QString("    input logic %1_i").arg(port.name)
+                    : QString("    input logic [%1:0] %2_i").arg(port.width - 1).arg(port.name));
+        }
     }
     for (const QString &name : txPorts) {
         declarations.append(QString("    input logic %1").arg(name));
@@ -116,6 +228,9 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     lines.append(QString("logic [%1:0] pad_input_enable_w;").arg(plan.pinCount - 1));
     lines.append(QString("logic [%1:0] pad_output_value_w;").arg(plan.pinCount - 1));
     lines.append(QString("logic [%1:0] pad_output_enable_w;").arg(plan.pinCount - 1));
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        lines.append(QString("logic [%1:0] %2_w;").arg(port.width - 1).arg(port.name));
+    }
     for (const QString &name : rxPorts) {
         lines.append(QString("logic %1;").arg(name));
     }
@@ -156,8 +271,14 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_value_i(tx_output_value_w)",
            "    .tx_output_enable_i(tx_output_enable_w)",
            "    .rx_input_value_o(rx_input_value_w)"};
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        coreConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
+    }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         coreConnections.append(QString("    .pin_%1_select_i(pin_%1_select_i)").arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            coreConnections.append(QString("    .%1_i(%1_i)").arg(port.name));
+        }
     }
     lines.append(QString("%1_core u_core (").arg(plan.moduleName));
     for (qsizetype index = 0; index < coreConnections.size(); ++index) {
@@ -170,20 +291,27 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     lines.append("always_comb begin");
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
+            const QString slotIe
+                = expectedRoleExpression(plan, pin, slot, QSocIomuxRole::InputEnable);
+            const QString slotOv
+                = expectedRoleExpression(plan, pin, slot, QSocIomuxRole::OutputValue);
+            const QString slotOe
+                = expectedRoleExpression(plan, pin, slot, QSocIomuxRole::OutputEnable);
             lines.append(
                 QString("    if (pin_%1_select_i == %2'd%3) begin").arg(pin).arg(width).arg(slot));
-            lines.append(
-                QString("        assert (pad_input_enable_w[%1] == (%2));")
-                    .arg(pin)
-                    .arg(expectedRoleExpression(plan, pin, slot, QSocIomuxRole::InputEnable)));
-            lines.append(
-                QString("        assert (pad_output_value_w[%1] == (%2));")
-                    .arg(pin)
-                    .arg(expectedRoleExpression(plan, pin, slot, QSocIomuxRole::OutputValue)));
-            lines.append(
-                QString("        assert (pad_output_enable_w[%1] == (%2));")
-                    .arg(pin)
-                    .arg(expectedRoleExpression(plan, pin, slot, QSocIomuxRole::OutputEnable)));
+            lines.append(QString("        assert (pad_input_enable_w[%1] == (%2));")
+                             .arg(pin)
+                             .arg(expectedPadExpression(
+                                 plan, pin, QSocIomuxRole::InputEnable, slotIe, slotOv, slotOe)));
+            lines.append(QString("        assert (pad_output_value_w[%1] == (%2));")
+                             .arg(pin)
+                             .arg(expectedPadExpression(
+                                 plan, pin, QSocIomuxRole::OutputValue, slotIe, slotOv, slotOe)));
+            lines.append(QString("        assert (pad_output_enable_w[%1] == (%2));")
+                             .arg(pin)
+                             .arg(expectedPadExpression(
+                                 plan, pin, QSocIomuxRole::OutputEnable, slotIe, slotOv, slotOe)));
+            appendPadCodeAssertions(&lines, plan, pin, findRoute(plan, pin, slot));
             lines.append("    end");
         }
         if (plan.hsSlots < (quint32(1) << width)) {
@@ -191,9 +319,20 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
                              .arg(pin)
                              .arg(width)
                              .arg(plan.hsSlots));
-            lines.append(QString("        assert (pad_input_enable_w[%1] == 1'b0);").arg(pin));
-            lines.append(QString("        assert (pad_output_value_w[%1] == 1'b0);").arg(pin));
-            lines.append(QString("        assert (pad_output_enable_w[%1] == 1'b0);").arg(pin));
+            const bool plain = !plan.option.gpio && !plan.option.invert;
+            for (const auto &[name, role] :
+                 {std::pair{"input_enable", QSocIomuxRole::InputEnable},
+                  std::pair{"output_value", QSocIomuxRole::OutputValue},
+                  std::pair{"output_enable", QSocIomuxRole::OutputEnable}}) {
+                lines.append(
+                    plain
+                        ? QString("        assert (pad_%1_w[%2] == 1'b0);").arg(QString(name)).arg(pin)
+                        : QString("        assert (pad_%1_w[%2] == (%3));")
+                              .arg(QString(name))
+                              .arg(pin)
+                              .arg(expectedPadExpression(plan, pin, role, "1'b0", "1'b0", "1'b0")));
+            }
+            appendPadCodeAssertions(&lines, plan, pin, nullptr);
             lines.append("    end");
         }
     }
@@ -204,9 +343,22 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
         }
         const QString name
             = QSocIomuxGenerator::endpointPortName(route.pin, route.slot, QSocIomuxRole::InputValue);
-        const QString expression = endpoint.invert
-                                       ? QString("pad_input_value_i[%1] ^ 1'b1").arg(route.pin)
-                                       : QString("pad_input_value_i[%1]").arg(route.pin);
+        QString expression = QString("pad_input_value_i[%1]").arg(route.pin);
+        if (plan.option.rxOverride) {
+            expression = QString("pin_%1_rx_src_s%2_i ? pin_%1_rx_value_s%2_i : %3")
+                             .arg(route.pin)
+                             .arg(route.slot)
+                             .arg(expression);
+        }
+        if (plan.option.invert) {
+            expression = QString("(%1) ^ pin_%2_rx_inv_s%3_i")
+                             .arg(expression)
+                             .arg(route.pin)
+                             .arg(route.slot);
+        }
+        if (endpoint.invert) {
+            expression += QStringLiteral(" ^ 1'b1");
+        }
         lines.append(QString("    assert (%1 == (%2));").arg(name, expression));
     }
     for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
@@ -322,34 +474,10 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
         harnessPorts.append(QString("    input wire %1 pad_output_enable_i").arg(range));
         padConnections.append("    .pad_output_enable_i(pad_output_enable_i)");
     }
-    quint32   pullWidth = 0;
-    qsizetype pullRows  = 0;
-    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
-        pullRows += it.value().size();
-    }
-    if (pullRows > 0) {
-        pullWidth = 1;
-        while ((qsizetype(1) << pullWidth) < pullRows) {
-            ++pullWidth;
-        }
-        harnessPorts.append(QString("    input wire [%1:0] pad_pull_select_i")
-                                .arg(quint64(pullWidth) * plan.pinCount - 1));
-        padConnections.append("    .pad_pull_select_i(pad_pull_select_i)");
-        if (cell.canKeep() && !cell.keeperIsNative()) {
-            harnessPorts.append(QString("    input wire %1 pad_keep_i").arg(range));
-            harnessPorts.append(QString("    input wire %1 pad_osc_i").arg(range));
-            padConnections.append("    .pad_keep_i(pad_keep_i)");
-            padConnections.append("    .pad_osc_i(pad_osc_i)");
-        }
-    }
-    if (!cell.drive.level.isEmpty()) {
-        quint32 driveWidth = 1;
-        while ((qsizetype(1) << driveWidth) < cell.drive.level.size()) {
-            ++driveWidth;
-        }
-        harnessPorts.append(QString("    input wire [%1:0] pad_drive_select_i")
-                                .arg(quint64(driveWidth) * plan.pinCount - 1));
-        padConnections.append("    .pad_drive_select_i(pad_drive_select_i)");
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        harnessPorts.append(
+            QString("    input wire [%1:0] %2_i").arg(port.width - 1).arg(port.name));
+        padConnections.append(QString("    .%1_i(%1_i)").arg(port.name));
     }
     sv.append(harnessPorts.join(",\n"));
     sv.append(");");

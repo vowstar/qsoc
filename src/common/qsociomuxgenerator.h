@@ -168,10 +168,48 @@ struct QSocIomuxIntegrationPlan
  */
 struct QSocIomuxOptionPlan
 {
-    bool gpio      = false;
-    bool interrupt = false;
+    bool gpio       = false;
+    bool interrupt  = false;
+    bool padControl = false; /**< Pull and drive registers behind a per-pin source bit */
+    bool invert     = false; /**< Runtime inversion after every source selector */
+    bool rxOverride = false; /**< Per-slot register substitution of the pad input */
+
+    /** Some option owns a field in the per-pin source control word. */
+    bool sourceControl() const { return gpio || padControl || rxOverride; }
 
     bool operator==(const QSocIomuxOptionPlan &) const = default;
+};
+
+/**
+ * @brief How the selector codes of a pad cell are laid out.
+ *
+ * Pull rows are numbered with `none` first and the remaining modes in name
+ * order, so an all-zero code is the state that drives nothing. Drive rows
+ * keep their table order. A woven keeper or oscillator is not a row; it is a
+ * flag that overrides the code inside the pad module.
+ */
+struct QSocPadEncoding
+{
+    QList<QSocPadTableRow> pullRows;
+    QStringList            pullMode; /**< Mode name of each pull row */
+    QStringList            driveLevel;
+    quint32                pullWidth  = 0; /**< 0 when the cell has no pull table */
+    quint32                driveWidth = 0; /**< 0 when the cell has no drive table */
+    bool                   weaves     = false;
+    int                    upCode     = -1;
+    int                    downCode   = -1;
+
+    bool hasPull() const { return pullWidth > 0; }
+    bool hasDrive() const { return driveWidth > 0; }
+    /** Code of a pull row, or -1 when the cell has no such row. */
+    int pullCode(const QString &mode, const QString &strength) const;
+    /** Code of a drive row, or -1 when the cell has no such row. */
+    int driveCode(const QString &level) const;
+    /** The slot code a route asks for, 0 when it asks for nothing reachable. */
+    int  routePullCode(const QSocIomuxRoutePlan &route) const;
+    int  routeDriveCode(const QSocIomuxRoutePlan &route) const;
+    bool routeWeavesKeeper(const QSocIomuxRoutePlan &route) const;
+    bool routeWeavesOscillator(const QSocIomuxRoutePlan &route) const;
 };
 
 struct QSocIomuxPlan
@@ -185,6 +223,15 @@ struct QSocIomuxPlan
     QSocMmioPlan              mmio;
 
     bool operator==(const QSocIomuxPlan &) const = default;
+};
+
+/**
+ * @brief One port of the mux core, without its direction suffix.
+ */
+struct QSocIomuxCorePort
+{
+    QString name;
+    quint32 width = 1;
 };
 
 struct QSocIomuxFormalCollateral
@@ -202,6 +249,17 @@ public:
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
     static QString endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role);
+    /** The selector code layout of the declared pad cell, empty when none. */
+    static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell);
+    /**
+     * @brief The register inputs an option adds to one pin of the core.
+     *
+     * The core declares them with `_i`, the wrapper wires them with `_w` and
+     * the formal harness leaves them free, all from this one list.
+     */
+    static QList<QSocIomuxCorePort> corePinOptionPorts(const QSocIomuxPlan &plan, quint32 pin);
+    /** The pad selector vectors the core drives when a pad cell is declared. */
+    static QList<QSocIomuxCorePort> corePadSelectPorts(const QSocIomuxPlan &plan);
     /**
      * @brief Check every declared pad cell port against the library.
      *

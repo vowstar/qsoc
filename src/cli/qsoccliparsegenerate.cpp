@@ -258,6 +258,12 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                     if (entry.second["direction"]) {
                         direction = QString::fromStdString(entry.second["direction"].Scalar());
                     }
+                    /* The library accepts both spellings. */
+                    if (direction == "input") {
+                        direction = "in";
+                    } else if (direction == "output") {
+                        direction = "out";
+                    }
                     cellPorts.insert(name, direction);
                 }
             }

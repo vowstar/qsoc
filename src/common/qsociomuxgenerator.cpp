@@ -10,6 +10,7 @@
 #include <array>
 #include <functional>
 #include <limits>
+#include <utility>
 #include <QRegularExpression>
 #include <QSet>
 
@@ -26,7 +27,7 @@ const QSet<QString> kGeneratorKeys
        "pad_cell",
        "integration",
        "route"};
-const QSet<QString> kOptionKeys      = {"gpio", "interrupt"};
+const QSet<QString> kOptionKeys = {"gpio", "interrupt", "pad_control", "invert", "rx_override"};
 const QSet<QString> kIntegrationKeys = {"instance", "clock", "reset", "control", "pad"};
 const QSet<QString> kPadKeys
     = {"io", "input_value", "input_enable", "output_value", "output_enable"};
@@ -41,7 +42,7 @@ const QSet<QString> kRouteKeys
        "output_enable",
        "pull",
        "drive"};
-const QSet<QString> kEndpointKeys  = {"link", "bit", "invert"};
+const QSet<QString> kEndpointKeys  = {"link", "bit", "invert", "open_drain"};
 const QSet<QString> kRoutePullKeys = {"mode", "strength"};
 
 constexpr quint32 kMinimumPinCount = 1;
@@ -603,11 +604,15 @@ bool parsePadCell(const YAML::Node &node, QSocPadCellPlan *plan, QStringList *er
     return valid;
 }
 
+/**
+ * @param openDrain receives `open_drain`, or null for a role that cannot carry it
+ */
 bool parseEndpoint(
     const YAML::Node      &node,
     const QString         &path,
     bool                   allowConstant,
     QSocIomuxEndpointPlan *endpoint,
+    bool                  *openDrain,
     QStringList           *errors)
 {
     if (node.IsMap()) {
@@ -615,6 +620,15 @@ bool parseEndpoint(
             return false;
         }
         bool valid = true;
+        if (node["open_drain"]) {
+            if (openDrain == nullptr) {
+                appendError(errors, "ROLE", path + ".open_drain", "applies to output_value only");
+                valid = false;
+            } else {
+                valid = parseStrictBool(node["open_drain"], path + ".open_drain", openDrain, errors)
+                        && valid;
+            }
+        }
         if (!node["link"]) {
             appendError(errors, "REQUIRED", path + ".link", "property is required");
             valid = false;
@@ -727,7 +741,8 @@ bool parseRoute(
         valid = parseLabel(node["signal"], path + ".signal", &route->signal, errors) && valid;
     }
 
-    int declaredRoles = 0;
+    int  declaredRoles = 0;
+    bool openDrain     = false;
     for (const QSocIomuxRole role : kRoles) {
         const QString    key      = roleKey(role);
         const YAML::Node roleNode = node[key.toStdString()];
@@ -737,8 +752,35 @@ bool parseRoute(
         ++declaredRoles;
         const bool allowConstant = role != QSocIomuxRole::InputValue;
         valid                    = parseEndpoint(
-                                       roleNode, path + "." + key, allowConstant, &routeRole(*route, role), errors)
+                                       roleNode,
+                                       path + "." + key,
+                                       allowConstant,
+                                       &routeRole(*route, role),
+                                       role == QSocIomuxRole::OutputValue ? &openDrain : nullptr,
+                                       errors)
                                    && valid;
+    }
+    if (openDrain) {
+        /* Open drain is a wiring, not a new role: the value is a constant zero
+         * and the enable follows the inverted link. */
+        if (node["output_enable"]) {
+            appendError(
+                errors,
+                "ROLE",
+                path + ".output_enable",
+                "is derived from an open_drain output_value, drop it");
+            valid = false;
+        }
+        if (route->outputValue.link.isEmpty()) {
+            appendError(errors, "ROLE", path + ".output_value", "open_drain needs a link");
+            valid = false;
+        }
+        if (valid) {
+            route->outputEnable         = route->outputValue;
+            route->outputEnable.invert  = !route->outputValue.invert;
+            route->outputValue          = QSocIomuxEndpointPlan();
+            route->outputValue.constant = 0;
+        }
     }
     if (node["pull"]) {
         const YAML::Node pull = node["pull"];
@@ -864,83 +906,170 @@ quint32 selectorWordCount(quint32 pinCount, quint32 dataWidth)
     return (pinCount + lanes - 1) / lanes;
 }
 
+quint32 bankWordCount(const QSocIomuxPlan &plan)
+{
+    const quint32 dataWidth = plan.mmio.dataWidth;
+    return (plan.pinCount + dataWidth - 1) / dataWidth;
+}
+
+quint64 nextOffset(const QSocIomuxPlan &plan)
+{
+    return plan.mmio.registers.constLast().byteOffset + plan.mmio.dataWidth / 8;
+}
+
 /**
- * @brief Append the register families that back software control of a pin.
+ * @brief Append one banked family: one bit per pin, `data_width` pins per word.
  *
- * Two shapes, matching the two access patterns. A banked vector holds one bit
- * per pin so one store flips the same bit on a whole word of pins. A per-pin
- * word holds that pin's whole source configuration so one store reconfigures a
- * pin without a read-modify-write and without touching its neighbours.
+ * One store flips the same bit on a whole word of pins. Register `family_N`
+ * holds field `pin_P_family`, which drives `pin_P_family_o` when it has
+ * storage and reads `pin_P_inputSuffix_i` when an input suffix is given.
  */
-void composeGpio(QSocIomuxPlan *plan)
+void appendBank(
+    QSocIomuxPlan *plan, const QString &family, QSocMmioAccess access, const QString &inputSuffix)
 {
     const quint32 dataWidth = plan->mmio.dataWidth;
     const quint32 byteCount = dataWidth / 8;
-    const quint32 words     = (plan->pinCount + dataWidth - 1) / dataWidth;
-    quint64       offset    = plan->mmio.registers.constLast().byteOffset + byteCount;
-
-    struct Family
-    {
-        const char    *name;
-        QSocMmioAccess access;
-    };
-    const Family families[]
-        = {{"input_value", QSocMmioAccess::ReadOnly},
-           {"input_enable", QSocMmioAccess::ReadWrite},
-           {"output_value", QSocMmioAccess::ReadWrite},
-           {"output_enable", QSocMmioAccess::ReadWrite}};
-
-    for (const Family &family : families) {
-        for (quint32 word = 0; word < words; ++word) {
-            QSocMmioRegisterPlan bank;
-            bank.name       = QString("%1_%2").arg(family.name).arg(word);
-            bank.byteOffset = offset;
-            offset += byteCount;
-            const quint32 first = word * dataWidth;
-            const quint32 last  = std::min(plan->pinCount, first + dataWidth);
-            for (quint32 pin = first; pin < last; ++pin) {
-                QSocMmioFieldPlan field;
-                field.name   = QString("pin_%1_%2").arg(pin).arg(family.name);
-                field.lsb    = pin - first;
-                field.width  = 1;
-                field.access = family.access;
-                if (family.access == QSocMmioAccess::ReadOnly) {
-                    field.inputPort = QString("pin_%1_%2_i").arg(pin).arg(family.name);
-                } else {
-                    field.resetValue = 0;
-                    field.outputPort = QString("pin_%1_%2_o").arg(pin).arg(family.name);
-                }
-                bank.fields.append(field);
-            }
-            plan->mmio.registers.append(bank);
-        }
-    }
-
-    for (quint32 pin = 0; pin < plan->pinCount; ++pin) {
-        QSocMmioRegisterPlan control;
-        control.name       = QString("pin_src_ctrl_%1").arg(pin);
-        control.byteOffset = offset;
+    quint64       offset    = nextOffset(*plan);
+    for (quint32 word = 0; word < bankWordCount(*plan); ++word) {
+        QSocMmioRegisterPlan bank;
+        bank.name       = QString("%1_%2").arg(family).arg(word);
+        bank.byteOffset = offset;
         offset += byteCount;
-
-        struct Source
-        {
-            const char *name;
-            quint32     lsb;
-            quint32     width;
-        };
-        const Source sources[]
-            = {{"input_enable_src", 0, 1}, {"output_value_src", 2, 2}, {"output_enable_src", 4, 2}};
-        for (const Source &source : sources) {
+        const quint32 first = word * dataWidth;
+        const quint32 last  = std::min(plan->pinCount, first + dataWidth);
+        for (quint32 pin = first; pin < last; ++pin) {
             QSocMmioFieldPlan field;
-            field.name       = QString(source.name);
-            field.lsb        = source.lsb;
-            field.width      = source.width;
+            field.name   = QString("pin_%1_%2").arg(pin).arg(family);
+            field.lsb    = pin - first;
+            field.width  = 1;
+            field.access = access;
+            if (qsocMmioHasStorage(access)) {
+                field.resetValue = 0;
+                field.outputPort = QString("pin_%1_%2_o").arg(pin).arg(family);
+            }
+            if (!inputSuffix.isEmpty()) {
+                field.inputPort = QString("pin_%1_%2_i").arg(pin).arg(inputSuffix);
+            }
+            bank.fields.append(field);
+        }
+        plan->mmio.registers.append(bank);
+    }
+}
+
+struct WordField
+{
+    QString name;
+    quint32 lsb;
+    quint32 width;
+};
+
+/**
+ * @brief Append one word per pin holding the given fields.
+ *
+ * One store reconfigures a pin without a read-modify-write and without
+ * touching its neighbours. Field `name` of pin P drives `pin_P_name_o`.
+ */
+void appendPinWords(QSocIomuxPlan *plan, const QString &prefix, const QList<WordField> &fields)
+{
+    const quint32 byteCount = plan->mmio.dataWidth / 8;
+    quint64       offset    = nextOffset(*plan);
+    for (quint32 pin = 0; pin < plan->pinCount; ++pin) {
+        QSocMmioRegisterPlan word;
+        word.name       = QString("%1_%2").arg(prefix).arg(pin);
+        word.byteOffset = offset;
+        offset += byteCount;
+        for (const WordField &item : fields) {
+            QSocMmioFieldPlan field;
+            field.name       = item.name;
+            field.lsb        = item.lsb;
+            field.width      = item.width;
             field.access     = QSocMmioAccess::ReadWrite;
             field.resetValue = 0;
-            field.outputPort = QString("pin_%1_%2_o").arg(pin).arg(source.name);
-            control.fields.append(field);
+            field.outputPort = QString("pin_%1_%2_o").arg(pin).arg(item.name);
+            word.fields.append(field);
         }
-        plan->mmio.registers.append(control);
+        plan->mmio.registers.append(word);
+    }
+}
+
+void composeGpio(QSocIomuxPlan *plan)
+{
+    appendBank(plan, "input_value", QSocMmioAccess::ReadOnly, "input_value");
+    appendBank(plan, "input_enable", QSocMmioAccess::ReadWrite, QString());
+    appendBank(plan, "output_value", QSocMmioAccess::ReadWrite, QString());
+    appendBank(plan, "output_enable", QSocMmioAccess::ReadWrite, QString());
+}
+
+/**
+ * @brief Append the per-pin source control word.
+ *
+ * Bit positions are fixed whatever options are on, so software written for
+ * one design reads the same word on another: gpio owns bits 0 to 5, pad
+ * control bits 6 and 7, and the receive override one bit per slot from bit 8.
+ * A field whose option is off is absent and reads zero.
+ */
+void composeSourceControl(QSocIomuxPlan *plan)
+{
+    QList<WordField> fields;
+    if (plan->option.gpio) {
+        fields.append({"input_enable_src", 0, 1});
+        fields.append({"output_value_src", 2, 2});
+        fields.append({"output_enable_src", 4, 2});
+    }
+    if (plan->option.padControl) {
+        const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
+        if (encoding.hasPull()) {
+            fields.append({"pull_src", 6, 1});
+        }
+        if (encoding.hasDrive()) {
+            fields.append({"drive_src", 7, 1});
+        }
+    }
+    if (plan->option.rxOverride) {
+        for (quint32 slot = 0; slot < plan->hsSlots; ++slot) {
+            fields.append({QString("rx_src_s%1").arg(slot), 8 + slot, 1});
+        }
+    }
+    appendPinWords(plan, "pin_src_ctrl", fields);
+}
+
+/**
+ * @brief Append the per-pin pad control word.
+ *
+ * The pull code sits at bit 0, the woven keeper and oscillator flags at bits
+ * 8 and 9, and the drive code at bit 16, each only when the cell has it.
+ */
+void composePadControl(QSocIomuxPlan *plan)
+{
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
+    QList<WordField>      fields;
+    if (encoding.hasPull()) {
+        fields.append({"pull", 0, encoding.pullWidth});
+    }
+    if (encoding.weaves) {
+        fields.append({"keep", 8, 1});
+        fields.append({"osc", 9, 1});
+    }
+    if (encoding.hasDrive()) {
+        fields.append({"drive", 16, encoding.driveWidth});
+    }
+    appendPinWords(plan, "pin_pad_ctrl", fields);
+}
+
+void composeInvert(QSocIomuxPlan *plan)
+{
+    appendBank(plan, "input_enable_inv", QSocMmioAccess::ReadWrite, QString());
+    appendBank(plan, "output_value_inv", QSocMmioAccess::ReadWrite, QString());
+    appendBank(plan, "output_enable_inv", QSocMmioAccess::ReadWrite, QString());
+    for (quint32 slot = 0; slot < plan->hsSlots; ++slot) {
+        appendBank(plan, QString("rx_inv_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString());
+    }
+}
+
+void composeRxOverride(QSocIomuxPlan *plan)
+{
+    for (quint32 slot = 0; slot < plan->hsSlots; ++slot) {
+        appendBank(plan, QString("rx_value_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString());
     }
 }
 
@@ -949,69 +1078,21 @@ void composeGpio(QSocIomuxPlan *plan)
  *
  * Pending records the event whether or not the enable is set, so a design can
  * poll a pin it never wired to an interrupt line. The enable gates the output
- * only. The reference this follows gates the set as well, which makes polling
- * impossible and loses an event that arrives while the enable is off.
+ * only.
  */
 void composeInterrupt(QSocIomuxPlan *plan)
 {
-    const quint32 dataWidth = plan->mmio.dataWidth;
-    const quint32 byteCount = dataWidth / 8;
-    const quint32 words     = (plan->pinCount + dataWidth - 1) / dataWidth;
-    quint64       offset    = plan->mmio.registers.constLast().byteOffset + byteCount;
-
     const char *kinds[] = {"high", "low", "rise", "fall"};
-
-    for (bool pending : {false, true}) {
-        for (const char *kind : kinds) {
-            for (quint32 word = 0; word < words; ++word) {
-                QSocMmioRegisterPlan bank;
-                bank.name = QString("%1_int_%2_%3").arg(kind, pending ? "pend" : "en").arg(word);
-                bank.byteOffset = offset;
-                offset += byteCount;
-                const quint32 first = word * dataWidth;
-                const quint32 last  = std::min(plan->pinCount, first + dataWidth);
-                for (quint32 pin = first; pin < last; ++pin) {
-                    QSocMmioFieldPlan field;
-                    field.name
-                        = QString("pin_%1_%2_int_%3").arg(pin).arg(kind, pending ? "pend" : "en");
-                    field.lsb        = pin - first;
-                    field.width      = 1;
-                    field.resetValue = 0;
-                    field.access     = pending ? QSocMmioAccess::WriteOneClear
-                                               : QSocMmioAccess::ReadWrite;
-                    if (pending) {
-                        field.inputPort = QString("pin_%1_%2_detect_i").arg(pin).arg(kind);
-                    }
-                    field.outputPort
-                        = QString("pin_%1_%2_int_%3_o").arg(pin).arg(kind, pending ? "pend" : "en");
-                    bank.fields.append(field);
-                }
-                plan->mmio.registers.append(bank);
-            }
-        }
+    for (const char *kind : kinds) {
+        appendBank(plan, QString("%1_int_en").arg(kind), QSocMmioAccess::ReadWrite, QString());
     }
-}
-
-namespace {
-
-/**
- * @brief The pull rows in the order the selector encodes them.
- */
-/**
- * @brief The pull rows in the order the selector encodes them.
- *
- * `none` leads so that an all-zero selector is the state that drives nothing,
- * and the remaining modes follow in name order so the encoding is stable.
- */
-QList<QSocPadTableRow> padPullRows(const QSocPadCellPlan &cell)
-{
-    QList<QSocPadTableRow> rows = cell.pull.mode.value(QStringLiteral("none"));
-    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
-        if (it.key() != QStringLiteral("none")) {
-            rows.append(it.value());
-        }
+    for (const char *kind : kinds) {
+        appendBank(
+            plan,
+            QString("%1_int_pend").arg(kind),
+            QSocMmioAccess::WriteOneClear,
+            QString("%1_detect").arg(kind));
     }
-    return rows;
 }
 
 quint32 encodingWidth(qsizetype count)
@@ -1038,55 +1119,27 @@ void appendPadTableCase(
     const QList<QSocPadTableRow> &rows)
 {
     const quint32 width = encodingWidth(rows.size());
+    /* A table entry of x means the pin does not matter in that row, so drive
+     * zero and keep the netlist two valued. */
+    const auto bit = [&](qsizetype row, qsizetype index) {
+        return rows.at(row).value.at(index) == "1" ? QStringLiteral("1'b1")
+                                                   : QStringLiteral("1'b0");
+    };
     for (qsizetype index = 0; index < port.size(); ++index) {
         QString expression;
-        for (qsizetype row = 0; row < rows.size(); ++row) {
-            /* A table entry of x means the pin does not matter in that row, so
-             * drive zero and keep the netlist two valued. */
-            const QString value = rows.at(row).value.at(index) == "1" ? "1" : "0";
-            expression
-                += QString("(%1 == %2'd%3) ? 1'b%4 : ").arg(selector).arg(width).arg(row).arg(value);
+        for (qsizetype row = 1; row < rows.size(); ++row) {
+            expression += QString("(%1 == %2'd%3) ? %4 : ")
+                              .arg(selector)
+                              .arg(width)
+                              .arg(row)
+                              .arg(bit(row, index));
         }
-        expression += "1'b0";
+        /* Row 0 is the none row for pull and the first level for drive, so a
+         * code with no row, which only a register can produce, lands there. */
+        expression += bit(0, index);
         lines->append(QString("wire %1_%2_w = %3;").arg(port.at(index)).arg(pin).arg(expression));
     }
 }
-
-/**
- * @brief Index of a requested pull row in the encoding order, or -1.
- */
-int padPullCode(const QSocPadCellPlan &cell, const QString &mode, const QString &strength)
-{
-    /* Same order padPullRows built: none first, then the remaining names. */
-    QStringList names = {QStringLiteral("none")};
-    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
-        if (it.key() != QStringLiteral("none")) {
-            names.append(it.key());
-        }
-    }
-    int index = 0;
-    for (const QString &name : names) {
-        for (const QSocPadTableRow &row : cell.pull.mode.value(name)) {
-            if (name == mode && row.label == strength) {
-                return index;
-            }
-            ++index;
-        }
-    }
-    return -1;
-}
-
-int padDriveCode(const QSocPadCellPlan &cell, const QString &level)
-{
-    for (qsizetype index = 0; index < cell.drive.level.size(); ++index) {
-        if (cell.drive.level.at(index).label == level) {
-            return int(index);
-        }
-    }
-    return -1;
-}
-
-} // namespace
 
 /**
  * @brief Words a constraint body may use besides cell ports.
@@ -1221,6 +1274,31 @@ bool validatePadConstraints(QSocIomuxPlan *plan, QStringList *errors)
 }
 
 /**
+ * @brief Refuse an option whose prerequisites the source does not meet.
+ */
+bool validateOptions(const QSocIomuxPlan &plan, QStringList *errors)
+{
+    if (!plan.option.padControl) {
+        return true;
+    }
+    const QSocPadCellPlan &cell = plan.integration.padCell;
+    if (!cell.declared()) {
+        appendError(errors, "OPTION", "generator.option.pad_control", "needs a pad_cell declaration");
+        return false;
+    }
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(cell);
+    if (!encoding.hasPull() && !encoding.hasDrive()) {
+        appendError(
+            errors,
+            "OPTION",
+            "generator.option.pad_control",
+            QString("pad cell %1 has no pull or drive table to control").arg(cell.cell));
+        return false;
+    }
+    return true;
+}
+
+/**
  * @brief Refuse a route that asks the declared pad cell for something it lacks.
  *
  * A cell that carries no output driver has no output_enable port, so a route
@@ -1245,7 +1323,25 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
         }
         return valid;
     }
-    bool valid = true;
+    bool                  valid    = true;
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(cell);
+    /* Codes are 8-bit fields of the pad control word. */
+    if (encoding.pullRows.size() > 256) {
+        appendError(
+            errors,
+            "RANGE",
+            "generator.pad_cell.pull.table",
+            QString("has %1 rows, at most 256").arg(encoding.pullRows.size()));
+        valid = false;
+    }
+    if (encoding.driveLevel.size() > 256) {
+        appendError(
+            errors,
+            "RANGE",
+            "generator.pad_cell.drive.table",
+            QString("has %1 rows, at most 256").arg(encoding.driveLevel.size()));
+        valid = false;
+    }
     for (const QSocIomuxRoutePlan &route : plan.routes) {
         for (const QSocIomuxRole role : kRoles) {
             const QSocIomuxEndpointPlan &endpoint = routeRole(route, role);
@@ -1361,8 +1457,9 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
 
     /* The cell gates its receiver with the input enable, so a pin whose sinks
      * listen while no slot ever raises that enable reads zero forever. The gpio
-     * register path can raise it at run time, which is the one way out. */
-    if (!cell.portInputEnable.isEmpty() && !plan.option.gpio) {
+     * register path can raise it at run time and the inversion bank can flip
+     * the constant, which are the two ways out. */
+    if (!cell.portInputEnable.isEmpty() && !plan.option.gpio && !plan.option.invert) {
         QSet<quint32> listening;
         QSet<quint32> enabling;
         for (const QSocIomuxRoutePlan &route : plan.routes) {
@@ -1438,6 +1535,18 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 
     if (plan->option.gpio) {
         composeGpio(plan);
+    }
+    if (plan->option.sourceControl()) {
+        composeSourceControl(plan);
+    }
+    if (plan->option.padControl) {
+        composePadControl(plan);
+    }
+    if (plan->option.invert) {
+        composeInvert(plan);
+    }
+    if (plan->option.rxOverride) {
+        composeRxOverride(plan);
     }
     if (plan->option.interrupt) {
         composeInterrupt(plan);
@@ -1577,18 +1686,18 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         if (!validateMap(option, kOptionKeys, "generator.option", errors)) {
             valid = false;
         } else {
-            if (option["gpio"]) {
-                valid = parseStrictBool(
-                            option["gpio"], "generator.option.gpio", &plan->option.gpio, errors)
-                        && valid;
-            }
-            if (option["interrupt"]) {
-                valid = parseStrictBool(
-                            option["interrupt"],
-                            "generator.option.interrupt",
-                            &plan->option.interrupt,
-                            errors)
-                        && valid;
+            const std::pair<const char *, bool *> flags[]
+                = {{"gpio", &plan->option.gpio},
+                   {"interrupt", &plan->option.interrupt},
+                   {"pad_control", &plan->option.padControl},
+                   {"invert", &plan->option.invert},
+                   {"rx_override", &plan->option.rxOverride}};
+            for (const auto &[key, flag] : flags) {
+                if (option[key]) {
+                    valid = parseStrictBool(
+                                option[key], QString("generator.option.%1").arg(key), flag, errors)
+                            && valid;
+                }
             }
         }
     }
@@ -1743,7 +1852,148 @@ QString txLaneExpression(const QSocIomuxPlan &plan, quint32 pin, quint32 slot, Q
     return QStringLiteral("1'b0");
 }
 
+QString portDeclaration(const QSocIomuxCorePort &port, const QString &suffix)
+{
+    return port.width == 1
+               ? QString("    input  wire        %1%2").arg(port.name, suffix)
+               : QString("    input  wire [%1:0]  %2%3").arg(port.width - 1).arg(port.name, suffix);
+}
+
+/**
+ * @brief `expression` with the inversion bit applied when the option is on.
+ */
+QString withInversion(const QSocIomuxPlan &plan, const QString &expression, const QString &invPort)
+{
+    if (!plan.option.invert) {
+        return expression;
+    }
+    return QString("(%1) ^ %2").arg(expression, invPort);
+}
+
+/**
+ * @brief The constant code slot `slot` of `pin` asks for, as a selector chain.
+ *
+ * A slot with no route, or a code the cell cannot reach, resolves to zero,
+ * which is the none row for pull and the first row for drive.
+ */
+QString slotCodeChain(
+    const QSocIomuxPlan                                  &plan,
+    quint32                                               pin,
+    quint32                                               codeWidth,
+    const std::function<int(const QSocIomuxRoutePlan &)> &code)
+{
+    const quint32 width = selectorWidth(plan.hsSlots);
+    QString       expression;
+    for (const QSocIomuxRoutePlan &route : plan.routes) {
+        const int value = route.pin == pin ? code(route) : 0;
+        if (value <= 0) {
+            continue;
+        }
+        expression += QString("(pin_%1_select_i == %2'd%3) ? %4'd%5 : ")
+                          .arg(pin)
+                          .arg(width)
+                          .arg(route.slot)
+                          .arg(codeWidth)
+                          .arg(value);
+    }
+    return expression + QString("%1'd0").arg(codeWidth);
+}
+
+QString slotFlagTerms(
+    const QSocIomuxPlan                                   &plan,
+    quint32                                                pin,
+    const std::function<bool(const QSocIomuxRoutePlan &)> &flag)
+{
+    const quint32 width = selectorWidth(plan.hsSlots);
+    QStringList   terms;
+    for (const QSocIomuxRoutePlan &route : plan.routes) {
+        if (route.pin == pin && flag(route)) {
+            terms.append(QString("(pin_%1_select_i == %2'd%3)").arg(pin).arg(width).arg(route.slot));
+        }
+    }
+    return terms.isEmpty() ? QStringLiteral("1'b0") : terms.join(" | ");
+}
+
 } // namespace
+
+int QSocPadEncoding::pullCode(const QString &mode, const QString &strength) const
+{
+    for (qsizetype index = 0; index < pullRows.size(); ++index) {
+        if (pullMode.at(index) == mode && pullRows.at(index).label == strength) {
+            return int(index);
+        }
+    }
+    return -1;
+}
+
+int QSocPadEncoding::driveCode(const QString &level) const
+{
+    return int(driveLevel.indexOf(level));
+}
+
+int QSocPadEncoding::routePullCode(const QSocIomuxRoutePlan &route) const
+{
+    if (route.pullMode.isEmpty()) {
+        return 0;
+    }
+    return std::max(0, pullCode(route.pullMode, route.pullStrength));
+}
+
+int QSocPadEncoding::routeDriveCode(const QSocIomuxRoutePlan &route) const
+{
+    if (route.driveLevel.isEmpty()) {
+        return 0;
+    }
+    return std::max(0, driveCode(route.driveLevel));
+}
+
+bool QSocPadEncoding::routeWeavesKeeper(const QSocIomuxRoutePlan &route) const
+{
+    return weaves && route.pullMode == QStringLiteral("keeper")
+           && !pullMode.contains(QStringLiteral("keeper"));
+}
+
+bool QSocPadEncoding::routeWeavesOscillator(const QSocIomuxRoutePlan &route) const
+{
+    return weaves && route.pullMode == QStringLiteral("oscillator")
+           && !pullMode.contains(QStringLiteral("oscillator"));
+}
+
+QSocPadEncoding QSocIomuxGenerator::padEncoding(const QSocPadCellPlan &cell)
+{
+    QSocPadEncoding encoding;
+    if (!cell.declared()) {
+        return encoding;
+    }
+    const auto appendMode = [&](const QString &name) {
+        for (const QSocPadTableRow &row : cell.pull.mode.value(name)) {
+            encoding.pullRows.append(row);
+            encoding.pullMode.append(name);
+        }
+    };
+    appendMode(QStringLiteral("none"));
+    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
+        if (it.key() != QStringLiteral("none")) {
+            appendMode(it.key());
+        }
+    }
+    if (!encoding.pullRows.isEmpty()) {
+        encoding.pullWidth = encodingWidth(encoding.pullRows.size());
+        encoding.weaves    = cell.canKeep() && !cell.keeperIsNative();
+        if (encoding.weaves) {
+            /* The first row of each direction, labelled or not. */
+            encoding.upCode   = int(encoding.pullMode.indexOf(QStringLiteral("up")));
+            encoding.downCode = int(encoding.pullMode.indexOf(QStringLiteral("down")));
+        }
+    }
+    for (const QSocPadTableRow &row : cell.drive.level) {
+        encoding.driveLevel.append(row.label);
+    }
+    if (!cell.drive.level.isEmpty()) {
+        encoding.driveWidth = encodingWidth(cell.drive.level.size());
+    }
+    return encoding;
+}
 
 bool QSocIomuxGenerator::checkPadCellPorts(
     const QSocIomuxPlan &plan, const QMap<QString, QString> &cellPorts, QStringList *errors)
@@ -1832,6 +2082,9 @@ bool QSocIomuxGenerator::buildPlan(
     QStringList   localErrors;
     bool          valid = parsePlan(definition, &localPlan, &localErrors);
     if (valid && localErrors.isEmpty()) {
+        valid = validateOptions(localPlan, &localErrors);
+    }
+    if (valid && localErrors.isEmpty()) {
         valid = validatePadCapability(localPlan, &localErrors);
     }
     if (valid && localErrors.isEmpty()) {
@@ -1861,13 +2114,75 @@ bool QSocIomuxGenerator::buildPlan(
     return true;
 }
 
+QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
+    const QSocIomuxPlan &plan, quint32 pin)
+{
+    QList<QSocIomuxCorePort> ports;
+    const QSocPadEncoding    encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    if (plan.option.gpio) {
+        ports.append({QString("pin_%1_input_enable").arg(pin), 1});
+        ports.append({QString("pin_%1_output_value").arg(pin), 1});
+        ports.append({QString("pin_%1_output_enable").arg(pin), 1});
+        ports.append({QString("pin_%1_input_enable_src").arg(pin), 1});
+        ports.append({QString("pin_%1_output_value_src").arg(pin), 2});
+        ports.append({QString("pin_%1_output_enable_src").arg(pin), 2});
+    }
+    if (plan.option.padControl) {
+        if (encoding.hasPull()) {
+            ports.append({QString("pin_%1_pull").arg(pin), encoding.pullWidth});
+            ports.append({QString("pin_%1_pull_src").arg(pin), 1});
+        }
+        if (encoding.weaves) {
+            ports.append({QString("pin_%1_keep").arg(pin), 1});
+            ports.append({QString("pin_%1_osc").arg(pin), 1});
+        }
+        if (encoding.hasDrive()) {
+            ports.append({QString("pin_%1_drive").arg(pin), encoding.driveWidth});
+            ports.append({QString("pin_%1_drive_src").arg(pin), 1});
+        }
+    }
+    if (plan.option.invert) {
+        ports.append({QString("pin_%1_input_enable_inv").arg(pin), 1});
+        ports.append({QString("pin_%1_output_value_inv").arg(pin), 1});
+        ports.append({QString("pin_%1_output_enable_inv").arg(pin), 1});
+        for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
+            ports.append({QString("pin_%1_rx_inv_s%2").arg(pin).arg(slot), 1});
+        }
+    }
+    if (plan.option.rxOverride) {
+        for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
+            ports.append({QString("pin_%1_rx_src_s%2").arg(pin).arg(slot), 1});
+            ports.append({QString("pin_%1_rx_value_s%2").arg(pin).arg(slot), 1});
+        }
+    }
+    return ports;
+}
+
+QList<QSocIomuxCorePort> QSocIomuxGenerator::corePadSelectPorts(const QSocIomuxPlan &plan)
+{
+    QList<QSocIomuxCorePort> ports;
+    const QSocPadEncoding    encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    if (encoding.hasPull()) {
+        ports.append({QStringLiteral("pad_pull_select"), encoding.pullWidth * plan.pinCount});
+    }
+    if (encoding.weaves) {
+        ports.append({QStringLiteral("pad_keep"), plan.pinCount});
+        ports.append({QStringLiteral("pad_osc"), plan.pinCount});
+    }
+    if (encoding.hasDrive()) {
+        ports.append({QStringLiteral("pad_drive_select"), encoding.driveWidth * plan.pinCount});
+    }
+    return ports;
+}
+
 QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
 {
     if (plan.pinCount == 0 || plan.hsSlots == 0) {
         return QString();
     }
-    const quint32 width = selectorWidth(plan.hsSlots);
-    const quint64 dense = quint64(plan.hsSlots) * plan.pinCount;
+    const quint32         width    = selectorWidth(plan.hsSlots);
+    const quint64         dense    = quint64(plan.hsSlots) * plan.pinCount;
+    const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
 
     QStringList lines;
     lines.append("// Generated by QSoC. Do not edit.");
@@ -1881,15 +2196,13 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
     ports.append(QString("    input  wire %1 tx_output_value_i").arg(vectorRange(dense)));
     ports.append(QString("    input  wire %1 tx_output_enable_i").arg(vectorRange(dense)));
     ports.append(QString("    output wire %1 rx_input_value_o").arg(vectorRange(dense)));
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        ports.append(QString("    output wire %1 %2_o").arg(vectorRange(port.width), port.name));
+    }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         ports.append(QString("    input  wire %1 pin_%2_select_i").arg(vectorRange(width)).arg(pin));
-        if (plan.option.gpio) {
-            ports.append(QString("    input  wire        pin_%1_input_enable_i").arg(pin));
-            ports.append(QString("    input  wire        pin_%1_output_value_i").arg(pin));
-            ports.append(QString("    input  wire        pin_%1_output_enable_i").arg(pin));
-            ports.append(QString("    input  wire        pin_%1_input_enable_src_i").arg(pin));
-            ports.append(QString("    input  wire [1:0]  pin_%1_output_value_src_i").arg(pin));
-            ports.append(QString("    input  wire [1:0]  pin_%1_output_enable_src_i").arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            ports.append(portDeclaration(port, QStringLiteral("_i")));
         }
     }
     for (qsizetype index = 0; index < ports.size(); ++index) {
@@ -1916,49 +2229,128 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
         lines.append(QString("        default: tx_bundle_%1 = 3'b000;").arg(pin));
         lines.append("    endcase");
         lines.append("end");
+        const QString ieInv = QString("pin_%1_input_enable_inv_i").arg(pin);
+        const QString ovInv = QString("pin_%1_output_value_inv_i").arg(pin);
+        const QString oeInv = QString("pin_%1_output_enable_inv_i").arg(pin);
         if (!plan.option.gpio) {
-            lines.append(QString("assign pad_input_enable_o[%1]  = tx_bundle_%1[2];").arg(pin));
-            lines.append(QString("assign pad_output_value_o[%1]  = tx_bundle_%1[1];").arg(pin));
-            lines.append(QString("assign pad_output_enable_o[%1] = tx_bundle_%1[0];").arg(pin));
-            lines.append(QString());
-            continue;
+            lines.append(QString("assign pad_input_enable_o[%1]  = %2;")
+                             .arg(pin)
+                             .arg(withInversion(plan, QString("tx_bundle_%1[2]").arg(pin), ieInv)));
+            lines.append(QString("assign pad_output_value_o[%1]  = %2;")
+                             .arg(pin)
+                             .arg(withInversion(plan, QString("tx_bundle_%1[1]").arg(pin), ovInv)));
+            lines.append(QString("assign pad_output_enable_o[%1] = %2;")
+                             .arg(pin)
+                             .arg(withInversion(plan, QString("tx_bundle_%1[0]").arg(pin), oeInv)));
+        } else {
+            /* A cross tap reads the slot mux output, never the source mux output,
+             * so no encoding of the two source fields can close a loop. */
+            lines.append(QString("assign pad_input_enable_o[%1] = %2;")
+                             .arg(pin)
+                             .arg(withInversion(
+                                 plan,
+                                 QString(
+                                     "pin_%1_input_enable_src_i"
+                                     " ? pin_%1_input_enable_i : tx_bundle_%1[2]")
+                                     .arg(pin),
+                                 ieInv)));
+            lines.append(QString("reg pad_output_value_%1;").arg(pin));
+            lines.append("always @(*) begin");
+            lines.append(QString("    case (pin_%1_output_value_src_i)").arg(pin));
+            lines.append(
+                QString("        2'd1: pad_output_value_%1 = pin_%1_output_value_i;").arg(pin));
+            lines.append(QString("        2'd2: pad_output_value_%1 = tx_bundle_%1[2];").arg(pin));
+            lines.append(QString("        2'd3: pad_output_value_%1 = tx_bundle_%1[0];").arg(pin));
+            lines.append(
+                QString("        default: pad_output_value_%1 = tx_bundle_%1[1];").arg(pin));
+            lines.append("    endcase");
+            lines.append("end");
+            lines.append(
+                QString("assign pad_output_value_o[%1] = %2;")
+                    .arg(pin)
+                    .arg(withInversion(plan, QString("pad_output_value_%1").arg(pin), ovInv)));
+            lines.append(QString("reg pad_output_enable_%1;").arg(pin));
+            lines.append("always @(*) begin");
+            lines.append(QString("    case (pin_%1_output_enable_src_i)").arg(pin));
+            lines.append(
+                QString("        2'd1: pad_output_enable_%1 = pin_%1_output_enable_i;").arg(pin));
+            lines.append(QString("        2'd2: pad_output_enable_%1 = tx_bundle_%1[1];").arg(pin));
+            lines.append(QString("        2'd3: pad_output_enable_%1 = 1'b0;").arg(pin));
+            lines.append(
+                QString("        default: pad_output_enable_%1 = tx_bundle_%1[0];").arg(pin));
+            lines.append("    endcase");
+            lines.append("end");
+            lines.append(
+                QString("assign pad_output_enable_o[%1] = %2;")
+                    .arg(pin)
+                    .arg(withInversion(plan, QString("pad_output_enable_%1").arg(pin), oeInv)));
         }
-
-        /* A cross tap reads the slot mux output, never the source mux output,
-         * so no encoding of the two source fields can close a loop. */
-        lines.append(QString(
-                         "assign pad_input_enable_o[%1] = pin_%1_input_enable_src_i"
-                         " ? pin_%1_input_enable_i : tx_bundle_%1[2];")
-                         .arg(pin));
-        lines.append(QString("reg pad_output_value_%1;").arg(pin));
-        lines.append("always @(*) begin");
-        lines.append(QString("    case (pin_%1_output_value_src_i)").arg(pin));
-        lines.append(QString("        2'd1: pad_output_value_%1 = pin_%1_output_value_i;").arg(pin));
-        lines.append(QString("        2'd2: pad_output_value_%1 = tx_bundle_%1[2];").arg(pin));
-        lines.append(QString("        2'd3: pad_output_value_%1 = tx_bundle_%1[0];").arg(pin));
-        lines.append(QString("        default: pad_output_value_%1 = tx_bundle_%1[1];").arg(pin));
-        lines.append("    endcase");
-        lines.append("end");
-        lines.append(QString("assign pad_output_value_o[%1] = pad_output_value_%1;").arg(pin));
-        lines.append(QString("reg pad_output_enable_%1;").arg(pin));
-        lines.append("always @(*) begin");
-        lines.append(QString("    case (pin_%1_output_enable_src_i)").arg(pin));
-        lines.append(
-            QString("        2'd1: pad_output_enable_%1 = pin_%1_output_enable_i;").arg(pin));
-        lines.append(QString("        2'd2: pad_output_enable_%1 = tx_bundle_%1[1];").arg(pin));
-        lines.append(QString("        2'd3: pad_output_enable_%1 = 1'b0;").arg(pin));
-        lines.append(QString("        default: pad_output_enable_%1 = tx_bundle_%1[0];").arg(pin));
-        lines.append("    endcase");
-        lines.append("end");
-        lines.append(QString("assign pad_output_enable_o[%1] = pad_output_enable_%1;").arg(pin));
+        if (encoding.hasPull()) {
+            /* The slot carries a constant code from its route; the register
+             * takes over when its source bit is set. */
+            const QString chain = slotCodeChain(plan, pin, encoding.pullWidth, [&](const auto &r) {
+                return encoding.routePullCode(r);
+            });
+            const QString code
+                = plan.option.padControl
+                      ? QString("pin_%1_pull_src_i ? pin_%1_pull_i : %2").arg(pin).arg(chain)
+                      : chain;
+            lines.append(QString("assign pad_pull_select_o[%1:%2] = %3;")
+                             .arg((pin + 1) * encoding.pullWidth - 1)
+                             .arg(pin * encoding.pullWidth)
+                             .arg(code));
+        }
+        if (encoding.weaves) {
+            const QString keep = slotFlagTerms(plan, pin, [&](const auto &r) {
+                return encoding.routeWeavesKeeper(r);
+            });
+            const QString osc  = slotFlagTerms(plan, pin, [&](const auto &r) {
+                return encoding.routeWeavesOscillator(r);
+            });
+            lines.append(
+                QString("assign pad_keep_o[%1] = %2;")
+                    .arg(pin)
+                    .arg(
+                        plan.option.padControl
+                            ? QString("pin_%1_pull_src_i ? pin_%1_keep_i : %2").arg(pin).arg(keep)
+                            : keep));
+            lines.append(
+                QString("assign pad_osc_o[%1] = %2;")
+                    .arg(pin)
+                    .arg(
+                        plan.option.padControl
+                            ? QString("pin_%1_pull_src_i ? pin_%1_osc_i : %2").arg(pin).arg(osc)
+                            : osc));
+        }
+        if (encoding.hasDrive()) {
+            const QString chain = slotCodeChain(plan, pin, encoding.driveWidth, [&](const auto &r) {
+                return encoding.routeDriveCode(r);
+            });
+            const QString code
+                = plan.option.padControl
+                      ? QString("pin_%1_drive_src_i ? pin_%1_drive_i : %2").arg(pin).arg(chain)
+                      : chain;
+            lines.append(QString("assign pad_drive_select_o[%1:%2] = %3;")
+                             .arg((pin + 1) * encoding.driveWidth - 1)
+                             .arg(pin * encoding.driveWidth)
+                             .arg(code));
+        }
         lines.append(QString());
     }
 
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
-            lines.append(QString("assign rx_input_value_o[%1] = pad_input_value_i[%2];")
+            QString value = QString("pad_input_value_i[%1]").arg(pin);
+            if (plan.option.rxOverride) {
+                value = QString("pin_%1_rx_src_s%2_i ? pin_%1_rx_value_s%2_i : %3")
+                            .arg(pin)
+                            .arg(slot)
+                            .arg(value);
+            }
+            lines.append(QString("assign rx_input_value_o[%1] = %2;")
                              .arg(denseIndex(plan, slot, pin))
-                             .arg(pin));
+                             .arg(withInversion(
+                                 plan, value, QString("pin_%1_rx_inv_s%2_i").arg(pin).arg(slot))));
         }
     }
     lines.append(QString());
@@ -2088,15 +2480,15 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
         lines.append(QString("wire %1 pad_output_value_o;").arg(vectorRange(plan.pinCount)));
         lines.append(QString("wire %1 pad_output_enable_o;").arg(vectorRange(plan.pinCount)));
     }
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        lines.append(QString("wire %1 %2_w;").arg(vectorRange(port.width), port.name));
+    }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         lines.append(QString("wire %1 pin_%2_select_w;").arg(vectorRange(width)).arg(pin));
-        if (plan.option.gpio) {
-            lines.append(QString("wire       pin_%1_input_enable_w;").arg(pin));
-            lines.append(QString("wire       pin_%1_output_value_w;").arg(pin));
-            lines.append(QString("wire       pin_%1_output_enable_w;").arg(pin));
-            lines.append(QString("wire       pin_%1_input_enable_src_w;").arg(pin));
-            lines.append(QString("wire [1:0] pin_%1_output_value_src_w;").arg(pin));
-            lines.append(QString("wire [1:0] pin_%1_output_enable_src_w;").arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            lines.append(
+                port.width == 1 ? QString("wire       %1_w;").arg(port.name)
+                                : QString("wire [%1:0] %2_w;").arg(port.width - 1).arg(port.name));
         }
     }
     lines.append(QString());
@@ -2156,19 +2548,12 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         regsConnections.append(QString("    .pin_%1_select_o(pin_%1_select_w)").arg(pin));
-        if (!plan.option.gpio) {
-            continue;
-        }
-        regsConnections.append(QString("    .pin_%1_input_value_i(pad_input_sync_q[%1])").arg(pin));
-        for (const char *role :
-             {"input_enable",
-              "output_value",
-              "output_enable",
-              "input_enable_src",
-              "output_value_src",
-              "output_enable_src"}) {
+        if (plan.option.gpio) {
             regsConnections.append(
-                QString("    .pin_%1_%2_o(pin_%1_%2_w)").arg(pin).arg(QString(role)));
+                QString("    .pin_%1_input_value_i(pad_input_sync_q[%1])").arg(pin));
+        }
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            regsConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
         }
     }
     if (plan.option.interrupt) {
@@ -2217,20 +2602,13 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_value_i(tx_output_value_w)",
            "    .tx_output_enable_i(tx_output_enable_w)",
            "    .rx_input_value_o(rx_input_value_w)"};
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        coreConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
+    }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         coreConnections.append(QString("    .pin_%1_select_i(pin_%1_select_w)").arg(pin));
-        if (!plan.option.gpio) {
-            continue;
-        }
-        for (const char *role :
-             {"input_enable",
-              "output_value",
-              "output_enable",
-              "input_enable_src",
-              "output_value_src",
-              "output_enable_src"}) {
-            coreConnections.append(
-                QString("    .pin_%1_%2_i(pin_%1_%2_w)").arg(pin).arg(QString(role)));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            coreConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
         }
     }
     if (plan.option.interrupt) {
@@ -2256,83 +2634,6 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     }
 
     if (padCell.declared()) {
-        const QList<QSocPadTableRow> pullRows  = padPullRows(padCell);
-        const bool                   hasPull   = !pullRows.isEmpty();
-        const bool                   hasDrive  = !padCell.drive.level.isEmpty();
-        const quint32                pullWidth = hasPull ? encodingWidth(pullRows.size()) : 0;
-        const quint32 driveWidth = hasDrive ? encodingWidth(padCell.drive.level.size()) : 0;
-        const auto    codeWire = [&](const char                                           *kind,
-                                     quint32                                               pin,
-                                     quint32                                               codeWidth,
-                                     const std::function<int(const QSocIomuxRoutePlan &)> &code) {
-            /* Each slot carries a constant code from its route. A slot with no
-             * route, or a code the selector cannot reach, resolves to zero,
-             * which is the none row for pull and the first row for drive. */
-            QString expression;
-            for (const QSocIomuxRoutePlan &route : plan.routes) {
-                if (route.pin != pin) {
-                    continue;
-                }
-                const int value = code(route);
-                if (value <= 0) {
-                    continue;
-                }
-                expression += QString("(pin_%1_select_w == %2'd%3) ? %4'd%5 : ")
-                                  .arg(pin)
-                                  .arg(width)
-                                  .arg(route.slot)
-                                  .arg(codeWidth)
-                                  .arg(value);
-            }
-            expression += QString("%1'd0").arg(codeWidth);
-            lines.append(QString("wire %1 pad_%2_code_%3_w = %4;")
-                             .arg(vectorRange(codeWidth))
-                             .arg(QString(kind))
-                             .arg(pin)
-                             .arg(expression));
-        };
-        const bool weaves   = hasPull && padCell.canKeep() && !padCell.keeperIsNative();
-        const auto flagWire = [&](const char *kind, quint32 pin, const QString &mode) {
-            QStringList terms;
-            for (const QSocIomuxRoutePlan &route : plan.routes) {
-                if (route.pin == pin && route.pullMode == mode && !padCell.pull.has(mode)) {
-                    terms.append(
-                        QString("(pin_%1_select_w == %2'd%3)").arg(pin).arg(width).arg(route.slot));
-                }
-            }
-            lines.append(QString("wire pad_%1_%2_w = %3;")
-                             .arg(QString(kind))
-                             .arg(pin)
-                             .arg(terms.isEmpty() ? QStringLiteral("1'b0") : terms.join(" | ")));
-        };
-        QStringList pullConcat;
-        QStringList keepConcat;
-        QStringList oscConcat;
-        QStringList driveConcat;
-        for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
-            if (hasPull) {
-                codeWire("pull", pin, pullWidth, [&](const QSocIomuxRoutePlan &route) {
-                    if (route.pullMode.isEmpty()) {
-                        return 0;
-                    }
-                    return padPullCode(padCell, route.pullMode, route.pullStrength);
-                });
-                pullConcat.prepend(QString("pad_pull_code_%1_w").arg(pin));
-            }
-            if (weaves) {
-                flagWire("keep", pin, QStringLiteral("keeper"));
-                flagWire("osc", pin, QStringLiteral("oscillator"));
-                keepConcat.prepend(QString("pad_keep_%1_w").arg(pin));
-                oscConcat.prepend(QString("pad_osc_%1_w").arg(pin));
-            }
-            if (hasDrive) {
-                codeWire("drive", pin, driveWidth, [&](const QSocIomuxRoutePlan &route) {
-                    return route.driveLevel.isEmpty() ? 0 : padDriveCode(padCell, route.driveLevel);
-                });
-                driveConcat.prepend(QString("pad_drive_code_%1_w").arg(pin));
-            }
-        }
-        lines.append(QString());
         QStringList padConnections;
         padConnections.append("    .pad_io(pad_io)");
         if (!padCell.portInputValue.isEmpty()) {
@@ -2347,17 +2648,8 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
         if (!padCell.portOutputEnable.isEmpty()) {
             padConnections.append("    .pad_output_enable_i(pad_output_enable_o)");
         }
-        if (hasPull) {
-            padConnections.append(
-                QString("    .pad_pull_select_i({%1})").arg(pullConcat.join(", ")));
-        }
-        if (weaves) {
-            padConnections.append(QString("    .pad_keep_i({%1})").arg(keepConcat.join(", ")));
-            padConnections.append(QString("    .pad_osc_i({%1})").arg(oscConcat.join(", ")));
-        }
-        if (hasDrive) {
-            padConnections.append(
-                QString("    .pad_drive_select_i({%1})").arg(driveConcat.join(", ")));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+            padConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
         }
         if (padCell.portInputValue.isEmpty()) {
             lines.append(QString("assign pad_input_value_i = %1'b0;").arg(plan.pinCount));
@@ -2390,11 +2682,12 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
     if (plan.pinCount == 0 || !cell.declared()) {
         return QString();
     }
-    const QList<QSocPadTableRow> pullRows   = padPullRows(cell);
-    const bool                   hasPull    = !pullRows.isEmpty();
-    const bool                   hasDrive   = !cell.drive.level.isEmpty();
-    const quint32                pullWidth  = hasPull ? encodingWidth(pullRows.size()) : 0;
-    const quint32                driveWidth = hasDrive ? encodingWidth(cell.drive.level.size()) : 0;
+    const QSocPadEncoding         encoding   = padEncoding(cell);
+    const QList<QSocPadTableRow> &pullRows   = encoding.pullRows;
+    const bool                    hasPull    = encoding.hasPull();
+    const bool                    hasDrive   = encoding.hasDrive();
+    const quint32                 pullWidth  = encoding.pullWidth;
+    const quint32                 driveWidth = encoding.driveWidth;
 
     QStringList lines;
     lines.append("// Generated by QSoC. Do not edit.");
@@ -2417,7 +2710,7 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
         ports.append(
             QString("    input  wire %1 pad_output_enable_i").arg(vectorRange(plan.pinCount)));
     }
-    const bool weaves = hasPull && cell.canKeep() && !cell.keeperIsNative();
+    const bool weaves = encoding.weaves;
     if (hasPull) {
         ports.append(QString("    input  wire %1 pad_pull_select_i")
                          .arg(vectorRange(quint64(pullWidth) * plan.pinCount)));
@@ -2437,8 +2730,8 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
     lines.append(");");
     lines.append(QString());
 
-    const int upCode   = weaves ? padPullCode(cell, QStringLiteral("up"), QString()) : -1;
-    const int downCode = weaves ? padPullCode(cell, QStringLiteral("down"), QString()) : -1;
+    const int upCode   = encoding.upCode;
+    const int downCode = encoding.downCode;
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         if (hasPull) {
             QString selector = QString("pad_pull_select_i[%1:%2]")
@@ -2658,13 +2951,35 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     /* The report indexes composed registers, so refuse a plan whose register list
      * does not match the layout its own pin count implies. */
     const QList<QSocMmioRegisterPlan> &registers = plan.mmio.registers;
-    qsizetype     expected  = qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth);
-    const quint32 bankWords = (plan.pinCount + dataWidth - 1) / dataWidth;
+    const quint32                      bankWords = (plan.pinCount + dataWidth - 1) / dataWidth;
+    /* Register blocks in composition order, each with its register count. */
+    struct Block
+    {
+        const char *name;
+        qsizetype   count;
+    };
+    QList<Block> blocks;
     if (plan.option.gpio) {
-        expected += qsizetype(4) * bankWords + qsizetype(plan.pinCount);
+        blocks.append({"gpio", qsizetype(4) * bankWords});
+    }
+    if (plan.option.sourceControl()) {
+        blocks.append({"source control", qsizetype(plan.pinCount)});
+    }
+    if (plan.option.padControl) {
+        blocks.append({"pad control", qsizetype(plan.pinCount)});
+    }
+    if (plan.option.invert) {
+        blocks.append({"invert", qsizetype(3 + plan.hsSlots) * bankWords});
+    }
+    if (plan.option.rxOverride) {
+        blocks.append({"rx override", qsizetype(plan.hsSlots) * bankWords});
     }
     if (plan.option.interrupt) {
-        expected += qsizetype(8) * bankWords;
+        blocks.append({"interrupt", qsizetype(8) * bankWords});
+    }
+    qsizetype expected = qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth);
+    for (const Block &block : blocks) {
+        expected += block.count;
     }
     if (registers.size() != expected) {
         return QString();
@@ -2700,20 +3015,16 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                      .arg(QString::number(registers.at(1).byteOffset, 16))
                      .arg(QString::number(registers.at(selectorWords).byteOffset, 16)));
     qsizetype cursor = qsizetype(1) + selectorWords;
-    if (plan.option.gpio) {
-        const qsizetype count = qsizetype(4) * bankWords + qsizetype(plan.pinCount);
-        lines.append(QString("gpio registers: %1 at offset 0x%2 to 0x%3")
-                         .arg(count)
-                         .arg(QString::number(registers.at(cursor).byteOffset, 16))
-                         .arg(QString::number(registers.at(cursor + count - 1).byteOffset, 16)));
-        cursor += count;
+    for (const Block &block : blocks) {
+        lines.append(
+            QString("%1 registers: %2 at offset 0x%3 to 0x%4")
+                .arg(QString(block.name))
+                .arg(block.count)
+                .arg(QString::number(registers.at(cursor).byteOffset, 16))
+                .arg(QString::number(registers.at(cursor + block.count - 1).byteOffset, 16)));
+        cursor += block.count;
     }
     if (plan.option.interrupt) {
-        const qsizetype count = qsizetype(8) * bankWords;
-        lines.append(QString("interrupt registers: %1 at offset 0x%2 to 0x%3")
-                         .arg(count)
-                         .arg(QString::number(registers.at(cursor).byteOffset, 16))
-                         .arg(QString::number(registers.at(cursor + count - 1).byteOffset, 16)));
         lines.append(QString("interrupt lines: %1, one per %2 pins")
                          .arg(interruptLineCount(plan))
                          .arg(dataWidth));
@@ -2731,6 +3042,24 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                          .arg(cell.pull.mode.size())
                          .arg(cell.drive.level.size())
                          .arg(cell.constraint.size()));
+        /* The code numbering is the software contract of pin_pad_ctrl. */
+        const QSocPadEncoding encoding = padEncoding(cell);
+        if (encoding.hasPull()) {
+            QStringList codes;
+            for (qsizetype index = 0; index < encoding.pullRows.size(); ++index) {
+                const QString label = encoding.pullRows.at(index).label;
+                codes.append(QString("%1 %2%3").arg(index).arg(
+                    encoding.pullMode.at(index), label.isEmpty() ? QString() : " " + label));
+            }
+            lines.append(QString("pull codes: %1").arg(codes.join(", ")));
+        }
+        if (encoding.hasDrive()) {
+            QStringList codes;
+            for (qsizetype index = 0; index < encoding.driveLevel.size(); ++index) {
+                codes.append(QString("%1 %2").arg(index).arg(encoding.driveLevel.at(index)));
+            }
+            lines.append(QString("drive codes: %1").arg(codes.join(", ")));
+        }
     }
     lines.append(QString());
 

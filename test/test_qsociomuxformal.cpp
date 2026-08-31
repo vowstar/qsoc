@@ -185,6 +185,10 @@ private slots:
     void tailPinSelectorDisconnectFailsBmcWhenAvailable();
     void padConstraintsPassSbyWhenAvailable();
     void padConstraintFalseClaimFailsSbyWhenAvailable();
+    void optionRegistersAreFreeInputsOfTheProof();
+    void optionCollateralPassesSbyWhenAvailable();
+    void optionMutationsFailBmcWhenAvailable_data();
+    void optionMutationsFailBmcWhenAvailable();
 };
 
 void Test::assertionCountCoversEverySlotOfEveryPin_data()
@@ -357,7 +361,8 @@ void Test::tailPinSelectorDisconnectFailsBmcWhenAvailable()
     QVERIFY2(result.started, result.output.constData());
     QVERIFY2(result.finished, result.output.constData());
     QVERIFY2(result.exitCode != 0, result.output.constData());
-    QVERIFY2(result.output.contains("FAIL"), result.output.constData());
+    QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+    QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
 }
 
 } // namespace
@@ -507,4 +512,201 @@ void Test::padConstraintFalseClaimFailsSbyWhenAvailable()
         result.output.contains("Assert failed")
             && result.output.contains("pull_select_needs_enable"),
         result.output.constData());
+}
+
+namespace {
+
+/* Every core option on one plan: the register inputs the proof must treat as
+ * free. Interrupt stays off because it never touches the core. */
+QSocModuleDefinition makeOptionDefinition()
+{
+    return makeDefinition(QString(R"yaml(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 3
+    option:
+      gpio: true
+      pad_control: true
+      invert: true
+      rx_override: true
+    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+      drive:
+        port: [DS]
+        table:
+          low: ["0"]
+          high: ["1"]
+    integration:
+      instance: u_iomux0
+      clock: clk_iomux
+      reset: rst_iomux_n
+      control: iomux_control
+      pad:
+        io: chip_gpio
+    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        drive: high
+      - pin: 1
+        slot: 0
+        function: i2c0
+        signal: sda
+        input_value: {link: i2c0_sda_in, invert: true}
+        input_enable: 1
+        output_value: {link: i2c0_sda_out, open_drain: true}
+        pull: down
+      - pin: 1
+        slot: 2
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: keeper
+)yaml"));
+}
+
+QSocIomuxPlan optionPlan()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    if (!QSocIomuxGenerator::buildPlan(makeOptionDefinition(), &plan, &errors)) {
+        qWarning() << errors;
+        return {};
+    }
+    return plan;
+}
+
+} // namespace
+
+void Test::optionRegistersAreFreeInputsOfTheProof()
+{
+    const QSocIomuxPlan plan = optionPlan();
+    QVERIFY(plan.option.padControl);
+    const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
+
+    QVERIFY(sv.contains("    input logic [1:0] pin_0_output_value_src_i,"));
+    QVERIFY(sv.contains("    input logic pin_1_rx_value_s2_i,"));
+    QVERIFY(sv.contains("    input logic [1:0] pin_0_pull_i,"));
+    QVERIFY(sv.contains("logic [3:0] pad_pull_select_w;"));
+    QVERIFY(sv.contains("    .pad_keep_o(pad_keep_w),"));
+    QVERIFY(sv.contains("    .pin_1_rx_inv_s1_i(pin_1_rx_inv_s1_i),"));
+    /* The expected value layers the source fields and the inversion exactly
+     * as the core does, on top of the slot bundle. */
+    QVERIFY(sv.contains(
+        "assert (pad_input_enable_w[0] == ((pin_0_input_enable_src_i ? pin_0_input_enable_i : "
+        "(1'b0)) ^ pin_0_input_enable_inv_i));"));
+    QVERIFY(sv.contains(
+        "assert (pad_output_enable_w[1] == ((pin_1_output_enable_src_i == 2'd1 ? "
+        "pin_1_output_enable_i : pin_1_output_enable_src_i == 2'd2 ? (1'b0) : "
+        "pin_1_output_enable_src_i == 2'd3 ? 1'b0 : (hs_p1_s0_output_enable_i ^ 1'b1)) ^ "
+        "pin_1_output_enable_inv_i));"));
+    QVERIFY(sv.contains(
+        "assert (pad_pull_select_w[1:0] == (pin_0_pull_src_i ? pin_0_pull_i : 2'd2));"));
+    QVERIFY(sv.contains("assert (pad_keep_w[1] == (pin_1_pull_src_i ? pin_1_keep_i : 1'b1));"));
+    QVERIFY(sv.contains(
+        "assert (pad_drive_select_w[0:0] == (pin_0_drive_src_i ? pin_0_drive_i : 1'd1));"));
+    QVERIFY(sv.contains(
+        "assert (pad_drive_select_w[0:0] == (pin_0_drive_src_i ? pin_0_drive_i : 1'd0));"));
+    QVERIFY(sv.contains(
+        "assert (hs_p1_s0_input_value_o == ((pin_1_rx_src_s0_i ? pin_1_rx_value_s0_i : "
+        "pad_input_value_i[1]) ^ pin_1_rx_inv_s0_i ^ 1'b1));"));
+    /* Invalid codes keep the register paths and zero the slot bundle. */
+    QVERIFY(sv.contains("if (pin_1_select_i >= 2'd3) begin"));
+    QVERIFY(sv.contains(
+        "assert (pad_output_value_w[1] == ((pin_1_output_value_src_i == 2'd1 ? "
+        "pin_1_output_value_i : pin_1_output_value_src_i == 2'd2 ? (1'b0) : "
+        "pin_1_output_value_src_i == 2'd3 ? (1'b0) : (1'b0)) ^ pin_1_output_value_inv_i));"));
+}
+
+void Test::optionCollateralPassesSbyWhenAvailable()
+{
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    const QSocIomuxPlan plan = optionPlan();
+    QVERIFY(plan.option.padControl);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, QSocIomuxGenerator::generateTopVerilog(plan));
+    for (const QString &task :
+         {QStringLiteral("prove"), QStringLiteral("bmc"), QStringLiteral("cover")}) {
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), task});
+        QVERIFY2(result.started, result.output.constData());
+        QVERIFY2(result.finished, result.output.constData());
+        QCOMPARE(result.exitStatus, QProcess::NormalExit);
+        QVERIFY2(result.exitCode == 0, result.output.constData());
+    }
+}
+
+void Test::optionMutationsFailBmcWhenAvailable_data()
+{
+    QTest::addColumn<QString>("before");
+    QTest::addColumn<QString>("after");
+    QTest::newRow("inversion-dropped")
+        << "assign pad_output_value_o[0] = (pad_output_value_0) ^ pin_0_output_value_inv_i;"
+        << "assign pad_output_value_o[0] = (pad_output_value_0);";
+    QTest::newRow("pull-source-bit-ignored")
+        << "assign pad_pull_select_o[1:0] = pin_0_pull_src_i ? pin_0_pull_i :"
+        << "assign pad_pull_select_o[1:0] = 1'b0 ? pin_0_pull_i :";
+    QTest::newRow("override-before-invert-swapped")
+        << "assign rx_input_value_o[1] = (pin_1_rx_src_s0_i ? pin_1_rx_value_s0_i : "
+           "pad_input_value_i[1]) ^ pin_1_rx_inv_s0_i;"
+        << "assign rx_input_value_o[1] = pin_1_rx_src_s0_i ? pin_1_rx_value_s0_i : "
+           "(pad_input_value_i[1] ^ pin_1_rx_inv_s0_i);";
+}
+
+void Test::optionMutationsFailBmcWhenAvailable()
+{
+    QFETCH(QString, before);
+    QFETCH(QString, after);
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    const QSocIomuxPlan plan       = optionPlan();
+    QString             mutatedTop = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY2(mutatedTop.contains(before), qPrintable(before));
+    mutatedTop.replace(before, after);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, mutatedTop);
+    const CommandResult result = runCommand(
+        directory.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc")});
+    QVERIFY2(result.started, result.output.constData());
+    QVERIFY2(result.finished, result.output.constData());
+    QVERIFY2(result.exitCode != 0, result.output.constData());
+    QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+    QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
 }
