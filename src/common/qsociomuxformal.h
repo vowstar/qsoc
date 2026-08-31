@@ -10,6 +10,14 @@ struct QSocIomuxPlan;
 namespace QSocIomuxFormal {
 
 QSocIomuxFormalCollateral generate(const QSocIomuxPlan &plan);
+/**
+ * @brief Harness for the pad module: the declared constraints, per pin.
+ *
+ * Empty when no pad cell is declared or it carries no constraint. The cell
+ * itself is a stub built from the library port table, so the proof speaks
+ * about the wiring this generator emits and nothing inside the cell.
+ */
+QSocIomuxFormalCollateral generatePad(const QSocIomuxPlan &plan);
 
 } // namespace QSocIomuxFormal
 
