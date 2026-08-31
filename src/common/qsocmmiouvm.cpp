@@ -65,11 +65,35 @@ quint64 writableMask(const QSocMmioRegisterPlan &reg)
     return mask;
 }
 
+/**
+ * @brief Bits a write of one clears, the union of the write-one-clear fields.
+ */
+quint64 clearMask(const QSocMmioRegisterPlan &reg)
+{
+    quint64 mask = 0;
+    for (const QSocMmioFieldPlan &field : reg.fields) {
+        if (field.access == QSocMmioAccess::WriteOneClear) {
+            mask |= fieldMask(field);
+        }
+    }
+    return mask;
+}
+
+bool hasClearFields(const QSocMmioPlan &plan)
+{
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        if (clearMask(reg) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 quint64 resetValue(const QSocMmioRegisterPlan &reg)
 {
     quint64 value = 0;
     for (const QSocMmioFieldPlan &field : reg.fields) {
-        if (field.access == QSocMmioAccess::ReadWrite && field.resetValue) {
+        if (qsocMmioHasStorage(field.access) && field.resetValue) {
             value |= (*field.resetValue & widthMask(field.width)) << field.lsb;
         }
     }
@@ -582,15 +606,25 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("            end");
     lines->append("            case (address)");
     for (qsizetype registerIndex = 0; registerIndex < plan.registers.size(); ++registerIndex) {
-        const QSocMmioRegisterPlan &reg  = plan.registers.at(registerIndex);
-        const quint64               mask = writableMask(reg);
-        lines->append(QString("                %1:").arg(addressLiteral(plan, reg.byteOffset)));
+        const QSocMmioRegisterPlan &reg   = plan.registers.at(registerIndex);
+        const quint64               mask  = writableMask(reg);
+        const quint64               clear = clearMask(reg);
+        lines->append(
+            QString("                %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         lines->append(
             QString("                    reference_%1 = (reference_%1 & ~(byte_mask & %2))")
                 .arg(registerIndex)
                 .arg(dataLiteral(plan, mask)));
         lines->append(QString("                        | (data & byte_mask & %1);")
                           .arg(dataLiteral(plan, mask)));
+        if (clear != 0) {
+            lines->append(
+                QString(
+                    "                    reference_%1 = reference_%1 & ~(data & byte_mask & %2);")
+                    .arg(registerIndex)
+                    .arg(dataLiteral(plan, clear)));
+        }
+        lines->append("                end");
     }
     lines->append("                default: begin end");
     lines->append("            endcase");
@@ -628,6 +662,30 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("            endcase");
     lines->append("        endfunction");
     lines->append(QString());
+    if (hasClearFields(plan)) {
+        /* The sequence pulses a set source only while the bus is idle, so this
+         * sampler and apply_write never touch one reference on the same cycle. */
+        lines->append("        task run_phase(uvm_phase phase);");
+        lines->append("            forever begin");
+        lines->append("                @(posedge vif.clk_i);");
+        lines->append("                if (vif.rst_ni === 1'b1) begin");
+        for (qsizetype registerIndex = 0; registerIndex < plan.registers.size(); ++registerIndex) {
+            for (const QSocMmioFieldPlan &field : plan.registers.at(registerIndex).fields) {
+                if (field.access != QSocMmioAccess::WriteOneClear) {
+                    continue;
+                }
+                lines->append(
+                    QString("                    if (vif.%1 === 1'b1)").arg(field.inputPort));
+                lines->append(QString("                        reference_%1%2 = 1'b1;")
+                                  .arg(registerIndex)
+                                  .arg(bitRange(field)));
+            }
+        }
+        lines->append("                end");
+        lines->append("            end");
+        lines->append("        endtask");
+        lines->append(QString());
+    }
     lines->append(QString("        function void write(%1_item item);").arg(prefix));
     lines->append("            bit [1:0] expected_response;");
     lines->append(
@@ -660,6 +718,7 @@ int appendSequence(QStringList *lines, const QSocMmioPlan &plan)
     const QString prefix = plan.moduleName + QStringLiteral("_uvm");
     lines->append(QString("    class %1_sequence extends uvm_sequence #(%1_item);").arg(prefix));
     lines->append(QString("        `uvm_object_utils(%1_sequence)").arg(prefix));
+    lines->append(QString("        virtual %1_if vif;").arg(prefix));
     lines->append(QString());
     lines->append(QString("        function new(string name = \"%1_sequence\");").arg(prefix));
     lines->append("            super.new(name);");
@@ -754,6 +813,32 @@ int appendSequence(QStringList *lines, const QSocMmioPlan &plan)
             lines->append(QString("            send_read(%1, 1'b0);")
                               .arg(addressLiteral(plan, reg.byteOffset)));
             transactionCount += 2;
+        }
+    }
+
+    for (qsizetype registerIndex = 0; registerIndex < plan.registers.size(); ++registerIndex) {
+        const QSocMmioRegisterPlan &reg     = plan.registers.at(registerIndex);
+        const QString               address = addressLiteral(plan, reg.byteOffset);
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access != QSocMmioAccess::WriteOneClear) {
+                continue;
+            }
+            /* One idle-bus pulse sets the bit. A zero leaves it, a one clears it. */
+            const quint64 bit = fieldMask(field);
+            lines->append("            @(negedge vif.clk_i);");
+            lines->append(QString("            vif.%1 = 1'b1;").arg(field.inputPort));
+            lines->append("            @(negedge vif.clk_i);");
+            lines->append(QString("            vif.%1 = 1'b0;").arg(field.inputPort));
+            lines->append(QString("            send_read(%1, 1'b0);").arg(address));
+            lines->append(QString("            send_write(%1, %2, '1, %3, 1'b0);")
+                              .arg(address, dataLiteral(plan, ~bit))
+                              .arg(writeOrder++ % 3));
+            lines->append(QString("            send_read(%1, 1'b0);").arg(address));
+            lines->append(QString("            send_write(%1, %2, '1, %3, 1'b0);")
+                              .arg(address, dataLiteral(plan, bit))
+                              .arg(writeOrder++ % 3));
+            lines->append(QString("            send_read(%1, 1'b0);").arg(address));
+            transactionCount += 5;
         }
     }
 
@@ -862,12 +947,14 @@ void appendEnvironmentAndTest(QStringList *lines, const QSocMmioPlan &plan, int 
     lines->append(
         QString("            sequenceHandle = %1_sequence::type_id::create(\"initial_sequence\");")
             .arg(prefix));
+    lines->append("            sequenceHandle.vif = vif;");
     lines->append("            sequenceHandle.start(env.sequencer);");
     lines->append("            apply_reset();");
     lines->append(
         QString(
             "            sequenceHandle = %1_sequence::type_id::create(\"post_reset_sequence\");")
             .arg(prefix));
+    lines->append("            sequenceHandle.vif = vif;");
     lines->append("            sequenceHandle.start(env.sequencer);");
     lines->append("            repeat (DRAIN_CYCLES) @(posedge vif.clk_i);");
     lines->append("            if (!env.monitor.is_idle())");
@@ -986,9 +1073,12 @@ QString buildTestbench(const QSocMmioPlan &plan)
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
             if (!field.inputPort.isEmpty()) {
-                inputInitializers.append(
-                    QString("        bus.%1 = %2;")
-                        .arg(field.inputPort, literal(field.width, inputValue(field, inputIndex++))));
+                const quint64 value = field.access == QSocMmioAccess::WriteOneClear
+                                          ? 0
+                                          : inputValue(field, inputIndex);
+                ++inputIndex;
+                inputInitializers.append(QString("        bus.%1 = %2;")
+                                             .arg(field.inputPort, literal(field.width, value)));
             }
         }
     }

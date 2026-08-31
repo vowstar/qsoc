@@ -216,6 +216,41 @@ generator:
 )");
 }
 
+QSocModuleDefinition makeW1cDefinition()
+{
+    return makeDefinition(QStringLiteral("event_ctrl"), R"(
+generator:
+  kind: mmio
+  bus: axi4_lite
+  data_width: 32
+  address_width: 8
+  register:
+    events:
+      offset: 0x00
+      field:
+        enable:
+          lsb: 0
+          access: rw
+          reset: 0
+          output: enable_o
+        done:
+          lsb: 8
+          access: w1c
+          reset: 0
+          input: done_i
+          output: done_pend_o
+    scratch:
+      offset: 0x04
+      field:
+        data:
+          lsb: 0
+          width: 8
+          access: rw
+          reset: 0x3c
+          output: scratch_o
+)");
+}
+
 QSocModuleDefinition makeIomuxDefinition()
 {
     return makeDefinition(QStringLiteral("iomux0"), R"(
@@ -245,6 +280,7 @@ enum UvmFixture {
     Wide64Fixture,
     FirstRoSingleBitFixture,
     AllRoFixture,
+    W1cFixture,
     IomuxRegsFixture,
 };
 
@@ -259,6 +295,8 @@ QSocModuleDefinition makeFixtureDefinition(int fixture)
         return makeFirstRoSingleBitDefinition();
     case AllRoFixture:
         return makeAllRoDefinition();
+    case W1cFixture:
+        return makeW1cDefinition();
     }
     return {};
 }
@@ -344,6 +382,7 @@ private slots:
     void sourceOrderDoesNotChangeCollateral();
     void collateralHasExpectedStructure_data();
     void collateralHasExpectedStructure();
+    void w1cCollateralPulsesSetsAndClears();
     void generatedTestbenchPassesVerilator_data();
     void generatedTestbenchPassesVerilator();
 };
@@ -452,6 +491,34 @@ void Test::collateralHasExpectedStructure()
     QCOMPARE(collateral.fileList, expectedFileList);
 }
 
+void Test::w1cCollateralPulsesSetsAndClears()
+{
+    QSocMmioUvmCollateral collateral;
+    QStringList           errors;
+    QVERIFY(QSocMmioGenerator::generateUvmCollateral(makeW1cDefinition(), &collateral, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+
+    const QString &pkg = collateral.packageSource;
+    QVERIFY(pkg.contains(QStringLiteral(
+        "                    if (vif.done_i === 1'b1)\n"
+        "                        reference_0[8] = 1'b1;")));
+    QVERIFY(pkg.contains(QStringLiteral(
+        "                    reference_0 = reference_0 & ~(data & byte_mask & 32'h00000100);")));
+    QVERIFY(!pkg.contains(QStringLiteral("reference_1 = reference_1 & ~(data")));
+    const QString pulse = QStringLiteral(
+        "            @(negedge vif.clk_i);\n"
+        "            vif.done_i = 1'b1;\n"
+        "            @(negedge vif.clk_i);\n"
+        "            vif.done_i = 1'b0;\n"
+        "            send_read(8'h00, 1'b0);\n"
+        "            send_write(8'h00, 32'hfffffeff, '1, ");
+    const qsizetype pulseIndex = pkg.indexOf(pulse);
+    QVERIFY(pulseIndex >= 0);
+    QVERIFY(pkg.indexOf(QStringLiteral("send_write(8'h00, 32'h00000100, '1, "), pulseIndex) > 0);
+    QVERIFY(pkg.contains(QStringLiteral("            sequenceHandle.vif = vif;")));
+    QVERIFY(collateral.testbenchSource.contains(QStringLiteral("        bus.done_i = 1'h0;")));
+}
+
 void Test::generatedTestbenchPassesVerilator_data()
 {
     QTest::addColumn<int>("fixture");
@@ -462,6 +529,7 @@ void Test::generatedTestbenchPassesVerilator_data()
     QTest::newRow("first-ro-single-bit-rw")
         << int(FirstRoSingleBitFixture) << QStringLiteral("first_ro_ctrl");
     QTest::newRow("all-ro-registers") << int(AllRoFixture) << QStringLiteral("read_only_ctrl");
+    QTest::newRow("w1c-set-and-clear") << int(W1cFixture) << QStringLiteral("event_ctrl");
     QTest::newRow("iomux-registers") << int(IomuxRegsFixture) << QStringLiteral("iomux0_regs");
 }
 
@@ -570,6 +638,44 @@ void Test::generatedTestbenchPassesVerilator()
         failureResult.exitStatus != QProcess::NormalExit || failureResult.exitCode != 0,
         failureResult.output.constData());
     QVERIFY2(failureResult.output.contains("QSOC_UVM_FAILED"), failureResult.output.constData());
+
+    if (fixture == W1cFixture) {
+        /* A one that sets instead of clears. The clear read at the end of the
+         * pulse sequence must see it. */
+        QString       mutatedVerilog = verilog;
+        const QString clear          = QStringLiteral("& ~(write_data[8] & write_mask[8]);");
+        QCOMPARE(mutatedVerilog.count(clear), qsizetype(1));
+        mutatedVerilog.replace(clear, QStringLiteral("| (write_data[8] & write_mask[8]);"));
+        writeTextFile(verilogPath, mutatedVerilog);
+
+        const QString mutatedObjectDirectory = outputDirectory.filePath(
+            QStringLiteral("obj_dir_mutated"));
+        QStringList     mutatedArguments = arguments;
+        const qsizetype mdirIndex        = mutatedArguments.indexOf(QStringLiteral("--Mdir"));
+        QVERIFY(mdirIndex >= 0 && mdirIndex + 1 < mutatedArguments.size());
+        mutatedArguments[mdirIndex + 1] = mutatedObjectDirectory;
+        const CommandResult mutatedCompile
+            = runCommand(directory.path(), verilator, mutatedArguments, 300000);
+        QVERIFY2(mutatedCompile.started, mutatedCompile.output.constData());
+        QVERIFY2(mutatedCompile.finished, mutatedCompile.output.constData());
+        QCOMPARE(mutatedCompile.exitStatus, QProcess::NormalExit);
+        QVERIFY2(mutatedCompile.exitCode == 0, mutatedCompile.output.constData());
+
+        const QString mutatedBinary = QDir(mutatedObjectDirectory).filePath(binaryName);
+        QVERIFY2(QFileInfo::exists(mutatedBinary), qPrintable(mutatedBinary));
+        const CommandResult mutatedRun = runCommand(directory.path(), mutatedBinary, {}, 60000);
+        QVERIFY2(mutatedRun.started, mutatedRun.output.constData());
+        QVERIFY2(mutatedRun.finished, mutatedRun.output.constData());
+        QVERIFY2(
+            mutatedRun.exitStatus != QProcess::NormalExit || mutatedRun.exitCode != 0,
+            mutatedRun.output.constData());
+        /* The output port check sees the wrongly set bit on the write itself,
+         * before any read compares it. */
+        QVERIFY2(
+            mutatedRun.output.contains("[OUTPUT]") || mutatedRun.output.contains("[READ_DATA]"),
+            mutatedRun.output.constData());
+        QVERIFY2(mutatedRun.output.contains("QSOC_UVM_FAILED"), mutatedRun.output.constData());
+    }
 
     if (fixture == FirstRoSingleBitFixture) {
         QString       mutatedVerilog = verilog;
