@@ -2249,6 +2249,14 @@ private slots:
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
     void registerTakeoverDrivesPadWhenIverilogIsAvailable();
     void interruptRecordsEventsWhenIverilogIsAvailable();
+    void padCellPortsAreCheckedAgainstTheLibrary();
+    void padCellRejectsWhatItLacks_data();
+    void padCellRejectsWhatItLacks();
+    void padModuleDrivesPinsFromTheTable();
+    void padLevelsFollowRequestsWhenIverilogIsAvailable();
+    void frozenPadArtifactsMatch();
+    void frozenGpioInterruptReportMatches();
+    void interruptAloneNeedsNoGpioRegisters();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -3307,6 +3315,658 @@ void Test::interruptRecordsEventsWhenIverilogIsAvailable()
     QCOMPARE(simulation.exitCode(), 0);
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+/* A pad cell that takes a pull enable and a pull direction. The port table
+ * below is what the module library would answer for it. */
+QString padCellBlock()
+{
+    return QStringLiteral(R"yaml(    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+          bus_hold: ["1", "1"]
+      drive:
+        port: [DS]
+        table:
+          low: ["0"]
+          high: ["1"]
+      constraint:
+        - name: pull_select_needs_enable
+          expr: "!PS || PE"
+        - name: ie_oe_exclusive
+          expr: "!(IE && OE)"
+        - name: pull_holds_across_oe_rise
+          property: "!$rose(OE) || $stable(PE)"
+)yaml");
+}
+
+QMap<QString, QString> padCellPorts()
+{
+    return {
+        {"PAD", "inout"},
+        {"C", "out"},
+        {"IE", "in"},
+        {"I", "in"},
+        {"OE", "in"},
+        {"PE", "in"},
+        {"PS", "in"},
+        {"DS", "in"}};
+}
+
+QString padIntegrationBlock()
+{
+    return QStringLiteral(R"(    integration:
+      instance: u_iomux0
+      clock: clk_iomux
+      reset: rst_iomux_n
+      control: iomux_control
+      pad:
+        io: chip_gpio
+)");
+}
+
+QSocModuleDefinition makePadCellDefinition(const QString &padCell = padCellBlock())
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 3
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        drive: high
+      - pin: 1
+        slot: 0
+        function: i2c0
+        signal: sda
+        input_value: {link: i2c0_sda_in}
+        input_enable: 1
+        pull: bus_hold
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: keeper
+      - pin: 1
+        slot: 2
+        function: osc0
+        signal: ring
+        input_enable: 1
+        pull: oscillator
+)")
+                              .arg(padCell, padIntegrationBlock()));
+}
+
+/* The same cell, modelled here so the test owns every line of it. PE gates
+ * both resistors and PS picks the one that conducts. */
+QString padCellModel()
+{
+    return QStringLiteral(R"(module gpio_pad_ps(PAD, I, OE, DS, IE, C, PE, PS);
+    inout PAD; input I, OE, DS, IE, PE, PS; output C;
+    assign C = IE & PAD;
+    bufif1 (PAD, I, OE);
+    rnmos (PAD, 1'b1, PE & PS);
+    rnmos (PAD, 1'b0, PE & ~PS);
+endmodule
+)");
+}
+
+void Test::padCellPortsAreCheckedAgainstTheLibrary()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QVERIFY(plan.integration.padCell.declared());
+    QVERIFY(QSocIomuxGenerator::checkPadCellPorts(plan, padCellPorts(), &errors));
+    QVERIFY(errors.isEmpty());
+
+    QMap<QString, QString> missing = padCellPorts();
+    missing.remove("OE");
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, missing, &errors));
+    QCOMPARE(errors.size(), 1);
+    QVERIFY(errors.first().contains("gpio_pad_ps has no port OE"));
+
+    QMap<QString, QString> wrongWay = padCellPorts();
+    wrongWay["C"]                   = "in";
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, wrongWay, &errors));
+    QCOMPARE(errors.size(), 1);
+    QVERIFY(errors.first().contains("port C is in, expected out"));
+}
+
+void Test::padCellRejectsWhatItLacks_data()
+{
+    QTest::addColumn<QString>("edit");
+    QTest::addColumn<QString>("replacement");
+    QTest::addColumn<QString>("message");
+
+    QTest::newRow("route drives a cell without an output enable")
+        << "        output_enable: OE\n"
+        << ""
+        << "pin 0 slot 0.output_enable: pad cell gpio_pad_ps declares no port for this role";
+    QTest::newRow("unknown pull mode")
+        << "        pull: up\n"
+        << "        pull: strong_up\n"
+        << "pin 0 slot 0.pull.mode: pad cell gpio_pad_ps has no pull mode strong_up";
+    QTest::newRow("strength on a single row") << "        pull: up\n"
+                                              << "        pull: {mode: up, strength: x}\n"
+                                              << "pin 0 slot 0.pull.strength: pull mode up of "
+                                                 "gpio_pad_ps has a single row, drop strength";
+    QTest::newRow("unknown drive level")
+        << "        drive: high\n"
+        << "        drive: max\n"
+        << "pin 0 slot 0.drive: pad cell gpio_pad_ps has no drive level max";
+    QTest::newRow("keeper woven from a driver")
+        << "        port: [PE, PS]\n"
+        << "        port: [PE, PS]\n        kind: driver\n"
+        << "pin 1 slot 1.pull.mode: pad cell gpio_pad_ps pulls with its driver, so keeper cannot "
+           "be woven";
+    QTest::newRow("keeper woven without a down row")
+        << "          down: [\"1\", \"0\"]\n"
+        << ""
+        << "pin 1 slot 1.pull.mode: pad cell gpio_pad_ps needs both up and down rows to weave "
+           "keeper";
+    QTest::newRow("strength on a woven keeper") << "        pull: keeper\n"
+                                                << "        pull: {mode: keeper, strength: x}\n"
+                                                << "pin 1 slot 1.pull.strength: woven keeper uses "
+                                                   "the first up and down rows, drop strength";
+    QTest::newRow("sinks with no slot enabling the receiver")
+        << "        input_enable: 1\n"
+        << ""
+        << "generator.route.pin 1: has input_value sinks but no slot enables the input buffer";
+    QTest::newRow("constraint names a word that is no port")
+        << "          expr: \"!PS || PE\"\n"
+        << "          expr: \"!PS || PEE\"\n"
+        << "constraint[0]: PEE is not a port of gpio_pad_ps nor a SystemVerilog word";
+    QTest::newRow("constraint names no port") << "          expr: \"!PS || PE\"\n"
+                                              << "          expr: \"1\"\n"
+                                              << "constraint[0]: names no port of the pad cell";
+    QTest::newRow("constraint with both expr and property")
+        << "          expr: \"!PS || PE\"\n"
+        << "          expr: \"!PS || PE\"\n          property: \"1\"\n"
+        << "constraint[0]: needs exactly one of expr or property";
+    QTest::newRow("table row wider than the port list")
+        << "          up: [\"1\", \"1\"]\n"
+        << "          up: [\"1\", \"1\", \"1\"]\n"
+        << "pull.table.up: holds 3 entries but the port list holds 2";
+    QTest::newRow("table without a none row") << "          none: [\"0\", \"x\"]\n"
+                                              << ""
+                                              << "pull.table.none: the table needs a none row";
+    QTest::newRow("integration still names the four vectors")
+        << "        io: chip_gpio\n"
+        << "        io: chip_gpio\n        input_value: pad_in\n"
+        << "integration.pad.input_value: is owned by pad_cell, remove it";
+}
+
+void Test::padCellRejectsWhatItLacks()
+{
+    QFETCH(QString, edit);
+    QFETCH(QString, replacement);
+    QFETCH(QString, message);
+
+    QString source = padCellBlock() + padIntegrationBlock();
+    QString body   = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 3
+%1    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        drive: high
+      - pin: 1
+        slot: 0
+        function: i2c0
+        signal: sda
+        input_value: {link: i2c0_sda_in}
+        input_enable: 1
+        pull: bus_hold
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: keeper
+)")
+                         .arg(source);
+    QVERIFY2(body.contains(edit), qPrintable("fixture lost the anchor: " + edit));
+    body.replace(edit, replacement);
+
+    QStringList   errors;
+    QSocIomuxPlan plan;
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(body), &plan, &errors));
+    QVERIFY2(errors.join('\n').contains(message), qPrintable(errors.join('\n')));
+}
+
+void Test::padModuleDrivesPinsFromTheTable()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    /* Rows encode as none, then the remaining modes in name order:
+     * bus_hold 1, down 2, up 3. */
+    QVERIFY(pad.contains(
+        "wire PE_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : "
+        "(pad_pull_eff_0 == 2'd2) ? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+    QVERIFY(pad.contains(
+        "wire PS_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : "
+        "(pad_pull_eff_0 == 2'd2) ? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+    QVERIFY(pad.contains(
+        "wire [1:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 2'd3 : 2'd2) : "
+        "pad_osc_i[1] ? (pad_io[1] ? 2'd2 : 2'd3) : pad_pull_select_i[3:2];"));
+    QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
+    QVERIFY(pad.contains("    .PE(PE_1_w),"));
+    QVERIFY(pad.contains("`ifdef FORMAL"));
+    QVERIFY(
+        pad.contains("always @(*) assert_pull_select_needs_enable_0: assert(!PS_0_w || PE_0_w);"));
+    QVERIFY(pad.contains(
+        "always @(*) assume_ie_oe_exclusive_1: "
+        "assume(!(pad_input_enable_i[1] && pad_output_enable_i[1]));"));
+    QVERIFY(pad.contains(
+        "always @(posedge formal_clk) assume_pull_holds_across_oe_rise_0: "
+        "assume(!$rose(pad_output_enable_i[0]) || $stable(PE_0_w));"));
+    QVERIFY(!pad.contains("always @(*) begin"));
+
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains("    inout  wire [1:0] pad_io,"));
+    QVERIFY(top.contains("wire [1:0] pad_output_enable_o;"));
+    QVERIFY(top.contains("wire [1:0] pad_pull_code_0_w = (pin_0_select_w == 2'd0) ? 2'd3 : 2'd0;"));
+    QVERIFY(top.contains("wire [1:0] pad_pull_code_1_w = (pin_1_select_w == 2'd0) ? 2'd1 : 2'd0;"));
+    QVERIFY(top.contains("wire pad_keep_1_w = (pin_1_select_w == 2'd1);"));
+    QVERIFY(top.contains("wire pad_osc_1_w = (pin_1_select_w == 2'd2);"));
+    QVERIFY(top.contains("iomux0_pad u_pad ("));
+
+    QVERIFY(QSocIomuxGenerator::generateFileList(plan).endsWith("iomux0_pad.v\n"));
+    const QString netlist = QSocIomuxGenerator::generateIntegrationNetlist(plan);
+    QVERIFY(netlist.contains("      pad_io:\n        uplink: chip_gpio"));
+    QVERIFY(!netlist.contains("pad_input_value_i"));
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3"));
+}
+
+QString padLevelTestbench()
+{
+    return QStringLiteral(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid = 0, wvalid = 0, arvalid = 0, bready = 1, rready = 1;
+    reg  [31:0] wdata;
+    reg  [3:0]  wstrb = 4'hf;
+    wire        awready, wready, bvalid, arready, rvalid;
+    wire [1:0]  bresp, rresp;
+    wire [31:0] rdata;
+    wire [1:0]  pad;
+    reg         uart0_tx = 0;
+    wire        sda_in, gp_in1;
+    reg         drv_en = 0, drv_val = 0;
+    assign pad[1] = drv_en ? drv_val : 1'bz;
+    integer     fails = 0;
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid),
+        .s_axi_awready(awready), .s_axi_wdata(wdata), .s_axi_wstrb(wstrb),
+        .s_axi_wvalid(wvalid), .s_axi_wready(wready), .s_axi_bresp(bresp),
+        .s_axi_bvalid(bvalid), .s_axi_bready(bready), .s_axi_araddr(araddr),
+        .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid),
+        .s_axi_rready(rready), .pad_io(pad), .hs_p0_s0_output_value_i(uart0_tx),
+        .hs_p1_s0_input_value_o(sda_in), .hs_p1_s1_input_value_o(gp_in1));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin
+            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
+            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            wait (bvalid); @(posedge clk);
+        end
+    endtask
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        chk("pin0_driven_low", pad[0], 1'b0);
+        uart0_tx = 1; #1 chk("pin0_driven_high", pad[0], 1'b1);
+        chk("pin0_drive_high_selected", dut.u_pad.DS_0_w, 1'b1);
+        chk("pin1_bus_hold_row_pulls_up", pad[1], 1'b1);
+        chk("pin1_receiver_sees_it", sda_in, 1'b1);
+        /* keeper: hold the pad while the mode changes, a floating node in a
+         * zero-delay simulation has no level for the loop to keep */
+        drv_en = 1; drv_val = 1;
+        wr(12'h004, 32'h0000_0010);
+        repeat (2) @(posedge clk);
+        drv_en = 0; #2 chk("keeper_holds_high", pad[1], 1'b1);
+        drv_en = 1; drv_val = 0; #2 drv_en = 0; #2 chk("keeper_holds_low", pad[1], 1'b0);
+        chk("keeper_receiver_sees_low", gp_in1, 1'b0);
+        drv_en = 1; drv_val = 1;
+        wr(12'h004, 32'h0000_0020);
+        repeat (2) @(posedge clk);
+        chk("osc_pad_high_asks_pull_down_PE", dut.u_pad.PE_1_w, 1'b1);
+        chk("osc_pad_high_asks_pull_down_PS", dut.u_pad.PS_1_w, 1'b0);
+        drv_val = 0; #2
+        chk("osc_pad_low_asks_pull_up_PE", dut.u_pad.PE_1_w, 1'b1);
+        chk("osc_pad_low_asks_pull_up_PS", dut.u_pad.PS_1_w, 1'b1);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::padLevelsFollowRequestsWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir    dir(directory.path());
+    const QString outputPath = dir.filePath("iomux0.out");
+    writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("tb.v"), padLevelTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler,
+        {"-g2012",
+         "-s",
+         "tb",
+         "-o",
+         outputPath,
+         "iomux0_regs.v",
+         "iomux0_conn.v",
+         "iomux0.v",
+         "iomux0_pad.v",
+         "gpio_pad_ps.v",
+         "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+QString frozenPadVerilog()
+{
+    return QStringLiteral(R"gold(// Generated by QSoC. Do not edit.
+module iomux0_pad (
+    inout  wire [1:0] pad_io,
+    output wire [1:0] pad_input_value_o,
+    input  wire [1:0] pad_input_enable_i,
+    input  wire [1:0] pad_output_value_i,
+    input  wire [1:0] pad_output_enable_i,
+    input  wire [3:0] pad_pull_select_i,
+    input  wire [1:0] pad_keep_i,
+    input  wire [1:0] pad_osc_i,
+    input  wire [1:0] pad_drive_select_i
+);
+
+wire [1:0] pad_pull_eff_0 = pad_keep_i[0] ? (pad_io[0] ? 2'd3 : 2'd2) : pad_osc_i[0] ? (pad_io[0] ? 2'd2 : 2'd3) : pad_pull_select_i[1:0];
+wire PE_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) ? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;
+wire PS_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) ? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;
+wire DS_0_w = (pad_drive_select_i[0:0] == 1'd0) ? 1'b0 : (pad_drive_select_i[0:0] == 1'd1) ? 1'b1 : 1'b0;
+gpio_pad_ps u_pad_0 (
+    .PAD(pad_io[0]),
+    .C(pad_input_value_o[0]),
+    .IE(pad_input_enable_i[0]),
+    .I(pad_output_value_i[0]),
+    .OE(pad_output_enable_i[0]),
+    .PE(PE_0_w),
+    .PS(PS_0_w),
+    .DS(DS_0_w)
+);
+
+wire [1:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 2'd3 : 2'd2) : pad_osc_i[1] ? (pad_io[1] ? 2'd2 : 2'd3) : pad_pull_select_i[3:2];
+wire PE_1_w = (pad_pull_eff_1 == 2'd0) ? 1'b0 : (pad_pull_eff_1 == 2'd1) ? 1'b1 : (pad_pull_eff_1 == 2'd2) ? 1'b1 : (pad_pull_eff_1 == 2'd3) ? 1'b1 : 1'b0;
+wire PS_1_w = (pad_pull_eff_1 == 2'd0) ? 1'b0 : (pad_pull_eff_1 == 2'd1) ? 1'b1 : (pad_pull_eff_1 == 2'd2) ? 1'b0 : (pad_pull_eff_1 == 2'd3) ? 1'b1 : 1'b0;
+wire DS_1_w = (pad_drive_select_i[1:1] == 1'd0) ? 1'b0 : (pad_drive_select_i[1:1] == 1'd1) ? 1'b1 : 1'b0;
+gpio_pad_ps u_pad_1 (
+    .PAD(pad_io[1]),
+    .C(pad_input_value_o[1]),
+    .IE(pad_input_enable_i[1]),
+    .I(pad_output_value_i[1]),
+    .OE(pad_output_enable_i[1]),
+    .PE(PE_1_w),
+    .PS(PS_1_w),
+    .DS(DS_1_w)
+);
+
+`ifdef FORMAL
+(* gclk *) wire formal_clk;
+always @(*) assert_pull_select_needs_enable_0: assert(!PS_0_w || PE_0_w);
+always @(*) assert_pull_select_needs_enable_1: assert(!PS_1_w || PE_1_w);
+always @(*) assume_ie_oe_exclusive_0: assume(!(pad_input_enable_i[0] && pad_output_enable_i[0]));
+always @(*) assume_ie_oe_exclusive_1: assume(!(pad_input_enable_i[1] && pad_output_enable_i[1]));
+always @(posedge formal_clk) assume_pull_holds_across_oe_rise_0: assume(!$rose(pad_output_enable_i[0]) || $stable(PE_0_w));
+always @(posedge formal_clk) assume_pull_holds_across_oe_rise_1: assume(!$rose(pad_output_enable_i[1]) || $stable(PE_1_w));
+`endif
+
+endmodule
+)gold");
+}
+
+QString frozenPadReport()
+{
+    return QStringLiteral(R"gold(IOMUX route report for iomux0
+pin_count: 2
+hs_slots: 3
+data_width: 32
+address_width: 12
+selector: 2-bit field in a fixed 4-bit lane per pin
+selector registers: 1 at offset 0x4 to 0x4
+registers total: 2
+aperture: 8 bytes
+capability: 0x00030002 at offset 0x0
+reset: every selector resets to 0 and selects slot 0
+rx: pad input broadcasts to every declared sink regardless of the selector
+pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
+
+pin 0 selector word 0 lsb 0 offset 0x4
+  slot 0 function uart0 signal tx
+    input_value: no sink
+    input_enable: constant 0
+    output_value: link uart0_tx
+    output_enable: constant 1
+    pull: up
+    drive: high
+  unused slots: 1, 2
+pin 1 selector word 0 lsb 4 offset 0x4
+  slot 0 function i2c0 signal sda
+    input_value: link i2c0_sda_in
+    input_enable: constant 1
+    output_value: constant 0
+    output_enable: constant 0
+    pull: bus_hold
+  slot 1 function gpio0 signal in1
+    input_value: link gpio0_in1
+    input_enable: constant 1
+    output_value: constant 0
+    output_enable: constant 0
+    pull: keeper
+  slot 2 function osc0 signal ring
+    input_value: no sink
+    input_enable: constant 1
+    output_value: constant 0
+    output_enable: constant 0
+    pull: oscillator
+  unused slots: none
+
+undeclared pin/slot pairs drive a zero tx bundle
+)gold");
+}
+
+QString frozenGpioInterruptReport()
+{
+    return QStringLiteral(R"gold(IOMUX route report for iomux0
+pin_count: 2
+hs_slots: 2
+data_width: 32
+address_width: 12
+selector: 1-bit field in a fixed 4-bit lane per pin
+selector registers: 1 at offset 0x4 to 0x4
+gpio registers: 6 at offset 0x8 to 0x1c
+interrupt registers: 8 at offset 0x20 to 0x3c
+interrupt lines: 1, one per 32 pins
+registers total: 16
+aperture: 64 bytes
+capability: 0x00020002 at offset 0x0
+reset: every selector resets to 0 and selects slot 0
+rx: pad input broadcasts to every declared sink regardless of the selector
+
+pin 0 selector word 0 lsb 0 offset 0x4
+  slot 0 function uart0 signal tx
+    input_value: no sink
+    input_enable: constant 0
+    output_value: link uart0_tx
+    output_enable: constant 1
+  unused slots: 1
+pin 1 selector word 0 lsb 4 offset 0x4
+  unused slots: 0, 1
+
+undeclared pin/slot pairs drive a zero tx bundle
+)gold");
+}
+
+void Test::frozenPadArtifactsMatch()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    compareText(QSocIomuxGenerator::generatePadVerilog(plan), frozenPadVerilog());
+    compareText(QSocIomuxGenerator::generateReport(plan), frozenPadReport());
+}
+
+void Test::frozenGpioInterruptReportMatches()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeInterruptDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    compareText(QSocIomuxGenerator::generateReport(plan), frozenGpioInterruptReport());
+}
+
+void Test::interruptAloneNeedsNoGpioRegisters()
+{
+    /* The one option combination nothing else exercises. It is the only path
+     * that reaches the synchroniser through interrupt alone while every gpio
+     * branch stays closed. */
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      interrupt: true
+%1    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+)")
+                               .arg(integrationBlock())),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    QVERIFY(plan.option.interrupt);
+    QVERIFY(!plan.option.gpio);
+
+    const QString report = QSocIomuxGenerator::generateReport(plan);
+    QVERIFY(report.contains("interrupt registers: 8 at offset 0x8 to 0x24"));
+    QVERIFY(!report.contains("gpio registers"));
+    QVERIFY(report.contains("registers total: 10"));
+
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains("pad_input_sync_q <= pad_input_meta_q;"));
+    QVERIFY(top.contains("pad_input_prev_q <= pad_input_sync_q;"));
+    QVERIFY(!top.contains("pin_0_input_value_i"));
+    QVERIFY(!top.contains("pin_0_output_value_src_w"));
+    QVERIFY(top.contains("assign irq_o = "));
+
+    const QString regs = QSocIomuxGenerator::generateRegsVerilog(plan);
+    QVERIFY(regs.contains("pin_0_rise_detect_i"));
+    QVERIFY(!regs.contains("pin_0_output_enable_src_o"));
 }
 
 void Test::registerTakeoverDrivesPadWhenIverilogIsAvailable()
