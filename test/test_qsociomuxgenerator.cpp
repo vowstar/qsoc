@@ -2257,6 +2257,17 @@ private slots:
     void frozenPadArtifactsMatch();
     void frozenGpioInterruptReportMatches();
     void interruptAloneNeedsNoGpioRegisters();
+    void optionRegistersKeepFixedBitPositions();
+    void optionLogicLayersOnTheSlotBundle();
+    void openDrainExpandsToAnInvertedEnable();
+    void padControlNeedsAPadCellWithSomethingToControl();
+    void composedRegistersAreAlreadyCanonical();
+    void registerPadControlReachesThePadWhenIverilogIsAvailable();
+    void inversionAndOverrideReachThePinsWhenIverilogIsAvailable();
+    void wovenKeeperCarriesItsStrength();
+    void padTablesAreBoundedToEightBitCodes();
+    void unreachableModeLandsOnNone();
+    void nativeKeeperRowIsSelectedNotWoven();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -3503,8 +3514,8 @@ void Test::padCellRejectsWhatItLacks_data()
            "keeper";
     QTest::newRow("strength on a woven keeper") << "        pull: keeper\n"
                                                 << "        pull: {mode: keeper, strength: x}\n"
-                                                << "pin 1 slot 1.pull.strength: woven keeper uses "
-                                                   "the first up and down rows, drop strength";
+                                                << "pin 1 slot 1.pull.strength: pull mode keeper "
+                                                   "of gpio_pad_ps has a single row, drop strength";
     QTest::newRow("sinks with no slot enabling the receiver")
         << "        input_enable: 1\n"
         << ""
@@ -3590,17 +3601,16 @@ void Test::padModuleDrivesPinsFromTheTable()
         qPrintable(errors.join('\n')));
 
     const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
-    /* Rows encode as none, then the remaining modes in name order:
-     * bus_hold 1, down 2, up 3. */
+    /* Modes are fixed: 1 up, 2 down, 3 keeper, 4 oscillator, then bus_hold 5. */
     QVERIFY(pad.contains(
-        "wire PE_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : "
-        "(pad_pull_eff_0 == 2'd2) ? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+        "wire PE_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : "
+        "(pad_mode_eff_0 == 3'd2) ? 1'b1 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;"));
     QVERIFY(pad.contains(
-        "wire PS_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : "
-        "(pad_pull_eff_0 == 2'd2) ? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+        "wire PS_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : "
+        "(pad_mode_eff_0 == 3'd2) ? 1'b0 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;"));
     QVERIFY(pad.contains(
-        "wire [1:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 2'd3 : 2'd2) : "
-        "pad_osc_i[1] ? (pad_io[1] ? 2'd2 : 2'd3) : pad_pull_select_i[3:2];"));
+        "wire [2:0] pad_mode_eff_1 = (pad_pull_mode_i[5:3] == 3'd3) ? (pad_io[1] ? 3'd1 : 3'd2) : "
+        "(pad_pull_mode_i[5:3] == 3'd4) ? (pad_io[1] ? 3'd2 : 3'd1) : pad_pull_mode_i[5:3];"));
     QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
     QVERIFY(pad.contains("    .PE(PE_1_w),"));
     QVERIFY(pad.contains("`ifdef FORMAL"));
@@ -3617,10 +3627,14 @@ void Test::padModuleDrivesPinsFromTheTable()
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
     QVERIFY(top.contains("    inout  wire [1:0] pad_io,"));
     QVERIFY(top.contains("wire [1:0] pad_output_enable_o;"));
-    QVERIFY(top.contains("wire [1:0] pad_pull_code_0_w = (pin_0_select_w == 2'd0) ? 2'd3 : 2'd0;"));
-    QVERIFY(top.contains("wire [1:0] pad_pull_code_1_w = (pin_1_select_w == 2'd0) ? 2'd1 : 2'd0;"));
-    QVERIFY(top.contains("wire pad_keep_1_w = (pin_1_select_w == 2'd1);"));
-    QVERIFY(top.contains("wire pad_osc_1_w = (pin_1_select_w == 2'd2);"));
+    /* The core resolves the slot codes; the wrapper only carries them. */
+    QVERIFY(top.contains("assign pad_pull_mode_o[2:0] = (pin_0_select_i == 2'd0) ? 3'd1 : 3'd0;"));
+    QVERIFY(top.contains(
+        "assign pad_pull_mode_o[5:3] = (pin_1_select_i == 2'd0) ? 3'd5 : "
+        "(pin_1_select_i == 2'd1) ? 3'd3 : (pin_1_select_i == 2'd2) ? 3'd4 : 3'd0;"));
+    QVERIFY(top.contains("wire [5:0] pad_pull_mode_w;"));
+    QVERIFY(top.contains("    .pad_pull_mode_i(pad_pull_mode_w)"));
+    QVERIFY(top.contains("    .pad_pull_mode_o(pad_pull_mode_w)"));
     QVERIFY(top.contains("iomux0_pad u_pad ("));
 
     QVERIFY(QSocIomuxGenerator::generateFileList(plan).endsWith("iomux0_pad.v\n"));
@@ -3779,16 +3793,14 @@ module iomux0_pad (
     input  wire [1:0] pad_input_enable_i,
     input  wire [1:0] pad_output_value_i,
     input  wire [1:0] pad_output_enable_i,
-    input  wire [3:0] pad_pull_select_i,
-    input  wire [1:0] pad_keep_i,
-    input  wire [1:0] pad_osc_i,
+    input  wire [5:0] pad_pull_mode_i,
     input  wire [1:0] pad_drive_select_i
 );
 
-wire [1:0] pad_pull_eff_0 = pad_keep_i[0] ? (pad_io[0] ? 2'd3 : 2'd2) : pad_osc_i[0] ? (pad_io[0] ? 2'd2 : 2'd3) : pad_pull_select_i[1:0];
-wire PE_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) ? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;
-wire PS_0_w = (pad_pull_eff_0 == 2'd0) ? 1'b0 : (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) ? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;
-wire DS_0_w = (pad_drive_select_i[0:0] == 1'd0) ? 1'b0 : (pad_drive_select_i[0:0] == 1'd1) ? 1'b1 : 1'b0;
+wire [2:0] pad_mode_eff_0 = (pad_pull_mode_i[2:0] == 3'd3) ? (pad_io[0] ? 3'd1 : 3'd2) : (pad_pull_mode_i[2:0] == 3'd4) ? (pad_io[0] ? 3'd2 : 3'd1) : pad_pull_mode_i[2:0];
+wire PE_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) ? 1'b1 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;
+wire PS_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) ? 1'b0 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;
+wire DS_0_w = (pad_drive_select_i[0:0] == 1'd1) ? 1'b1 : 1'b0;
 gpio_pad_ps u_pad_0 (
     .PAD(pad_io[0]),
     .C(pad_input_value_o[0]),
@@ -3800,10 +3812,10 @@ gpio_pad_ps u_pad_0 (
     .DS(DS_0_w)
 );
 
-wire [1:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 2'd3 : 2'd2) : pad_osc_i[1] ? (pad_io[1] ? 2'd2 : 2'd3) : pad_pull_select_i[3:2];
-wire PE_1_w = (pad_pull_eff_1 == 2'd0) ? 1'b0 : (pad_pull_eff_1 == 2'd1) ? 1'b1 : (pad_pull_eff_1 == 2'd2) ? 1'b1 : (pad_pull_eff_1 == 2'd3) ? 1'b1 : 1'b0;
-wire PS_1_w = (pad_pull_eff_1 == 2'd0) ? 1'b0 : (pad_pull_eff_1 == 2'd1) ? 1'b1 : (pad_pull_eff_1 == 2'd2) ? 1'b0 : (pad_pull_eff_1 == 2'd3) ? 1'b1 : 1'b0;
-wire DS_1_w = (pad_drive_select_i[1:1] == 1'd0) ? 1'b0 : (pad_drive_select_i[1:1] == 1'd1) ? 1'b1 : 1'b0;
+wire [2:0] pad_mode_eff_1 = (pad_pull_mode_i[5:3] == 3'd3) ? (pad_io[1] ? 3'd1 : 3'd2) : (pad_pull_mode_i[5:3] == 3'd4) ? (pad_io[1] ? 3'd2 : 3'd1) : pad_pull_mode_i[5:3];
+wire PE_1_w = (pad_mode_eff_1 == 3'd1) ? 1'b1 : (pad_mode_eff_1 == 3'd2) ? 1'b1 : (pad_mode_eff_1 == 3'd5) ? 1'b1 : 1'b0;
+wire PS_1_w = (pad_mode_eff_1 == 3'd1) ? 1'b1 : (pad_mode_eff_1 == 3'd2) ? 1'b0 : (pad_mode_eff_1 == 3'd5) ? 1'b1 : 1'b0;
+wire DS_1_w = (pad_drive_select_i[1:1] == 1'd1) ? 1'b1 : 1'b0;
 gpio_pad_ps u_pad_1 (
     .PAD(pad_io[1]),
     .C(pad_input_value_o[1]),
@@ -3844,6 +3856,8 @@ capability: 0x00030002 at offset 0x0
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
+pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold
+drive codes: 0 low, 1 high
 
 pin 0 selector word 0 lsb 0 offset 0x4
   slot 0 function uart0 signal tx
@@ -3888,7 +3902,8 @@ data_width: 32
 address_width: 12
 selector: 1-bit field in a fixed 4-bit lane per pin
 selector registers: 1 at offset 0x4 to 0x4
-gpio registers: 6 at offset 0x8 to 0x1c
+gpio registers: 4 at offset 0x8 to 0x14
+source control registers: 2 at offset 0x18 to 0x1c
 interrupt registers: 8 at offset 0x20 to 0x3c
 interrupt lines: 1, one per 32 pins
 registers total: 16
@@ -4111,6 +4126,965 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
     QCOMPARE(simulation.exitCode(), 0);
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+QString allOptionBlock()
+{
+    return QStringLiteral(R"(    option:
+      gpio: true
+      interrupt: true
+      pad_control: true
+      invert: true
+      rx_override: true
+)");
+}
+
+/* The pad cell fixture with every option on. Pin count and slot count match
+ * makePadCellDefinition so the per-pin layout can be checked by hand. */
+QSocModuleDefinition makeAllOptionDefinition()
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 3
+%1%2%3    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        drive: high
+      - pin: 1
+        slot: 0
+        function: i2c0
+        signal: sda
+        input_value: {link: i2c0_sda_in}
+        input_enable: 1
+        output_value: {link: i2c0_sda_out, open_drain: true}
+        pull: bus_hold
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: keeper
+)")
+                              .arg(allOptionBlock(), padCellBlock(), padIntegrationBlock()));
+}
+
+const QSocMmioRegisterPlan *findRegister(const QSocMmioPlan &mmio, const QString &name)
+{
+    for (const QSocMmioRegisterPlan &reg : mmio.registers) {
+        if (reg.name == name) {
+            return &reg;
+        }
+    }
+    return nullptr;
+}
+
+QString frozenAllOptionReport()
+{
+    return QStringLiteral(R"gold(IOMUX route report for iomux0
+pin_count: 2
+hs_slots: 3
+data_width: 32
+address_width: 12
+selector: 2-bit field in a fixed 4-bit lane per pin
+selector registers: 1 at offset 0x4 to 0x4
+gpio registers: 4 at offset 0x8 to 0x14
+source control registers: 2 at offset 0x18 to 0x1c
+pad control registers: 2 at offset 0x20 to 0x24
+invert registers: 6 at offset 0x28 to 0x3c
+rx override registers: 3 at offset 0x40 to 0x48
+interrupt registers: 8 at offset 0x4c to 0x68
+interrupt lines: 1, one per 32 pins
+registers total: 27
+aperture: 108 bytes
+capability: 0x00030002 at offset 0x0
+reset: every selector resets to 0 and selects slot 0
+rx: pad input broadcasts to every declared sink regardless of the selector
+pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
+pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold
+drive codes: 0 low, 1 high
+
+pin 0 selector word 0 lsb 0 offset 0x4
+  slot 0 function uart0 signal tx
+    input_value: no sink
+    input_enable: constant 0
+    output_value: link uart0_tx
+    output_enable: constant 1
+    pull: up
+    drive: high
+  unused slots: 1, 2
+pin 1 selector word 0 lsb 4 offset 0x4
+  slot 0 function i2c0 signal sda
+    input_value: link i2c0_sda_in
+    input_enable: constant 1
+    output_value: constant 0
+    output_enable: link i2c0_sda_out invert
+    pull: bus_hold
+  slot 1 function gpio0 signal in1
+    input_value: link gpio0_in1
+    input_enable: constant 1
+    output_value: constant 0
+    output_enable: constant 0
+    pull: keeper
+  unused slots: 2
+
+undeclared pin/slot pairs drive a zero tx bundle
+)gold");
+}
+
+void Test::optionRegistersKeepFixedBitPositions()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeAllOptionDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QVERIFY(plan.option.padControl && plan.option.invert && plan.option.rxOverride);
+
+    /* Composition order: gpio banks, source words, pad words, inversion banks,
+     * receive override banks, interrupt banks. */
+    const QStringList expectedNames
+        = {"capability",          "hs_select_0",     "input_value_0",      "input_enable_0",
+           "output_value_0",      "output_enable_0", "pin_src_ctrl_0",     "pin_src_ctrl_1",
+           "pin_pad_ctrl_0",      "pin_pad_ctrl_1",  "input_enable_inv_0", "output_value_inv_0",
+           "output_enable_inv_0", "rx_inv_s0_0",     "rx_inv_s1_0",        "rx_inv_s2_0",
+           "rx_value_s0_0",       "rx_value_s1_0",   "rx_value_s2_0",      "high_int_en_0",
+           "low_int_en_0",        "rise_int_en_0",   "fall_int_en_0",      "high_int_pend_0",
+           "low_int_pend_0",      "rise_int_pend_0", "fall_int_pend_0"};
+    QStringList names;
+    for (const QSocMmioRegisterPlan &reg : plan.mmio.registers) {
+        names.append(reg.name);
+        QCOMPARE(reg.byteOffset, quint64(names.size() - 1) * 4);
+    }
+    QCOMPARE(names, expectedNames);
+
+    /* A missing field reads as -1 so a lookup failure is a comparison, not a crash. */
+    const auto lsbOf = [&](const char *reg, const char *field) -> qint64 {
+        const QSocMmioFieldPlan *found = findField(plan.mmio, reg, field);
+        return found ? qint64(found->lsb) : -1;
+    };
+    const auto widthOf = [&](const char *reg, const char *field) -> qint64 {
+        const QSocMmioFieldPlan *found = findField(plan.mmio, reg, field);
+        return found ? qint64(found->width) : -1;
+    };
+    const auto portOf = [&](const char *reg, const char *field) -> QString {
+        const QSocMmioFieldPlan *found = findField(plan.mmio, reg, field);
+        return found ? found->outputPort : QString();
+    };
+
+    /* The source word keeps every field at its fixed position. */
+    const QSocMmioRegisterPlan *source = findRegister(plan.mmio, "pin_src_ctrl_1");
+    QVERIFY(source != nullptr);
+    QCOMPARE(source->fields.size(), 8);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "input_enable_src"), 0);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "output_value_src"), 2);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "output_enable_src"), 4);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "pull_src"), 6);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "drive_src"), 7);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "rx_src_s0"), 8);
+    QCOMPARE(lsbOf("pin_src_ctrl_1", "rx_src_s2"), 10);
+    QCOMPARE(portOf("pin_src_ctrl_1", "pull_src"), QString("pin_1_pull_src_o"));
+
+    /* The pad word: the mode covers five fixed values plus bus_hold, the
+     * single-row directions need no strength select, drive sits at 24. */
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "pull_mode"), 0);
+    QCOMPARE(widthOf("pin_pad_ctrl_0", "pull_mode"), 3);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "up_sel"), -1);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "down_sel"), -1);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "drive"), 24);
+    QCOMPARE(widthOf("pin_pad_ctrl_0", "drive"), 1);
+    const QSocMmioFieldPlan *pull = findField(plan.mmio, "pin_pad_ctrl_0", "pull_mode");
+    QVERIFY(pull != nullptr);
+    QCOMPARE(pull->resetValue.value(), quint64(0));
+
+    QCOMPARE(lsbOf("rx_inv_s2_0", "pin_1_rx_inv_s2"), 1);
+    QCOMPARE(portOf("rx_value_s1_0", "pin_0_rx_value_s1"), QString("pin_0_rx_value_s1_o"));
+
+    compareText(QSocIomuxGenerator::generateReport(plan), frozenAllOptionReport());
+}
+
+void Test::optionLogicLayersOnTheSlotBundle()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeAllOptionDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+
+    /* Inversion wraps the source mux output, so it inverts whichever source
+     * the pin uses; the cross taps inside the mux stay uninverted. */
+    QVERIFY(core.contains(
+        "assign pad_input_enable_o[0] = (pin_0_input_enable_src_i ? "
+        "pin_0_input_enable_i : tx_bundle_0[2]) ^ pin_0_input_enable_inv_i;"));
+    QVERIFY(core.contains(
+        "assign pad_output_value_o[0] = (pad_output_value_0) ^ pin_0_output_value_inv_i;"));
+    QVERIFY(core.contains("        2'd2: pad_output_enable_0 = tx_bundle_0[1];"));
+    /* The register takes over a code only through its source bit. */
+    QVERIFY(core.contains(
+        "assign pad_pull_mode_o[2:0] = pin_0_pull_src_i ? pin_0_pull_mode_i : "
+        "(pin_0_select_i == 2'd0) ? 3'd1 : 3'd0;"));
+    QVERIFY(core.contains(
+        "assign pad_pull_mode_o[5:3] = pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(pin_1_select_i == 2'd0) ? 3'd5 : (pin_1_select_i == 2'd1) ? 3'd3 : 3'd0;"));
+    QVERIFY(core.contains(
+        "assign pad_drive_select_o[0:0] = pin_0_drive_src_i ? pin_0_drive_i : "
+        "(pin_0_select_i == 2'd0) ? 1'd1 : 1'd0;"));
+    /* Receive: substitute first, invert second. */
+    QVERIFY(core.contains(
+        "assign rx_input_value_o[3] = (pin_1_rx_src_s1_i ? pin_1_rx_value_s1_i "
+        ": pad_input_value_i[1]) ^ pin_1_rx_inv_s1_i;"));
+
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains("    .pin_1_rx_value_s2_o(pin_1_rx_value_s2_w)"));
+    QVERIFY(top.contains("    .pin_1_rx_value_s2_i(pin_1_rx_value_s2_w)"));
+    QVERIFY(top.contains("wire [2:0] pin_0_pull_mode_w;"));
+    QVERIFY(!top.contains("pad_keep"));
+}
+
+void Test::openDrainExpandsToAnInvertedEnable()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeAllOptionDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QSocIomuxRoutePlan &sda = plan.routes.at(1);
+    QCOMPARE(sda.function, QString("i2c0"));
+    QCOMPARE(sda.outputValue.constant.value(), quint8(0));
+    QVERIFY(sda.outputValue.link.isEmpty());
+    QCOMPARE(sda.outputEnable.link, QString("i2c0_sda_out"));
+    QVERIFY(sda.outputEnable.invert);
+    QVERIFY(
+        QSocIomuxGenerator::generateConnVerilog(plan).contains(
+            "assign tx_output_enable_o[1] = hs_p1_s0_output_enable_i ^ 1'b1;"));
+
+    /* An inverted open-drain link drives low on a one. */
+    QString inverted = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+%1    route:
+      - pin: 0
+        slot: 0
+        function: i2c0
+        signal: sda
+        output_value: {link: sda_n, open_drain: true, invert: true}
+)")
+                           .arg(integrationBlock());
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(inverted), &plan, &errors));
+    QVERIFY(!plan.routes.at(0).outputEnable.invert);
+
+    QString withEnable = inverted;
+    withEnable.replace(
+        "output_value: {link: sda_n, open_drain: true, invert: true}\n",
+        "output_value: {link: sda_n, open_drain: true}\n        output_enable: 1\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(withEnable), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_ROLE generator.route[0].output_enable: is derived from an open_drain "
+                    "output_value, drop it"});
+
+    QString onEnable = inverted;
+    onEnable.replace(
+        "output_value: {link: sda_n, open_drain: true, invert: true}\n",
+        "output_enable: {link: sda_n, open_drain: true}\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(onEnable), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_ROLE generator.route[0].output_enable.open_drain: applies to "
+                    "output_value only"});
+}
+
+void Test::padControlNeedsAPadCellWithSomethingToControl()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    const QString noCell = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+    option:
+      pad_control: true
+%1    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+)")
+                               .arg(integrationBlock());
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(noCell), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_OPTION generator.option.pad_control: needs a pad_cell declaration"});
+
+    QString         bareCell = padCellBlock();
+    const qsizetype pullAt   = bareCell.indexOf("      pull:");
+    QVERIFY(pullAt > 0);
+    bareCell.truncate(pullAt);
+    const QString source = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+    option:
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+)")
+                               .arg(bareCell, padIntegrationBlock());
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_OPTION generator.option.pad_control: pad cell gpio_pad_ps has no "
+                    "pull or drive table to control"});
+}
+
+void Test::composedRegistersAreAlreadyCanonical()
+{
+    /* buildPlan runs the MMIO invariant gate over what composeMmio produced.
+     * No source can make that gate fail, so the gate is proven here from the
+     * other side: the largest layouts of every option come out canonical. */
+    for (const QString &options :
+         {QString(),
+          QStringLiteral("    option: {gpio: true, interrupt: true}\n"),
+          QStringLiteral("    option: {invert: true, rx_override: true}\n"),
+          QStringLiteral(
+              "    option: {gpio: true, interrupt: true, invert: true, rx_override: true}\n")}) {
+        for (const quint32 dataWidth : {32U, 64U}) {
+            const QString source = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: %1
+    address_width: 32
+    pin_count: 256
+    hs_slots: 8
+%2%3    route: []
+)")
+                                       .arg(dataWidth)
+                                       .arg(options, integrationBlock());
+            QSocIomuxPlan plan;
+            QStringList   errors;
+            QVERIFY2(
+                QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+                qPrintable(errors.join('\n')));
+            QSocMmioPlan copy = plan.mmio;
+            QVERIFY(QSocMmioGenerator::canonicalizePlan(&copy, &errors));
+            QVERIFY(errors.isEmpty());
+            QVERIFY(copy == plan.mmio);
+            QVERIFY(!QSocIomuxGenerator::generateReport(plan).isEmpty());
+        }
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeAllOptionDefinition(), &plan, &errors));
+    QSocMmioPlan copy = plan.mmio;
+    QVERIFY(QSocMmioGenerator::canonicalizePlan(&copy, &errors));
+    QVERIFY(copy == plan.mmio);
+}
+
+QString padControlTestbench()
+{
+    return QStringLiteral(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid = 0, wvalid = 0, arvalid = 0, bready = 1, rready = 1;
+    reg  [31:0] wdata;
+    reg  [3:0]  wstrb = 4'hf;
+    wire        awready, wready, bvalid, arready, rvalid;
+    wire [1:0]  bresp, rresp;
+    wire [31:0] rdata;
+    wire [1:0]  pad;
+    reg         uart0_tx = 0, sda_out = 1;
+    wire        sda_in, gp_in1;
+    reg         drv_en = 0, drv_val = 0;
+    assign pad[1] = drv_en ? drv_val : 1'bz;
+    integer     fails = 0;
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid),
+        .s_axi_awready(awready), .s_axi_wdata(wdata), .s_axi_wstrb(wstrb),
+        .s_axi_wvalid(wvalid), .s_axi_wready(wready), .s_axi_bresp(bresp),
+        .s_axi_bvalid(bvalid), .s_axi_bready(bready), .s_axi_araddr(araddr),
+        .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid),
+        .s_axi_rready(rready), .pad_io(pad), .hs_p0_s0_output_value_i(uart0_tx),
+        .hs_p1_s0_input_value_o(sda_in), .hs_p1_s0_output_enable_i(sda_out),
+        .hs_p1_s1_input_value_o(gp_in1));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin
+            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
+            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            wait (bvalid); @(posedge clk);
+        end
+    endtask
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        /* slot 0 of pin 0 asks for up and high drive */
+        chk("slot_pull_up_PE", dut.u_pad.PE_0_w, 1'b1);
+        chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
+        chk("slot_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        /* the register alone changes nothing: mode 2 is down */
+        wr(12'h010, 32'h0000_0002);
+        repeat (2) @(posedge clk);
+        chk("reg_idle_PS", dut.u_pad.PS_0_w, 1'b1);
+        chk("reg_idle_DS", dut.u_pad.DS_0_w, 1'b1);
+        /* each source bit hands over its own code and nothing else */
+        wr(12'h008, 32'h0000_0040);
+        repeat (2) @(posedge clk);
+        chk("reg_pull_down_PE", dut.u_pad.PE_0_w, 1'b1);
+        chk("reg_pull_down_PS", dut.u_pad.PS_0_w, 1'b0);
+        chk("drive_still_slot", dut.u_pad.DS_0_w, 1'b1);
+        wr(12'h008, 32'h0000_00c0);
+        repeat (2) @(posedge clk);
+        chk("reg_drive_low", dut.u_pad.DS_0_w, 1'b0);
+        /* mode 0 is none, drive 1 is high */
+        wr(12'h010, 32'h0100_0000);
+        repeat (2) @(posedge clk);
+        chk("reg_pull_none_PE", dut.u_pad.PE_0_w, 1'b0);
+        chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        /* releasing the source bits returns the slot request */
+        wr(12'h008, 32'h0000_0000);
+        repeat (2) @(posedge clk);
+        chk("slot_again_PS", dut.u_pad.PS_0_w, 1'b1);
+        /* mode 3 reaches the weave through the register too */
+        drv_en = 1; drv_val = 1;
+        wr(12'h014, 32'h0000_0003);
+        wr(12'h00c, 32'h0000_0040);
+        repeat (2) @(posedge clk);
+        drv_en = 0; #2 chk("reg_keeper_holds_high", pad[1], 1'b1);
+        drv_en = 1; drv_val = 0; #2 drv_en = 0; #2 chk("reg_keeper_holds_low", pad[1], 1'b0);
+        /* open drain from the route: sda_out low drives the pad low */
+        wr(12'h00c, 32'h0000_0000);
+        drv_en = 1; drv_val = 1; #2 drv_en = 0;
+        sda_out = 0; #2 chk("open_drain_drives_low", pad[1], 1'b0);
+        sda_out = 1; #2 chk("open_drain_releases", dut.pad_output_enable_o[1], 1'b0);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::registerPadControlReachesThePadWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QString       source = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 3
+    option:
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        drive: high
+      - pin: 1
+        slot: 0
+        function: i2c0
+        signal: sda
+        input_value: {link: i2c0_sda_in}
+        input_enable: 1
+        output_value: {link: i2c0_sda_out, open_drain: true}
+        pull: bus_hold
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: keeper
+)")
+                               .arg(padCellBlock(), padIntegrationBlock());
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    const auto offsetOf = [&](const char *name) -> qint64 {
+        const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
+        return found ? qint64(found->byteOffset) : -1;
+    };
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x08));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x10));
+    QCOMPARE(offsetOf("pin_pad_ctrl_1"), qint64(0x14));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir    dir(directory.path());
+    const QString outputPath = dir.filePath("iomux0.out");
+    writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("tb.v"), padControlTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler,
+        {"-g2012",
+         "-s",
+         "tb",
+         "-o",
+         outputPath,
+         "iomux0_regs.v",
+         "iomux0_conn.v",
+         "iomux0.v",
+         "iomux0_pad.v",
+         "gpio_pad_ps.v",
+         "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+QSocModuleDefinition makeInvertOverrideDefinition()
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      gpio: true
+      invert: true
+      rx_override: true
+%1    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+      - pin: 1
+        slot: 0
+        function: uart0
+        signal: rx
+        input_value: {link: uart0_rx}
+        input_enable: 1
+      - pin: 1
+        slot: 1
+        function: spi0
+        signal: miso
+        input_value: {link: spi0_miso}
+        input_enable: 1
+)")
+                              .arg(integrationBlock()));
+}
+
+QString invertOverrideTestbench()
+{
+    return QStringLiteral(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid = 0, wvalid = 0, arvalid = 0, bready = 1, rready = 1;
+    reg  [31:0] wdata;
+    reg  [3:0]  wstrb = 4'hf;
+    wire        awready, wready, bvalid, arready, rvalid;
+    wire [1:0]  bresp, rresp;
+    wire [31:0] rdata;
+    reg  [1:0]  pad_in = 2'b00;
+    wire [1:0]  pad_ie, pad_ov, pad_oe;
+    reg         uart0_tx = 0;
+    wire        uart0_rx, spi0_miso;
+    integer     fails = 0;
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid),
+        .s_axi_awready(awready), .s_axi_wdata(wdata), .s_axi_wstrb(wstrb),
+        .s_axi_wvalid(wvalid), .s_axi_wready(wready), .s_axi_bresp(bresp),
+        .s_axi_bvalid(bvalid), .s_axi_bready(bready), .s_axi_araddr(araddr),
+        .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid),
+        .s_axi_rready(rready), .pad_input_value_i(pad_in),
+        .pad_input_enable_o(pad_ie), .pad_output_value_o(pad_ov),
+        .pad_output_enable_o(pad_oe), .hs_p0_s0_output_value_i(uart0_tx),
+        .hs_p1_s0_input_value_o(uart0_rx), .hs_p1_s1_input_value_o(spi0_miso));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin
+            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
+            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            wait (bvalid); @(posedge clk);
+        end
+    endtask
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        uart0_tx = 1; #1;
+        chk("plain_ov", pad_ov[0], 1'b1);
+        chk("plain_oe", pad_oe[0], 1'b1);
+        /* output value inversion flips the slot value */
+        wr(12'h024, 32'h0000_0001);
+        repeat (2) @(posedge clk);
+        chk("inv_ov", pad_ov[0], 1'b0);
+        uart0_tx = 0; #1 chk("inv_ov_low", pad_ov[0], 1'b1);
+        wr(12'h024, 32'h0000_0000);
+        /* open drain at run time: enable follows the inverted slot value */
+        wr(12'h018, 32'h0000_0020);
+        wr(12'h028, 32'h0000_0001);
+        repeat (2) @(posedge clk);
+        uart0_tx = 0; #1;
+        chk("od_low_drives", pad_oe[0], 1'b1);
+        chk("od_low_value", pad_ov[0], 1'b0);
+        uart0_tx = 1; #1 chk("od_high_releases", pad_oe[0], 1'b0);
+        /* cross taps: value from the slot enable (1) and from the slot input enable (0) */
+        wr(12'h028, 32'h0000_0000);
+        wr(12'h018, 32'h0000_000c);
+        repeat (2) @(posedge clk);
+        uart0_tx = 0; #1 chk("ov_from_slot_oe", pad_ov[0], 1'b1);
+        wr(12'h018, 32'h0000_0008);
+        repeat (2) @(posedge clk);
+        uart0_tx = 1; #1 chk("ov_from_slot_ie", pad_ov[0], 1'b0);
+        wr(12'h018, 32'h0000_0000);
+        /* input enable inversion turns the constant zero of an idle pin on */
+        chk("ie_pin0_off", pad_ie[0], 1'b0);
+        wr(12'h020, 32'h0000_0001);
+        repeat (2) @(posedge clk);
+        chk("ie_pin0_inverted_on", pad_ie[0], 1'b1);
+        /* receive: broadcast, then a per-slot override, then a per-slot invert */
+        pad_in = 2'b10; #1;
+        chk("rx_s0_broadcast", uart0_rx, 1'b1);
+        chk("rx_s1_broadcast", spi0_miso, 1'b1);
+        wr(12'h038, 32'h0000_0000);
+        repeat (2) @(posedge clk);
+        chk("rx_value_idle_without_src", spi0_miso, 1'b1);
+        wr(12'h01c, 32'h0000_0200);
+        repeat (2) @(posedge clk);
+        chk("rx_s1_overridden_low", spi0_miso, 1'b0);
+        chk("rx_s0_untouched", uart0_rx, 1'b1);
+        wr(12'h038, 32'h0000_0002);
+        repeat (2) @(posedge clk);
+        chk("rx_s1_overridden_high", spi0_miso, 1'b1);
+        pad_in = 2'b00; #1 chk("rx_s1_ignores_pad", spi0_miso, 1'b1);
+        wr(12'h02c, 32'h0000_0002);
+        repeat (2) @(posedge clk);
+        chk("rx_s0_inverted", uart0_rx, 1'b1);
+        wr(12'h030, 32'h0000_0002);
+        repeat (2) @(posedge clk);
+        chk("rx_s1_override_then_invert", spi0_miso, 1'b0);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeInvertOverrideDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    const auto offsetOf = [&](const char *name) -> qint64 {
+        const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
+        return found ? qint64(found->byteOffset) : -1;
+    };
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x18));
+    QCOMPARE(offsetOf("input_enable_inv_0"), qint64(0x20));
+    QCOMPARE(offsetOf("output_value_inv_0"), qint64(0x24));
+    QCOMPARE(offsetOf("output_enable_inv_0"), qint64(0x28));
+    QCOMPARE(offsetOf("rx_inv_s0_0"), qint64(0x2c));
+    QCOMPARE(offsetOf("rx_inv_s1_0"), qint64(0x30));
+    QCOMPARE(offsetOf("rx_value_s1_0"), qint64(0x38));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir    dir(directory.path());
+    const QString outputPath = dir.filePath("iomux0.out");
+    writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("tb.v"), invertOverrideTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler,
+        {"-g2001", "-s", "tb", "-o", outputPath, "iomux0_regs.v", "iomux0_conn.v", "iomux0.v", "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::wovenKeeperCarriesItsStrength()
+{
+    QString       padCell = padCellBlock();
+    const QString single  = "          up: [\"1\", \"1\"]\n";
+    QVERIFY(padCell.contains(single));
+    padCell.replace(single, "          up: {weak: [\"1\", \"1\"], strong: [\"1\", \"1\"]}\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: {mode: up, strength: strong}
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: {mode: keeper, strength: strong}
+)")
+                               .arg(padCell, padIntegrationBlock())),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    QCOMPARE(encoding.modeWidth, 3U);
+    QCOMPARE(encoding.upSelWidth, 1U);
+    QCOMPARE(encoding.downSelWidth, 0U);
+    /* Only up is graded, so only up_sel exists, at bit 8. */
+    const QSocMmioFieldPlan *upSel = findField(plan.mmio, "pin_pad_ctrl_0", "up_sel");
+    QVERIFY(upSel != nullptr);
+    QCOMPARE(upSel->lsb, 8U);
+    QVERIFY(findField(plan.mmio, "pin_pad_ctrl_0", "down_sel") == nullptr);
+    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    QVERIFY(pad.contains(
+        "wire PE_1_w = (pad_mode_eff_1 == 3'd1 && pad_up_sel_i[1:1] == 1'd0) ? 1'b1 : "
+        "(pad_mode_eff_1 == 3'd1 && pad_up_sel_i[1:1] == 1'd1) ? 1'b1 : "
+        "(pad_mode_eff_1 == 3'd2) ? 1'b1 : (pad_mode_eff_1 == 3'd5) ? 1'b1 : 1'b0;"));
+    /* The keeper route carries strong into the up select; the down side has
+     * a single row and no select. */
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains(
+        "assign pad_pull_mode_o[5:3] = pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(pin_1_select_i == 1'd1) ? 3'd3 : 3'd0;"));
+    QVERIFY(top.contains(
+        "assign pad_up_sel_o[1:1] = pin_1_pull_src_i ? pin_1_up_sel_i : "
+        "(pin_1_select_i == 1'd1) ? 1'd1 : 1'd0;"));
+    QVERIFY(top.contains(
+        "assign pad_up_sel_o[0:0] = pin_0_pull_src_i ? pin_0_up_sel_i : "
+        "(pin_0_select_i == 1'd0) ? 1'd1 : 1'd0;"));
+    const QString report = QSocIomuxGenerator::generateReport(plan);
+    QVERIFY(report.contains("pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold"));
+    QVERIFY(report.contains("up strengths: 0 weak, 1 strong"));
+    QVERIFY(!report.contains("down strengths"));
+}
+
+void Test::padTablesAreBoundedToEightBitCodes()
+{
+    QString rows;
+    for (int index = 0; index < 257; ++index) {
+        rows += QString("            r%1: [\"1\", \"1\"]\n").arg(index);
+    }
+    QString       padCell = padCellBlock();
+    const QString single  = "          up: [\"1\", \"1\"]\n";
+    QVERIFY(padCell.contains(single));
+    padCell.replace(single, "          up:\n" + rows);
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(padCell), &plan, &errors));
+    QVERIFY2(
+        errors.contains(
+            "IOMUX_RANGE generator.pad_cell.pull.table: at most 256 strength rows per "
+            "direction and 251 named modes"),
+        qPrintable(errors.join('\n')));
+}
+
+void Test::unreachableModeLandsOnNone()
+{
+    /* Only a register can present a mode with no row. The none row of this
+     * cell drives the enable high, which is what such a mode must produce. */
+    QString       padCell = padCellBlock();
+    const QString none    = "          none: [\"0\", \"x\"]\n";
+    QVERIFY(padCell.contains(none));
+    padCell.replace(none, "          none: [\"1\", \"x\"]\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadCellDefinition(padCell), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    QVERIFY(pad.contains(
+        "wire PE_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) "
+        "? 1'b1 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b1;"));
+    QVERIFY(pad.contains(
+        "wire PS_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) "
+        "? 1'b0 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;"));
+}
+
+void Test::nativeKeeperRowIsSelectedNotWoven()
+{
+    /* A cell with its own keeper pin state: mode 3 selects that row and no
+     * loop is woven, so oscillator is not reachable either. */
+    QString       padCell = padCellBlock();
+    const QString down    = "          down: [\"1\", \"0\"]\n";
+    QVERIFY(padCell.contains(down));
+    padCell.replace(down, down + "          keeper: [\"0\", \"1\"]\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    const QString source = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: gpio0
+        signal: in0
+        input_value: {link: gpio0_in0}
+        input_enable: 1
+        pull: keeper
+)")
+                               .arg(padCell, padIntegrationBlock());
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    QVERIFY(!encoding.weaves);
+    QVERIFY(encoding.supports(QSocPadEncoding::Keeper));
+    QVERIFY(!encoding.supports(QSocPadEncoding::Oscillator));
+    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    QVERIFY(!pad.contains("pad_mode_eff_"));
+    QVERIFY(pad.contains(
+        "wire PS_0_w = (pad_pull_mode_i[2:0] == 3'd1) ? 1'b1 : "
+        "(pad_pull_mode_i[2:0] == 3'd2) ? 1'b0 : (pad_pull_mode_i[2:0] == 3'd3) "
+        "? 1'b1 : (pad_pull_mode_i[2:0] == 3'd5) ? 1'b1 : 1'b0;"));
+    QVERIFY(
+        QSocIomuxGenerator::generateTopVerilog(plan).contains(
+            "assign pad_pull_mode_o[2:0] = (pin_0_select_i == 1'd0) ? 3'd3 : 3'd0;"));
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "pull modes: 0 none, 1 up, 2 down, 3 keeper, 5 bus_hold"));
+
+    QString oscillator = source;
+    oscillator.replace("        pull: keeper\n", "        pull: oscillator\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(oscillator), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.pull.mode: pad cell gpio_pad_ps "
+                    "names its own keeper or oscillator row, so oscillator is not woven"});
+
+    QString graded = source;
+    graded.replace("        pull: keeper\n", "        pull: {mode: keeper, strength: x}\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(graded), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.pull.strength: pull mode keeper "
+                    "of gpio_pad_ps has a single row, drop strength"});
 }
 
 } // namespace
