@@ -5,11 +5,11 @@ multiplexer: an AXI4-Lite selector slave, a per-pin mux core, a connection
 fabric, and one public wrapper. Its source stays in the module's `.soc_mod`
 entry.
 
-The first version covers four roles only: `input_value`, `input_enable`,
-`output_value`, and `output_enable`. Pull control, bus keepers, oscillators,
-register overrides, runtime inversion, and interrupts are not generated. A
-design that needs those capabilities cannot replace its existing pin
-multiplexer with this generator.
+Every design gets the four roles `input_value`, `input_enable`,
+`output_value`, and `output_enable`. Software control of a pin, pin
+interrupts, and pad pull and drive control are options that a source turns on
+one by one. Register overrides of the receive path and runtime inversion are
+not generated.
 
 == Source Format
 <iomux-source-format>
@@ -93,6 +93,81 @@ drive its pads before firmware runs takes that guarantee from the pad cell
 power-on state or from isolation outside this module; the generator emits
 neither.
 
+== Pad Cell
+<iomux-pad-cell>
+`generator.pad_cell` names the pad cell the design uses and the generator
+instantiates it, one per pin, in `<module>_pad.v`. The public wrapper then
+exposes a single `pad_io` vector in place of the four pad vectors, and
+`integration.pad` names only `io`, the net that vector uplinks to.
+
+```yaml
+pad_cell:
+  cell: gpio_pad_ps
+  port:
+    pad: PAD
+    input_value: C
+    input_enable: IE
+    output_value: I
+    output_enable: OE
+  pull:
+    port: [PE, PS]
+    table:
+      none: ["0", "x"]
+      up: ["1", "1"]
+      down: ["1", "0"]
+  drive:
+    port: [DS]
+    table:
+      low: ["0"]
+      high: ["1"]
+  constraint:
+    - name: pull_select_needs_enable
+      expr: "!PS || PE"
+```
+
+Every port named here must exist on the cell in the module library with a
+matching direction, or generation stops before it writes a file. A role that
+is absent from `port` is a role the cell lacks, and a route that asks for it
+is an error. The same holds for a missing `pull` or `drive` section.
+
+`pull.table` maps mode names to the values the pull ports take, one entry per
+port, transcribed from the databook. `none` is required and encodes as the
+all-zero selector. `up`, `down`, and `keeper` carry meaning to the generator.
+Any other name is a mode the cell documents, which a route asks for by that
+name. A mode holds either one row or a map of strength labels to rows, so a
+cell with two pull-up strengths and one pull-down strength is expressed as
+`up: {"47k": [...], "100k": [...]}` and `down: [...]`. A route writes
+`pull: up` for a single row and `pull: {mode: up, strength: "47k"}` for a
+labelled one. `drive.table` has the same shape without the mode level.
+
+A route may ask for `keeper` or `oscillator` when the cell has no row of that
+name. The generator then weaves the mode from the first `up` and first `down`
+rows: the keeper follows the pad and the oscillator opposes it, and both read
+the pad itself rather than the receiver, so the loop closes inside the pad
+module. `pull.kind: driver` marks a cell whose pulls are its output driver
+rather than resistors, and no mode is woven from those. A woven mode is a
+combinational loop through the pad. A zero-delay simulation of a floating pad
+under a woven keeper does not settle, so a testbench drives the pad across a
+mode change or gives it a delay.
+
+A cell that gates its receiver on `input_enable` reads zero on any pin whose
+sinks listen while no slot raises that enable. Generation refuses such a pin
+unless `option.gpio` is on, because the register path can then raise it.
+
+`constraint` lists properties over the cell ports, one per pin. `expr` is
+combinational and `property` is sampled on the formal global clock, where
+`$past`, `$rose`, and `$stable` are available. The body is not parsed:
+identifiers that name cell ports are rewritten to the nets of each pin, and
+any other identifier must be a SystemVerilog keyword or a system function.
+The open engine has no SVA sequences, so write an implication as a boolean.
+The generator settles `kind` when it is absent. A body over pull and drive
+ports alone is a claim about logic this generator emits, so it is an
+`assert`. A body that reaches a role port speaks about what routes and
+registers will do, so it is an `assume`. The constraints live in `_pad.v`
+under `ifdef FORMAL`, and `--with-formal` emits `<module>_pad_formal.sby`
+that proves them against a stub of the cell built from the library port
+table. A false claim fails by name.
+
 == Register Layout
 <iomux-register-layout>
 Offset 0 is a read-only `capability` register: bits `[15:0]` hold
@@ -119,9 +194,12 @@ enable, and 3 for the slot output enable. `output_enable_src` takes 0 for
 the selected slot, 1 for the register, 2 for the slot output value, and 3
 to stop driving. A cross tap reads the slot output and never the source mux
 output, so no combination of the two fields closes a loop. Setting
-`output_enable_src` to 2 gives open drain that software can switch off
-again, while a route that declares `output_value: 0` with an inverted
-`output_enable` link gives the same shape fixed at generation time.
+`output_enable_src` to 2 ties the drive enable to the slot output value, so
+the pad drives a one and releases a zero. That is open source, not open
+drain. Open drain needs the enable to follow the inverted value, which no
+source encoding reaches because there is no runtime inversion. A route that
+declares `output_value: 0` with an inverted `output_enable` link gives open
+drain, fixed at generation time.
 
 Every source field resets to 0, so a design that enables `gpio` and writes
 nothing behaves exactly as if the option were absent. `input_value` reads
