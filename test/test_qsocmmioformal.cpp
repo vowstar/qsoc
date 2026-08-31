@@ -194,10 +194,46 @@ generator:
 )");
 }
 
+QSocModuleDefinition makeW1c32Definition()
+{
+    return makeDefinition(QStringLiteral("event_ctrl"), R"(
+generator:
+  kind: mmio
+  bus: axi4_lite
+  data_width: 32
+  address_width: 8
+  register:
+    events:
+      offset: 0x00
+      field:
+        enable:
+          lsb: 0
+          access: rw
+          reset: 0
+          output: enable_o
+        done:
+          lsb: 8
+          access: w1c
+          reset: 0
+          input: done_i
+          output: done_pend_o
+    scratch:
+      offset: 0x04
+      field:
+        data:
+          lsb: 0
+          width: 8
+          access: rw
+          reset: 0x3c
+          output: scratch_o
+)");
+}
+
 enum FormalFixture {
     Mixed32Fixture,
     Boundary64Fixture,
     Known32Fixture,
+    W1c32Fixture,
 };
 
 QSocModuleDefinition makeFormalFixture(int fixture)
@@ -209,6 +245,8 @@ QSocModuleDefinition makeFormalFixture(int fixture)
         return makeFormal64Definition();
     case Known32Fixture:
         return makeKnownAnswer32Definition();
+    case W1c32Fixture:
+        return makeW1c32Definition();
     }
     return {};
 }
@@ -271,10 +309,13 @@ private slots:
     void collateralNamesWidthsAndSidebands_data();
     void collateralNamesWidthsAndSidebands();
     void knownAnswerUsesIndependentConstants();
+    void w1cModelSetsAfterTheWrite();
     void generatedCollateralPassesSby_data();
     void generatedCollateralPassesSby();
     void generatedMutantsFailBmc_data();
     void generatedMutantsFailBmc();
+    void w1cMutantsFailBmc_data();
+    void w1cMutantsFailBmc();
 };
 
 void Test::failureClearsCollateral()
@@ -419,6 +460,41 @@ void Test::knownAnswerUsesIndependentConstants()
     }
 }
 
+void Test::w1cModelSetsAfterTheWrite()
+{
+    QSocMmioFormalCollateral collateral;
+    QStringList              errors;
+    QVERIFY(
+        QSocMmioGenerator::generateFormalCollateral(makeW1c32Definition(), &collateral, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+    QVERIFY(!collateral.systemVerilog.isEmpty());
+    QVERIFY(!collateral.sby.isEmpty());
+
+    const QString &sv = collateral.systemVerilog;
+    QVERIFY(sv.contains(QStringLiteral("(* anyseq *) reg done_i;")));
+    QVERIFY(
+        sv.contains(QStringLiteral("                formal_read_register[8] = formal_field_1_q;")));
+    const QString clear = QStringLiteral(
+        "                    if (formal_write_strobe[1])\n"
+        "                        formal_field_1_q <= formal_field_1_q & "
+        "~formal_write_data[8];");
+    const QString set = QStringLiteral(
+        "        if (done_i)\n"
+        "            formal_field_1_q <= 1'b1;");
+    /* A one-bit field is a scalar reg; a bit select on it is not portable. */
+    QVERIFY(!sv.contains(QStringLiteral("_q[0] <=")));
+    const qsizetype clearIndex = sv.indexOf(clear);
+    const qsizetype setIndex   = sv.indexOf(set);
+    QVERIFY(clearIndex >= 0);
+    QVERIFY(setIndex > clearIndex);
+    QCOMPARE(sv.count(set), qsizetype(1));
+    QVERIFY(sv.contains(QStringLiteral("        assert(done_pend_o == formal_field_1_q);")));
+    QVERIFY(sv.contains(QStringLiteral("        assert(formal_field_1_q == 1'h0);")));
+    QVERIFY(sv.contains(QStringLiteral(
+        "        cover(formal_write_fire && formal_write_address == 8'h00 && "
+        "formal_write_strobe[1] && formal_write_data[8] && done_i);")));
+}
+
 void Test::generatedCollateralPassesSby_data()
 {
     QTest::addColumn<int>("fixture");
@@ -427,6 +503,7 @@ void Test::generatedCollateralPassesSby_data()
     QTest::newRow("32-bit-mixed-fields") << int(Mixed32Fixture) << QStringLiteral("timer_ctrl");
     QTest::newRow("64-bit-boundary-lanes") << int(Boundary64Fixture) << QStringLiteral("wide_ctrl");
     QTest::newRow("32-bit-known-answer") << int(Known32Fixture) << QStringLiteral("known_ctrl");
+    QTest::newRow("32-bit-w1c") << int(W1c32Fixture) << QStringLiteral("event_ctrl");
 }
 
 void Test::generatedCollateralPassesSby()
@@ -523,6 +600,69 @@ void Test::generatedMutantsFailBmc()
         directory.path(),
         sby,
         {QStringLiteral("-f"), QStringLiteral("known_ctrl_formal.sby"), QStringLiteral("bmc")});
+    QVERIFY2(result.started, result.output.constData());
+    QVERIFY2(result.finished, result.output.constData());
+    QCOMPARE(result.exitStatus, QProcess::NormalExit);
+    QCOMPARE(result.exitCode, 2);
+    QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+    QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+}
+
+void Test::w1cMutantsFailBmc_data()
+{
+    QTest::addColumn<QString>("needle");
+    QTest::addColumn<QString>("replacement");
+
+    /* The clear beats the set only on the cycle that clears this very bit, so
+     * the counterexample has to reach that collision. */
+    QTest::newRow("clear-wins")
+        << QStringLiteral("        if (done_i)\n")
+        << QStringLiteral(
+               "        if (done_i && !(write_fire && write_address == 8'h00 && "
+               "write_data[8] && write_mask[8]))\n");
+    QTest::newRow("never-set") << QStringLiteral("        if (done_i)\n")
+                               << QStringLiteral("        if (1'b0)\n");
+    QTest::newRow("write-sets") << QStringLiteral("& ~(write_data[8] & write_mask[8]);")
+                                << QStringLiteral("| (write_data[8] & write_mask[8]);");
+}
+
+void Test::w1cMutantsFailBmc()
+{
+    QFETCH(QString, needle);
+    QFETCH(QString, replacement);
+
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+
+    QString                    verilog;
+    QSocMmioFormalCollateral   collateral;
+    QStringList                errors;
+    const QSocModuleDefinition definition = makeW1c32Definition();
+    QVERIFY(QSocMmioGenerator::generateVerilog(definition, &verilog, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+    QVERIFY(QSocMmioGenerator::generateFormalCollateral(definition, &collateral, &errors));
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+
+    QCOMPARE(verilog.count(needle), qsizetype(1));
+    verilog.replace(needle, replacement);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTextFile(QDir(directory.path()).filePath(QStringLiteral("event_ctrl.v")), verilog);
+    writeTextFile(
+        QDir(directory.path()).filePath(QStringLiteral("event_ctrl_formal.sv")),
+        collateral.systemVerilog);
+    writeTextFile(
+        QDir(directory.path()).filePath(QStringLiteral("event_ctrl_formal.sby")), collateral.sby);
+
+    const CommandResult result = runCommand(
+        directory.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("event_ctrl_formal.sby"), QStringLiteral("bmc")});
     QVERIFY2(result.started, result.output.constData());
     QVERIFY2(result.finished, result.output.constData());
     QCOMPARE(result.exitStatus, QProcess::NormalExit);

@@ -171,7 +171,7 @@ FormalNames allocateNames(const QSocMmioPlan &plan)
     int fieldIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access == QSocMmioAccess::ReadWrite) {
+            if (qsocMmioHasStorage(field.access)) {
                 names.fields.append(
                     identifiers.take(QString("formal_field_%1_q").arg(fieldIndex++)));
             }
@@ -273,7 +273,7 @@ void appendModelStorage(QStringList *lines, const QSocMmioPlan &plan, const Form
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access == QSocMmioAccess::ReadWrite) {
+            if (qsocMmioHasStorage(field.access)) {
                 lines->append(QString("reg%1 %2;")
                                   .arg(packedRange(field.width), names.fields.at(storageIndex++)));
             }
@@ -312,7 +312,7 @@ void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan, const F
 
 QString readSource(const QSocMmioFieldPlan &field, const FormalNames &names, int storageIndex)
 {
-    if (field.access == QSocMmioAccess::ReadWrite) {
+    if (qsocMmioHasStorage(field.access)) {
         return names.fields.at(storageIndex);
     }
     if (!field.inputPort.isEmpty()) {
@@ -333,7 +333,7 @@ void appendReadFunction(QStringList *lines, const QSocMmioPlan &plan, const Form
         lines->append(QString("            %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         for (const QSocMmioFieldPlan &field : reg.fields) {
             const QString source = readSource(field, names, storageIndex);
-            if (field.access == QSocMmioAccess::ReadWrite) {
+            if (qsocMmioHasStorage(field.access)) {
                 ++storageIndex;
             }
             lines->append(QString("                %1%2 = %3;")
@@ -388,7 +388,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         const bool hasWriteField
             = std::any_of(reg.fields.cbegin(), reg.fields.cend(), [](const QSocMmioFieldPlan &field) {
-                  return field.access == QSocMmioAccess::ReadWrite;
+                  return qsocMmioHasStorage(field.access);
               });
         if (!hasWriteField) {
             continue;
@@ -396,7 +396,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
         lines->append(
             QString("                %1: begin").arg(addressLiteral(plan, reg.byteOffset)));
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access != QSocMmioAccess::ReadWrite) {
+            if (!qsocMmioHasStorage(field.access)) {
                 continue;
             }
             const QString &storage = names.fields.at(storageIndex++);
@@ -412,6 +412,15 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
                 }
                 lines->append(
                     QString("                    if (%1[%2])").arg(names.writeStrobe).arg(lane));
+                if (field.access == QSocMmioAccess::WriteOneClear) {
+                    lines->append(QString("                        %1%2 <= %1%2 & ~%3%4;")
+                                      .arg(
+                                          storage,
+                                          storageSlice(field, high, low),
+                                          names.writeData,
+                                          bitRange(high, low)));
+                    continue;
+                }
                 lines->append(QString("                        %1%2 <= %3%4;")
                                   .arg(
                                       storage,
@@ -424,6 +433,30 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
     }
     lines->append("                default: begin end");
     lines->append("            endcase");
+}
+
+/**
+ * @brief Set every write-one-clear field from its source, after the bus write.
+ *
+ * Same order as the design, so the model and the design agree that a set on
+ * the cycle of the clearing write keeps the bit.
+ */
+void appendHardwareSet(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
+{
+    int storageIndex = 0;
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (!qsocMmioHasStorage(field.access)) {
+                continue;
+            }
+            const QString &storage = names.fields.at(storageIndex++);
+            if (field.access != QSocMmioAccess::WriteOneClear) {
+                continue;
+            }
+            lines->append(QString("        if (%1)").arg(field.inputPort));
+            lines->append(QString("            %1 <= 1'b1;").arg(storage));
+        }
+    }
 }
 
 void appendWriteModel(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
@@ -440,7 +473,7 @@ void appendWriteModel(QStringList *lines, const QSocMmioPlan &plan, const Formal
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access != QSocMmioAccess::ReadWrite) {
+            if (!qsocMmioHasStorage(field.access)) {
                 continue;
             }
             lines->append(QString("        %1 <= %2;")
@@ -474,6 +507,7 @@ void appendWriteModel(QStringList *lines, const QSocMmioPlan &plan, const Formal
                           names.responseSlverr));
     appendWriteCase(lines, plan, names);
     lines->append("        end");
+    appendHardwareSet(lines, plan, names);
     lines->append("    end");
     lines->append("end");
     lines->append(QString());
@@ -547,7 +581,7 @@ void appendOutputAssertions(QStringList *lines, const QSocMmioPlan &plan, const 
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access != QSocMmioAccess::ReadWrite) {
+            if (!qsocMmioHasStorage(field.access)) {
                 continue;
             }
             if (!field.outputPort.isEmpty()) {
@@ -583,6 +617,22 @@ void appendCovers(QStringList *lines, const QSocMmioPlan &plan, const FormalName
             QString("        cover(%1 && %2(%3) && %4[%5]);")
                 .arg(names.writeFire, names.mappedFunction, names.writeAddress, names.writeStrobe)
                 .arg(lane));
+    }
+    /* The clearing write and the set source on one cycle, per w1c field. */
+    for (const QSocMmioRegisterPlan &reg : plan.registers) {
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            if (field.access != QSocMmioAccess::WriteOneClear) {
+                continue;
+            }
+            lines->append(QString("        cover(%1 && %2 == %3 && %4[%5] && %6[%7] && %8);")
+                              .arg(names.writeFire, names.writeAddress)
+                              .arg(addressLiteral(plan, reg.byteOffset))
+                              .arg(names.writeStrobe)
+                              .arg(field.lsb / 8)
+                              .arg(names.writeData)
+                              .arg(field.lsb)
+                              .arg(field.inputPort));
+        }
     }
 }
 
@@ -624,7 +674,7 @@ void appendResetAssertions(QStringList *lines, const QSocMmioPlan &plan, const F
     int storageIndex = 0;
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access != QSocMmioAccess::ReadWrite) {
+            if (!qsocMmioHasStorage(field.access)) {
                 continue;
             }
             const QString resetValue = verilogLiteral(field.width, *field.resetValue);
@@ -733,16 +783,5 @@ QString buildSby(const QSocMmioPlan &plan)
 
 QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
-    /* The reference model here mirrors read-write storage only. A write-one-clear
-     * field would keep its storage slot but not its behaviour, so the proof would
-     * compare the design against a model of a different register. Emit nothing
-     * rather than a proof that means something else. */
-    for (const QSocMmioRegisterPlan &reg : plan.registers) {
-        for (const QSocMmioFieldPlan &field : reg.fields) {
-            if (field.access == QSocMmioAccess::WriteOneClear) {
-                return {};
-            }
-        }
-    }
     return {buildSystemVerilog(plan), buildSby(plan)};
 }

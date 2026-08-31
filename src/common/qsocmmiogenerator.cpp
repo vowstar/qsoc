@@ -225,7 +225,11 @@ bool parseAccess(
         field->access = QSocMmioAccess::ReadOnly;
         return true;
     }
-    appendError(errors, "ACCESS", path + ".access", "must be rw or ro");
+    if (access == "w1c") {
+        field->access = QSocMmioAccess::WriteOneClear;
+        return true;
+    }
+    appendError(errors, "ACCESS", path + ".access", "must be rw, ro, or w1c");
     return false;
 }
 

@@ -91,10 +91,16 @@ module, input, and output names must be Verilog identifiers. Optional scalar
     [`reset`, `output`, `value`],
     [`ro` constant], [`lsb`, `value`], [`width`, `description`],
     [`reset`, `input`, `output`],
+    [`w1c`], [`lsb`, `reset`, `input`], [`output`, `description`],
+    [`width` other than 1, `value`],
   )],
   caption: [MMIO FIELD FORMS],
   kind: table,
 )
+
+A `w1c` field is one bit that hardware sets through `input` and software
+clears by writing one. A zero leaves it. A set that lands on the cycle of the
+clearing write wins, so an event cannot vanish into its own acknowledgement.
 
 Fields may not overlap or cross bit `data_width - 1`. `reset` and `value` must
 fit their field width. Sideband signals must be unique and may not collide
@@ -155,6 +161,9 @@ The generated job also has a `bmc` task for bounded counterexamples; omit the
 task name to run `prove`, `bmc`, and `cover`. The harness follows the selected
 address width, data width, register layout, resets, sidebands, byte strobes,
 responses, and backpressure. It covers the generated AXI4-Lite slave only.
+A `w1c` set source is a free input of the harness, so the proof includes a
+set on the cycle of the clearing write, and a cover marks that cycle as
+reachable.
 The harness holds reset active for two clock steps, guarantees one active
 cycle, and then allows reset to reassert during traffic. It checks bus
 quiescence and register state during reset, and covers reset aborts with a
@@ -186,8 +195,11 @@ Generation does not compile or run the testbench. The directed sequence runs
 twice with a reset between runs. It checks reset reads, RW and RO fields,
 constants, reserved bits, byte strobes, all write-address and write-data
 orders, response causality and backpressure, error responses, and that illegal
-writes have no side effects. Each channel has a 64-cycle timeout, followed by a
-three-cycle final drain. It follows the generated widths and sideband bindings.
+writes have no side effects. For each `w1c` field it pulses the set source
+while the bus is idle, reads the bit as one, writes a zero to that bit and
+reads it still set, then writes a one to it and reads it clear. Each channel has a 64-cycle
+timeout, followed by a three-cycle final drain. It follows the generated
+widths and sideband bindings.
 This is a module-specific MMIO testbench, not reusable AXI verification IP. A
 UVM error or fatal report makes the simulation process fail.
 
