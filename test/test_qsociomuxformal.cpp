@@ -183,6 +183,8 @@ private slots:
     void emptyPlanProducesNoCollateral();
     void generatedCollateralPassesSbyWhenAvailable();
     void tailPinSelectorDisconnectFailsBmcWhenAvailable();
+    void padConstraintsPassSbyWhenAvailable();
+    void padConstraintFalseClaimFailsSbyWhenAvailable();
 };
 
 void Test::assertionCountCoversEverySlotOfEveryPin_data()
@@ -362,3 +364,147 @@ void Test::tailPinSelectorDisconnectFailsBmcWhenAvailable()
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsociomuxformal.moc"
+
+namespace {
+
+QSocModuleDefinition makePadCellDefinition(const QString &claim)
+{
+    return makeDefinition(QString(R"yaml(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+      constraint:
+        - name: pull_select_needs_enable
+          expr: "%1"
+        - name: ie_oe_exclusive
+          expr: "!(IE && OE)"
+        - name: pull_holds_across_oe_rise
+          property: "!$rose(OE) || $stable(PE)"
+    integration:
+      instance: u_iomux0
+      clock: clk_iomux
+      reset: rst_iomux_n
+      control: iomux_control
+      pad:
+        io: chip_gpio
+    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+        pull: keeper
+)yaml")
+                              .arg(claim));
+}
+
+QSocIomuxPlan padPlan(const QString &claim)
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    if (!QSocIomuxGenerator::buildPlan(makePadCellDefinition(claim), &plan, &errors)) {
+        qWarning() << errors;
+        return {};
+    }
+    plan.integration.padCell.cellPorts
+        = {{"PAD", "inout"},
+           {"C", "out"},
+           {"IE", "in"},
+           {"I", "in"},
+           {"OE", "in"},
+           {"PE", "in"},
+           {"PS", "in"},
+           {"DS", "in"}};
+    return plan;
+}
+
+QStringList padSbyTasks(const QTemporaryDir &directory, const QSocIomuxPlan &plan)
+{
+    const QDir dir(directory.path());
+    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    const QSocIomuxFormalCollateral collateral = QSocIomuxFormal::generatePad(plan);
+    writeTextFile(dir.filePath("iomux0_pad_formal.sv"), collateral.systemVerilog);
+    writeTextFile(dir.filePath("iomux0_pad_formal.sby"), collateral.sby);
+    return {QStringLiteral("prove"), QStringLiteral("bmc")};
+}
+
+} // namespace
+
+void Test::padConstraintsPassSbyWhenAvailable()
+{
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    const QSocIomuxPlan plan = padPlan(QStringLiteral("!PS || PE"));
+    QVERIFY(plan.integration.padCell.declared());
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    for (const QString &task : padSbyTasks(directory, plan)) {
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_pad_formal.sby"), task});
+        QVERIFY2(result.started, result.output.constData());
+        QVERIFY2(result.finished, result.output.constData());
+        QCOMPARE(result.exitStatus, QProcess::NormalExit);
+        QVERIFY2(result.exitCode == 0, result.output.constData());
+    }
+}
+
+void Test::padConstraintFalseClaimFailsSbyWhenAvailable()
+{
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    /* The down row has PE high with PS low, so this claim is false and the
+     * proof must say so by name. */
+    const QSocIomuxPlan plan = padPlan(QStringLiteral("!PE || PS"));
+    QVERIFY(plan.integration.padCell.declared());
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    padSbyTasks(directory, plan);
+    const CommandResult result = runCommand(
+        directory.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_pad_formal.sby"), QStringLiteral("bmc")});
+    QVERIFY2(result.started, result.output.constData());
+    QVERIFY2(result.finished, result.output.constData());
+    QVERIFY2(result.exitCode != 0, result.output.constData());
+    QVERIFY2(
+        result.output.contains("Assert failed")
+            && result.output.contains("pull_select_needs_enable"),
+        result.output.constData());
+}

@@ -239,6 +239,40 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             return showError(1, messages.join('\n'));
         }
 
+        if (plan.integration.padCell.declared()) {
+            const QString cellName = plan.integration.padCell.cell;
+            if (!moduleManager->load(QRegularExpression(".*"))
+                || !moduleManager->isModuleExist(cellName)) {
+                return showError(
+                    1,
+                    QCoreApplication::translate(
+                        "main", "Error: pad cell %1 is not in any module library.")
+                        .arg(cellName));
+            }
+            QMap<QString, QString> cellPorts;
+            const YAML::Node       cellPortNode = moduleManager->getModuleYaml(cellName)["port"];
+            if (cellPortNode && cellPortNode.IsMap()) {
+                for (const auto &entry : cellPortNode) {
+                    const QString name = QString::fromStdString(entry.first.Scalar());
+                    QString       direction;
+                    if (entry.second["direction"]) {
+                        direction = QString::fromStdString(entry.second["direction"].Scalar());
+                    }
+                    cellPorts.insert(name, direction);
+                }
+            }
+            plan.integration.padCell.cellPorts = cellPorts;
+            QStringList padErrors;
+            if (!QSocIomuxGenerator::checkPadCellPorts(plan, cellPorts, &padErrors)) {
+                QStringList messages;
+                messages.reserve(padErrors.size());
+                for (const QString &error : padErrors) {
+                    messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+                }
+                return showError(1, messages.join('\n'));
+            }
+        }
+
         const QStringList libraryModules = moduleManager->listModulesInLibrary(libraryName);
         for (const QString &suffix :
              {QStringLiteral("_regs"), QStringLiteral("_conn"), QStringLiteral("_core")}) {
@@ -279,6 +313,11 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
                {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
                {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
+        if (plan.integration.padCell.declared()) {
+            artifacts.push_back(
+                {outputFilePath(moduleName + QStringLiteral("_pad.v")),
+                 QSocIomuxGenerator::generatePadVerilog(plan).toUtf8()});
+        }
         QString formalSystemVerilogPath;
         QString formalSbyPath;
         QString hsFormalSystemVerilogPath;
@@ -294,6 +333,15 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             hsFormalSbyPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sby"));
             artifacts.push_back({hsFormalSystemVerilogPath, hsCollateral.systemVerilog.toUtf8()});
             artifacts.push_back({hsFormalSbyPath, hsCollateral.sby.toUtf8()});
+            const QSocIomuxFormalCollateral padCollateral = QSocIomuxFormal::generatePad(plan);
+            if (!padCollateral.systemVerilog.isEmpty()) {
+                artifacts.push_back(
+                    {outputFilePath(moduleName + QStringLiteral("_pad_formal.sv")),
+                     padCollateral.systemVerilog.toUtf8()});
+                artifacts.push_back(
+                    {outputFilePath(moduleName + QStringLiteral("_pad_formal.sby")),
+                     padCollateral.sby.toUtf8()});
+            }
         }
         QString uvmInterfacePath;
         QString uvmPackagePath;
