@@ -7,9 +7,9 @@ entry.
 
 Every design gets the four roles `input_value`, `input_enable`,
 `output_value`, and `output_enable`. Software control of a pin, pin
-interrupts, and pad pull and drive control are options that a source turns on
-one by one. Register overrides of the receive path and runtime inversion are
-not generated.
+interrupts, register control of pad pull and drive, runtime inversion, and
+register overrides of the receive path are options that a source turns on one
+by one.
 
 == Source Format
 <iomux-source-format>
@@ -74,6 +74,12 @@ an optional `bit`, and an optional boolean `invert`, or for the three output
 roles the integer `0` or `1`. An omitted output role drives `0`; an omitted
 `input_value` declares no sink. HDL expressions, slices, and concatenations
 are rejected.
+
+An `output_value` endpoint may add `open_drain: true`. It then stands for
+both output roles: the value becomes the constant 0 and the enable follows
+the inverted link, so the pad drives low on a 0 and releases on a 1. Such a
+route declares no `output_enable`. The report and the generated files show
+the expanded form.
 
 == Behavior
 <iomux-behavior>
@@ -142,19 +148,23 @@ cell with two pull-up strengths and one pull-down strength is expressed as
 `pull: up` for a single row and `pull: {mode: up, strength: "47k"}` for a
 labelled one. `drive.table` has the same shape without the mode level.
 
-A route may ask for `keeper` or `oscillator` when the cell has no row of that
-name. The generator then weaves the mode from the first `up` and first `down`
-rows: the keeper follows the pad and the oscillator opposes it, and both read
-the pad itself rather than the receiver, so the loop closes inside the pad
-module. `pull.kind: driver` marks a cell whose pulls are its output driver
-rather than resistors, and no mode is woven from those. A woven mode is a
+Only `up` and `down` carry strength rows. Every other mode is one row. A
+route may ask for `keeper` or `oscillator` when the cell has no row of that
+name. The generator then weaves the mode from `up` and `down`: the keeper
+follows the pad and the oscillator opposes it, and both read the pad itself
+rather than the receiver, so the loop closes inside the pad module. A woven
+mode keeps its strength: `pull: {mode: keeper, strength: "47k"}` selects that
+row on each graded direction, and an absent strength selects the first row.
+`pull.kind: driver` marks a cell whose pulls are its output driver rather
+than resistors, and no mode is woven from those. A woven mode is a
 combinational loop through the pad. A zero-delay simulation of a floating pad
 under a woven keeper does not settle, so a testbench drives the pad across a
 mode change or gives it a delay.
 
 A cell that gates its receiver on `input_enable` reads zero on any pin whose
 sinks listen while no slot raises that enable. Generation refuses such a pin
-unless `option.gpio` is on, because the register path can then raise it.
+unless `option.gpio` or `option.invert` is on, because either register path
+can then raise it.
 
 `constraint` lists properties over the cell ports, one per pin. `expr` is
 combinational and `property` is sampled on the formal global clock, where
@@ -182,13 +192,39 @@ offsets depend only on `pin_count` and `data_width`, never on `hs_slots`.
 Generation fails when `2^address_width` cannot hold the aperture and reports
 the minimum usable width.
 
-`generator.option.gpio` appends the registers that let software drive and
-read a pin. Four banked vectors follow the selectors, each holding one bit
-per pin: read-only `input_value`, then `input_enable`, `output_value`, and
-`output_enable`. One `pin_src_ctrl` word per pin follows them, so one store
+Options append register blocks after the selectors in a fixed order: the
+four gpio banks, one `pin_src_ctrl` word per pin, one `pin_pad_ctrl` word
+per pin, the inversion banks, the receive override banks, and the interrupt
+banks. A block whose option is off is absent and the next block moves up, so
+the report is the authority for offsets. A bank holds one bit per pin,
+`data_width` pins per word, so one store flips the same bit on a whole word
+of pins. A per-pin word holds that pin's whole configuration, so one store
 reconfigures a pin without a read-modify-write and without touching its
-neighbours. That word holds `input_enable_src` at bit 0, `output_value_src`
-at bits `[3:2]`, and `output_enable_src` at bits `[5:4]`.
+neighbours.
+
+`pin_src_ctrl` exists when any option owns a field in it, and every field
+keeps a fixed position whatever else is on, so software reads the same word
+on every design. Absent fields read zero.
+
+#figure(
+  align(center)[#table(
+    columns: 3,
+    align: (left, left, left),
+    table.header([Bits], [Field], [Option]),
+    table.hline(),
+    [0], [`input_enable_src`], [`gpio`],
+    [3:2], [`output_value_src`], [`gpio`],
+    [5:4], [`output_enable_src`], [`gpio`],
+    [6], [`pull_src`], [`pad_control`, when the cell has a pull table],
+    [7], [`drive_src`], [`pad_control`, when the cell has a drive table],
+    [8 + k], [`rx_src_sk`], [`rx_override`, one bit per slot k],
+  )],
+  caption: [PIN_SRC_CTRL LAYOUT],
+)
+
+`generator.option.gpio` appends the registers that let software drive and
+read a pin: the banks `input_value` (read-only), `input_enable`,
+`output_value`, and `output_enable`, and the three source fields above.
 
 A source field selects where the pad signal comes from. `output_value_src`
 takes 0 for the selected slot, 1 for the register, 2 for the slot input
@@ -198,15 +234,59 @@ to stop driving. A cross tap reads the slot output and never the source mux
 output, so no combination of the two fields closes a loop. Setting
 `output_enable_src` to 2 ties the drive enable to the slot output value, so
 the pad drives a one and releases a zero. That is open source, not open
-drain. Open drain needs the enable to follow the inverted value, which no
-source encoding reaches because there is no runtime inversion. A route that
-declares `output_value: 0` with an inverted `output_enable` link gives open
-drain, fixed at generation time.
+drain. Open drain needs the enable to follow the inverted value: at
+generation time through `open_drain: true` on the route, at run time through
+`output_enable_src` at 2 together with the pin's `output_enable_inv` bit.
 
 Every source field resets to 0, so a design that enables `gpio` and writes
 nothing behaves exactly as if the option were absent. `input_value` reads
 the pad through two flip-flops in the bus clock domain, so a pad edge takes
 two bus cycles to become readable.
+
+`generator.option.pad_control` needs a `pad_cell` with a pull or a drive
+table. It appends one `pin_pad_ctrl` word per pin with the fields below,
+each present only when the cell has something for it to select and each as
+wide as its table needs.
+
+#figure(
+  align(center)[#table(
+    columns: 3,
+    align: (left, left, left),
+    table.header([Bits], [Field], [Meaning]),
+    table.hline(),
+    [from 0], [`pull_mode`], [0 none, 1 up, 2 down, 3 keeper, 4 oscillator, then the cell's other modes from 5 in name order],
+    [from 8], [`up_sel`], [strength row of `up`, table order, only when `up` has several rows],
+    [from 16], [`down_sel`], [strength row of `down`, likewise],
+    [from 24], [`drive`], [drive row, table order],
+  )],
+  caption: [PIN_PAD_CTRL LAYOUT],
+)
+
+The mode values are fixed, so software reads the same field on every design.
+A value the cell has no row for behaves as `none`, and a strength select past
+the table behaves as the first row. The register keeps what was written, so
+firmware can read its own mistake back. A mode says whether and which way
+the pin pulls, a select says how strongly, and the two never mix: the keeper
+and the oscillator switch the mode between `up` and `down` from the pad
+level and leave both selects alone, so they hold at whatever strength the
+selects name. The report prints the mode numbering and each graded
+direction's strengths. `pull_src` at 0 keeps the pull the selected slot's
+route asked for, and at 1 hands mode and selects to the word. `drive_src`
+does the same for the drive row. Both reset to 0, so the word is inert until
+software claims it. A register-driven keeper or oscillator is the same woven
+loop as a route request, with the same simulation caveat.
+
+`generator.option.invert` appends the banks `input_enable_inv`,
+`output_value_inv`, `output_enable_inv`, and one `rx_inv_sk` bank per slot
+k. Each bit inverts its signal after the source selector, so it inverts
+whichever source the pin currently uses. The cross taps read the uninverted
+slot bundle. `input_value` and the interrupt detectors read the pad and are
+not affected. Pull and drive codes are not bits and have no inversion.
+
+`generator.option.rx_override` appends one `rx_value_sk` bank per slot k.
+While `rx_src_sk` of a pin is set, the sink of slot k on that pin reads the
+register bit instead of the pad, which holds an unselected peripheral's input
+at a known level. Substitution happens before inversion.
 
 `generator.option.interrupt` appends four enable banks and four pending
 banks, one bit per pin in each, for the high level, the low level, the
@@ -271,9 +351,11 @@ read as `z` in simulation.
 <iomux-formal-collateral>
 `--with-formal` writes two jobs: the register slave proof
 (`<module>_regs_formal.sv`, `<module>_regs_formal.sby`) and a routing proof
-(`<module>_hs_formal.sv`, `<module>_hs_formal.sby`) that asserts the selected
-bundle per slot, the all-zero bundle for invalid codes, the pad input
-broadcast, and the inversion of each routed endpoint.
+(`<module>_hs_formal.sv`, `<module>_hs_formal.sby`). The routing proof leaves
+every option register free and asserts, per slot and for invalid codes, the
+pad bundle after source selection and inversion, the pull mode, strength
+selects, and drive row after their source bits, and every receive sink after substitution and
+inversion. A pad cell adds the constraint proof described above.
 
 == UVM Collateral
 <iomux-uvm-collateral>
