@@ -1577,6 +1577,91 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
     return valid;
 }
 
+QSocMmioFieldPlan constantField(const QString &name, quint32 lsb, quint32 width, quint64 value)
+{
+    QSocMmioFieldPlan field;
+    field.name          = name;
+    field.lsb           = lsb;
+    field.width         = width;
+    field.access        = QSocMmioAccess::ReadOnly;
+    field.constantValue = value;
+    return field;
+}
+
+/**
+ * @brief Registers the identity words occupy: two 64-bit beats or four 32-bit.
+ */
+qsizetype identityRegisterCount(quint32 dataWidth)
+{
+    return dataWidth == 64 ? 2 : 4;
+}
+
+/**
+ * @brief Append the identity words at byte offsets 0x0 to 0xc.
+ *
+ * The byte map is the same for both data widths: version at 0x0, type at
+ * 0x4, capability at 0x8, feature at 0xc. A 64-bit instance packs each pair
+ * into one beat. Software that knows the layout of one instance therefore
+ * finds the same bytes on every other.
+ */
+void composeIdentity(QSocIomuxPlan *plan)
+{
+    const QSocIomuxLayoutVersion layout = QSocIomuxGenerator::layoutVersion();
+    const bool                   wide   = plan->mmio.dataWidth == 64;
+
+    QSocMmioRegisterPlan version;
+    version.name       = QStringLiteral("version");
+    version.byteOffset = 0;
+    version.fields.append(constantField(QStringLiteral("major"), 24, 8, layout.major));
+    version.fields.append(constantField(QStringLiteral("minor"), 16, 8, layout.minor));
+    version.fields.append(constantField(QStringLiteral("patch"), 8, 8, layout.patch));
+
+    QSocMmioRegisterPlan type;
+    type.name       = QStringLiteral("type");
+    type.byteOffset = 4;
+    QSocMmioFieldPlan typeId
+        = constantField(QStringLiteral("type_id"), 0, 32, QSocIomuxGenerator::kTypeId);
+
+    QSocMmioRegisterPlan capability;
+    capability.name       = QStringLiteral("capability");
+    capability.byteOffset = 8;
+    capability.fields.append(constantField(QStringLiteral("pin_count"), 0, 16, plan->pinCount));
+    capability.fields.append(constantField(QStringLiteral("hs_slots"), 16, 8, plan->hsSlots));
+
+    QSocMmioRegisterPlan feature;
+    feature.name       = QStringLiteral("feature");
+    feature.byteOffset = 12;
+    const std::pair<const char *, bool> flags[]
+        = {{"gpio", plan->option.gpio},
+           {"interrupt", plan->option.interrupt},
+           {"pad_control", plan->option.padControl},
+           {"invert", plan->option.invert},
+           {"rx_override", plan->option.rxOverride}};
+    QList<QSocMmioFieldPlan> featureFields;
+    for (qsizetype index = 0; index < qsizetype(std::size(flags)); ++index) {
+        featureFields.append(
+            constantField(QString(flags[index].first), quint32(index), 1, flags[index].second));
+    }
+
+    if (wide) {
+        typeId.lsb = 32;
+        version.fields.append(typeId);
+        for (QSocMmioFieldPlan field : featureFields) {
+            field.lsb += 32;
+            capability.fields.append(field);
+        }
+        plan->mmio.registers.append(version);
+        plan->mmio.registers.append(capability);
+        return;
+    }
+    type.fields.append(typeId);
+    feature.fields = featureFields;
+    plan->mmio.registers.append(version);
+    plan->mmio.registers.append(type);
+    plan->mmio.registers.append(capability);
+    plan->mmio.registers.append(feature);
+}
+
 bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 {
     const quint32 dataWidth = plan->mmio.dataWidth;
@@ -1585,31 +1670,12 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     const quint32 words     = selectorWordCount(plan->pinCount, dataWidth);
     const quint32 width     = selectorWidth(plan->hsSlots);
 
-    QSocMmioRegisterPlan capability;
-    capability.name       = QStringLiteral("capability");
-    capability.byteOffset = 0;
-
-    QSocMmioFieldPlan pinCountField;
-    pinCountField.name          = QStringLiteral("pin_count");
-    pinCountField.lsb           = 0;
-    pinCountField.width         = 16;
-    pinCountField.access        = QSocMmioAccess::ReadOnly;
-    pinCountField.constantValue = plan->pinCount;
-    capability.fields.append(pinCountField);
-
-    QSocMmioFieldPlan hsSlotsField;
-    hsSlotsField.name          = QStringLiteral("hs_slots");
-    hsSlotsField.lsb           = 16;
-    hsSlotsField.width         = 8;
-    hsSlotsField.access        = QSocMmioAccess::ReadOnly;
-    hsSlotsField.constantValue = plan->hsSlots;
-    capability.fields.append(hsSlotsField);
-    plan->mmio.registers.append(capability);
+    composeIdentity(plan);
 
     for (quint32 word = 0; word < words; ++word) {
         QSocMmioRegisterPlan selector;
         selector.name       = QString("hs_select_%1").arg(word);
-        selector.byteOffset = quint64(1 + word) * byteCount;
+        selector.byteOffset = QSocIomuxGenerator::kIdentityBytes + quint64(word) * byteCount;
         const quint32 first = word * lanes;
         const quint32 last  = std::min(plan->pinCount, first + lanes);
         for (quint32 pin = first; pin < last; ++pin) {
@@ -2130,6 +2196,11 @@ const QSocPadTableRow &QSocPadEncoding::row(int mode, int upIndex, int downIndex
         }
         return noneRow;
     }
+}
+
+QSocIomuxLayoutVersion QSocIomuxGenerator::layoutVersion()
+{
+    return {};
 }
 
 QSocPadEncoding QSocIomuxGenerator::padEncoding(const QSocPadCellPlan &cell)
@@ -3178,7 +3249,8 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     if (plan.option.interrupt) {
         blocks.append({"interrupt", qsizetype(8) * bankWords});
     }
-    qsizetype expected = qsizetype(1) + selectorWordCount(plan.pinCount, dataWidth);
+    const qsizetype identityCount = identityRegisterCount(dataWidth);
+    qsizetype       expected      = identityCount + selectorWordCount(plan.pinCount, dataWidth);
     for (const Block &block : blocks) {
         expected += block.count;
     }
@@ -3189,17 +3261,33 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     const quint32 lanes     = pinsPerWord(dataWidth);
     const quint32 width     = selectorWidth(plan.hsSlots);
     const quint64 aperture  = registers.constLast().byteOffset + byteCount;
-    /* Fold the composed capability register so the report cannot publish a value
-     * the read function does not emit. */
-    quint64 capabilityValue = 0;
-    for (const QSocMmioFieldPlan &field : registers.constFirst().fields) {
-        if (!field.constantValue.has_value()) {
-            continue;
+    /* Fold the composed identity words so the report cannot publish a value
+     * the read function does not emit. Each word is the 32 bits at its byte
+     * offset, whatever the data width. */
+    const auto wordAt = [&](quint64 byteOffset) {
+        quint64 value = 0;
+        for (const QSocMmioRegisterPlan &reg : registers) {
+            if (byteOffset < reg.byteOffset || byteOffset >= reg.byteOffset + byteCount) {
+                continue;
+            }
+            const quint32 shift = quint32(byteOffset - reg.byteOffset) * 8;
+            for (const QSocMmioFieldPlan &field : reg.fields) {
+                const quint32 low  = std::max(field.lsb, shift);
+                const quint32 high = std::min(field.lsb + field.width, shift + 32);
+                if (!field.constantValue.has_value() || low >= high) {
+                    continue;
+                }
+                /* The read function emits a width-sized literal, which Verilog
+                 * truncates, and a field may straddle the word boundary. */
+                const quint64 mask = field.width >= 64 ? ~quint64(0)
+                                                       : ((quint64(1) << field.width) - 1);
+                const quint64 bits = (*field.constantValue & mask) >> (low - field.lsb);
+                value |= (bits & ((quint64(1) << (high - low)) - 1)) << (low - shift);
+            }
         }
-        /* The read function emits a width-sized literal, which Verilog truncates. */
-        const quint64 mask = field.width >= 64 ? ~quint64(0) : ((quint64(1) << field.width) - 1);
-        capabilityValue |= (*field.constantValue & mask) << field.lsb;
-    }
+        return value & 0xffffffffULL;
+    };
+    const QSocIomuxLayoutVersion layout = layoutVersion();
 
     QStringList lines;
     lines.append(QString("IOMUX route report for %1").arg(plan.moduleName));
@@ -3211,11 +3299,17 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                      .arg(width)
                      .arg(kSelectorLane));
     const qsizetype selectorWords = selectorWordCount(plan.pinCount, dataWidth);
-    lines.append(QString("selector registers: %1 at offset 0x%2 to 0x%3")
-                     .arg(selectorWords)
-                     .arg(QString::number(registers.at(1).byteOffset, 16))
-                     .arg(QString::number(registers.at(selectorWords).byteOffset, 16)));
-    qsizetype cursor = qsizetype(1) + selectorWords;
+    lines.append(QString("identity: version %1.%2.%3, type 0x%4 at offset 0x0 to 0xc")
+                     .arg(layout.major)
+                     .arg(layout.minor)
+                     .arg(layout.patch)
+                     .arg(wordAt(4), 8, 16, QLatin1Char('0')));
+    lines.append(
+        QString("selector registers: %1 at offset 0x%2 to 0x%3")
+            .arg(selectorWords)
+            .arg(QString::number(registers.at(identityCount).byteOffset, 16))
+            .arg(QString::number(registers.at(identityCount + selectorWords - 1).byteOffset, 16)));
+    qsizetype cursor = identityCount + selectorWords;
     for (const Block &block : blocks) {
         lines.append(
             QString("%1 registers: %2 at offset 0x%3 to 0x%4")
@@ -3232,8 +3326,8 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     }
     lines.append(QString("registers total: %1").arg(registers.size()));
     lines.append(QString("aperture: %1 bytes").arg(aperture));
-    lines.append(QString("capability: 0x%1 at offset 0x0")
-                     .arg(capabilityValue, int(dataWidth / 4), 16, QLatin1Char('0')));
+    lines.append(QString("capability: 0x%1 at offset 0x8").arg(wordAt(8), 8, 16, QLatin1Char('0')));
+    lines.append(QString("feature: 0x%1 at offset 0xc").arg(wordAt(12), 8, 16, QLatin1Char('0')));
     lines.append("reset: every selector resets to 0 and selects slot 0");
     lines.append("rx: pad input broadcasts to every declared sink regardless of the selector");
     if (plan.integration.padCell.declared()) {
@@ -3272,11 +3366,12 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
 
     qsizetype routeIndex = 0;
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
-        lines.append(QString("pin %1 selector word %2 lsb %3 offset 0x%4")
-                         .arg(pin)
-                         .arg(pin / lanes)
-                         .arg((pin % lanes) * kSelectorLane)
-                         .arg(QString::number(registers.at(1 + pin / lanes).byteOffset, 16)));
+        lines.append(
+            QString("pin %1 selector word %2 lsb %3 offset 0x%4")
+                .arg(pin)
+                .arg(pin / lanes)
+                .arg((pin % lanes) * kSelectorLane)
+                .arg(QString::number(registers.at(identityCount + pin / lanes).byteOffset, 16)));
         QStringList unusedSlots;
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
             const bool hasRoute = routeIndex < plan.routes.size()
