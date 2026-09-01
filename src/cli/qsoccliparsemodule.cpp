@@ -3,6 +3,8 @@
 
 #include "cli/qsoccliworker.h"
 
+#include <algorithm>
+
 #include "common/qslangdriver.h"
 #include "common/qsociomuxgenerator.h"
 #include "common/qsocmmiogenerator.h"
@@ -310,7 +312,13 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
                 .arg(plan.hsSlots)
                 .arg(defaultedSlots ? QStringLiteral(" (default)") : QString())
                 .arg(plan.routes.size())
-                .arg(plan.mmio.registers.size() - 1)
+                .arg(
+                    std::count_if(
+                        plan.mmio.registers.cbegin(),
+                        plan.mmio.registers.cend(),
+                        [](const QSocMmioRegisterPlan &reg) {
+                            return reg.name.startsWith(QStringLiteral("hs_select_"));
+                        }))
                 .arg(plan.mmio.registers.size()));
     }
 

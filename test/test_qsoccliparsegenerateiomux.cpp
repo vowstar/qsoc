@@ -271,7 +271,7 @@ initial begin
     gpio_out  = 4'b0101;
     gpio_oe   = 4'b1111;
     uart_tx   = 1'b1;
-    m_awaddr  = 8'h04;
+    m_awaddr  = 8'h10;
     m_awprot  = 3'b000;
     m_awvalid = 1'b0;
     m_wdata   = 32'h00001000;
