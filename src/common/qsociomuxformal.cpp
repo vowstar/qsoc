@@ -124,6 +124,48 @@ QString expectedPadExpression(
 }
 
 /**
+ * @brief Every select net a plan declares, in route order.
+ */
+QStringList selectPortNames(const QSocIomuxPlan &plan)
+{
+    QStringList names;
+    for (const QSocIomuxRoutePlan &route : plan.routes) {
+        if (route.pullSelect.linked()) {
+            names.append(
+                QSocIomuxGenerator::selectPortName(route.pin, route.slot, QStringLiteral("pull")));
+        }
+        for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
+            if (it.value().select.linked()) {
+                names.append(QSocIomuxGenerator::selectPortName(route.pin, route.slot, it.key()));
+            }
+        }
+    }
+    return names;
+}
+
+/**
+ * @brief The expected code of one slot: a constant, or on and off under its net.
+ *
+ * Written here from the route and the encoding, not by the core's helper.
+ */
+QString expectedCode(
+    const QSocIomuxRoutePlan    &route,
+    const QString               &group,
+    const QSocIomuxEndpointPlan &link,
+    quint32                      width,
+    int                          fixed,
+    int                          on,
+    int                          off)
+{
+    if (link.link.isEmpty()) {
+        return QString("%1'd%2").arg(width).arg(fixed);
+    }
+    const QString net = QSocIomuxGenerator::selectPortName(route.pin, route.slot, group)
+                        + (link.invert ? QStringLiteral(" ^ 1'b1") : QString());
+    return QString("(%1 ? %2'd%3 : %2'd%4)").arg(net).arg(width).arg(on).arg(off);
+}
+
+/**
  * @brief The pad selector code assertions for one pin under one selector value.
  *
  * `route` is the route the selector picks, or null for an unrouted or invalid
@@ -133,33 +175,51 @@ void appendPadCodeAssertions(
     QStringList *lines, const QSocIomuxPlan &plan, quint32 pin, const QSocIomuxRoutePlan *route)
 {
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
-    const auto            expect =
-        [&](const char *name, const char *reg, quint32 width, const char *src, int constant) {
-            const QString value = QString("%1'd%2").arg(width).arg(constant);
-            lines->append(
-                QString("        assert (pad_%1_w[%2:%3] == (%4));")
-                    .arg(name)
-                    .arg((pin + 1) * width - 1)
-                    .arg(pin * width)
-                    .arg(
-                        plan.option.padControl
-                            ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, value)
-                            : value));
-        };
+    const auto            expect   = [&](const char    *name,
+                                         const char    *reg,
+                                         quint32        width,
+                                         const char    *src,
+                                         const QString &value) {
+        lines->append(
+            QString("        assert (pad_%1_w[%2:%3] == (%4));")
+                .arg(name)
+                .arg((pin + 1) * width - 1)
+                .arg(pin * width)
+                .arg(
+                    plan.option.padControl
+                        ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, value)
+                        : value));
+    };
     if (encoding.hasPull()) {
         expect(
             "pull_mode",
             "pull_mode",
             encoding.modeWidth,
             "pull_src",
-            route ? encoding.routeMode(*route) : 0);
+            route ? expectedCode(
+                        *route,
+                        "pull",
+                        route->pullSelect.link,
+                        encoding.modeWidth,
+                        encoding.routeMode(*route),
+                        encoding.requestMode(route->pullSelect.on),
+                        encoding.requestMode(route->pullSelect.off))
+                  : QString("%1'd0").arg(encoding.modeWidth));
         if (encoding.upSelWidth > 0) {
             expect(
                 "up_sel",
                 "up_sel",
                 encoding.upSelWidth,
                 "pull_src",
-                route ? encoding.routeUpSel(*route) : 0);
+                route ? expectedCode(
+                            *route,
+                            "pull",
+                            route->pullSelect.link,
+                            encoding.upSelWidth,
+                            encoding.routeUpSel(*route),
+                            encoding.requestUpSel(route->pullSelect.on),
+                            encoding.requestUpSel(route->pullSelect.off))
+                      : QString("%1'd0").arg(encoding.upSelWidth));
         }
         if (encoding.downSelWidth > 0) {
             expect(
@@ -167,7 +227,15 @@ void appendPadCodeAssertions(
                 "down_sel",
                 encoding.downSelWidth,
                 "pull_src",
-                route ? encoding.routeDownSel(*route) : 0);
+                route ? expectedCode(
+                            *route,
+                            "pull",
+                            route->pullSelect.link,
+                            encoding.downSelWidth,
+                            encoding.routeDownSel(*route),
+                            encoding.requestDownSel(route->pullSelect.on),
+                            encoding.requestDownSel(route->pullSelect.off))
+                      : QString("%1'd0").arg(encoding.downSelWidth));
         }
     }
     for (qsizetype index = 0; index < encoding.control.size(); ++index) {
@@ -183,7 +251,17 @@ void appendPadCodeAssertions(
             name.constData(),
             item.width,
             src.constData(),
-            route ? encoding.routeControlCode(*route, index) : item.defaultCode);
+            route ? expectedCode(
+                        *route,
+                        item.name,
+                        route->control.value(item.name).select.link,
+                        item.width,
+                        encoding.routeControlCode(*route, index),
+                        encoding.controlCodeOrDefault(
+                            index, route->control.value(item.name).select.on.mode),
+                        encoding.controlCodeOrDefault(
+                            index, route->control.value(item.name).select.off.mode))
+                  : QString("%1'd%2").arg(item.width).arg(item.defaultCode));
     }
 }
 
@@ -231,6 +309,9 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
         }
     }
     for (const QString &name : txPorts) {
+        declarations.append(QString("    input logic %1").arg(name));
+    }
+    for (const QString &name : selectPortNames(plan)) {
         declarations.append(QString("    input logic %1").arg(name));
     }
     for (qsizetype index = 0; index < declarations.size(); ++index) {
@@ -297,6 +378,9 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
             coreConnections.append(QString("    .%1_i(%1_i)").arg(port.name));
         }
+    }
+    for (const QString &name : selectPortNames(plan)) {
+        coreConnections.append(QString("    .%1(%1)").arg(name));
     }
     lines.append(QString("%1_core u_core (").arg(plan.moduleName));
     for (qsizetype index = 0; index < coreConnections.size(); ++index) {
