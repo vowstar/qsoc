@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsociomuxformal.h"
 #include "common/qsociomuxgenerator.h"
 #include "common/qsocmodulemanager.h"
 #include "qsoc_test.h"
@@ -2330,6 +2331,8 @@ private slots:
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
     void forceHoldsThePadInSimulationWhenIverilogIsAvailable();
+    void unroutedSlotsTakeTheDeclaredDefaultRow();
+    void linksNeedAPadCellAndRowsToChooseFrom();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -5199,9 +5202,11 @@ void Test::nativeKeeperRowIsSelectedNotWoven()
 void Test::layoutVersionTracksTheRegisterMap()
 {
     /* The version word is a promise about offsets. This list is that promise
-     * for the layout with every option on. Any change here that moves an
-     * existing line is a major step, a new line at the end is a minor step,
-     * and either one changes QSocIomuxGenerator::layoutVersion() first. */
+     * for the layout with every option on. Once a layout has shipped, a
+     * change here that moves an existing line is a major step and a new line
+     * at the end is a minor step, and either one changes
+     * QSocIomuxGenerator::layoutVersion() first. Before that the list may
+     * change under the same number. */
     const QSocIomuxLayoutVersion layout = QSocIomuxGenerator::layoutVersion();
     QCOMPARE(layout.major, 2U);
     QCOMPARE(layout.minor, 0U);
@@ -5773,6 +5778,116 @@ void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
     const QByteArray simulationOutput = simulation.readAll();
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::unroutedSlotsTakeTheDeclaredDefaultRow()
+{
+    /* drive defaults to high: pin 1 has no route asking for drive, so its
+     * chain closes on row 1, and a routed low is the only explicit term. */
+    QString       padCell = padCellBlock();
+    const QString table = "          table:\n            low: [\"0\"]\n            high: [\"1\"]\n";
+    QVERIFY(padCell.contains(table));
+    padCell.replace(table, table + "          default: high\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        control: {drive: low}
+      - pin: 1
+        slot: 1
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+)")
+                               .arg(padCell, padIntegrationBlock())),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+    QVERIFY(
+        core.contains("assign pad_drive_select_o[0:0] = (pin_0_select_i == 1'd0) ? 1'd0 : 1'd1;"));
+    QVERIFY(core.contains("assign pad_drive_select_o[1:1] = 1'd1;"));
+    /* The pad module lands unknown codes on the same row. */
+    QVERIFY(
+        QSocIomuxGenerator::generatePadVerilog(plan).contains(
+            "wire DS_0_w = (pad_drive_select_i[0:0] == 1'd0) ? 1'b0 : 1'b1;"));
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "control drive: 0 low, 1 high, default high"));
+    /* The proof expects the same default where no route is selected. */
+    QVERIFY(
+        QSocIomuxFormal::generate(plan).systemVerilog.contains(
+            "assert (pad_drive_select_w[1:1] == (1'd1));"));
+}
+
+void Test::linksNeedAPadCellAndRowsToChooseFrom()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    const QString noCell = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+%1    route:
+      - pin: 0
+        slot: 0
+        function: wake0
+        signal: irq
+        input_value: {link: wake0_irq}
+        input_enable: 1
+        pull: {link: sleep_n, on: down, off: up}
+)")
+                               .arg(integrationBlock());
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(noCell), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0: pull and control need a "
+                    "pad_cell declaration"});
+
+    QString       padCell = padCellBlock();
+    const QString table = "          table:\n            low: [\"0\"]\n            high: [\"1\"]\n";
+    QVERIFY(padCell.contains(table));
+    padCell.replace(table, "          table:\n            low: [\"0\"]\n");
+    const QString oneRow = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        control: {drive: {link: uart0_fast, on: low, off: low}}
+)")
+                               .arg(padCell, padIntegrationBlock());
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(oneRow), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.control.drive: control drive of "
+                    "gpio_pad_ps has one row, nothing for a link to select"});
 }
 
 } // namespace

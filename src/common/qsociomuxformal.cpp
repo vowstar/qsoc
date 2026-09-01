@@ -152,8 +152,6 @@ QStringList selectPortNames(const QSocIomuxPlan &plan)
 
 /**
  * @brief The expected code of one slot: a constant, or on and off under its net.
- *
- * Written here from the route and the encoding, not by the core's helper.
  */
 QString expectedCode(
     const QSocIomuxRoutePlan    &route,

@@ -422,8 +422,7 @@ QSocMmioFieldPlan identityField(const QString &name, quint32 lsb, quint32 width,
  * number, or exactly four printable ASCII characters packed so the first
  * lands in the top byte, which is how the word reads in a register view.
  * The words take byte offsets 0x0 and 0x4; a 64-bit instance holds both in
- * one beat. A user register on those offsets or with those names is an error
- * rather than a silent overlap.
+ * one beat. A user register on those offsets or with those names is an error.
  */
 bool parseIdentity(const YAML::Node &node, QSocMmioPlan *plan, QStringList *errors)
 {

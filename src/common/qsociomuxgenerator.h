@@ -108,7 +108,8 @@ struct QSocPadPullPlan
     /**
      * @brief Mode name to its rows, one row per strength label.
      *
-     * `none`, `up`, `down` and `keeper` carry meaning to the generator. Any
+     * `none`, `up`, `down`, `keeper` and `oscillator` carry meaning to the
+     * generator. Any
      * other name is a mode the cell documents and a route asks for by name,
      * which is how a pad that gives both pull pins together a defined
      * behaviour stays expressible.
@@ -245,7 +246,7 @@ struct QSocIomuxOptionPlan
 {
     bool gpio       = false;
     bool interrupt  = false;
-    bool padControl = false; /**< Pull and drive registers behind a per-pin source bit */
+    bool padControl = false; /**< Pull and control registers behind per-pin source bits */
     bool invert     = false; /**< Runtime inversion after every source selector */
     bool rxOverride = false; /**< Per-slot register substitution of the pad input */
 
@@ -305,6 +306,8 @@ struct QSocPadEncoding
     /** Strength index within a direction, or -1. */
     int upSel(const QString &strength) const;
     int downSel(const QString &strength) const;
+    /** Declaration index of a control name, or -1. */
+    qsizetype controlIndex(const QString &name) const;
     /** Row index of a control label, or -1 when the control has no such row. */
     int controlCode(qsizetype index, const QString &label) const;
     /** The constants a pull request resolves to, 0 when it asks for nothing. */

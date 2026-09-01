@@ -340,10 +340,13 @@ bool parseIntegration(
             valid = parseIdentifier(pad["io"], padPath + ".io", &integration->padIo, errors)
                     && valid;
         }
-        for (const auto &[key, value] : pads) {
-            if (pad[key.toStdString()]) {
+        for (const auto &entry : pads) {
+            if (pad[entry.first.toStdString()]) {
                 appendError(
-                    errors, "CONFLICT", padPath + "." + key, "is owned by pad_cell, remove it");
+                    errors,
+                    "CONFLICT",
+                    padPath + "." + entry.first,
+                    "is owned by pad_cell, remove it");
                 valid = false;
             }
         }
@@ -391,10 +394,7 @@ bool reservedControlName(const QString &name)
            QStringLiteral("pull"),
            QStringLiteral("pull_mode"),
            QStringLiteral("up_sel"),
-           QStringLiteral("down_sel"),
-           QStringLiteral("keep"),
-           QStringLiteral("osc"),
-           QStringLiteral("io")};
+           QStringLiteral("down_sel")};
     return fixed.contains(name) || name.startsWith(QStringLiteral("rx_"))
            || name.endsWith(QStringLiteral("_src")) || name.endsWith(QStringLiteral("_inv"));
 }
@@ -1295,7 +1295,8 @@ void composeGpio(QSocIomuxPlan *plan)
  *
  * Bit positions are fixed whatever options are on, so software written for
  * one design reads the same word on another: gpio owns bits 0 to 5, pad
- * control bits 6 and 7, and the receive override one bit per slot from bit 8.
+ * control bit 6, the receive override one bit per slot from bit 8, and each
+ * selectable control one bit from bit 16 in declaration order.
  * A field whose option is off is absent and reads zero.
  */
 void composeSourceControl(QSocIomuxPlan *plan)
@@ -1331,7 +1332,7 @@ void composeSourceControl(QSocIomuxPlan *plan)
  * @brief Append the per-pin pad control word.
  *
  * The pull mode sits at bit 0, the up and down strength selects at bits 8 and
- * 16, and the drive code at bit 24, each only when the cell has it.
+ * 16, each only when the cell has it. Controls follow in their own words.
  */
 void composePadControl(QSocIomuxPlan *plan)
 {
@@ -1609,7 +1610,7 @@ bool rewriteConstraint(
 /**
  * @brief Check every constraint and settle its kind.
  *
- * A body over pull and drive pins alone speaks about logic this generator
+ * A body over pull and control pins alone speaks about logic this generator
  * emits, so it is a claim to prove. A body that reaches a role pin speaks
  * about what routes and registers will do, so it bounds the environment.
  */
@@ -1691,7 +1692,7 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
     if (!cell.declared()) {
         bool valid = true;
         for (const QSocIomuxRoutePlan &route : plan.routes) {
-            if (route.pullMode.isEmpty() && route.control.isEmpty()) {
+            if (route.pullMode.isEmpty() && !route.pullSelect.linked() && route.control.isEmpty()) {
                 continue;
             }
             appendError(
@@ -1807,12 +1808,7 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             valid = false;
         }
         for (auto it = cell.safe.control.cbegin(); it != cell.safe.control.cend(); ++it) {
-            qsizetype index = -1;
-            for (qsizetype candidate = 0; candidate < encoding.control.size(); ++candidate) {
-                if (encoding.control.at(candidate).name == it.key()) {
-                    index = candidate;
-                }
-            }
+            const qsizetype index = encoding.controlIndex(it.key());
             if (index < 0) {
                 appendError(
                     errors,
@@ -1894,19 +1890,24 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             }
         }
         for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
-            qsizetype index = -1;
-            for (qsizetype candidate = 0; candidate < encoding.control.size(); ++candidate) {
-                if (encoding.control.at(candidate).name == it.key()) {
-                    index = candidate;
-                }
-            }
-            const QString itemPath = routePath + ".control." + it.key();
+            const qsizetype index    = encoding.controlIndex(it.key());
+            const QString   itemPath = routePath + ".control." + it.key();
             if (index < 0) {
                 appendError(
                     errors,
                     "CAPABILITY",
                     itemPath,
                     QString("pad cell %1 has no control %2").arg(cell.cell, it.key()));
+                valid = false;
+                continue;
+            }
+            if (it.value().select.linked() && encoding.control.at(index).width == 0) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    itemPath,
+                    QString("control %1 of %2 has one row, nothing for a link to select")
+                        .arg(it.key(), cell.cell));
                 valid = false;
                 continue;
             }
@@ -2464,15 +2465,9 @@ QString withInversion(const QSocIomuxPlan &plan, const QString &expression, cons
 }
 
 /**
- * @brief The constant code slot `slot` of `pin` asks for, as a selector chain.
- *
- * A slot with no route, or a code the cell cannot reach, resolves to zero,
- * which is the none row for pull and the first row for drive.
- */
-/**
  * @brief One slot's code: a constant, or a pair chosen by its select net.
  *
- * An empty string means the slot asks for zero, which the chain's default
+ * An empty string means the slot asks for the default, which the chain
  * already supplies.
  */
 QString slotCode(
@@ -2480,6 +2475,7 @@ QString slotCode(
     const QSocIomuxRoutePlan &route,
     const QString            &group,
     quint32                   codeWidth,
+    int                       defaultCode,
     int                       fixed,
     int                       on,
     int                       off)
@@ -2492,13 +2488,20 @@ QString slotCode(
             .arg(on)
             .arg(off);
     }
-    return fixed <= 0 ? QString() : QString("%1'd%2").arg(codeWidth).arg(fixed);
+    return fixed == defaultCode ? QString() : QString("%1'd%2").arg(codeWidth).arg(fixed);
 }
 
+/**
+ * @brief The selector chain of one group on one pin, closed by its default.
+ *
+ * A slot with no route, and any selector value above the slot count, lands
+ * on the default: none for pull, the declared default row for a control.
+ */
 QString slotCodeChain(
     const QSocIomuxPlan                                      &plan,
     quint32                                                   pin,
     quint32                                                   codeWidth,
+    int                                                       defaultCode,
     const std::function<QString(const QSocIomuxRoutePlan &)> &code)
 {
     const quint32 width = selectorWidth(plan.hsSlots);
@@ -2514,7 +2517,7 @@ QString slotCodeChain(
                           .arg(route.slot)
                           .arg(value);
     }
-    return expression + QString("%1'd0").arg(codeWidth);
+    return expression + QString("%1'd%2").arg(codeWidth).arg(defaultCode);
 }
 
 } // namespace
@@ -2575,6 +2578,16 @@ int QSocPadEncoding::upSel(const QString &strength) const
 int QSocPadEncoding::downSel(const QString &strength) const
 {
     return rowIndex(downRows, strength);
+}
+
+qsizetype QSocPadEncoding::controlIndex(const QString &name) const
+{
+    for (qsizetype index = 0; index < control.size(); ++index) {
+        if (control.at(index).name == name) {
+            return index;
+        }
+    }
+    return -1;
 }
 
 int QSocPadEncoding::controlCode(qsizetype index, const QString &label) const
@@ -3115,8 +3128,9 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                                   quint32     width,
                                   const char *src,
                                   int         safeCode,
+                                  int         defaultCode,
                                   const std::function<QString(const QSocIomuxRoutePlan &)> &code) {
-            const QString chain = slotCodeChain(plan, pin, width, code);
+            const QString chain = slotCodeChain(plan, pin, width, defaultCode, code);
             const QString value = withForce(
                 plan.option.padControl
                     ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, chain)
@@ -3135,12 +3149,14 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                 encoding.modeWidth,
                 "pull_src",
                 encoding.requestMode(safe.pull),
+                0,
                 [&](const auto &r) {
                     return slotCode(
                         plan,
                         r,
                         "pull",
                         encoding.modeWidth,
+                        0,
                         encoding.routeMode(r),
                         encoding.requestMode(r.pullSelect.on),
                         encoding.requestMode(r.pullSelect.off));
@@ -3152,12 +3168,14 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                     encoding.upSelWidth,
                     "pull_src",
                     encoding.requestUpSel(safe.pull),
+                    0,
                     [&](const auto &r) {
                         return slotCode(
                             plan,
                             r,
                             "pull",
                             encoding.upSelWidth,
+                            0,
                             encoding.routeUpSel(r),
                             encoding.requestUpSel(r.pullSelect.on),
                             encoding.requestUpSel(r.pullSelect.off));
@@ -3170,12 +3188,14 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                     encoding.downSelWidth,
                     "pull_src",
                     encoding.requestDownSel(safe.pull),
+                    0,
                     [&](const auto &r) {
                         return slotCode(
                             plan,
                             r,
                             "pull",
                             encoding.downSelWidth,
+                            0,
                             encoding.routeDownSel(r),
                             encoding.requestDownSel(r.pullSelect.on),
                             encoding.requestDownSel(r.pullSelect.off));
@@ -3196,6 +3216,7 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                 item.width,
                 src.constData(),
                 encoding.controlCodeOrDefault(index, safe.control.value(item.name)),
+                item.defaultCode,
                 [&](const auto &r) {
                     const QSocIomuxControlRequest request = r.control.value(item.name);
                     return slotCode(
@@ -3203,6 +3224,7 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                         r,
                         item.name,
                         item.width,
+                        item.defaultCode,
                         encoding.routeControlCode(r, index),
                         encoding.controlCodeOrDefault(index, request.select.on.mode),
                         encoding.controlCodeOrDefault(index, request.select.off.mode));
