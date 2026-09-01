@@ -181,35 +181,54 @@ struct QSocIomuxOptionPlan
 };
 
 /**
- * @brief How the selector codes of a pad cell are laid out.
+ * @brief How the pad control of a cell is encoded.
  *
- * Pull rows are numbered with `none` first and the remaining modes in name
- * order, so an all-zero code is the state that drives nothing. Drive rows
- * keep their table order. A woven keeper or oscillator is not a row; it is a
- * flag that overrides the code inside the pad module.
+ * A pin has one pull mode and one strength per direction. The mode values
+ * are fixed so software reads the same field on every design: 0 none, 1 up,
+ * 2 down, 3 keeper, 4 oscillator, and the cell's other named rows from 5 in
+ * name order. A value the cell has no row for behaves as none. Only up and
+ * down carry strength rows; the strength selects index them in table order.
  */
 struct QSocPadEncoding
 {
-    QList<QSocPadTableRow> pullRows;
-    QStringList            pullMode; /**< Mode name of each pull row */
-    QStringList            driveLevel;
-    quint32                pullWidth  = 0; /**< 0 when the cell has no pull table */
-    quint32                driveWidth = 0; /**< 0 when the cell has no drive table */
-    bool                   weaves     = false;
-    int                    upCode     = -1;
-    int                    downCode   = -1;
+    enum Mode : int { None = 0, Up = 1, Down = 2, Keeper = 3, Oscillator = 4, FirstNamed = 5 };
 
-    bool hasPull() const { return pullWidth > 0; }
+    QSocPadTableRow                noneRow;
+    QList<QSocPadTableRow>         upRows;
+    QList<QSocPadTableRow>         downRows;
+    std::optional<QSocPadTableRow> keeperRow;     /**< Native keeper row, if any */
+    std::optional<QSocPadTableRow> oscillatorRow; /**< Native oscillator row, if any */
+    QStringList                    namedMode;     /**< Other modes, name order */
+    QList<QSocPadTableRow>         namedRow;      /**< One row per named mode */
+    QStringList                    driveLevel;
+    quint32                        modeWidth    = 0; /**< 0 when the cell has no pull table */
+    quint32                        upSelWidth   = 0; /**< 0 when up has at most one row */
+    quint32                        downSelWidth = 0;
+    quint32                        driveWidth   = 0; /**< 0 when the cell has no drive table */
+    bool weaves = false; /**< keeper and oscillator are woven from up and down */
+
+    bool hasPull() const { return modeWidth > 0; }
     bool hasDrive() const { return driveWidth > 0; }
-    /** Code of a pull row, or -1 when the cell has no such row. */
-    int pullCode(const QString &mode, const QString &strength) const;
+    bool hasUp() const { return !upRows.isEmpty(); }
+    bool hasDown() const { return !downRows.isEmpty(); }
+    /** Whether the cell reaches this mode, natively or woven. */
+    bool supports(int mode) const;
+    /** Mode value of a name, or -1 when the cell has no such mode. */
+    int modeCode(const QString &mode) const;
+    /** Strength index within a direction, or -1. */
+    int upSel(const QString &strength) const;
+    int downSel(const QString &strength) const;
     /** Code of a drive row, or -1 when the cell has no such row. */
     int driveCode(const QString &level) const;
-    /** The slot code a route asks for, 0 when it asks for nothing reachable. */
-    int  routePullCode(const QSocIomuxRoutePlan &route) const;
-    int  routeDriveCode(const QSocIomuxRoutePlan &route) const;
-    bool routeWeavesKeeper(const QSocIomuxRoutePlan &route) const;
-    bool routeWeavesOscillator(const QSocIomuxRoutePlan &route) const;
+    /** What a route asks for, as the constants its slot carries. */
+    int routeMode(const QSocIomuxRoutePlan &route) const;
+    int routeUpSel(const QSocIomuxRoutePlan &route) const;
+    int routeDownSel(const QSocIomuxRoutePlan &route) const;
+    int routeDriveCode(const QSocIomuxRoutePlan &route) const;
+    /** "0 none, 1 up, ..." over the modes this cell reaches. */
+    QString modeSummary() const;
+    /** The row a mode value selects, with the strength indices, or none. */
+    const QSocPadTableRow &row(int mode, int upIndex, int downIndex) const;
 };
 
 struct QSocIomuxPlan

@@ -1036,22 +1036,24 @@ void composeSourceControl(QSocIomuxPlan *plan)
 /**
  * @brief Append the per-pin pad control word.
  *
- * The pull code sits at bit 0, the woven keeper and oscillator flags at bits
- * 8 and 9, and the drive code at bit 16, each only when the cell has it.
+ * The pull mode sits at bit 0, the up and down strength selects at bits 8 and
+ * 16, and the drive code at bit 24, each only when the cell has it.
  */
 void composePadControl(QSocIomuxPlan *plan)
 {
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
     QList<WordField>      fields;
     if (encoding.hasPull()) {
-        fields.append({"pull", 0, encoding.pullWidth});
-    }
-    if (encoding.weaves) {
-        fields.append({"keep", 8, 1});
-        fields.append({"osc", 9, 1});
+        fields.append({"pull_mode", 0, encoding.modeWidth});
+        if (encoding.upSelWidth > 0) {
+            fields.append({"up_sel", 8, encoding.upSelWidth});
+        }
+        if (encoding.downSelWidth > 0) {
+            fields.append({"down_sel", 16, encoding.downSelWidth});
+        }
     }
     if (encoding.hasDrive()) {
-        fields.append({"drive", 16, encoding.driveWidth});
+        fields.append({"drive", 24, encoding.driveWidth});
     }
     appendPinWords(plan, "pin_pad_ctrl", fields);
 }
@@ -1102,6 +1104,67 @@ quint32 encodingWidth(qsizetype count)
         ++width;
     }
     return width;
+}
+
+/**
+ * @brief Drive the pull pins of one pin from its mode and strength selects.
+ *
+ * Every mode value with a row behind it is listed; anything else, including a
+ * value the cell has no row for, resolves to the none row.
+ */
+void appendPadPullPorts(
+    QStringList           *lines,
+    quint32                pin,
+    const QSocPadEncoding &encoding,
+    const QList<QString>  &port,
+    const QString         &mode,
+    const QString         &upSel,
+    const QString         &downSel)
+{
+    struct Arm
+    {
+        QString                condition;
+        const QSocPadTableRow *row;
+    };
+    QList<Arm>    arms;
+    const QString modeIs = QString("%1 == %2'd").arg(mode).arg(encoding.modeWidth);
+    const auto    graded =
+        [&](int modeCode, const QList<QSocPadTableRow> &rows, const QString &sel, quint32 selWidth) {
+            for (qsizetype index = 0; index < rows.size(); ++index) {
+                QString condition = modeIs + QString::number(modeCode);
+                if (selWidth > 0) {
+                    condition += QString(" && %1 == %2'd%3").arg(sel).arg(selWidth).arg(index);
+                }
+                arms.append({condition, &rows.at(index)});
+            }
+        };
+    graded(QSocPadEncoding::Up, encoding.upRows, upSel, encoding.upSelWidth);
+    graded(QSocPadEncoding::Down, encoding.downRows, downSel, encoding.downSelWidth);
+    if (encoding.keeperRow) {
+        arms.append({modeIs + QString::number(int(QSocPadEncoding::Keeper)), &*encoding.keeperRow});
+    }
+    if (encoding.oscillatorRow) {
+        arms.append(
+            {modeIs + QString::number(int(QSocPadEncoding::Oscillator)), &*encoding.oscillatorRow});
+    }
+    for (qsizetype index = 0; index < encoding.namedRow.size(); ++index) {
+        arms.append(
+            {modeIs + QString::number(int(QSocPadEncoding::FirstNamed) + int(index)),
+             &encoding.namedRow.at(index)});
+    }
+    /* A table entry of x means the pin does not matter in that row, so drive
+     * zero and keep the netlist two valued. */
+    const auto bit = [](const QSocPadTableRow &row, qsizetype index) {
+        return row.value.at(index) == "1" ? QStringLiteral("1'b1") : QStringLiteral("1'b0");
+    };
+    for (qsizetype index = 0; index < port.size(); ++index) {
+        QString expression;
+        for (const Arm &arm : arms) {
+            expression += QString("(%1) ? %2 : ").arg(arm.condition, bit(*arm.row, index));
+        }
+        expression += bit(encoding.noneRow, index);
+        lines->append(QString("wire %1_%2_w = %3;").arg(port.at(index)).arg(pin).arg(expression));
+    }
 }
 
 /**
@@ -1326,12 +1389,13 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
     bool                  valid    = true;
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(cell);
     /* Codes are 8-bit fields of the pad control word. */
-    if (encoding.pullRows.size() > 256) {
+    if (encoding.upRows.size() > 256 || encoding.downRows.size() > 256
+        || QSocPadEncoding::FirstNamed + encoding.namedMode.size() > 256) {
         appendError(
             errors,
             "RANGE",
             "generator.pad_cell.pull.table",
-            QString("has %1 rows, at most 256").arg(encoding.pullRows.size()));
+            "at most 256 strength rows per direction and 251 named modes");
         valid = false;
     }
     if (encoding.driveLevel.size() > 256) {
@@ -1341,6 +1405,18 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             "generator.pad_cell.drive.table",
             QString("has %1 rows, at most 256").arg(encoding.driveLevel.size()));
         valid = false;
+    }
+    /* Strength is a property of a direction. Every other mode is one row. */
+    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
+        if (it.key() != QStringLiteral("up") && it.key() != QStringLiteral("down")
+            && it.value().size() > 1) {
+            appendError(
+                errors,
+                "CAPABILITY",
+                QString("generator.pad_cell.pull.table.%1").arg(it.key()),
+                "only up and down carry strength rows");
+            valid = false;
+        }
     }
     for (const QSocIomuxRoutePlan &route : plan.routes) {
         for (const QSocIomuxRole role : kRoles) {
@@ -1379,48 +1455,48 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
         const QString routePath
             = QString("generator.route.pin %1 slot %2").arg(route.pin).arg(route.slot);
         if (!route.pullMode.isEmpty()) {
-            const bool wantsFeedback = route.pullMode == QStringLiteral("keeper")
-                                       || route.pullMode == QStringLiteral("oscillator");
-            const bool derivedKeeper = wantsFeedback && !cell.pull.has(route.pullMode)
-                                       && cell.canKeep();
-            if (wantsFeedback && !cell.pull.has(route.pullMode) && !cell.canKeep()) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    routePath + ".pull.mode",
-                    cell.pull.isDriver
-                        ? QString("pad cell %1 pulls with its driver, so %2 cannot be woven")
-                              .arg(cell.cell, route.pullMode)
-                        : QString("pad cell %1 needs both up and down rows to weave %2")
-                              .arg(cell.cell, route.pullMode));
+            const int mode = encoding.modeCode(route.pullMode);
+            if (mode < 0) {
+                const bool feedback = route.pullMode == QStringLiteral("keeper")
+                                      || route.pullMode == QStringLiteral("oscillator");
+                QString    reason
+                    = QString("pad cell %1 has no pull mode %2").arg(cell.cell, route.pullMode);
+                if (feedback && cell.pull.isDriver) {
+                    reason = QString("pad cell %1 pulls with its driver, so %2 cannot be woven")
+                                 .arg(cell.cell, route.pullMode);
+                } else if (feedback && (encoding.keeperRow || encoding.oscillatorRow)) {
+                    reason = QString(
+                                 "pad cell %1 names its own keeper or oscillator row, so %2 "
+                                 "is not woven")
+                                 .arg(cell.cell, route.pullMode);
+                } else if (feedback) {
+                    reason = QString("pad cell %1 needs both up and down rows to weave %2")
+                                 .arg(cell.cell, route.pullMode);
+                }
+                appendError(errors, "CAPABILITY", routePath + ".pull.mode", reason);
                 valid = false;
                 continue;
             }
-            if (derivedKeeper && !route.pullStrength.isEmpty()) {
+            const bool woven = encoding.weaves
+                               && (mode == QSocPadEncoding::Keeper
+                                   || mode == QSocPadEncoding::Oscillator);
+            const bool up    = mode == QSocPadEncoding::Up;
+            const bool down  = mode == QSocPadEncoding::Down;
+            const bool graded = (up && encoding.upSelWidth > 0)
+                                || (down && encoding.downSelWidth > 0)
+                                || (woven && (encoding.upSelWidth > 0 || encoding.downSelWidth > 0));
+            if (!graded && !route.pullStrength.isEmpty()) {
                 appendError(
                     errors,
                     "CAPABILITY",
                     routePath + ".pull.strength",
-                    QString("woven %1 uses the first up and down rows, drop strength")
-                        .arg(route.pullMode));
+                    QString("pull mode %1 of %2 has a single row, drop strength")
+                        .arg(route.pullMode, cell.cell));
                 valid = false;
-                continue;
-            }
-            if (!cell.pull.has(route.pullMode) && !derivedKeeper) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    routePath + ".pull.mode",
-                    QString("pad cell %1 has no pull mode %2").arg(cell.cell, route.pullMode));
-                valid = false;
-            } else if (!derivedKeeper) {
-                const QList<QSocPadTableRow> rows = cell.pull.mode.value(route.pullMode);
-                const bool labelled = rows.size() > 1 || !rows.first().label.isEmpty();
-                bool       found    = false;
-                for (const QSocPadTableRow &row : rows) {
-                    found = found || row.label == route.pullStrength;
-                }
-                if (labelled && !found) {
+            } else if ((up || down) && graded && !route.pullStrength.isEmpty()) {
+                const int sel = up ? encoding.upSel(route.pullStrength)
+                                   : encoding.downSel(route.pullStrength);
+                if (sel < 0) {
                     appendError(
                         errors,
                         "CAPABILITY",
@@ -1428,13 +1504,29 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
                         QString("pull mode %1 of %2 has no strength %3")
                             .arg(route.pullMode, cell.cell, route.pullStrength));
                     valid = false;
-                } else if (!labelled && !route.pullStrength.isEmpty()) {
+                }
+            } else if ((up || down) && graded) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    routePath + ".pull.strength",
+                    QString("pull mode %1 of %2 has several rows, name one")
+                        .arg(route.pullMode, cell.cell));
+                valid = false;
+            } else if (woven && !route.pullStrength.isEmpty()) {
+                /* A woven mode alternates between the two directions, so the
+                 * strength must exist on whichever side is graded. */
+                const bool upOk   = encoding.upSelWidth == 0
+                                    || encoding.upSel(route.pullStrength) >= 0;
+                const bool downOk = encoding.downSelWidth == 0
+                                    || encoding.downSel(route.pullStrength) >= 0;
+                if (!upOk || !downOk) {
                     appendError(
                         errors,
                         "CAPABILITY",
                         routePath + ".pull.strength",
-                        QString("pull mode %1 of %2 has a single row, drop strength")
-                            .arg(route.pullMode, cell.cell));
+                        QString("woven %1 of %2 needs strength %3 in both up and down")
+                            .arg(route.pullMode, cell.cell, route.pullStrength));
                     valid = false;
                 }
             }
@@ -1899,31 +1991,64 @@ QString slotCodeChain(
     return expression + QString("%1'd0").arg(codeWidth);
 }
 
-QString slotFlagTerms(
-    const QSocIomuxPlan                                   &plan,
-    quint32                                                pin,
-    const std::function<bool(const QSocIomuxRoutePlan &)> &flag)
-{
-    const quint32 width = selectorWidth(plan.hsSlots);
-    QStringList   terms;
-    for (const QSocIomuxRoutePlan &route : plan.routes) {
-        if (route.pin == pin && flag(route)) {
-            terms.append(QString("(pin_%1_select_i == %2'd%3)").arg(pin).arg(width).arg(route.slot));
-        }
-    }
-    return terms.isEmpty() ? QStringLiteral("1'b0") : terms.join(" | ");
-}
-
 } // namespace
 
-int QSocPadEncoding::pullCode(const QString &mode, const QString &strength) const
+bool QSocPadEncoding::supports(int mode) const
 {
-    for (qsizetype index = 0; index < pullRows.size(); ++index) {
-        if (pullMode.at(index) == mode && pullRows.at(index).label == strength) {
+    switch (mode) {
+    case None:
+        return hasPull();
+    case Up:
+        return hasUp();
+    case Down:
+        return hasDown();
+    case Keeper:
+        return keeperRow.has_value() || weaves;
+    case Oscillator:
+        return oscillatorRow.has_value() || weaves;
+    default:
+        return mode >= FirstNamed && mode - FirstNamed < namedMode.size();
+    }
+}
+
+int QSocPadEncoding::modeCode(const QString &mode) const
+{
+    static const QMap<QString, int> fixed
+        = {{QStringLiteral("none"), None},
+           {QStringLiteral("up"), Up},
+           {QStringLiteral("down"), Down},
+           {QStringLiteral("keeper"), Keeper},
+           {QStringLiteral("oscillator"), Oscillator}};
+    int code = fixed.value(mode, -1);
+    if (code < 0) {
+        const qsizetype index = namedMode.indexOf(mode);
+        code                  = index < 0 ? -1 : int(FirstNamed + index);
+    }
+    return supports(code) ? code : -1;
+}
+
+namespace {
+
+int rowIndex(const QList<QSocPadTableRow> &rows, const QString &label)
+{
+    for (qsizetype index = 0; index < rows.size(); ++index) {
+        if (rows.at(index).label == label) {
             return int(index);
         }
     }
     return -1;
+}
+
+} // namespace
+
+int QSocPadEncoding::upSel(const QString &strength) const
+{
+    return rowIndex(upRows, strength);
+}
+
+int QSocPadEncoding::downSel(const QString &strength) const
+{
+    return rowIndex(downRows, strength);
 }
 
 int QSocPadEncoding::driveCode(const QString &level) const
@@ -1931,12 +2056,32 @@ int QSocPadEncoding::driveCode(const QString &level) const
     return int(driveLevel.indexOf(level));
 }
 
-int QSocPadEncoding::routePullCode(const QSocIomuxRoutePlan &route) const
+int QSocPadEncoding::routeMode(const QSocIomuxRoutePlan &route) const
 {
-    if (route.pullMode.isEmpty()) {
+    return route.pullMode.isEmpty() ? None : std::max(0, modeCode(route.pullMode));
+}
+
+/* A woven keeper or oscillator carries its strength into both directions;
+ * a plain up or down carries it into its own. Anything else leaves the
+ * first row, which is what an absent strength means. */
+int QSocPadEncoding::routeUpSel(const QSocIomuxRoutePlan &route) const
+{
+    const int mode = routeMode(route);
+    if (route.pullStrength.isEmpty()
+        || (mode != Up && !(weaves && (mode == Keeper || mode == Oscillator)))) {
         return 0;
     }
-    return std::max(0, pullCode(route.pullMode, route.pullStrength));
+    return std::max(0, upSel(route.pullStrength));
+}
+
+int QSocPadEncoding::routeDownSel(const QSocIomuxRoutePlan &route) const
+{
+    const int mode = routeMode(route);
+    if (route.pullStrength.isEmpty()
+        || (mode != Down && !(weaves && (mode == Keeper || mode == Oscillator)))) {
+        return 0;
+    }
+    return std::max(0, downSel(route.pullStrength));
 }
 
 int QSocPadEncoding::routeDriveCode(const QSocIomuxRoutePlan &route) const
@@ -1947,44 +2092,90 @@ int QSocPadEncoding::routeDriveCode(const QSocIomuxRoutePlan &route) const
     return std::max(0, driveCode(route.driveLevel));
 }
 
-bool QSocPadEncoding::routeWeavesKeeper(const QSocIomuxRoutePlan &route) const
+QString QSocPadEncoding::modeSummary() const
 {
-    return weaves && route.pullMode == QStringLiteral("keeper")
-           && !pullMode.contains(QStringLiteral("keeper"));
+    QStringList parts;
+    const char *fixed[] = {"none", "up", "down", "keeper", "oscillator"};
+    for (int mode = None; mode < FirstNamed; ++mode) {
+        if (supports(mode)) {
+            parts.append(QString("%1 %2").arg(mode).arg(QString(fixed[mode])));
+        }
+    }
+    for (qsizetype index = 0; index < namedMode.size(); ++index) {
+        parts.append(QString("%1 %2").arg(FirstNamed + index).arg(namedMode.at(index)));
+    }
+    return parts.join(", ");
 }
 
-bool QSocPadEncoding::routeWeavesOscillator(const QSocIomuxRoutePlan &route) const
+const QSocPadTableRow &QSocPadEncoding::row(int mode, int upIndex, int downIndex) const
 {
-    return weaves && route.pullMode == QStringLiteral("oscillator")
-           && !pullMode.contains(QStringLiteral("oscillator"));
+    switch (mode) {
+    case Up:
+        if (upIndex >= 0 && upIndex < upRows.size()) {
+            return upRows.at(upIndex);
+        }
+        return noneRow;
+    case Down:
+        if (downIndex >= 0 && downIndex < downRows.size()) {
+            return downRows.at(downIndex);
+        }
+        return noneRow;
+    case Keeper:
+        return keeperRow ? *keeperRow : noneRow;
+    case Oscillator:
+        return oscillatorRow ? *oscillatorRow : noneRow;
+    default:
+        if (mode >= FirstNamed && mode - FirstNamed < namedRow.size()) {
+            return namedRow.at(mode - FirstNamed);
+        }
+        return noneRow;
+    }
 }
 
 QSocPadEncoding QSocIomuxGenerator::padEncoding(const QSocPadCellPlan &cell)
 {
     QSocPadEncoding encoding;
-    if (!cell.declared()) {
+    if (!cell.declared() || cell.pull.mode.isEmpty()) {
+        for (const QSocPadTableRow &row : cell.drive.level) {
+            encoding.driveLevel.append(row.label);
+        }
+        if (!cell.drive.level.isEmpty()) {
+            encoding.driveWidth = encodingWidth(cell.drive.level.size());
+        }
         return encoding;
     }
-    const auto appendMode = [&](const QString &name) {
-        for (const QSocPadTableRow &row : cell.pull.mode.value(name)) {
-            encoding.pullRows.append(row);
-            encoding.pullMode.append(name);
+    const auto single = [&](const QString &name) -> std::optional<QSocPadTableRow> {
+        const QList<QSocPadTableRow> rows = cell.pull.mode.value(name);
+        if (rows.isEmpty()) {
+            return std::nullopt;
         }
+        return rows.first();
     };
-    appendMode(QStringLiteral("none"));
+    encoding.noneRow       = single(QStringLiteral("none")).value_or(QSocPadTableRow());
+    encoding.upRows        = cell.pull.mode.value(QStringLiteral("up"));
+    encoding.downRows      = cell.pull.mode.value(QStringLiteral("down"));
+    encoding.keeperRow     = single(QStringLiteral("keeper"));
+    encoding.oscillatorRow = single(QStringLiteral("oscillator"));
     for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
-        if (it.key() != QStringLiteral("none")) {
-            appendMode(it.key());
+        static const QStringList fixed
+            = {QStringLiteral("none"),
+               QStringLiteral("up"),
+               QStringLiteral("down"),
+               QStringLiteral("keeper"),
+               QStringLiteral("oscillator")};
+        if (!fixed.contains(it.key())) {
+            encoding.namedMode.append(it.key());
+            encoding.namedRow.append(it.value().first());
         }
     }
-    if (!encoding.pullRows.isEmpty()) {
-        encoding.pullWidth = encodingWidth(encoding.pullRows.size());
-        encoding.weaves    = cell.canKeep() && !cell.keeperIsNative();
-        if (encoding.weaves) {
-            /* The first row of each direction, labelled or not. */
-            encoding.upCode   = int(encoding.pullMode.indexOf(QStringLiteral("up")));
-            encoding.downCode = int(encoding.pullMode.indexOf(QStringLiteral("down")));
-        }
+    encoding.weaves    = !encoding.keeperRow && !encoding.oscillatorRow && encoding.hasUp()
+                         && encoding.hasDown() && !cell.pull.isDriver;
+    encoding.modeWidth = encodingWidth(QSocPadEncoding::FirstNamed + encoding.namedMode.size());
+    if (encoding.upRows.size() > 1) {
+        encoding.upSelWidth = encodingWidth(encoding.upRows.size());
+    }
+    if (encoding.downRows.size() > 1) {
+        encoding.downSelWidth = encodingWidth(encoding.downRows.size());
     }
     for (const QSocPadTableRow &row : cell.drive.level) {
         encoding.driveLevel.append(row.label);
@@ -2129,12 +2320,14 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
     }
     if (plan.option.padControl) {
         if (encoding.hasPull()) {
-            ports.append({QString("pin_%1_pull").arg(pin), encoding.pullWidth});
+            ports.append({QString("pin_%1_pull_mode").arg(pin), encoding.modeWidth});
+            if (encoding.upSelWidth > 0) {
+                ports.append({QString("pin_%1_up_sel").arg(pin), encoding.upSelWidth});
+            }
+            if (encoding.downSelWidth > 0) {
+                ports.append({QString("pin_%1_down_sel").arg(pin), encoding.downSelWidth});
+            }
             ports.append({QString("pin_%1_pull_src").arg(pin), 1});
-        }
-        if (encoding.weaves) {
-            ports.append({QString("pin_%1_keep").arg(pin), 1});
-            ports.append({QString("pin_%1_osc").arg(pin), 1});
         }
         if (encoding.hasDrive()) {
             ports.append({QString("pin_%1_drive").arg(pin), encoding.driveWidth});
@@ -2163,11 +2356,13 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePadSelectPorts(const QSocIomuxP
     QList<QSocIomuxCorePort> ports;
     const QSocPadEncoding    encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
     if (encoding.hasPull()) {
-        ports.append({QStringLiteral("pad_pull_select"), encoding.pullWidth * plan.pinCount});
-    }
-    if (encoding.weaves) {
-        ports.append({QStringLiteral("pad_keep"), plan.pinCount});
-        ports.append({QStringLiteral("pad_osc"), plan.pinCount});
+        ports.append({QStringLiteral("pad_pull_mode"), encoding.modeWidth * plan.pinCount});
+        if (encoding.upSelWidth > 0) {
+            ports.append({QStringLiteral("pad_up_sel"), encoding.upSelWidth * plan.pinCount});
+        }
+        if (encoding.downSelWidth > 0) {
+            ports.append({QStringLiteral("pad_down_sel"), encoding.downSelWidth * plan.pinCount});
+        }
     }
     if (encoding.hasDrive()) {
         ports.append({QStringLiteral("pad_drive_select"), encoding.driveWidth * plan.pinCount});
@@ -2285,55 +2480,43 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                     .arg(pin)
                     .arg(withInversion(plan, QString("pad_output_enable_%1").arg(pin), oeInv)));
         }
-        if (encoding.hasPull()) {
-            /* The slot carries a constant code from its route; the register
-             * takes over when its source bit is set. */
-            const QString chain = slotCodeChain(plan, pin, encoding.pullWidth, [&](const auto &r) {
-                return encoding.routePullCode(r);
-            });
-            const QString code
+        /* Each slot carries the constants its route asked for; the register
+         * takes over a whole group when its source bit is set. */
+        const auto emitCode = [&](const char                                           *name,
+                                  const char                                           *reg,
+                                  quint32                                               width,
+                                  const char                                           *src,
+                                  const std::function<int(const QSocIomuxRoutePlan &)> &code) {
+            const QString chain = slotCodeChain(plan, pin, width, code);
+            const QString value
                 = plan.option.padControl
-                      ? QString("pin_%1_pull_src_i ? pin_%1_pull_i : %2").arg(pin).arg(chain)
+                      ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, chain)
                       : chain;
-            lines.append(QString("assign pad_pull_select_o[%1:%2] = %3;")
-                             .arg((pin + 1) * encoding.pullWidth - 1)
-                             .arg(pin * encoding.pullWidth)
-                             .arg(code));
-        }
-        if (encoding.weaves) {
-            const QString keep = slotFlagTerms(plan, pin, [&](const auto &r) {
-                return encoding.routeWeavesKeeper(r);
+            lines.append(QString("assign pad_%1_o[%2:%3] = %4;")
+                             .arg(name)
+                             .arg((pin + 1) * width - 1)
+                             .arg(pin * width)
+                             .arg(value));
+        };
+        if (encoding.hasPull()) {
+            emitCode("pull_mode", "pull_mode", encoding.modeWidth, "pull_src", [&](const auto &r) {
+                return encoding.routeMode(r);
             });
-            const QString osc  = slotFlagTerms(plan, pin, [&](const auto &r) {
-                return encoding.routeWeavesOscillator(r);
-            });
-            lines.append(
-                QString("assign pad_keep_o[%1] = %2;")
-                    .arg(pin)
-                    .arg(
-                        plan.option.padControl
-                            ? QString("pin_%1_pull_src_i ? pin_%1_keep_i : %2").arg(pin).arg(keep)
-                            : keep));
-            lines.append(
-                QString("assign pad_osc_o[%1] = %2;")
-                    .arg(pin)
-                    .arg(
-                        plan.option.padControl
-                            ? QString("pin_%1_pull_src_i ? pin_%1_osc_i : %2").arg(pin).arg(osc)
-                            : osc));
+            if (encoding.upSelWidth > 0) {
+                emitCode("up_sel", "up_sel", encoding.upSelWidth, "pull_src", [&](const auto &r) {
+                    return encoding.routeUpSel(r);
+                });
+            }
+            if (encoding.downSelWidth > 0) {
+                emitCode("down_sel", "down_sel", encoding.downSelWidth, "pull_src", [&](const auto &r) {
+                    return encoding.routeDownSel(r);
+                });
+            }
         }
         if (encoding.hasDrive()) {
-            const QString chain = slotCodeChain(plan, pin, encoding.driveWidth, [&](const auto &r) {
+            emitCode("drive_select", "drive", encoding.driveWidth, "drive_src", [&](const auto &r) {
                 return encoding.routeDriveCode(r);
             });
-            const QString code
-                = plan.option.padControl
-                      ? QString("pin_%1_drive_src_i ? pin_%1_drive_i : %2").arg(pin).arg(chain)
-                      : chain;
-            lines.append(QString("assign pad_drive_select_o[%1:%2] = %3;")
-                             .arg((pin + 1) * encoding.driveWidth - 1)
-                             .arg(pin * encoding.driveWidth)
-                             .arg(code));
         }
         lines.append(QString());
     }
@@ -2682,12 +2865,11 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
     if (plan.pinCount == 0 || !cell.declared()) {
         return QString();
     }
-    const QSocPadEncoding         encoding   = padEncoding(cell);
-    const QList<QSocPadTableRow> &pullRows   = encoding.pullRows;
-    const bool                    hasPull    = encoding.hasPull();
-    const bool                    hasDrive   = encoding.hasDrive();
-    const quint32                 pullWidth  = encoding.pullWidth;
-    const quint32                 driveWidth = encoding.driveWidth;
+    const QSocPadEncoding encoding   = padEncoding(cell);
+    const bool            hasPull    = encoding.hasPull();
+    const bool            hasDrive   = encoding.hasDrive();
+    const quint32         modeWidth  = encoding.modeWidth;
+    const quint32         driveWidth = encoding.driveWidth;
 
     QStringList lines;
     lines.append("// Generated by QSoC. Do not edit.");
@@ -2710,18 +2892,8 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
         ports.append(
             QString("    input  wire %1 pad_output_enable_i").arg(vectorRange(plan.pinCount)));
     }
-    const bool weaves = encoding.weaves;
-    if (hasPull) {
-        ports.append(QString("    input  wire %1 pad_pull_select_i")
-                         .arg(vectorRange(quint64(pullWidth) * plan.pinCount)));
-    }
-    if (weaves) {
-        ports.append(QString("    input  wire %1 pad_keep_i").arg(vectorRange(plan.pinCount)));
-        ports.append(QString("    input  wire %1 pad_osc_i").arg(vectorRange(plan.pinCount)));
-    }
-    if (hasDrive) {
-        ports.append(QString("    input  wire %1 pad_drive_select_i")
-                         .arg(vectorRange(quint64(driveWidth) * plan.pinCount)));
+    for (const QSocIomuxCorePort &port : corePadSelectPorts(plan)) {
+        ports.append(QString("    input  wire %1 %2_i").arg(vectorRange(port.width), port.name));
     }
     for (qsizetype index = 0; index < ports.size(); ++index) {
         const QString suffix = index + 1 == ports.size() ? QString() : QString(",");
@@ -2730,39 +2902,44 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
     lines.append(");");
     lines.append(QString());
 
-    const int upCode   = encoding.upCode;
-    const int downCode = encoding.downCode;
+    const auto slice = [&](const char *name, quint32 width, quint32 pin) {
+        return QString("pad_%1_i[%2:%3]").arg(name).arg((pin + 1) * width - 1).arg(pin * width);
+    };
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         if (hasPull) {
-            QString selector = QString("pad_pull_select_i[%1:%2]")
-                                   .arg((pin + 1) * pullWidth - 1)
-                                   .arg(pin * pullWidth);
-            if (weaves) {
+            QString mode = slice("pull_mode", modeWidth, pin);
+            if (encoding.weaves) {
                 /* The keeper follows the pad and the oscillator opposes it. The
                  * feedback reads the pad itself, not the receiver output, so an
                  * input enable of zero does not silently turn either into a
                  * pull-down. The loop closes here, inside the pad module. */
                 lines.append(QString(
-                                 "wire %1 pad_pull_eff_%2 = pad_keep_i[%2] ? "
-                                 "(pad_io[%2] ? %3'd%4 : %3'd%5) : pad_osc_i[%2] ? "
-                                 "(pad_io[%2] ? %3'd%5 : %3'd%4) : %6;")
-                                 .arg(vectorRange(pullWidth))
+                                 "wire %1 pad_mode_eff_%2 = (%3 == %4'd%5) ? "
+                                 "(pad_io[%2] ? %4'd%6 : %4'd%7) : (%3 == %4'd%8) ? "
+                                 "(pad_io[%2] ? %4'd%7 : %4'd%6) : %3;")
+                                 .arg(vectorRange(modeWidth))
                                  .arg(pin)
-                                 .arg(pullWidth)
-                                 .arg(upCode)
-                                 .arg(downCode)
-                                 .arg(selector));
-                selector = QString("pad_pull_eff_%1").arg(pin);
+                                 .arg(mode)
+                                 .arg(modeWidth)
+                                 .arg(int(QSocPadEncoding::Keeper))
+                                 .arg(int(QSocPadEncoding::Up))
+                                 .arg(int(QSocPadEncoding::Down))
+                                 .arg(int(QSocPadEncoding::Oscillator)));
+                mode = QString("pad_mode_eff_%1").arg(pin);
             }
-            appendPadTableCase(&lines, pin, selector, cell.pull.port, pullRows);
+            const QString upSel   = encoding.upSelWidth > 0
+                                        ? slice("up_sel", encoding.upSelWidth, pin)
+                                        : QString();
+            const QString downSel = encoding.downSelWidth > 0
+                                        ? slice("down_sel", encoding.downSelWidth, pin)
+                                        : QString();
+            appendPadPullPorts(&lines, pin, encoding, cell.pull.port, mode, upSel, downSel);
         }
         if (hasDrive) {
             appendPadTableCase(
                 &lines,
                 pin,
-                QString("pad_drive_select_i[%1:%2]")
-                    .arg((pin + 1) * driveWidth - 1)
-                    .arg(pin * driveWidth),
+                slice("drive_select", driveWidth, pin),
                 cell.drive.port,
                 cell.drive.level);
         }
@@ -3042,16 +3219,22 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                          .arg(cell.pull.mode.size())
                          .arg(cell.drive.level.size())
                          .arg(cell.constraint.size()));
-        /* The code numbering is the software contract of pin_pad_ctrl. */
+        /* The numbering is the software contract of pin_pad_ctrl. */
         const QSocPadEncoding encoding = padEncoding(cell);
         if (encoding.hasPull()) {
-            QStringList codes;
-            for (qsizetype index = 0; index < encoding.pullRows.size(); ++index) {
-                const QString label = encoding.pullRows.at(index).label;
-                codes.append(QString("%1 %2%3").arg(index).arg(
-                    encoding.pullMode.at(index), label.isEmpty() ? QString() : " " + label));
-            }
-            lines.append(QString("pull codes: %1").arg(codes.join(", ")));
+            lines.append(QString("pull modes: %1").arg(encoding.modeSummary()));
+            const auto strengths = [&](const char *name, const QList<QSocPadTableRow> &rows) {
+                if (rows.size() < 2) {
+                    return;
+                }
+                QStringList codes;
+                for (qsizetype index = 0; index < rows.size(); ++index) {
+                    codes.append(QString("%1 %2").arg(index).arg(rows.at(index).label));
+                }
+                lines.append(QString("%1 strengths: %2").arg(QString(name), codes.join(", ")));
+            };
+            strengths("up", encoding.upRows);
+            strengths("down", encoding.downRows);
         }
         if (encoding.hasDrive()) {
             QStringList codes;

@@ -146,12 +146,15 @@ cell with two pull-up strengths and one pull-down strength is expressed as
 `pull: up` for a single row and `pull: {mode: up, strength: "47k"}` for a
 labelled one. `drive.table` has the same shape without the mode level.
 
-A route may ask for `keeper` or `oscillator` when the cell has no row of that
-name. The generator then weaves the mode from the first `up` and first `down`
-rows: the keeper follows the pad and the oscillator opposes it, and both read
-the pad itself rather than the receiver, so the loop closes inside the pad
-module. `pull.kind: driver` marks a cell whose pulls are its output driver
-rather than resistors, and no mode is woven from those. A woven mode is a
+Only `up` and `down` carry strength rows. Every other mode is one row. A
+route may ask for `keeper` or `oscillator` when the cell has no row of that
+name. The generator then weaves the mode from `up` and `down`: the keeper
+follows the pad and the oscillator opposes it, and both read the pad itself
+rather than the receiver, so the loop closes inside the pad module. A woven
+mode keeps its strength: `pull: {mode: keeper, strength: "47k"}` selects that
+row on each graded direction, and an absent strength selects the first row.
+`pull.kind: driver` marks a cell whose pulls are its output driver rather
+than resistors, and no mode is woven from those. A woven mode is a
 combinational loop through the pad. A zero-delay simulation of a floating pad
 under a woven keeper does not settle, so a testbench drives the pad across a
 mode change or gives it a delay.
@@ -239,19 +242,37 @@ the pad through two flip-flops in the bus clock domain, so a pad edge takes
 two bus cycles to become readable.
 
 `generator.option.pad_control` needs a `pad_cell` with a pull or a drive
-table. It appends one `pin_pad_ctrl` word per pin: the pull code at bit 0,
-the woven `keep` and `osc` flags at bits 8 and 9 when the cell weaves them,
-and the drive code at bit 16, each field as wide as its table needs. Pull
-codes number `none` as 0 and then the modes in name order, each strength row
-in table order. Drive codes follow table order. The report prints both
-numberings. `pull_src` at 0 keeps the pull the selected slot's route asked
-for, and at 1 hands the pull to the word, flags included. `drive_src` does
-the same for the drive code. Both reset to 0, so the word is inert until
-software claims it. Inside the pad module `keep` wins over `osc`, and either
-flag wins over the code. A code with no row behind it, which only a register
-can produce, lands on row 0: `none` for pull, the first level for drive. A
-register-driven keeper or oscillator is the same woven loop as a route
-request, with the same simulation caveat.
+table. It appends one `pin_pad_ctrl` word per pin with the fields below,
+each present only when the cell has something for it to select and each as
+wide as its table needs.
+
+#figure(
+  align(center)[#table(
+    columns: 3,
+    align: (left, left, left),
+    table.header([Bits], [Field], [Meaning]),
+    table.hline(),
+    [from 0], [`pull_mode`], [0 none, 1 up, 2 down, 3 keeper, 4 oscillator, then the cell's other modes from 5 in name order],
+    [from 8], [`up_sel`], [strength row of `up`, table order, only when `up` has several rows],
+    [from 16], [`down_sel`], [strength row of `down`, likewise],
+    [from 24], [`drive`], [drive row, table order],
+  )],
+  caption: [PIN_PAD_CTRL LAYOUT],
+)
+
+The mode values are fixed, so software reads the same field on every design.
+A value the cell has no row for behaves as `none`, and a strength select past
+the table behaves as the first row. The register keeps what was written, so
+firmware can read its own mistake back. A mode says whether and which way
+the pin pulls, a select says how strongly, and the two never mix: the keeper
+and the oscillator switch the mode between `up` and `down` from the pad
+level and leave both selects alone, so they hold at whatever strength the
+selects name. The report prints the mode numbering and each graded
+direction's strengths. `pull_src` at 0 keeps the pull the selected slot's
+route asked for, and at 1 hands mode and selects to the word. `drive_src`
+does the same for the drive row. Both reset to 0, so the word is inert until
+software claims it. A register-driven keeper or oscillator is the same woven
+loop as a route request, with the same simulation caveat.
 
 `generator.option.invert` appends the banks `input_enable_inv`,
 `output_value_inv`, `output_enable_inv`, and one `rx_inv_sk` bank per slot
@@ -330,8 +351,8 @@ read as `z` in simulation.
 (`<module>_regs_formal.sv`, `<module>_regs_formal.sby`) and a routing proof
 (`<module>_hs_formal.sv`, `<module>_hs_formal.sby`). The routing proof leaves
 every option register free and asserts, per slot and for invalid codes, the
-pad bundle after source selection and inversion, the pad pull and drive codes
-after their source bits, and every receive sink after substitution and
+pad bundle after source selection and inversion, the pull mode, strength
+selects, and drive row after their source bits, and every receive sink after substitution and
 inversion. A pad cell adds the constraint proof described above.
 
 == UVM Collateral

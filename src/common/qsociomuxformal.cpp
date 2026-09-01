@@ -133,39 +133,50 @@ void appendPadCodeAssertions(
     QStringList *lines, const QSocIomuxPlan &plan, quint32 pin, const QSocIomuxRoutePlan *route)
 {
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
-    const auto expected = [&](const QString &constant, const char *reg, const char *src) {
-        return plan.option.padControl ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4")
-                                            .arg(pin)
-                                            .arg(QString(src), QString(reg), constant)
-                                      : constant;
-    };
+    const auto            expect =
+        [&](const char *name, const char *reg, quint32 width, const char *src, int constant) {
+            const QString value = QString("%1'd%2").arg(width).arg(constant);
+            lines->append(
+                QString("        assert (pad_%1_w[%2:%3] == (%4));")
+                    .arg(name)
+                    .arg((pin + 1) * width - 1)
+                    .arg(pin * width)
+                    .arg(
+                        plan.option.padControl
+                            ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, value)
+                            : value));
+        };
     if (encoding.hasPull()) {
-        const int code = route ? encoding.routePullCode(*route) : 0;
-        lines->append(
-            QString("        assert (pad_pull_select_w[%1:%2] == (%3));")
-                .arg((pin + 1) * encoding.pullWidth - 1)
-                .arg(pin * encoding.pullWidth)
-                .arg(expected(
-                    QString("%1'd%2").arg(encoding.pullWidth).arg(code), "pull", "pull_src")));
-    }
-    if (encoding.weaves) {
-        const bool keep = route && encoding.routeWeavesKeeper(*route);
-        const bool osc  = route && encoding.routeWeavesOscillator(*route);
-        lines->append(QString("        assert (pad_keep_w[%1] == (%2));")
-                          .arg(pin)
-                          .arg(expected(keep ? "1'b1" : "1'b0", "keep", "pull_src")));
-        lines->append(QString("        assert (pad_osc_w[%1] == (%2));")
-                          .arg(pin)
-                          .arg(expected(osc ? "1'b1" : "1'b0", "osc", "pull_src")));
+        expect(
+            "pull_mode",
+            "pull_mode",
+            encoding.modeWidth,
+            "pull_src",
+            route ? encoding.routeMode(*route) : 0);
+        if (encoding.upSelWidth > 0) {
+            expect(
+                "up_sel",
+                "up_sel",
+                encoding.upSelWidth,
+                "pull_src",
+                route ? encoding.routeUpSel(*route) : 0);
+        }
+        if (encoding.downSelWidth > 0) {
+            expect(
+                "down_sel",
+                "down_sel",
+                encoding.downSelWidth,
+                "pull_src",
+                route ? encoding.routeDownSel(*route) : 0);
+        }
     }
     if (encoding.hasDrive()) {
-        const int code = route ? encoding.routeDriveCode(*route) : 0;
-        lines->append(
-            QString("        assert (pad_drive_select_w[%1:%2] == (%3));")
-                .arg((pin + 1) * encoding.driveWidth - 1)
-                .arg(pin * encoding.driveWidth)
-                .arg(expected(
-                    QString("%1'd%2").arg(encoding.driveWidth).arg(code), "drive", "drive_src")));
+        expect(
+            "drive_select",
+            "drive",
+            encoding.driveWidth,
+            "drive_src",
+            route ? encoding.routeDriveCode(*route) : 0);
     }
 }
 

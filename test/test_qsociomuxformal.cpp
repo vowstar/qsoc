@@ -606,9 +606,9 @@ void Test::optionRegistersAreFreeInputsOfTheProof()
 
     QVERIFY(sv.contains("    input logic [1:0] pin_0_output_value_src_i,"));
     QVERIFY(sv.contains("    input logic pin_1_rx_value_s2_i,"));
-    QVERIFY(sv.contains("    input logic [1:0] pin_0_pull_i,"));
-    QVERIFY(sv.contains("logic [3:0] pad_pull_select_w;"));
-    QVERIFY(sv.contains("    .pad_keep_o(pad_keep_w),"));
+    QVERIFY(sv.contains("    input logic [2:0] pin_0_pull_mode_i,"));
+    QVERIFY(sv.contains("logic [5:0] pad_pull_mode_w;"));
+    QVERIFY(sv.contains("    .pad_pull_mode_o(pad_pull_mode_w),"));
     QVERIFY(sv.contains("    .pin_1_rx_inv_s1_i(pin_1_rx_inv_s1_i),"));
     /* The expected value layers the source fields and the inversion exactly
      * as the core does, on top of the slot bundle. */
@@ -621,8 +621,11 @@ void Test::optionRegistersAreFreeInputsOfTheProof()
         "pin_1_output_enable_src_i == 2'd3 ? 1'b0 : (hs_p1_s0_output_enable_i ^ 1'b1)) ^ "
         "pin_1_output_enable_inv_i));"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_select_w[1:0] == (pin_0_pull_src_i ? pin_0_pull_i : 2'd2));"));
-    QVERIFY(sv.contains("assert (pad_keep_w[1] == (pin_1_pull_src_i ? pin_1_keep_i : 1'b1));"));
+        "assert (pad_pull_mode_w[2:0] == (pin_0_pull_src_i ? pin_0_pull_mode_i : 3'd1));"));
+    QVERIFY(sv.contains(
+        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : 3'd3));"));
+    QVERIFY(sv.contains(
+        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : 3'd2));"));
     QVERIFY(sv.contains(
         "assert (pad_drive_select_w[0:0] == (pin_0_drive_src_i ? pin_0_drive_i : 1'd1));"));
     QVERIFY(sv.contains(
@@ -673,8 +676,8 @@ void Test::optionMutationsFailBmcWhenAvailable_data()
         << "assign pad_output_value_o[0] = (pad_output_value_0) ^ pin_0_output_value_inv_i;"
         << "assign pad_output_value_o[0] = (pad_output_value_0);";
     QTest::newRow("pull-source-bit-ignored")
-        << "assign pad_pull_select_o[1:0] = pin_0_pull_src_i ? pin_0_pull_i :"
-        << "assign pad_pull_select_o[1:0] = 1'b0 ? pin_0_pull_i :";
+        << "assign pad_pull_mode_o[2:0] = pin_0_pull_src_i ? pin_0_pull_mode_i :"
+        << "assign pad_pull_mode_o[2:0] = 1'b0 ? pin_0_pull_mode_i :";
     QTest::newRow("override-before-invert-swapped")
         << "assign rx_input_value_o[1] = (pin_1_rx_src_s0_i ? pin_1_rx_value_s0_i : "
            "pad_input_value_i[1]) ^ pin_1_rx_inv_s0_i;"

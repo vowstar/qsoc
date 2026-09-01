@@ -2264,9 +2264,10 @@ private slots:
     void composedRegistersAreAlreadyCanonical();
     void registerPadControlReachesThePadWhenIverilogIsAvailable();
     void inversionAndOverrideReachThePinsWhenIverilogIsAvailable();
-    void wovenKeeperUsesTheFirstLabelledRow();
+    void wovenKeeperCarriesItsStrength();
     void padTablesAreBoundedToEightBitCodes();
-    void unreachableCodeLandsOnRowZero();
+    void unreachableModeLandsOnNone();
+    void nativeKeeperRowIsSelectedNotWoven();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -3500,8 +3501,8 @@ void Test::padCellRejectsWhatItLacks_data()
            "keeper";
     QTest::newRow("strength on a woven keeper") << "        pull: keeper\n"
                                                 << "        pull: {mode: keeper, strength: x}\n"
-                                                << "pin 1 slot 1.pull.strength: woven keeper uses "
-                                                   "the first up and down rows, drop strength";
+                                                << "pin 1 slot 1.pull.strength: pull mode keeper "
+                                                   "of gpio_pad_ps has a single row, drop strength";
     QTest::newRow("sinks with no slot enabling the receiver")
         << "        input_enable: 1\n"
         << ""
@@ -3587,17 +3588,16 @@ void Test::padModuleDrivesPinsFromTheTable()
         qPrintable(errors.join('\n')));
 
     const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
-    /* Rows encode as none, then the remaining modes in name order:
-     * bus_hold 1, down 2, up 3. */
+    /* Modes are fixed: 1 up, 2 down, 3 keeper, 4 oscillator, then bus_hold 5. */
     QVERIFY(pad.contains(
-        "wire PE_0_w = (pad_pull_eff_0 == 2'd1) ? 1'b1 : "
-        "(pad_pull_eff_0 == 2'd2) ? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+        "wire PE_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : "
+        "(pad_mode_eff_0 == 3'd2) ? 1'b1 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;"));
     QVERIFY(pad.contains(
-        "wire PS_0_w = (pad_pull_eff_0 == 2'd1) ? 1'b1 : "
-        "(pad_pull_eff_0 == 2'd2) ? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+        "wire PS_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : "
+        "(pad_mode_eff_0 == 3'd2) ? 1'b0 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;"));
     QVERIFY(pad.contains(
-        "wire [1:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 2'd3 : 2'd2) : "
-        "pad_osc_i[1] ? (pad_io[1] ? 2'd2 : 2'd3) : pad_pull_select_i[3:2];"));
+        "wire [2:0] pad_mode_eff_1 = (pad_pull_mode_i[5:3] == 3'd3) ? (pad_io[1] ? 3'd1 : 3'd2) : "
+        "(pad_pull_mode_i[5:3] == 3'd4) ? (pad_io[1] ? 3'd2 : 3'd1) : pad_pull_mode_i[5:3];"));
     QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
     QVERIFY(pad.contains("    .PE(PE_1_w),"));
     QVERIFY(pad.contains("`ifdef FORMAL"));
@@ -3615,13 +3615,13 @@ void Test::padModuleDrivesPinsFromTheTable()
     QVERIFY(top.contains("    inout  wire [1:0] pad_io,"));
     QVERIFY(top.contains("wire [1:0] pad_output_enable_o;"));
     /* The core resolves the slot codes; the wrapper only carries them. */
-    QVERIFY(top.contains("assign pad_pull_select_o[1:0] = (pin_0_select_i == 2'd0) ? 2'd3 : 2'd0;"));
-    QVERIFY(top.contains("assign pad_pull_select_o[3:2] = (pin_1_select_i == 2'd0) ? 2'd1 : 2'd0;"));
-    QVERIFY(top.contains("assign pad_keep_o[1] = (pin_1_select_i == 2'd1);"));
-    QVERIFY(top.contains("assign pad_osc_o[1] = (pin_1_select_i == 2'd2);"));
-    QVERIFY(top.contains("wire [3:0] pad_pull_select_w;"));
-    QVERIFY(top.contains("    .pad_pull_select_i(pad_pull_select_w)"));
-    QVERIFY(top.contains("    .pad_pull_select_o(pad_pull_select_w)"));
+    QVERIFY(top.contains("assign pad_pull_mode_o[2:0] = (pin_0_select_i == 2'd0) ? 3'd1 : 3'd0;"));
+    QVERIFY(top.contains(
+        "assign pad_pull_mode_o[5:3] = (pin_1_select_i == 2'd0) ? 3'd5 : "
+        "(pin_1_select_i == 2'd1) ? 3'd3 : (pin_1_select_i == 2'd2) ? 3'd4 : 3'd0;"));
+    QVERIFY(top.contains("wire [5:0] pad_pull_mode_w;"));
+    QVERIFY(top.contains("    .pad_pull_mode_i(pad_pull_mode_w)"));
+    QVERIFY(top.contains("    .pad_pull_mode_o(pad_pull_mode_w)"));
     QVERIFY(top.contains("iomux0_pad u_pad ("));
 
     QVERIFY(QSocIomuxGenerator::generateFileList(plan).endsWith("iomux0_pad.v\n"));
@@ -3780,15 +3780,13 @@ module iomux0_pad (
     input  wire [1:0] pad_input_enable_i,
     input  wire [1:0] pad_output_value_i,
     input  wire [1:0] pad_output_enable_i,
-    input  wire [3:0] pad_pull_select_i,
-    input  wire [1:0] pad_keep_i,
-    input  wire [1:0] pad_osc_i,
+    input  wire [5:0] pad_pull_mode_i,
     input  wire [1:0] pad_drive_select_i
 );
 
-wire [1:0] pad_pull_eff_0 = pad_keep_i[0] ? (pad_io[0] ? 2'd3 : 2'd2) : pad_osc_i[0] ? (pad_io[0] ? 2'd2 : 2'd3) : pad_pull_select_i[1:0];
-wire PE_0_w = (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) ? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;
-wire PS_0_w = (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) ? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;
+wire [2:0] pad_mode_eff_0 = (pad_pull_mode_i[2:0] == 3'd3) ? (pad_io[0] ? 3'd1 : 3'd2) : (pad_pull_mode_i[2:0] == 3'd4) ? (pad_io[0] ? 3'd2 : 3'd1) : pad_pull_mode_i[2:0];
+wire PE_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) ? 1'b1 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;
+wire PS_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) ? 1'b0 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;
 wire DS_0_w = (pad_drive_select_i[0:0] == 1'd1) ? 1'b1 : 1'b0;
 gpio_pad_ps u_pad_0 (
     .PAD(pad_io[0]),
@@ -3801,9 +3799,9 @@ gpio_pad_ps u_pad_0 (
     .DS(DS_0_w)
 );
 
-wire [1:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 2'd3 : 2'd2) : pad_osc_i[1] ? (pad_io[1] ? 2'd2 : 2'd3) : pad_pull_select_i[3:2];
-wire PE_1_w = (pad_pull_eff_1 == 2'd1) ? 1'b1 : (pad_pull_eff_1 == 2'd2) ? 1'b1 : (pad_pull_eff_1 == 2'd3) ? 1'b1 : 1'b0;
-wire PS_1_w = (pad_pull_eff_1 == 2'd1) ? 1'b1 : (pad_pull_eff_1 == 2'd2) ? 1'b0 : (pad_pull_eff_1 == 2'd3) ? 1'b1 : 1'b0;
+wire [2:0] pad_mode_eff_1 = (pad_pull_mode_i[5:3] == 3'd3) ? (pad_io[1] ? 3'd1 : 3'd2) : (pad_pull_mode_i[5:3] == 3'd4) ? (pad_io[1] ? 3'd2 : 3'd1) : pad_pull_mode_i[5:3];
+wire PE_1_w = (pad_mode_eff_1 == 3'd1) ? 1'b1 : (pad_mode_eff_1 == 3'd2) ? 1'b1 : (pad_mode_eff_1 == 3'd5) ? 1'b1 : 1'b0;
+wire PS_1_w = (pad_mode_eff_1 == 3'd1) ? 1'b1 : (pad_mode_eff_1 == 3'd2) ? 1'b0 : (pad_mode_eff_1 == 3'd5) ? 1'b1 : 1'b0;
 wire DS_1_w = (pad_drive_select_i[1:1] == 1'd1) ? 1'b1 : 1'b0;
 gpio_pad_ps u_pad_1 (
     .PAD(pad_io[1]),
@@ -3845,7 +3843,7 @@ capability: 0x00030002 at offset 0x0
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
-pull codes: 0 none, 1 bus_hold, 2 down, 3 up
+pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold
 drive codes: 0 low, 1 high
 
 pin 0 selector word 0 lsb 0 offset 0x4
@@ -4199,7 +4197,7 @@ capability: 0x00030002 at offset 0x0
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
-pull codes: 0 none, 1 bus_hold, 2 down, 3 up
+pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold
 drive codes: 0 low, 1 high
 
 pin 0 selector word 0 lsb 0 offset 0x4
@@ -4283,14 +4281,15 @@ void Test::optionRegistersKeepFixedBitPositions()
     QCOMPARE(lsbOf("pin_src_ctrl_1", "rx_src_s2"), 10);
     QCOMPARE(portOf("pin_src_ctrl_1", "pull_src"), QString("pin_1_pull_src_o"));
 
-    /* The pad word: code widths follow the tables, flags sit at 8 and 9. */
-    QCOMPARE(lsbOf("pin_pad_ctrl_0", "pull"), 0);
-    QCOMPARE(widthOf("pin_pad_ctrl_0", "pull"), 2);
-    QCOMPARE(lsbOf("pin_pad_ctrl_0", "keep"), 8);
-    QCOMPARE(lsbOf("pin_pad_ctrl_0", "osc"), 9);
-    QCOMPARE(lsbOf("pin_pad_ctrl_0", "drive"), 16);
+    /* The pad word: the mode covers five fixed values plus bus_hold, the
+     * single-row directions need no strength select, drive sits at 24. */
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "pull_mode"), 0);
+    QCOMPARE(widthOf("pin_pad_ctrl_0", "pull_mode"), 3);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "up_sel"), -1);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "down_sel"), -1);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "drive"), 24);
     QCOMPARE(widthOf("pin_pad_ctrl_0", "drive"), 1);
-    const QSocMmioFieldPlan *pull = findField(plan.mmio, "pin_pad_ctrl_0", "pull");
+    const QSocMmioFieldPlan *pull = findField(plan.mmio, "pin_pad_ctrl_0", "pull_mode");
     QVERIFY(pull != nullptr);
     QCOMPARE(pull->resetValue.value(), quint64(0));
 
@@ -4319,10 +4318,11 @@ void Test::optionLogicLayersOnTheSlotBundle()
     QVERIFY(core.contains("        2'd2: pad_output_enable_0 = tx_bundle_0[1];"));
     /* The register takes over a code only through its source bit. */
     QVERIFY(core.contains(
-        "assign pad_pull_select_o[1:0] = pin_0_pull_src_i ? pin_0_pull_i : "
-        "(pin_0_select_i == 2'd0) ? 2'd3 : 2'd0;"));
+        "assign pad_pull_mode_o[2:0] = pin_0_pull_src_i ? pin_0_pull_mode_i : "
+        "(pin_0_select_i == 2'd0) ? 3'd1 : 3'd0;"));
     QVERIFY(core.contains(
-        "assign pad_keep_o[1] = pin_1_pull_src_i ? pin_1_keep_i : (pin_1_select_i == 2'd1);"));
+        "assign pad_pull_mode_o[5:3] = pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(pin_1_select_i == 2'd0) ? 3'd5 : (pin_1_select_i == 2'd1) ? 3'd3 : 3'd0;"));
     QVERIFY(core.contains(
         "assign pad_drive_select_o[0:0] = pin_0_drive_src_i ? pin_0_drive_i : "
         "(pin_0_select_i == 2'd0) ? 1'd1 : 1'd0;"));
@@ -4334,8 +4334,8 @@ void Test::optionLogicLayersOnTheSlotBundle()
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
     QVERIFY(top.contains("    .pin_1_rx_value_s2_o(pin_1_rx_value_s2_w)"));
     QVERIFY(top.contains("    .pin_1_rx_value_s2_i(pin_1_rx_value_s2_w)"));
-    QVERIFY(top.contains("wire [1:0] pin_0_pull_w;"));
-    QVERIFY(!top.contains("pad_pull_code_"));
+    QVERIFY(top.contains("wire [2:0] pin_0_pull_mode_w;"));
+    QVERIFY(!top.contains("pad_keep"));
 }
 
 void Test::openDrainExpandsToAnInvertedEnable()
@@ -4548,7 +4548,7 @@ module tb;
         chk("slot_pull_up_PE", dut.u_pad.PE_0_w, 1'b1);
         chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
         chk("slot_drive_high", dut.u_pad.DS_0_w, 1'b1);
-        /* the register alone changes nothing: pull code 2 is down */
+        /* the register alone changes nothing: mode 2 is down */
         wr(12'h010, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("reg_idle_PS", dut.u_pad.PS_0_w, 1'b1);
@@ -4562,8 +4562,8 @@ module tb;
         wr(12'h008, 32'h0000_00c0);
         repeat (2) @(posedge clk);
         chk("reg_drive_low", dut.u_pad.DS_0_w, 1'b0);
-        /* code 0 is none, drive 1 is high */
-        wr(12'h010, 32'h0001_0000);
+        /* mode 0 is none, drive 1 is high */
+        wr(12'h010, 32'h0100_0000);
         repeat (2) @(posedge clk);
         chk("reg_pull_none_PE", dut.u_pad.PE_0_w, 1'b0);
         chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
@@ -4571,9 +4571,9 @@ module tb;
         wr(12'h008, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("slot_again_PS", dut.u_pad.PS_0_w, 1'b1);
-        /* the keeper flag reaches the weave through the register too */
+        /* mode 3 reaches the weave through the register too */
         drv_en = 1; drv_val = 1;
-        wr(12'h014, 32'h0000_0100);
+        wr(12'h014, 32'h0000_0003);
         wr(12'h00c, 32'h0000_0040);
         repeat (2) @(posedge clk);
         drv_en = 0; #2 chk("reg_keeper_holds_high", pad[1], 1'b1);
@@ -4897,7 +4897,7 @@ void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
-void Test::wovenKeeperUsesTheFirstLabelledRow()
+void Test::wovenKeeperCarriesItsStrength()
 {
     QString       padCell = padCellBlock();
     const QString single  = "          up: [\"1\", \"1\"]\n";
@@ -4914,6 +4914,8 @@ void Test::wovenKeeperUsesTheFirstLabelledRow()
     address_width: 12
     pin_count: 2
     hs_slots: 2
+    option:
+      pad_control: true
 %1%2    route:
       - pin: 0
         slot: 0
@@ -4928,28 +4930,42 @@ void Test::wovenKeeperUsesTheFirstLabelledRow()
         signal: in1
         input_value: {link: gpio0_in1}
         input_enable: 1
-        pull: keeper
+        pull: {mode: keeper, strength: strong}
 )")
                                .arg(padCell, padIntegrationBlock())),
             &plan,
             &errors),
         qPrintable(errors.join('\n')));
-    /* Rows: 0 none, 1 bus_hold, 2 down, 3 up weak, 4 up strong. */
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
-    QCOMPARE(encoding.pullWidth, 3U);
-    QCOMPARE(encoding.upCode, 3);
-    QCOMPARE(encoding.downCode, 2);
+    QCOMPARE(encoding.modeWidth, 3U);
+    QCOMPARE(encoding.upSelWidth, 1U);
+    QCOMPARE(encoding.downSelWidth, 0U);
+    /* Only up is graded, so only up_sel exists, at bit 8. */
+    const QSocMmioFieldPlan *upSel = findField(plan.mmio, "pin_pad_ctrl_0", "up_sel");
+    QVERIFY(upSel != nullptr);
+    QCOMPARE(upSel->lsb, 8U);
+    QVERIFY(findField(plan.mmio, "pin_pad_ctrl_0", "down_sel") == nullptr);
     const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
-    QVERIFY(!pad.contains("'d-1"));
     QVERIFY(pad.contains(
-        "wire [2:0] pad_pull_eff_1 = pad_keep_i[1] ? (pad_io[1] ? 3'd3 : 3'd2) : "
-        "pad_osc_i[1] ? (pad_io[1] ? 3'd2 : 3'd3) : pad_pull_select_i[5:3];"));
-    QVERIFY(
-        QSocIomuxGenerator::generateTopVerilog(plan).contains(
-            "assign pad_pull_select_o[2:0] = (pin_0_select_i == 1'd0) ? 3'd4 : 3'd0;"));
-    QVERIFY(
-        QSocIomuxGenerator::generateReport(plan).contains(
-            "pull codes: 0 none, 1 bus_hold, 2 down, 3 up weak, 4 up strong"));
+        "wire PE_1_w = (pad_mode_eff_1 == 3'd1 && pad_up_sel_i[1:1] == 1'd0) ? 1'b1 : "
+        "(pad_mode_eff_1 == 3'd1 && pad_up_sel_i[1:1] == 1'd1) ? 1'b1 : "
+        "(pad_mode_eff_1 == 3'd2) ? 1'b1 : (pad_mode_eff_1 == 3'd5) ? 1'b1 : 1'b0;"));
+    /* The keeper route carries strong into the up select; the down side has
+     * a single row and no select. */
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains(
+        "assign pad_pull_mode_o[5:3] = pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(pin_1_select_i == 1'd1) ? 3'd3 : 3'd0;"));
+    QVERIFY(top.contains(
+        "assign pad_up_sel_o[1:1] = pin_1_pull_src_i ? pin_1_up_sel_i : "
+        "(pin_1_select_i == 1'd1) ? 1'd1 : 1'd0;"));
+    QVERIFY(top.contains(
+        "assign pad_up_sel_o[0:0] = pin_0_pull_src_i ? pin_0_up_sel_i : "
+        "(pin_0_select_i == 1'd0) ? 1'd1 : 1'd0;"));
+    const QString report = QSocIomuxGenerator::generateReport(plan);
+    QVERIFY(report.contains("pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold"));
+    QVERIFY(report.contains("up strengths: 0 weak, 1 strong"));
+    QVERIFY(!report.contains("down strengths"));
 }
 
 void Test::padTablesAreBoundedToEightBitCodes()
@@ -4966,14 +4982,16 @@ void Test::padTablesAreBoundedToEightBitCodes()
     QStringList   errors;
     QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(padCell), &plan, &errors));
     QVERIFY2(
-        errors.contains("IOMUX_RANGE generator.pad_cell.pull.table: has 260 rows, at most 256"),
+        errors.contains(
+            "IOMUX_RANGE generator.pad_cell.pull.table: at most 256 strength rows per "
+            "direction and 251 named modes"),
         qPrintable(errors.join('\n')));
 }
 
-void Test::unreachableCodeLandsOnRowZero()
+void Test::unreachableModeLandsOnNone()
 {
-    /* Only a register can present a code with no row. The none row of this
-     * cell drives the enable high, which is what such a code must produce. */
+    /* Only a register can present a mode with no row. The none row of this
+     * cell drives the enable high, which is what such a mode must produce. */
     QString       padCell = padCellBlock();
     const QString none    = "          none: [\"0\", \"x\"]\n";
     QVERIFY(padCell.contains(none));
@@ -4985,11 +5003,75 @@ void Test::unreachableCodeLandsOnRowZero()
         qPrintable(errors.join('\n')));
     const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
     QVERIFY(pad.contains(
-        "wire PE_0_w = (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) "
-        "? 1'b1 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b1;"));
+        "wire PE_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) "
+        "? 1'b1 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b1;"));
     QVERIFY(pad.contains(
-        "wire PS_0_w = (pad_pull_eff_0 == 2'd1) ? 1'b1 : (pad_pull_eff_0 == 2'd2) "
-        "? 1'b0 : (pad_pull_eff_0 == 2'd3) ? 1'b1 : 1'b0;"));
+        "wire PS_0_w = (pad_mode_eff_0 == 3'd1) ? 1'b1 : (pad_mode_eff_0 == 3'd2) "
+        "? 1'b0 : (pad_mode_eff_0 == 3'd5) ? 1'b1 : 1'b0;"));
+}
+
+void Test::nativeKeeperRowIsSelectedNotWoven()
+{
+    /* A cell with its own keeper pin state: mode 3 selects that row and no
+     * loop is woven, so oscillator is not reachable either. */
+    QString       padCell = padCellBlock();
+    const QString down    = "          down: [\"1\", \"0\"]\n";
+    QVERIFY(padCell.contains(down));
+    padCell.replace(down, down + "          keeper: [\"0\", \"1\"]\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    const QString source = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: gpio0
+        signal: in0
+        input_value: {link: gpio0_in0}
+        input_enable: 1
+        pull: keeper
+)")
+                               .arg(padCell, padIntegrationBlock());
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    QVERIFY(!encoding.weaves);
+    QVERIFY(encoding.supports(QSocPadEncoding::Keeper));
+    QVERIFY(!encoding.supports(QSocPadEncoding::Oscillator));
+    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    QVERIFY(!pad.contains("pad_mode_eff_"));
+    QVERIFY(pad.contains(
+        "wire PS_0_w = (pad_pull_mode_i[2:0] == 3'd1) ? 1'b1 : "
+        "(pad_pull_mode_i[2:0] == 3'd2) ? 1'b0 : (pad_pull_mode_i[2:0] == 3'd3) "
+        "? 1'b1 : (pad_pull_mode_i[2:0] == 3'd5) ? 1'b1 : 1'b0;"));
+    QVERIFY(
+        QSocIomuxGenerator::generateTopVerilog(plan).contains(
+            "assign pad_pull_mode_o[2:0] = (pin_0_select_i == 1'd0) ? 3'd3 : 3'd0;"));
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "pull modes: 0 none, 1 up, 2 down, 3 keeper, 5 bus_hold"));
+
+    QString oscillator = source;
+    oscillator.replace("        pull: keeper\n", "        pull: oscillator\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(oscillator), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.pull.mode: pad cell gpio_pad_ps "
+                    "names its own keeper or oscillator row, so oscillator is not woven"});
+
+    QString graded = source;
+    graded.replace("        pull: keeper\n", "        pull: {mode: keeper, strength: x}\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(graded), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.pull.strength: pull mode keeper "
+                    "of gpio_pad_ps has a single row, drop strength"});
 }
 
 } // namespace
