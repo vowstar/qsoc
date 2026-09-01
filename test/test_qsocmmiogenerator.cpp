@@ -973,6 +973,9 @@ private slots:
     void generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable_data();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable();
+    void identityPrependsVersionAndTypeWords();
+    void identityRejectsCollisionsAndMalformedValues();
+    void adviseAsksForIdentity();
 };
 
 void Test::planPreservesSemantics()
@@ -1911,6 +1914,121 @@ void Test::generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable()
     QCOMPARE(simulation.exitCode(), 0);
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+namespace {
+
+QString identitySource(const QString &identity, const QString &dataWidth = "32")
+{
+    return QString(R"(
+generator:
+  kind: mmio
+  bus: axi4_lite
+  data_width: %2
+  address_width: 8
+%1  register:
+    control:
+      offset: 0x08
+      field:
+        enable:
+          lsb: 0
+          access: rw
+          reset: 0
+          output: enable_o
+)")
+        .arg(identity, dataWidth);
+}
+
+} // namespace
+
+void Test::identityPrependsVersionAndTypeWords()
+{
+    QSocMmioPlan plan;
+    QStringList  errors;
+    QVERIFY2(
+        QSocMmioGenerator::buildPlan(
+            makeDefinition(identitySource("  identity:\n    type: TMRC\n    version: 1.2.3\n")),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.registers.size(), qsizetype(3));
+    QCOMPARE(plan.registers.at(0).name, QString("version"));
+    QCOMPARE(plan.registers.at(0).byteOffset, quint64(0));
+    QCOMPARE(plan.registers.at(1).name, QString("type"));
+    QCOMPARE(plan.registers.at(1).byteOffset, quint64(4));
+    QCOMPARE(plan.registers.at(2).name, QString("control"));
+    const QString verilog = QSocMmioGenerator::generateVerilog(plan);
+    /* T M R C read as one hex value, first letter in the top byte. */
+    QVERIFY(verilog.contains("read_register[31:0] = 32'h544d5243;"));
+    QVERIFY(verilog.contains("read_register[31:24] = 8'h1;"));
+    QVERIFY(verilog.contains("read_register[23:16] = 8'h2;"));
+    QVERIFY(verilog.contains("read_register[15:8] = 8'h3;"));
+
+    /* A number is taken as written, and a 64-bit instance packs both words
+     * into the first beat. */
+    QVERIFY2(
+        QSocMmioGenerator::buildPlan(
+            makeDefinition(
+                identitySource("  identity:\n    type: 0x12345678\n    version: 0.9.255\n", "64")),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.registers.size(), qsizetype(2));
+    QCOMPARE(plan.registers.at(0).name, QString("version"));
+    QCOMPARE(plan.registers.at(0).fields.size(), qsizetype(4));
+    const QString wide = QSocMmioGenerator::generateVerilog(plan);
+    QVERIFY(wide.contains("read_register[63:32] = 32'h12345678;"));
+    QVERIFY(wide.contains("read_register[15:8] = 8'hff;"));
+    QVERIFY(wide.contains("read_register[31:24] = 8'h0;"));
+}
+
+void Test::identityRejectsCollisionsAndMalformedValues()
+{
+    QSocMmioPlan plan;
+    QStringList  errors;
+    const auto   rejects = [&](const QString &source, const QString &message) {
+        QVERIFY(!QSocMmioGenerator::buildPlan(makeDefinition(source), &plan, &errors));
+        QVERIFY2(errors.contains(message), qPrintable(errors.join('\n')));
+    };
+    rejects(
+        identitySource("  identity:\n    type: TOOLONG\n    version: 1.0.0\n"),
+        "MMIO_TYPE generator.identity.type: must be a number or four printable ASCII characters");
+    rejects(
+        identitySource("  identity:\n    type: ABCD\n    version: 1.0\n"),
+        "MMIO_TYPE generator.identity.version: must be major.minor.patch with each part below 256");
+    rejects(
+        identitySource("  identity:\n    type: ABCD\n    version: 1.256.0\n"),
+        "MMIO_TYPE generator.identity.version: must be major.minor.patch with each part below 256");
+    rejects(
+        identitySource("  identity:\n    version: 1.0.0\n"),
+        "MMIO_REQUIRED generator.identity.type: property is required");
+    QString onZero = identitySource("  identity:\n    type: ABCD\n    version: 1.0.0\n");
+    onZero.replace("      offset: 0x08\n", "      offset: 0x04\n");
+    rejects(
+        onZero,
+        "MMIO_IDENTITY generator.register.control: offset 0x4 is taken by generator.identity");
+    QString named = identitySource("  identity:\n    type: ABCD\n    version: 1.0.0\n");
+    named.replace("    control:\n", "    type:\n");
+    rejects(named, "MMIO_IDENTITY generator.register.type: name is taken by generator.identity");
+    /* A 64-bit instance still owns the first eight bytes. */
+    QString wideOnFour = identitySource("  identity:\n    type: ABCD\n    version: 1.0.0\n", "64");
+    wideOnFour.replace("      offset: 0x08\n", "      offset: 0x00\n");
+    rejects(
+        wideOnFour,
+        "MMIO_IDENTITY generator.register.control: offset 0x0 is taken by generator.identity");
+}
+
+void Test::adviseAsksForIdentity()
+{
+    QVERIFY(
+        QSocMmioGenerator::advise(makeValidDefinition())
+            .contains(
+                "MMIO_IDENTITY generator.identity: absent, add type and version so software can "
+                "recognise the block"));
+    QVERIFY(
+        QSocMmioGenerator::advise(
+            makeDefinition(identitySource("  identity:\n    type: ABCD\n    version: 1.0.0\n")))
+            .isEmpty());
 }
 
 } // namespace
