@@ -16,8 +16,10 @@
 
 namespace {
 
-const QSet<QString> kGeneratorKeys = {"kind", "bus", "data_width", "address_width", "register"};
-const QSet<QString> kRegisterKeys  = {"offset", "field", "description"};
+const QSet<QString> kGeneratorKeys
+    = {"kind", "bus", "data_width", "address_width", "identity", "register"};
+const QSet<QString> kIdentityKeys = {"type", "version"};
+const QSet<QString> kRegisterKeys = {"offset", "field", "description"};
 const QSet<QString> kFieldKeys
     = {"lsb", "width", "access", "reset", "input", "output", "value", "description"};
 const QSet<QString> kFixedPorts = {
@@ -402,6 +404,141 @@ bool parseRegisters(const YAML::Node &node, QSocMmioPlan *plan, QStringList *err
     return valid;
 }
 
+QSocMmioFieldPlan identityField(const QString &name, quint32 lsb, quint32 width, quint64 value)
+{
+    QSocMmioFieldPlan field;
+    field.name          = name;
+    field.lsb           = lsb;
+    field.width         = width;
+    field.access        = QSocMmioAccess::ReadOnly;
+    field.constantValue = value;
+    return field;
+}
+
+/**
+ * @brief Read `generator.identity` and prepend its words to the map.
+ *
+ * `version` is "major.minor.patch" with each part below 256. `type` is a
+ * number, or exactly four printable ASCII characters packed so the first
+ * lands in the top byte, which is how the word reads in a register view.
+ * The words take byte offsets 0x0 and 0x4; a 64-bit instance holds both in
+ * one beat. A user register on those offsets or with those names is an error
+ * rather than a silent overlap.
+ */
+bool parseIdentity(const YAML::Node &node, QSocMmioPlan *plan, QStringList *errors)
+{
+    const QString path = "generator.identity";
+    if (!validateMap(node, kIdentityKeys, path, errors)) {
+        return false;
+    }
+    bool    valid   = true;
+    quint64 typeId  = 0;
+    quint64 version = 0;
+    if (!node["type"]) {
+        appendError(errors, "REQUIRED", path + ".type", "property is required");
+        valid = false;
+    } else {
+        QString text;
+        if (!parseScalar(node["type"], path + ".type", &text, errors)) {
+            valid = false;
+        } else {
+            static const QRegularExpression numberPattern(
+                QStringLiteral("^(?:0[xX][0-9a-fA-F]+|[0-9]+)$"));
+            if (numberPattern.match(text).hasMatch()) {
+                valid = parseUnsigned(node["type"], path + ".type", 0xffffffffULL, &typeId, errors)
+                        && valid;
+            } else if (text.size() != 4 || !std::all_of(text.cbegin(), text.cend(), [](QChar c) {
+                           return c.unicode() >= 0x21 && c.unicode() <= 0x7e;
+                       })) {
+                appendError(
+                    errors,
+                    "TYPE",
+                    path + ".type",
+                    "must be a number or four printable ASCII characters");
+                valid = false;
+            } else {
+                for (const QChar c : text) {
+                    typeId = (typeId << 8) | quint64(c.unicode());
+                }
+            }
+        }
+    }
+    if (!node["version"]) {
+        appendError(errors, "REQUIRED", path + ".version", "property is required");
+        valid = false;
+    } else {
+        QString text;
+        if (!parseScalar(node["version"], path + ".version", &text, errors)) {
+            valid = false;
+        } else {
+            static const QRegularExpression versionPattern(
+                QStringLiteral("^([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})$"));
+            const QRegularExpressionMatch match = versionPattern.match(text);
+            bool                          fits  = match.hasMatch();
+            for (int part = 1; fits && part <= 3; ++part) {
+                fits = match.captured(part).toUInt() <= 255;
+            }
+            if (!fits) {
+                appendError(
+                    errors,
+                    "TYPE",
+                    path + ".version",
+                    "must be major.minor.patch with each part below 256");
+                valid = false;
+            } else {
+                version = (quint64(match.captured(1).toUInt()) << 24)
+                          | (quint64(match.captured(2).toUInt()) << 16)
+                          | (quint64(match.captured(3).toUInt()) << 8);
+            }
+        }
+    }
+    if (!valid) {
+        return false;
+    }
+    const bool wide = plan->dataWidth == 64;
+    for (const QSocMmioRegisterPlan &reg : plan->registers) {
+        if (reg.name == QStringLiteral("version") || reg.name == QStringLiteral("type")) {
+            appendError(
+                errors,
+                "IDENTITY",
+                "generator.register." + reg.name,
+                "name is taken by generator.identity");
+            valid = false;
+        }
+        if (reg.byteOffset < 8) {
+            appendError(
+                errors,
+                "IDENTITY",
+                "generator.register." + reg.name,
+                QString("offset 0x%1 is taken by generator.identity").arg(reg.byteOffset, 0, 16));
+            valid = false;
+        }
+    }
+    if (!valid) {
+        return false;
+    }
+    QSocMmioRegisterPlan versionReg;
+    versionReg.name        = QStringLiteral("version");
+    versionReg.description = QStringLiteral("Layout version");
+    versionReg.byteOffset  = 0;
+    versionReg.fields.append(identityField(QStringLiteral("major"), 24, 8, (version >> 24) & 0xff));
+    versionReg.fields.append(identityField(QStringLiteral("minor"), 16, 8, (version >> 16) & 0xff));
+    versionReg.fields.append(identityField(QStringLiteral("patch"), 8, 8, (version >> 8) & 0xff));
+    QSocMmioRegisterPlan typeReg;
+    typeReg.name        = QStringLiteral("type");
+    typeReg.description = QStringLiteral("Block type");
+    typeReg.byteOffset  = 4;
+    if (wide) {
+        versionReg.fields.append(identityField(QStringLiteral("type_id"), 32, 32, typeId));
+        plan->registers.prepend(versionReg);
+    } else {
+        typeReg.fields.append(identityField(QStringLiteral("type_id"), 0, 32, typeId));
+        plan->registers.prepend(typeReg);
+        plan->registers.prepend(versionReg);
+    }
+    return true;
+}
+
 bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors)
 {
     plan->moduleName = definition.moduleName;
@@ -461,7 +598,11 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
         return false;
     }
     const bool registersDecodable = parseRegisters(generator["register"], plan, errors);
-    return widthsDecodable && registersDecodable;
+    bool       identityDecodable  = true;
+    if (generator["identity"] && widthsDecodable && registersDecodable) {
+        identityDecodable = parseIdentity(generator["identity"], plan, errors);
+    }
+    return widthsDecodable && registersDecodable && identityDecodable;
 }
 
 QString packedRange(quint32 width)
@@ -1107,6 +1248,18 @@ QStringList QSocMmioGenerator::validate(const QSocModuleDefinition &definition)
     QStringList errors;
     buildPlan(definition, nullptr, &errors);
     return errors;
+}
+
+QStringList QSocMmioGenerator::advise(const QSocModuleDefinition &definition)
+{
+    QStringList      advice;
+    const YAML::Node generator = definition.extraAttributes["generator"];
+    if (generator && generator.IsMap() && !generator["identity"]) {
+        advice.append(QStringLiteral(
+            "MMIO_IDENTITY generator.identity: absent, add type and version so software can "
+            "recognise the block"));
+    }
+    return advice;
 }
 
 bool QSocMmioGenerator::buildPlan(

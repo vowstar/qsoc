@@ -95,6 +95,8 @@ public:
     static bool        isMmio(const QSocModuleDefinition &definition);
     static YAML::Node  createDraftGenerator();
     static QStringList validate(const QSocModuleDefinition &definition);
+    /** Non-blocking findings: what a valid source still lacks. */
+    static QStringList advise(const QSocModuleDefinition &definition);
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors = nullptr);
     static bool    canonicalizePlan(QSocMmioPlan *plan, QStringList *errors = nullptr);
