@@ -180,15 +180,39 @@ table. A false claim fails by name.
 
 == Register Layout
 <iomux-register-layout>
-Offset 0 is a read-only `capability` register: bits `[15:0]` hold
-`pin_count` and bits `[23:16]` hold `hs_slots`. Selector registers follow
-from the next data beat. Every pin owns a fixed 4-bit lane; the field uses
-the low `ceil(log2(hs_slots))` bits and the remaining lane bits read zero and
-ignore writes. A 32-bit word holds 8 pins and a 64-bit word holds 16, so no
-field crosses a byte and one write strobe never splits a selector. Selector
-offsets depend only on `pin_count` and `data_width`, never on `hs_slots`.
-Generation fails when `2^address_width` cannot hold the aperture and reports
-the minimum usable width.
+The first 16 bytes identify the block. The byte map is the same for both
+data widths: a 64-bit instance packs each pair into one beat. All four words
+are read-only and ignore writes.
+
+#figure(
+  align(center)[#table(
+    columns: 3,
+    align: (left, left, left),
+    table.header([Offset], [Word], [Content]),
+    table.hline(),
+    [0x0], [`version`], [layout contract: major `[31:24]`, minor `[23:16]`, patch `[15:8]`],
+    [0x4], [`type`], [0x494F4D58, the letters IOMX read as one hex value],
+    [0x8], [`capability`], [`pin_count` `[15:0]`, `hs_slots` `[23:16]`],
+    [0xC], [`feature`], [one bit per option: 0 gpio, 1 interrupt, 2 pad_control, 3 invert, 4 rx_override],
+  )],
+  caption: [IOMUX IDENTITY WORDS],
+)
+
+Software reads `version` first, because that is where a driver written for
+another instance of this type looks, then `type` to confirm the block, then
+`capability` and `feature` to compute the rest of the map. The layout
+contract is 2.0.0. A block appended after the existing ones steps the minor
+number. Any existing offset that moves steps the major number. With
+`pin_count`, `hs_slots`, `data_width`, and the feature bits every block
+offset below is computable, and the report prints them.
+
+Selector registers start at 0x10. Every pin owns a fixed 4-bit lane; the
+field uses the low `ceil(log2(hs_slots))` bits and the remaining lane bits
+read zero and ignore writes. A 32-bit word holds 8 pins and a 64-bit word
+holds 16, so no field crosses a byte and one write strobe never splits a
+selector. Selector offsets depend only on `pin_count` and `data_width`,
+never on `hs_slots`. Generation fails when `2^address_width` cannot hold
+the aperture and reports the minimum usable width.
 
 Options append register blocks after the selectors in a fixed order: the
 four gpio banks, one `pin_src_ctrl` word per pin, one `pin_pad_ctrl` word
@@ -305,10 +329,10 @@ one bus cycle to register as an edge.
     align: (left, right, right, left, right),
     table.header([Pins, width], [Selector regs], [Total regs], [Selector offsets], [Aperture]),
     table.hline(),
-    [185, 32-bit], [24], [25], [0x04 to 0x60], [100 bytes],
-    [185, 64-bit], [12], [13], [0x08 to 0x60], [104 bytes],
-    [256, 32-bit], [32], [33], [0x04 to 0x80], [132 bytes],
-    [256, 64-bit], [16], [17], [0x08 to 0x80], [136 bytes],
+    [185, 32-bit], [24], [28], [0x10 to 0x6C], [112 bytes],
+    [185, 64-bit], [12], [14], [0x10 to 0x68], [112 bytes],
+    [256, 32-bit], [32], [36], [0x10 to 0x8C], [144 bytes],
+    [256, 64-bit], [16], [18], [0x10 to 0x88], [144 bytes],
   )],
   caption: [IOMUX SELECTOR LAYOUT],
 )

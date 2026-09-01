@@ -513,7 +513,7 @@ initial begin
     check_value(pad_ov[@PIN@] === 1'b0, "reset slot 0 ov low");
     check_value(pad_oe[0] === 1'b1, "reset pin 0 slot 0 oe");
 
-    axi_read({@AW@{1'b0}});
+    axi_read(@AW@'h8);
     check_value(rdata[31:0] === 32'h@CAP@, "capability value");
 
     pad_in[@PIN@] = 1'b1;
@@ -534,8 +534,8 @@ initial begin
     @(negedge clk_i);
     check_value(tail_rx_w === 1'b0, "rx sink tracks pad");
 
-    axi_write({@AW@{1'b0}}, {@DW@{1'b1}}, {@SW@{1'b1}});
-    axi_read({@AW@{1'b0}});
+    axi_write(@AW@'h8, {@DW@{1'b1}}, {@SW@{1'b1}});
+    axi_read(@AW@'h8);
     check_value(rdata[31:0] === 32'h@CAP@, "capability write ignored");
 
     axi_write(@AW@'h@W0_OFFSET@, @DW@'h@CODE@, {@SW@{1'b1}});
@@ -715,6 +715,9 @@ function address_is_mapped;
             8'h00: address_is_mapped = 1'b1;
             8'h04: address_is_mapped = 1'b1;
             8'h08: address_is_mapped = 1'b1;
+            8'h0c: address_is_mapped = 1'b1;
+            8'h10: address_is_mapped = 1'b1;
+            8'h14: address_is_mapped = 1'b1;
             default: address_is_mapped = 1'b0;
         endcase
     end
@@ -726,10 +729,25 @@ function [31:0] read_register;
         read_register = 32'b0;
         case (address)
             8'h00: begin
+                read_register[15:8] = 8'h0;
+                read_register[23:16] = 8'h0;
+                read_register[31:24] = 8'h2;
+            end
+            8'h04: begin
+                read_register[31:0] = 32'h494f4d58;
+            end
+            8'h08: begin
                 read_register[15:0] = 16'h9;
                 read_register[23:16] = 8'h3;
             end
-            8'h04: begin
+            8'h0c: begin
+                read_register[0] = 1'h0;
+                read_register[1] = 1'h0;
+                read_register[2] = 1'h0;
+                read_register[3] = 1'h0;
+                read_register[4] = 1'h0;
+            end
+            8'h10: begin
                 read_register[1:0] = mmio_field_0_q;
                 read_register[5:4] = mmio_field_1_q;
                 read_register[9:8] = mmio_field_2_q;
@@ -739,7 +757,7 @@ function [31:0] read_register;
                 read_register[25:24] = mmio_field_6_q;
                 read_register[29:28] = mmio_field_7_q;
             end
-            8'h08: begin
+            8'h14: begin
                 read_register[1:0] = mmio_field_8_q;
             end
             default: begin end
@@ -809,7 +827,7 @@ always @(posedge clk_i or negedge rst_ni) begin
                             ? AXI_RESP_OKAY : AXI_RESP_SLVERR;
             if (address_is_mapped(write_address)) begin
             case (write_address)
-                8'h04: begin
+                8'h10: begin
                     mmio_field_0_q <= (mmio_field_0_q & ~write_mask[1:0])
                         | (write_data[1:0] & write_mask[1:0]);
                     mmio_field_1_q <= (mmio_field_1_q & ~write_mask[5:4])
@@ -827,7 +845,7 @@ always @(posedge clk_i or negedge rst_ni) begin
                     mmio_field_7_q <= (mmio_field_7_q & ~write_mask[29:28])
                         | (write_data[29:28] & write_mask[29:28]);
                 end
-                8'h08: begin
+                8'h14: begin
                     mmio_field_8_q <= (mmio_field_8_q & ~write_mask[1:0])
                         | (write_data[1:0] & write_mask[1:0]);
                 end
@@ -1254,14 +1272,16 @@ hs_slots: 3
 data_width: 32
 address_width: 8
 selector: 2-bit field in a fixed 4-bit lane per pin
-selector registers: 2 at offset 0x4 to 0x8
-registers total: 3
-aperture: 12 bytes
-capability: 0x00030009 at offset 0x0
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 2 at offset 0x10 to 0x14
+registers total: 6
+aperture: 24 bytes
+capability: 0x00030009 at offset 0x8
+feature: 0x00000000 at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
-pin 0 selector word 0 lsb 0 offset 0x4
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function gpio0 signal a*/b
     input_value: link gpio0_in bit 0 invert
     input_enable: constant 1
@@ -1273,21 +1293,21 @@ pin 0 selector word 0 lsb 0 offset 0x4
     output_value: link uart0_tx
     output_enable: constant 1
   unused slots: 1
-pin 1 selector word 0 lsb 4 offset 0x4
+pin 1 selector word 0 lsb 4 offset 0x10
   unused slots: 0, 1, 2
-pin 2 selector word 0 lsb 8 offset 0x4
+pin 2 selector word 0 lsb 8 offset 0x10
   unused slots: 0, 1, 2
-pin 3 selector word 0 lsb 12 offset 0x4
+pin 3 selector word 0 lsb 12 offset 0x10
   unused slots: 0, 1, 2
-pin 4 selector word 0 lsb 16 offset 0x4
+pin 4 selector word 0 lsb 16 offset 0x10
   unused slots: 0, 1, 2
-pin 5 selector word 0 lsb 20 offset 0x4
+pin 5 selector word 0 lsb 20 offset 0x10
   unused slots: 0, 1, 2
-pin 6 selector word 0 lsb 24 offset 0x4
+pin 6 selector word 0 lsb 24 offset 0x10
   unused slots: 0, 1, 2
-pin 7 selector word 0 lsb 28 offset 0x4
+pin 7 selector word 0 lsb 28 offset 0x10
   unused slots: 0, 1, 2
-pin 8 selector word 1 lsb 0 offset 0x8
+pin 8 selector word 1 lsb 0 offset 0x14
   slot 1 function tail signal oe
     input_value: link tail_in
     input_enable: constant 0
@@ -1403,6 +1423,7 @@ function address_is_mapped;
             12'h000: address_is_mapped = 1'b1;
             12'h008: address_is_mapped = 1'b1;
             12'h010: address_is_mapped = 1'b1;
+            12'h018: address_is_mapped = 1'b1;
             default: address_is_mapped = 1'b0;
         endcase
     end
@@ -1414,10 +1435,21 @@ function [63:0] read_register;
         read_register = 64'b0;
         case (address)
             12'h000: begin
-                read_register[15:0] = 16'h11;
-                read_register[23:16] = 8'h4;
+                read_register[15:8] = 8'h0;
+                read_register[23:16] = 8'h0;
+                read_register[31:24] = 8'h2;
+                read_register[63:32] = 32'h494f4d58;
             end
             12'h008: begin
+                read_register[15:0] = 16'h11;
+                read_register[23:16] = 8'h4;
+                read_register[32] = 1'h0;
+                read_register[33] = 1'h0;
+                read_register[34] = 1'h0;
+                read_register[35] = 1'h0;
+                read_register[36] = 1'h0;
+            end
+            12'h010: begin
                 read_register[1:0] = mmio_field_0_q;
                 read_register[5:4] = mmio_field_1_q;
                 read_register[9:8] = mmio_field_2_q;
@@ -1435,7 +1467,7 @@ function [63:0] read_register;
                 read_register[57:56] = mmio_field_14_q;
                 read_register[61:60] = mmio_field_15_q;
             end
-            12'h010: begin
+            12'h018: begin
                 read_register[1:0] = mmio_field_16_q;
             end
             default: begin end
@@ -1523,7 +1555,7 @@ always @(posedge clk_i or negedge rst_ni) begin
                             ? AXI_RESP_OKAY : AXI_RESP_SLVERR;
             if (address_is_mapped(write_address)) begin
             case (write_address)
-                12'h008: begin
+                12'h010: begin
                     mmio_field_0_q <= (mmio_field_0_q & ~write_mask[1:0])
                         | (write_data[1:0] & write_mask[1:0]);
                     mmio_field_1_q <= (mmio_field_1_q & ~write_mask[5:4])
@@ -1557,7 +1589,7 @@ always @(posedge clk_i or negedge rst_ni) begin
                     mmio_field_15_q <= (mmio_field_15_q & ~write_mask[61:60])
                         | (write_data[61:60] & write_mask[61:60]);
                 end
-                12'h010: begin
+                12'h018: begin
                     mmio_field_16_q <= (mmio_field_16_q & ~write_mask[1:0])
                         | (write_data[1:0] & write_mask[1:0]);
                 end
@@ -1597,51 +1629,53 @@ hs_slots: 4
 data_width: 64
 address_width: 12
 selector: 2-bit field in a fixed 4-bit lane per pin
-selector registers: 2 at offset 0x8 to 0x10
-registers total: 3
-aperture: 24 bytes
-capability: 0x0000000000040011 at offset 0x0
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 2 at offset 0x10 to 0x18
+registers total: 4
+aperture: 32 bytes
+capability: 0x00040011 at offset 0x8
+feature: 0x00000000 at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
-pin 0 selector word 0 lsb 0 offset 0x8
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function gpio0 signal data0
     input_value: link gpio0_in bit 0
     input_enable: constant 1
     output_value: link gpio0_out bit 0
     output_enable: link gpio0_oe bit 0
   unused slots: 1, 2, 3
-pin 1 selector word 0 lsb 4 offset 0x8
+pin 1 selector word 0 lsb 4 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 2 selector word 0 lsb 8 offset 0x8
+pin 2 selector word 0 lsb 8 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 3 selector word 0 lsb 12 offset 0x8
+pin 3 selector word 0 lsb 12 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 4 selector word 0 lsb 16 offset 0x8
+pin 4 selector word 0 lsb 16 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 5 selector word 0 lsb 20 offset 0x8
+pin 5 selector word 0 lsb 20 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 6 selector word 0 lsb 24 offset 0x8
+pin 6 selector word 0 lsb 24 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 7 selector word 0 lsb 28 offset 0x8
+pin 7 selector word 0 lsb 28 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 8 selector word 0 lsb 32 offset 0x8
+pin 8 selector word 0 lsb 32 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 9 selector word 0 lsb 36 offset 0x8
+pin 9 selector word 0 lsb 36 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 10 selector word 0 lsb 40 offset 0x8
+pin 10 selector word 0 lsb 40 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 11 selector word 0 lsb 44 offset 0x8
+pin 11 selector word 0 lsb 44 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 12 selector word 0 lsb 48 offset 0x8
+pin 12 selector word 0 lsb 48 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 13 selector word 0 lsb 52 offset 0x8
+pin 13 selector word 0 lsb 52 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 14 selector word 0 lsb 56 offset 0x8
+pin 14 selector word 0 lsb 56 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 15 selector word 0 lsb 60 offset 0x8
+pin 15 selector word 0 lsb 60 offset 0x10
   unused slots: 0, 1, 2, 3
-pin 16 selector word 1 lsb 0 offset 0x10
+pin 16 selector word 1 lsb 0 offset 0x18
   slot 3 function tail signal oe
     input_value: no sink
     input_enable: constant 0
@@ -1689,81 +1723,83 @@ hs_slots: 8
 data_width: 64
 address_width: 16
 selector: 3-bit field in a fixed 4-bit lane per pin
-selector registers: 2 at offset 0x8 to 0x10
-registers total: 3
-aperture: 24 bytes
-capability: 0x0000000000080020 at offset 0x0
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 2 at offset 0x10 to 0x18
+registers total: 4
+aperture: 32 bytes
+capability: 0x00080020 at offset 0x8
+feature: 0x00000000 at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
-pin 0 selector word 0 lsb 0 offset 0x8
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function gpio0 signal data0
     input_value: link gpio0_in bit 0
     input_enable: constant 1
     output_value: link gpio0_out bit 0
     output_enable: link gpio0_oe bit 0
   unused slots: 1, 2, 3, 4, 5, 6, 7
-pin 1 selector word 0 lsb 4 offset 0x8
+pin 1 selector word 0 lsb 4 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 2 selector word 0 lsb 8 offset 0x8
+pin 2 selector word 0 lsb 8 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 3 selector word 0 lsb 12 offset 0x8
+pin 3 selector word 0 lsb 12 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 4 selector word 0 lsb 16 offset 0x8
+pin 4 selector word 0 lsb 16 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 5 selector word 0 lsb 20 offset 0x8
+pin 5 selector word 0 lsb 20 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 6 selector word 0 lsb 24 offset 0x8
+pin 6 selector word 0 lsb 24 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 7 selector word 0 lsb 28 offset 0x8
+pin 7 selector word 0 lsb 28 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 8 selector word 0 lsb 32 offset 0x8
+pin 8 selector word 0 lsb 32 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 9 selector word 0 lsb 36 offset 0x8
+pin 9 selector word 0 lsb 36 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 10 selector word 0 lsb 40 offset 0x8
+pin 10 selector word 0 lsb 40 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 11 selector word 0 lsb 44 offset 0x8
+pin 11 selector word 0 lsb 44 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 12 selector word 0 lsb 48 offset 0x8
+pin 12 selector word 0 lsb 48 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 13 selector word 0 lsb 52 offset 0x8
+pin 13 selector word 0 lsb 52 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 14 selector word 0 lsb 56 offset 0x8
+pin 14 selector word 0 lsb 56 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 15 selector word 0 lsb 60 offset 0x8
+pin 15 selector word 0 lsb 60 offset 0x10
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 16 selector word 1 lsb 0 offset 0x10
+pin 16 selector word 1 lsb 0 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 17 selector word 1 lsb 4 offset 0x10
+pin 17 selector word 1 lsb 4 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 18 selector word 1 lsb 8 offset 0x10
+pin 18 selector word 1 lsb 8 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 19 selector word 1 lsb 12 offset 0x10
+pin 19 selector word 1 lsb 12 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 20 selector word 1 lsb 16 offset 0x10
+pin 20 selector word 1 lsb 16 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 21 selector word 1 lsb 20 offset 0x10
+pin 21 selector word 1 lsb 20 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 22 selector word 1 lsb 24 offset 0x10
+pin 22 selector word 1 lsb 24 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 23 selector word 1 lsb 28 offset 0x10
+pin 23 selector word 1 lsb 28 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 24 selector word 1 lsb 32 offset 0x10
+pin 24 selector word 1 lsb 32 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 25 selector word 1 lsb 36 offset 0x10
+pin 25 selector word 1 lsb 36 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 26 selector word 1 lsb 40 offset 0x10
+pin 26 selector word 1 lsb 40 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 27 selector word 1 lsb 44 offset 0x10
+pin 27 selector word 1 lsb 44 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 28 selector word 1 lsb 48 offset 0x10
+pin 28 selector word 1 lsb 48 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 29 selector word 1 lsb 52 offset 0x10
+pin 29 selector word 1 lsb 52 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 30 selector word 1 lsb 56 offset 0x10
+pin 30 selector word 1 lsb 56 offset 0x18
   unused slots: 0, 1, 2, 3, 4, 5, 6, 7
-pin 31 selector word 1 lsb 60 offset 0x10
+pin 31 selector word 1 lsb 60 offset 0x18
   slot 7 function tail signal oe
     input_value: link tail_in
     input_enable: constant 0
@@ -1857,6 +1893,9 @@ function address_is_mapped;
         case (address)
             12'h000: address_is_mapped = 1'b1;
             12'h004: address_is_mapped = 1'b1;
+            12'h008: address_is_mapped = 1'b1;
+            12'h00c: address_is_mapped = 1'b1;
+            12'h010: address_is_mapped = 1'b1;
             default: address_is_mapped = 1'b0;
         endcase
     end
@@ -1868,10 +1907,25 @@ function [31:0] read_register;
         read_register = 32'b0;
         case (address)
             12'h000: begin
+                read_register[15:8] = 8'h0;
+                read_register[23:16] = 8'h0;
+                read_register[31:24] = 8'h2;
+            end
+            12'h004: begin
+                read_register[31:0] = 32'h494f4d58;
+            end
+            12'h008: begin
                 read_register[15:0] = 16'h2;
                 read_register[23:16] = 8'h2;
             end
-            12'h004: begin
+            12'h00c: begin
+                read_register[0] = 1'h0;
+                read_register[1] = 1'h0;
+                read_register[2] = 1'h0;
+                read_register[3] = 1'h0;
+                read_register[4] = 1'h0;
+            end
+            12'h010: begin
                 read_register[0] = mmio_field_0_q;
                 read_register[4] = mmio_field_1_q;
             end
@@ -1928,7 +1982,7 @@ always @(posedge clk_i or negedge rst_ni) begin
                             ? AXI_RESP_OKAY : AXI_RESP_SLVERR;
             if (address_is_mapped(write_address)) begin
             case (write_address)
-                12'h004: begin
+                12'h010: begin
                     mmio_field_0_q <= (mmio_field_0_q & ~write_mask[0])
                         | (write_data[0] & write_mask[0]);
                     mmio_field_1_q <= (mmio_field_1_q & ~write_mask[4])
@@ -2147,14 +2201,16 @@ hs_slots: 2
 data_width: 32
 address_width: 12
 selector: 1-bit field in a fixed 4-bit lane per pin
-selector registers: 1 at offset 0x4 to 0x4
-registers total: 2
-aperture: 8 bytes
-capability: 0x00020002 at offset 0x0
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 1 at offset 0x10 to 0x10
+registers total: 5
+aperture: 20 bytes
+capability: 0x00020002 at offset 0x8
+feature: 0x00000000 at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
-pin 0 selector word 0 lsb 0 offset 0x4
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function gpio0 signal data0
     input_value: link gpio0_input bit 0
     input_enable: constant 1
@@ -2166,7 +2222,7 @@ pin 0 selector word 0 lsb 0 offset 0x4
     output_value: link uart0_tx
     output_enable: constant 1
   unused slots: none
-pin 1 selector word 0 lsb 4 offset 0x4
+pin 1 selector word 0 lsb 4 offset 0x10
   slot 1 function uart0 signal rx
     input_value: link uart0_rx
     input_enable: constant 1
@@ -2268,6 +2324,7 @@ private slots:
     void padTablesAreBoundedToEightBitCodes();
     void unreachableModeLandsOnNone();
     void nativeKeeperRowIsSelectedNotWoven();
+    void layoutVersionTracksTheRegisterMap();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -2314,17 +2371,20 @@ void Test::planPreservesSemantics()
     QCOMPARE(plan.mmio.moduleName, QString("iomux0_regs"));
     QCOMPARE(plan.mmio.dataWidth, 32U);
     QCOMPARE(plan.mmio.addressWidth, 12U);
-    QCOMPARE(plan.mmio.registers.size(), 2);
-    QCOMPARE(plan.mmio.registers.at(0).name, QString("capability"));
+    QCOMPARE(plan.mmio.registers.size(), 5);
+    QCOMPARE(plan.mmio.registers.at(0).name, QString("version"));
     QCOMPARE(plan.mmio.registers.at(0).byteOffset, quint64(0));
-    QCOMPARE(plan.mmio.registers.at(1).name, QString("hs_select_0"));
-    QCOMPARE(plan.mmio.registers.at(1).byteOffset, quint64(4));
-    QCOMPARE(plan.mmio.registers.at(1).fields.size(), 2);
-    QCOMPARE(plan.mmio.registers.at(1).fields.at(0).name, QString("pin_0_select"));
-    QCOMPARE(plan.mmio.registers.at(1).fields.at(0).width, 1U);
-    QCOMPARE(plan.mmio.registers.at(1).fields.at(0).lsb, 0U);
-    QCOMPARE(plan.mmio.registers.at(1).fields.at(1).lsb, 4U);
-    QCOMPARE(plan.mmio.registers.at(1).fields.at(1).outputPort, QString("pin_1_select_o"));
+    QCOMPARE(plan.mmio.registers.at(1).name, QString("type"));
+    QCOMPARE(plan.mmio.registers.at(2).name, QString("capability"));
+    QCOMPARE(plan.mmio.registers.at(3).name, QString("feature"));
+    QCOMPARE(plan.mmio.registers.at(4).name, QString("hs_select_0"));
+    QCOMPARE(plan.mmio.registers.at(4).byteOffset, quint64(16));
+    QCOMPARE(plan.mmio.registers.at(4).fields.size(), 2);
+    QCOMPARE(plan.mmio.registers.at(4).fields.at(0).name, QString("pin_0_select"));
+    QCOMPARE(plan.mmio.registers.at(4).fields.at(0).width, 1U);
+    QCOMPARE(plan.mmio.registers.at(4).fields.at(0).lsb, 0U);
+    QCOMPARE(plan.mmio.registers.at(4).fields.at(1).lsb, 4U);
+    QCOMPARE(plan.mmio.registers.at(4).fields.at(1).outputPort, QString("pin_1_select_o"));
 
     const QSocMmioFieldPlan *pinCountField = findField(plan.mmio, "capability", "pin_count");
     QVERIFY(pinCountField != nullptr);
@@ -2461,20 +2521,21 @@ void Test::reportCapabilityFollowsComposedRegister()
     QSocIomuxPlan narrow;
     QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &narrow));
     spare.lsb = 24;
-    narrow.mmio.registers[0].fields.append(spare);
+    QCOMPARE(narrow.mmio.registers[2].name, QString("capability"));
+    narrow.mmio.registers[2].fields.append(spare);
     QVERIFY(
-        QSocIomuxGenerator::generateReport(narrow).contains("capability: 0x01020002 at offset 0x0"));
+        QSocIomuxGenerator::generateReport(narrow).contains("capability: 0x01020002 at offset 0x8"));
 
-    /* A 64-bit capability register reaches past bit 31. A narrower accumulator
-     * or a fixed print width drops such a field while the read function still
-     * emits it. */
+    /* A 64-bit beat holds capability and feature together. A field past bit
+     * 31 is the feature word, and the report must say so. */
     QSocIomuxPlan wide;
     QVERIFY(QSocIomuxGenerator::buildPlan(makeWide64Definition(), &wide));
-    spare.lsb = 32;
-    wide.mmio.registers[0].fields.append(spare);
-    QVERIFY(
-        QSocIomuxGenerator::generateReport(wide).contains(
-            "capability: 0x0000000100040011 at offset 0x0"));
+    spare.lsb = 37;
+    QCOMPARE(wide.mmio.registers[1].name, QString("capability"));
+    wide.mmio.registers[1].fields.append(spare);
+    const QString wideReport = QSocIomuxGenerator::generateReport(wide);
+    QVERIFY(wideReport.contains("capability: 0x00040011 at offset 0x8"));
+    QVERIFY(wideReport.contains("feature: 0x00000020 at offset 0xc"));
 
     /* generateReport is public and accepts a register no composer builds. A
      * full-width field must not shift the mask past the accumulator, and a
@@ -2492,10 +2553,10 @@ void Test::reportCapabilityFollowsComposedRegister()
 
     QSocIomuxPlan hostile;
     QVERIFY(QSocIomuxGenerator::buildPlan(makeWide64Definition(), &hostile));
-    hostile.mmio.registers[0].fields = {full, unset};
-    QVERIFY(
-        QSocIomuxGenerator::generateReport(hostile).contains(
-            "capability: 0xffffffffffffffff at offset 0x0"));
+    hostile.mmio.registers[1].fields = {full, unset};
+    const QString hostileReport      = QSocIomuxGenerator::generateReport(hostile);
+    QVERIFY(hostileReport.contains("capability: 0xffffffff at offset 0x8"));
+    QVERIFY(hostileReport.contains("feature: 0xffffffff at offset 0xc"));
 }
 
 void Test::sourceOrderDoesNotChangeGeneratedVerilog()
@@ -2556,10 +2617,10 @@ void Test::selectorLayoutMatchesFrozenKnownAnswer_data()
     QTest::addColumn<quint64>("lastOffset");
     QTest::addColumn<quint64>("capability");
 
-    QTest::newRow("185-4-32") << 185U << 4U << 32U << 25 << quint64(0x60) << quint64(0x000400B9);
-    QTest::newRow("185-4-64") << 185U << 4U << 64U << 13 << quint64(0x60) << quint64(0x000400B9);
-    QTest::newRow("256-8-32") << 256U << 8U << 32U << 33 << quint64(0x80) << quint64(0x00080100);
-    QTest::newRow("256-8-64") << 256U << 8U << 64U << 17 << quint64(0x80) << quint64(0x00080100);
+    QTest::newRow("185-4-32") << 185U << 4U << 32U << 28 << quint64(0x6c) << quint64(0x000400B9);
+    QTest::newRow("185-4-64") << 185U << 4U << 64U << 14 << quint64(0x68) << quint64(0x000400B9);
+    QTest::newRow("256-8-32") << 256U << 8U << 32U << 36 << quint64(0x8c) << quint64(0x00080100);
+    QTest::newRow("256-8-64") << 256U << 8U << 64U << 18 << quint64(0x88) << quint64(0x00080100);
 }
 
 void Test::selectorLayoutMatchesFrozenKnownAnswer()
@@ -2580,7 +2641,7 @@ void Test::selectorLayoutMatchesFrozenKnownAnswer()
 
     QCOMPARE(plan.mmio.registers.size(), registerCount);
     QCOMPARE(plan.mmio.registers.constFirst().byteOffset, quint64(0));
-    QCOMPARE(plan.mmio.registers.at(1).byteOffset, quint64(dataWidth / 8));
+    QCOMPARE(plan.mmio.registers.at(dataWidth == 64 ? 2 : 4).byteOffset, quint64(16));
     QCOMPARE(plan.mmio.registers.constLast().byteOffset, lastOffset);
 
     const QSocMmioFieldPlan *pinCountField = findField(plan.mmio, "capability", "pin_count");
@@ -2620,8 +2681,10 @@ void Test::pinCountBoundaryFollowsLaneFormula()
             qPrintable(errors.join('\n')));
         const quint32 lanes = dataWidth / 4;
         const quint32 words = (pinCount + lanes - 1) / lanes;
-        QCOMPARE(plan.mmio.registers.size(), int(words) + 1);
-        QCOMPARE(plan.mmio.registers.constLast().byteOffset, quint64(words) * (dataWidth / 8));
+        QCOMPARE(plan.mmio.registers.size(), int(words) + (dataWidth == 64 ? 2 : 4));
+        QCOMPARE(
+            plan.mmio.registers.constLast().byteOffset,
+            quint64(16) + quint64(words - 1) * (dataWidth / 8));
         const QSocMmioFieldPlan *lastField = findField(
             plan.mmio,
             plan.mmio.registers.constLast().name,
@@ -2670,7 +2733,7 @@ void Test::apertureExceedingAddressWidthIsRejected()
     QCOMPARE(plan, QSocIomuxPlan());
     QCOMPARE(errors.size(), 1);
     QVERIFY(errors.constFirst().startsWith("IOMUX_RANGE generator.address_width"));
-    QVERIFY(errors.constFirst().contains("aperture needs 132 bytes"));
+    QVERIFY(errors.constFirst().contains("aperture needs 144 bytes"));
     QVERIFY(errors.constFirst().contains("minimum address_width is 8"));
     QVERIFY(
         QSocIomuxGenerator::generateCoreVerilog(plan).isEmpty()
@@ -2682,14 +2745,14 @@ void Test::apertureExceedingAddressWidthIsRejected()
     QVERIFY(!QSocIomuxGenerator::buildPlan(
         makeDefinition(sourceForConfig(256, 8, 64, 7)), &plan, &errors));
     QCOMPARE(errors.size(), 1);
-    QVERIFY(errors.constFirst().contains("aperture needs 136 bytes"));
+    QVERIFY(errors.constFirst().contains("aperture needs 144 bytes"));
     QVERIFY(errors.constFirst().contains("minimum address_width is 8"));
     QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(256, 8, 64, 8)), &plan));
 
     QVERIFY(
         !QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 2)), &plan, &errors));
-    QVERIFY(errors.constFirst().contains("minimum address_width is 3"));
-    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 3)), &plan));
+    QVERIFY(errors.constFirst().contains("minimum address_width is 5"));
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 5)), &plan));
 }
 
 void Test::reportListsRoutesAndLayout()
@@ -2702,10 +2765,10 @@ void Test::reportListsRoutesAndLayout()
     QVERIFY(report.contains("pin_count: 2"));
     QVERIFY(report.contains("hs_slots: 2"));
     QVERIFY(report.contains("selector: 1-bit field in a fixed 4-bit lane per pin"));
-    QVERIFY(report.contains("capability: 0x00020002 at offset 0x0"));
+    QVERIFY(report.contains("capability: 0x00020002 at offset 0x8"));
     QVERIFY(report.contains("reset: every selector resets to 0 and selects slot 0"));
-    QVERIFY(report.contains("pin 0 selector word 0 lsb 0 offset 0x4"));
-    QVERIFY(report.contains("pin 1 selector word 0 lsb 4 offset 0x4"));
+    QVERIFY(report.contains("pin 0 selector word 0 lsb 0 offset 0x10"));
+    QVERIFY(report.contains("pin 1 selector word 0 lsb 4 offset 0x10"));
     QVERIFY(report.contains("  slot 1 function uart0 signal tx"));
     QVERIFY(report.contains("    input_value: no sink"));
     QVERIFY(report.contains("    output_value: link uart0_tx"));
@@ -3133,35 +3196,35 @@ module tb;
 
     initial begin
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
-        rd(12'h000);
+        rd(12'h008);
         if (v !== 32'h00020002) begin
             $display("TEST_FAIL capability %h", v); fails = fails + 1;
         end
         uart0_tx = 1; repeat (2) @(posedge clk);
         chk("fast_ov", pad_ov[0], 1'b1);
         chk("fast_oe", pad_oe[0], 1'b1);
-        wr(12'h010, 32'h00000000);
-        wr(12'h014, 32'h00000001);
-        wr(12'h018, 32'h00000014);
+        wr(12'h01c, 32'h00000000);
+        wr(12'h020, 32'h00000001);
+        wr(12'h024, 32'h00000014);
         repeat (2) @(posedge clk);
         chk("reg_ov_low", pad_ov[0], 1'b0);
         chk("reg_oe_high", pad_oe[0], 1'b1);
-        wr(12'h010, 32'h00000001);
+        wr(12'h01c, 32'h00000001);
         repeat (2) @(posedge clk);
         chk("reg_ov_high", pad_ov[0], 1'b1);
         uart0_tx = 0; repeat (2) @(posedge clk);
         chk("fast_ignored", pad_ov[0], 1'b1);
         uart0_tx = 1;
-        wr(12'h018, 32'h00000020);
+        wr(12'h024, 32'h00000020);
         repeat (2) @(posedge clk);
         chk("oe_from_slot_ov_high", pad_oe[0], 1'b1);
         uart0_tx = 0; repeat (2) @(posedge clk);
         chk("oe_from_slot_ov_low", pad_oe[0], 1'b0);
-        wr(12'h018, 32'h00000030);
+        wr(12'h024, 32'h00000030);
         repeat (2) @(posedge clk);
         chk("oe_reserved", pad_oe[0], 1'b0);
         pad_in = 2'b10; repeat (4) @(posedge clk);
-        rd(12'h008);
+        rd(12'h014);
         chk("readback_pin1", v[1], 1'b1);
         chk("readback_pin0", v[0], 1'b0);
         if (fails == 0) $display("TEST_PASS");
@@ -3238,35 +3301,35 @@ module tb;
         repeat (4) @(posedge clk); rst_n = 1; repeat (6) @(posedge clk);
 
         /* fix 1: pending records the event with every enable still at zero */
-        rd(12'h034);
+        rd(12'h040);
         chk("low_pend_set_without_enable", v[0], 1'b1);
         chk("irq_quiet_without_enable", irq, 1'b0);
-        rd(12'h030);
+        rd(12'h03c);
         chk("high_pend_clear", v[0], 1'b0);
 
         /* fix 2: a clear that lands while the source still fires keeps the bit */
-        wr(12'h034, 32'h00000001);
+        wr(12'h040, 32'h00000001);
         repeat (2) @(posedge clk);
-        rd(12'h034);
+        rd(12'h040);
         chk("set_beats_clear", v[0], 1'b1);
 
         /* once the source stops, the same write clears it */
         pad_in = 2'b01;
         repeat (4) @(posedge clk);
-        wr(12'h034, 32'h00000001);
+        wr(12'h040, 32'h00000001);
         repeat (2) @(posedge clk);
-        rd(12'h034);
+        rd(12'h040);
         chk("clear_when_idle", v[0], 1'b0);
 
         /* the rising edge was recorded on the way up */
-        rd(12'h038);
+        rd(12'h044);
         chk("rise_pend_set", v[0], 1'b1);
 
         /* enable gates the line, not the bit */
-        wr(12'h028, 32'h00000001);
+        wr(12'h034, 32'h00000001);
         repeat (2) @(posedge clk);
         chk("irq_after_enable", irq, 1'b1);
-        wr(12'h038, 32'h00000001);
+        wr(12'h044, 32'h00000001);
         repeat (2) @(posedge clk);
         chk("irq_after_ack", irq, 1'b0);
 
@@ -3691,13 +3754,13 @@ module tb;
         /* keeper: hold the pad while the mode changes, a floating node in a
          * zero-delay simulation has no level for the loop to keep */
         drv_en = 1; drv_val = 1;
-        wr(12'h004, 32'h0000_0010);
+        wr(12'h010, 32'h0000_0010);
         repeat (2) @(posedge clk);
         drv_en = 0; #2 chk("keeper_holds_high", pad[1], 1'b1);
         drv_en = 1; drv_val = 0; #2 drv_en = 0; #2 chk("keeper_holds_low", pad[1], 1'b0);
         chk("keeper_receiver_sees_low", gp_in1, 1'b0);
         drv_en = 1; drv_val = 1;
-        wr(12'h004, 32'h0000_0020);
+        wr(12'h010, 32'h0000_0020);
         repeat (2) @(posedge clk);
         chk("osc_pad_high_asks_pull_down_PE", dut.u_pad.PE_1_w, 1'b1);
         chk("osc_pad_high_asks_pull_down_PS", dut.u_pad.PS_1_w, 1'b0);
@@ -3836,17 +3899,19 @@ hs_slots: 3
 data_width: 32
 address_width: 12
 selector: 2-bit field in a fixed 4-bit lane per pin
-selector registers: 1 at offset 0x4 to 0x4
-registers total: 2
-aperture: 8 bytes
-capability: 0x00030002 at offset 0x0
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 1 at offset 0x10 to 0x10
+registers total: 5
+aperture: 20 bytes
+capability: 0x00030002 at offset 0x8
+feature: 0x00000000 at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
 pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold
 drive codes: 0 low, 1 high
 
-pin 0 selector word 0 lsb 0 offset 0x4
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function uart0 signal tx
     input_value: no sink
     input_enable: constant 0
@@ -3855,7 +3920,7 @@ pin 0 selector word 0 lsb 0 offset 0x4
     pull: up
     drive: high
   unused slots: 1, 2
-pin 1 selector word 0 lsb 4 offset 0x4
+pin 1 selector word 0 lsb 4 offset 0x10
   slot 0 function i2c0 signal sda
     input_value: link i2c0_sda_in
     input_enable: constant 1
@@ -3888,25 +3953,27 @@ hs_slots: 2
 data_width: 32
 address_width: 12
 selector: 1-bit field in a fixed 4-bit lane per pin
-selector registers: 1 at offset 0x4 to 0x4
-gpio registers: 4 at offset 0x8 to 0x14
-source control registers: 2 at offset 0x18 to 0x1c
-interrupt registers: 8 at offset 0x20 to 0x3c
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 1 at offset 0x10 to 0x10
+gpio registers: 4 at offset 0x14 to 0x20
+source control registers: 2 at offset 0x24 to 0x28
+interrupt registers: 8 at offset 0x2c to 0x48
 interrupt lines: 1, one per 32 pins
-registers total: 16
-aperture: 64 bytes
-capability: 0x00020002 at offset 0x0
+registers total: 19
+aperture: 76 bytes
+capability: 0x00020002 at offset 0x8
+feature: 0x00000003 at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
-pin 0 selector word 0 lsb 0 offset 0x4
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function uart0 signal tx
     input_value: no sink
     input_enable: constant 0
     output_value: link uart0_tx
     output_enable: constant 1
   unused slots: 1
-pin 1 selector word 0 lsb 4 offset 0x4
+pin 1 selector word 0 lsb 4 offset 0x10
   unused slots: 0, 1
 
 undeclared pin/slot pairs drive a zero tx bundle
@@ -3968,9 +4035,9 @@ void Test::interruptAloneNeedsNoGpioRegisters()
     QVERIFY(!plan.option.gpio);
 
     const QString report = QSocIomuxGenerator::generateReport(plan);
-    QVERIFY(report.contains("interrupt registers: 8 at offset 0x8 to 0x24"));
+    QVERIFY(report.contains("interrupt registers: 8 at offset 0x14 to 0x30"));
     QVERIFY(!report.contains("gpio registers"));
-    QVERIFY(report.contains("registers total: 10"));
+    QVERIFY(report.contains("registers total: 13"));
 
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
     QVERIFY(top.contains("pad_input_sync_q <= pad_input_meta_q;"));
@@ -4059,7 +4126,7 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
     const quint32 byteCount  = dataWidth / 8;
     const quint32 lanes      = dataWidth / 4;
     const quint32 code       = hsSlots - 1;
-    const quint64 selOffset  = quint64(1 + pin / lanes) * byteCount;
+    const quint64 selOffset  = 16 + quint64(pin / lanes) * byteCount;
     const quint32 laneLsb    = (pin % lanes) * 4;
     const quint32 capability = pinCount | (hsSlots << 16);
     const QString keepStrobe = QString("%1'h%2").arg(byteCount).arg(
@@ -4074,7 +4141,7 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
     bench.replace("@HISLOT@", QString::number(hsSlots - 1));
     bench.replace("@CAP@", QString("%1").arg(capability, 8, 16, QLatin1Char('0')));
     bench.replace("@SEL_OFFSET@", QString::number(selOffset, 16));
-    bench.replace("@W0_OFFSET@", QString::number(byteCount, 16));
+    bench.replace("@W0_OFFSET@", QString::number(16, 16));
     bench.replace("@LANE_LSB@", QString::number(laneLsb));
     bench.replace("@CODE@", QString::number(code, 16));
     bench.replace("@KEEP_STRB@", keepStrobe);
@@ -4183,24 +4250,26 @@ hs_slots: 3
 data_width: 32
 address_width: 12
 selector: 2-bit field in a fixed 4-bit lane per pin
-selector registers: 1 at offset 0x4 to 0x4
-gpio registers: 4 at offset 0x8 to 0x14
-source control registers: 2 at offset 0x18 to 0x1c
-pad control registers: 2 at offset 0x20 to 0x24
-invert registers: 6 at offset 0x28 to 0x3c
-rx override registers: 3 at offset 0x40 to 0x48
-interrupt registers: 8 at offset 0x4c to 0x68
+identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+selector registers: 1 at offset 0x10 to 0x10
+gpio registers: 4 at offset 0x14 to 0x20
+source control registers: 2 at offset 0x24 to 0x28
+pad control registers: 2 at offset 0x2c to 0x30
+invert registers: 6 at offset 0x34 to 0x48
+rx override registers: 3 at offset 0x4c to 0x54
+interrupt registers: 8 at offset 0x58 to 0x74
 interrupt lines: 1, one per 32 pins
-registers total: 27
-aperture: 108 bytes
-capability: 0x00030002 at offset 0x0
+registers total: 30
+aperture: 120 bytes
+capability: 0x00030002 at offset 0x8
+feature: 0x0000001f at offset 0xc
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, drive levels 2, constraints 3
 pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 bus_hold
 drive codes: 0 low, 1 high
 
-pin 0 selector word 0 lsb 0 offset 0x4
+pin 0 selector word 0 lsb 0 offset 0x10
   slot 0 function uart0 signal tx
     input_value: no sink
     input_enable: constant 0
@@ -4209,7 +4278,7 @@ pin 0 selector word 0 lsb 0 offset 0x4
     pull: up
     drive: high
   unused slots: 1, 2
-pin 1 selector word 0 lsb 4 offset 0x4
+pin 1 selector word 0 lsb 4 offset 0x10
   slot 0 function i2c0 signal sda
     input_value: link i2c0_sda_in
     input_enable: constant 1
@@ -4240,13 +4309,36 @@ void Test::optionRegistersKeepFixedBitPositions()
     /* Composition order: gpio banks, source words, pad words, inversion banks,
      * receive override banks, interrupt banks. */
     const QStringList expectedNames
-        = {"capability",          "hs_select_0",     "input_value_0",      "input_enable_0",
-           "output_value_0",      "output_enable_0", "pin_src_ctrl_0",     "pin_src_ctrl_1",
-           "pin_pad_ctrl_0",      "pin_pad_ctrl_1",  "input_enable_inv_0", "output_value_inv_0",
-           "output_enable_inv_0", "rx_inv_s0_0",     "rx_inv_s1_0",        "rx_inv_s2_0",
-           "rx_value_s0_0",       "rx_value_s1_0",   "rx_value_s2_0",      "high_int_en_0",
-           "low_int_en_0",        "rise_int_en_0",   "fall_int_en_0",      "high_int_pend_0",
-           "low_int_pend_0",      "rise_int_pend_0", "fall_int_pend_0"};
+        = {"version",
+           "type",
+           "capability",
+           "feature",
+           "hs_select_0",
+           "input_value_0",
+           "input_enable_0",
+           "output_value_0",
+           "output_enable_0",
+           "pin_src_ctrl_0",
+           "pin_src_ctrl_1",
+           "pin_pad_ctrl_0",
+           "pin_pad_ctrl_1",
+           "input_enable_inv_0",
+           "output_value_inv_0",
+           "output_enable_inv_0",
+           "rx_inv_s0_0",
+           "rx_inv_s1_0",
+           "rx_inv_s2_0",
+           "rx_value_s0_0",
+           "rx_value_s1_0",
+           "rx_value_s2_0",
+           "high_int_en_0",
+           "low_int_en_0",
+           "rise_int_en_0",
+           "fall_int_en_0",
+           "high_int_pend_0",
+           "low_int_pend_0",
+           "rise_int_pend_0",
+           "fall_int_pend_0"};
     QStringList names;
     for (const QSocMmioRegisterPlan &reg : plan.mmio.registers) {
         names.append(reg.name);
@@ -4549,37 +4641,37 @@ module tb;
         chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
         chk("slot_drive_high", dut.u_pad.DS_0_w, 1'b1);
         /* the register alone changes nothing: mode 2 is down */
-        wr(12'h010, 32'h0000_0002);
+        wr(12'h01c, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("reg_idle_PS", dut.u_pad.PS_0_w, 1'b1);
         chk("reg_idle_DS", dut.u_pad.DS_0_w, 1'b1);
         /* each source bit hands over its own code and nothing else */
-        wr(12'h008, 32'h0000_0040);
+        wr(12'h014, 32'h0000_0040);
         repeat (2) @(posedge clk);
         chk("reg_pull_down_PE", dut.u_pad.PE_0_w, 1'b1);
         chk("reg_pull_down_PS", dut.u_pad.PS_0_w, 1'b0);
         chk("drive_still_slot", dut.u_pad.DS_0_w, 1'b1);
-        wr(12'h008, 32'h0000_00c0);
+        wr(12'h014, 32'h0000_00c0);
         repeat (2) @(posedge clk);
         chk("reg_drive_low", dut.u_pad.DS_0_w, 1'b0);
         /* mode 0 is none, drive 1 is high */
-        wr(12'h010, 32'h0100_0000);
+        wr(12'h01c, 32'h0100_0000);
         repeat (2) @(posedge clk);
         chk("reg_pull_none_PE", dut.u_pad.PE_0_w, 1'b0);
         chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
         /* releasing the source bits returns the slot request */
-        wr(12'h008, 32'h0000_0000);
+        wr(12'h014, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("slot_again_PS", dut.u_pad.PS_0_w, 1'b1);
         /* mode 3 reaches the weave through the register too */
         drv_en = 1; drv_val = 1;
-        wr(12'h014, 32'h0000_0003);
-        wr(12'h00c, 32'h0000_0040);
+        wr(12'h020, 32'h0000_0003);
+        wr(12'h018, 32'h0000_0040);
         repeat (2) @(posedge clk);
         drv_en = 0; #2 chk("reg_keeper_holds_high", pad[1], 1'b1);
         drv_en = 1; drv_val = 0; #2 drv_en = 0; #2 chk("reg_keeper_holds_low", pad[1], 1'b0);
         /* open drain from the route: sda_out low drives the pad low */
-        wr(12'h00c, 32'h0000_0000);
+        wr(12'h018, 32'h0000_0000);
         drv_en = 1; drv_val = 1; #2 drv_en = 0;
         sda_out = 0; #2 chk("open_drain_drives_low", pad[1], 1'b0);
         sda_out = 1; #2 chk("open_drain_releases", dut.pad_output_enable_o[1], 1'b0);
@@ -4643,9 +4735,9 @@ void Test::registerPadControlReachesThePadWhenIverilogIsAvailable()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x08));
-    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x10));
-    QCOMPARE(offsetOf("pin_pad_ctrl_1"), qint64(0x14));
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x14));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x1c));
+    QCOMPARE(offsetOf("pin_pad_ctrl_1"), qint64(0x20));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -4783,52 +4875,52 @@ module tb;
         chk("plain_ov", pad_ov[0], 1'b1);
         chk("plain_oe", pad_oe[0], 1'b1);
         /* output value inversion flips the slot value */
-        wr(12'h024, 32'h0000_0001);
+        wr(12'h030, 32'h0000_0001);
         repeat (2) @(posedge clk);
         chk("inv_ov", pad_ov[0], 1'b0);
         uart0_tx = 0; #1 chk("inv_ov_low", pad_ov[0], 1'b1);
-        wr(12'h024, 32'h0000_0000);
+        wr(12'h030, 32'h0000_0000);
         /* open drain at run time: enable follows the inverted slot value */
-        wr(12'h018, 32'h0000_0020);
-        wr(12'h028, 32'h0000_0001);
+        wr(12'h024, 32'h0000_0020);
+        wr(12'h034, 32'h0000_0001);
         repeat (2) @(posedge clk);
         uart0_tx = 0; #1;
         chk("od_low_drives", pad_oe[0], 1'b1);
         chk("od_low_value", pad_ov[0], 1'b0);
         uart0_tx = 1; #1 chk("od_high_releases", pad_oe[0], 1'b0);
         /* cross taps: value from the slot enable (1) and from the slot input enable (0) */
-        wr(12'h028, 32'h0000_0000);
-        wr(12'h018, 32'h0000_000c);
+        wr(12'h034, 32'h0000_0000);
+        wr(12'h024, 32'h0000_000c);
         repeat (2) @(posedge clk);
         uart0_tx = 0; #1 chk("ov_from_slot_oe", pad_ov[0], 1'b1);
-        wr(12'h018, 32'h0000_0008);
+        wr(12'h024, 32'h0000_0008);
         repeat (2) @(posedge clk);
         uart0_tx = 1; #1 chk("ov_from_slot_ie", pad_ov[0], 1'b0);
-        wr(12'h018, 32'h0000_0000);
+        wr(12'h024, 32'h0000_0000);
         /* input enable inversion turns the constant zero of an idle pin on */
         chk("ie_pin0_off", pad_ie[0], 1'b0);
-        wr(12'h020, 32'h0000_0001);
+        wr(12'h02c, 32'h0000_0001);
         repeat (2) @(posedge clk);
         chk("ie_pin0_inverted_on", pad_ie[0], 1'b1);
         /* receive: broadcast, then a per-slot override, then a per-slot invert */
         pad_in = 2'b10; #1;
         chk("rx_s0_broadcast", uart0_rx, 1'b1);
         chk("rx_s1_broadcast", spi0_miso, 1'b1);
-        wr(12'h038, 32'h0000_0000);
+        wr(12'h044, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("rx_value_idle_without_src", spi0_miso, 1'b1);
-        wr(12'h01c, 32'h0000_0200);
+        wr(12'h028, 32'h0000_0200);
         repeat (2) @(posedge clk);
         chk("rx_s1_overridden_low", spi0_miso, 1'b0);
         chk("rx_s0_untouched", uart0_rx, 1'b1);
-        wr(12'h038, 32'h0000_0002);
+        wr(12'h044, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("rx_s1_overridden_high", spi0_miso, 1'b1);
         pad_in = 2'b00; #1 chk("rx_s1_ignores_pad", spi0_miso, 1'b1);
-        wr(12'h02c, 32'h0000_0002);
+        wr(12'h038, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("rx_s0_inverted", uart0_rx, 1'b1);
-        wr(12'h030, 32'h0000_0002);
+        wr(12'h03c, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("rx_s1_override_then_invert", spi0_miso, 1'b0);
         if (fails == 0) $display("TEST_PASS");
@@ -4856,13 +4948,13 @@ void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x18));
-    QCOMPARE(offsetOf("input_enable_inv_0"), qint64(0x20));
-    QCOMPARE(offsetOf("output_value_inv_0"), qint64(0x24));
-    QCOMPARE(offsetOf("output_enable_inv_0"), qint64(0x28));
-    QCOMPARE(offsetOf("rx_inv_s0_0"), qint64(0x2c));
-    QCOMPARE(offsetOf("rx_inv_s1_0"), qint64(0x30));
-    QCOMPARE(offsetOf("rx_value_s1_0"), qint64(0x38));
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x24));
+    QCOMPARE(offsetOf("input_enable_inv_0"), qint64(0x2c));
+    QCOMPARE(offsetOf("output_value_inv_0"), qint64(0x30));
+    QCOMPARE(offsetOf("output_enable_inv_0"), qint64(0x34));
+    QCOMPARE(offsetOf("rx_inv_s0_0"), qint64(0x38));
+    QCOMPARE(offsetOf("rx_inv_s1_0"), qint64(0x3c));
+    QCOMPARE(offsetOf("rx_value_s1_0"), qint64(0x44));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -5072,6 +5164,69 @@ void Test::nativeKeeperRowIsSelectedNotWoven()
         errors,
         QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.pull.strength: pull mode keeper "
                     "of gpio_pad_ps has a single row, drop strength"});
+}
+
+void Test::layoutVersionTracksTheRegisterMap()
+{
+    /* The version word is a promise about offsets. This list is that promise
+     * for the layout with every option on. Any change here that moves an
+     * existing line is a major step, a new line at the end is a minor step,
+     * and either one changes QSocIomuxGenerator::layoutVersion() first. */
+    const QSocIomuxLayoutVersion layout = QSocIomuxGenerator::layoutVersion();
+    QCOMPARE(layout.major, 2U);
+    QCOMPARE(layout.minor, 0U);
+    QCOMPARE(layout.patch, 0U);
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeAllOptionDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QStringList map;
+    for (const QSocMmioRegisterPlan &reg : plan.mmio.registers) {
+        QStringList fields;
+        for (const QSocMmioFieldPlan &field : reg.fields) {
+            fields.append(QString("%1@%2").arg(field.name).arg(field.lsb));
+        }
+        map.append(QString("0x%1 %2: %3")
+                       .arg(reg.byteOffset, 2, 16, QLatin1Char('0'))
+                       .arg(reg.name, fields.join(' ')));
+    }
+    const QStringList frozen = {
+        "0x00 version: patch@8 minor@16 major@24",
+        "0x04 type: type_id@0",
+        "0x08 capability: pin_count@0 hs_slots@16",
+        "0x0c feature: gpio@0 interrupt@1 pad_control@2 invert@3 rx_override@4",
+        "0x10 hs_select_0: pin_0_select@0 pin_1_select@4",
+        "0x14 input_value_0: pin_0_input_value@0 pin_1_input_value@1",
+        "0x18 input_enable_0: pin_0_input_enable@0 pin_1_input_enable@1",
+        "0x1c output_value_0: pin_0_output_value@0 pin_1_output_value@1",
+        "0x20 output_enable_0: pin_0_output_enable@0 pin_1_output_enable@1",
+        "0x24 pin_src_ctrl_0: input_enable_src@0 output_value_src@2 output_enable_src@4 "
+        "pull_src@6 drive_src@7 rx_src_s0@8 rx_src_s1@9 rx_src_s2@10",
+        "0x28 pin_src_ctrl_1: input_enable_src@0 output_value_src@2 output_enable_src@4 "
+        "pull_src@6 drive_src@7 rx_src_s0@8 rx_src_s1@9 rx_src_s2@10",
+        "0x2c pin_pad_ctrl_0: pull_mode@0 drive@24",
+        "0x30 pin_pad_ctrl_1: pull_mode@0 drive@24",
+        "0x34 input_enable_inv_0: pin_0_input_enable_inv@0 pin_1_input_enable_inv@1",
+        "0x38 output_value_inv_0: pin_0_output_value_inv@0 pin_1_output_value_inv@1",
+        "0x3c output_enable_inv_0: pin_0_output_enable_inv@0 pin_1_output_enable_inv@1",
+        "0x40 rx_inv_s0_0: pin_0_rx_inv_s0@0 pin_1_rx_inv_s0@1",
+        "0x44 rx_inv_s1_0: pin_0_rx_inv_s1@0 pin_1_rx_inv_s1@1",
+        "0x48 rx_inv_s2_0: pin_0_rx_inv_s2@0 pin_1_rx_inv_s2@1",
+        "0x4c rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
+        "0x50 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
+        "0x54 rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
+        "0x58 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
+        "0x5c low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
+        "0x60 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
+        "0x64 fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
+        "0x68 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
+        "0x6c low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
+        "0x70 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
+        "0x74 fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
+    };
+    QCOMPARE(map, frozen);
 }
 
 } // namespace

@@ -253,6 +253,20 @@ struct QSocIomuxCorePort
     quint32 width = 1;
 };
 
+/**
+ * @brief Version of the register layout this generator emits.
+ *
+ * Software reads it from the first word of every instance. A block appended
+ * after the existing ones is a minor step. Any existing offset that moves is
+ * a major step.
+ */
+struct QSocIomuxLayoutVersion
+{
+    quint32 major = 2;
+    quint32 minor = 0;
+    quint32 patch = 0;
+};
+
 struct QSocIomuxFormalCollateral
 {
     QString systemVerilog;
@@ -268,6 +282,12 @@ public:
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
     static QString endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role);
+    /** The layout contract the identity word reports. */
+    static QSocIomuxLayoutVersion layoutVersion();
+    /** The type word every instance reports, "IOMX" read as a hex value. */
+    static constexpr quint32 kTypeId = 0x494F4D58;
+    /** Bytes the identity words occupy before the first selector. */
+    static constexpr quint32 kIdentityBytes = 16;
     /** The selector code layout of the declared pad cell, empty when none. */
     static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell);
     /**
