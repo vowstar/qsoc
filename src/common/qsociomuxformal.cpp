@@ -170,13 +170,20 @@ void appendPadCodeAssertions(
                 route ? encoding.routeDownSel(*route) : 0);
         }
     }
-    if (encoding.hasDrive()) {
+    for (qsizetype index = 0; index < encoding.control.size(); ++index) {
+        const QSocPadEncoding::Control &item = encoding.control.at(index);
+        if (item.width == 0) {
+            continue;
+        }
+        const QByteArray out  = (item.name + "_select").toUtf8();
+        const QByteArray name = item.name.toUtf8();
+        const QByteArray src  = (item.name + "_src").toUtf8();
         expect(
-            "drive_select",
-            "drive",
-            encoding.driveWidth,
-            "drive_src",
-            route ? encoding.routeDriveCode(*route) : 0);
+            out.constData(),
+            name.constData(),
+            item.width,
+            src.constData(),
+            route ? encoding.routeControlCode(*route, index) : item.defaultCode);
     }
 }
 
