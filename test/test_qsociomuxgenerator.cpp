@@ -2331,6 +2331,9 @@ private slots:
     void unroutedSlotsTakeTheDeclaredDefaultRow();
     void controlNamesAndPinsAreRefusedWhenTaken();
     void linksNeedAPadCellAndRowsToChooseFrom();
+    void safeRowOutranksEveryOtherSource();
+    void safeRowIsValidatedAgainstTheCell();
+    void forceHoldsThePadInSimulationWhenIverilogIsAvailable();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -5471,6 +5474,279 @@ void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
     writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
     writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
     writeTextFile(dir.filePath("tb.v"), linkedRowTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler,
+        {"-g2012",
+         "-s",
+         "tb",
+         "-o",
+         outputPath,
+         "iomux0_regs.v",
+         "iomux0_conn.v",
+         "iomux0.v",
+         "iomux0_pad.v",
+         "gpio_pad_ps.v",
+         "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+QSocModuleDefinition makeSafeRowDefinition(
+    const QString &safe = QStringLiteral(
+        "      safe:\n        input_enable: 1\n"
+        "        pull: down\n        drive: high\n"))
+{
+    QString       padCell = padCellBlock();
+    const QString anchor  = "      constraint:\n";
+    padCell.replace(anchor, safe + anchor);
+    QString integration = padIntegrationBlock();
+    integration.replace("        io: chip_gpio\n", "        io: chip_gpio\n      force: pad_iso\n");
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      gpio: true
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        control: {drive: low}
+      - pin: 1
+        slot: 0
+        function: gpio0
+        signal: in1
+        input_value: {link: gpio0_in1}
+        input_enable: 1
+)")
+                              .arg(padCell, integration));
+}
+
+void Test::safeRowOutranksEveryOtherSource()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeSafeRowDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QSocPadSafePlan &safe = plan.integration.padCell.safe;
+    QVERIFY(safe.declared);
+    QCOMPARE(safe.inputEnable, quint8(1));
+    QCOMPARE(safe.outputEnable, quint8(0));
+    QCOMPARE(safe.pull.mode, QString("down"));
+    QCOMPARE(safe.control.value("drive"), QString("high"));
+    QCOMPARE(plan.integration.force, QString("pad_iso"));
+
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+    QVERIFY(core.contains("    input  wire        pad_force_i"));
+    /* Force wraps the finished expression: above the register, the slot and
+     * the source bits alike. */
+    QVERIFY(core.contains(
+        "assign pad_input_enable_o[0] = pad_force_i ? 1'b1 : "
+        "(pin_0_input_enable_src_i ? pin_0_input_enable_i : tx_bundle_0[2]);"));
+    QVERIFY(core.contains(
+        "assign pad_output_enable_o[0] = pad_force_i ? 1'b0 : (pad_output_enable_0);"));
+    QVERIFY(core.contains(
+        "assign pad_pull_mode_o[2:0] = pad_force_i ? 3'd2 : (pin_0_pull_src_i ? "
+        "pin_0_pull_mode_i : (pin_0_select_i == 1'd0) ? 3'd1 : 3'd0);"));
+    QVERIFY(core.contains(
+        "assign pad_drive_select_o[0:0] = pad_force_i ? 1'd1 : (pin_0_drive_src_i ? "
+        "pin_0_drive_i : 1'd0);"));
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains("    input  wire pad_force_i,"));
+    QVERIFY(top.contains("    .pad_force_i(pad_force_i)"));
+    QVERIFY(
+        QSocIomuxGenerator::generateIntegrationNetlist(plan).contains(
+            "      pad_force_i:\n        link: pad_iso"));
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "safe: input_enable 1, output_value 0, output_enable 0, pull down, drive high, forced "
+            "by "
+            "pad_force_i above every register and slot"));
+    QVERIFY(QSocIomuxGenerator::describeModuleYaml(plan)["port"]["pad_force_i"]);
+
+    /* Without safe the port, the link and the wrapping are all absent. */
+    QSocIomuxPlan plain;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plain, &errors));
+    QVERIFY(!QSocIomuxGenerator::generateTopVerilog(plain).contains("pad_force_i"));
+}
+
+void Test::safeRowIsValidatedAgainstTheCell()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    const auto    rejects = [&](const QString &safe, const QString &message) {
+        QVERIFY(!QSocIomuxGenerator::buildPlan(makeSafeRowDefinition(safe), &plan, &errors));
+        QVERIFY2(errors.contains(message), qPrintable(errors.join('\n')));
+    };
+    rejects(
+        "      safe:\n        drive: max\n",
+        "IOMUX_CAPABILITY generator.pad_cell.safe.drive: control drive of gpio_pad_ps has no row "
+        "max");
+    rejects(
+        "      safe:\n        slew: fast\n",
+        "IOMUX_CAPABILITY generator.pad_cell.safe.slew: pad cell gpio_pad_ps has no control slew");
+    rejects(
+        "      safe:\n        pull: strong_up\n",
+        "IOMUX_CAPABILITY generator.pad_cell.safe.pull.mode: pad cell gpio_pad_ps has no pull mode "
+        "strong_up");
+    rejects(
+        "      safe:\n        output_enable: 2\n",
+        "IOMUX_RANGE generator.pad_cell.safe.output_enable: must be between 0 and 1");
+    rejects(
+        "      safe:\n        input_value: 1\n",
+        "IOMUX_ROLE generator.pad_cell.safe.input_value: input_value is read, not driven");
+
+    /* force and safe go together. */
+    QSocModuleDefinition noForce   = makeSafeRowDefinition();
+    YAML::Node           generator = noForce.extraAttributes["generator"];
+    generator["integration"].remove("force");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(noForce, &plan, &errors));
+    QVERIFY2(
+        errors.contains(
+            "IOMUX_REQUIRED generator.integration.force: property is required with pad_cell.safe"),
+        qPrintable(errors.join('\n')));
+    QSocModuleDefinition noSafe                                 = makePadCellDefinition();
+    noSafe.extraAttributes["generator"]["integration"]["force"] = "pad_iso";
+    QVERIFY(!QSocIomuxGenerator::buildPlan(noSafe, &plan, &errors));
+    QVERIFY2(
+        errors.contains(
+            "IOMUX_CONFLICT generator.integration.force: needs pad_cell.safe to be declared"),
+        qPrintable(errors.join('\n')));
+}
+
+QString safeRowTestbench()
+{
+    return QStringLiteral(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid = 0, wvalid = 0, arvalid = 0, bready = 1, rready = 1;
+    reg  [31:0] wdata;
+    reg  [3:0]  wstrb = 4'hf;
+    wire        awready, wready, bvalid, arready, rvalid;
+    wire [1:0]  bresp, rresp;
+    wire [31:0] rdata;
+    wire [1:0]  pad;
+    reg         uart0_tx = 0, force_n = 0;
+    wire        gp_in1;
+    integer     fails = 0;
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid),
+        .s_axi_awready(awready), .s_axi_wdata(wdata), .s_axi_wstrb(wstrb),
+        .s_axi_wvalid(wvalid), .s_axi_wready(wready), .s_axi_bresp(bresp),
+        .s_axi_bvalid(bvalid), .s_axi_bready(bready), .s_axi_araddr(araddr),
+        .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid),
+        .s_axi_rready(rready), .pad_io(pad), .pad_force_i(force_n),
+        .hs_p0_s0_output_value_i(uart0_tx), .hs_p1_s0_input_value_o(gp_in1));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin
+            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
+            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            wait (bvalid); @(posedge clk);
+        end
+    endtask
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        chk("slot_drives_oe", dut.pad_output_enable_o[0], 1'b1);
+        chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
+        chk("slot_drive_low", dut.u_pad.DS_0_w, 1'b0);
+        /* the register claims the pin, then force takes it away */
+        wr(12'h034, 32'h0000_0001);
+        wr(12'h024, 32'h0001_0040);
+        repeat (2) @(posedge clk);
+        chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        force_n = 1; #1;
+        chk("forced_oe_off", dut.pad_output_enable_o[0], 1'b0);
+        chk("forced_ie_on", dut.pad_input_enable_o[0], 1'b1);
+        chk("forced_pull_down_PS", dut.u_pad.PS_0_w, 1'b0);
+        chk("forced_pull_down_PE", dut.u_pad.PE_0_w, 1'b1);
+        chk("forced_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        /* a bus write during force changes nothing on the pad */
+        wr(12'h024, 32'h0000_0000);
+        repeat (2) @(posedge clk);
+        chk("forced_holds_through_write", dut.u_pad.PS_0_w, 1'b0);
+        chk("forced_drive_high_over_slot_low", dut.u_pad.DS_0_w, 1'b1);
+        force_n = 0; #1;
+        chk("released_slot_pull_up", dut.u_pad.PS_0_w, 1'b1);
+        chk("released_slot_oe", dut.pad_output_enable_o[0], 1'b1);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeSafeRowDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const auto offsetOf = [&](const char *name) -> qint64 {
+        const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
+        return found ? qint64(found->byteOffset) : -1;
+    };
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x24));
+    QCOMPARE(offsetOf("pin_ctl_0_0"), qint64(0x34));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir    dir(directory.path());
+    const QString outputPath = dir.filePath("iomux0.out");
+    writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("tb.v"), safeRowTestbench());
 
     QProcess process;
     process.setWorkingDirectory(directory.path());

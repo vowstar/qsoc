@@ -158,6 +158,25 @@ struct QSocPadConstraint
 };
 
 /**
+ * @brief The row every pin takes while `pad_force_i` is high.
+ *
+ * Isolation, test, and the window before firmware runs all need one state
+ * that no register can override. Roles default to 0, the pull to none, and
+ * each control to its default row.
+ */
+struct QSocPadSafePlan
+{
+    bool                   declared     = false;
+    quint8                 inputEnable  = 0;
+    quint8                 outputValue  = 0;
+    quint8                 outputEnable = 0;
+    QSocIomuxPullRequest   pull;
+    QMap<QString, QString> control; /**< Control name to row label */
+
+    bool operator==(const QSocPadSafePlan &) const = default;
+};
+
+/**
  * @brief The pad cell this design instantiates.
  *
  * The generator owns every connection to the cell, so a source that names the
@@ -174,6 +193,7 @@ struct QSocPadCellPlan
     QString                   portPad;
     QSocPadPullPlan           pull;
     QList<QSocPadControlPlan> control; /**< Declaration order, which fixes field positions */
+    QSocPadSafePlan           safe;
     QList<QSocPadConstraint>  constraint;
     /** Port name to direction of the cell, filled from the module library. */
     QMap<QString, QString> cellPorts;
@@ -213,6 +233,7 @@ struct QSocIomuxIntegrationPlan
     QString         padOutputValue;
     QString         padOutputEnable;
     QString         padIo; /**< Top-level pad net, used when a pad cell is declared */
+    QString         force; /**< Net that drives pad_force_i, used when safe is declared */
     QSocPadCellPlan padCell;
 
     bool operator==(const QSocIomuxIntegrationPlan &) const = default;
