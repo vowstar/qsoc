@@ -396,7 +396,9 @@ bool reservedControlName(const QString &name)
            QStringLiteral("up_sel"),
            QStringLiteral("down_sel")};
     return fixed.contains(name) || name.startsWith(QStringLiteral("rx_"))
-           || name.endsWith(QStringLiteral("_src")) || name.endsWith(QStringLiteral("_inv"));
+           || name.endsWith(QStringLiteral("_src")) || name.endsWith(QStringLiteral("_inv"))
+           || name.endsWith(QStringLiteral("_detect")) || name.endsWith(QStringLiteral("_int_en"))
+           || name.endsWith(QStringLiteral("_int_pend"));
 }
 
 /**
@@ -1042,6 +1044,10 @@ bool parseRoute(
                 valid
                     = parsePullRequest(pull["off"], pullPath + ".off", &route->pullSelect.off, errors)
                       && valid;
+                if (valid && route->pullSelect.on == route->pullSelect.off) {
+                    appendError(errors, "ROLE", pullPath, "on and off name the same row");
+                    valid = false;
+                }
             } else {
                 QSocIomuxPullRequest request;
                 valid               = parsePullRequest(pull, pullPath, &request, errors) && valid;
@@ -1069,6 +1075,11 @@ bool parseRoute(
                 const QString           name     = QString::fromStdString(entry.first.Scalar());
                 const QString           itemPath = path + ".control." + name;
                 QSocIomuxControlRequest request;
+                if (route->control.contains(name)) {
+                    appendError(errors, "DUPLICATE", itemPath, "control is listed twice");
+                    valid = false;
+                    continue;
+                }
                 if (entry.second.IsMap()) {
                     if (!validateMap(entry.second, kRouteSelectKeys, itemPath, errors)) {
                         valid = false;
@@ -1088,6 +1099,10 @@ bool parseRoute(
                                 = parseLabel(entry.second[key], itemPath + "." + key, target, errors)
                                   && valid;
                         }
+                    }
+                    if (valid && request.select.on == request.select.off) {
+                        appendError(errors, "ROLE", itemPath, "on and off name the same row");
+                        valid = false;
                     }
                 } else if (!parseLabel(entry.second, itemPath, &request.row, errors)) {
                     valid = false;
@@ -1715,6 +1730,40 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             "generator.pad_cell.pull.table",
             "at most 256 strength rows per direction and 251 named modes");
         valid = false;
+    }
+    /* Every cell pin has one driver: a role, the pull group, or one control. */
+    {
+        QMap<QString, int> named;
+        for (const QString &port :
+             {cell.portPad,
+              cell.portInputValue,
+              cell.portInputEnable,
+              cell.portOutputValue,
+              cell.portOutputEnable}) {
+            if (!port.isEmpty()) {
+                ++named[port];
+            }
+        }
+        for (const QString &port : cell.pull.port) {
+            ++named[port];
+        }
+        for (const QSocPadControlPlan &item : cell.control) {
+            for (const QString &port : item.port) {
+                ++named[port];
+            }
+        }
+        for (auto it = named.cbegin(); it != named.cend(); ++it) {
+            if (it.value() > 1) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    "generator.pad_cell",
+                    QString("pin %1 of %2 is named %3 times, once is the limit")
+                        .arg(it.key(), cell.cell)
+                        .arg(it.value()));
+                valid = false;
+            }
+        }
     }
     /* Strength is a property of a direction. Every other mode is one row. */
     for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {

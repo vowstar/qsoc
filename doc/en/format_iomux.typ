@@ -158,7 +158,8 @@ enable, whatever the databook lists. Each control names its pins, a table of
 labelled rows, and an optional `default` row, which is otherwise the first.
 The control name is yours. It must be a Verilog identifier, because it
 appears as is in ports, register fields, and the report, and it may not be
-one of the names in the table below. A cell may declare up to 16 controls of
+one of the names in the table below. Every cell pin is named once, by a
+role, by `pull`, or by one control. A cell may declare up to 16 controls of
 up to 256 rows each. A route asks for a row by label under `control`, as in
 `control: {drive: high, slew: fast}`. A slot that names none, an unrouted
 slot, and a selector value above the slot count all take the default. A
@@ -204,7 +205,7 @@ unchanged. The fixed names and the names a control may not take:
     [`pull.kind`], [`resistor` `driver`], [whether the pulls are resistors],
     [control body], [`port` `table` `default`], [keys],
     [`safe`], [the roles, `pull`, control names], [keys],
-    [control name], [the roles, `pull`, `pull_mode`, `up_sel`, `down_sel`, `select`, `rx_*`, `*_src`, `*_inv`], [taken, would collide with a generated port or field],
+    [control name], [the roles, `pull`, `pull_mode`, `up_sel`, `down_sel`, `select`, `rx_*`, `*_src`, `*_inv`, `*_detect`, `*_int_en`, `*_int_pend`], [taken, would collide with a generated port or field],
   )],
   caption: [FIXED NAMES],
 )

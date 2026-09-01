@@ -192,6 +192,7 @@ private slots:
     void selectNetsAreFreeInputsOfTheProof();
     void selectNetMutationFailsBmcWhenAvailable();
     void forceIsProvenAboveEverySourceWhenAvailable();
+    void unroutedSlotsLandOnTheDefaultRowWhenAvailable();
 };
 
 void Test::assertionCountCoversEverySlotOfEveryPin_data()
@@ -369,8 +370,6 @@ void Test::tailPinSelectorDisconnectFailsBmcWhenAvailable()
 }
 
 } // namespace
-
-QSOC_TEST_MAIN(Test)
 #include "test_qsociomuxformal.moc"
 
 namespace {
@@ -947,3 +946,105 @@ void Test::forceIsProvenAboveEverySourceWhenAvailable()
     QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
     QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
 }
+
+void Test::unroutedSlotsLandOnTheDefaultRowWhenAvailable()
+{
+    /* A default that is not the first row: the unrouted slots and every
+     * selector value past hs_slots must land on it, in the core and in the
+     * proof alike. */
+    QSocModuleDefinition definition = makeDefinition(QString(R"yaml(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 3
+    option:
+      pad_control: true
+    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+      control:
+        drive:
+          port: [DS]
+          table:
+            low: ["0"]
+            mid: ["1"]
+            high: ["1"]
+          default: mid
+    integration:
+      instance: u_iomux0
+      clock: clk_iomux
+      reset: rst_iomux_n
+      control: iomux_control
+      pad:
+        io: chip_gpio
+    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        control: {drive: high}
+)yaml"));
+    QSocIomuxPlan        plan;
+    QStringList          errors;
+    QVERIFY2(QSocIomuxGenerator::buildPlan(definition, &plan, &errors), qPrintable(errors.join('\n')));
+    const QString core   = QSocIomuxGenerator::generateTopVerilog(plan);
+    const QString before = "assign pad_drive_select_o[1:0] = pin_0_drive_src_i ? pin_0_drive_i : "
+                           "(pin_0_select_i == 2'd0) ? 2'd2 : 2'd1;";
+    QVERIFY2(core.contains(before), qPrintable(core));
+    const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
+    /* One assertion per selector value: slot 0 routed, slots 1 and 2 and the
+     * value past hs_slots on the default. */
+    QCOMPARE(
+        sv.count("assert (pad_drive_select_w[1:0] == (pin_0_drive_src_i ? pin_0_drive_i : 2'd2));"),
+        1);
+    QCOMPARE(
+        sv.count("assert (pad_drive_select_w[1:0] == (pin_0_drive_src_i ? pin_0_drive_i : 2'd1));"),
+        3);
+
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, core);
+    for (const QString &task : {QStringLiteral("prove"), QStringLiteral("bmc")}) {
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), task});
+        QVERIFY2(result.exitCode == 0, result.output.constData());
+    }
+    QString mutated = core;
+    mutated.replace(before, QString(before).replace("2'd2 : 2'd1", "2'd2 : 2'd0"));
+    QVERIFY(mutated != core);
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    writeCollateral(second, plan, mutated);
+    const CommandResult result = runCommand(
+        second.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc")});
+    QVERIFY2(result.exitCode != 0, result.output.constData());
+    QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+    QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+}
+
+QSOC_TEST_MAIN(Test)

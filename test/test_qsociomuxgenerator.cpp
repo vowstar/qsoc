@@ -5706,6 +5706,7 @@ module tb;
         wr(12'h024, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("forced_holds_through_write", dut.u_pad.PS_0_w, 1'b0);
+        chk("forced_drive_high_over_slot_low", dut.u_pad.DS_0_w, 1'b1);
         force_n = 0; #1;
         chk("released_slot_pull_up", dut.u_pad.PS_0_w, 1'b1);
         chk("released_slot_oe", dut.pad_output_enable_o[0], 1'b1);
@@ -5880,7 +5881,7 @@ void Test::linksNeedAPadCellAndRowsToChooseFrom()
         signal: tx
         output_value: {link: uart0_tx}
         output_enable: 1
-        control: {drive: {link: uart0_fast, on: low, off: low}}
+        control: {drive: {link: uart0_fast, on: high, off: low}}
 )")
                                .arg(padCell, padIntegrationBlock());
     QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(oneRow), &plan, &errors));
@@ -5888,6 +5889,39 @@ void Test::linksNeedAPadCellAndRowsToChooseFrom()
         errors,
         QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.control.drive: control drive of "
                     "gpio_pad_ps has one row, nothing for a link to select"});
+
+    /* A pair that names the same row twice is a link that does nothing. */
+    QString sameRow = oneRow;
+    sameRow.replace(
+        "        control: {drive: {link: uart0_fast, on: high, off: low}}\n",
+        "        pull: {link: sleep_n, on: up, off: up}\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(sameRow), &plan, &errors));
+    QCOMPARE(errors, QStringList{"IOMUX_ROLE generator.route[0].pull: on and off name the same row"});
+
+    /* A cell pin may have one driver, and a control may not shadow the
+     * interrupt detectors. */
+    QString shared = padCellBlock();
+    shared.replace(
+        "          port: [DS]\n          table:\n            low: [\"0\"]\n            high: "
+        "[\"1\"]\n",
+        "          port: [DS, PS]\n          table:\n            low: [\"0\", \"0\"]\n            "
+        "high: "
+        "[\"1\", \"1\"]\n");
+    QVERIFY(shared != padCellBlock());
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(shared), &plan, &errors));
+    QVERIFY2(
+        errors.contains(
+            "IOMUX_CAPABILITY generator.pad_cell: pin PS of gpio_pad_ps is named 2 times, once is "
+            "the limit"),
+        qPrintable(errors.join('\n')));
+    QString detect = padCellBlock();
+    detect.replace("        drive:\n", "        rise_detect:\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(detect), &plan, &errors));
+    QVERIFY2(
+        errors.contains(
+            "IOMUX_RESERVED generator.pad_cell.control.rise_detect: name is owned by the "
+            "generator"),
+        qPrintable(errors.join('\n')));
 }
 
 } // namespace
