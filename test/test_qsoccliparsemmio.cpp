@@ -316,6 +316,9 @@ void Test::validateReportsSuccessAndGeneratorErrors()
     const CommandResult valid = runCommand(arguments);
     QCOMPARE(valid.exitCode, 0);
     QVERIFY2(valid.output.contains("MMIO source is valid"), qPrintable(valid.output));
+    QVERIFY2(
+        valid.output.contains("Warning: MMIO_IDENTITY generator.identity: absent"),
+        qPrintable(valid.output));
 
     writeTextFile(modulePath, invalidModule);
     const CommandResult invalid = runCommand(arguments);

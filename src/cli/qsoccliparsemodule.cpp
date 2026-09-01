@@ -332,10 +332,14 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
         return showError(1, messages.join('\n'));
     }
 
-    return showInfo(
-        0,
+    QStringList messages;
+    for (const QString &advice : QSocMmioGenerator::advise(definition)) {
+        messages.append(QCoreApplication::translate("main", "Warning: %1").arg(advice));
+    }
+    messages.append(
         QCoreApplication::translate("main", "MMIO source is valid: %1/%2.")
             .arg(libraryName, moduleName));
+    return showInfo(0, messages.join('\n'));
 }
 
 bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)

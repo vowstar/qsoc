@@ -16,6 +16,22 @@ qsoc generate module -l peripheral timer_ctrl
 `create` writes an empty `register` map. An empty map is a saved draft, not a
 valid generator input.
 
+`identity` names the block for software. `type` is a number or four printable
+ASCII characters packed with the first in the top byte, so `TMRC` reads as
+0x544D5243 in a register view. `version` is `major.minor.patch`, each part
+below 256. The generator places `version` at 0x0 with major `[31:24]`, minor
+`[23:16]`, patch `[15:8]`, and `type` at 0x4, both read-only. A 64-bit
+instance holds both in its first beat. A user register on offsets 0x0 to 0x7,
+or named `version` or `type`, is an error. `validate` warns when `identity`
+is absent, because a block software cannot recognise is a block software
+cannot refuse.
+
+```yaml
+    identity:
+      type: TMRC
+      version: 1.0.0
+```
+
 ```yaml
 timer_ctrl:
   generator:
