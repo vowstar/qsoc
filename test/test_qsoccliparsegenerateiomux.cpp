@@ -870,7 +870,7 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     const CommandResult refused = generateModule(undriven);
     QVERIFY2(refused.exitCode != 0, qPrintable(refused.output));
     QVERIFY2(
-        refused.output.contains("input pins ANE are not named by any role, pull, or drive"),
+        refused.output.contains("input pins ANE are not named by any role, pull, or control"),
         qPrintable(refused.output));
 
     moduleText.replace("    ANE: {type: logic, direction: input}\n", "");

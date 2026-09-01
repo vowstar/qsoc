@@ -31,17 +31,17 @@ struct QSocIomuxEndpointPlan
 
 struct QSocIomuxRoutePlan
 {
-    quint32               pin  = 0;
-    quint32               slot = 0;
-    QString               function;
-    QString               signal;
-    QSocIomuxEndpointPlan inputValue;
-    QSocIomuxEndpointPlan inputEnable;
-    QSocIomuxEndpointPlan outputValue;
-    QSocIomuxEndpointPlan outputEnable;
-    QString               pullMode;     /**< A mode name from the pad cell table, or empty */
-    QString               pullStrength; /**< A strength label under that mode, or empty */
-    QString               driveLevel;   /**< A label from the drive table, or empty */
+    quint32                pin  = 0;
+    quint32                slot = 0;
+    QString                function;
+    QString                signal;
+    QSocIomuxEndpointPlan  inputValue;
+    QSocIomuxEndpointPlan  inputEnable;
+    QSocIomuxEndpointPlan  outputValue;
+    QSocIomuxEndpointPlan  outputEnable;
+    QString                pullMode;     /**< A mode name from the pad cell table, or empty */
+    QString                pullStrength; /**< A strength label under that mode, or empty */
+    QMap<QString, QString> control;      /**< Control name to the row label this slot asks for */
 
     bool operator==(const QSocIomuxRoutePlan &) const = default;
 };
@@ -84,14 +84,20 @@ struct QSocPadPullPlan
 };
 
 /**
- * @brief The drive strength control of a pad cell.
+ * @brief One control of a pad cell: a named group of pins and its rows.
+ *
+ * Drive strength, slew, Schmitt trigger, analog enable, open-drain mode: the
+ * generator treats them all alike. The name is the user's, appears as is in
+ * ports, fields and the report, and carries no meaning to the generator.
  */
-struct QSocPadDrivePlan
+struct QSocPadControlPlan
 {
+    QString                name;
     QList<QString>         port;
-    QList<QSocPadTableRow> level;
+    QList<QSocPadTableRow> row;            /**< Labelled rows, table order */
+    int                    defaultRow = 0; /**< Row a slot takes when its route names none */
 
-    bool operator==(const QSocPadDrivePlan &) const = default;
+    bool operator==(const QSocPadControlPlan &) const = default;
 };
 
 /**
@@ -121,15 +127,15 @@ struct QSocPadConstraint
  */
 struct QSocPadCellPlan
 {
-    QString                  cell;
-    QString                  portInputValue;
-    QString                  portInputEnable;
-    QString                  portOutputValue;
-    QString                  portOutputEnable;
-    QString                  portPad;
-    QSocPadPullPlan          pull;
-    QSocPadDrivePlan         drive;
-    QList<QSocPadConstraint> constraint;
+    QString                   cell;
+    QString                   portInputValue;
+    QString                   portInputEnable;
+    QString                   portOutputValue;
+    QString                   portOutputEnable;
+    QString                   portPad;
+    QSocPadPullPlan           pull;
+    QList<QSocPadControlPlan> control; /**< Declaration order, which fixes field positions */
+    QList<QSocPadConstraint>  constraint;
     /** Port name to direction of the cell, filled from the module library. */
     QMap<QString, QString> cellPorts;
 
@@ -143,6 +149,16 @@ struct QSocPadCellPlan
                || (canPullUp() && canPullDown() && !pull.isDriver);
     }
     bool keeperIsNative() const { return pull.has(QStringLiteral("keeper")); }
+    /** Whether some control drives this cell pin. */
+    bool controlDrives(const QString &port) const
+    {
+        for (const QSocPadControlPlan &item : control) {
+            if (item.port.contains(port)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     bool operator==(const QSocPadCellPlan &) const = default;
 };
@@ -196,19 +212,31 @@ struct QSocPadEncoding
     QSocPadTableRow                noneRow;
     QList<QSocPadTableRow>         upRows;
     QList<QSocPadTableRow>         downRows;
-    std::optional<QSocPadTableRow> keeperRow;     /**< Native keeper row, if any */
-    std::optional<QSocPadTableRow> oscillatorRow; /**< Native oscillator row, if any */
-    QStringList                    namedMode;     /**< Other modes, name order */
-    QList<QSocPadTableRow>         namedRow;      /**< One row per named mode */
-    QStringList                    driveLevel;
+    std::optional<QSocPadTableRow> keeperRow;        /**< Native keeper row, if any */
+    std::optional<QSocPadTableRow> oscillatorRow;    /**< Native oscillator row, if any */
+    QStringList                    namedMode;        /**< Other modes, name order */
+    QList<QSocPadTableRow>         namedRow;         /**< One row per named mode */
     quint32                        modeWidth    = 0; /**< 0 when the cell has no pull table */
     quint32                        upSelWidth   = 0; /**< 0 when up has at most one row */
     quint32                        downSelWidth = 0;
-    quint32                        driveWidth   = 0; /**< 0 when the cell has no drive table */
     bool weaves = false; /**< keeper and oscillator are woven from up and down */
 
+    /**
+     * @brief One control as software sees it.
+     *
+     * A single-row control has width 0: nothing to select, no field, no port.
+     * Its row is still driven into the pad.
+     */
+    struct Control
+    {
+        QString     name;
+        QStringList label;
+        quint32     width       = 0;
+        int         defaultCode = 0;
+    };
+    QList<Control> control; /**< Declaration order */
+
     bool hasPull() const { return modeWidth > 0; }
-    bool hasDrive() const { return driveWidth > 0; }
     bool hasUp() const { return !upRows.isEmpty(); }
     bool hasDown() const { return !downRows.isEmpty(); }
     /** Whether the cell reaches this mode, natively or woven. */
@@ -218,13 +246,13 @@ struct QSocPadEncoding
     /** Strength index within a direction, or -1. */
     int upSel(const QString &strength) const;
     int downSel(const QString &strength) const;
-    /** Code of a drive row, or -1 when the cell has no such row. */
-    int driveCode(const QString &level) const;
+    /** Row index of a control label, or -1 when the control has no such row. */
+    int controlCode(qsizetype index, const QString &label) const;
     /** What a route asks for, as the constants its slot carries. */
     int routeMode(const QSocIomuxRoutePlan &route) const;
     int routeUpSel(const QSocIomuxRoutePlan &route) const;
     int routeDownSel(const QSocIomuxRoutePlan &route) const;
-    int routeDriveCode(const QSocIomuxRoutePlan &route) const;
+    int routeControlCode(const QSocIomuxRoutePlan &route, qsizetype index) const;
     /** "0 none, 1 up, ..." over the modes this cell reaches. */
     QString modeSummary() const;
     /** The row a mode value selects, with the strength indices, or none. */

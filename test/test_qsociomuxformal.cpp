@@ -546,11 +546,12 @@ QSocModuleDefinition makeOptionDefinition()
           none: ["0", "x"]
           up: ["1", "1"]
           down: ["1", "0"]
-      drive:
-        port: [DS]
-        table:
-          low: ["0"]
-          high: ["1"]
+      control:
+        drive:
+          port: [DS]
+          table:
+            low: ["0"]
+            high: ["1"]
     integration:
       instance: u_iomux0
       clock: clk_iomux
@@ -566,7 +567,7 @@ QSocModuleDefinition makeOptionDefinition()
         output_value: {link: uart0_tx}
         output_enable: 1
         pull: up
-        drive: high
+        control: {drive: high}
       - pin: 1
         slot: 0
         function: i2c0
