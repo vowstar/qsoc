@@ -2293,6 +2293,30 @@ bool QSocIomuxGenerator::checkPadCellPorts(
         expect(port, QStringLiteral("in"), QStringLiteral("drive.port"));
     }
 
+    /* Every input of the cell must be named somewhere, or the instance would
+     * leave it floating, which elaborates and is wrong. */
+    QSet<QString> driven
+        = {cell.portPad, cell.portInputEnable, cell.portOutputValue, cell.portOutputEnable};
+    for (const QString &port : cell.pull.port) {
+        driven.insert(port);
+    }
+    for (const QString &port : cell.drive.port) {
+        driven.insert(port);
+    }
+    QStringList undriven;
+    for (auto it = cellPorts.cbegin(); it != cellPorts.cend(); ++it) {
+        if ((it.value() == "in" || it.value() == "inout") && !driven.contains(it.key())) {
+            undriven.append(it.key());
+        }
+    }
+    if (!undriven.isEmpty()) {
+        undriven.sort();
+        local.append(QString(
+                         "IOMUX_PAD generator.pad_cell: %1 input pins %2 are not named by any "
+                         "role, pull, or drive")
+                         .arg(cell.cell, undriven.join(", ")));
+    }
+
     local.sort(Qt::CaseSensitive);
     if (errors) {
         *errors = local;

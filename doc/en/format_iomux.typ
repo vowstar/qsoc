@@ -132,9 +132,11 @@ pad_cell:
 ```
 
 Every port named here must exist on the cell in the module library with a
-matching direction, or generation stops before it writes a file. A role that
-is absent from `port` is a role the cell lacks, and a route that asks for it
-is an error. The same holds for a missing `pull` or `drive` section.
+matching direction, and every input of the cell must be named here, or
+generation stops before it writes a file: an input the declaration forgets
+would be left floating in a netlist that elaborates. A role that is absent
+from `port` is a role the cell lacks, and a route that asks for it is an
+error. The same holds for a missing `pull` or `drive` section.
 
 `pull.table` maps mode names to the values the pull ports take, one entry per
 port, transcribed from the databook. `none` is required and encodes as the

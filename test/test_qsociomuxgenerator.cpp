@@ -3526,8 +3526,21 @@ void Test::padCellPortsAreCheckedAgainstTheLibrary()
     QMap<QString, QString> wrongWay = padCellPorts();
     wrongWay["C"]                   = "in";
     QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, wrongWay, &errors));
-    QCOMPARE(errors.size(), 1);
+    QCOMPARE(errors.size(), 2);
     QVERIFY(errors.first().contains("port C is in, expected out"));
+    QVERIFY(errors.last().contains("input pins C are not named"));
+
+    /* A cell input the declaration never names would be left floating. */
+    QMap<QString, QString> extra = padCellPorts();
+    extra.insert("SL", "in");
+    extra.insert("ANE", "in");
+    extra.insert("VDDIO", "inout");
+    extra.insert("STATUS", "out");
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, extra, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_PAD generator.pad_cell: gpio_pad_ps input pins ANE, SL, VDDIO are not "
+                    "named by any role, pull, or drive"});
 }
 
 void Test::padCellRejectsWhatItLacks_data()

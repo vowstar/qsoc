@@ -831,6 +831,7 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     OE: {type: logic, direction: input}
     PE: {type: logic, direction: input}
     PS: {type: logic, direction: input}
+    ANE: {type: logic, direction: input}
 )";
     const QString oldPad = R"(      pad:
         input_value: pad_input_value
@@ -863,6 +864,16 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     integration:
 )");
 
+    /* The library cell has one more input than the declaration names. */
+    QTemporaryDir undriven;
+    createProject(undriven, moduleText);
+    const CommandResult refused = generateModule(undriven);
+    QVERIFY2(refused.exitCode != 0, qPrintable(refused.output));
+    QVERIFY2(
+        refused.output.contains("input pins ANE are not named by any role, pull, or drive"),
+        qPrintable(refused.output));
+
+    moduleText.replace("    ANE: {type: logic, direction: input}\n", "");
     QTemporaryDir directory;
     createProject(directory, moduleText);
     const CommandResult generated = generateModule(directory);
