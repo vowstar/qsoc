@@ -141,8 +141,7 @@ error. The same holds for a missing `pull` section or an absent control.
 
 `pull.table` maps mode names to the values the pull ports take, one entry per
 port, transcribed from the databook. `none` is required and encodes as the
-all-zero selector. `up`, `down`, `keeper`, and `oscillator` carry meaning to
-the generator.
+all-zero selector. `up`, `down`, and `keeper` carry meaning to the generator.
 Any other name is a mode the cell documents, which a route asks for by that
 name. A mode holds either one row or a map of strength labels to rows, so a
 cell with two pull-up strengths and one pull-down strength is expressed as
@@ -161,8 +160,21 @@ role, by `pull`, or by one control. A cell may declare up to 16 controls of
 up to 256 rows each. A route asks for a row by label under `control`, as in
 `control: {drive: high, slew: fast}`. A slot that names none, an unrouted
 slot, and a selector value above the slot count all take the default. A
-control with one row has nothing to select: its pins take that row and it
-owns no field and no port.
+control with one row has nothing to select: its pins take that row, it owns
+no field and no port, and a route may not put a link on it.
+
+A row may also follow a net at bus speed. `control: {od: {link:
+i3c0_sda_oe, on: pp, off: od}}` gives the slot the `on` row while the net is
+high and the `off` row while it is low, with the usual `bit` and `invert` on
+the link, and `pull: {link: sleep_n, invert: true, on: down, off: up}` does
+the same for the pull, where `on` and `off` take a mode name or a `mode` and
+`strength` map. The net becomes a wrapper input named
+`hs_p<pin>_s<slot>_<group>_select_i`, where the group is `pull` or the
+control name, and a link in the integration fragment.
+It is what an open-drain mode pin of an I3C controller or a pull that
+changes for sleep needs. The register source bit still wins over the net,
+and a slot that is not selected contributes nothing, exactly as for a fixed
+row.
 
 A name the generator gives behaviour to is fixed. Every other name, a pull
 mode, a strength, a control, a row, is yours and is copied through
@@ -190,9 +202,8 @@ follows the pad and the oscillator opposes it, and both read the pad itself
 rather than the receiver, so the loop closes inside the pad module. A woven
 mode keeps its strength: `pull: {mode: keeper, strength: "47k"}` selects that
 row on each graded direction, and an absent strength selects the first row.
-`pull.kind` is `resistor`, the default, or `driver`, which marks a cell whose
-pulls are its output driver rather than resistors, and no mode is woven from
-those. A woven mode is a
+`pull.kind: driver` marks a cell whose pulls are its output driver rather
+than resistors, and no mode is woven from those. A woven mode is a
 combinational loop through the pad. A zero-delay simulation of a floating pad
 under a woven keeper does not settle, so a testbench drives the pad across a
 mode change or gives it a delay.
@@ -239,10 +250,8 @@ are read-only and ignore writes.
 Software reads `version` first, because that is where a driver written for
 another instance of this type looks, then `type` to confirm the block, then
 `capability` and `feature` to compute the rest of the map. The layout
-contract is 2.0.0. The number steps against a layout that has shipped in
-silicon or that firmware depends on. Until then fields may move under it.
-After that, a block appended after the existing ones steps the minor number
-and any existing offset that moves steps the major number. With
+contract is 2.0.0. A block appended after the existing ones steps the minor
+number. Any existing offset that moves steps the major number. With
 `pin_count`, `hs_slots`, `data_width`, and the feature bits every block
 offset below is computable, and the report prints them.
 
@@ -279,7 +288,7 @@ on every design. Absent fields read zero.
     [5:4], [`output_enable_src`], [`gpio`],
     [6], [`pull_src`], [`pad_control`, when the cell has a pull table],
     [8 + k], [`rx_src_sk`], [`rx_override`, one bit per slot k],
-    [16 + i], [`<control>_src`], [`pad_control`, i is the control's declaration index, a single-row control keeps its index and has no bit],
+    [16 + i], [`<control>_src`], [`pad_control`, one bit per selectable control i in declaration order],
   )],
   caption: [PIN_SRC_CTRL LAYOUT],
 )
@@ -306,12 +315,11 @@ the pad through two flip-flops in the bus clock domain, so a pad edge takes
 two bus cycles to become readable.
 
 `generator.option.pad_control` needs a `pad_cell` with a pull table or a
-control of more than one row. It appends one `pin_pad_ctrl` word per pin when
-the cell has a pull table, then one `pin_ctl_k` word per pin for each group of
-four controls, each control in an 8-bit slot at bit `8 * (i mod 4)` in
-declaration order. A single-row control keeps its slot empty, so its neighbours
-never move, and a group whose four controls are all single-row emits no word
-while `k` still counts it. The fields below are present only when the cell has
+control of more than one row. It appends one `pin_pad_ctrl` word per pin
+for the pull, then one `pin_ctl_k` word per pin for each group of four
+controls, each control in an 8-bit slot at bit `8 * (i mod 4)` in
+declaration order. A single-row control keeps its slot empty, so its
+neighbours never move. The fields below are present only when the cell has
 something for them to select and each is as wide as its table needs.
 
 #figure(
@@ -327,20 +335,20 @@ something for them to select and each is as wide as its table needs.
   caption: [PIN_PAD_CTRL LAYOUT],
 )
 
-The mode values are fixed, so software reads the same field on every design. A
-value the cell has no row for behaves as `none`, a strength select past the
-table behaves as the first row, and a control value past its table behaves as
-the control's default row. The register keeps what was written, so firmware can
-read its own mistake back. A mode says whether and which way the pin pulls, a
-select says how strongly, and the two never mix: the keeper and the oscillator
-switch the mode between `up` and `down` from the pad level and leave both
-selects alone, so they hold at whatever strength the selects name. The report
-prints the mode numbering and each graded direction's strengths. `pull_src` at
-0 keeps the pull the selected slot's route asked for, and at 1 hands mode and
-selects to the word. Each `<control>_src` does the same for its control. All
-reset to 0, so the words are inert until software claims them. A
-register-driven keeper or oscillator is the same woven loop as a route request,
-with the same simulation caveat.
+The mode values are fixed, so software reads the same field on every design.
+A value the cell has no row for behaves as `none`, a strength select past
+the table behaves as the first row, and a control value past its table
+behaves as the control's default row. The register keeps what was written, so
+firmware can read its own mistake back. A mode says whether and which way
+the pin pulls, a select says how strongly, and the two never mix: the keeper
+and the oscillator switch the mode between `up` and `down` from the pad
+level and leave both selects alone, so they hold at whatever strength the
+selects name. The report prints the mode numbering and each graded
+direction's strengths. `pull_src` at 0 keeps the pull the selected slot's
+route asked for, and at 1 hands mode and selects to the word. Each
+`<control>_src` does the same for its control. All reset to 0, so the words
+are inert until software claims them. A register-driven keeper or oscillator is the same woven
+loop as a route request, with the same simulation caveat.
 
 `generator.option.invert` appends the banks `input_enable_inv`,
 `output_value_inv`, `output_enable_inv`, and one `rx_inv_sk` bank per slot

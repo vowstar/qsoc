@@ -42,8 +42,9 @@ const QSet<QString> kRouteKeys
        "output_enable",
        "pull",
        "control"};
-const QSet<QString> kEndpointKeys  = {"link", "bit", "invert", "open_drain"};
-const QSet<QString> kRoutePullKeys = {"mode", "strength"};
+const QSet<QString> kEndpointKeys    = {"link", "bit", "invert", "open_drain"};
+const QSet<QString> kRoutePullKeys   = {"mode", "strength", "link", "bit", "invert", "on", "off"};
+const QSet<QString> kRouteSelectKeys = {"link", "bit", "invert", "on", "off"};
 
 constexpr quint32 kMinimumPinCount = 1;
 constexpr quint32 kMaximumPinCount = 256;
@@ -805,6 +806,59 @@ bool parseEndpoint(
     return false;
 }
 
+/**
+ * @brief Read the net of a selected pair: `link`, optional `bit`, optional `invert`.
+ */
+bool parseSelectLink(
+    const YAML::Node &node, const QString &path, QSocIomuxEndpointPlan *link, QStringList *errors)
+{
+    bool valid = parseIdentifier(node["link"], path + ".link", &link->link, errors);
+    if (node["bit"]) {
+        quint64 bit = 0;
+        if (parseStrictUnsigned(
+                node["bit"], path + ".bit", 0, std::numeric_limits<quint32>::max(), &bit, errors)) {
+            link->bit = static_cast<quint32>(bit);
+        } else {
+            valid = false;
+        }
+    }
+    if (node["invert"]) {
+        valid = parseStrictBool(node["invert"], path + ".invert", &link->invert, errors) && valid;
+    }
+    return valid;
+}
+
+/**
+ * @brief Read a pull request: a mode name, or a map of `mode` and `strength`.
+ */
+bool parsePullRequest(
+    const YAML::Node &node, const QString &path, QSocIomuxPullRequest *request, QStringList *errors)
+{
+    if (!node) {
+        appendError(errors, "REQUIRED", path, "property is required");
+        return false;
+    }
+    if (node.IsScalar()) {
+        return parseLabel(node, path, &request->mode, errors);
+    }
+    if (!node.IsMap()) {
+        appendError(errors, "TYPE", path, "must be a mode name or a map");
+        return false;
+    }
+    bool valid = true;
+    if (!node["mode"]) {
+        appendError(errors, "REQUIRED", path + ".mode", "property is required");
+        valid = false;
+    } else {
+        valid = parseLabel(node["mode"], path + ".mode", &request->mode, errors) && valid;
+    }
+    if (node["strength"]) {
+        valid = parseLabel(node["strength"], path + ".strength", &request->strength, errors)
+                && valid;
+    }
+    return valid;
+}
+
 bool parseRoute(
     const YAML::Node   &node,
     const QString      &path,
@@ -917,24 +971,34 @@ bool parseRoute(
         }
     }
     if (node["pull"]) {
-        const YAML::Node pull = node["pull"];
+        const YAML::Node pull     = node["pull"];
+        const QString    pullPath = path + ".pull";
         if (pull.IsScalar()) {
-            valid = parseLabel(pull, path + ".pull", &route->pullMode, errors) && valid;
-        } else if (pull.IsMap() && validateMap(pull, kRoutePullKeys, path + ".pull", errors)) {
-            if (!pull["mode"]) {
-                appendError(errors, "REQUIRED", path + ".pull.mode", "property is required");
-                valid = false;
+            valid = parseLabel(pull, pullPath, &route->pullMode, errors) && valid;
+        } else if (pull.IsMap() && validateMap(pull, kRoutePullKeys, pullPath, errors)) {
+            if (pull["link"]) {
+                valid = parseSelectLink(pull, pullPath, &route->pullSelect.link, errors) && valid;
+                if (pull["mode"] || pull["strength"]) {
+                    appendError(errors, "ROLE", pullPath, "a linked pull names on and off, not mode");
+                    valid = false;
+                }
+                valid = parsePullRequest(pull["on"], pullPath + ".on", &route->pullSelect.on, errors)
+                        && valid;
+                valid
+                    = parsePullRequest(pull["off"], pullPath + ".off", &route->pullSelect.off, errors)
+                      && valid;
+                if (valid && route->pullSelect.on == route->pullSelect.off) {
+                    appendError(errors, "ROLE", pullPath, "on and off name the same row");
+                    valid = false;
+                }
             } else {
-                valid = parseLabel(pull["mode"], path + ".pull.mode", &route->pullMode, errors)
-                        && valid;
-            }
-            if (pull["strength"]) {
-                valid = parseLabel(
-                            pull["strength"], path + ".pull.strength", &route->pullStrength, errors)
-                        && valid;
+                QSocIomuxPullRequest request;
+                valid               = parsePullRequest(pull, pullPath, &request, errors) && valid;
+                route->pullMode     = request.mode;
+                route->pullStrength = request.strength;
             }
         } else {
-            appendError(errors, "TYPE", path + ".pull", "must be a mode name or a map");
+            appendError(errors, "TYPE", pullPath, "must be a mode name or a map");
             valid = false;
         }
         ++declaredRoles;
@@ -951,13 +1015,42 @@ bool parseRoute(
                     valid = false;
                     continue;
                 }
-                const QString name = QString::fromStdString(entry.first.Scalar());
-                QString       label;
-                if (parseLabel(entry.second, path + ".control." + name, &label, errors)) {
-                    route->control.insert(name, label);
-                } else {
+                const QString           name     = QString::fromStdString(entry.first.Scalar());
+                const QString           itemPath = path + ".control." + name;
+                QSocIomuxControlRequest request;
+                if (route->control.contains(name)) {
+                    appendError(errors, "DUPLICATE", itemPath, "control is listed twice");
+                    valid = false;
+                    continue;
+                }
+                if (entry.second.IsMap()) {
+                    if (!validateMap(entry.second, kRouteSelectKeys, itemPath, errors)) {
+                        valid = false;
+                        continue;
+                    }
+                    valid = parseSelectLink(entry.second, itemPath, &request.select.link, errors)
+                            && valid;
+                    for (const auto &[key, target] :
+                         {std::pair{"on", &request.select.on.mode},
+                          std::pair{"off", &request.select.off.mode}}) {
+                        if (!entry.second[key]) {
+                            appendError(
+                                errors, "REQUIRED", itemPath + "." + key, "property is required");
+                            valid = false;
+                        } else {
+                            valid
+                                = parseLabel(entry.second[key], itemPath + "." + key, target, errors)
+                                  && valid;
+                        }
+                    }
+                    if (valid && request.select.on == request.select.off) {
+                        appendError(errors, "ROLE", itemPath, "on and off name the same row");
+                        valid = false;
+                    }
+                } else if (!parseLabel(entry.second, itemPath, &request.row, errors)) {
                     valid = false;
                 }
+                route->control.insert(name, request);
             }
             if (!route->control.isEmpty()) {
                 ++declaredRoles;
@@ -1557,7 +1650,7 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
     if (!cell.declared()) {
         bool valid = true;
         for (const QSocIomuxRoutePlan &route : plan.routes) {
-            if (route.pullMode.isEmpty() && route.control.isEmpty()) {
+            if (route.pullMode.isEmpty() && !route.pullSelect.linked() && route.control.isEmpty()) {
                 continue;
             }
             appendError(
@@ -1663,28 +1756,27 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
         }
         const QString routePath
             = QString("generator.route.pin %1 slot %2").arg(route.pin).arg(route.slot);
-        if (!route.pullMode.isEmpty()) {
-            const int mode = encoding.modeCode(route.pullMode);
+        const auto checkPull = [&](const QSocIomuxPullRequest &request, const QString &pullPath) {
+            const int mode = encoding.modeCode(request.mode);
             if (mode < 0) {
-                const bool feedback = route.pullMode == QStringLiteral("keeper")
-                                      || route.pullMode == QStringLiteral("oscillator");
+                const bool feedback = request.mode == QStringLiteral("keeper")
+                                      || request.mode == QStringLiteral("oscillator");
                 QString    reason
-                    = QString("pad cell %1 has no pull mode %2").arg(cell.cell, route.pullMode);
+                    = QString("pad cell %1 has no pull mode %2").arg(cell.cell, request.mode);
                 if (feedback && cell.pull.isDriver) {
                     reason = QString("pad cell %1 pulls with its driver, so %2 cannot be woven")
-                                 .arg(cell.cell, route.pullMode);
+                                 .arg(cell.cell, request.mode);
                 } else if (feedback && (encoding.keeperRow || encoding.oscillatorRow)) {
                     reason = QString(
                                  "pad cell %1 names its own keeper or oscillator row, so %2 "
                                  "is not woven")
-                                 .arg(cell.cell, route.pullMode);
+                                 .arg(cell.cell, request.mode);
                 } else if (feedback) {
                     reason = QString("pad cell %1 needs both up and down rows to weave %2")
-                                 .arg(cell.cell, route.pullMode);
+                                 .arg(cell.cell, request.mode);
                 }
-                appendError(errors, "CAPABILITY", routePath + ".pull.mode", reason);
-                valid = false;
-                continue;
+                appendError(errors, "CAPABILITY", pullPath + ".mode", reason);
+                return false;
             }
             const bool woven = encoding.weaves
                                && (mode == QSocPadEncoding::Keeper
@@ -1694,68 +1786,102 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             const bool graded = (up && encoding.upSelWidth > 0)
                                 || (down && encoding.downSelWidth > 0)
                                 || (woven && (encoding.upSelWidth > 0 || encoding.downSelWidth > 0));
-            if (!graded && !route.pullStrength.isEmpty()) {
+            if (!graded && !request.strength.isEmpty()) {
                 appendError(
                     errors,
                     "CAPABILITY",
-                    routePath + ".pull.strength",
+                    pullPath + ".strength",
                     QString("pull mode %1 of %2 has a single row, drop strength")
-                        .arg(route.pullMode, cell.cell));
-                valid = false;
-            } else if ((up || down) && graded && !route.pullStrength.isEmpty()) {
-                const int sel = up ? encoding.upSel(route.pullStrength)
-                                   : encoding.downSel(route.pullStrength);
+                        .arg(request.mode, cell.cell));
+                return false;
+            }
+            if ((up || down) && graded && !request.strength.isEmpty()) {
+                const int sel = up ? encoding.upSel(request.strength)
+                                   : encoding.downSel(request.strength);
                 if (sel < 0) {
                     appendError(
                         errors,
                         "CAPABILITY",
-                        routePath + ".pull.strength",
+                        pullPath + ".strength",
                         QString("pull mode %1 of %2 has no strength %3")
-                            .arg(route.pullMode, cell.cell, route.pullStrength));
-                    valid = false;
+                            .arg(request.mode, cell.cell, request.strength));
+                    return false;
                 }
             } else if ((up || down) && graded) {
                 appendError(
                     errors,
                     "CAPABILITY",
-                    routePath + ".pull.strength",
+                    pullPath + ".strength",
                     QString("pull mode %1 of %2 has several rows, name one")
-                        .arg(route.pullMode, cell.cell));
-                valid = false;
-            } else if (woven && !route.pullStrength.isEmpty()) {
+                        .arg(request.mode, cell.cell));
+                return false;
+            } else if (woven && !request.strength.isEmpty()) {
                 /* A woven mode alternates between the two directions, so the
                  * strength must exist on whichever side is graded. */
-                const bool upOk   = encoding.upSelWidth == 0
-                                    || encoding.upSel(route.pullStrength) >= 0;
+                const bool upOk = encoding.upSelWidth == 0 || encoding.upSel(request.strength) >= 0;
                 const bool downOk = encoding.downSelWidth == 0
-                                    || encoding.downSel(route.pullStrength) >= 0;
+                                    || encoding.downSel(request.strength) >= 0;
                 if (!upOk || !downOk) {
                     appendError(
                         errors,
                         "CAPABILITY",
-                        routePath + ".pull.strength",
+                        pullPath + ".strength",
                         QString("woven %1 of %2 needs strength %3 in both up and down")
-                            .arg(route.pullMode, cell.cell, route.pullStrength));
-                    valid = false;
+                            .arg(request.mode, cell.cell, request.strength));
+                    return false;
                 }
+            }
+            return true;
+        };
+        if (!route.pullMode.isEmpty()) {
+            if (!checkPull({route.pullMode, route.pullStrength}, routePath + ".pull")) {
+                valid = false;
+                continue;
+            }
+        } else if (route.pullSelect.linked()) {
+            const bool onOk  = checkPull(route.pullSelect.on, routePath + ".pull.on");
+            const bool offOk = checkPull(route.pullSelect.off, routePath + ".pull.off");
+            if (!onOk || !offOk) {
+                valid = false;
+                continue;
             }
         }
         for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
-            const qsizetype index = encoding.controlIndex(it.key());
+            const qsizetype index    = encoding.controlIndex(it.key());
+            const QString   itemPath = routePath + ".control." + it.key();
             if (index < 0) {
                 appendError(
                     errors,
                     "CAPABILITY",
-                    routePath + ".control." + it.key(),
+                    itemPath,
                     QString("pad cell %1 has no control %2").arg(cell.cell, it.key()));
                 valid = false;
-            } else if (encoding.controlCode(index, it.value()) < 0) {
+                continue;
+            }
+            if (it.value().select.linked() && encoding.control.at(index).width == 0) {
                 appendError(
                     errors,
                     "CAPABILITY",
-                    routePath + ".control." + it.key(),
-                    QString("control %1 of %2 has no row %3").arg(it.key(), cell.cell, it.value()));
+                    itemPath,
+                    QString("control %1 of %2 has one row, nothing for a link to select")
+                        .arg(it.key(), cell.cell));
                 valid = false;
+                continue;
+            }
+            const QList<std::pair<QString, QString>> rows
+                = it.value().select.linked()
+                      ? QList<std::pair<QString, QString>>{{".on", it.value().select.on.mode},
+                                                           {".off", it.value().select.off.mode}}
+                      : QList<std::pair<QString, QString>>{{QString(), it.value().row}};
+            for (const auto &[suffix, label] : rows) {
+                if (encoding.controlCode(index, label) < 0) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        itemPath + suffix,
+                        QString("control %1 of %2 has no row %3").arg(it.key(), cell.cell, label));
+                    valid = false;
+                }
             }
         }
     }
@@ -2113,11 +2239,26 @@ struct EndpointPort
     QSocIomuxRole                role = QSocIomuxRole::InputValue;
     const QSocIomuxRoutePlan    *route;
     const QSocIomuxEndpointPlan *endpoint;
+    QString                      select; /**< "pull" or a control name for a row select net */
+
+    bool isSelect() const { return !select.isEmpty(); }
 };
 
 QString endpointName(const EndpointPort &port)
 {
+    if (port.isSelect()) {
+        return QSocIomuxGenerator::selectPortName(port.pin, port.slot, port.select);
+    }
     return QSocIomuxGenerator::endpointPortName(port.pin, port.slot, port.role);
+}
+
+/**
+ * @brief The select net of one slot as an expression, inverted when asked.
+ */
+QString selectNet(const EndpointPort &port)
+{
+    const QString name = endpointName(port);
+    return port.endpoint->invert ? name + " ^ 1'b1" : name;
 }
 
 QString endpointComment(const EndpointPort &port)
@@ -2137,10 +2278,44 @@ QList<EndpointPort> endpointPorts(const QSocIomuxPlan &plan)
             if (endpoint.link.isEmpty()) {
                 continue;
             }
-            ports.append({route.pin, route.slot, role, &route, &endpoint});
+            ports.append({route.pin, route.slot, role, &route, &endpoint, QString()});
+        }
+        if (route.pullSelect.linked()) {
+            ports.append(
+                {route.pin,
+                 route.slot,
+                 QSocIomuxRole::InputEnable,
+                 &route,
+                 &route.pullSelect.link,
+                 QStringLiteral("pull")});
+        }
+        for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
+            if (it.value().select.linked()) {
+                ports.append(
+                    {route.pin,
+                     route.slot,
+                     QSocIomuxRole::InputEnable,
+                     &route,
+                     &it.value().select.link,
+                     it.key()});
+            }
         }
     }
     return ports;
+}
+
+/**
+ * @brief The select nets of one route, keyed by group name.
+ */
+QMap<QString, EndpointPort> selectPorts(const QSocIomuxPlan &plan, const QSocIomuxRoutePlan &route)
+{
+    QMap<QString, EndpointPort> selects;
+    for (const EndpointPort &port : endpointPorts(plan)) {
+        if (port.isSelect() && port.route == &route) {
+            selects.insert(port.select, port);
+        }
+    }
+    return selects;
 }
 
 bool isControlPort(const QSocMmioPortDescription &port)
@@ -2178,8 +2353,9 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
     for (const EndpointPort &endpoint : endpointPorts(plan)) {
         ports.append(
             {endpointName(endpoint),
-             endpoint.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
-                                                        : QStringLiteral("input"),
+             !endpoint.isSelect() && endpoint.role == QSocIomuxRole::InputValue
+                 ? QStringLiteral("output")
+                 : QStringLiteral("input"),
              1});
     }
     return ports;
@@ -2242,33 +2418,56 @@ QString withInversion(const QSocIomuxPlan &plan, const QString &expression, cons
 }
 
 /**
+ * @brief One slot's code: a constant, or a pair chosen by its select net.
+ *
+ * An empty string means the slot asks for the default, which the chain
+ * already supplies.
+ */
+QString slotCode(
+    const QSocIomuxPlan      &plan,
+    const QSocIomuxRoutePlan &route,
+    const QString            &group,
+    quint32                   codeWidth,
+    int                       defaultCode,
+    int                       fixed,
+    int                       on,
+    int                       off)
+{
+    const QMap<QString, EndpointPort> selects = selectPorts(plan, route);
+    if (selects.contains(group)) {
+        return QString("(%1 ? %2'd%3 : %2'd%4)")
+            .arg(selectNet(selects.value(group)))
+            .arg(codeWidth)
+            .arg(on)
+            .arg(off);
+    }
+    return fixed == defaultCode ? QString() : QString("%1'd%2").arg(codeWidth).arg(fixed);
+}
+
+/**
  * @brief The selector chain of one group on one pin, closed by its default.
  *
  * A slot with no route, and any selector value above the slot count, lands
  * on the default: none for pull, the declared default row for a control.
  */
 QString slotCodeChain(
-    const QSocIomuxPlan                                  &plan,
-    quint32                                               pin,
-    quint32                                               codeWidth,
-    int                                                   defaultCode,
-    const std::function<int(const QSocIomuxRoutePlan &)> &code)
+    const QSocIomuxPlan                                      &plan,
+    quint32                                                   pin,
+    quint32                                                   codeWidth,
+    int                                                       defaultCode,
+    const std::function<QString(const QSocIomuxRoutePlan &)> &code)
 {
     const quint32 width = selectorWidth(plan.hsSlots);
     QString       expression;
     for (const QSocIomuxRoutePlan &route : plan.routes) {
-        if (route.pin != pin) {
+        const QString value = route.pin == pin ? code(route) : QString();
+        if (value.isEmpty()) {
             continue;
         }
-        const int value = code(route);
-        if (value == defaultCode) {
-            continue;
-        }
-        expression += QString("(pin_%1_select_i == %2'd%3) ? %4'd%5 : ")
+        expression += QString("(pin_%1_select_i == %2'd%3) ? %4 : ")
                           .arg(pin)
                           .arg(width)
                           .arg(route.slot)
-                          .arg(codeWidth)
                           .arg(value);
     }
     return expression + QString("%1'd%2").arg(codeWidth).arg(defaultCode);
@@ -2352,42 +2551,69 @@ int QSocPadEncoding::controlCode(qsizetype index, const QString &label) const
     return int(control.at(index).label.indexOf(label));
 }
 
+int QSocPadEncoding::requestMode(const QSocIomuxPullRequest &request) const
+{
+    return request.empty() ? None : std::max(0, modeCode(request.mode));
+}
+
 int QSocPadEncoding::routeMode(const QSocIomuxRoutePlan &route) const
 {
-    return route.pullMode.isEmpty() ? None : std::max(0, modeCode(route.pullMode));
+    if (route.pullSelect.linked()) {
+        return requestMode(route.pullSelect.off);
+    }
+    return requestMode({route.pullMode, route.pullStrength});
 }
 
 /* A woven keeper or oscillator carries its strength into both directions;
  * a plain up or down carries it into its own. Anything else leaves the
  * first row, which is what an absent strength means. */
-int QSocPadEncoding::routeUpSel(const QSocIomuxRoutePlan &route) const
+int QSocPadEncoding::requestUpSel(const QSocIomuxPullRequest &request) const
 {
-    const int mode = routeMode(route);
-    if (route.pullStrength.isEmpty()
+    const int mode = requestMode(request);
+    if (request.strength.isEmpty()
         || (mode != Up && !(weaves && (mode == Keeper || mode == Oscillator)))) {
         return 0;
     }
-    return std::max(0, upSel(route.pullStrength));
+    return std::max(0, upSel(request.strength));
+}
+
+int QSocPadEncoding::requestDownSel(const QSocIomuxPullRequest &request) const
+{
+    const int mode = requestMode(request);
+    if (request.strength.isEmpty()
+        || (mode != Down && !(weaves && (mode == Keeper || mode == Oscillator)))) {
+        return 0;
+    }
+    return std::max(0, downSel(request.strength));
+}
+
+int QSocPadEncoding::routeUpSel(const QSocIomuxRoutePlan &route) const
+{
+    return requestUpSel(
+        route.pullSelect.linked() ? route.pullSelect.off
+                                  : QSocIomuxPullRequest{route.pullMode, route.pullStrength});
 }
 
 int QSocPadEncoding::routeDownSel(const QSocIomuxRoutePlan &route) const
 {
-    const int mode = routeMode(route);
-    if (route.pullStrength.isEmpty()
-        || (mode != Down && !(weaves && (mode == Keeper || mode == Oscillator)))) {
-        return 0;
+    return requestDownSel(
+        route.pullSelect.linked() ? route.pullSelect.off
+                                  : QSocIomuxPullRequest{route.pullMode, route.pullStrength});
+}
+
+int QSocPadEncoding::controlCodeOrDefault(qsizetype index, const QString &label) const
+{
+    if (label.isEmpty()) {
+        return control.at(index).defaultCode;
     }
-    return std::max(0, downSel(route.pullStrength));
+    return std::max(0, controlCode(index, label));
 }
 
 int QSocPadEncoding::routeControlCode(const QSocIomuxRoutePlan &route, qsizetype index) const
 {
-    const Control &item  = control.at(index);
-    const QString  label = route.control.value(item.name);
-    if (label.isEmpty()) {
-        return item.defaultCode;
-    }
-    return std::max(0, controlCode(index, label));
+    const QSocIomuxControlRequest request = route.control.value(control.at(index).name);
+    return controlCodeOrDefault(
+        index, request.select.linked() ? request.select.off.mode : request.row);
 }
 
 QString QSocPadEncoding::modeSummary() const
@@ -2556,6 +2782,11 @@ bool QSocIomuxGenerator::checkPadCellPorts(
         *errors = local;
     }
     return local.isEmpty();
+}
+
+QString QSocIomuxGenerator::selectPortName(quint32 pin, quint32 slot, const QString &group)
+{
+    return QString("hs_p%1_s%2_%3_select_i").arg(pin).arg(slot).arg(group);
 }
 
 QString QSocIomuxGenerator::endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role)
@@ -2734,6 +2965,11 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             ports.append(portDeclaration(port, QStringLiteral("_i")));
         }
     }
+    for (const EndpointPort &port : endpointPorts(plan)) {
+        if (port.isSelect()) {
+            ports.append(QString("    input  wire        %1").arg(endpointName(port)));
+        }
+    }
     for (qsizetype index = 0; index < ports.size(); ++index) {
         const QString suffix = index + 1 == ports.size() ? QString() : QString(",");
         lines.append(ports.at(index) + suffix);
@@ -2816,12 +3052,12 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
         }
         /* Each slot carries the constants its route asked for; the register
          * takes over a whole group when its source bit is set. */
-        const auto emitCode = [&](const char                                           *name,
-                                  const char                                           *reg,
-                                  quint32                                               width,
-                                  const char                                           *src,
-                                  int                                                   defaultCode,
-                                  const std::function<int(const QSocIomuxRoutePlan &)> &code) {
+        const auto emitCode = [&](const char *name,
+                                  const char *reg,
+                                  quint32     width,
+                                  const char *src,
+                                  int         defaultCode,
+                                  const std::function<QString(const QSocIomuxRoutePlan &)> &code) {
             const QString chain = slotCodeChain(plan, pin, width, defaultCode, code);
             const QString value
                 = plan.option.padControl
@@ -2835,17 +3071,41 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
         };
         if (encoding.hasPull()) {
             emitCode("pull_mode", "pull_mode", encoding.modeWidth, "pull_src", 0, [&](const auto &r) {
-                return encoding.routeMode(r);
+                return slotCode(
+                    plan,
+                    r,
+                    "pull",
+                    encoding.modeWidth,
+                    0,
+                    encoding.routeMode(r),
+                    encoding.requestMode(r.pullSelect.on),
+                    encoding.requestMode(r.pullSelect.off));
             });
             if (encoding.upSelWidth > 0) {
                 emitCode("up_sel", "up_sel", encoding.upSelWidth, "pull_src", 0, [&](const auto &r) {
-                    return encoding.routeUpSel(r);
+                    return slotCode(
+                        plan,
+                        r,
+                        "pull",
+                        encoding.upSelWidth,
+                        0,
+                        encoding.routeUpSel(r),
+                        encoding.requestUpSel(r.pullSelect.on),
+                        encoding.requestUpSel(r.pullSelect.off));
                 });
             }
             if (encoding.downSelWidth > 0) {
                 emitCode(
                     "down_sel", "down_sel", encoding.downSelWidth, "pull_src", 0, [&](const auto &r) {
-                        return encoding.routeDownSel(r);
+                        return slotCode(
+                            plan,
+                            r,
+                            "pull",
+                            encoding.downSelWidth,
+                            0,
+                            encoding.routeDownSel(r),
+                            encoding.requestDownSel(r.pullSelect.on),
+                            encoding.requestDownSel(r.pullSelect.off));
                     });
             }
         }
@@ -2863,7 +3123,18 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                 item.width,
                 src.constData(),
                 item.defaultCode,
-                [&](const auto &r) { return encoding.routeControlCode(r, index); });
+                [&](const auto &r) {
+                    const QSocIomuxControlRequest request = r.control.value(item.name);
+                    return slotCode(
+                        plan,
+                        r,
+                        item.name,
+                        item.width,
+                        item.defaultCode,
+                        encoding.routeControlCode(r, index),
+                        encoding.controlCodeOrDefault(index, request.select.on.mode),
+                        encoding.controlCodeOrDefault(index, request.select.off.mode));
+                });
         }
         lines.append(QString());
     }
@@ -2907,6 +3178,9 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
     declarations.append(QString("    input  wire %1 rx_input_value_i").arg(vectorRange(dense)));
     QStringList comments = {QString(), QString(), QString(), QString()};
     for (const EndpointPort &port : ports) {
+        if (port.isSelect()) {
+            continue;
+        }
         const QString direction = port.role == QSocIomuxRole::InputValue ? QStringLiteral("output")
                                                                          : QStringLiteral("input ");
         declarations.append(QString("    %1 wire %2").arg(direction, endpointName(port)));
@@ -2936,7 +3210,7 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
     lines.append(QString());
 
     for (const EndpointPort &port : ports) {
-        if (port.role != QSocIomuxRole::InputValue) {
+        if (port.isSelect() || port.role != QSocIomuxRole::InputValue) {
             continue;
         }
         const quint64 index      = denseIndex(plan, port.slot, port.pin);
@@ -3113,7 +3387,9 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_enable_o(tx_output_enable_w)",
            "    .rx_input_value_i(rx_input_value_w)"};
     for (const EndpointPort &port : endpoints) {
-        connConnections.append(QString("    .%1(%1)").arg(endpointName(port)));
+        if (!port.isSelect()) {
+            connConnections.append(QString("    .%1(%1)").arg(endpointName(port)));
+        }
     }
     lines.append(QString("%1_conn u_conn (").arg(plan.moduleName));
     for (qsizetype index = 0; index < connConnections.size(); ++index) {
@@ -3139,6 +3415,11 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
         coreConnections.append(QString("    .pin_%1_select_i(pin_%1_select_w)").arg(pin));
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
             coreConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
+        }
+    }
+    for (const EndpointPort &port : endpoints) {
+        if (port.isSelect()) {
+            coreConnections.append(QString("    .%1(%1)").arg(endpointName(port)));
         }
     }
     if (plan.option.interrupt) {
@@ -3686,14 +3967,42 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                 }
                 lines.append(QString("    %1: %2").arg(roleKey(role), value));
             }
+            const auto pullText = [](const QSocIomuxPullRequest &request) {
+                return request.strength.isEmpty()
+                           ? request.mode
+                           : QString("%1 %2").arg(request.mode, request.strength);
+            };
+            const auto linkText = [](const QSocIomuxEndpointPlan &link) {
+                QString text = QString("link %1").arg(link.link);
+                if (link.bit.has_value()) {
+                    text += QString(" bit %1").arg(*link.bit);
+                }
+                if (link.invert) {
+                    text += " invert";
+                }
+                return text;
+            };
             if (!route.pullMode.isEmpty()) {
                 lines.append(
-                    route.pullStrength.isEmpty()
-                        ? QString("    pull: %1").arg(route.pullMode)
-                        : QString("    pull: %1 %2").arg(route.pullMode, route.pullStrength));
+                    QString("    pull: %1").arg(pullText({route.pullMode, route.pullStrength})));
+            } else if (route.pullSelect.linked()) {
+                lines.append(QString("    pull: %1 on %2 off %3")
+                                 .arg(
+                                     linkText(route.pullSelect.link),
+                                     pullText(route.pullSelect.on),
+                                     pullText(route.pullSelect.off)));
             }
             for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
-                lines.append(QString("    control %1: %2").arg(it.key(), it.value()));
+                if (it.value().select.linked()) {
+                    lines.append(QString("    control %1: %2 on %3 off %4")
+                                     .arg(
+                                         it.key(),
+                                         linkText(it.value().select.link),
+                                         it.value().select.on.mode,
+                                         it.value().select.off.mode));
+                } else {
+                    lines.append(QString("    control %1: %2").arg(it.key(), it.value().row));
+                }
             }
         }
         lines.append(
