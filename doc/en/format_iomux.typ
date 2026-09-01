@@ -163,6 +163,18 @@ controls of up to 256 rows each. A route asks for a row by label under
 names none takes the default. A control with one row has nothing to select:
 its pins take that row and it owns no field and no port.
 
+A row may also follow a net at bus speed. `control: {mode: {link:
+i3c0_sda_oe, on: pp, off: od}}` gives the slot the `on` row while the net is
+high and the `off` row while it is low, with the usual `bit` and `invert` on
+the link, and `pull: {link: sleep_n, invert: true, on: down, off: up}` does
+the same for the pull, where `on` and `off` take a mode name or a `mode` and
+`strength` map. The net becomes a wrapper input named
+`hs_p<pin>_s<slot>_<group>_select_i` and a link in the integration fragment.
+It is what an open-drain mode pin of an I3C controller or a pull that
+changes for sleep needs. The register source bit still wins over the net,
+and a slot that is not selected contributes nothing, exactly as for a fixed
+row.
+
 The rule behind the names is short. A name the generator gives behaviour
 to is fixed: the roles, `none`, `up`, `down`, `keeper`, `oscillator`. Every
 other name, a pull mode, a strength, a control, a row, is yours and is

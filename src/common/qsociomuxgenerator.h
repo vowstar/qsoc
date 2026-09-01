@@ -29,19 +29,57 @@ struct QSocIomuxEndpointPlan
     bool operator==(const QSocIomuxEndpointPlan &) const = default;
 };
 
+/**
+ * @brief A pull request of a route: one mode and, on a graded side, a strength.
+ */
+struct QSocIomuxPullRequest
+{
+    QString mode;
+    QString strength;
+
+    bool empty() const { return mode.isEmpty(); }
+    bool operator==(const QSocIomuxPullRequest &) const = default;
+};
+
+/**
+ * @brief A row chosen at bus speed by a net: `on` while the net is high,
+ * `off` while it is low. What an open-drain mode pin or a sleep pull needs.
+ */
+struct QSocIomuxRouteSelect
+{
+    QSocIomuxEndpointPlan link;
+    QSocIomuxPullRequest  on; /**< For a control only `mode` is used, as the row label */
+    QSocIomuxPullRequest  off;
+
+    bool linked() const { return !link.link.isEmpty(); }
+    bool operator==(const QSocIomuxRouteSelect &) const = default;
+};
+
+/**
+ * @brief What a route asks of one control: a fixed row or a net-selected pair.
+ */
+struct QSocIomuxControlRequest
+{
+    QString              row;
+    QSocIomuxRouteSelect select;
+
+    bool operator==(const QSocIomuxControlRequest &) const = default;
+};
+
 struct QSocIomuxRoutePlan
 {
-    quint32                pin  = 0;
-    quint32                slot = 0;
-    QString                function;
-    QString                signal;
-    QSocIomuxEndpointPlan  inputValue;
-    QSocIomuxEndpointPlan  inputEnable;
-    QSocIomuxEndpointPlan  outputValue;
-    QSocIomuxEndpointPlan  outputEnable;
-    QString                pullMode;     /**< A mode name from the pad cell table, or empty */
-    QString                pullStrength; /**< A strength label under that mode, or empty */
-    QMap<QString, QString> control;      /**< Control name to the row label this slot asks for */
+    quint32               pin  = 0;
+    quint32               slot = 0;
+    QString               function;
+    QString               signal;
+    QSocIomuxEndpointPlan inputValue;
+    QSocIomuxEndpointPlan inputEnable;
+    QSocIomuxEndpointPlan outputValue;
+    QSocIomuxEndpointPlan outputEnable;
+    QString               pullMode;     /**< A mode name from the pad cell table, or empty */
+    QString               pullStrength; /**< A strength label under that mode, or empty */
+    QSocIomuxRouteSelect  pullSelect;   /**< A net-selected pull pair, when the mode is empty */
+    QMap<QString, QSocIomuxControlRequest> control; /**< Control name to the request */
 
     bool operator==(const QSocIomuxRoutePlan &) const = default;
 };
@@ -248,11 +286,17 @@ struct QSocPadEncoding
     int downSel(const QString &strength) const;
     /** Row index of a control label, or -1 when the control has no such row. */
     int controlCode(qsizetype index, const QString &label) const;
-    /** What a route asks for, as the constants its slot carries. */
+    /** The constants a pull request resolves to, 0 when it asks for nothing. */
+    int requestMode(const QSocIomuxPullRequest &request) const;
+    int requestUpSel(const QSocIomuxPullRequest &request) const;
+    int requestDownSel(const QSocIomuxPullRequest &request) const;
+    /** What a route's fixed request carries; a linked route reports its off row. */
     int routeMode(const QSocIomuxRoutePlan &route) const;
     int routeUpSel(const QSocIomuxRoutePlan &route) const;
     int routeDownSel(const QSocIomuxRoutePlan &route) const;
     int routeControlCode(const QSocIomuxRoutePlan &route, qsizetype index) const;
+    /** Row code of a control label, the default when the label is empty, or -1. */
+    int controlCodeOrDefault(qsizetype index, const QString &label) const;
     /** "0 none, 1 up, ..." over the modes this cell reaches. */
     QString modeSummary() const;
     /** The row a mode value selects, with the strength indices, or none. */
@@ -310,6 +354,8 @@ public:
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
     static QString endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role);
+    /** Wrapper input that selects a pull or control row for one slot. */
+    static QString selectPortName(quint32 pin, quint32 slot, const QString &group);
     /** The layout contract the identity word reports. */
     static QSocIomuxLayoutVersion layoutVersion();
     /** The type word every instance reports, "IOMX" read as a hex value. */

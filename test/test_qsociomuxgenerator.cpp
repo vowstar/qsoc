@@ -2325,6 +2325,8 @@ private slots:
     void unreachableModeLandsOnNone();
     void nativeKeeperRowIsSelectedNotWoven();
     void layoutVersionTracksTheRegisterMap();
+    void netSelectedRowsFollowTheLink();
+    void netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -5254,6 +5256,248 @@ void Test::layoutVersionTracksTheRegisterMap()
         "0x7c fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
     };
     QCOMPARE(map, frozen);
+}
+
+QSocModuleDefinition makeLinkedRowDefinition()
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: i3c0
+        signal: sda
+        input_value: {link: i3c0_sda_in}
+        input_enable: 1
+        output_value: {link: i3c0_sda_out}
+        output_enable: 1
+        control: {drive: {link: i3c0_sda_oe, on: high, off: low}}
+      - pin: 1
+        slot: 0
+        function: wake0
+        signal: irq
+        input_value: {link: wake0_irq}
+        input_enable: 1
+        pull: {link: sleep_n, invert: true, on: down, off: up}
+)")
+                              .arg(padCellBlock(), padIntegrationBlock()));
+}
+
+void Test::netSelectedRowsFollowTheLink()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeLinkedRowDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QSocIomuxControlRequest drive = plan.routes.at(0).control.value("drive");
+    QVERIFY(drive.select.linked());
+    QCOMPARE(drive.select.link.link, QString("i3c0_sda_oe"));
+    QCOMPARE(drive.select.on.mode, QString("high"));
+    QVERIFY(plan.routes.at(1).pullSelect.linked());
+    QVERIFY(plan.routes.at(1).pullSelect.link.invert);
+    QVERIFY(plan.routes.at(1).pullMode.isEmpty());
+
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+    QVERIFY(core.contains("    input  wire        hs_p0_s0_drive_select_i,"));
+    QVERIFY(core.contains("    input  wire        hs_p1_s0_pull_select_i"));
+    /* The net picks between the two codes inside the slot's own term, and
+     * the register source bit still sits above it. */
+    QVERIFY(core.contains(
+        "assign pad_drive_select_o[0:0] = pin_0_drive_src_i ? pin_0_drive_i : "
+        "(pin_0_select_i == 1'd0) ? (hs_p0_s0_drive_select_i ? 1'd1 : 1'd0) : "
+        "1'd0;"));
+    QVERIFY(core.contains(
+        "assign pad_pull_mode_o[5:3] = pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(pin_1_select_i == 1'd0) ? (hs_p1_s0_pull_select_i ^ 1'b1 ? 3'd2 : 3'd1) "
+        ": 3'd0;"));
+
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(top.contains("    input  wire hs_p0_s0_drive_select_i, /* i3c0.sda */"));
+    QVERIFY(top.contains("    input  wire hs_p1_s0_pull_select_i /* wake0.irq */"));
+    QVERIFY(top.contains("    .hs_p0_s0_drive_select_i(hs_p0_s0_drive_select_i)"));
+    QVERIFY(!QSocIomuxGenerator::generateConnVerilog(plan).contains("select_i"));
+
+    const QString netlist = QSocIomuxGenerator::generateIntegrationNetlist(plan);
+    QVERIFY(netlist.contains("      hs_p0_s0_drive_select_i:\n        link: i3c0_sda_oe"));
+    QVERIFY(netlist.contains("      hs_p1_s0_pull_select_i:\n        link: sleep_n"));
+    const QString report = QSocIomuxGenerator::generateReport(plan);
+    QVERIFY(report.contains("    control drive: link i3c0_sda_oe on high off low"));
+    QVERIFY(report.contains("    pull: link sleep_n invert on down off up"));
+
+    /* A linked row must exist on both sides, and a linked pull names no mode. */
+    QString text = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: i3c0
+        signal: sda
+        output_value: {link: i3c0_sda_out}
+        output_enable: 1
+        control: {drive: {link: i3c0_sda_oe, on: high, off: max}}
+)")
+                       .arg(padCellBlock(), padIntegrationBlock());
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(text), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_CAPABILITY generator.route.pin 0 slot 0.control.drive.off: control "
+                    "drive of gpio_pad_ps has no row max"});
+    text.replace(
+        "        control: {drive: {link: i3c0_sda_oe, on: high, off: max}}\n",
+        "        pull: {link: sleep_n, mode: up, on: down, off: up}\n");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(text), &plan, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{
+            "IOMUX_ROLE generator.route[0].pull: a linked pull names on and off, not mode"});
+}
+
+QString linkedRowTestbench()
+{
+    return QStringLiteral(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    reg  [11:0] awaddr, araddr;
+    reg         awvalid = 0, wvalid = 0, arvalid = 0, bready = 1, rready = 1;
+    reg  [31:0] wdata;
+    reg  [3:0]  wstrb = 4'hf;
+    wire        awready, wready, bvalid, arready, rvalid;
+    wire [1:0]  bresp, rresp;
+    wire [31:0] rdata;
+    wire [1:0]  pad;
+    reg         sda_out = 0, sda_oe = 0, sleep_n = 1;
+    wire        sda_in, wake_irq;
+    integer     fails = 0;
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid),
+        .s_axi_awready(awready), .s_axi_wdata(wdata), .s_axi_wstrb(wstrb),
+        .s_axi_wvalid(wvalid), .s_axi_wready(wready), .s_axi_bresp(bresp),
+        .s_axi_bvalid(bvalid), .s_axi_bready(bready), .s_axi_araddr(araddr),
+        .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+        .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid),
+        .s_axi_rready(rready), .pad_io(pad),
+        .hs_p0_s0_input_value_o(sda_in), .hs_p0_s0_output_value_i(sda_out),
+        .hs_p0_s0_drive_select_i(sda_oe),
+        .hs_p1_s0_input_value_o(wake_irq), .hs_p1_s0_pull_select_i(sleep_n));
+
+    task wr(input [11:0] a, input [31:0] d);
+        begin
+            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
+            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            wait (bvalid); @(posedge clk);
+        end
+    endtask
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        /* the net moves the drive row without a bus write */
+        chk("oe_low_is_low_drive", dut.u_pad.DS_0_w, 1'b0);
+        sda_oe = 1; #1 chk("oe_high_is_high_drive", dut.u_pad.DS_0_w, 1'b1);
+        sda_oe = 0; #1 chk("oe_back_low", dut.u_pad.DS_0_w, 1'b0);
+        /* awake: inverted sleep_n is 0, the off row, pull up */
+        chk("awake_pull_up_PS", dut.u_pad.PS_1_w, 1'b1);
+        sleep_n = 0; #1 chk("asleep_pull_down_PS", dut.u_pad.PS_1_w, 1'b0);
+        chk("asleep_pull_down_PE", dut.u_pad.PE_1_w, 1'b1);
+        sleep_n = 1;
+        /* the register source bit wins over the net */
+        wr(12'h024, 32'h0000_0000);
+        wr(12'h014, 32'h0001_0000);
+        repeat (2) @(posedge clk);
+        sda_oe = 1; #1 chk("register_overrides_net", dut.u_pad.DS_0_w, 1'b0);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeLinkedRowDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const auto offsetOf = [&](const char *name) -> qint64 {
+        const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
+        return found ? qint64(found->byteOffset) : -1;
+    };
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x14));
+    QCOMPARE(offsetOf("pin_ctl_0_0"), qint64(0x24));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir    dir(directory.path());
+    const QString outputPath = dir.filePath("iomux0.out");
+    writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("tb.v"), linkedRowTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler,
+        {"-g2012",
+         "-s",
+         "tb",
+         "-o",
+         outputPath,
+         "iomux0_regs.v",
+         "iomux0_conn.v",
+         "iomux0.v",
+         "iomux0_pad.v",
+         "gpio_pad_ps.v",
+         "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
 } // namespace
