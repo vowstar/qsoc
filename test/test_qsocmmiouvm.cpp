@@ -669,7 +669,11 @@ void Test::generatedTestbenchPassesVerilator()
         QVERIFY2(
             mutatedRun.exitStatus != QProcess::NormalExit || mutatedRun.exitCode != 0,
             mutatedRun.output.constData());
-        QVERIFY2(mutatedRun.output.contains("READ_DATA"), mutatedRun.output.constData());
+        /* The output port check sees the wrongly set bit on the write itself,
+         * before any read compares it. */
+        QVERIFY2(
+            mutatedRun.output.contains("[OUTPUT]") || mutatedRun.output.contains("[READ_DATA]"),
+            mutatedRun.output.constData());
         QVERIFY2(mutatedRun.output.contains("QSOC_UVM_FAILED"), mutatedRun.output.constData());
     }
 
