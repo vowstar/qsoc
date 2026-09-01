@@ -191,6 +191,7 @@ private slots:
     void optionMutationsFailBmcWhenAvailable();
     void selectNetsAreFreeInputsOfTheProof();
     void selectNetMutationFailsBmcWhenAvailable();
+    void forceIsProvenAboveEverySourceWhenAvailable();
 };
 
 void Test::assertionCountCoversEverySlotOfEveryPin_data()
@@ -827,6 +828,114 @@ void Test::selectNetMutationFailsBmcWhenAvailable()
     const QString before  = "(hs_p0_s0_drive_select_i ? 1'd1 : 1'd0)";
     QVERIFY(mutated.contains(before));
     mutated.replace(before, "(hs_p0_s0_drive_select_i ? 1'd0 : 1'd1)");
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    writeCollateral(second, plan, mutated);
+    const CommandResult result = runCommand(
+        second.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc")});
+    QVERIFY2(result.exitCode != 0, result.output.constData());
+    QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+    QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+}
+
+void Test::forceIsProvenAboveEverySourceWhenAvailable()
+{
+    /* The linked plan with a safe row: force must win over the register,
+     * the slot constant and the select net in the proof, and a core that
+     * forgets it on one output must fail. */
+    QSocModuleDefinition definition = makeDefinition(QString(R"yaml(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 2
+    hs_slots: 2
+    option:
+      gpio: true
+      pad_control: true
+    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+      control:
+        drive:
+          port: [DS]
+          table:
+            low: ["0"]
+            high: ["1"]
+      safe:
+        input_enable: 1
+        pull: down
+        drive: high
+    integration:
+      instance: u_iomux0
+      clock: clk_iomux
+      reset: rst_iomux_n
+      control: iomux_control
+      force: pad_iso
+      pad:
+        io: chip_gpio
+    route:
+      - pin: 0
+        slot: 0
+        function: i3c0
+        signal: sda
+        output_value: {link: i3c0_sda_out}
+        output_enable: 1
+        control: {drive: {link: i3c0_sda_oe, on: high, off: low}}
+      - pin: 1
+        slot: 1
+        function: wake0
+        signal: irq
+        input_value: {link: wake0_irq}
+        input_enable: 1
+        pull: {link: sleep_n, invert: true, on: down, off: up}
+)yaml"));
+    QSocIomuxPlan        plan;
+    QStringList          errors;
+    QVERIFY2(QSocIomuxGenerator::buildPlan(definition, &plan, &errors), qPrintable(errors.join('\n')));
+    const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
+    QVERIFY(sv.contains("    input logic pad_force_i"));
+    QVERIFY(sv.contains(
+        "assert (pad_input_enable_w[0] == (pad_force_i ? 1'b1 : (pin_0_input_enable_src_i ? "
+        "pin_0_input_enable_i : (1'b0))));"));
+    QVERIFY(sv.contains(
+        "assert (pad_pull_mode_w[5:3] == (pad_force_i ? 3'd2 : (pin_1_pull_src_i ? "
+        "pin_1_pull_mode_i : "
+        "(hs_p1_s1_pull_select_i ^ 1'b1 ? 3'd2 : 3'd1))));"));
+
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, QSocIomuxGenerator::generateTopVerilog(plan));
+    for (const QString &task : {QStringLiteral("prove"), QStringLiteral("bmc")}) {
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), task});
+        QVERIFY2(result.exitCode == 0, result.output.constData());
+    }
+    QString       mutated = QSocIomuxGenerator::generateTopVerilog(plan);
+    const QString before  = "assign pad_output_enable_o[0] = pad_force_i ? 1'b0 : (";
+    QVERIFY(mutated.contains(before));
+    mutated.replace(before, "assign pad_output_enable_o[0] = 1'b0 ? 1'b0 : (");
     QTemporaryDir second;
     QVERIFY(second.isValid());
     writeCollateral(second, plan, mutated);

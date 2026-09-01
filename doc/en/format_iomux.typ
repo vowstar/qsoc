@@ -104,7 +104,9 @@ neither.
 `generator.pad_cell` names the pad cell the design uses and the generator
 instantiates it, one per pin, in `<module>_pad.v`. The public wrapper then
 exposes a single `pad_io` vector in place of the four pad vectors, and
-`integration.pad` names only `io`, the net that vector uplinks to.
+`integration.pad` names only `io`, the net that vector uplinks to. With a
+`safe` row the wrapper also takes `pad_force_i`, linked from
+`integration.force`.
 
 ```yaml
 pad_cell:
@@ -174,6 +176,17 @@ It is what an open-drain mode pin of an I3C controller or a pull that
 changes for sleep needs. The register source bit still wins over the net,
 and a slot that is not selected contributes nothing, exactly as for a fixed
 row.
+
+`safe` names the row every pin takes while the wrapper input `pad_force_i`
+is high: `input_enable`, `output_value`, and `output_enable` as 0 or 1, `pull`
+as a mode or a `mode` and `strength` map, and any control by its row label.
+Anything left out is 0, `none`, or the control's default. Declaring `safe`
+adds the `pad_force_i` port and requires `integration.force`, the net that
+drives it, typically the isolation or test signal of the power domain.
+Nothing outranks it: not a register, not a slot, not a select net. That is
+the whole priority order of a pad output, and it reads in one line: forced
+selects the safe row, otherwise a set source bit selects the register,
+otherwise the selected slot's link or constant.
 
 The rule behind the names is short. A name the generator gives behaviour
 to is fixed: the roles, `none`, `up`, `down`, `keeper`, `oscillator`. Every
@@ -412,8 +425,9 @@ read as `z` in simulation.
 (`<module>_regs_formal.sv`, `<module>_regs_formal.sby`) and a routing proof
 (`<module>_hs_formal.sv`, `<module>_hs_formal.sby`). The routing proof leaves
 every option register free and asserts, per slot and for invalid codes, the
-pad bundle after source selection and inversion, the pull mode, strength
-selects, and every control row after their source bits, and every receive sink after substitution and
+pad bundle after source selection, inversion, and the safe row under
+`pad_force_i`, the pull mode, strength selects, and every control row after
+their source bits and the same force, and every receive sink after substitution and
 inversion. A pad cell adds the constraint proof described above.
 
 == UVM Collateral

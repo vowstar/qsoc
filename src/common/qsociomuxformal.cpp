@@ -120,6 +120,13 @@ QString expectedPadExpression(
     if (plan.option.invert) {
         expression = QString("(%1) ^ pin_%2_%3_inv_i").arg(expression).arg(pin).arg(roleName);
     }
+    const QSocPadSafePlan &safe = plan.integration.padCell.safe;
+    if (safe.declared) {
+        const quint8 value = role == QSocIomuxRole::InputEnable   ? safe.inputEnable
+                             : role == QSocIomuxRole::OutputValue ? safe.outputValue
+                                                                  : safe.outputEnable;
+        expression         = QString("pad_force_i ? 1'b%1 : (%2)").arg(value).arg(expression);
+    }
     return expression;
 }
 
@@ -174,21 +181,27 @@ QString expectedCode(
 void appendPadCodeAssertions(
     QStringList *lines, const QSocIomuxPlan &plan, quint32 pin, const QSocIomuxRoutePlan *route)
 {
-    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
-    const auto            expect   = [&](const char    *name,
-                                         const char    *reg,
-                                         quint32        width,
-                                         const char    *src,
-                                         const QString &value) {
-        lines->append(
-            QString("        assert (pad_%1_w[%2:%3] == (%4));")
-                .arg(name)
-                .arg((pin + 1) * width - 1)
-                .arg(pin * width)
-                .arg(
-                    plan.option.padControl
-                        ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, value)
-                        : value));
+    const QSocPadEncoding  encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    const QSocPadSafePlan &safe     = plan.integration.padCell.safe;
+    const auto             expect   = [&](const char    *name,
+                                          const char    *reg,
+                                          quint32        width,
+                                          const char    *src,
+                                          int            safeCode,
+                                          const QString &value) {
+        const QString chosen
+            = plan.option.padControl
+                  ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, value)
+                  : value;
+        const QString forced
+            = safe.declared
+                  ? QString("pad_force_i ? %1'd%2 : (%3)").arg(width).arg(safeCode).arg(chosen)
+                  : chosen;
+        lines->append(QString("        assert (pad_%1_w[%2:%3] == (%4));")
+                          .arg(name)
+                          .arg((pin + 1) * width - 1)
+                          .arg(pin * width)
+                          .arg(forced));
     };
     if (encoding.hasPull()) {
         expect(
@@ -196,6 +209,7 @@ void appendPadCodeAssertions(
             "pull_mode",
             encoding.modeWidth,
             "pull_src",
+            encoding.requestMode(safe.pull),
             route ? expectedCode(
                         *route,
                         "pull",
@@ -211,6 +225,7 @@ void appendPadCodeAssertions(
                 "up_sel",
                 encoding.upSelWidth,
                 "pull_src",
+                encoding.requestUpSel(safe.pull),
                 route ? expectedCode(
                             *route,
                             "pull",
@@ -227,6 +242,7 @@ void appendPadCodeAssertions(
                 "down_sel",
                 encoding.downSelWidth,
                 "pull_src",
+                encoding.requestDownSel(safe.pull),
                 route ? expectedCode(
                             *route,
                             "pull",
@@ -251,6 +267,7 @@ void appendPadCodeAssertions(
             name.constData(),
             item.width,
             src.constData(),
+            encoding.controlCodeOrDefault(index, safe.control.value(item.name)),
             route ? expectedCode(
                         *route,
                         item.name,
@@ -313,6 +330,9 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     }
     for (const QString &name : selectPortNames(plan)) {
         declarations.append(QString("    input logic %1").arg(name));
+    }
+    if (plan.integration.padCell.safe.declared) {
+        declarations.append(QStringLiteral("    input logic pad_force_i"));
     }
     for (qsizetype index = 0; index < declarations.size(); ++index) {
         const QString suffix = index + 1 == declarations.size() ? QString() : QString(",");
@@ -382,6 +402,9 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     for (const QString &name : selectPortNames(plan)) {
         coreConnections.append(QString("    .%1(%1)").arg(name));
     }
+    if (plan.integration.padCell.safe.declared) {
+        coreConnections.append(QStringLiteral("    .pad_force_i(pad_force_i)"));
+    }
     lines.append(QString("%1_core u_core (").arg(plan.moduleName));
     for (qsizetype index = 0; index < coreConnections.size(); ++index) {
         const QString suffix = index + 1 == coreConnections.size() ? QString() : QString(",");
@@ -421,7 +444,8 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
                              .arg(pin)
                              .arg(width)
                              .arg(plan.hsSlots));
-            const bool plain = !plan.option.gpio && !plan.option.invert;
+            const bool plain = !plan.option.gpio && !plan.option.invert
+                               && !plan.integration.padCell.safe.declared;
             for (const auto &[name, role] :
                  {std::pair{"input_enable", QSocIomuxRole::InputEnable},
                   std::pair{"output_value", QSocIomuxRole::OutputValue},
