@@ -65,7 +65,10 @@ iomux0:
 `pin_count` is required and ranges from 1 to 256. It is never inferred from
 the routes or the pad width. `hs_slots` ranges from 2 to 8 and defaults to 4
 when omitted; an explicit 4 and the default generate byte-identical files.
-Both are generation-time configuration, not Verilog parameters.
+Both are generation-time configuration, not Verilog parameters. `build` is a
+number from 0 to 255 the design chooses, 0 when omitted, and reads back in
+the low byte of the `version` word so firmware can tell one build of the
+same layout from another.
 
 Each route names a `pin` below `pin_count`, a `slot` below `hs_slots`, and
 non-empty `function` and `signal` labels used only for reports. A `(pin,
@@ -255,7 +258,7 @@ are read-only and ignore writes.
     align: (left, left, left),
     table.header([Offset], [Word], [Content]),
     table.hline(),
-    [0x0], [`version`], [layout contract: major `[31:24]`, minor `[23:16]`, patch `[15:8]`],
+    [0x0], [`version`], [layout contract: major `[31:24]`, minor `[23:16]`, patch `[15:8]`; the design's `build` `[7:0]`],
     [0x4], [`type`], [0x494F4D58, the letters IOMX read as one hex value],
     [0x8], [`capability`], [`pin_count` `[15:0]`, `hs_slots` `[23:16]`],
     [0xC], [`feature`], [one bit per option: 0 gpio, 1 interrupt, 2 pad_control, 3 invert, 4 rx_override],
