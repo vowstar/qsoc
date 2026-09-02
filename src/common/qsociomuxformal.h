@@ -4,12 +4,25 @@
 #ifndef QSOCIOMUXFORMAL_H
 #define QSOCIOMUXFORMAL_H
 
+#include <QtGlobal>
+
 struct QSocIomuxFormalCollateral;
 struct QSocIomuxPlan;
 
 namespace QSocIomuxFormal {
 
-QSocIomuxFormalCollateral generate(const QSocIomuxPlan &plan);
+/** Pins one routing proof job takes when the caller does not say. */
+constexpr quint32 kDefaultBankPins = 16;
+
+/**
+ * @brief Harness and job for the routing proof.
+ *
+ * The harness takes `PIN_LO` and `PIN_HI` parameters and asserts only the
+ * pins between them, so the job file cuts the design into banks of
+ * `bankPins` pins, one prove and one bmc task each, that run in parallel.
+ * A design that fits one bank gets the plain `prove`, `bmc`, `cover` tasks.
+ */
+QSocIomuxFormalCollateral generate(const QSocIomuxPlan &plan, quint32 bankPins = kDefaultBankPins);
 /**
  * @brief Harness for the pad module: the declared constraints, per pin.
  *
