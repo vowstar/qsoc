@@ -135,7 +135,7 @@ private:
     QString       m_missing;
     QString       m_failure;
     QString       m_qsoc;
-    QString       m_mockScript;
+    QString       m_mockBinary;
     QString       m_workspace;
     QString       m_escape;
     QString       m_requestLog;
@@ -162,16 +162,13 @@ void Test::initTestCase()
     }
 
     QStringList absent;
-    if (QStandardPaths::findExecutable(QStringLiteral("python3")).isEmpty()) {
-        absent << QStringLiteral("python3");
-    }
     m_qsoc = builtQsoc();
     if (m_qsoc.isEmpty()) {
         absent << QStringLiteral("a built qsoc binary");
     }
-    m_mockScript = QDir(QStringLiteral(QT_TESTCASE_SOURCEDIR)).absoluteFilePath("qsoc_mock_llm.py");
-    if (!QFile::exists(m_mockScript)) {
-        absent << QStringLiteral("qsoc_mock_llm.py");
+    m_mockBinary = QString::fromUtf8(QSOC_MOCK_LLM_PATH);
+    if (!QFile::exists(m_mockBinary)) {
+        absent << QStringLiteral("qsoc_mock_llm");
     }
     if (!absent.isEmpty()) {
         m_missing = absent.join(QStringLiteral(", "));
@@ -317,9 +314,7 @@ bool Test::runOneCwdTurn(const QString &cwdArg)
     m_mock.setProcessEnvironment(mockEnv);
     m_mock.setStandardOutputFile(m_dir.path() + QStringLiteral("/mock.log"));
     m_mock.setStandardErrorFile(m_dir.path() + QStringLiteral("/mock.err"));
-    m_mock.start(
-        QStandardPaths::findExecutable(QStringLiteral("python3")),
-        {m_mockScript, QString::number(m_mockPort), QStringLiteral("none")});
+    m_mock.start(m_mockBinary, {QString::number(m_mockPort), QStringLiteral("none")});
     if (!m_mock.waitForStarted(5000)) {
         return false;
     }

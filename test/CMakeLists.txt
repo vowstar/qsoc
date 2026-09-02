@@ -91,6 +91,12 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     )
 endfunction()
 
+add_executable(qsoc_mock_llm "${CMAKE_CURRENT_LIST_DIR}/qsoc_mock_llm.cpp")
+target_link_libraries(qsoc_mock_llm PRIVATE
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network
+)
+
 add_executable(qsoc_mcp_stdio_peer "${CMAKE_CURRENT_LIST_DIR}/qsoc_mcp_stdio_peer.cpp")
 target_link_libraries(qsoc_mcp_stdio_peer PRIVATE Qt${QT_VERSION_MAJOR}::Core)
 
@@ -332,6 +338,16 @@ qt_add_test_target("test_qsocmemoryrecall")
 qt_add_test_target("test_qsocmemoryextractor")
 qt_add_test_target("test_qsocmemorydream")
 qt_add_test_target("test_qsocsftpstranded" LOCK qsoc_loopback_sshd)
+foreach(_mock_test
+    test_qsocagentlazystorage
+    test_qsocagentremoterecovery
+    test_qsocremotecwdowner
+    test_qsocremotedeadlinkcost
+    test_qsocsshabortlatency)
+    add_dependencies(${_mock_test} qsoc_mock_llm)
+    target_compile_definitions(${_mock_test}
+        PRIVATE QSOC_MOCK_LLM_PATH="$<TARGET_FILE:qsoc_mock_llm>")
+endforeach()
 # Registration is explicit above, so a new test file that nobody registered is
 # silently absent. Glob here to assert, never to register: a stale glob can only
 # make this check miss, it can never make a test disappear.

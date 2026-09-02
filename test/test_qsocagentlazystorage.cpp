@@ -639,13 +639,8 @@ void Test::unsafeProjectSwitchKeepsCurrentSession()
 void Test::firstPromptPersistsAndCanContinue()
 {
 #ifdef Q_OS_UNIX
-    const QString python = QStandardPaths::findExecutable(QStringLiteral("python3"));
-    if (python.isEmpty()) {
-        QSKIP("python3 is required for the local mock endpoint");
-    }
-    const QString mockScript
-        = QDir(QStringLiteral(QT_TESTCASE_SOURCEDIR)).absoluteFilePath("qsoc_mock_llm.py");
-    QVERIFY2(QFile::exists(mockScript), "qsoc_mock_llm.py was not found");
+    const QString mockBinary = QString::fromUtf8(QSOC_MOCK_LLM_PATH);
+    QVERIFY2(QFile::exists(mockBinary), "qsoc_mock_llm was not built");
 
     QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_agent_lazy_XXXXXX"));
     QVERIFY(fixture.isValid());
@@ -694,8 +689,7 @@ void Test::firstPromptPersistsAndCanContinue()
     const QString mockErr = QDir(fixture.path()).filePath(QStringLiteral("mock.err"));
     mock.setStandardOutputFile(mockOut);
     mock.setStandardErrorFile(mockErr);
-    mock.start(
-        python, {QStringLiteral("-u"), mockScript, QString::number(port), QStringLiteral("none")});
+    mock.start(mockBinary, {QString::number(port), QStringLiteral("none")});
     QVERIFY(mock.waitForStarted(5000));
     const bool mockReady = waitForMockReady(mock, port, 45000);
     QByteArray mockErrLog;
