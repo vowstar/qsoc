@@ -333,13 +333,14 @@ the pad through two flip-flops in the bus clock domain, so a pad edge takes
 two bus cycles to become readable.
 
 `generator.option.pad_control` needs a `pad_cell` with a pull table or a
-control of more than one row. It appends one `pin_pad_ctrl` word per pin when
-the cell has a pull table, then one `pin_ctl_k` word per pin for each group of
-four controls, each control in an 8-bit slot at bit `8 * (i mod 4)` in
-declaration order. A single-row control keeps its slot empty, so its neighbours
-never move, and a group whose four controls are all single-row emits no word
-while `k` still counts it. The fields below are present only when the cell has
-something for them to select and each is as wide as its table needs.
+control of more than one row. It appends one `pin_pad_ctrl` word per pin
+holding the pull fields and the first four controls, then one `pin_ctl_k`
+word per pin for each further group of eight controls, each control in a
+4-bit lane at bit `4 * (i mod 8)` in declaration order. A single-row control
+keeps its lane empty, so its neighbours never move, and a group whose
+controls are all single-row emits no word while `k` still counts it. The
+fields below are present only when the cell has something for them to select
+and each is as wide as its table needs; a table has at most 16 rows.
 
 #figure(
   align(center)[#table(
@@ -348,8 +349,9 @@ something for them to select and each is as wide as its table needs.
     table.header([Bits], [Field], [Meaning]),
     table.hline(),
     [from 0], [`pull_mode`], [0 none, 1 up, 2 down, 3 keeper, 4 oscillator, then the cell's other modes from 5 in name order],
-    [from 8], [`up_sel`], [strength row of `up`, table order, only when `up` has several rows],
-    [from 16], [`down_sel`], [strength row of `down`, likewise],
+    [from 4], [`up_sel`], [strength row of `up`, table order, only when `up` has several rows],
+    [from 8], [`down_sel`], [strength row of `down`, likewise],
+    [from 16, 20, 24, 28], [control 0 to 3], [row of the control, table order, only when it has several rows],
   )],
   caption: [PIN_PAD_CTRL LAYOUT],
 )

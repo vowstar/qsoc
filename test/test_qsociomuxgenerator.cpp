@@ -2330,6 +2330,7 @@ private slots:
     void netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable();
     void unroutedSlotsTakeTheDeclaredDefaultRow();
     void controlNamesAndPinsAreRefusedWhenTaken();
+    void padWordHoldsFourControlsAndSpillsTheFifth();
     void linksNeedAPadCellAndRowsToChooseFrom();
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
@@ -4281,13 +4282,13 @@ identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x10 to 0x10
 gpio registers: 4 at offset 0x14 to 0x20
 source control registers: 2 at offset 0x24 to 0x28
-pad control registers: 4 at offset 0x2c to 0x38
-invert registers: 6 at offset 0x3c to 0x50
-rx override registers: 3 at offset 0x54 to 0x5c
-interrupt registers: 8 at offset 0x60 to 0x7c
+pad control registers: 2 at offset 0x2c to 0x30
+invert registers: 6 at offset 0x34 to 0x48
+rx override registers: 3 at offset 0x4c to 0x54
+interrupt registers: 8 at offset 0x58 to 0x74
 interrupt lines: 1, one per 32 pins
-registers total: 32
-aperture: 128 bytes
+registers total: 30
+aperture: 120 bytes
 capability: 0x00030002 at offset 0x8
 feature: 0x0000001f at offset 0xc
 reset: every selector resets to 0 and selects slot 0
@@ -4349,8 +4350,6 @@ void Test::optionRegistersKeepFixedBitPositions()
            "pin_src_ctrl_1",
            "pin_pad_ctrl_0",
            "pin_pad_ctrl_1",
-           "pin_ctl_0_0",
-           "pin_ctl_0_1",
            "input_enable_inv_0",
            "output_value_inv_0",
            "output_enable_inv_0",
@@ -4403,15 +4402,15 @@ void Test::optionRegistersKeepFixedBitPositions()
     QCOMPARE(portOf("pin_src_ctrl_1", "pull_src"), QString("pin_1_pull_src_o"));
 
     /* The pad word: the mode covers five fixed values plus bus_hold, the
-     * single-row directions need no strength select. Controls take their own
-     * words, one 8-bit slot each in declaration order. */
+     * single-row directions need no strength select, and the first control
+     * takes the 4-bit lane at bit 16. */
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "pull_mode"), 0);
     QCOMPARE(widthOf("pin_pad_ctrl_0", "pull_mode"), 3);
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "up_sel"), -1);
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "down_sel"), -1);
-    QCOMPARE(lsbOf("pin_pad_ctrl_0", "drive"), -1);
-    QCOMPARE(lsbOf("pin_ctl_0_0", "drive"), 0);
-    QCOMPARE(widthOf("pin_ctl_0_0", "drive"), 1);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "drive"), 16);
+    QCOMPARE(widthOf("pin_pad_ctrl_0", "drive"), 1);
+    QVERIFY(findRegister(plan.mmio, "pin_ctl_0_0") == nullptr);
     const QSocMmioFieldPlan *pull = findField(plan.mmio, "pin_pad_ctrl_0", "pull_mode");
     QVERIFY(pull != nullptr);
     QCOMPARE(pull->resetValue.value(), quint64(0));
@@ -4685,9 +4684,8 @@ module tb;
         wr(12'h014, 32'h0001_0040);
         repeat (2) @(posedge clk);
         chk("reg_drive_low", dut.u_pad.DS_0_w, 1'b0);
-        /* mode 0 is none, and the drive control word holds row 1, high */
-        wr(12'h01c, 32'h0000_0000);
-        wr(12'h024, 32'h0000_0001);
+        /* mode 0 is none, and the drive lane at bit 16 holds row 1, high */
+        wr(12'h01c, 32'h0001_0000);
         repeat (2) @(posedge clk);
         chk("reg_pull_none_PE", dut.u_pad.PE_0_w, 1'b0);
         chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
@@ -4770,8 +4768,7 @@ void Test::registerPadControlReachesThePadWhenIverilogIsAvailable()
     QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x14));
     QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x1c));
     QCOMPARE(offsetOf("pin_pad_ctrl_1"), qint64(0x20));
-    QCOMPARE(offsetOf("pin_ctl_0_0"), qint64(0x24));
-    QCOMPARE(offsetOf("pin_ctl_0_1"), qint64(0x28));
+    QVERIFY(findRegister(plan.mmio, "pin_ctl_0_0") == nullptr);
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -5066,10 +5063,10 @@ void Test::wovenKeeperCarriesItsStrength()
     QCOMPARE(encoding.modeWidth, 3U);
     QCOMPARE(encoding.upSelWidth, 1U);
     QCOMPARE(encoding.downSelWidth, 0U);
-    /* Only up is graded, so only up_sel exists, at bit 8. */
+    /* Only up is graded, so only up_sel exists, at bit 4. */
     const QSocMmioFieldPlan *upSel = findField(plan.mmio, "pin_pad_ctrl_0", "up_sel");
     QVERIFY(upSel != nullptr);
-    QCOMPARE(upSel->lsb, 8U);
+    QCOMPARE(upSel->lsb, 4U);
     QVERIFY(findField(plan.mmio, "pin_pad_ctrl_0", "down_sel") == nullptr);
     const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
     QVERIFY(pad.contains(
@@ -5097,7 +5094,7 @@ void Test::wovenKeeperCarriesItsStrength()
 void Test::padTablesAreBoundedToEightBitCodes()
 {
     QString rows;
-    for (int index = 0; index < 257; ++index) {
+    for (int index = 0; index < 17; ++index) {
         rows += QString("            r%1: [\"1\", \"1\"]\n").arg(index);
     }
     QString       padCell = padCellBlock();
@@ -5109,8 +5106,8 @@ void Test::padTablesAreBoundedToEightBitCodes()
     QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(padCell), &plan, &errors));
     QVERIFY2(
         errors.contains(
-            "IOMUX_RANGE generator.pad_cell.pull.table: at most 256 strength rows per "
-            "direction and 251 named modes"),
+            "IOMUX_RANGE generator.pad_cell.pull.table: at most 16 strength rows per "
+            "direction and 11 named modes"),
         qPrintable(errors.join('\n')));
 }
 
@@ -5242,27 +5239,25 @@ void Test::layoutVersionTracksTheRegisterMap()
         "pull_src@6 rx_src_s0@8 rx_src_s1@9 rx_src_s2@10 drive_src@16",
         "0x28 pin_src_ctrl_1: input_enable_src@0 output_value_src@2 output_enable_src@4 "
         "pull_src@6 rx_src_s0@8 rx_src_s1@9 rx_src_s2@10 drive_src@16",
-        "0x2c pin_pad_ctrl_0: pull_mode@0",
-        "0x30 pin_pad_ctrl_1: pull_mode@0",
-        "0x34 pin_ctl_0_0: drive@0",
-        "0x38 pin_ctl_0_1: drive@0",
-        "0x3c input_enable_inv_0: pin_0_input_enable_inv@0 pin_1_input_enable_inv@1",
-        "0x40 output_value_inv_0: pin_0_output_value_inv@0 pin_1_output_value_inv@1",
-        "0x44 output_enable_inv_0: pin_0_output_enable_inv@0 pin_1_output_enable_inv@1",
-        "0x48 rx_inv_s0_0: pin_0_rx_inv_s0@0 pin_1_rx_inv_s0@1",
-        "0x4c rx_inv_s1_0: pin_0_rx_inv_s1@0 pin_1_rx_inv_s1@1",
-        "0x50 rx_inv_s2_0: pin_0_rx_inv_s2@0 pin_1_rx_inv_s2@1",
-        "0x54 rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
-        "0x58 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
-        "0x5c rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
-        "0x60 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
-        "0x64 low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
-        "0x68 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
-        "0x6c fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
-        "0x70 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
-        "0x74 low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
-        "0x78 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
-        "0x7c fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
+        "0x2c pin_pad_ctrl_0: pull_mode@0 drive@16",
+        "0x30 pin_pad_ctrl_1: pull_mode@0 drive@16",
+        "0x34 input_enable_inv_0: pin_0_input_enable_inv@0 pin_1_input_enable_inv@1",
+        "0x38 output_value_inv_0: pin_0_output_value_inv@0 pin_1_output_value_inv@1",
+        "0x3c output_enable_inv_0: pin_0_output_enable_inv@0 pin_1_output_enable_inv@1",
+        "0x40 rx_inv_s0_0: pin_0_rx_inv_s0@0 pin_1_rx_inv_s0@1",
+        "0x44 rx_inv_s1_0: pin_0_rx_inv_s1@0 pin_1_rx_inv_s1@1",
+        "0x48 rx_inv_s2_0: pin_0_rx_inv_s2@0 pin_1_rx_inv_s2@1",
+        "0x4c rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
+        "0x50 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
+        "0x54 rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
+        "0x58 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
+        "0x5c low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
+        "0x60 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
+        "0x64 fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
+        "0x68 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
+        "0x6c low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
+        "0x70 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
+        "0x74 fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
     };
     QCOMPARE(map, frozen);
 }
@@ -5434,7 +5429,7 @@ module tb;
         chk("asleep_pull_down_PE", dut.u_pad.PE_1_w, 1'b1);
         sleep_n = 1;
         /* the register source bit wins over the net */
-        wr(12'h024, 32'h0000_0000);
+        wr(12'h01c, 32'h0000_0000);
         wr(12'h014, 32'h0001_0000);
         repeat (2) @(posedge clk);
         sda_oe = 1; #1 chk("register_overrides_net", dut.u_pad.DS_0_w, 1'b0);
@@ -5462,7 +5457,7 @@ void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
         return found ? qint64(found->byteOffset) : -1;
     };
     QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x14));
-    QCOMPARE(offsetOf("pin_ctl_0_0"), qint64(0x24));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x1c));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -5693,7 +5688,7 @@ module tb;
         chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
         chk("slot_drive_low", dut.u_pad.DS_0_w, 1'b0);
         /* the register claims the pin, then force takes it away */
-        wr(12'h034, 32'h0000_0001);
+        wr(12'h02c, 32'h0001_0000);
         wr(12'h024, 32'h0001_0040);
         repeat (2) @(posedge clk);
         chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
@@ -5735,7 +5730,7 @@ void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
         return found ? qint64(found->byteOffset) : -1;
     };
     QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x24));
-    QCOMPARE(offsetOf("pin_ctl_0_0"), qint64(0x34));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x2c));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -5928,6 +5923,83 @@ void Test::linksNeedAPadCellAndRowsToChooseFrom()
         "        pull: {link: sleep_n, on: up, off: up}\n");
     QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(sameRow), &plan, &errors));
     QCOMPARE(errors, QStringList{"IOMUX_ROLE generator.route[0].pull: on and off name the same row"});
+}
+
+void Test::padWordHoldsFourControlsAndSpillsTheFifth()
+{
+    const auto cell = [](int controls, int rows) {
+        QString text = QStringLiteral(R"yaml(    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+      control:
+)yaml");
+        for (int index = 0; index < controls; ++index) {
+            text += QString("        c%1:\n          port: [D%1]\n          table:\n").arg(index);
+            for (int row = 0; row < rows; ++row) {
+                text += QString("            r%1: [\"%2\"]\n").arg(row).arg(row % 2);
+            }
+        }
+        return text;
+    };
+    const auto source = [&](const QString &padCell) {
+        return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 12
+    pin_count: 1
+    hs_slots: 2
+    option:
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+)")
+                                  .arg(padCell, padIntegrationBlock()));
+    };
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(source(cell(5, 2)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const auto lsbOf = [&](const char *reg, const char *field) -> int {
+        const QSocMmioFieldPlan *found = findField(plan.mmio, reg, field);
+        return found ? int(found->lsb) : -1;
+    };
+    /* Pull fields at 0, 4, 8; controls 0 to 3 in 4-bit lanes from 16; the
+     * fifth opens pin_ctl_0 at lane 0. */
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "pull_mode"), 0);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "c0"), 16);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "c3"), 28);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0", "c4"), -1);
+    QCOMPARE(lsbOf("pin_ctl_0_0", "c4"), 0);
+    QCOMPARE(lsbOf("pin_src_ctrl_0", "c4_src"), 20);
+    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("pad control registers: 2 at offset"));
+
+    /* Sixteen rows fill a lane, seventeen do not fit. */
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(source(cell(1, 16)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(findField(plan.mmio, "pin_pad_ctrl_0", "c0")->width, 4U);
+    QVERIFY(!QSocIomuxGenerator::buildPlan(source(cell(1, 17)), &plan, &errors));
+    QVERIFY2(
+        errors.contains("IOMUX_RANGE generator.pad_cell.control.c0.table: has 17 rows, at most 16"),
+        qPrintable(errors.join('\n')));
 }
 
 } // namespace

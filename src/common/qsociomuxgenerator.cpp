@@ -375,7 +375,9 @@ const QSet<QString> kPadPortKeys
 const QSet<QString> kPadPullKeys     = {"port", "table", "kind"};
 const QSet<QString> kPadControlKeys  = {"port", "table", "default"};
 constexpr qsizetype kMaximumControls = 16;
-constexpr qsizetype kMaximumRows     = 256;
+constexpr qsizetype kMaximumRows     = 16; /* a 4-bit lane of the pad word */
+constexpr qsizetype kPadWordLanes    = 4;  /* controls in pin_pad_ctrl */
+constexpr qsizetype kCtlWordLanes    = 8;  /* controls per pin_ctl_k word */
 
 /**
  * @brief Names a control may not take, because the generator owns them.
@@ -1346,8 +1348,11 @@ void composeSourceControl(QSocIomuxPlan *plan)
 /**
  * @brief Append the per-pin pad control word.
  *
- * The pull mode sits at bit 0, the up and down strength selects at bits 8 and
- * 16, each only when the cell has it. Controls follow in their own words.
+ * The pull mode sits at bit 0, the up and down strength selects at bits 4
+ * and 8, each only when the cell has it, and the first four controls take
+ * 4-bit lanes from bit 16 in declaration order. Controls past the fourth
+ * take `pin_ctl_k` words, eight lanes each. A single-row control keeps its
+ * lane empty so its neighbours never move.
  */
 void composePadControl(QSocIomuxPlan *plan)
 {
@@ -1356,28 +1361,35 @@ void composePadControl(QSocIomuxPlan *plan)
     if (encoding.hasPull()) {
         fields.append({"pull_mode", 0, encoding.modeWidth});
         if (encoding.upSelWidth > 0) {
-            fields.append({"up_sel", 8, encoding.upSelWidth});
+            fields.append({"up_sel", 4, encoding.upSelWidth});
         }
         if (encoding.downSelWidth > 0) {
-            fields.append({"down_sel", 16, encoding.downSelWidth});
+            fields.append({"down_sel", 8, encoding.downSelWidth});
         }
     }
-    if (!fields.isEmpty()) {
-        appendPinWords(plan, "pin_pad_ctrl", fields);
-    }
-    /* Controls take 8-bit slots in declaration order, four per word. A
-     * single-row control keeps its slot so its neighbours never move. */
-    for (qsizetype word = 0; word * 4 < encoding.control.size(); ++word) {
-        QList<WordField> lanes;
-        for (qsizetype index = word * 4; index < std::min(encoding.control.size(), (word + 1) * 4);
+    const auto lanes = [&](qsizetype first, qsizetype count, quint32 lsb) {
+        QList<WordField> result;
+        for (qsizetype index = first; index < std::min(encoding.control.size(), first + count);
              ++index) {
             const QSocPadEncoding::Control &item = encoding.control.at(index);
             if (item.width > 0) {
-                lanes.append({item.name, quint32(8 * (index % 4)), item.width});
+                result.append({item.name, lsb + 4 * quint32(index - first), item.width});
             }
         }
-        if (!lanes.isEmpty()) {
-            appendPinWords(plan, QString("pin_ctl_%1").arg(word), lanes);
+        return result;
+    };
+    fields.append(lanes(0, kPadWordLanes, 16));
+    /* Empty when the cell has no pull and its first controls are single-row;
+     * cppcheck does not see that append of an empty list adds nothing. */
+    // cppcheck-suppress knownConditionTrueFalse
+    if (!fields.isEmpty()) {
+        appendPinWords(plan, "pin_pad_ctrl", fields);
+    }
+    for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < encoding.control.size();
+         ++word) {
+        const QList<WordField> extra = lanes(kPadWordLanes + word * kCtlWordLanes, kCtlWordLanes, 0);
+        if (!extra.isEmpty()) {
+            appendPinWords(plan, QString("pin_ctl_%1").arg(word), extra);
         }
     }
 }
@@ -1721,14 +1733,16 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
     }
     bool                  valid    = true;
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(cell);
-    /* Codes are 8-bit fields of the pad control word. */
-    if (encoding.upRows.size() > 256 || encoding.downRows.size() > 256
-        || QSocPadEncoding::FirstNamed + encoding.namedMode.size() > 256) {
+    /* Codes are 4-bit fields of the pad control word. */
+    if (encoding.upRows.size() > kMaximumRows || encoding.downRows.size() > kMaximumRows
+        || QSocPadEncoding::FirstNamed + encoding.namedMode.size() > kMaximumRows) {
         appendError(
             errors,
             "RANGE",
             "generator.pad_cell.pull.table",
-            "at most 256 strength rows per direction and 251 named modes");
+            QString("at most %1 strength rows per direction and %2 named modes")
+                .arg(kMaximumRows)
+                .arg(kMaximumRows - QSocPadEncoding::FirstNamed));
         valid = false;
     }
     /* Every cell pin has one driver: a role, the pull group, or one control. */
@@ -3934,18 +3948,22 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         blocks.append({"source control", qsizetype(plan.pinCount)});
     }
     if (plan.option.padControl) {
-        /* One pull word per pin when the cell has a pull table, then one word
-         * per pin for every group of four controls holding a selectable one. */
-        const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
-        qsizetype             words    = encoding.hasPull() ? 1 : 0;
-        for (qsizetype word = 0; word * 4 < encoding.control.size(); ++word) {
-            bool selectable = false;
-            for (qsizetype index = word * 4;
-                 index < std::min(encoding.control.size(), (word + 1) * 4);
+        /* One word per pin when the cell has a pull table or a selectable
+         * control in the first four, then one per group of eight holding one. */
+        const QSocPadEncoding encoding   = padEncoding(plan.integration.padCell);
+        const auto            selectable = [&](qsizetype first, qsizetype count) {
+            for (qsizetype index = first; index < std::min(encoding.control.size(), first + count);
                  ++index) {
-                selectable = selectable || encoding.control.at(index).width > 0;
+                if (encoding.control.at(index).width > 0) {
+                    return true;
+                }
             }
-            words += selectable ? 1 : 0;
+            return false;
+        };
+        qsizetype words = encoding.hasPull() || selectable(0, kPadWordLanes) ? 1 : 0;
+        for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < encoding.control.size();
+             ++word) {
+            words += selectable(kPadWordLanes + word * kCtlWordLanes, kCtlWordLanes) ? 1 : 0;
         }
         blocks.append({"pad control", words * qsizetype(plan.pinCount)});
     }
