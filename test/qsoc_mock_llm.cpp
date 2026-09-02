@@ -138,6 +138,24 @@ QByteArray compactJson(const QJsonArray &array)
     return QJsonDocument(array).toJson(QJsonDocument::Compact);
 }
 
+/**
+ * @brief Which wire format a request is speaking.
+ *
+ * GET /v1/models exists in both APIs at the same method and path with
+ * incompatible bodies, so the path alone cannot decide. anthropic-version is
+ * required on every Anthropic request, which makes it the discriminator.
+ */
+enum class Wire { OpenAi, Anthropic };
+
+Wire wireOf(const QByteArray &head)
+{
+    const QByteArray lowered = head.toLower();
+    if (lowered.contains("\nanthropic-version:") || lowered.contains("\nx-api-key:")) {
+        return Wire::Anthropic;
+    }
+    return Wire::OpenAi;
+}
+
 /** Decide whether this request gets the failure code. */
 bool shouldFail()
 {
@@ -258,35 +276,48 @@ QJsonObject deltaChunk(const QJsonObject &delta, const QString &finishReason)
     return chunk;
 }
 
-void respondPost(QTcpSocket *socket, const QByteArray &body)
+QJsonObject parseBody(const QByteArray &body)
 {
-    QJsonObject request;
-    if (!body.isEmpty()) {
-        const QJsonDocument doc = QJsonDocument::fromJson(body);
-        if (doc.isObject()) {
-            request = doc.object();
-        }
+    if (body.isEmpty()) {
+        return QJsonObject();
     }
+    const QJsonDocument doc = QJsonDocument::fromJson(body);
+    return doc.isObject() ? doc.object() : QJsonObject();
+}
+
+/** One envelope per wire format, so the two paths cannot drift apart. */
+void respondFailure(QTcpSocket *socket, Wire wire)
+{
+    QJsonObject error;
+    error["message"] = QStringLiteral("rate limited");
+    error["type"]    = QStringLiteral("rate_limit_error");
+    QJsonObject payload;
+    payload["error"] = error;
+    if (wire == Wire::Anthropic) {
+        payload["type"]       = QStringLiteral("error");
+        payload["request_id"] = QStringLiteral("req_mock");
+    }
+    const QByteArray encoded = compactJson(payload);
+    writeHead(
+        socket,
+        config.failCode,
+        {"Content-Type: application/json",
+         "Retry-After: 1",
+         "Content-Length: " + QByteArray::number(encoded.size())});
+    socket->write(encoded);
+    socket->flush();
+    socket->disconnectFromHost();
+}
+
+void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
+{
+    const QJsonObject request = parseBody(body);
     const bool streaming = request.value("stream").isBool() && request.value("stream").toBool();
     appendRequestLog(request);
 
     if (shouldFail()) {
         ++hits["fail"];
-        QJsonObject error;
-        error["message"] = QStringLiteral("rate limited");
-        error["type"]    = QStringLiteral("rate_limit_error");
-        QJsonObject payload;
-        payload["error"]         = error;
-        const QByteArray encoded = compactJson(payload);
-        writeHead(
-            socket,
-            config.failCode,
-            {"Content-Type: application/json",
-             "Retry-After: 1",
-             "Content-Length: " + QByteArray::number(encoded.size())});
-        socket->write(encoded);
-        socket->flush();
-        socket->disconnectFromHost();
+        respondFailure(socket, wire);
         return;
     }
 
@@ -368,6 +399,172 @@ void respondPost(QTcpSocket *socket, const QByteArray &body)
     }
 }
 
+/** Anthropic frames every event with a name, and has no [DONE] sentinel. */
+void writeNamedSse(QTcpSocket *socket, const QList<QPair<QByteArray, QJsonObject>> &events)
+{
+    writeHead(socket, 200, {"Content-Type: text/event-stream", "Cache-Control: no-cache"});
+    for (const auto &event : events) {
+        socket->write("event: " + event.first + "\n");
+        socket->write("data: " + compactJson(event.second) + "\n\n");
+        socket->flush();
+    }
+    socket->disconnectFromHost();
+}
+
+QJsonObject anthropicUsage(int outputTokens)
+{
+    QJsonObject usage;
+    usage["input_tokens"]                = 1;
+    usage["output_tokens"]               = outputTokens;
+    usage["cache_creation_input_tokens"] = 0;
+    usage["cache_read_input_tokens"]     = 0;
+    return usage;
+}
+
+void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bool streaming)
+{
+    /* max_tokens is required on every Messages request; a naive port omits it. */
+    if (!request.contains("max_tokens")) {
+        QJsonObject error;
+        error["type"]    = QStringLiteral("invalid_request_error");
+        error["message"] = QStringLiteral("max_tokens: field required");
+        QJsonObject payload;
+        payload["type"]       = QStringLiteral("error");
+        payload["error"]      = error;
+        payload["request_id"] = QStringLiteral("req_mock");
+        writeBody(socket, 400, "application/json", compactJson(payload));
+        return;
+    }
+    const QString model    = request.value("model").toString(QStringLiteral("claude-mock"));
+    const bool    emitTool = !config.toolName.isEmpty();
+
+    QJsonObject block;
+    if (emitTool) {
+        block["type"]  = QStringLiteral("tool_use");
+        block["id"]    = QStringLiteral("toolu_0");
+        block["name"]  = QString::fromUtf8(config.toolName);
+        block["input"] = config.toolArgs;
+    } else {
+        block["type"] = QStringLiteral("text");
+        block["text"] = QString::fromUtf8(config.reply);
+    }
+    const QString stopReason = emitTool ? QStringLiteral("tool_use") : QStringLiteral("end_turn");
+
+    if (!streaming) {
+        QJsonArray content;
+        content.append(block);
+        QJsonObject payload;
+        payload["id"]            = QStringLiteral("msg_mock");
+        payload["type"]          = QStringLiteral("message");
+        payload["role"]          = QStringLiteral("assistant");
+        payload["model"]         = model;
+        payload["content"]       = content;
+        payload["stop_reason"]   = stopReason;
+        payload["stop_sequence"] = QJsonValue();
+        payload["usage"]         = anthropicUsage(1);
+        writeBody(socket, 200, "application/json", compactJson(payload));
+        return;
+    }
+
+    QJsonObject opening;
+    opening["id"]            = QStringLiteral("msg_mock");
+    opening["type"]          = QStringLiteral("message");
+    opening["role"]          = QStringLiteral("assistant");
+    opening["model"]         = model;
+    opening["content"]       = QJsonArray();
+    opening["stop_reason"]   = QJsonValue();
+    opening["stop_sequence"] = QJsonValue();
+    opening["usage"]         = anthropicUsage(1);
+
+    QJsonObject start;
+    start["type"]    = QStringLiteral("message_start");
+    start["message"] = opening;
+
+    QJsonObject emptyBlock = block;
+    QJsonObject delta;
+    if (emitTool) {
+        emptyBlock["input"]   = QJsonObject();
+        delta["type"]         = QStringLiteral("input_json_delta");
+        delta["partial_json"] = QString::fromUtf8(compactJson(config.toolArgs));
+    } else {
+        emptyBlock["text"] = QString();
+        delta["type"]      = QStringLiteral("text_delta");
+        delta["text"]      = QString::fromUtf8(config.reply);
+    }
+
+    QJsonObject blockStart;
+    blockStart["type"]          = QStringLiteral("content_block_start");
+    blockStart["index"]         = 0;
+    blockStart["content_block"] = emptyBlock;
+
+    QJsonObject blockDelta;
+    blockDelta["type"]  = QStringLiteral("content_block_delta");
+    blockDelta["index"] = 0;
+    blockDelta["delta"] = delta;
+
+    QJsonObject blockStop;
+    blockStop["type"]  = QStringLiteral("content_block_stop");
+    blockStop["index"] = 0;
+
+    QJsonObject stopDelta;
+    stopDelta["stop_reason"]   = stopReason;
+    stopDelta["stop_sequence"] = QJsonValue();
+    QJsonObject messageDelta;
+    messageDelta["type"]  = QStringLiteral("message_delta");
+    messageDelta["delta"] = stopDelta;
+    /* Cumulative, not incremental. */
+    messageDelta["usage"] = anthropicUsage(1);
+
+    QJsonObject messageStop;
+    messageStop["type"] = QStringLiteral("message_stop");
+
+    writeNamedSse(
+        socket,
+        {{"message_start", start},
+         {"content_block_start", blockStart},
+         {"content_block_delta", blockDelta},
+         {"content_block_stop", blockStop},
+         {"message_delta", messageDelta},
+         {"message_stop", messageStop}});
+}
+
+void respondCountTokens(QTcpSocket *socket, const QJsonObject &request)
+{
+    const QByteArray encoded = compactJson(request);
+    QJsonObject      payload;
+    payload["input_tokens"] = int(encoded.size() / 4) + 1;
+    writeBody(socket, 200, "application/json", compactJson(payload));
+}
+
+void respondModels(QTcpSocket *socket, Wire wire)
+{
+    QJsonArray  data;
+    QJsonObject model;
+    if (wire == Wire::Anthropic) {
+        model["id"]           = QStringLiteral("claude-mock");
+        model["type"]         = QStringLiteral("model");
+        model["display_name"] = QStringLiteral("Claude Mock");
+        model["created_at"]   = QStringLiteral("2026-01-01T00:00:00Z");
+        data.append(model);
+        QJsonObject payload;
+        payload["data"]     = data;
+        payload["has_more"] = false;
+        payload["first_id"] = QStringLiteral("claude-mock");
+        payload["last_id"]  = QStringLiteral("claude-mock");
+        writeBody(socket, 200, "application/json", compactJson(payload));
+        return;
+    }
+    model["id"]       = QStringLiteral("mock");
+    model["object"]   = QStringLiteral("model");
+    model["created"]  = 0;
+    model["owned_by"] = QStringLiteral("qsoc");
+    data.append(model);
+    QJsonObject payload;
+    payload["object"] = QStringLiteral("list");
+    payload["data"]   = data;
+    writeBody(socket, 200, "application/json", compactJson(payload));
+}
+
 void respondGet(QTcpSocket *socket)
 {
     QJsonObject payload;
@@ -409,11 +606,41 @@ void serve(QTcpSocket *socket, Connection *connection)
         return;
     }
 
+    const int        pathStart = space + 1;
+    const int        pathEnd   = head.indexOf(' ', pathStart);
+    const QByteArray path      = pathEnd > pathStart ? head.mid(pathStart, pathEnd - pathStart)
+                                                     : QByteArray();
+    const Wire       wire      = wireOf(head);
+
     connection->served = true;
     if (method == "POST") {
-        respondPost(socket, body.left(contentLength));
+        if (path.startsWith("/v1/messages/count_tokens")) {
+            respondCountTokens(socket, parseBody(body.left(contentLength)));
+        } else if (path.startsWith("/v1/messages")) {
+            const QJsonObject request = parseBody(body.left(contentLength));
+            appendRequestLog(request);
+            if (shouldFail()) {
+                ++hits["fail"];
+                respondFailure(socket, Wire::Anthropic);
+                return;
+            }
+            ++hits["200_text"];
+            const bool streaming = request.value("stream").toBool();
+            if (!streaming) {
+                ++hits["200_sync"];
+            }
+            respondAnthropicMessages(socket, request, streaming);
+        } else {
+            respondPost(socket, body.left(contentLength), wire);
+        }
     } else if (method == "GET") {
-        respondGet(socket);
+        /* /v1/models means different documents to the two APIs, so it must be
+         * answered before the catch-all counters. */
+        if (path.startsWith("/v1/models")) {
+            respondModels(socket, wire);
+        } else {
+            respondGet(socket);
+        }
     } else {
         writeBody(socket, 501, "text/plain", "Unsupported method\n");
     }
