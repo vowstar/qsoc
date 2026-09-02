@@ -218,6 +218,7 @@ private slots:
     void optionMutationsFailBmcWhenAvailable();
     void selectNetsAreFreeInputsOfTheProof();
     void selectNetMutationFailsBmcWhenAvailable();
+    void selectInversionIsProvenWhenAvailable();
     void unroutedSlotsLandOnTheDefaultRowWhenAvailable();
     void forceIsProvenAboveEverySourceWhenAvailable();
 };
@@ -819,11 +820,12 @@ void Test::optionMutationsFailBmcWhenAvailable()
 
 namespace {
 
-QSocIomuxPlan linkedPlan()
+QSocIomuxPlan linkedPlan(bool invert = false)
 {
     QSocIomuxPlan              plan;
     QStringList                errors;
-    const QSocModuleDefinition definition = makeDefinition(QString(R"yaml(generator:
+    const QSocModuleDefinition definition = makeDefinition(
+        QString(R"yaml(generator:
     kind: iomux
     bus: axi4_lite
     data_width: 32
@@ -832,7 +834,7 @@ QSocIomuxPlan linkedPlan()
     hs_slots: 2
     option:
       pad_control: true
-    pad_cell:
+%1    pad_cell:
       cell: gpio_pad_ps
       port:
         pad: PAD
@@ -874,7 +876,8 @@ QSocIomuxPlan linkedPlan()
         input_value: {link: wake0_irq}
         input_enable: 1
         pull: {link: sleep_n, invert: true, on: down, off: up}
-)yaml"));
+)yaml")
+            .arg(invert ? "      invert: true\n" : ""));
     if (!QSocIomuxGenerator::buildPlan(definition, &plan, &errors)) {
         qWarning() << errors;
         return {};
@@ -927,6 +930,51 @@ void Test::selectNetMutationFailsBmcWhenAvailable()
     const QString before  = "(hs_p0_s0_drive_select_i ? 1'd1 : 1'd0)";
     QVERIFY(mutated.contains(before));
     mutated.replace(before, "(hs_p0_s0_drive_select_i ? 1'd0 : 1'd1)");
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    writeCollateral(second, plan, mutated);
+    const CommandResult result = runCommand(
+        second.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc")});
+    QVERIFY2(result.exitCode != 0, result.output.constData());
+    QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+    QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+}
+
+void Test::selectInversionIsProvenWhenAvailable()
+{
+    const QSocIomuxPlan plan = linkedPlan(true);
+    QVERIFY(plan.option.invert);
+    const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
+    QVERIFY(sv.contains("    input logic pin_1_pull_inv_i,"));
+    QVERIFY(sv.contains("    input logic pin_0_drive_inv_i,"));
+    QVERIFY(sv.contains(
+        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(hs_p1_s1_pull_select_i ^ 1'b1 ^ pin_1_pull_inv_i ? 3'd2 : 3'd1)));"));
+
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, QSocIomuxGenerator::generateTopVerilog(plan));
+    for (const QString &task : {QStringLiteral("prove"), QStringLiteral("bmc")}) {
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), task});
+        QVERIFY2(result.exitCode == 0, result.output.constData());
+    }
+
+    /* A core that forgets the bit on one net fails on that net alone. */
+    QString       mutated = QSocIomuxGenerator::generateTopVerilog(plan);
+    const QString before  = "(hs_p0_s0_drive_select_i ^ pin_0_drive_inv_i ? 1'd1 : 1'd0)";
+    QVERIFY2(mutated.contains(before), qPrintable(mutated));
+    mutated.replace(before, "(hs_p0_s0_drive_select_i ? 1'd1 : 1'd0)");
     QTemporaryDir second;
     QVERIFY(second.isValid());
     writeCollateral(second, plan, mutated);

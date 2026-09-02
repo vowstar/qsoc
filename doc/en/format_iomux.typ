@@ -372,11 +372,14 @@ register-driven keeper or oscillator is the same woven loop as a route request,
 with the same simulation caveat.
 
 `generator.option.invert` appends the banks `input_enable_inv`,
-`output_value_inv`, `output_enable_inv`, and one `rx_inv_sk` bank per slot
-k. Each bit inverts its signal after the source selector, so it inverts
-whichever source the pin currently uses. The cross taps read the uninverted
-slot bundle. `input_value` and the interrupt detectors read the pad and are
-not affected. Pull and drive codes are not bits and have no inversion.
+`output_value_inv`, `output_enable_inv`, one `rx_inv_sk` bank per slot k,
+then `pull_inv` when the cell has a pull table and one `<control>_inv` bank
+per control with several rows. Each role bit inverts its signal after the
+source selector, so it inverts whichever source the pin currently uses. The
+cross taps read the uninverted slot bundle. `input_value` and the interrupt
+detectors read the pad and are not affected. A pull or control bit inverts
+the select net of the slot's `{link, on, off}` request, so a fixed row and
+the register path are not affected.
 
 `generator.option.rx_override` appends one `rx_value_sk` bank per slot k.
 While `rx_src_sk` of a pin is set, the sink of slot k on that pin reads the

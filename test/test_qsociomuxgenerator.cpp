@@ -4283,12 +4283,12 @@ selector registers: 1 at offset 0x10 to 0x10
 gpio registers: 4 at offset 0x14 to 0x20
 source control registers: 2 at offset 0x24 to 0x28
 pad control registers: 2 at offset 0x2c to 0x30
-invert registers: 6 at offset 0x34 to 0x48
-rx override registers: 3 at offset 0x4c to 0x54
-interrupt registers: 8 at offset 0x58 to 0x74
+invert registers: 8 at offset 0x34 to 0x50
+rx override registers: 3 at offset 0x54 to 0x5c
+interrupt registers: 8 at offset 0x60 to 0x7c
 interrupt lines: 1, one per 32 pins
-registers total: 30
-aperture: 120 bytes
+registers total: 32
+aperture: 128 bytes
 capability: 0x00030002 at offset 0x8
 feature: 0x0000001f at offset 0xc
 reset: every selector resets to 0 and selects slot 0
@@ -4356,6 +4356,8 @@ void Test::optionRegistersKeepFixedBitPositions()
            "rx_inv_s0_0",
            "rx_inv_s1_0",
            "rx_inv_s2_0",
+           "pull_inv_0",
+           "drive_inv_0",
            "rx_value_s0_0",
            "rx_value_s1_0",
            "rx_value_s2_0",
@@ -5247,17 +5249,19 @@ void Test::layoutVersionTracksTheRegisterMap()
         "0x40 rx_inv_s0_0: pin_0_rx_inv_s0@0 pin_1_rx_inv_s0@1",
         "0x44 rx_inv_s1_0: pin_0_rx_inv_s1@0 pin_1_rx_inv_s1@1",
         "0x48 rx_inv_s2_0: pin_0_rx_inv_s2@0 pin_1_rx_inv_s2@1",
-        "0x4c rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
-        "0x50 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
-        "0x54 rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
-        "0x58 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
-        "0x5c low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
-        "0x60 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
-        "0x64 fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
-        "0x68 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
-        "0x6c low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
-        "0x70 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
-        "0x74 fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
+        "0x4c pull_inv_0: pin_0_pull_inv@0 pin_1_pull_inv@1",
+        "0x50 drive_inv_0: pin_0_drive_inv@0 pin_1_drive_inv@1",
+        "0x54 rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
+        "0x58 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
+        "0x5c rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
+        "0x60 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
+        "0x64 low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
+        "0x68 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
+        "0x6c fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
+        "0x70 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
+        "0x74 low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
+        "0x78 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
+        "0x7c fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
     };
     QCOMPARE(map, frozen);
 }
