@@ -258,7 +258,7 @@ generator:
   kind: iomux
   bus: axi4_lite
   data_width: 32
-  address_width: 8
+  address_width: 14
   pin_count: 9
   hs_slots: 5
   integration:

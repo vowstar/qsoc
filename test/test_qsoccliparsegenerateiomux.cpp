@@ -87,7 +87,7 @@ const QString moduleLibrary = R"(periph_stub:
     gpio_oe: {type: "logic[3:0]", direction: output}
     gpio_in: {type: "logic[3:0]", direction: input}
     uart_tx: {type: logic, direction: output}
-    m_awaddr: {type: "logic[7:0]", direction: output}
+    m_awaddr: {type: "logic[13:0]", direction: output}
     m_awprot: {type: "logic[2:0]", direction: output}
     m_awvalid: {type: logic, direction: output}
     m_awready: {type: logic, direction: input}
@@ -98,7 +98,7 @@ const QString moduleLibrary = R"(periph_stub:
     m_bresp: {type: "logic[1:0]", direction: input}
     m_bvalid: {type: logic, direction: input}
     m_bready: {type: logic, direction: output}
-    m_araddr: {type: "logic[7:0]", direction: output}
+    m_araddr: {type: "logic[13:0]", direction: output}
     m_arprot: {type: "logic[2:0]", direction: output}
     m_arvalid: {type: logic, direction: output}
     m_arready: {type: logic, direction: input}
@@ -135,7 +135,7 @@ iomux0:
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 4
     integration:
       instance: u_iomux0
@@ -246,7 +246,7 @@ QString peripheralVerilog()
     output reg  [3:0]  gpio_oe,
     input  wire [3:0]  gpio_in,
     output reg         uart_tx,
-    output reg  [7:0]  m_awaddr,
+    output reg  [13:0] m_awaddr,
     output reg  [2:0]  m_awprot,
     output reg         m_awvalid,
     input  wire        m_awready,
@@ -257,7 +257,7 @@ QString peripheralVerilog()
     input  wire [1:0]  m_bresp,
     input  wire        m_bvalid,
     output reg         m_bready,
-    output reg  [7:0]  m_araddr,
+    output reg  [13:0] m_araddr,
     output reg  [2:0]  m_arprot,
     output reg         m_arvalid,
     input  wire        m_arready,
@@ -271,14 +271,14 @@ initial begin
     gpio_out  = 4'b0101;
     gpio_oe   = 4'b1111;
     uart_tx   = 1'b1;
-    m_awaddr  = 8'h10;
+    m_awaddr  = 14'h100;
     m_awprot  = 3'b000;
     m_awvalid = 1'b0;
     m_wdata   = 32'h00001000;
     m_wstrb   = 4'b0010;
     m_wvalid  = 1'b0;
     m_bready  = 1'b0;
-    m_araddr  = 8'h00;
+    m_araddr  = 14'h000;
     m_arprot  = 3'b000;
     m_arvalid = 1'b0;
     m_rready  = 1'b0;

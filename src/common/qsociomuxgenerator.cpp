@@ -1220,11 +1220,6 @@ quint32 bankWordCount(const QSocIomuxPlan &plan)
     return (plan.pinCount + dataWidth - 1) / dataWidth;
 }
 
-quint64 nextOffset(const QSocIomuxPlan &plan)
-{
-    return plan.mmio.registers.constLast().byteOffset + plan.mmio.dataWidth / 8;
-}
-
 /**
  * @brief Append one banked family: one bit per pin, `data_width` pins per word.
  *
@@ -1233,16 +1228,19 @@ quint64 nextOffset(const QSocIomuxPlan &plan)
  * storage and reads `pin_P_inputSuffix_i` when an input suffix is given.
  */
 void appendBank(
-    QSocIomuxPlan *plan, const QString &family, QSocMmioAccess access, const QString &inputSuffix)
+    QSocIomuxPlan *plan,
+    const QString &family,
+    QSocMmioAccess access,
+    const QString &inputSuffix,
+    quint64       *offset)
 {
     const quint32 dataWidth = plan->mmio.dataWidth;
     const quint32 byteCount = dataWidth / 8;
-    quint64       offset    = nextOffset(*plan);
     for (quint32 word = 0; word < bankWordCount(*plan); ++word) {
         QSocMmioRegisterPlan bank;
         bank.name       = QString("%1_%2").arg(family).arg(word);
-        bank.byteOffset = offset;
-        offset += byteCount;
+        bank.byteOffset = *offset;
+        *offset += byteCount;
         const quint32 first = word * dataWidth;
         const quint32 last  = std::min(plan->pinCount, first + dataWidth);
         for (quint32 pin = first; pin < last; ++pin) {
@@ -1277,10 +1275,10 @@ struct WordField
  * One store reconfigures a pin without a read-modify-write and without
  * touching its neighbours. Field `name` of pin P drives `pin_P_name_o`.
  */
-void appendPinWords(QSocIomuxPlan *plan, const QString &prefix, const QList<WordField> &fields)
+void appendPinWords(
+    QSocIomuxPlan *plan, const QString &prefix, const QList<WordField> &fields, quint64 offset)
 {
     const quint32 byteCount = plan->mmio.dataWidth / 8;
-    quint64       offset    = nextOffset(*plan);
     for (quint32 pin = 0; pin < plan->pinCount; ++pin) {
         QSocMmioRegisterPlan word;
         word.name       = QString("%1_%2").arg(prefix).arg(pin);
@@ -1302,10 +1300,11 @@ void appendPinWords(QSocIomuxPlan *plan, const QString &prefix, const QList<Word
 
 void composeGpio(QSocIomuxPlan *plan)
 {
-    appendBank(plan, "input_value", QSocMmioAccess::ReadOnly, "input_value");
-    appendBank(plan, "input_enable", QSocMmioAccess::ReadWrite, QString());
-    appendBank(plan, "output_value", QSocMmioAccess::ReadWrite, QString());
-    appendBank(plan, "output_enable", QSocMmioAccess::ReadWrite, QString());
+    quint64 offset = QSocIomuxGenerator::kBaseGpio;
+    appendBank(plan, "input_value", QSocMmioAccess::ReadOnly, "input_value", &offset);
+    appendBank(plan, "input_enable", QSocMmioAccess::ReadWrite, QString(), &offset);
+    appendBank(plan, "output_value", QSocMmioAccess::ReadWrite, QString(), &offset);
+    appendBank(plan, "output_enable", QSocMmioAccess::ReadWrite, QString(), &offset);
 }
 
 /**
@@ -1343,7 +1342,7 @@ void composeSourceControl(QSocIomuxPlan *plan)
             fields.append({QString("rx_src_s%1").arg(slot), 8 + slot, 1});
         }
     }
-    appendPinWords(plan, "pin_src_ctrl", fields);
+    appendPinWords(plan, "pin_src_ctrl", fields, QSocIomuxGenerator::kBaseSourceControl);
 }
 
 /**
@@ -1384,13 +1383,18 @@ void composePadControl(QSocIomuxPlan *plan)
      * cppcheck does not see that append of an empty list adds nothing. */
     // cppcheck-suppress knownConditionTrueFalse
     if (!fields.isEmpty()) {
-        appendPinWords(plan, "pin_pad_ctrl", fields);
+        appendPinWords(plan, "pin_pad_ctrl", fields, QSocIomuxGenerator::kBasePadControl);
     }
     for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < encoding.control.size();
          ++word) {
         const QList<WordField> extra = lanes(kPadWordLanes + word * kCtlWordLanes, kCtlWordLanes, 0);
         if (!extra.isEmpty()) {
-            appendPinWords(plan, QString("pin_ctl_%1").arg(word), extra);
+            appendPinWords(
+                plan,
+                QString("pin_ctl_%1").arg(word),
+                extra,
+                QSocIomuxGenerator::kBaseControlWords
+                    + quint64(word) * QSocIomuxGenerator::kControlWordStride);
         }
     }
 }
@@ -1401,27 +1405,31 @@ void composePadControl(QSocIomuxPlan *plan)
  */
 void composeInvert(QSocIomuxPlan *plan)
 {
-    appendBank(plan, "input_enable_inv", QSocMmioAccess::ReadWrite, QString());
-    appendBank(plan, "output_value_inv", QSocMmioAccess::ReadWrite, QString());
-    appendBank(plan, "output_enable_inv", QSocMmioAccess::ReadWrite, QString());
+    quint64 offset = QSocIomuxGenerator::kBaseInvert;
+    appendBank(plan, "input_enable_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
+    appendBank(plan, "output_value_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
+    appendBank(plan, "output_enable_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
     for (quint32 slot = 0; slot < plan->hsSlots; ++slot) {
-        appendBank(plan, QString("rx_inv_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString());
+        appendBank(
+            plan, QString("rx_inv_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString(), &offset);
     }
     const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
     if (encoding.hasPull()) {
-        appendBank(plan, "pull_inv", QSocMmioAccess::ReadWrite, QString());
+        appendBank(plan, "pull_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
     }
     for (const QSocPadEncoding::Control &item : encoding.control) {
         if (item.width > 0) {
-            appendBank(plan, item.name + "_inv", QSocMmioAccess::ReadWrite, QString());
+            appendBank(plan, item.name + "_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
         }
     }
 }
 
 void composeRxOverride(QSocIomuxPlan *plan)
 {
+    quint64 offset = QSocIomuxGenerator::kBaseRxOverride;
     for (quint32 slot = 0; slot < plan->hsSlots; ++slot) {
-        appendBank(plan, QString("rx_value_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString());
+        appendBank(
+            plan, QString("rx_value_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString(), &offset);
     }
 }
 
@@ -1435,15 +1443,18 @@ void composeRxOverride(QSocIomuxPlan *plan)
 void composeInterrupt(QSocIomuxPlan *plan)
 {
     const char *kinds[] = {"high", "low", "rise", "fall"};
+    quint64     offset  = QSocIomuxGenerator::kBaseInterrupt;
     for (const char *kind : kinds) {
-        appendBank(plan, QString("%1_int_en").arg(kind), QSocMmioAccess::ReadWrite, QString());
+        appendBank(
+            plan, QString("%1_int_en").arg(kind), QSocMmioAccess::ReadWrite, QString(), &offset);
     }
     for (const char *kind : kinds) {
         appendBank(
             plan,
             QString("%1_int_pend").arg(kind),
             QSocMmioAccess::WriteOneClear,
-            QString("%1_detect").arg(kind));
+            QString("%1_detect").arg(kind),
+            &offset);
     }
 }
 
@@ -2135,7 +2146,7 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     for (quint32 word = 0; word < words; ++word) {
         QSocMmioRegisterPlan selector;
         selector.name       = QString("hs_select_%1").arg(word);
-        selector.byteOffset = QSocIomuxGenerator::kIdentityBytes + quint64(word) * byteCount;
+        selector.byteOffset = QSocIomuxGenerator::kBaseSelector + quint64(word) * byteCount;
         const quint32 first = word * lanes;
         const quint32 last  = std::min(plan->pinCount, first + lanes);
         for (quint32 pin = first; pin < last; ++pin) {
@@ -2151,17 +2162,9 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
         plan->mmio.registers.append(selector);
     }
 
+    /* Address order: the bit-per-pin banks below 0x1000, the per-pin words above. */
     if (plan->option.gpio) {
         composeGpio(plan);
-    }
-    if (plan->option.sourceControl()) {
-        composeSourceControl(plan);
-    }
-    if (plan->option.padControl) {
-        composePadControl(plan);
-    }
-    if (plan->option.invert) {
-        composeInvert(plan);
     }
     if (plan->option.rxOverride) {
         composeRxOverride(plan);
@@ -2169,8 +2172,32 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     if (plan->option.interrupt) {
         composeInterrupt(plan);
     }
+    if (plan->option.invert) {
+        composeInvert(plan);
+        const QSocMmioRegisterPlan &last = plan->mmio.registers.constLast();
+        if (last.byteOffset + byteCount
+            > QSocIomuxGenerator::kBaseInvert + QSocIomuxGenerator::kInvertBytes) {
+            appendError(
+                errors,
+                "RANGE",
+                "generator.option.invert",
+                QString("needs %1 banks, the invert region holds %2")
+                    .arg(
+                        (last.byteOffset + byteCount - QSocIomuxGenerator::kBaseInvert)
+                        / (byteCount * bankWordCount(*plan)))
+                    .arg(QSocIomuxGenerator::kInvertBytes / (byteCount * bankWordCount(*plan))));
+            return false;
+        }
+    }
+    if (plan->option.sourceControl()) {
+        composeSourceControl(plan);
+    }
+    if (plan->option.padControl) {
+        composePadControl(plan);
+    }
 
-    const quint64 aperture  = plan->mmio.registers.constLast().byteOffset + byteCount;
+    const quint64 aperture = std::max(
+        QSocIomuxGenerator::kApertureBytes, plan->mmio.registers.constLast().byteOffset + byteCount);
     const quint64 available = plan->mmio.addressWidth >= 64
                                   ? std::numeric_limits<quint64>::max()
                                   : (quint64(1) << plan->mmio.addressWidth);
@@ -3976,6 +4003,20 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     if (plan.option.gpio) {
         blocks.append({"gpio", qsizetype(4) * bankWords});
     }
+    if (plan.option.rxOverride) {
+        blocks.append({"rx override", qsizetype(plan.hsSlots) * bankWords});
+    }
+    if (plan.option.interrupt) {
+        blocks.append({"interrupt", qsizetype(8) * bankWords});
+    }
+    if (plan.option.invert) {
+        const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
+        qsizetype             nets     = encoding.hasPull() ? 1 : 0;
+        for (const QSocPadEncoding::Control &item : encoding.control) {
+            nets += item.width > 0 ? 1 : 0;
+        }
+        blocks.append({"invert", (qsizetype(3 + plan.hsSlots) + nets) * bankWords});
+    }
     if (plan.option.sourceControl()) {
         blocks.append({"source control", qsizetype(plan.pinCount)});
     }
@@ -3999,20 +4040,6 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         }
         blocks.append({"pad control", words * qsizetype(plan.pinCount)});
     }
-    if (plan.option.invert) {
-        const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
-        qsizetype             nets     = encoding.hasPull() ? 1 : 0;
-        for (const QSocPadEncoding::Control &item : encoding.control) {
-            nets += item.width > 0 ? 1 : 0;
-        }
-        blocks.append({"invert", (qsizetype(3 + plan.hsSlots) + nets) * bankWords});
-    }
-    if (plan.option.rxOverride) {
-        blocks.append({"rx override", qsizetype(plan.hsSlots) * bankWords});
-    }
-    if (plan.option.interrupt) {
-        blocks.append({"interrupt", qsizetype(8) * bankWords});
-    }
     const qsizetype identityCount = identityRegisterCount(dataWidth);
     qsizetype       expected      = identityCount + selectorWordCount(plan.pinCount, dataWidth);
     for (const Block &block : blocks) {
@@ -4024,7 +4051,7 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     const quint32 byteCount = dataWidth / 8;
     const quint32 lanes     = pinsPerWord(dataWidth);
     const quint32 width     = selectorWidth(plan.hsSlots);
-    const quint64 aperture  = registers.constLast().byteOffset + byteCount;
+    const quint64 aperture = std::max(kApertureBytes, registers.constLast().byteOffset + byteCount);
     /* Fold the composed identity words so the report cannot publish a value
      * the read function does not emit. Each word is the 32 bits at its byte
      * offset, whatever the data width. */

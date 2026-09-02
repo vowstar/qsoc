@@ -52,7 +52,7 @@ QSocModuleDefinition makeSmallDefinition()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 2
     hs_slots: 3
 %1    route:
@@ -86,7 +86,7 @@ QSocModuleDefinition makeTailDefinition()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 9
     hs_slots: 3
 %1    route:
@@ -106,7 +106,7 @@ QSocModuleDefinition makeBankDefinition()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 20
     hs_slots: 2
 %1    route:
@@ -130,7 +130,7 @@ QSocModuleDefinition makeSlotCountDefinition(quint32 hsSlots)
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 3
     hs_slots: %2
 %1    route:
@@ -297,7 +297,7 @@ void Test::sourceOrderDoesNotChangeCollateral()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 2
     hs_slots: 3
 %1    route:
@@ -481,7 +481,7 @@ QSocModuleDefinition makePadCellDefinition(const QString &claim)
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 12
+    address_width: 14
     pin_count: 2
     hs_slots: 2
     pad_cell:
@@ -627,7 +627,7 @@ QSocModuleDefinition makeOptionDefinition()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 12
+    address_width: 14
     pin_count: 2
     hs_slots: 3
     option:
@@ -829,7 +829,7 @@ QSocIomuxPlan linkedPlan(bool invert = false)
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 12
+    address_width: 14
     pin_count: 2
     hs_slots: 2
     option:
@@ -996,7 +996,7 @@ void Test::forceIsProvenAboveEverySourceWhenAvailable()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 12
+    address_width: 14
     pin_count: 2
     hs_slots: 2
     option:
@@ -1104,7 +1104,7 @@ void Test::unroutedSlotsLandOnTheDefaultRowWhenAvailable()
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 12
+    address_width: 14
     pin_count: 1
     hs_slots: 3
     option:
