@@ -281,8 +281,10 @@ field uses the low `ceil(log2(hs_slots))` bits and the remaining lane bits
 read zero and ignore writes. A 32-bit word holds 8 pins and a 64-bit word
 holds 16, so no field crosses a byte and one write strobe never splits a
 selector. Selector offsets depend only on `pin_count` and `data_width`,
-never on `hs_slots`. Generation fails when `2^address_width` cannot hold
-the aperture and reports the minimum usable width.
+never on `hs_slots`; that is what the lane buys, and its price is the idle
+bits: 2 per pin with the default 4 slots, 48 bytes of aperture on a 185-pin
+instance. Generation fails when `2^address_width` cannot hold the aperture
+and reports the minimum usable width.
 
 Options append register blocks after the selectors in a fixed order: the
 four gpio banks, one `pin_src_ctrl` word per pin, one `pin_pad_ctrl` word
@@ -396,7 +398,9 @@ carries one line per `data_width` pins.
 
 A pending bit records its event whether or not the matching enable is set,
 so a pin that reaches no interrupt line can still be polled. The enable
-gates `irq_o` alone. Software clears a pending bit by writing one to it,
+gates `irq_o` alone, so a bit that latched while its enable was clear raises
+the line the moment the enable is written; clear it first when that event is
+stale. Software clears a pending bit by writing one to it,
 and a set that lands on the same cycle as that write wins, so an event
 cannot vanish into its own acknowledgement. Edge detection compares the
 second synchronizer stage against a third, so the pad must hold a level for
