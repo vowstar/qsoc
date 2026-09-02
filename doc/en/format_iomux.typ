@@ -452,6 +452,21 @@ their source bits and the same force, and every receive sink after
 substitution and inversion. A pad cell adds the constraint proof described
 above.
 
+The routing proof is per pin, and one job over a whole design grows faster
+than the pin count, so the job file cuts the pins into banks of
+`--formal-bank` pins, 16 when not given. A design that fits one bank has the
+tasks `prove`, `bmc`, and `cover`. A larger one has `prove_bN` and `bmc_bN`
+per bank and `cover` on bank 0; each task sets the harness parameters
+`PIN_LO` and `PIN_HI` and the other pins fall out of the job.
+
+```bash
+sby -f iomux0_hs_formal.sby            # every task, in parallel
+sby -f iomux0_hs_formal.sby bmc_b3     # one bank
+```
+
+`--formal-bank 1` makes one task per pin, for proving a few pins after a
+change to their routes.
+
 == UVM Collateral
 <iomux-uvm-collateral>
 `--with-uvm` reuses the MMIO UVM testbench for `<module>_regs` only. It

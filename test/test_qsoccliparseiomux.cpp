@@ -158,6 +158,7 @@ private slots:
     void validateReportsExplicitSlotsWithoutMarker();
     void generateWritesArtifactsAndRequiresForce();
     void generateWithFormalAndUvmTargetsRegs();
+    void formalBankSplitsTheRoutingProof();
     void invalidSourceProducesNoArtifacts();
     void generateRejectsDerivedModuleNameCollision();
 };
@@ -337,6 +338,39 @@ void Test::generateWithFormalAndUvmTargetsRegs()
     QVERIFY2(
         generated.output.contains("covers iomux0_regs only, not routing"),
         qPrintable(generated.output));
+}
+
+void Test::formalBankSplitsTheRoutingProof()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-formal", "--formal-bank", "1", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("iomux0");
+
+    const CommandResult generated = runCommand(arguments);
+    QCOMPARE(generated.exitCode, 0);
+    QVERIFY2(
+        generated.output.contains("HS routing proof: 2 banks, bank size 1"),
+        qPrintable(generated.output));
+    const QString outputDirectory = QDir(directory.path()).filePath("output/peripheral/iomux0");
+    const QString hsSby = readTextFile(QDir(outputDirectory).filePath("iomux0_hs_formal.sby"));
+    QVERIFY2(hsSby.contains("bmc_b1 bmc b1\n"), qPrintable(hsSby));
+    QVERIFY2(
+        hsSby.contains("b1: chparam -set PIN_LO 1 -set PIN_HI 1 iomux0_hs_formal\n"),
+        qPrintable(hsSby));
+
+    QStringList zero = arguments;
+    zero.insert(3, "--force");
+    zero[zero.indexOf("1")]     = "0";
+    const CommandResult refused = runCommand(zero);
+    QCOMPARE(refused.exitCode, 1);
+    QVERIFY2(
+        refused.output.contains("--formal-bank takes a pin count of 1 or more"),
+        qPrintable(refused.output));
 }
 
 void Test::invalidSourceProducesNoArtifacts()

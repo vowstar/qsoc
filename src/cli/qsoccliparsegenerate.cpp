@@ -161,6 +161,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
          QCoreApplication::translate("main", "Replace existing requested output files.")},
         {"with-formal",
          QCoreApplication::translate("main", "Generate formal verification collateral.")},
+        {"formal-bank",
+         QCoreApplication::translate("main", "Pins per IOMUX routing proof task (default 16)."),
+         "pins"},
         {"with-uvm", QCoreApplication::translate("main", "Generate a UVM testbench.")},
     });
     parser.addPositionalArgument(
@@ -328,13 +331,24 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         QString formalSbyPath;
         QString hsFormalSystemVerilogPath;
         QString hsFormalSbyPath;
+        quint32 bankPins = QSocIomuxFormal::kDefaultBankPins;
+        if (parser.isSet("formal-bank")) {
+            bool ok  = false;
+            bankPins = parser.value("formal-bank").toUInt(&ok);
+            if (!ok || bankPins == 0) {
+                return showError(
+                    1,
+                    QCoreApplication::translate(
+                        "main", "Error: --formal-bank takes a pin count of 1 or more."));
+            }
+        }
         if (parser.isSet("with-formal")) {
             const QSocMmioFormalCollateral collateral = QSocMmioFormal::generate(plan.mmio);
             formalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sv"));
             formalSbyPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sby"));
             artifacts.push_back({formalSystemVerilogPath, collateral.systemVerilog.toUtf8()});
             artifacts.push_back({formalSbyPath, collateral.sby.toUtf8()});
-            const QSocIomuxFormalCollateral hsCollateral = QSocIomuxFormal::generate(plan);
+            const QSocIomuxFormalCollateral hsCollateral = QSocIomuxFormal::generate(plan, bankPins);
             hsFormalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sv"));
             hsFormalSbyPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sby"));
             artifacts.push_back({hsFormalSystemVerilogPath, hsCollateral.systemVerilog.toUtf8()});
@@ -385,6 +399,15 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             messages.append(
                 QCoreApplication::translate("main", "Generated HS formal collateral: %1, %2")
                     .arg(hsFormalSystemVerilogPath, hsFormalSbyPath));
+            const quint32 banks = (plan.pinCount + bankPins - 1) / bankPins;
+            if (banks > 1) {
+                messages.append(
+                    QCoreApplication::translate(
+                        "main",
+                        "HS routing proof: %1 banks, bank size %2, tasks prove_bN and bmc_bN")
+                        .arg(banks)
+                        .arg(bankPins));
+            }
         }
         if (parser.isSet("with-uvm")) {
             messages.append(

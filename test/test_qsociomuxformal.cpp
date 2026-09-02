@@ -99,6 +99,31 @@ QSocModuleDefinition makeTailDefinition()
                               .arg(integrationBlock()));
 }
 
+/* Twenty pins, so a bank of sixteen leaves pins 16 to 19 in a second task. */
+QSocModuleDefinition makeBankDefinition()
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 8
+    pin_count: 20
+    hs_slots: 2
+%1    route:
+      - pin: 0
+        slot: 1
+        function: head
+        signal: oe
+        output_enable: 1
+      - pin: 17
+        slot: 1
+        function: tail
+        signal: oe
+        output_enable: 1
+)")
+                              .arg(integrationBlock()));
+}
+
 QSocModuleDefinition makeSlotCountDefinition(quint32 hsSlots)
 {
     return makeDefinition(QString(R"(generator:
@@ -183,6 +208,8 @@ private slots:
     void emptyPlanProducesNoCollateral();
     void generatedCollateralPassesSbyWhenAvailable();
     void tailPinSelectorDisconnectFailsBmcWhenAvailable();
+    void bankedJobNamesOneTaskPerBank();
+    void bankBoundaryIsRealWhenAvailable();
     void padConstraintsPassSbyWhenAvailable();
     void padConstraintFalseClaimFailsSbyWhenAvailable();
     void optionRegistersAreFreeInputsOfTheProof();
@@ -237,7 +264,12 @@ void Test::collateralAssertsBundlesBroadcastAndInvalidCodes()
         qPrintable(errors.join('\n')));
     const QSocIomuxFormalCollateral collateral = QSocIomuxFormal::generate(plan);
 
-    QVERIFY(collateral.systemVerilog.contains("module iomux0_hs_formal ("));
+    QVERIFY(collateral.systemVerilog.contains("module iomux0_hs_formal #("));
+    QVERIFY(collateral.systemVerilog.contains("    parameter integer PIN_HI = 1"));
+    QVERIFY(collateral.systemVerilog.contains(
+        "generate if (PIN_LO <= 1 && 1 <= PIN_HI) begin : g_pin_1"));
+    QVERIFY(collateral.sby.contains("[tasks]\nprove\nbmc\ncover\n"));
+    QVERIFY(!collateral.sby.contains("chparam"));
     QVERIFY(collateral.systemVerilog.contains("iomux0_conn u_conn ("));
     QVERIFY(collateral.systemVerilog.contains("iomux0_core u_core ("));
     QVERIFY(collateral.systemVerilog.contains(
@@ -367,6 +399,74 @@ void Test::tailPinSelectorDisconnectFailsBmcWhenAvailable()
     QVERIFY2(result.exitCode != 0, result.output.constData());
     QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
     QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+}
+
+void Test::bankedJobNamesOneTaskPerBank()
+{
+    QSocIomuxPlan plan;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeBankDefinition(), &plan, nullptr));
+
+    const QSocIomuxFormalCollateral banked = QSocIomuxFormal::generate(plan, 16);
+    QVERIFY(banked.sby.contains(
+        "[tasks]\nprove_b0 prove b0\nbmc_b0 bmc b0\n"
+        "prove_b1 prove b1\nbmc_b1 bmc b1\ncover b0\n"));
+    QVERIFY(banked.sby.contains(
+        "b0: chparam -set PIN_LO 0 -set PIN_HI 15 iomux0_hs_formal\n"
+        "b1: chparam -set PIN_LO 16 -set PIN_HI 19 iomux0_hs_formal\n"
+        "prep -top iomux0_hs_formal"));
+    QVERIFY(!banked.sby.contains("\nbmc\n"));
+
+    /* A bank that holds every pin is the plain job, byte for byte. */
+    const QSocIomuxFormalCollateral whole = QSocIomuxFormal::generate(plan, 20);
+    QCOMPARE(whole.sby, QSocIomuxFormal::generate(plan, 64).sby);
+    QVERIFY(whole.sby.contains("[tasks]\nprove\nbmc\ncover\n"));
+    QCOMPARE(whole.systemVerilog, banked.systemVerilog);
+    QVERIFY(QSocIomuxFormal::generate(plan, 0).sby.isEmpty());
+}
+
+void Test::bankBoundaryIsRealWhenAvailable()
+{
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+
+    QSocIomuxPlan plan;
+    QVERIFY(QSocIomuxGenerator::buildPlan(makeBankDefinition(), &plan, nullptr));
+
+    /* Pin 17 is broken; the bank that holds it must see it, the other must not. */
+    QString mutatedTop = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY(mutatedTop.contains("case (pin_17_select_i)"));
+    mutatedTop.replace("case (pin_17_select_i)", "case ({1{1'b0}})");
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeTextFile(QDir(directory.path()).filePath("iomux0.v"), mutatedTop);
+    writeTextFile(
+        QDir(directory.path()).filePath("iomux0_conn.v"),
+        QSocIomuxGenerator::generateConnVerilog(plan));
+    const QSocIomuxFormalCollateral collateral = QSocIomuxFormal::generate(plan, 16);
+    writeTextFile(QDir(directory.path()).filePath("iomux0_hs_formal.sv"), collateral.systemVerilog);
+    writeTextFile(QDir(directory.path()).filePath("iomux0_hs_formal.sby"), collateral.sby);
+
+    const CommandResult clean = runCommand(
+        directory.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc_b0")});
+    QVERIFY2(clean.finished, clean.output.constData());
+    QVERIFY2(clean.exitCode == 0, clean.output.constData());
+    QVERIFY2(clean.output.contains("DONE (PASS, rc=0)"), clean.output.constData());
+
+    const CommandResult broken = runCommand(
+        directory.path(),
+        sby,
+        {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc_b1")});
+    QVERIFY2(broken.finished, broken.output.constData());
+    QVERIFY2(broken.exitCode != 0, broken.output.constData());
+    QVERIFY2(broken.output.contains("DONE (FAIL, rc=2)"), broken.output.constData());
+    QVERIFY2(!broken.output.contains("DONE (ERROR"), broken.output.constData());
 }
 
 } // namespace
