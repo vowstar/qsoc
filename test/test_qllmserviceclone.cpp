@@ -2095,22 +2095,26 @@ private slots:
     {
         QFETCH(bool, chatCompletion);
 
-        MockHttpServer server;
-        QVERIFY(server.listen());
-        server.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{"), 0, true});
-        server.enqueue(jsonResponse(QStringLiteral("recovered")));
+        /* Distinct hosts: after the abort, Qt may still deliver a stale queued
+         * receive on the first channel, which closes whatever socket that
+         * channel is connecting; a same-host fallback would land on it. */
+        MockHttpServer firstServer;
+        MockHttpServer secondServer;
+        QVERIFY(firstServer.listen());
+        QVERIFY(secondServer.listen());
+        firstServer.enqueue(
+            {QByteArrayLiteral("application/json"), QByteArrayLiteral("{"), 0, true});
+        secondServer.enqueue(jsonResponse(QStringLiteral("recovered")));
 
         QLLMService service(nullptr, nullptr);
-        LLMEndpoint endpoint = endpointFor(server);
-        endpoint.timeout     = 3000;
-        service.addEndpoint(endpoint);
-        service.addEndpoint(endpoint);
+        service.addEndpoint(endpointFor(firstServer));
+        service.addEndpoint(endpointFor(secondServer));
 
         QObject                 callbacks;
         QPointer<QNetworkReply> deletedReply;
         bool                    replyDeleted = false;
         connect(
-            &server,
+            &firstServer,
             &MockHttpServer::responseSent,
             &callbacks,
             [&](int responseIndex) {
@@ -2129,6 +2133,8 @@ private slots:
         QVERIFY2(waitForNoReplies(&service), "fallback sync replies were not deleted");
         QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
         QCOMPARE(result.content, QStringLiteral("recovered"));
+        QCOMPARE(firstServer.requestCount(), 1);
+        QCOMPARE(secondServer.requestCount(), 1);
     }
 
     void testReentrantSyncFallbackUsesStableOrder_data()
