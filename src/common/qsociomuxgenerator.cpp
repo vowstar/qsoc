@@ -1394,6 +1394,10 @@ void composePadControl(QSocIomuxPlan *plan)
     }
 }
 
+/**
+ * @brief Append the inversion banks: the three roles, the receive slots, then
+ * the select net of the pull and of every selectable control.
+ */
 void composeInvert(QSocIomuxPlan *plan)
 {
     appendBank(plan, "input_enable_inv", QSocMmioAccess::ReadWrite, QString());
@@ -1401,6 +1405,15 @@ void composeInvert(QSocIomuxPlan *plan)
     appendBank(plan, "output_enable_inv", QSocMmioAccess::ReadWrite, QString());
     for (quint32 slot = 0; slot < plan->hsSlots; ++slot) {
         appendBank(plan, QString("rx_inv_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString());
+    }
+    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
+    if (encoding.hasPull()) {
+        appendBank(plan, "pull_inv", QSocMmioAccess::ReadWrite, QString());
+    }
+    for (const QSocPadEncoding::Control &item : encoding.control) {
+        if (item.width > 0) {
+            appendBank(plan, item.name + "_inv", QSocMmioAccess::ReadWrite, QString());
+        }
     }
 }
 
@@ -2545,11 +2558,11 @@ QString slotCode(
 {
     const QMap<QString, EndpointPort> selects = selectPorts(plan, route);
     if (selects.contains(group)) {
-        return QString("(%1 ? %2'd%3 : %2'd%4)")
-            .arg(selectNet(selects.value(group)))
-            .arg(codeWidth)
-            .arg(on)
-            .arg(off);
+        QString net = selectNet(selects.value(group));
+        if (plan.option.invert) {
+            net += QString(" ^ pin_%1_%2_inv_i").arg(route.pin).arg(group);
+        }
+        return QString("(%1 ? %2'd%3 : %2'd%4)").arg(net).arg(codeWidth).arg(on).arg(off);
     }
     return fixed == defaultCode ? QString() : QString("%1'd%2").arg(codeWidth).arg(fixed);
 }
@@ -3013,6 +3026,14 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
         ports.append({QString("pin_%1_output_enable_inv").arg(pin), 1});
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
             ports.append({QString("pin_%1_rx_inv_s%2").arg(pin).arg(slot), 1});
+        }
+        if (encoding.hasPull()) {
+            ports.append({QString("pin_%1_pull_inv").arg(pin), 1});
+        }
+        for (const QSocPadEncoding::Control &item : encoding.control) {
+            if (item.width > 0) {
+                ports.append({QString("pin_%1_%2_inv").arg(pin).arg(item.name), 1});
+            }
         }
     }
     if (plan.option.rxOverride) {
@@ -3968,7 +3989,12 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         blocks.append({"pad control", words * qsizetype(plan.pinCount)});
     }
     if (plan.option.invert) {
-        blocks.append({"invert", qsizetype(3 + plan.hsSlots) * bankWords});
+        const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
+        qsizetype             nets     = encoding.hasPull() ? 1 : 0;
+        for (const QSocPadEncoding::Control &item : encoding.control) {
+            nets += item.width > 0 ? 1 : 0;
+        }
+        blocks.append({"invert", (qsizetype(3 + plan.hsSlots) + nets) * bankWords});
     }
     if (plan.option.rxOverride) {
         blocks.append({"rx override", qsizetype(plan.hsSlots) * bankWords});

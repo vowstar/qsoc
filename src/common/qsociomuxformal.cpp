@@ -155,6 +155,7 @@ QStringList selectPortNames(const QSocIomuxPlan &plan)
  * @brief The expected code of one slot: a constant, or on and off under its net.
  */
 QString expectedCode(
+    const QSocIomuxPlan         &plan,
     const QSocIomuxRoutePlan    &route,
     const QString               &group,
     const QSocIomuxEndpointPlan &link,
@@ -166,8 +167,11 @@ QString expectedCode(
     if (link.link.isEmpty()) {
         return QString("%1'd%2").arg(width).arg(fixed);
     }
-    const QString net = QSocIomuxGenerator::selectPortName(route.pin, route.slot, group)
-                        + (link.invert ? QStringLiteral(" ^ 1'b1") : QString());
+    QString net = QSocIomuxGenerator::selectPortName(route.pin, route.slot, group)
+                  + (link.invert ? QStringLiteral(" ^ 1'b1") : QString());
+    if (plan.option.invert) {
+        net += QString(" ^ pin_%1_%2_inv_i").arg(route.pin).arg(group);
+    }
     return QString("(%1 ? %2'd%3 : %2'd%4)").arg(net).arg(width).arg(on).arg(off);
 }
 
@@ -210,6 +214,7 @@ void appendPadCodeAssertions(
             "pull_src",
             encoding.requestMode(safe.pull),
             route ? expectedCode(
+                        plan,
                         *route,
                         "pull",
                         route->pullSelect.link,
@@ -226,6 +231,7 @@ void appendPadCodeAssertions(
                 "pull_src",
                 encoding.requestUpSel(safe.pull),
                 route ? expectedCode(
+                            plan,
                             *route,
                             "pull",
                             route->pullSelect.link,
@@ -243,6 +249,7 @@ void appendPadCodeAssertions(
                 "pull_src",
                 encoding.requestDownSel(safe.pull),
                 route ? expectedCode(
+                            plan,
                             *route,
                             "pull",
                             route->pullSelect.link,
@@ -268,6 +275,7 @@ void appendPadCodeAssertions(
             src.constData(),
             encoding.controlCodeOrDefault(index, safe.control.value(item.name)),
             route ? expectedCode(
+                        plan,
                         *route,
                         item.name,
                         route->control.value(item.name).select.link,
