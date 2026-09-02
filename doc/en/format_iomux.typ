@@ -30,7 +30,7 @@ iomux0:
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 2
     hs_slots: 2
     option:
@@ -273,28 +273,51 @@ contract is 2.0.0. The number steps against a layout that has shipped in
 silicon or that firmware depends on. Until then fields may move under it.
 After that, a block appended after the existing ones steps the minor number
 and any existing offset that moves steps the major number. With
-`pin_count`, `hs_slots`, `data_width`, and the feature bits every block
-offset below is computable, and the report prints them.
+`pin_count`, `hs_slots`, and `data_width` every offset below is
+computable, and the report prints them.
 
-Selector registers start at 0x10. Every pin owns a fixed 4-bit lane; the
-field uses the low `ceil(log2(hs_slots))` bits and the remaining lane bits
-read zero and ignore writes. A 32-bit word holds 8 pins and a 64-bit word
-holds 16, so no field crosses a byte and one write strobe never splits a
-selector. Selector offsets depend only on `pin_count` and `data_width`,
-never on `hs_slots`; that is what the lane buys, and its price is the idle
-bits: 2 per pin with the default 4 slots, 48 bytes of aperture on a 185-pin
-instance. Generation fails when `2^address_width` cannot hold the aperture
-and reports the minimum usable width.
+Every block has a fixed byte base, and a block whose option is off leaves
+its region empty: an offset means the same thing on every design, so a
+driver carries constants and reads `feature` only to learn which blocks
+answer. A read from an empty region returns 0 and a write to it returns
+SLVERR. The map spans 16 KB, so `address_width` is at least 14; a design
+whose `pin_ctl_k` words run past 0x4000 needs more and the report says so.
 
-Options append register blocks after the selectors in a fixed order: the
-four gpio banks, one `pin_src_ctrl` word per pin, one `pin_pad_ctrl` word
-per pin, the inversion banks, the receive override banks, and the interrupt
-banks. A block whose option is off is absent and the next block moves up, so
-the report is the authority for offsets. A bank holds one bit per pin,
-`data_width` pins per word, so one store flips the same bit on a whole word
-of pins. A per-pin word holds that pin's whole configuration, so one store
-reconfigures a pin without a read-modify-write and without touching its
-neighbours.
+#figure(
+  align(center)[#table(
+    columns: 3,
+    align: (left, left, left),
+    table.header([Base], [Block], [Size at 256 pins]),
+    table.hline(),
+    [0x0000], [identity words], [16 bytes],
+    [0x0100], [`hs_select` words], [`pin_count / 2` bytes, at most 0x80],
+    [0x0200], [gpio banks, four], [at most 0x80],
+    [0x0300], [`rx_value_sk` banks, one per slot], [at most 0x100],
+    [0x0400], [interrupt banks, four enable then four pending], [at most 0x100],
+    [0x0800], [inversion banks], [at most 0x400, 32 banks],
+    [0x1000], [`pin_src_ctrl`, one word per pin], [at most 0x800],
+    [0x1800], [`pin_pad_ctrl`, one word per pin], [at most 0x800],
+    [0x2000 + k × 0x800], [`pin_ctl_k`, one word per pin], [0x800 each],
+  )],
+  caption: [IOMUX REGISTER MAP],
+)
+
+Within a block the stride is the only arithmetic. A bank holds one bit per
+pin, `data_width` pins per word, so bit `p` of a family sits at
+`base + (p / data_width) × (data_width / 8)`, and one store flips the same
+bit on a whole word of pins. A per-pin word sits at
+`base + p × (data_width / 8)` and holds that pin's whole configuration, so
+one store reconfigures a pin without a read-modify-write and without
+touching its neighbours. A name that starts with `pin_` is indexed by pin;
+any other suffix is a word index.
+
+Every pin owns a fixed 4-bit lane in the selector words; the field uses the
+low `ceil(log2(hs_slots))` bits and the remaining lane bits read zero and
+ignore writes. A 32-bit word holds 8 pins and a 64-bit word holds 16, so no
+field crosses a byte, one write strobe never splits a selector, and a hex
+dump shows one pin per digit. The lane idles 2 bits per pin at the default 4
+slots, 48 bytes on a 185-pin instance; that is the price of a selector
+offset that depends on `pin_count` and `data_width` alone.
 
 `pin_src_ctrl` exists when any option owns a field in it, and every field
 keeps a fixed position whatever else is on, so software reads the same word
@@ -408,14 +431,14 @@ one bus cycle to register as an edge.
 
 #figure(
   align(center)[#table(
-    columns: 5,
-    align: (left, right, right, left, right),
-    table.header([Pins, width], [Selector regs], [Total regs], [Selector offsets], [Aperture]),
+    columns: 4,
+    align: (left, right, right, left),
+    table.header([Pins, width], [Selector regs], [Total regs], [Selector offsets]),
     table.hline(),
-    [185, 32-bit], [24], [28], [0x10 to 0x6C], [112 bytes],
-    [185, 64-bit], [12], [14], [0x10 to 0x68], [112 bytes],
-    [256, 32-bit], [32], [36], [0x10 to 0x8C], [144 bytes],
-    [256, 64-bit], [16], [18], [0x10 to 0x88], [144 bytes],
+    [185, 32-bit], [24], [28], [0x100 to 0x15C],
+    [185, 64-bit], [12], [14], [0x100 to 0x158],
+    [256, 32-bit], [32], [36], [0x100 to 0x17C],
+    [256, 64-bit], [16], [18], [0x100 to 0x178],
   )],
   caption: [IOMUX SELECTOR LAYOUT],
 )

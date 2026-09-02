@@ -385,8 +385,26 @@ public:
     static QSocIomuxLayoutVersion layoutVersion();
     /** The type word every instance reports, "IOMX" read as a hex value. */
     static constexpr quint32 kTypeId = 0x494F4D58;
-    /** Bytes the identity words occupy before the first selector. */
+    /** Bytes the identity words occupy at offset 0. */
     static constexpr quint32 kIdentityBytes = 16;
+    /**
+     * Byte base of every register block. A block whose option is off leaves
+     * its region empty, so an offset means the same thing on every design.
+     */
+    static constexpr quint64 kBaseSelector      = 0x100;
+    static constexpr quint64 kBaseGpio          = 0x200;
+    static constexpr quint64 kBaseRxOverride    = 0x300;
+    static constexpr quint64 kBaseInterrupt     = 0x400;
+    static constexpr quint64 kBaseInvert        = 0x800;
+    static constexpr quint64 kBaseSourceControl = 0x1000;
+    static constexpr quint64 kBasePadControl    = 0x1800;
+    static constexpr quint64 kBaseControlWords  = 0x2000;
+    /** Bytes between one `pin_ctl_k` block and the next. */
+    static constexpr quint64 kControlWordStride = 0x800;
+    /** Bytes the invert region holds: 32 banks of the widest instance. */
+    static constexpr quint64 kInvertBytes = 0x400;
+    /** Bytes the fixed map spans, so address_width is at least 14. */
+    static constexpr quint64 kApertureBytes = 0x4000;
     /** The selector code layout of the declared pad cell, empty when none. */
     static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell);
     /**

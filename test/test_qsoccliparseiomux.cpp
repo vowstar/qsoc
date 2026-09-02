@@ -20,7 +20,7 @@ const QString validModule = R"(iomux0:
     kind: iomux
     bus: axi4_lite
     data_width: 32
-    address_width: 8
+    address_width: 14
     pin_count: 2
     integration:
       instance: u_iomux0
