@@ -75,6 +75,15 @@ QString bitRange(quint32 high, quint32 low)
     return high == low ? QString("[%1]").arg(low) : QString("[%1:%2]").arg(high).arg(low);
 }
 
+/**
+ * @brief The slice of a field's storage a lane touches; a one-bit field is
+ * a scalar reg and a bit select on it is not portable.
+ */
+QString storageSlice(const QSocMmioFieldPlan &field, quint32 high, quint32 low)
+{
+    return field.width == 1 ? QString() : bitRange(high - field.lsb, low - field.lsb);
+}
+
 QString verilogLiteral(quint32 width, quint64 value)
 {
     return QString("%1'h%2").arg(width).arg(QString::number(value, 16));
@@ -171,17 +180,37 @@ FormalNames allocateNames(const QSocMmioPlan &plan)
     return names;
 }
 
+/**
+ * @brief The reset the harness runs under.
+ *
+ * The default builds a two-cycle reset from an `initial` value. A tool that
+ * ignores `initial` blocks defines `FORMAL_EXTERNAL_RESET` and drives
+ * `formal_reset_ni` as a port instead. Either way a free input may pull
+ * reset again at any time, so re-entering reset stays under proof. The
+ * request is registered first: an asynchronous reset that moves on the
+ * clock edge itself races the sampling of the properties, and the tools do
+ * not agree on who wins.
+ */
 void appendClockAndReset(QStringList *lines, const FormalNames &names)
 {
-    lines->append(QString("reg [2:0] %1;").arg(names.resetShift));
+    lines->append(QString("reg %1;").arg(names.pastValid));
     lines->append(QString("(* anyseq *) reg %1;").arg(names.runtimeReset));
-    lines->append(
-        QString("wire rst_ni = %1[1] && (!%1[2] || %2);").arg(names.resetShift, names.runtimeReset));
+    lines->append(QString("reg %1_q;").arg(names.runtimeReset));
+    lines->append("always @(posedge clk_i)");
+    lines->append(QString("    %1_q <= %1;").arg(names.runtimeReset));
+    lines->append("`ifdef FORMAL_EXTERNAL_RESET");
+    lines->append(QString("wire rst_ni = formal_reset_ni && (!%1 || %2_q);")
+                      .arg(names.pastValid, names.runtimeReset));
+    lines->append("`else");
+    lines->append(QString("reg [2:0] %1;").arg(names.resetShift));
+    lines->append(QString("wire rst_ni = %1[1] && (!%1[2] || %2_q);")
+                      .arg(names.resetShift, names.runtimeReset));
     lines->append(QString());
     lines->append(QString("initial %1 = 3'b000;").arg(names.resetShift));
     lines->append(QString());
     lines->append("always @(posedge clk_i)");
     lines->append(QString("    %1 <= {%1[1:0], 1'b1};").arg(names.resetShift));
+    lines->append("`endif");
     lines->append(QString());
 }
 
@@ -260,7 +289,6 @@ void appendModelStorage(QStringList *lines, const QSocMmioPlan &plan, const Form
     lines->append(QString("reg %1;").arg(names.rValid));
     lines->append(QString("reg [%1:0] %2;").arg(plan.dataWidth - 1).arg(names.rData));
     lines->append(QString("reg [1:0] %1;").arg(names.rResponse));
-    lines->append(QString("reg %1;").arg(names.pastValid));
     lines->append(QString());
 }
 
@@ -388,7 +416,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
                     lines->append(QString("                        %1%2 <= %1%2 & ~%3%4;")
                                       .arg(
                                           storage,
-                                          bitRange(high - field.lsb, low - field.lsb),
+                                          storageSlice(field, high, low),
                                           names.writeData,
                                           bitRange(high, low)));
                     continue;
@@ -396,7 +424,7 @@ void appendWriteCase(QStringList *lines, const QSocMmioPlan &plan, const FormalN
                 lines->append(QString("                        %1%2 <= %3%4;")
                                   .arg(
                                       storage,
-                                      bitRange(high - field.lsb, low - field.lsb),
+                                      storageSlice(field, high, low),
                                       names.writeData,
                                       bitRange(high, low)));
             }
@@ -664,11 +692,17 @@ void appendResetAssertions(QStringList *lines, const QSocMmioPlan &plan, const F
 
 void appendProperties(QStringList *lines, const QSocMmioPlan &plan, const FormalNames &names)
 {
+    lines->append("`ifdef FORMAL_EXTERNAL_RESET");
+    lines->append("always @(posedge clk_i or negedge formal_reset_ni)");
+    lines->append(QString("    %1 <= formal_reset_ni;").arg(names.pastValid));
+    lines->append("`else");
     lines->append(QString("initial %1 = 1'b0;").arg(names.pastValid));
     lines->append(QString());
-    lines->append("always @(posedge clk_i) begin");
+    lines->append("always @(posedge clk_i)");
     lines->append(QString("    %1 <= 1'b1;").arg(names.pastValid));
+    lines->append("`endif");
     lines->append(QString());
+    lines->append("always @(posedge clk_i) begin");
     lines->append(QString("    if (%1 && rst_ni && $past(rst_ni)) begin").arg(names.pastValid));
     appendMasterAssumptions(lines, names);
     appendResponseStability(lines);
@@ -693,6 +727,9 @@ QString buildSystemVerilog(const QSocMmioPlan &plan)
     lines.append("// Generated by QSoC. Do not edit.");
     lines.append(QString("module %1_formal (").arg(plan.moduleName));
     lines.append("    input wire clk_i");
+    lines.append("`ifdef FORMAL_EXTERNAL_RESET");
+    lines.append("    , input wire formal_reset_ni");
+    lines.append("`endif");
     lines.append(");");
     lines.append(QString());
     appendClockAndReset(&lines, names);

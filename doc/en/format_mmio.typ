@@ -167,6 +167,12 @@ sby -f <module>_formal.sby prove
 sby -f <module>_formal.sby cover
 ```
 
+The harness resets itself from an `initial` value and then lets a free
+input pull reset again at any time. A tool that ignores `initial` blocks
+compiles the harness with `FORMAL_EXTERNAL_RESET` defined, which adds a
+`formal_reset_ni` port for the tool's own reset handling; the free input
+still re-enters reset, so those properties stay under proof.
+
 The generated job also has a `bmc` task for bounded counterexamples; omit the
 task name to run `prove`, `bmc`, and `cover`. The harness follows the selected
 address width, data width, register layout, resets, sidebands, byte strobes,

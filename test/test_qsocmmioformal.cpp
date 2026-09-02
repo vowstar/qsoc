@@ -474,13 +474,17 @@ void Test::w1cModelSetsAfterTheWrite()
         sv.contains(QStringLiteral("                formal_read_register[8] = formal_field_1_q;")));
     const QString clear = QStringLiteral(
         "                    if (formal_write_strobe[1])\n"
-        "                        formal_field_1_q[0] <= formal_field_1_q[0] & "
+        "                        formal_field_1_q <= formal_field_1_q & "
         "~formal_write_data[8];");
     const QString set = QStringLiteral(
         "        if (done_i)\n"
         "            formal_field_1_q <= 1'b1;");
     const qsizetype clearIndex = sv.indexOf(clear);
     const qsizetype setIndex   = sv.indexOf(set);
+    /* A one-bit field is a scalar reg; a bit select on it is not portable. */
+    QVERIFY(!sv.contains(QStringLiteral("_q[0] <=")));
+    QVERIFY(sv.contains(
+        QStringLiteral("`ifdef FORMAL_EXTERNAL_RESET\n    , input wire formal_reset_ni\n`endif")));
     QVERIFY(clearIndex >= 0);
     QVERIFY(setIndex > clearIndex);
     QCOMPARE(sv.count(set), qsizetype(1));
