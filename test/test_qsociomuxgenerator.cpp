@@ -730,6 +730,7 @@ function [31:0] read_register;
         read_register = 32'b0;
         case (address)
             8'h00: begin
+                read_register[7:0] = 8'h0;
                 read_register[15:8] = 8'h0;
                 read_register[23:16] = 8'h0;
                 read_register[31:24] = 8'h2;
@@ -1273,7 +1274,7 @@ hs_slots: 3
 data_width: 32
 address_width: 8
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 2 at offset 0x10 to 0x14
 registers total: 6
 aperture: 24 bytes
@@ -1436,6 +1437,7 @@ function [63:0] read_register;
         read_register = 64'b0;
         case (address)
             12'h000: begin
+                read_register[7:0] = 8'h0;
                 read_register[15:8] = 8'h0;
                 read_register[23:16] = 8'h0;
                 read_register[31:24] = 8'h2;
@@ -1630,7 +1632,7 @@ hs_slots: 4
 data_width: 64
 address_width: 12
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 2 at offset 0x10 to 0x18
 registers total: 4
 aperture: 32 bytes
@@ -1724,7 +1726,7 @@ hs_slots: 8
 data_width: 64
 address_width: 16
 selector: 3-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 2 at offset 0x10 to 0x18
 registers total: 4
 aperture: 32 bytes
@@ -1908,6 +1910,7 @@ function [31:0] read_register;
         read_register = 32'b0;
         case (address)
             12'h000: begin
+                read_register[7:0] = 8'h0;
                 read_register[15:8] = 8'h0;
                 read_register[23:16] = 8'h0;
                 read_register[31:24] = 8'h2;
@@ -2202,7 +2205,7 @@ hs_slots: 2
 data_width: 32
 address_width: 12
 selector: 1-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x10 to 0x10
 registers total: 5
 aperture: 20 bytes
@@ -2331,6 +2334,7 @@ private slots:
     void unroutedSlotsTakeTheDeclaredDefaultRow();
     void controlNamesAndPinsAreRefusedWhenTaken();
     void padWordHoldsFourControlsAndSpillsTheFifth();
+    void buildNumberReadsBackInTheVersionWord();
     void linksNeedAPadCellAndRowsToChooseFrom();
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
@@ -3927,7 +3931,7 @@ hs_slots: 3
 data_width: 32
 address_width: 12
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x10 to 0x10
 registers total: 5
 aperture: 20 bytes
@@ -3981,7 +3985,7 @@ hs_slots: 2
 data_width: 32
 address_width: 12
 selector: 1-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x10 to 0x10
 gpio registers: 4 at offset 0x14 to 0x20
 source control registers: 2 at offset 0x24 to 0x28
@@ -4278,7 +4282,7 @@ hs_slots: 3
 data_width: 32
 address_width: 12
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x10 to 0x10
 gpio registers: 4 at offset 0x14 to 0x20
 source control registers: 2 at offset 0x24 to 0x28
@@ -5228,7 +5232,7 @@ void Test::layoutVersionTracksTheRegisterMap()
                        .arg(reg.name, fields.join(' ')));
     }
     const QStringList frozen = {
-        "0x00 version: patch@8 minor@16 major@24",
+        "0x00 version: build@0 patch@8 minor@16 major@24",
         "0x04 type: type_id@0",
         "0x08 capability: pin_count@0 hs_slots@16",
         "0x0c feature: gpio@0 interrupt@1 pad_control@2 invert@3 rx_override@4",
@@ -6003,6 +6007,49 @@ void Test::padWordHoldsFourControlsAndSpillsTheFifth()
     QVERIFY(!QSocIomuxGenerator::buildPlan(source(cell(1, 17)), &plan, &errors));
     QVERIFY2(
         errors.contains("IOMUX_RANGE generator.pad_cell.control.c0.table: has 17 rows, at most 16"),
+        qPrintable(errors.join('\n')));
+}
+
+void Test::buildNumberReadsBackInTheVersionWord()
+{
+    const auto source = [](const QString &build) {
+        return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 8
+    pin_count: 1
+    hs_slots: 2
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+)")
+                                  .arg(build, integrationBlock()));
+    };
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(source("    build: 7\n"), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.build, 7U);
+    const QSocMmioFieldPlan *build = findField(plan.mmio, "version", "build");
+    QVERIFY(build != nullptr);
+    QCOMPARE(build->lsb, 0U);
+    QCOMPARE(build->width, 8U);
+    QCOMPARE(build->constantValue.value(), quint64(7));
+    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("identity: version 2.0.0 build 7,"));
+
+    /* Absent means 0, and the word stays the same as before the field existed. */
+    QVERIFY(QSocIomuxGenerator::buildPlan(source(QString()), &plan, &errors));
+    QCOMPARE(plan.build, 0U);
+    QCOMPARE(findField(plan.mmio, "version", "build")->constantValue.value(), quint64(0));
+
+    QVERIFY(!QSocIomuxGenerator::buildPlan(source("    build: 256\n"), &plan, &errors));
+    QVERIFY2(
+        errors.contains("IOMUX_RANGE generator.build: must be between 0 and 255"),
         qPrintable(errors.join('\n')));
 }
 

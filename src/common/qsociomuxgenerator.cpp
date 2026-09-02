@@ -23,6 +23,7 @@ const QSet<QString> kGeneratorKeys
        "address_width",
        "pin_count",
        "hs_slots",
+       "build",
        "option",
        "pad_cell",
        "integration",
@@ -2073,6 +2074,7 @@ void composeIdentity(QSocIomuxPlan *plan)
     version.fields.append(constantField(QStringLiteral("major"), 24, 8, layout.major));
     version.fields.append(constantField(QStringLiteral("minor"), 16, 8, layout.minor));
     version.fields.append(constantField(QStringLiteral("patch"), 8, 8, layout.patch));
+    version.fields.append(constantField(QStringLiteral("build"), 0, 8, plan->build));
 
     QSocMmioRegisterPlan type;
     type.name       = QStringLiteral("type");
@@ -2295,6 +2297,15 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         }
     } else {
         plan->hsSlots = kDefaultHsSlots;
+    }
+
+    if (generator["build"]) {
+        quint64 build = 0;
+        if (parseStrictUnsigned(generator["build"], "generator.build", 0, 255, &build, errors)) {
+            plan->build = static_cast<quint32>(build);
+        } else {
+            valid = false;
+        }
     }
 
     if (generator["option"]) {
@@ -4052,10 +4063,11 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                      .arg(width)
                      .arg(kSelectorLane));
     const qsizetype selectorWords = selectorWordCount(plan.pinCount, dataWidth);
-    lines.append(QString("identity: version %1.%2.%3, type 0x%4 at offset 0x0 to 0xc")
+    lines.append(QString("identity: version %1.%2.%3 build %4, type 0x%5 at offset 0x0 to 0xc")
                      .arg(layout.major)
                      .arg(layout.minor)
                      .arg(layout.patch)
+                     .arg(plan.build)
                      .arg(wordAt(4), 8, 16, QLatin1Char('0')));
     lines.append(
         QString("selector registers: %1 at offset 0x%2 to 0x%3")

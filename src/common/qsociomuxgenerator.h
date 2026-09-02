@@ -332,6 +332,7 @@ struct QSocIomuxPlan
     QString                   moduleName;
     quint32                   pinCount = 0;
     quint32                   hsSlots  = 0;
+    quint32                   build    = 0; /**< version[7:0], the design's own number */
     QSocIomuxOptionPlan       option;
     QList<QSocIomuxRoutePlan> routes;
     QSocIomuxIntegrationPlan  integration;
