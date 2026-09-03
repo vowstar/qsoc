@@ -200,11 +200,11 @@ void appendPadCodeAssertions(
             = safe.declared
                   ? QString("pad_force_i ? %1'd%2 : (%3)").arg(width).arg(safeCode).arg(chosen)
                   : chosen;
-        lines->append(QString("        assert (pad_%1_w[%2:%3] == (%4));")
-                          .arg(name)
-                          .arg((pin + 1) * width - 1)
-                          .arg(pin * width)
-                          .arg(forced));
+        lines->append(QString("        assert (pad_%1_w%2 == %3);")
+                          .arg(
+                              name,
+                              QSocIomuxGenerator::padLane(pin),
+                              QSocIomuxGenerator::padLaneValue(width, "(" + forced + ")")));
     };
     if (encoding.hasPull()) {
         expect(

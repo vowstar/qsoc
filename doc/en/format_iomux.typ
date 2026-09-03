@@ -368,7 +368,10 @@ word per pin for each further group of eight controls, each control in a
 keeps its lane empty, so its neighbours never move, and a group whose
 controls are all single-row emits no word while `k` still counts it. The
 fields below are present only when the cell has something for them to select
-and each is as wide as its table needs; a table has at most 16 rows.
+and each is as wide as its table needs; a table has at most 16 rows. Between
+the core and `<module>_pad` the same selects travel in one 4-bit lane per pin,
+`[4 * pin + 3 : 4 * pin]`, whatever the table needs, so a pin's slice never
+moves when a table grows.
 
 #figure(
   align(center)[#table(

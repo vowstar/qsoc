@@ -405,6 +405,16 @@ public:
     static constexpr quint64 kInvertBytes = 0x400;
     /** Bytes the fixed map spans, so address_width is at least 14. */
     static constexpr quint64 kApertureBytes = 0x4000;
+    /**
+     * Bits per pin of every pull and control select between the core and the
+     * pad module. The lane is fixed, whatever the table needs, so the bus keeps
+     * its shape when a table grows and a pin's slice never moves.
+     */
+    static constexpr quint32 kPadLane = 4;
+    /** `[4 * pin + 3 : 4 * pin]`, the slice of one pin in a select bus. */
+    static QString padLane(quint32 pin);
+    /** `value`, which is `width` bits wide, zero extended to one lane. */
+    static QString padLaneValue(quint32 width, const QString &value);
     /** The selector code layout of the declared pad cell, empty when none. */
     static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell);
     /**

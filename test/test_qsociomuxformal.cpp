@@ -711,7 +711,7 @@ void Test::optionRegistersAreFreeInputsOfTheProof()
     QVERIFY(sv.contains("    input logic [1:0] pin_0_output_value_src_i,"));
     QVERIFY(sv.contains("    input logic pin_1_rx_value_s2_i,"));
     QVERIFY(sv.contains("    input logic [2:0] pin_0_pull_mode_i,"));
-    QVERIFY(sv.contains("logic [5:0] pad_pull_mode_w;"));
+    QVERIFY(sv.contains("logic [7:0] pad_pull_mode_w;"));
     QVERIFY(sv.contains("    .pad_pull_mode_o(pad_pull_mode_w),"));
     QVERIFY(sv.contains("    .pin_1_rx_inv_s1_i(pin_1_rx_inv_s1_i),"));
     /* The expected value layers the source fields and the inversion exactly
@@ -725,15 +725,15 @@ void Test::optionRegistersAreFreeInputsOfTheProof()
         "pin_1_output_enable_src_i == 2'd3 ? 1'b0 : (hs_p1_s0_output_enable_i ^ 1'b1)) ^ "
         "pin_1_output_enable_inv_i));"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_mode_w[2:0] == (pin_0_pull_src_i ? pin_0_pull_mode_i : 3'd1));"));
+        "assert (pad_pull_mode_w[3:0] == {1'b0, (pin_0_pull_src_i ? pin_0_pull_mode_i : 3'd1)});"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : 3'd3));"));
+        "assert (pad_pull_mode_w[7:4] == {1'b0, (pin_1_pull_src_i ? pin_1_pull_mode_i : 3'd3)});"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : 3'd2));"));
+        "assert (pad_pull_mode_w[7:4] == {1'b0, (pin_1_pull_src_i ? pin_1_pull_mode_i : 3'd2)});"));
     QVERIFY(sv.contains(
-        "assert (pad_drive_select_w[0:0] == (pin_0_drive_src_i ? pin_0_drive_i : 1'd1));"));
+        "assert (pad_drive_select_w[3:0] == {3'b0, (pin_0_drive_src_i ? pin_0_drive_i : 1'd1)});"));
     QVERIFY(sv.contains(
-        "assert (pad_drive_select_w[0:0] == (pin_0_drive_src_i ? pin_0_drive_i : 1'd0));"));
+        "assert (pad_drive_select_w[3:0] == {3'b0, (pin_0_drive_src_i ? pin_0_drive_i : 1'd0)});"));
     QVERIFY(sv.contains(
         "assert (hs_p1_s0_input_value_o == ((pin_1_rx_src_s0_i ? pin_1_rx_value_s0_i : "
         "pad_input_value_i[1]) ^ pin_1_rx_inv_s0_i ^ 1'b1));"));
@@ -780,8 +780,8 @@ void Test::optionMutationsFailBmcWhenAvailable_data()
         << "assign pad_output_value_o[0] = (pad_output_value_0) ^ pin_0_output_value_inv_i;"
         << "assign pad_output_value_o[0] = (pad_output_value_0);";
     QTest::newRow("pull-source-bit-ignored")
-        << "assign pad_pull_mode_o[2:0] = pin_0_pull_src_i ? pin_0_pull_mode_i :"
-        << "assign pad_pull_mode_o[2:0] = 1'b0 ? pin_0_pull_mode_i :";
+        << "assign pad_pull_mode_o[3:0] = {1'b0, pin_0_pull_src_i ? pin_0_pull_mode_i :"
+        << "assign pad_pull_mode_o[3:0] = {1'b0, 1'b0 ? pin_0_pull_mode_i :";
     QTest::newRow("override-before-invert-swapped")
         << "assign rx_input_value_o[1] = (pin_1_rx_src_s0_i ? pin_1_rx_value_s0_i : "
            "pad_input_value_i[1]) ^ pin_1_rx_inv_s0_i;"
@@ -896,11 +896,11 @@ void Test::selectNetsAreFreeInputsOfTheProof()
     QVERIFY(sv.contains("    input logic hs_p1_s1_pull_select_i\n"));
     QVERIFY(sv.contains("    .hs_p1_s1_pull_select_i(hs_p1_s1_pull_select_i)"));
     QVERIFY(sv.contains(
-        "assert (pad_drive_select_w[0:0] == (pin_0_drive_src_i ? pin_0_drive_i : "
-        "(hs_p0_s0_drive_select_i ? 1'd1 : 1'd0)));"));
+        "assert (pad_drive_select_w[3:0] == {3'b0, (pin_0_drive_src_i ? pin_0_drive_i : "
+        "(hs_p0_s0_drive_select_i ? 1'd1 : 1'd0))});"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : "
-        "(hs_p1_s1_pull_select_i ^ 1'b1 ? 3'd2 : 3'd1)));"));
+        "assert (pad_pull_mode_w[7:4] == {1'b0, (pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(hs_p1_s1_pull_select_i ^ 1'b1 ? 3'd2 : 3'd1))});"));
 }
 
 void Test::selectNetMutationFailsBmcWhenAvailable()
@@ -950,8 +950,8 @@ void Test::selectInversionIsProvenWhenAvailable()
     QVERIFY(sv.contains("    input logic pin_1_pull_inv_i,"));
     QVERIFY(sv.contains("    input logic pin_0_drive_inv_i,"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_mode_w[5:3] == (pin_1_pull_src_i ? pin_1_pull_mode_i : "
-        "(hs_p1_s1_pull_select_i ^ 1'b1 ^ pin_1_pull_inv_i ? 3'd2 : 3'd1)));"));
+        "assert (pad_pull_mode_w[7:4] == {1'b0, (pin_1_pull_src_i ? pin_1_pull_mode_i : "
+        "(hs_p1_s1_pull_select_i ^ 1'b1 ^ pin_1_pull_inv_i ? 3'd2 : 3'd1))});"));
 
     const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
     const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
@@ -1059,9 +1059,9 @@ void Test::forceIsProvenAboveEverySourceWhenAvailable()
         "assert (pad_input_enable_w[0] == (pad_force_i ? 1'b1 : (pin_0_input_enable_src_i ? "
         "pin_0_input_enable_i : (1'b0))));"));
     QVERIFY(sv.contains(
-        "assert (pad_pull_mode_w[5:3] == (pad_force_i ? 3'd2 : (pin_1_pull_src_i ? "
+        "assert (pad_pull_mode_w[7:4] == {1'b0, (pad_force_i ? 3'd2 : (pin_1_pull_src_i ? "
         "pin_1_pull_mode_i : "
-        "(hs_p1_s1_pull_select_i ^ 1'b1 ? 3'd2 : 3'd1))));"));
+        "(hs_p1_s1_pull_select_i ^ 1'b1 ? 3'd2 : 3'd1)))});"));
 
     const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
     const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
@@ -1151,17 +1151,21 @@ void Test::unroutedSlotsLandOnTheDefaultRowWhenAvailable()
     QStringList          errors;
     QVERIFY2(QSocIomuxGenerator::buildPlan(definition, &plan, &errors), qPrintable(errors.join('\n')));
     const QString core   = QSocIomuxGenerator::generateTopVerilog(plan);
-    const QString before = "assign pad_drive_select_o[1:0] = pin_0_drive_src_i ? pin_0_drive_i : "
-                           "(pin_0_select_i == 2'd0) ? 2'd2 : 2'd1;";
+    const QString before = "assign pad_drive_select_o[3:0] = {2'b0, pin_0_drive_src_i ? "
+                           "pin_0_drive_i : (pin_0_select_i == 2'd0) ? 2'd2 : 2'd1};";
     QVERIFY2(core.contains(before), qPrintable(core));
     const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
     /* One assertion per selector value: slot 0 routed, slots 1 and 2 and the
      * value past hs_slots on the default. */
     QCOMPARE(
-        sv.count("assert (pad_drive_select_w[1:0] == (pin_0_drive_src_i ? pin_0_drive_i : 2'd2));"),
+        sv.count(
+            "assert (pad_drive_select_w[3:0] == {2'b0, (pin_0_drive_src_i ? pin_0_drive_i : "
+            "2'd2)});"),
         1);
     QCOMPARE(
-        sv.count("assert (pad_drive_select_w[1:0] == (pin_0_drive_src_i ? pin_0_drive_i : 2'd1));"),
+        sv.count(
+            "assert (pad_drive_select_w[3:0] == {2'b0, (pin_0_drive_src_i ? pin_0_drive_i : "
+            "2'd1)});"),
         3);
 
     const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
