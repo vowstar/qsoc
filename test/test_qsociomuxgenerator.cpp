@@ -2336,6 +2336,10 @@ private slots:
     void padWordHoldsFourControlsAndSpillsTheFifth();
     void buildNumberReadsBackInTheVersionWord();
     void blockBasesDoNotMoveWhenOtherOptionsChange();
+    void padClassesShareOneRegisterModel();
+    void padClassesRejectBadAssignments_data();
+    void padClassesRejectBadAssignments();
+    void padClassesDriveTheirOwnCellsWhenIverilogIsAvailable();
     void linksNeedAPadCellAndRowsToChooseFrom();
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
@@ -6116,6 +6120,308 @@ void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
 }
 
 } // namespace
+
+/* Two classes: the pull cell above and an open-drain cell with no pull
+ * table and its own control, so the union has fields neither owns alone. */
+QString padClassesBlock()
+{
+    return QStringLiteral(R"yaml(    pad_cells:
+      ps:
+        cell: gpio_pad_ps
+        port: {pad: PAD, input_value: C, input_enable: IE, output_value: I, output_enable: OE}
+        pull:
+          port: [PE, PS]
+          table:
+            none: ["0", "x"]
+            up: ["1", "1"]
+            down: ["1", "0"]
+        control:
+          drive:
+            port: [DS]
+            table:
+              low: ["0"]
+              high: ["1"]
+      od:
+        cell: gpio_pad_od
+        port: {pad: PAD, input_value: C, input_enable: IE, output_value: I, output_enable: OE}
+        control:
+          od:
+            port: [OD]
+            table:
+              pp: ["0"]
+              od: ["1"]
+)yaml");
+}
+
+QString padClassesPinCell()
+{
+    return QStringLiteral(R"yaml(    pin_cell:
+      default: ps
+      "2-3": od
+)yaml");
+}
+
+QString padClassesRoutes()
+{
+    return QStringLiteral(R"yaml(    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        control: {drive: high}
+      - pin: 2
+        slot: 0
+        function: i2c1
+        signal: sda
+        input_value: {link: i2c1_sda_in}
+        input_enable: 1
+        output_value: {link: i2c1_sda_out}
+        output_enable: 1
+        control: {od: od}
+)yaml");
+}
+
+QSocModuleDefinition makePadClassesDefinition(
+    const QString &classes     = padClassesBlock() + padClassesPinCell(),
+    const QString &routes      = padClassesRoutes(),
+    const QString &integration = padIntegrationBlock())
+{
+    return makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 14
+    pin_count: 4
+    hs_slots: 2
+    option:
+      pad_control: true
+%1%2%3)")
+                              .arg(classes, integration, routes));
+}
+
+QString padOpenDrainModel()
+{
+    return QStringLiteral(R"(module gpio_pad_od(PAD, I, OE, IE, C, OD);
+    inout PAD; input I, OE, IE, OD; output C;
+    assign C = IE & PAD;
+    bufif1 (PAD, I, OE & ~OD);
+    bufif1 (PAD, 1'b0, OE & OD & ~I);
+endmodule
+)");
+}
+
+QString padClassesTestbench()
+{
+    return QStringLiteral(R"(`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    always #5 clk = ~clk;
+    wire [3:0] pad;
+    reg        uart0_tx = 0, sda_out = 1;
+    wire       sda_in;
+    integer    fails = 0;
+    pullup (pad[2]);
+
+    iomux0 dut (
+        .clk_i(clk), .rst_ni(rst_n),
+        .s_axi_awaddr(14'd0), .s_axi_awprot(3'b0), .s_axi_awvalid(1'b0), .s_axi_awready(),
+        .s_axi_wdata(32'd0), .s_axi_wstrb(4'd0), .s_axi_wvalid(1'b0), .s_axi_wready(),
+        .s_axi_bresp(), .s_axi_bvalid(), .s_axi_bready(1'b1),
+        .s_axi_araddr(14'd0), .s_axi_arprot(3'b0), .s_axi_arvalid(1'b0), .s_axi_arready(),
+        .s_axi_rdata(), .s_axi_rresp(), .s_axi_rvalid(), .s_axi_rready(1'b1),
+        .pad_io(pad), .hs_p0_s0_output_value_i(uart0_tx),
+        .hs_p2_s0_input_value_o(sda_in), .hs_p2_s0_output_value_i(sda_out));
+
+    task chk(input [255:0] name, input got, input exp);
+        begin
+            if (got !== exp) begin
+                $display("TEST_FAIL %0s got=%b exp=%b", name, got, exp);
+                fails = fails + 1;
+            end
+        end
+    endtask
+
+    initial begin
+        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        chk("pin0_driven_low", pad[0], 1'b0);
+        uart0_tx = 1; #1 chk("pin0_driven_high", pad[0], 1'b1);
+        chk("pin0_drive_high_selected", dut.u_pad.DS_0_w, 1'b1);
+        chk("pin2_open_drain_selected", dut.u_pad.OD_2_w, 1'b1);
+        chk("pin2_released_reads_pullup", pad[2], 1'b1);
+        chk("pin2_receiver_sees_high", sda_in, 1'b1);
+        sda_out = 0; #1 chk("pin2_pulls_low", pad[2], 1'b0);
+        chk("pin2_receiver_sees_low", sda_in, 1'b0);
+        if (fails == 0) $display("TEST_PASS");
+        $finish;
+    end
+endmodule
+)");
+}
+
+void Test::padClassesShareOneRegisterModel()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadClassesDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.padCells.size(), 2);
+    QCOMPARE(plan.pinClass, (QList<int>{0, 0, 1, 1}));
+
+    /* Every pin carries the union: the pull fields, then drive, then od. */
+    for (const char *word : {"pin_pad_ctrl_0", "pin_pad_ctrl_2"}) {
+        const QSocMmioFieldPlan *mode  = findField(plan.mmio, word, "pull_mode");
+        const QSocMmioFieldPlan *drive = findField(plan.mmio, word, "drive");
+        const QSocMmioFieldPlan *od    = findField(plan.mmio, word, "od");
+        QVERIFY2(mode && drive && od, word);
+        QCOMPARE(mode->lsb, 0U);
+        QCOMPARE(drive->lsb, 16U);
+        QCOMPARE(od->lsb, 20U);
+    }
+
+    /* Each pin instantiates its own class and decodes only what it has. */
+    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
+    QVERIFY(pad.contains("gpio_pad_od u_pad_2 ("));
+    QVERIFY(pad.contains("wire DS_0_w = (pad_drive_select_i[3:0] == 4'd1) ? 1'b1 : 1'b0;"));
+    QVERIFY(pad.contains("wire OD_2_w = (pad_od_select_i[11:8] == 4'd1) ? 1'b1 : 1'b0;"));
+    QVERIFY(!pad.contains("PE_2_w"));
+    QVERIFY(!pad.contains("DS_2_w"));
+    QVERIFY(!pad.contains("OD_0_w"));
+
+    /* The core drives the lanes a class lacks low and the rest as usual. */
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+    QVERIFY(core.contains("assign pad_pull_mode_o[11:8] = 4'd0;"));
+    QVERIFY(core.contains("assign pad_drive_select_o[11:8] = 4'd0;"));
+    QVERIFY(core.contains("assign pad_od_select_o[3:0] = 4'd0;"));
+    QVERIFY(core.contains(
+        "assign pad_od_select_o[11:8] = {3'b0, pin_2_od_src_i ? pin_2_od_i : "
+        "(pin_2_select_i == 1'd0) ? 1'd1 : 1'd0};"));
+    const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
+    QVERIFY(sv.contains("assert (pad_pull_mode_w[11:8] == 4'd0);"));
+    QVERIFY(sv.contains("assert (pad_od_select_w[3:0] == 4'd0);"));
+
+    /* The report names the class of every pin and one code table per class. */
+    const QString report = QSocIomuxGenerator::generateReport(plan);
+    QVERIFY(report.contains("pad cell ps: gpio_pad_ps, pull modes 3, controls 1, constraints 0"));
+    QVERIFY(report.contains("pad cell od: gpio_pad_od, pull modes 0, controls 1, constraints 0"));
+    QVERIFY(report.contains("pin 1 selector word 0 lsb 4 offset 0x100 cell ps"));
+    QVERIFY(report.contains("pin 2 selector word 0 lsb 8 offset 0x100 cell od"));
+}
+
+void Test::padClassesRejectBadAssignments_data()
+{
+    QTest::addColumn<QString>("classes");
+    QTest::addColumn<QString>("routes");
+    QTest::addColumn<QString>("integration");
+    QTest::addColumn<QString>("message");
+    const QString classes = padClassesBlock();
+    const QString routes  = padClassesRoutes();
+    const QString link    = padIntegrationBlock();
+    const auto    pins    = [](const char *body) { return QString("    pin_cell:\n%1").arg(body); };
+    QTest::newRow("unknown-class") << classes + pins("      default: nope\n") << routes << link
+                                   << "no class named nope under pad_cells";
+    QTest::newRow("reversed-range")
+        << classes + pins("      default: ps\n      \"3-2\": od\n") << routes << link
+        << "must lie below pin_count 4, low end first";
+    QTest::newRow("pin-beyond-count") << classes + pins("      default: ps\n      7: od\n")
+                                      << routes << link << "must lie below pin_count 4";
+    QTest::newRow("pin-assigned-twice")
+        << classes + pins("      default: ps\n      2: od\n      \"2-3\": od\n") << routes << link
+        << "pin 2 is already assigned";
+    QTest::newRow("no-default") << classes + pins("      \"2-3\": od\n") << routes << link
+                                << "pins 0, 1 name no class";
+    QTest::newRow("both-keys") << padCellBlock() + classes + padClassesPinCell() << routes << link
+                               << "declare pad_cell or pad_cells, not both";
+    QTest::newRow("pin-cell-without-classes")
+        << pins("      default: ps\n") << QStringLiteral("    route: []\n") << link
+        << "needs pad_cells to be declared";
+    QTest::newRow("route-asks-what-the-class-lacks")
+        << classes + padClassesPinCell()
+        << QString(routes).replace("control: {od: od}", "control: {drive: high}") << link
+        << "pad cell gpio_pad_od has no control drive";
+    QTest::newRow("safe-in-one-class-only")
+        << QString(classes).replace(
+               "\n      od:\n        cell",
+               "\n        safe: {output_enable: 0}\n      od:\n        cell")
+               + padClassesPinCell()
+        << routes << link + QStringLiteral("      force: iso_n\n")
+        << "every class declares safe once one does";
+}
+
+void Test::padClassesRejectBadAssignments()
+{
+    QFETCH(QString, classes);
+    QFETCH(QString, routes);
+    QFETCH(QString, integration);
+    QFETCH(QString, message);
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY(!QSocIomuxGenerator::buildPlan(
+        makePadClassesDefinition(classes, routes, integration), &plan, &errors));
+    QVERIFY2(errors.join('\n').contains(message), qPrintable(errors.join('\n')));
+}
+
+void Test::padClassesDriveTheirOwnCellsWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makePadClassesDefinition(), &plan, &errors),
+        qPrintable(errors.join('\n')));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir    dir(directory.path());
+    const QString outputPath = dir.filePath("iomux0.out");
+    writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("gpio_pad_od.v"), padOpenDrainModel());
+    writeTextFile(dir.filePath("tb.v"), padClassesTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler,
+        {"-g2012",
+         "-s",
+         "tb",
+         "-o",
+         outputPath,
+         "iomux0_regs.v",
+         "iomux0_conn.v",
+         "iomux0.v",
+         "iomux0_pad.v",
+         "gpio_pad_ps.v",
+         "gpio_pad_od.v",
+         "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    const QByteArray simulationOutput = simulation.readAll();
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsociomuxgenerator.moc"

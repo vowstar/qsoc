@@ -207,7 +207,20 @@ void appendPadCodeAssertions(
                               QSocIomuxGenerator::padLane(pin),
                               QSocIomuxGenerator::padLaneValue(width, "(" + forced + ")")));
     };
-    if (model.hasPull()) {
+    const auto expectZero = [&](const QString &name) {
+        lines->append(QString("        assert (pad_%1_w%2 == %3'd0);")
+                          .arg(name, QSocIomuxGenerator::padLane(pin))
+                          .arg(QSocIomuxGenerator::kPadLane));
+    };
+    if (model.hasPull() && !encoding.hasPull()) {
+        expectZero(QStringLiteral("pull_mode"));
+        if (model.upSelWidth > 0) {
+            expectZero(QStringLiteral("up_sel"));
+        }
+        if (model.downSelWidth > 0) {
+            expectZero(QStringLiteral("down_sel"));
+        }
+    } else if (model.hasPull()) {
         expect(
             "pull_mode",
             "pull_mode",
@@ -265,6 +278,10 @@ void appendPadCodeAssertions(
         const QSocPadEncoding::Control &item       = encoding.control.at(index);
         const quint32                   fieldWidth = model.control.at(index).width;
         if (fieldWidth == 0) {
+            continue;
+        }
+        if (item.cellIndex < 0) {
+            expectZero(item.name + "_select");
             continue;
         }
         const QByteArray out  = (item.name + "_select").toUtf8();

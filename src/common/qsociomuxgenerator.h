@@ -185,6 +185,8 @@ struct QSocPadSafePlan
  */
 struct QSocPadCellPlan
 {
+    QString                   name; /**< Class name: the key under pad_cells, or the cell */
+    QString                   path; /**< Where the source declares it, for messages */
     QString                   cell;
     QString                   portInputValue;
     QString                   portInputEnable;
@@ -285,7 +287,8 @@ struct QSocPadEncoding
      * @brief One control as software sees it.
      *
      * A single-row control has width 0: nothing to select, no field, no port.
-     * Its row is still driven into the pad.
+     * Its row is still driven into the pad. A control the cell lacks has no
+     * cell index and no rows.
      */
     struct Control
     {
@@ -293,8 +296,9 @@ struct QSocPadEncoding
         QStringList label;
         quint32     width       = 0;
         int         defaultCode = 0;
+        qsizetype   cellIndex   = -1; /**< Into the cell's control list, -1 when absent */
     };
-    QList<Control> control; /**< Declaration order */
+    QList<Control> control; /**< Model order */
 
     bool hasPull() const { return modeWidth > 0; }
     bool hasUp() const { return !upRows.isEmpty(); }

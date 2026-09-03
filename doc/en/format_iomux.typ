@@ -246,6 +246,39 @@ under `ifdef FORMAL`, and `--with-formal` emits `<module>_pad_formal.sby`
 that proves them against a stub of the cell built from the library port
 table. A false claim fails by name.
 
+== Pad Classes
+<iomux-pad-classes>
+A design whose pins do not all take the same cell declares each cell once
+under `generator.pad_cells`, keyed by a class name, and says under
+`generator.pin_cell` which class each pin instantiates: `default` for every
+pin not named, a pin number, or a range `"a-b"`. Each class holds exactly
+what `pad_cell` holds. `pad_cell` stays the short form for one class, named
+after its cell, and the two keys do not mix. One class needs no `pin_cell`;
+several need a `default` or every pin named.
+
+```yaml
+pad_cells:
+  gpio_33: {cell: PDDW33, port: {...}, pull: {...}, control: {...}}
+  gpio_18: {cell: PDDW18, port: {...}, pull: {...}}
+pin_cell:
+  default: gpio_33
+  "40-47": gpio_18
+  3: gpio_33
+```
+
+The register map is one for the block, the union of its classes. `pull_mode`
+numbers every named mode of every class in name order, `up_sel`, `down_sel`
+and each control lane are as wide as the widest table, and controls sit in
+first appearance order, `pad_cells` order then the order inside each class,
+so a class added later appends lanes and moves none. A class that lacks a
+control or the pull table leaves the field in place: a write to it on such
+a pin is kept and read back, the lane to the pad is driven low, the pad
+takes the rows the class does have, and a route that asks that pin for it is
+an error. A code still names the row of that pin's own class, so two classes
+that share a control name should share its rows or take different names; the
+report prints one table per class and the class of every pin. When one class
+declares `safe`, every class must, so `pad_force_i` holds every pin.
+
 == Register Layout
 <iomux-register-layout>
 The first 16 bytes identify the block. The byte map is the same for both

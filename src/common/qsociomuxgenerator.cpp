@@ -26,6 +26,8 @@ const QSet<QString> kGeneratorKeys
        "build",
        "option",
        "pad_cell",
+       "pad_cells",
+       "pin_cell",
        "integration",
        "route"};
 const QSet<QString> kOptionKeys = {"gpio", "interrupt", "pad_control", "invert", "rx_override"};
@@ -492,9 +494,10 @@ bool parsePadDirection(
 bool parsePullRequest(
     const YAML::Node &node, const QString &path, QSocIomuxPullRequest *request, QStringList *errors);
 
-bool parsePadCell(const YAML::Node &node, QSocPadCellPlan *plan, QStringList *errors)
+bool parsePadCell(
+    const YAML::Node &node, const QString &path, QSocPadCellPlan *plan, QStringList *errors)
 {
-    const QString path = QStringLiteral("generator.pad_cell");
+    plan->path = path;
     if (!validateMap(node, kPadCellKeys, path, errors)) {
         return false;
     }
@@ -796,6 +799,151 @@ bool parsePadCell(const YAML::Node &node, QSocPadCellPlan *plan, QStringList *er
             plan->constraint.append(item);
         }
     }
+    return valid;
+}
+
+/**
+ * @brief Parse the pad classes and the pin to class map.
+ *
+ * `pad_cell` declares one class named after its cell. `pad_cells` declares
+ * several by name, and `pin_cell` says which one each pin instantiates, with
+ * `default` for every pin it does not name.
+ */
+bool parsePadClasses(const YAML::Node &generator, QSocIomuxPlan *plan, QStringList *errors)
+{
+    bool valid = true;
+    if (generator["pad_cell"] && generator["pad_cells"]) {
+        appendError(
+            errors, "CONFLICT", "generator.pad_cells", "declare pad_cell or pad_cells, not both");
+        return false;
+    }
+    if (generator["pad_cell"]) {
+        QSocPadCellPlan cell;
+        valid
+            = parsePadCell(generator["pad_cell"], QStringLiteral("generator.pad_cell"), &cell, errors)
+              && valid;
+        cell.name = cell.cell;
+        plan->padCells.append(cell);
+    }
+    if (generator["pad_cells"]) {
+        const YAML::Node cells = generator["pad_cells"];
+        if (!cells.IsMap() || cells.size() == 0) {
+            appendError(
+                errors, "TYPE", "generator.pad_cells", "must be a map of class name to pad cell");
+            return false;
+        }
+        for (const auto &entry : cells) {
+            QSocPadCellPlan cell;
+            if (!parseIdentifier(entry.first, "generator.pad_cells", &cell.name, errors)) {
+                valid = false;
+                continue;
+            }
+            valid = parsePadCell(entry.second, "generator.pad_cells." + cell.name, &cell, errors)
+                    && valid;
+            plan->padCells.append(cell);
+        }
+    }
+
+    plan->pinClass = QList<int>(plan->pinCount, plan->padCells.size() == 1 ? 0 : -1);
+    if (generator["pin_cell"]) {
+        const YAML::Node map  = generator["pin_cell"];
+        const QString    path = QStringLiteral("generator.pin_cell");
+        if (plan->padCells.isEmpty()) {
+            appendError(errors, "CONFLICT", path, "needs pad_cells to be declared");
+            return false;
+        }
+        if (!map.IsMap()) {
+            appendError(errors, "TYPE", path, "must be a map of pin or range to class name");
+            return false;
+        }
+        const auto classOf = [&](const YAML::Node &node, const QString &keyPath) {
+            QString name;
+            if (!parseScalar(node, keyPath, &name, errors)) {
+                return -1;
+            }
+            for (qsizetype index = 0; index < plan->padCells.size(); ++index) {
+                if (plan->padCells.at(index).name == name) {
+                    return int(index);
+                }
+            }
+            appendError(
+                errors, "UNKNOWN", keyPath, QString("no class named %1 under pad_cells").arg(name));
+            return -1;
+        };
+        static const QRegularExpression rangeKey("^(\\d+)(?:-(\\d+))?$");
+        int                             fallback = -1;
+        QList<int>                      assigned(plan->pinCount, -1);
+        for (const auto &entry : map) {
+            if (!entry.first.IsScalar()) {
+                appendError(errors, "TYPE", path, "keys must be scalar");
+                valid = false;
+                continue;
+            }
+            const QString key     = QString::fromStdString(entry.first.Scalar());
+            const QString keyPath = path + "." + key;
+            if (key == "default") {
+                fallback = classOf(entry.second, keyPath);
+                valid    = valid && fallback >= 0;
+                continue;
+            }
+            const QRegularExpressionMatch match = rangeKey.match(key);
+            if (!match.hasMatch()) {
+                appendError(errors, "VALUE", keyPath, "must be default, a pin number, or a range a-b");
+                valid = false;
+                continue;
+            }
+            const quint64 first = match.captured(1).toULongLong();
+            const quint64 last  = match.captured(2).isEmpty() ? first
+                                                              : match.captured(2).toULongLong();
+            if (last >= plan->pinCount || first > last) {
+                appendError(
+                    errors,
+                    "RANGE",
+                    keyPath,
+                    QString("must lie below pin_count %1, low end first").arg(plan->pinCount));
+                valid = false;
+                continue;
+            }
+            const int index = classOf(entry.second, keyPath);
+            if (index < 0) {
+                valid = false;
+                continue;
+            }
+            for (quint64 pin = first; pin <= last; ++pin) {
+                if (assigned.at(qsizetype(pin)) >= 0) {
+                    appendError(
+                        errors, "CONFLICT", keyPath, QString("pin %1 is already assigned").arg(pin));
+                    valid = false;
+                    continue;
+                }
+                assigned[qsizetype(pin)] = index;
+            }
+        }
+        for (qsizetype pin = 0; pin < plan->pinClass.size(); ++pin) {
+            if (assigned.at(pin) >= 0) {
+                plan->pinClass[pin] = assigned.at(pin);
+            } else if (fallback >= 0) {
+                plan->pinClass[pin] = fallback;
+            }
+        }
+    }
+    if (!plan->padCells.isEmpty()) {
+        QStringList unassigned;
+        for (qsizetype pin = 0; pin < plan->pinClass.size(); ++pin) {
+            if (plan->pinClass.at(pin) < 0) {
+                unassigned.append(QString::number(pin));
+            }
+        }
+        if (!unassigned.isEmpty()) {
+            appendError(
+                errors,
+                "REQUIRED",
+                "generator.pin_cell.default",
+                QString("pins %1 name no class").arg(unassigned.join(", ")));
+            valid = false;
+        }
+    }
+    plan->padModel = QSocIomuxGenerator::padModel(plan->padCells);
     return valid;
 }
 
@@ -1675,7 +1823,7 @@ bool validatePadConstraints(QSocPadCellPlan &cell, QStringList *errors)
     bool valid = true;
     for (qsizetype index = 0; index < cell.constraint.size(); ++index) {
         QSocPadConstraint &item = cell.constraint[index];
-        const QString      path = QString("generator.pad_cell.constraint[%1]").arg(index);
+        const QString      path = QString("%1.constraint[%2]").arg(cell.path).arg(index);
         QSet<QString>      ports;
         QString            unknown;
         if (!rewriteConstraint(cell, item.body, 0, nullptr, &ports, &unknown)) {
@@ -1722,7 +1870,9 @@ bool validateOptions(const QSocIomuxPlan &plan, QStringList *errors)
             "OPTION",
             "generator.option.pad_control",
             QString("pad cell %1 has no pull table and no control with more than one row")
-                .arg(plan.padCells.first().cell));
+                .arg(
+                    plan.padCells.size() == 1 ? plan.padCells.first().cell
+                                              : QStringLiteral("pad_cells")));
         return false;
     }
     return true;
@@ -1752,293 +1902,315 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
         }
         return valid;
     }
-    bool                   valid    = true;
-    const QSocPadCellPlan &cell     = plan.padCells.first();
-    const QSocPadEncoding  encoding = QSocIomuxGenerator::padEncoding(cell, plan.padModel);
-    /* Codes are 4-bit fields of the pad control word. */
-    if (encoding.upRows.size() > kMaximumRows || encoding.downRows.size() > kMaximumRows
-        || QSocPadEncoding::FirstNamed + encoding.namedMode.size() > kMaximumRows) {
-        appendError(
-            errors,
-            "RANGE",
-            "generator.pad_cell.pull.table",
-            QString("at most %1 strength rows per direction and %2 named modes")
-                .arg(kMaximumRows)
-                .arg(kMaximumRows - QSocPadEncoding::FirstNamed));
-        valid = false;
-    }
-    /* Every cell pin has one driver: a role, the pull group, or one control. */
-    {
-        QMap<QString, int> named;
-        for (const QString &port :
-             {cell.portPad,
-              cell.portInputValue,
-              cell.portInputEnable,
-              cell.portOutputValue,
-              cell.portOutputEnable}) {
-            if (!port.isEmpty()) {
+    bool valid = true;
+    for (qsizetype classIndex = 0; classIndex < plan.padCells.size(); ++classIndex) {
+        const QSocPadCellPlan &cell     = plan.padCells.at(classIndex);
+        const QSocPadEncoding  encoding = QSocIomuxGenerator::padEncoding(cell, plan.padModel);
+        const auto ownsPin = [&](quint32 pin) { return plan.pinClass.at(pin) == classIndex; };
+        if (plan.padModel.safe && !cell.safe.declared) {
+            appendError(
+                errors,
+                "REQUIRED",
+                cell.path + ".safe",
+                "every class declares safe once one does, so pad_force_i holds every pin");
+            valid = false;
+        }
+        /* Codes are 4-bit fields of the pad control word. */
+        if (encoding.upRows.size() > kMaximumRows || encoding.downRows.size() > kMaximumRows
+            || QSocPadEncoding::FirstNamed + encoding.namedMode.size() > kMaximumRows) {
+            appendError(
+                errors,
+                "RANGE",
+                cell.path + ".pull.table",
+                QString("at most %1 strength rows per direction and %2 named modes")
+                    .arg(kMaximumRows)
+                    .arg(kMaximumRows - QSocPadEncoding::FirstNamed));
+            valid = false;
+        }
+        /* Every cell pin has one driver: a role, the pull group, or one control. */
+        {
+            QMap<QString, int> named;
+            for (const QString &port :
+                 {cell.portPad,
+                  cell.portInputValue,
+                  cell.portInputEnable,
+                  cell.portOutputValue,
+                  cell.portOutputEnable}) {
+                if (!port.isEmpty()) {
+                    ++named[port];
+                }
+            }
+            for (const QString &port : cell.pull.port) {
                 ++named[port];
             }
-        }
-        for (const QString &port : cell.pull.port) {
-            ++named[port];
-        }
-        for (const QSocPadControlPlan &item : cell.control) {
-            for (const QString &port : item.port) {
-                ++named[port];
+            for (const QSocPadControlPlan &item : cell.control) {
+                for (const QString &port : item.port) {
+                    ++named[port];
+                }
             }
-        }
-        for (auto it = named.cbegin(); it != named.cend(); ++it) {
-            if (it.value() > 1) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    "generator.pad_cell",
-                    QString("pin %1 of %2 is named %3 times, once is the limit")
-                        .arg(it.key(), cell.cell)
-                        .arg(it.value()));
-                valid = false;
-            }
-        }
-    }
-    /* Strength is a property of a direction. Every other mode is one row. */
-    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
-        if (it.key() != QStringLiteral("up") && it.key() != QStringLiteral("down")
-            && it.value().size() > 1) {
-            appendError(
-                errors,
-                "CAPABILITY",
-                QString("generator.pad_cell.pull.table.%1").arg(it.key()),
-                "only up and down carry strength rows");
-            valid = false;
-        }
-    }
-    const auto checkPull = [&](const QSocIomuxPullRequest &request, const QString &pullPath) {
-        const int mode = encoding.modeCode(request.mode);
-        if (mode < 0) {
-            const bool feedback = request.mode == QStringLiteral("keeper")
-                                  || request.mode == QStringLiteral("oscillator");
-            QString reason = QString("pad cell %1 has no pull mode %2").arg(cell.cell, request.mode);
-            if (feedback && cell.pull.isDriver) {
-                reason = QString("pad cell %1 pulls with its driver, so %2 cannot be woven")
-                             .arg(cell.cell, request.mode);
-            } else if (feedback && (encoding.keeperRow || encoding.oscillatorRow)) {
-                reason = QString(
-                             "pad cell %1 names its own keeper or oscillator row, so %2 "
-                             "is not woven")
-                             .arg(cell.cell, request.mode);
-            } else if (feedback) {
-                reason = QString("pad cell %1 needs both up and down rows to weave %2")
-                             .arg(cell.cell, request.mode);
-            }
-            appendError(errors, "CAPABILITY", pullPath + ".mode", reason);
-            return false;
-        }
-        const bool woven  = encoding.weaves
-                            && (mode == QSocPadEncoding::Keeper
-                                || mode == QSocPadEncoding::Oscillator);
-        const bool up     = mode == QSocPadEncoding::Up;
-        const bool down   = mode == QSocPadEncoding::Down;
-        const bool graded = (up && encoding.upSelWidth > 0) || (down && encoding.downSelWidth > 0)
-                            || (woven && (encoding.upSelWidth > 0 || encoding.downSelWidth > 0));
-        if (!graded && !request.strength.isEmpty()) {
-            appendError(
-                errors,
-                "CAPABILITY",
-                pullPath + ".strength",
-                QString("pull mode %1 of %2 has a single row, drop strength")
-                    .arg(request.mode, cell.cell));
-            return false;
-        }
-        if ((up || down) && graded && !request.strength.isEmpty()) {
-            const int sel = up ? encoding.upSel(request.strength)
-                               : encoding.downSel(request.strength);
-            if (sel < 0) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    pullPath + ".strength",
-                    QString("pull mode %1 of %2 has no strength %3")
-                        .arg(request.mode, cell.cell, request.strength));
-                return false;
-            }
-        } else if ((up || down) && graded) {
-            appendError(
-                errors,
-                "CAPABILITY",
-                pullPath + ".strength",
-                QString("pull mode %1 of %2 has several rows, name one")
-                    .arg(request.mode, cell.cell));
-            return false;
-        } else if (woven && !request.strength.isEmpty()) {
-            /* A woven mode alternates between the two directions, so the
-             * strength must exist on whichever side is graded. */
-            const bool upOk   = encoding.upSelWidth == 0 || encoding.upSel(request.strength) >= 0;
-            const bool downOk = encoding.downSelWidth == 0
-                                || encoding.downSel(request.strength) >= 0;
-            if (!upOk || !downOk) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    pullPath + ".strength",
-                    QString("woven %1 of %2 needs strength %3 in both up and down")
-                        .arg(request.mode, cell.cell, request.strength));
-                return false;
-            }
-        }
-        return true;
-    };
-    if (cell.safe.declared) {
-        if (!cell.safe.pull.empty() && !checkPull(cell.safe.pull, "generator.pad_cell.safe.pull")) {
-            valid = false;
-        }
-        for (auto it = cell.safe.control.cbegin(); it != cell.safe.control.cend(); ++it) {
-            const qsizetype index = encoding.controlIndex(it.key());
-            if (index < 0) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    "generator.pad_cell.safe." + it.key(),
-                    QString("pad cell %1 has no control %2").arg(cell.cell, it.key()));
-                valid = false;
-            } else if (encoding.controlCode(index, it.value()) < 0) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    "generator.pad_cell.safe." + it.key(),
-                    QString("control %1 of %2 has no row %3").arg(it.key(), cell.cell, it.value()));
-                valid = false;
-            }
-        }
-        const std::pair<const char *, bool> forced[]
-            = {{"input_enable", cell.safe.inputEnable != 0 && cell.portInputEnable.isEmpty()},
-               {"output_value", cell.safe.outputValue != 0 && cell.portOutputValue.isEmpty()},
-               {"output_enable", cell.safe.outputEnable != 0 && cell.portOutputEnable.isEmpty()}};
-        for (const auto &[role, missing] : forced) {
-            if (missing) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    QString("generator.pad_cell.safe.%1").arg(role),
-                    QString("pad cell %1 declares no port for this role").arg(cell.cell));
-                valid = false;
-            }
-        }
-    }
-    for (const QSocIomuxRoutePlan &route : plan.routes) {
-        for (const QSocIomuxRole role : kRoles) {
-            const QSocIomuxEndpointPlan &endpoint = routeRole(route, role);
-            if (endpoint.link.isEmpty() && !endpoint.constant.has_value()) {
-                continue;
-            }
-            QString port;
-            switch (role) {
-            case QSocIomuxRole::InputValue:
-                port = cell.portInputValue;
-                break;
-            case QSocIomuxRole::InputEnable:
-                port = cell.portInputEnable;
-                break;
-            case QSocIomuxRole::OutputValue:
-                port = cell.portOutputValue;
-                break;
-            case QSocIomuxRole::OutputEnable:
-                port = cell.portOutputEnable;
-                break;
-            }
-            if (!port.isEmpty()) {
-                continue;
-            }
-            appendError(
-                errors,
-                "CAPABILITY",
-                QString("generator.route.pin %1 slot %2.%3")
-                    .arg(route.pin)
-                    .arg(route.slot)
-                    .arg(roleKey(role)),
-                QString("pad cell %1 declares no port for this role").arg(cell.cell));
-            valid = false;
-        }
-        const QString routePath
-            = QString("generator.route.pin %1 slot %2").arg(route.pin).arg(route.slot);
-        if (!route.pullMode.isEmpty()) {
-            if (!checkPull({route.pullMode, route.pullStrength}, routePath + ".pull")) {
-                valid = false;
-                continue;
-            }
-        } else if (route.pullSelect.linked()) {
-            const bool onOk  = checkPull(route.pullSelect.on, routePath + ".pull.on");
-            const bool offOk = checkPull(route.pullSelect.off, routePath + ".pull.off");
-            if (!onOk || !offOk) {
-                valid = false;
-                continue;
-            }
-        }
-        for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
-            const qsizetype index    = encoding.controlIndex(it.key());
-            const QString   itemPath = routePath + ".control." + it.key();
-            if (index < 0) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    itemPath,
-                    QString("pad cell %1 has no control %2").arg(cell.cell, it.key()));
-                valid = false;
-                continue;
-            }
-            if (it.value().select.linked() && encoding.control.at(index).width == 0) {
-                appendError(
-                    errors,
-                    "CAPABILITY",
-                    itemPath,
-                    QString("control %1 of %2 has one row, nothing for a link to select")
-                        .arg(it.key(), cell.cell));
-                valid = false;
-                continue;
-            }
-            const QList<std::pair<QString, QString>> rows
-                = it.value().select.linked()
-                      ? QList<std::pair<QString, QString>>{{".on", it.value().select.on.mode},
-                                                           {".off", it.value().select.off.mode}}
-                      : QList<std::pair<QString, QString>>{{QString(), it.value().row}};
-            for (const auto &[suffix, label] : rows) {
-                if (encoding.controlCode(index, label) < 0) {
+            for (auto it = named.cbegin(); it != named.cend(); ++it) {
+                if (it.value() > 1) {
                     appendError(
                         errors,
                         "CAPABILITY",
-                        itemPath + suffix,
-                        QString("control %1 of %2 has no row %3").arg(it.key(), cell.cell, label));
+                        cell.path,
+                        QString("pin %1 of %2 is named %3 times, once is the limit")
+                            .arg(it.key(), cell.cell)
+                            .arg(it.value()));
                     valid = false;
                 }
             }
         }
-    }
+        /* Strength is a property of a direction. Every other mode is one row. */
+        for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
+            if (it.key() != QStringLiteral("up") && it.key() != QStringLiteral("down")
+                && it.value().size() > 1) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    QString("%1.pull.table.%2").arg(cell.path, it.key()),
+                    "only up and down carry strength rows");
+                valid = false;
+            }
+        }
+        const auto checkPull = [&](const QSocIomuxPullRequest &request, const QString &pullPath) {
+            const int mode = encoding.modeCode(request.mode);
+            if (mode < 0) {
+                const bool feedback = request.mode == QStringLiteral("keeper")
+                                      || request.mode == QStringLiteral("oscillator");
+                QString    reason
+                    = QString("pad cell %1 has no pull mode %2").arg(cell.cell, request.mode);
+                if (feedback && cell.pull.isDriver) {
+                    reason = QString("pad cell %1 pulls with its driver, so %2 cannot be woven")
+                                 .arg(cell.cell, request.mode);
+                } else if (feedback && (encoding.keeperRow || encoding.oscillatorRow)) {
+                    reason = QString(
+                                 "pad cell %1 names its own keeper or oscillator row, so %2 "
+                                 "is not woven")
+                                 .arg(cell.cell, request.mode);
+                } else if (feedback) {
+                    reason = QString("pad cell %1 needs both up and down rows to weave %2")
+                                 .arg(cell.cell, request.mode);
+                }
+                appendError(errors, "CAPABILITY", pullPath + ".mode", reason);
+                return false;
+            }
+            const bool woven = encoding.weaves
+                               && (mode == QSocPadEncoding::Keeper
+                                   || mode == QSocPadEncoding::Oscillator);
+            const bool up    = mode == QSocPadEncoding::Up;
+            const bool down  = mode == QSocPadEncoding::Down;
+            const bool graded = (up && encoding.upSelWidth > 0)
+                                || (down && encoding.downSelWidth > 0)
+                                || (woven && (encoding.upSelWidth > 0 || encoding.downSelWidth > 0));
+            if (!graded && !request.strength.isEmpty()) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    pullPath + ".strength",
+                    QString("pull mode %1 of %2 has a single row, drop strength")
+                        .arg(request.mode, cell.cell));
+                return false;
+            }
+            if ((up || down) && graded && !request.strength.isEmpty()) {
+                const int sel = up ? encoding.upSel(request.strength)
+                                   : encoding.downSel(request.strength);
+                if (sel < 0) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        pullPath + ".strength",
+                        QString("pull mode %1 of %2 has no strength %3")
+                            .arg(request.mode, cell.cell, request.strength));
+                    return false;
+                }
+            } else if ((up || down) && graded) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    pullPath + ".strength",
+                    QString("pull mode %1 of %2 has several rows, name one")
+                        .arg(request.mode, cell.cell));
+                return false;
+            } else if (woven && !request.strength.isEmpty()) {
+                /* A woven mode alternates between the two directions, so the
+             * strength must exist on whichever side is graded. */
+                const bool upOk = encoding.upSelWidth == 0 || encoding.upSel(request.strength) >= 0;
+                const bool downOk = encoding.downSelWidth == 0
+                                    || encoding.downSel(request.strength) >= 0;
+                if (!upOk || !downOk) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        pullPath + ".strength",
+                        QString("woven %1 of %2 needs strength %3 in both up and down")
+                            .arg(request.mode, cell.cell, request.strength));
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (cell.safe.declared) {
+            if (!cell.safe.pull.empty() && !checkPull(cell.safe.pull, cell.path + ".safe.pull")) {
+                valid = false;
+            }
+            for (auto it = cell.safe.control.cbegin(); it != cell.safe.control.cend(); ++it) {
+                const qsizetype index = encoding.controlIndex(it.key());
+                if (index < 0 || encoding.control.at(index).cellIndex < 0) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        cell.path + ".safe." + it.key(),
+                        QString("pad cell %1 has no control %2").arg(cell.cell, it.key()));
+                    valid = false;
+                } else if (encoding.controlCode(index, it.value()) < 0) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        cell.path + ".safe." + it.key(),
+                        QString("control %1 of %2 has no row %3")
+                            .arg(it.key(), cell.cell, it.value()));
+                    valid = false;
+                }
+            }
+            const std::pair<const char *, bool> forced[]
+                = {{"input_enable", cell.safe.inputEnable != 0 && cell.portInputEnable.isEmpty()},
+                   {"output_value", cell.safe.outputValue != 0 && cell.portOutputValue.isEmpty()},
+                   {"output_enable",
+                    cell.safe.outputEnable != 0 && cell.portOutputEnable.isEmpty()}};
+            for (const auto &[role, missing] : forced) {
+                if (missing) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        QString("%1.safe.%2").arg(cell.path, role),
+                        QString("pad cell %1 declares no port for this role").arg(cell.cell));
+                    valid = false;
+                }
+            }
+        }
+        for (const QSocIomuxRoutePlan &route : plan.routes) {
+            if (!ownsPin(route.pin)) {
+                continue;
+            }
+            for (const QSocIomuxRole role : kRoles) {
+                const QSocIomuxEndpointPlan &endpoint = routeRole(route, role);
+                if (endpoint.link.isEmpty() && !endpoint.constant.has_value()) {
+                    continue;
+                }
+                QString port;
+                switch (role) {
+                case QSocIomuxRole::InputValue:
+                    port = cell.portInputValue;
+                    break;
+                case QSocIomuxRole::InputEnable:
+                    port = cell.portInputEnable;
+                    break;
+                case QSocIomuxRole::OutputValue:
+                    port = cell.portOutputValue;
+                    break;
+                case QSocIomuxRole::OutputEnable:
+                    port = cell.portOutputEnable;
+                    break;
+                }
+                if (!port.isEmpty()) {
+                    continue;
+                }
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    QString("generator.route.pin %1 slot %2.%3")
+                        .arg(route.pin)
+                        .arg(route.slot)
+                        .arg(roleKey(role)),
+                    QString("pad cell %1 declares no port for this role").arg(cell.cell));
+                valid = false;
+            }
+            const QString routePath
+                = QString("generator.route.pin %1 slot %2").arg(route.pin).arg(route.slot);
+            if (!route.pullMode.isEmpty()) {
+                if (!checkPull({route.pullMode, route.pullStrength}, routePath + ".pull")) {
+                    valid = false;
+                    continue;
+                }
+            } else if (route.pullSelect.linked()) {
+                const bool onOk  = checkPull(route.pullSelect.on, routePath + ".pull.on");
+                const bool offOk = checkPull(route.pullSelect.off, routePath + ".pull.off");
+                if (!onOk || !offOk) {
+                    valid = false;
+                    continue;
+                }
+            }
+            for (auto it = route.control.cbegin(); it != route.control.cend(); ++it) {
+                const qsizetype index    = encoding.controlIndex(it.key());
+                const QString   itemPath = routePath + ".control." + it.key();
+                if (index < 0 || encoding.control.at(index).cellIndex < 0) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        itemPath,
+                        QString("pad cell %1 has no control %2").arg(cell.cell, it.key()));
+                    valid = false;
+                    continue;
+                }
+                if (it.value().select.linked() && encoding.control.at(index).width == 0) {
+                    appendError(
+                        errors,
+                        "CAPABILITY",
+                        itemPath,
+                        QString("control %1 of %2 has one row, nothing for a link to select")
+                            .arg(it.key(), cell.cell));
+                    valid = false;
+                    continue;
+                }
+                const QList<std::pair<QString, QString>> rows
+                = it.value().select.linked()
+                      ? QList<std::pair<QString, QString>>{{".on", it.value().select.on.mode},
+                                                           {".off", it.value().select.off.mode}}
+                      : QList<std::pair<QString, QString>>{{QString(), it.value().row}};
+                for (const auto &[suffix, label] : rows) {
+                    if (encoding.controlCode(index, label) < 0) {
+                        appendError(
+                            errors,
+                            "CAPABILITY",
+                            itemPath + suffix,
+                            QString("control %1 of %2 has no row %3")
+                                .arg(it.key(), cell.cell, label));
+                        valid = false;
+                    }
+                }
+            }
+        }
 
-    /* The cell gates its receiver with the input enable, so a pin whose sinks
+        /* The cell gates its receiver with the input enable, so a pin whose sinks
      * listen while no slot ever raises that enable reads zero forever. The gpio
      * register path can raise it at run time and the inversion bank can flip
      * the constant, which are the two ways out. */
-    if (!cell.portInputEnable.isEmpty() && !plan.option.gpio && !plan.option.invert) {
-        QSet<quint32> listening;
-        QSet<quint32> enabling;
-        for (const QSocIomuxRoutePlan &route : plan.routes) {
-            if (!route.inputValue.link.isEmpty()) {
-                listening.insert(route.pin);
+        if (!cell.portInputEnable.isEmpty() && !plan.option.gpio && !plan.option.invert) {
+            QSet<quint32> listening;
+            QSet<quint32> enabling;
+            for (const QSocIomuxRoutePlan &route : plan.routes) {
+                if (!ownsPin(route.pin)) {
+                    continue;
+                }
+                if (!route.inputValue.link.isEmpty()) {
+                    listening.insert(route.pin);
+                }
+                const QSocIomuxEndpointPlan &ie = route.inputEnable;
+                if (!ie.link.isEmpty() || (ie.constant.has_value() && *ie.constant == 1)) {
+                    enabling.insert(route.pin);
+                }
             }
-            const QSocIomuxEndpointPlan &ie = route.inputEnable;
-            if (!ie.link.isEmpty() || (ie.constant.has_value() && *ie.constant == 1)) {
-                enabling.insert(route.pin);
+            QList<quint32> dead = (listening - enabling).values();
+            std::sort(dead.begin(), dead.end());
+            for (quint32 pin : dead) {
+                appendError(
+                    errors,
+                    "CAPABILITY",
+                    QString("generator.route.pin %1").arg(pin),
+                    "has input_value sinks but no slot enables the input buffer");
+                valid = false;
             }
-        }
-        QList<quint32> dead = (listening - enabling).values();
-        std::sort(dead.begin(), dead.end());
-        for (quint32 pin : dead) {
-            appendError(
-                errors,
-                "CAPABILITY",
-                QString("generator.route.pin %1").arg(pin),
-                "has input_value sinks but no slot enables the input buffer");
-            valid = false;
         }
     }
     return valid;
@@ -2353,13 +2525,7 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         }
     }
 
-    if (generator["pad_cell"]) {
-        QSocPadCellPlan cell;
-        valid = parsePadCell(generator["pad_cell"], &cell, errors) && valid;
-        plan->padCells.append(cell);
-    }
-    plan->pinClass = QList<int>(plan->pinCount, 0);
-    plan->padModel = QSocIomuxGenerator::padModel(plan->padCells);
+    valid = parsePadClasses(generator, plan, errors) && valid;
 
     if (!generator["integration"]) {
         appendError(errors, "REQUIRED", "generator.integration", "property is required");
@@ -2906,14 +3072,21 @@ QSocPadEncoding QSocIomuxGenerator::padEncoding(
     const QSocPadCellPlan &cell, const QSocPadModel &model)
 {
     QSocPadEncoding encoding;
-    for (const QSocPadControlPlan &item : cell.control) {
+    for (const QSocPadModel::Control &slot : model.control) {
         QSocPadEncoding::Control entry;
-        entry.name = item.name;
-        for (const QSocPadTableRow &row : item.row) {
-            entry.label.append(row.label);
+        entry.name = slot.name;
+        for (qsizetype index = 0; index < cell.control.size(); ++index) {
+            const QSocPadControlPlan &item = cell.control.at(index);
+            if (item.name != slot.name) {
+                continue;
+            }
+            entry.cellIndex = index;
+            for (const QSocPadTableRow &row : item.row) {
+                entry.label.append(row.label);
+            }
+            entry.width       = item.row.size() > 1 ? encodingWidth(item.row.size()) : 0;
+            entry.defaultCode = item.defaultRow;
         }
-        entry.width       = item.row.size() > 1 ? encodingWidth(item.row.size()) : 0;
-        entry.defaultCode = item.defaultRow;
         encoding.control.append(entry);
     }
     if (!cell.declared() || cell.pull.mode.isEmpty()) {
@@ -3339,7 +3512,21 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             lines.append(QString("assign pad_%1_o%2 = %3;")
                              .arg(name, padLane(pin), padLaneValue(width, value)));
         };
-        if (model.hasPull()) {
+        /* A lane the pin's class has nothing for is driven low; its pad
+         * never reads it and the field above it stays writable. */
+        const auto emitZero = [&](const QString &name) {
+            lines.append(
+                QString("assign pad_%1_o%2 = %3'd0;").arg(name, padLane(pin)).arg(kPadLane));
+        };
+        if (model.hasPull() && !encoding.hasPull()) {
+            emitZero(QStringLiteral("pull_mode"));
+            if (model.upSelWidth > 0) {
+                emitZero(QStringLiteral("up_sel"));
+            }
+            if (model.downSelWidth > 0) {
+                emitZero(QStringLiteral("down_sel"));
+            }
+        } else if (model.hasPull()) {
             emitCode(
                 "pull_mode",
                 "pull_mode",
@@ -3403,6 +3590,10 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             const QSocPadEncoding::Control &item       = encoding.control.at(index);
             const quint32                   fieldWidth = model.control.at(index).width;
             if (fieldWidth == 0) {
+                continue;
+            }
+            if (item.cellIndex < 0) {
+                emitZero(item.name + "_select");
                 continue;
             }
             const QByteArray name = item.name.toUtf8();
@@ -3851,9 +4042,11 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
             const QString downSel = encoding.downSelWidth > 0 ? slice("down_sel", pin) : QString();
             appendPadPullPorts(&lines, pin, encoding, cell.pull.port, mode, upSel, downSel);
         }
-        for (qsizetype index = 0; index < cell.control.size(); ++index) {
-            const QSocPadControlPlan       &item  = cell.control.at(index);
-            const QSocPadEncoding::Control &entry = encoding.control.at(index);
+        for (const QSocPadEncoding::Control &entry : encoding.control) {
+            if (entry.cellIndex < 0) {
+                continue;
+            }
+            const QSocPadControlPlan &item = cell.control.at(entry.cellIndex);
             if (entry.width > 0) {
                 appendPadTableCase(
                     &lines,
@@ -4204,8 +4397,10 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     lines.append("reset: every selector resets to 0 and selects slot 0");
     lines.append("rx: pad input broadcasts to every declared sink regardless of the selector");
     for (const QSocPadCellPlan &cell : plan.padCells) {
-        lines.append(QString("pad cell: %1, pull modes %2, controls %3, constraints %4")
-                         .arg(cell.cell)
+        const QString label = plan.padCells.size() == 1 ? QStringLiteral("pad cell")
+                                                        : QString("pad cell %1").arg(cell.name);
+        lines.append(QString("%1: %2, pull modes %3, controls %4, constraints %5")
+                         .arg(label, cell.cell)
                          .arg(cell.pull.mode.size())
                          .arg(cell.control.size())
                          .arg(cell.constraint.size()));
@@ -4244,9 +4439,11 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
             strengths("up", encoding.upRows);
             strengths("down", encoding.downRows);
         }
-        for (qsizetype index = 0; index < encoding.control.size(); ++index) {
-            const QSocPadEncoding::Control &item = encoding.control.at(index);
-            QStringList                     codes;
+        for (const QSocPadEncoding::Control &item : encoding.control) {
+            if (item.cellIndex < 0) {
+                continue;
+            }
+            QStringList codes;
             for (qsizetype row = 0; row < item.label.size(); ++row) {
                 codes.append(QString("%1 %2").arg(row).arg(item.label.at(row)));
             }
@@ -4263,7 +4460,9 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                 .arg(pin)
                 .arg(pin / lanes)
                 .arg((pin % lanes) * kSelectorLane)
-                .arg(QString::number(registers.at(identityCount + pin / lanes).byteOffset, 16)));
+                .arg(QString::number(registers.at(identityCount + pin / lanes).byteOffset, 16))
+            + (plan.padCells.size() > 1 ? QString(" cell %1").arg(plan.padClass(pin).name)
+                                        : QString()));
         QStringList unusedSlots;
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
             const bool hasRoute = routeIndex < plan.routes.size()
