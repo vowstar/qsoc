@@ -493,6 +493,7 @@ private slots:
     void generatedIntegrationRejectsInvalidAssemblyAndKeepsSentinel_data();
     void generatedIntegrationRejectsInvalidAssemblyAndKeepsSentinel();
     void padCellPortsAcceptLibraryDirectionSpelling();
+    void ioRingCellsAreCheckedAndEmitted();
 };
 
 QStringList      Test::messages;
@@ -884,6 +885,124 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     const QString report = readTextFile(
         QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0.iomux.rpt"));
     QVERIFY2(report.contains("pad control registers: 4"), qPrintable(report));
+}
+
+void Test::ioRingCellsAreCheckedAndEmitted()
+{
+    QString moduleText = moduleLibrary;
+    moduleText += R"(gpio_pad_ps:
+  port:
+    PAD: {type: logic, direction: inout}
+    C: {type: logic, direction: output}
+    IE: {type: logic, direction: input}
+    I: {type: logic, direction: input}
+    OE: {type: logic, direction: input}
+    PE: {type: logic, direction: input}
+    PS: {type: logic, direction: input}
+gpio_pad_ps_v:
+  port:
+    PAD: {type: logic, direction: inout}
+    C: {type: logic, direction: output}
+    IE: {type: logic, direction: input}
+    I: {type: logic, direction: input}
+    OE: {type: logic, direction: input}
+    PE: {type: logic, direction: input}
+    PS: {type: logic, direction: input}
+rst_pad:
+  port:
+    PAD: {type: logic, direction: inout}
+    C: {type: logic, direction: output}
+    IE: {type: logic, direction: input}
+    SMT: {type: logic, direction: input}
+pvss:
+  port: {}
+)";
+    const QString oldPad = R"(      pad:
+        input_value: pad_input_value
+        input_enable: pad_input_enable
+        output_value: pad_output_value
+        output_enable: pad_output_enable
+)";
+    QVERIFY(moduleText.contains(oldPad));
+    moduleText.replace(oldPad, "      pad:\n        io: chip_gpio\n");
+    const QString integration = "    integration:\n";
+    QVERIFY(moduleText.contains(integration));
+    moduleText.replace(
+        integration,
+        R"(    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      pull:
+        port: [PE, PS]
+        table:
+          none: ["0", "x"]
+          up: ["1", "1"]
+          down: ["1", "0"]
+    io_lib:
+      gpio_pad_ps: {kind: signal, width: 40, variant: {north: gpio_pad_ps_v}}
+      pvss: {kind: power, width: 20}
+    io_ring:
+      power: {VSS: pvss}
+      direct:
+        rst: {cell: rst_pad, port: {PAD: pad_rst_n, C: rst_n, IE: "1'b1"}}
+      sides:
+        west:  [{power: VSS}, {pin: 0}, {pin: 1}]
+        south: [{direct: rst}, {pin: 2}]
+        north: [{pin: 3}, {power: VSS}]
+    integration:
+)");
+
+    /* The direct cell has an input the map never names. */
+    QTemporaryDir undriven;
+    createProject(undriven, moduleText);
+    const CommandResult refused = generateModule(undriven);
+    QVERIFY2(refused.exitCode != 0, qPrintable(refused.output));
+    QVERIFY2(
+        refused.output.contains("rst_pad input pins SMT are not named"), qPrintable(refused.output));
+    moduleText.replace("    SMT: {type: logic, direction: input}\n", "");
+
+    /* The side variant must be in the library like the base cell. */
+    QString noVariant = moduleText;
+    noVariant.replace("gpio_pad_ps_v:\n", "gpio_pad_ps_w:\n");
+    QTemporaryDir missing;
+    createProject(missing, noVariant);
+    const CommandResult lost = generateModule(missing);
+    QVERIFY2(lost.exitCode != 0, qPrintable(lost.output));
+    QVERIFY2(
+        lost.output.contains("pad cell gpio_pad_ps_v is not in any module library"),
+        qPrintable(lost.output));
+
+    QTemporaryDir directory;
+    createProject(directory, moduleText);
+    const CommandResult generated = generateModule(directory);
+    QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
+    QVERIFY2(
+        generated.output.contains("Ring DEF not written, needs io_ring.die"),
+        qPrintable(generated.output));
+    const QDir out(QDir(directory.path()).filePath("output/peripheral/iomux0"));
+    QVERIFY(!QFile::exists(out.filePath("iomux0_ring.def")));
+    const QString ring = readTextFile(out.filePath("iomux0_ring.v"));
+    QVERIFY2(ring.contains("pvss u_VSS_0 ();"), qPrintable(ring));
+    QVERIFY2(ring.contains("pvss u_VSS_1 ();"), qPrintable(ring));
+    QVERIFY2(
+        ring.contains("rst_pad u_rst (\n    .C(rst_n),\n    .IE(1'b1),\n    .PAD(pad_rst_n)\n);"),
+        qPrintable(ring));
+    QVERIFY2(ring.contains("    inout  wire pad_rst_n\n"), qPrintable(ring));
+    const QString pad = readTextFile(out.filePath("iomux0_pad.v"));
+    QVERIFY2(pad.contains("gpio_pad_ps u_pad_0 ("), qPrintable(pad));
+    QVERIFY2(pad.contains("gpio_pad_ps_v u_pad_3 ("), qPrintable(pad));
+    const QString top = readTextFile(out.filePath("iomux0.v"));
+    QVERIFY2(top.contains("iomux0_ring u_ring ("), qPrintable(top));
+    const QString report = readTextFile(out.filePath("iomux0.ring.rpt"));
+    QVERIFY2(
+        report.contains("north: 2 items\n  0 u_pad/u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
+        qPrintable(report));
+    QVERIFY2(readTextFile(out.filePath("iomux0.f")).contains("iomux0_ring.v\n"), qPrintable(report));
 }
 
 } // namespace

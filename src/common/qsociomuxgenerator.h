@@ -373,25 +373,126 @@ struct QSocPadModel
     bool operator==(const QSocPadModel &) const = default;
 };
 
+/**
+ * @brief One cell of the IO library: what the ring needs beyond its ports.
+ */
+struct QSocIoLibCell
+{
+    QString                name;       /**< Module name, the key under io_lib */
+    QString                kind;       /**< signal, power, corner, fill, or other */
+    double                 width  = 0; /**< Along the die edge, 0 when not given */
+    double                 height = 0;
+    QMap<QString, QString> variant; /**< Side to the module that side takes */
+
+    bool operator==(const QSocIoLibCell &) const = default;
+};
+
+/**
+ * @brief A cell on the ring that the mux does not drive: an oscillator, the
+ * reset pad, a test pad. Its ports become ports of the wrapper.
+ */
+struct QSocIoRingDirect
+{
+    QString                key;
+    QString                cell;
+    QMap<QString, QString> port;      /**< Cell port to wrapper net, or a constant */
+    QMap<QString, QString> cellPorts; /**< Port to direction, from the module library */
+
+    bool operator==(const QSocIoRingDirect &) const = default;
+};
+
+/**
+ * @brief One entry of a side, in placement order.
+ */
+struct QSocIoRingItem
+{
+    enum Kind { Pin, Power, Cell, Direct };
+
+    Kind    kind = Pin;
+    quint32 pin  = 0;    /**< Pin, for a signal pad */
+    QString name;        /**< Power net, plain cell, or direct key */
+    int     id = -1;     /**< Power: the instance number, or the running count */
+    QString instance;    /**< Cell: an explicit instance name */
+    double  offset = -1; /**< Microns from the corner, or -1 to follow the previous item */
+    double  gap    = 0;  /**< Microns of space left before this item */
+
+    bool operator==(const QSocIoRingItem &) const = default;
+};
+
+/**
+ * @brief One placed cell of the ring, in microns from the die origin.
+ */
+struct QSocIoRingPlacement
+{
+    QString instance; /**< Path below the wrapper */
+    QString cell;
+    QString meaning;
+    QString side;
+    double  offset = 0; /**< Along the side from its first corner */
+    double  width  = 0; /**< Along the side */
+    double  x      = 0; /**< Lower left of the oriented box */
+    double  y      = 0;
+    QString orient;
+};
+
+/**
+ * @brief Where everything sits, or why it cannot be worked out yet.
+ */
+struct QSocIoRingGeometry
+{
+    bool                       complete = false;
+    QStringList                missing; /**< What the geometry still needs */
+    QList<QSocIoRingPlacement> placement;
+};
+
+/**
+ * @brief The physical ring: what sits on each side, in order.
+ *
+ * Only identity is written here. Position is computed, so a pad that moves
+ * keeps its instance name.
+ */
+struct QSocIoRingPlan
+{
+    bool                                 declared  = false;
+    double                               dieWidth  = 0;
+    double                               dieHeight = 0;
+    QString                              corner;
+    QString                              prefix; /**< DEF component prefix, default the instance */
+    QMap<QString, QString>               orient; /**< Side or corner to DEF orientation */
+    QMap<QString, QString>               power;  /**< Net to the cell that supplies it */
+    QList<QSocIoRingDirect>              direct; /**< Declaration order */
+    QMap<QString, QList<QSocIoRingItem>> side;   /**< west, south, east, north */
+
+    bool operator==(const QSocIoRingPlan &) const = default;
+};
+
 struct QSocIomuxPlan
 {
-    QString                   moduleName;
-    quint32                   pinCount = 0;
-    quint32                   hsSlots  = 0;
-    quint32                   build    = 0; /**< version[7:0], the design's own number */
-    QSocIomuxOptionPlan       option;
-    QList<QSocIomuxRoutePlan> routes;
-    QSocIomuxIntegrationPlan  integration;
-    QList<QSocPadCellPlan>    padCells;        /**< Declaration order, indexed by pinClass */
-    QList<int>                pinClass;        /**< The class each pin instantiates */
-    QStringList               padModeOrder;    /**< `pad_model.mode`, names that lead */
-    QStringList               padControlOrder; /**< `pad_model.control`, names that lead */
-    QSocPadModel              padModel;        /**< The union the registers and core follow */
-    QSocMmioPlan              mmio;
+    QString                      moduleName;
+    quint32                      pinCount = 0;
+    quint32                      hsSlots  = 0;
+    quint32                      build    = 0; /**< version[7:0], the design's own number */
+    QSocIomuxOptionPlan          option;
+    QList<QSocIomuxRoutePlan>    routes;
+    QSocIomuxIntegrationPlan     integration;
+    QList<QSocPadCellPlan>       padCells;        /**< Declaration order, indexed by pinClass */
+    QList<int>                   pinClass;        /**< The class each pin instantiates */
+    QStringList                  padModeOrder;    /**< `pad_model.mode`, names that lead */
+    QStringList                  padControlOrder; /**< `pad_model.control`, names that lead */
+    QSocPadModel                 padModel;        /**< The union the registers and core follow */
+    QMap<QString, QSocIoLibCell> ioLib;
+    QSocIoRingPlan               ioRing;
+    QSocMmioPlan                 mmio;
 
     bool hasPadCell() const { return !padCells.isEmpty(); }
     /** The class a pin instantiates, or an undeclared cell when there is none. */
     const QSocPadCellPlan &padClass(quint32 pin) const;
+    /** The side the ring puts a pin on, empty when the ring does not place it. */
+    QString padSide(quint32 pin) const;
+    /** The module a pin instantiates: its class's cell, or that cell's variant for its side. */
+    QString padModule(quint32 pin) const;
+    /** The module a ring cell takes on a side: `io_lib`'s variant for it, or the cell itself. */
+    QString ringModule(const QString &cell, const QString &side) const;
 
     bool operator==(const QSocIomuxPlan &) const = default;
 };
@@ -508,11 +609,38 @@ public:
         const QSocPadCellPlan        &cell,
         const QMap<QString, QString> &cellPorts,
         QStringList                  *errors = nullptr);
-    static QString generateCoreVerilog(const QSocIomuxPlan &plan);
-    static QString generateConnVerilog(const QSocIomuxPlan &plan);
-    static QString generateRegsVerilog(const QSocIomuxPlan &plan);
-    static QString generateTopVerilog(const QSocIomuxPlan &plan);
-    static QString generatePadVerilog(const QSocIomuxPlan &plan);
+    /**
+     * @brief Check the port map of a direct ring cell against the library.
+     *
+     * Every input of the cell must be named, or the instance would leave it
+     * floating; every named port must exist.
+     */
+    static bool checkDirectPorts(
+        const QSocIoRingDirect       &direct,
+        const QMap<QString, QString> &cellPorts,
+        QStringList                  *errors = nullptr);
+    /** The sides in placement order: west, south, east, north. */
+    static const QStringList &ringSides();
+    static QString            generateCoreVerilog(const QSocIomuxPlan &plan);
+    static QString            generateConnVerilog(const QSocIomuxPlan &plan);
+    static QString            generateRegsVerilog(const QSocIomuxPlan &plan);
+    static QString            generateTopVerilog(const QSocIomuxPlan &plan);
+    static QString            generatePadVerilog(const QSocIomuxPlan &plan);
+    /** The ring cells the mux does not drive, empty without an io_ring. */
+    static QString generateRingVerilog(const QSocIomuxPlan &plan);
+    /** Every ring instance by side, in order, with what it stands for. */
+    static QString generateRingReport(const QSocIomuxPlan &plan);
+    /**
+     * @brief Place every ring cell from the die, the corner, and the widths.
+     *
+     * Items pack from the first corner of each side in order, an `offset`
+     * pins one at a distance, a `gap` leaves space before one, and fill
+     * cells from `io_lib` close every gap, largest first. Incomplete input
+     * lists what is missing instead of guessing.
+     */
+    static QSocIoRingGeometry ringGeometry(const QSocIomuxPlan &plan);
+    /** The DEF of the ring, empty when the geometry is incomplete. */
+    static QString generateRingDef(const QSocIomuxPlan &plan);
     /** The constraint body with cell ports rewritten to the nets of one pin. */
     static QString    padConstraintForPin(const QSocIomuxPlan &plan, qsizetype index, quint32 pin);
     static QString    generateFileList(const QSocIomuxPlan &plan);

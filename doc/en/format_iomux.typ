@@ -292,6 +292,81 @@ pad_model:
   control: [drive, slew, od]
 ```
 
+== IO Ring
+<iomux-io-ring>
+`generator.io_ring` places the pads and the cells around them: supplies,
+corners, breakers, and cells the mux does not drive such as an oscillator or the
+reset pad. It is optional, and a design without it generates exactly what it
+did before. `generator.io_lib` describes the cells it names: the `kind`
+(`signal`, `power`, `corner`, `fill`, `other`), the `width` and `height` in
+microns, and for a signal cell the module each side takes under `variant`.
+Neither block knows a net or a port of the mux; each side lists identities in
+placement order and nothing else.
+
+```yaml
+io_lib:
+  PDDW33: {kind: signal, width: 40, variant: {north: PDDW33_V, south: PDDW33_V}}
+  PVSS:   {kind: power, width: 20}
+  PCORNER: {kind: corner, width: 60}
+io_ring:
+  die: {width: 5100, height: 5200}
+  corner: PCORNER
+  power: {VSS: PVSS, VDDIO: PVDD}
+  direct:
+    rst: {cell: PDDW33, port: {PAD: pad_rst_n, C: rst_n, IE: "1'b1", OE: "1'b0"}}
+  sides:
+    west:  [{power: VSS}, {pin: 0}, {pin: 1}, {direct: rst}]
+    south: [{power: VDDIO}, {pin: 2}, {cell: PRCUT}]
+    east:  [{pin: 3}, {power: VSS, id: 7}]
+    north: []
+```
+
+An item is one of `pin`, `power`, `cell`, or `direct`. Every pin appears on
+exactly one side. A `power` item names a net declared under `power`, a
+`cell` item any cell with no ports of its own, a breaker, a clamp, an
+explicit filler, and a `direct` item a key declared under `direct`; a corner
+or supply that `io_lib` describes must be declared as such. A `variant`
+applies to every kind, so a supply or breaker that comes in a horizontal
+and a vertical form takes the right one on each side. A direct cell maps each of its
+ports to a wrapper net or to `1'b0` or `1'b1`; the nets become ports of the
+wrapper with the direction of the cell port, an `inout` uplinks and the rest
+link in the integration fragment, and every input of the cell must be
+named.
+
+Generation adds `<module>_ring.v`, a module the wrapper instantiates as
+`u_ring` beside `u_pad`, holding the corners, supplies, plain cells, and direct
+cells, and `<module>.ring.rpt`, one table per side with each instance, its
+cell, and what it stands for. The signal pads stay in `<module>_pad.v`, and
+a pin on a side whose class cell has a `variant` for it instantiates that
+variant under the same instance name. Instance names carry identity, never
+position: `u_pad/u_pad_<pin>`, `u_ring/u_<net>_<k>` with `k` counting that
+net around the ring or the `id` an item gives, `u_ring/u_corner_<nw|sw|se|ne>`,
+`u_ring/u_<cell>_<k>` counting that cell or the `name` an item gives, and
+`u_ring/u_<key>` for a direct cell. Moving a pad to another side or reordering a side changes the
+report and, when the library has variants, the module a pad instantiates,
+and nothing else.
+
+With a `die`, a `corner`, and a `width` in `io_lib` for every cell on the
+ring, generation also writes `<module>_ring.def`: `DIEAREA`, and every
+corner, pad, supply, plain cell, direct cell, and fill as a `FIXED`
+component named by its path below `prefix`, which defaults to the
+integration instance and a slash. `die` is the area the ring occupies, the
+inside of the seal ring, not the cut die. Corners, supplies, plain cells,
+and fills carry `SOURCE DIST`, so a back end knows the netlist never drives
+them. Each side packs from its first corner in the order written, going
+clockwise from the north-west corner: west top to bottom, south left to
+right, east bottom to top, north right to left. An item's `gap` leaves that
+many microns before it and `offset` pins it at that distance from the
+corner; fill cells of kind `fill`, widest first, close every gap and each
+side's tail, and appear in `<module>_ring.v` as `u_fill_<side>_<k>`. The
+ring has one depth: a cell without a `height` takes the corner's, and a
+corner without one is square. Orientations follow the
+usual convention, west `E`, south `N`, east `W`, north `S`, and the corners
+`N`, `W`, `S`, `E` from the south-west round, each overridable under
+`orient`. When something is missing the DEF is not written and the report's
+`def:` line says what it needs; a side whose cells exceed its length, or an
+`offset` that reaches back over the item before it, is refused the same way.
+
 == Register Layout
 <iomux-register-layout>
 The first 16 bytes identify the block. The byte map is the same for both

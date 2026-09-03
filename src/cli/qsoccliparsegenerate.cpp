@@ -242,18 +242,13 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             return showError(1, messages.join('\n'));
         }
 
-        for (QSocPadCellPlan &padCell : plan.padCells) {
-            const QString cellName = padCell.cell;
+        /* Port name to direction of a library module, both spellings accepted. */
+        const auto libraryPorts = [&](const QString &cellName, QMap<QString, QString> *ports) {
             if (!moduleManager->load(QRegularExpression(".*"))
                 || !moduleManager->isModuleExist(cellName)) {
-                return showError(
-                    1,
-                    QCoreApplication::translate(
-                        "main", "Error: pad cell %1 is not in any module library.")
-                        .arg(cellName));
+                return false;
             }
-            QMap<QString, QString> cellPorts;
-            const YAML::Node       cellPortNode = moduleManager->getModuleYaml(cellName)["port"];
+            const YAML::Node cellPortNode = moduleManager->getModuleYaml(cellName)["port"];
             if (cellPortNode && cellPortNode.IsMap()) {
                 for (const auto &entry : cellPortNode) {
                     const QString name = QString::fromStdString(entry.first.Scalar());
@@ -261,24 +256,80 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                     if (entry.second["direction"]) {
                         direction = QString::fromStdString(entry.second["direction"].Scalar());
                     }
-                    /* The library accepts both spellings. */
                     if (direction == "input") {
                         direction = "in";
                     } else if (direction == "output") {
                         direction = "out";
                     }
-                    cellPorts.insert(name, direction);
+                    ports->insert(name, direction);
                 }
             }
-            padCell.cellPorts = cellPorts;
-            QStringList padErrors;
-            if (!QSocIomuxGenerator::checkPadCellPorts(padCell, cellPorts, &padErrors)) {
-                QStringList messages;
-                messages.reserve(padErrors.size());
-                for (const QString &error : padErrors) {
-                    messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+            return true;
+        };
+        const auto reportPadErrors = [&](const QStringList &padErrors) {
+            QStringList messages;
+            messages.reserve(padErrors.size());
+            for (const QString &error : padErrors) {
+                messages.append(QCoreApplication::translate("main", "Error: %1").arg(error));
+            }
+            return showError(1, messages.join('\n'));
+        };
+        for (QSocPadCellPlan &padCell : plan.padCells) {
+            /* The class's cell and every side variant the library gives it
+             * must exist and take the same ports. */
+            QStringList modules = {padCell.cell};
+            if (plan.ioRing.declared && plan.ioLib.contains(padCell.cell)) {
+                for (const QString &variant : plan.ioLib.value(padCell.cell).variant) {
+                    if (!modules.contains(variant)) {
+                        modules.append(variant);
+                    }
                 }
-                return showError(1, messages.join('\n'));
+            }
+            for (const QString &cellName : modules) {
+                QMap<QString, QString> cellPorts;
+                if (!libraryPorts(cellName, &cellPorts)) {
+                    return showError(
+                        1,
+                        QCoreApplication::translate(
+                            "main", "Error: pad cell %1 is not in any module library.")
+                            .arg(cellName));
+                }
+                if (cellName == padCell.cell) {
+                    padCell.cellPorts = cellPorts;
+                }
+                QSocPadCellPlan checked = padCell;
+                checked.cell            = cellName;
+                QStringList padErrors;
+                if (!QSocIomuxGenerator::checkPadCellPorts(checked, cellPorts, &padErrors)) {
+                    return reportPadErrors(padErrors);
+                }
+            }
+        }
+        for (QSocIoRingDirect &direct : plan.ioRing.direct) {
+            QStringList modules = {direct.cell};
+            if (plan.ioLib.contains(direct.cell)) {
+                for (const QString &variant : plan.ioLib.value(direct.cell).variant) {
+                    if (!modules.contains(variant)) {
+                        modules.append(variant);
+                    }
+                }
+            }
+            for (const QString &cellName : modules) {
+                QMap<QString, QString> cellPorts;
+                if (!libraryPorts(cellName, &cellPorts)) {
+                    return showError(
+                        1,
+                        QCoreApplication::translate(
+                            "main", "Error: ring cell %1 is not in any module library.")
+                            .arg(cellName));
+                }
+                if (cellName == direct.cell) {
+                    direct.cellPorts = cellPorts;
+                }
+                QStringList ringErrors;
+                if (!QSocIomuxGenerator::checkDirectPorts(direct, cellPorts, &ringErrors)) {
+                    return reportPadErrors(ringErrors);
+                }
             }
         }
 
@@ -326,6 +377,25 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             artifacts.push_back(
                 {outputFilePath(moduleName + QStringLiteral("_pad.v")),
                  QSocIomuxGenerator::generatePadVerilog(plan).toUtf8()});
+        }
+        if (plan.ioRing.declared) {
+            artifacts.push_back(
+                {outputFilePath(moduleName + QStringLiteral("_ring.v")),
+                 QSocIomuxGenerator::generateRingVerilog(plan).toUtf8()});
+            artifacts.push_back(
+                {outputFilePath(moduleName + QStringLiteral(".ring.rpt")),
+                 QSocIomuxGenerator::generateRingReport(plan).toUtf8()});
+            const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
+            if (geometry.complete) {
+                artifacts.push_back(
+                    {outputFilePath(moduleName + QStringLiteral("_ring.def")),
+                     QSocIomuxGenerator::generateRingDef(plan).toUtf8()});
+            } else {
+                showInfo(
+                    0,
+                    QCoreApplication::translate("main", "Ring DEF not written, needs %1")
+                        .arg(geometry.missing.join("; ")));
+            }
         }
         QString formalSystemVerilogPath;
         QString formalSbyPath;
