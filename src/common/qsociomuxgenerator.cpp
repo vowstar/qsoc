@@ -28,6 +28,7 @@ const QSet<QString> kGeneratorKeys
        "pad_cell",
        "pad_cells",
        "pin_cell",
+       "pad_model",
        "integration",
        "route"};
 const QSet<QString> kOptionKeys = {"gpio", "interrupt", "pad_control", "invert", "rx_override"};
@@ -372,6 +373,7 @@ bool parseIntegration(
 }
 
 const QSet<QString> kPadCellKeys    = {"cell", "port", "pull", "control", "safe", "constraint"};
+const QSet<QString> kPadModelKeys   = {"mode", "control"};
 const QSet<QString> kConstraintKeys = {"name", "kind", "expr", "property"};
 const QSet<QString> kPadPortKeys
     = {"pad", "input_value", "input_enable", "output_value", "output_enable"};
@@ -943,7 +945,54 @@ bool parsePadClasses(const YAML::Node &generator, QSocIomuxPlan *plan, QStringLi
             valid = false;
         }
     }
-    plan->padModel = QSocIomuxGenerator::padModel(plan->padCells);
+    if (generator["pad_model"]) {
+        const YAML::Node model = generator["pad_model"];
+        const QString    path  = QStringLiteral("generator.pad_model");
+        if (!validateMap(model, kPadModelKeys, path, errors)) {
+            return false;
+        }
+        static const QStringList fixedModes
+            = {QStringLiteral("none"),
+               QStringLiteral("up"),
+               QStringLiteral("down"),
+               QStringLiteral("keeper"),
+               QStringLiteral("oscillator")};
+        for (const auto &[key, target] :
+             {std::pair<const char *, QStringList *>{"mode", &plan->padModeOrder},
+              std::pair<const char *, QStringList *>{"control", &plan->padControlOrder}}) {
+            if (!model[key]) {
+                continue;
+            }
+            const QString keyPath = path + "." + key;
+            if (!model[key].IsSequence()) {
+                appendError(errors, "TYPE", keyPath, "must be a sequence of names");
+                valid = false;
+                continue;
+            }
+            for (const YAML::Node &entry : model[key]) {
+                QString name;
+                if (!parseLabel(entry, keyPath, &name, errors)) {
+                    valid = false;
+                    continue;
+                }
+                if (target->contains(name)) {
+                    appendError(errors, "CONFLICT", keyPath, QString("%1 is listed twice").arg(name));
+                    valid = false;
+                } else if (QString(key) == "mode" && fixedModes.contains(name)) {
+                    appendError(
+                        errors,
+                        "VALUE",
+                        keyPath,
+                        QString("%1 has a fixed number and is not listed").arg(name));
+                    valid = false;
+                } else {
+                    target->append(name);
+                }
+            }
+        }
+    }
+    plan->padModel
+        = QSocIomuxGenerator::padModel(plan->padCells, plan->padModeOrder, plan->padControlOrder);
     return valid;
 }
 
@@ -3013,12 +3062,18 @@ const QSocPadCellPlan &QSocIomuxPlan::padClass(quint32 pin) const
     return index >= 0 && index < padCells.size() ? padCells.at(index) : none;
 }
 
-QSocPadModel QSocIomuxGenerator::padModel(const QList<QSocPadCellPlan> &cells)
+QSocPadModel QSocIomuxGenerator::padModel(
+    const QList<QSocPadCellPlan> &cells,
+    const QStringList            &modeOrder,
+    const QStringList            &controlOrder)
 {
     QSocPadModel  model;
     qsizetype     upRows   = 0;
     qsizetype     downRows = 0;
     QSet<QString> named;
+    for (const QString &name : controlOrder) {
+        model.control.append({name, 0});
+    }
     for (const QSocPadCellPlan &cell : cells) {
         model.inputValue   = model.inputValue || !cell.portInputValue.isEmpty();
         model.inputEnable  = model.inputEnable || !cell.portInputEnable.isEmpty();
@@ -3054,8 +3109,14 @@ QSocPadModel QSocIomuxGenerator::padModel(const QList<QSocPadCellPlan> &cells)
             }
         }
     }
-    model.namedMode = QStringList(named.cbegin(), named.cend());
-    model.namedMode.sort();
+    QStringList rest = QStringList(named.cbegin(), named.cend());
+    rest.sort();
+    model.namedMode = modeOrder;
+    for (const QString &name : rest) {
+        if (!model.namedMode.contains(name)) {
+            model.namedMode.append(name);
+        }
+    }
     if (model.pull) {
         model.modeWidth = encodingWidth(QSocPadEncoding::FirstNamed + model.namedMode.size());
     }

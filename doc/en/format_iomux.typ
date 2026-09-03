@@ -279,6 +279,19 @@ that share a control name should share its rows or take different names; the
 report prints one table per class and the class of every pin. When one class
 declares `safe`, every class must, so `pad_force_i` holds every pin.
 
+`generator.pad_model` pins the order instead of leaving it to appearance:
+`mode` lists named modes and `control` lists controls, each taking the
+numbers or lanes in that order ahead of everything else, and a name no class
+declares yet keeps its place with nothing in it, so a lane can be reserved
+for a cell that arrives later. Names left out follow in appearance order as
+before.
+
+```yaml
+pad_model:
+  mode: [bus_hold]
+  control: [drive, slew, od]
+```
+
 == Register Layout
 <iomux-register-layout>
 The first 16 bytes identify the block. The byte map is the same for both

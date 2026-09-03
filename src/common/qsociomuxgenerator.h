@@ -382,9 +382,11 @@ struct QSocIomuxPlan
     QSocIomuxOptionPlan       option;
     QList<QSocIomuxRoutePlan> routes;
     QSocIomuxIntegrationPlan  integration;
-    QList<QSocPadCellPlan>    padCells; /**< Declaration order, indexed by pinClass */
-    QList<int>                pinClass; /**< The class each pin instantiates */
-    QSocPadModel              padModel; /**< The union the registers and core follow */
+    QList<QSocPadCellPlan>    padCells;        /**< Declaration order, indexed by pinClass */
+    QList<int>                pinClass;        /**< The class each pin instantiates */
+    QStringList               padModeOrder;    /**< `pad_model.mode`, names that lead */
+    QStringList               padControlOrder; /**< `pad_model.control`, names that lead */
+    QSocPadModel              padModel;        /**< The union the registers and core follow */
     QSocMmioPlan              mmio;
 
     bool hasPadCell() const { return !padCells.isEmpty(); }
@@ -468,8 +470,17 @@ public:
     static QString padLane(quint32 pin);
     /** `value`, which is `width` bits wide, zero extended to one lane. */
     static QString padLaneValue(quint32 width, const QString &value);
-    /** The union of the classes, which the register map and the core follow. */
-    static QSocPadModel padModel(const QList<QSocPadCellPlan> &cells);
+    /**
+     * @brief The union of the classes, which the register map and the core follow.
+     *
+     * Named modes and controls listed in the orders come first, in that order,
+     * whether or not a class has them yet; the rest follow in first appearance
+     * order. A listed name no class declares holds its number with nothing in it.
+     */
+    static QSocPadModel padModel(
+        const QList<QSocPadCellPlan> &cells,
+        const QStringList            &modeOrder    = {},
+        const QStringList            &controlOrder = {});
     /** The rows of one class, numbered as the model numbers them. */
     static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell, const QSocPadModel &model);
     /**

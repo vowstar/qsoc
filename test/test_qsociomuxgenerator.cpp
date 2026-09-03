@@ -2340,6 +2340,7 @@ private slots:
     void padClassesRejectBadAssignments_data();
     void padClassesRejectBadAssignments();
     void padClassesDriveTheirOwnCellsWhenIverilogIsAvailable();
+    void padModelPinsTheLaneOrder();
     void linksNeedAPadCellAndRowsToChooseFrom();
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
@@ -6310,6 +6311,49 @@ void Test::padClassesShareOneRegisterModel()
     QVERIFY(report.contains("pad cell od: gpio_pad_od, pull modes 0, controls 1, constraints 0"));
     QVERIFY(report.contains("pin 1 selector word 0 lsb 4 offset 0x100 cell ps"));
     QVERIFY(report.contains("pin 2 selector word 0 lsb 8 offset 0x100 cell od"));
+}
+
+void Test::padModelPinsTheLaneOrder()
+{
+    /* od leads, a reserved slew lane sits between, drive follows; a named
+     * mode no class has takes number 5 and the class's own mode moves to 6. */
+    const QString model = QStringLiteral(R"yaml(    pad_model:
+      mode: [bus_keep]
+      control: [od, slew, drive]
+)yaml");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makePadClassesDefinition(padClassesBlock() + padClassesPinCell() + model),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(findField(plan.mmio, "pin_pad_ctrl_0", "od")->lsb, 16U);
+    QVERIFY(findField(plan.mmio, "pin_pad_ctrl_0", "slew") == nullptr);
+    QCOMPARE(findField(plan.mmio, "pin_pad_ctrl_0", "drive")->lsb, 24U);
+    QCOMPARE(plan.padModel.namedMode, (QStringList{"bus_keep"}));
+    QCOMPARE(findField(plan.mmio, "pin_src_ctrl_0", "od_src")->lsb, 16U);
+    QCOMPARE(findField(plan.mmio, "pin_src_ctrl_0", "drive_src")->lsb, 18U);
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+    QVERIFY(core.contains("assign pad_drive_select_o[3:0] = {3'b0, pin_0_drive_src_i ?"));
+    QVERIFY(!core.contains("pad_slew_select_o"));
+
+    /* A route cannot ask for a reserved mode, and the fixed names stay fixed. */
+    QVERIFY(!QSocIomuxGenerator::buildPlan(
+        makePadClassesDefinition(
+            padClassesBlock() + padClassesPinCell() + model,
+            QString(padClassesRoutes()).replace("pull: up", "pull: bus_keep")),
+        &plan,
+        &errors));
+    QVERIFY2(errors.join('\n').contains("has no pull mode bus_keep"), qPrintable(errors.join('\n')));
+    QVERIFY(!QSocIomuxGenerator::buildPlan(
+        makePadClassesDefinition(
+            padClassesBlock() + padClassesPinCell()
+            + QStringLiteral("    pad_model:\n      mode: [keeper]\n")),
+        &plan,
+        &errors));
+    QVERIFY2(errors.join('\n').contains("keeper has a fixed number"), qPrintable(errors.join('\n')));
 }
 
 void Test::padClassesRejectBadAssignments_data()
