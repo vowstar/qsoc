@@ -224,17 +224,16 @@ struct QSocPadCellPlan
 
 struct QSocIomuxIntegrationPlan
 {
-    QString         instance;
-    QString         clock;
-    QString         reset;
-    QString         control;
-    QString         padInputValue;
-    QString         padInputEnable;
-    QString         padOutputValue;
-    QString         padOutputEnable;
-    QString         padIo; /**< Top-level pad net, used when a pad cell is declared */
-    QString         force; /**< Net that drives pad_force_i, used when safe is declared */
-    QSocPadCellPlan padCell;
+    QString instance;
+    QString clock;
+    QString reset;
+    QString control;
+    QString padInputValue;
+    QString padInputEnable;
+    QString padOutputValue;
+    QString padOutputEnable;
+    QString padIo; /**< Top-level pad net, used when a pad cell is declared */
+    QString force; /**< Net that drives pad_force_i, used when safe is declared */
 
     bool operator==(const QSocIomuxIntegrationPlan &) const = default;
 };
@@ -272,13 +271,14 @@ struct QSocPadEncoding
     QSocPadTableRow                noneRow;
     QList<QSocPadTableRow>         upRows;
     QList<QSocPadTableRow>         downRows;
-    std::optional<QSocPadTableRow> keeperRow;        /**< Native keeper row, if any */
-    std::optional<QSocPadTableRow> oscillatorRow;    /**< Native oscillator row, if any */
-    QStringList                    namedMode;        /**< Other modes, name order */
-    QList<QSocPadTableRow>         namedRow;         /**< One row per named mode */
-    quint32                        modeWidth    = 0; /**< 0 when the cell has no pull table */
-    quint32                        upSelWidth   = 0; /**< 0 when up has at most one row */
-    quint32                        downSelWidth = 0;
+    std::optional<QSocPadTableRow> keeperRow;     /**< Native keeper row, if any */
+    std::optional<QSocPadTableRow> oscillatorRow; /**< Native oscillator row, if any */
+    QStringList                    namedMode;     /**< The model's other modes, name order */
+    /** One per named mode, empty where this cell has no such row. */
+    QList<std::optional<QSocPadTableRow>> namedRow;
+    quint32                               modeWidth  = 0; /**< 0 when the cell has no pull table */
+    quint32                               upSelWidth = 0; /**< 0 when up has at most one row */
+    quint32                               downSelWidth = 0;
     bool weaves = false; /**< keeper and oscillator are woven from up and down */
 
     /**
@@ -327,6 +327,48 @@ struct QSocPadEncoding
     const QSocPadTableRow &row(int mode, int upIndex, int downIndex) const;
 };
 
+/**
+ * @brief What the register map and the core see of the pad cells.
+ *
+ * The union over every class: a role or a pull the design has when some class
+ * has it, each select as wide as the widest table, the controls in first
+ * appearance order. With one class it is that class's own shape.
+ */
+struct QSocPadModel
+{
+    bool        inputValue   = false;
+    bool        inputEnable  = false;
+    bool        outputValue  = false;
+    bool        outputEnable = false;
+    bool        safe         = false; /**< Some class declares a safe row */
+    bool        pull         = false; /**< Some class has a pull table */
+    quint32     modeWidth    = 0;
+    quint32     upSelWidth   = 0;
+    quint32     downSelWidth = 0;
+    QStringList namedMode; /**< Modes from FirstNamed, name order */
+    struct Control
+    {
+        QString name;
+        quint32 width = 0; /**< 0 when no class gives it a choice */
+
+        bool operator==(const Control &) const = default;
+    };
+    QList<Control> control; /**< First appearance order */
+
+    bool hasPull() const { return pull; }
+    /** Whether some select owns a register field. */
+    bool selectable() const
+    {
+        bool result = pull;
+        for (const Control &item : control) {
+            result = result || item.width > 0;
+        }
+        return result;
+    }
+
+    bool operator==(const QSocPadModel &) const = default;
+};
+
 struct QSocIomuxPlan
 {
     QString                   moduleName;
@@ -336,7 +378,14 @@ struct QSocIomuxPlan
     QSocIomuxOptionPlan       option;
     QList<QSocIomuxRoutePlan> routes;
     QSocIomuxIntegrationPlan  integration;
+    QList<QSocPadCellPlan>    padCells; /**< Declaration order, indexed by pinClass */
+    QList<int>                pinClass; /**< The class each pin instantiates */
+    QSocPadModel              padModel; /**< The union the registers and core follow */
     QSocMmioPlan              mmio;
+
+    bool hasPadCell() const { return !padCells.isEmpty(); }
+    /** The class a pin instantiates, or an undeclared cell when there is none. */
+    const QSocPadCellPlan &padClass(quint32 pin) const;
 
     bool operator==(const QSocIomuxPlan &) const = default;
 };
@@ -415,8 +464,10 @@ public:
     static QString padLane(quint32 pin);
     /** `value`, which is `width` bits wide, zero extended to one lane. */
     static QString padLaneValue(quint32 width, const QString &value);
-    /** The selector code layout of the declared pad cell, empty when none. */
-    static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell);
+    /** The union of the classes, which the register map and the core follow. */
+    static QSocPadModel padModel(const QList<QSocPadCellPlan> &cells);
+    /** The rows of one class, numbered as the model numbers them. */
+    static QSocPadEncoding padEncoding(const QSocPadCellPlan &cell, const QSocPadModel &model);
     /**
      * @brief The register inputs an option adds to one pin of the core.
      *
@@ -427,19 +478,19 @@ public:
     /** The pad selector vectors the core drives when a pad cell is declared. */
     static QList<QSocIomuxCorePort> corePadSelectPorts(const QSocIomuxPlan &plan);
     /**
-     * @brief Check every declared pad cell port against the library.
+     * @brief Check every port a class declares against the library.
      *
-     * The caller supplies the port table of the cell named by the source, so a
+     * The caller supplies the port table of the cell named by the class, so a
      * port that does not exist, or exists with the wrong direction, fails
      * before any Verilog is written.
      *
-     * @param plan      the plan holding the pad cell declaration
+     * @param cell      the class
      * @param cellPorts port name to direction, "in", "out" or "inout"
      * @param errors    receives one message per rejected port
      * @return true when the declaration matches the cell
      */
     static bool checkPadCellPorts(
-        const QSocIomuxPlan          &plan,
+        const QSocPadCellPlan        &cell,
         const QMap<QString, QString> &cellPorts,
         QStringList                  *errors = nullptr);
     static QString generateCoreVerilog(const QSocIomuxPlan &plan);

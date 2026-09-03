@@ -242,8 +242,8 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             return showError(1, messages.join('\n'));
         }
 
-        if (plan.integration.padCell.declared()) {
-            const QString cellName = plan.integration.padCell.cell;
+        for (QSocPadCellPlan &padCell : plan.padCells) {
+            const QString cellName = padCell.cell;
             if (!moduleManager->load(QRegularExpression(".*"))
                 || !moduleManager->isModuleExist(cellName)) {
                 return showError(
@@ -270,9 +270,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                     cellPorts.insert(name, direction);
                 }
             }
-            plan.integration.padCell.cellPorts = cellPorts;
+            padCell.cellPorts = cellPorts;
             QStringList padErrors;
-            if (!QSocIomuxGenerator::checkPadCellPorts(plan, cellPorts, &padErrors)) {
+            if (!QSocIomuxGenerator::checkPadCellPorts(padCell, cellPorts, &padErrors)) {
                 QStringList messages;
                 messages.reserve(padErrors.size());
                 for (const QString &error : padErrors) {
@@ -322,7 +322,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
                {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
                {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
-        if (plan.integration.padCell.declared()) {
+        if (plan.hasPadCell()) {
             artifacts.push_back(
                 {outputFilePath(moduleName + QStringLiteral("_pad.v")),
                  QSocIomuxGenerator::generatePadVerilog(plan).toUtf8()});

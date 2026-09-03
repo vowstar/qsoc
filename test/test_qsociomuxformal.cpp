@@ -539,7 +539,7 @@ QSocIomuxPlan padPlan(const QString &claim)
         qWarning() << errors;
         return {};
     }
-    plan.integration.padCell.cellPorts
+    plan.padCells.first().cellPorts
         = {{"PAD", "inout"},
            {"C", "out"},
            {"IE", "in"},
@@ -572,7 +572,7 @@ void Test::padConstraintsPassSbyWhenAvailable()
         QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
     }
     const QSocIomuxPlan plan = padPlan(QStringLiteral("!PS || PE"));
-    QVERIFY(plan.integration.padCell.declared());
+    QVERIFY(plan.hasPadCell());
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -599,7 +599,7 @@ void Test::padConstraintFalseClaimFailsSbyWhenAvailable()
     /* The down row has PE high with PS low, so this claim is false and the
      * proof must say so by name. */
     const QSocIomuxPlan plan = padPlan(QStringLiteral("!PE || PS"));
-    QVERIFY(plan.integration.padCell.declared());
+    QVERIFY(plan.hasPadCell());
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());

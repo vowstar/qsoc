@@ -1325,15 +1325,15 @@ void composeSourceControl(QSocIomuxPlan *plan)
         fields.append({"output_enable_src", 4, 2});
     }
     if (plan->option.padControl) {
-        const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
-        if (encoding.hasPull()) {
+        const QSocPadModel &model = plan->padModel;
+        if (model.hasPull()) {
             fields.append({"pull_src", 6, 1});
         }
         /* One source bit per declared control from bit 16, in declaration
          * order, so a control keeps its bit when another one gains rows. */
-        for (qsizetype index = 0; index < encoding.control.size(); ++index) {
-            if (encoding.control.at(index).width > 0) {
-                fields.append({encoding.control.at(index).name + "_src", quint32(16 + index), 1});
+        for (qsizetype index = 0; index < model.control.size(); ++index) {
+            if (model.control.at(index).width > 0) {
+                fields.append({model.control.at(index).name + "_src", quint32(16 + index), 1});
             }
         }
     }
@@ -1356,22 +1356,22 @@ void composeSourceControl(QSocIomuxPlan *plan)
  */
 void composePadControl(QSocIomuxPlan *plan)
 {
-    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
-    QList<WordField>      fields;
-    if (encoding.hasPull()) {
-        fields.append({"pull_mode", 0, encoding.modeWidth});
-        if (encoding.upSelWidth > 0) {
-            fields.append({"up_sel", 4, encoding.upSelWidth});
+    const QSocPadModel &model = plan->padModel;
+    QList<WordField>    fields;
+    if (model.hasPull()) {
+        fields.append({"pull_mode", 0, model.modeWidth});
+        if (model.upSelWidth > 0) {
+            fields.append({"up_sel", 4, model.upSelWidth});
         }
-        if (encoding.downSelWidth > 0) {
-            fields.append({"down_sel", 8, encoding.downSelWidth});
+        if (model.downSelWidth > 0) {
+            fields.append({"down_sel", 8, model.downSelWidth});
         }
     }
     const auto lanes = [&](qsizetype first, qsizetype count, quint32 lsb) {
         QList<WordField> result;
-        for (qsizetype index = first; index < std::min(encoding.control.size(), first + count);
+        for (qsizetype index = first; index < std::min(model.control.size(), first + count);
              ++index) {
-            const QSocPadEncoding::Control &item = encoding.control.at(index);
+            const QSocPadModel::Control &item = model.control.at(index);
             if (item.width > 0) {
                 result.append({item.name, lsb + 4 * quint32(index - first), item.width});
             }
@@ -1385,8 +1385,7 @@ void composePadControl(QSocIomuxPlan *plan)
     if (!fields.isEmpty()) {
         appendPinWords(plan, "pin_pad_ctrl", fields, QSocIomuxGenerator::kBasePadControl);
     }
-    for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < encoding.control.size();
-         ++word) {
+    for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < model.control.size(); ++word) {
         const QList<WordField> extra = lanes(kPadWordLanes + word * kCtlWordLanes, kCtlWordLanes, 0);
         if (!extra.isEmpty()) {
             appendPinWords(
@@ -1413,11 +1412,11 @@ void composeInvert(QSocIomuxPlan *plan)
         appendBank(
             plan, QString("rx_inv_s%1").arg(slot), QSocMmioAccess::ReadWrite, QString(), &offset);
     }
-    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan->integration.padCell);
-    if (encoding.hasPull()) {
+    const QSocPadModel &model = plan->padModel;
+    if (model.hasPull()) {
         appendBank(plan, "pull_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
     }
-    for (const QSocPadEncoding::Control &item : encoding.control) {
+    for (const QSocPadModel::Control &item : model.control) {
         if (item.width > 0) {
             appendBank(plan, item.name + "_inv", QSocMmioAccess::ReadWrite, QString(), &offset);
         }
@@ -1512,9 +1511,11 @@ void appendPadPullPorts(
             {modeIs + QString::number(int(QSocPadEncoding::Oscillator)), &*encoding.oscillatorRow});
     }
     for (qsizetype index = 0; index < encoding.namedRow.size(); ++index) {
-        arms.append(
-            {modeIs + QString::number(int(QSocPadEncoding::FirstNamed) + int(index)),
-             &encoding.namedRow.at(index)});
+        if (encoding.namedRow.at(index)) {
+            arms.append(
+                {modeIs + QString::number(int(QSocPadEncoding::FirstNamed) + int(index)),
+                 &*encoding.namedRow.at(index)});
+        }
     }
     /* A table entry of x means the pin does not matter in that row, so drive
      * zero and keep the netlist two valued. */
@@ -1669,10 +1670,9 @@ bool rewriteConstraint(
  * emits, so it is a claim to prove. A body that reaches a role pin speaks
  * about what routes and registers will do, so it bounds the environment.
  */
-bool validatePadConstraints(QSocIomuxPlan *plan, QStringList *errors)
+bool validatePadConstraints(QSocPadCellPlan &cell, QStringList *errors)
 {
-    QSocPadCellPlan &cell  = plan->integration.padCell;
-    bool             valid = true;
+    bool valid = true;
     for (qsizetype index = 0; index < cell.constraint.size(); ++index) {
         QSocPadConstraint &item = cell.constraint[index];
         const QString      path = QString("generator.pad_cell.constraint[%1]").arg(index);
@@ -1712,23 +1712,17 @@ bool validateOptions(const QSocIomuxPlan &plan, QStringList *errors)
     if (!plan.option.padControl) {
         return true;
     }
-    const QSocPadCellPlan &cell = plan.integration.padCell;
-    if (!cell.declared()) {
+    if (!plan.hasPadCell()) {
         appendError(errors, "OPTION", "generator.option.pad_control", "needs a pad_cell declaration");
         return false;
     }
-    const QSocPadEncoding encoding   = QSocIomuxGenerator::padEncoding(cell);
-    bool                  selectable = encoding.hasPull();
-    for (const QSocPadEncoding::Control &item : encoding.control) {
-        selectable = selectable || item.width > 0;
-    }
-    if (!selectable) {
+    if (!plan.padModel.selectable()) {
         appendError(
             errors,
             "OPTION",
             "generator.option.pad_control",
             QString("pad cell %1 has no pull table and no control with more than one row")
-                .arg(cell.cell));
+                .arg(plan.padCells.first().cell));
         return false;
     }
     return true;
@@ -1743,8 +1737,7 @@ bool validateOptions(const QSocIomuxPlan &plan, QStringList *errors)
  */
 bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
 {
-    const QSocPadCellPlan &cell = plan.integration.padCell;
-    if (!cell.declared()) {
+    if (!plan.hasPadCell()) {
         bool valid = true;
         for (const QSocIomuxRoutePlan &route : plan.routes) {
             if (route.pullMode.isEmpty() && !route.pullSelect.linked() && route.control.isEmpty()) {
@@ -1759,8 +1752,9 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
         }
         return valid;
     }
-    bool                  valid    = true;
-    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(cell);
+    bool                   valid    = true;
+    const QSocPadCellPlan &cell     = plan.padCells.first();
+    const QSocPadEncoding  encoding = QSocIomuxGenerator::padEncoding(cell, plan.padModel);
     /* Codes are 4-bit fields of the pad control word. */
     if (encoding.upRows.size() > kMaximumRows || encoding.downRows.size() > kMaximumRows
         || QSocPadEncoding::FirstNamed + encoding.namedMode.size() > kMaximumRows) {
@@ -2360,8 +2354,12 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
     }
 
     if (generator["pad_cell"]) {
-        valid = parsePadCell(generator["pad_cell"], &plan->integration.padCell, errors) && valid;
+        QSocPadCellPlan cell;
+        valid = parsePadCell(generator["pad_cell"], &cell, errors) && valid;
+        plan->padCells.append(cell);
     }
+    plan->pinClass = QList<int>(plan->pinCount, 0);
+    plan->padModel = QSocIomuxGenerator::padModel(plan->padCells);
 
     if (!generator["integration"]) {
         appendError(errors, "REQUIRED", "generator.integration", "property is required");
@@ -2369,8 +2367,8 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
     } else {
         valid = parseIntegration(
                     generator["integration"],
-                    plan->integration.padCell.declared(),
-                    plan->integration.padCell.safe.declared,
+                    plan->hasPadCell(),
+                    plan->padModel.safe,
                     &plan->integration,
                     errors)
                 && valid;
@@ -2498,9 +2496,9 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
             ports.append(port);
         }
     }
-    if (plan.integration.padCell.declared()) {
+    if (plan.hasPadCell()) {
         ports.append({"pad_io", "inout", plan.pinCount});
-        if (plan.integration.padCell.safe.declared) {
+        if (plan.padModel.safe) {
             ports.append({"pad_force_i", "input", 1});
         }
     } else {
@@ -2653,7 +2651,8 @@ bool QSocPadEncoding::supports(int mode) const
     case Oscillator:
         return oscillatorRow.has_value() || weaves;
     default:
-        return mode >= FirstNamed && mode - FirstNamed < namedMode.size();
+        return mode >= FirstNamed && mode - FirstNamed < namedRow.size()
+               && namedRow.at(mode - FirstNamed).has_value();
     }
 }
 
@@ -2790,7 +2789,9 @@ QString QSocPadEncoding::modeSummary() const
         }
     }
     for (qsizetype index = 0; index < namedMode.size(); ++index) {
-        parts.append(QString("%1 %2").arg(FirstNamed + index).arg(namedMode.at(index)));
+        if (supports(int(FirstNamed + index))) {
+            parts.append(QString("%1 %2").arg(FirstNamed + index).arg(namedMode.at(index)));
+        }
     }
     return parts.join(", ");
 }
@@ -2813,8 +2814,9 @@ const QSocPadTableRow &QSocPadEncoding::row(int mode, int upIndex, int downIndex
     case Oscillator:
         return oscillatorRow ? *oscillatorRow : noneRow;
     default:
-        if (mode >= FirstNamed && mode - FirstNamed < namedRow.size()) {
-            return namedRow.at(mode - FirstNamed);
+        if (mode >= FirstNamed && mode - FirstNamed < namedRow.size()
+            && namedRow.at(mode - FirstNamed)) {
+            return *namedRow.at(mode - FirstNamed);
         }
         return noneRow;
     }
@@ -2838,7 +2840,70 @@ QString QSocIomuxGenerator::padLaneValue(quint32 width, const QString &value)
     return QString("{%1'b0, %2}").arg(kPadLane - width).arg(value);
 }
 
-QSocPadEncoding QSocIomuxGenerator::padEncoding(const QSocPadCellPlan &cell)
+const QSocPadCellPlan &QSocIomuxPlan::padClass(quint32 pin) const
+{
+    static const QSocPadCellPlan none;
+    const int                    index = pinClass.value(qsizetype(pin), 0);
+    return index >= 0 && index < padCells.size() ? padCells.at(index) : none;
+}
+
+QSocPadModel QSocIomuxGenerator::padModel(const QList<QSocPadCellPlan> &cells)
+{
+    QSocPadModel  model;
+    qsizetype     upRows   = 0;
+    qsizetype     downRows = 0;
+    QSet<QString> named;
+    for (const QSocPadCellPlan &cell : cells) {
+        model.inputValue   = model.inputValue || !cell.portInputValue.isEmpty();
+        model.inputEnable  = model.inputEnable || !cell.portInputEnable.isEmpty();
+        model.outputValue  = model.outputValue || !cell.portOutputValue.isEmpty();
+        model.outputEnable = model.outputEnable || !cell.portOutputEnable.isEmpty();
+        model.safe         = model.safe || cell.safe.declared;
+        if (!cell.pull.mode.isEmpty()) {
+            model.pull = true;
+            upRows     = std::max(upRows, cell.pull.mode.value(QStringLiteral("up")).size());
+            downRows   = std::max(downRows, cell.pull.mode.value(QStringLiteral("down")).size());
+            for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
+                static const QStringList fixed
+                    = {QStringLiteral("none"),
+                       QStringLiteral("up"),
+                       QStringLiteral("down"),
+                       QStringLiteral("keeper"),
+                       QStringLiteral("oscillator")};
+                if (!fixed.contains(it.key())) {
+                    named.insert(it.key());
+                }
+            }
+        }
+        for (const QSocPadControlPlan &item : cell.control) {
+            const quint32 width = item.row.size() > 1 ? encodingWidth(item.row.size()) : 0;
+            qsizetype     index = 0;
+            while (index < model.control.size() && model.control.at(index).name != item.name) {
+                ++index;
+            }
+            if (index == model.control.size()) {
+                model.control.append({item.name, width});
+            } else {
+                model.control[index].width = std::max(model.control.at(index).width, width);
+            }
+        }
+    }
+    model.namedMode = QStringList(named.cbegin(), named.cend());
+    model.namedMode.sort();
+    if (model.pull) {
+        model.modeWidth = encodingWidth(QSocPadEncoding::FirstNamed + model.namedMode.size());
+    }
+    if (upRows > 1) {
+        model.upSelWidth = encodingWidth(upRows);
+    }
+    if (downRows > 1) {
+        model.downSelWidth = encodingWidth(downRows);
+    }
+    return model;
+}
+
+QSocPadEncoding QSocIomuxGenerator::padEncoding(
+    const QSocPadCellPlan &cell, const QSocPadModel &model)
 {
     QSocPadEncoding encoding;
     for (const QSocPadControlPlan &item : cell.control) {
@@ -2866,21 +2931,15 @@ QSocPadEncoding QSocIomuxGenerator::padEncoding(const QSocPadCellPlan &cell)
     encoding.downRows      = cell.pull.mode.value(QStringLiteral("down"));
     encoding.keeperRow     = single(QStringLiteral("keeper"));
     encoding.oscillatorRow = single(QStringLiteral("oscillator"));
-    for (auto it = cell.pull.mode.cbegin(); it != cell.pull.mode.cend(); ++it) {
-        static const QStringList fixed
-            = {QStringLiteral("none"),
-               QStringLiteral("up"),
-               QStringLiteral("down"),
-               QStringLiteral("keeper"),
-               QStringLiteral("oscillator")};
-        if (!fixed.contains(it.key())) {
-            encoding.namedMode.append(it.key());
-            encoding.namedRow.append(it.value().first());
-        }
+    /* Named modes take the model's numbers, so a code means the same mode on
+     * every pin whichever class it instantiates. */
+    encoding.namedMode = model.namedMode;
+    for (const QString &name : model.namedMode) {
+        encoding.namedRow.append(single(name));
     }
     encoding.weaves    = !encoding.keeperRow && !encoding.oscillatorRow && encoding.hasUp()
                          && encoding.hasDown() && !cell.pull.isDriver;
-    encoding.modeWidth = encodingWidth(QSocPadEncoding::FirstNamed + encoding.namedMode.size());
+    encoding.modeWidth = model.modeWidth;
     if (encoding.upRows.size() > 1) {
         encoding.upSelWidth = encodingWidth(encoding.upRows.size());
     }
@@ -2891,9 +2950,8 @@ QSocPadEncoding QSocIomuxGenerator::padEncoding(const QSocPadCellPlan &cell)
 }
 
 bool QSocIomuxGenerator::checkPadCellPorts(
-    const QSocIomuxPlan &plan, const QMap<QString, QString> &cellPorts, QStringList *errors)
+    const QSocPadCellPlan &cell, const QMap<QString, QString> &cellPorts, QStringList *errors)
 {
-    const QSocPadCellPlan &cell = plan.integration.padCell;
     if (!cell.declared()) {
         return true;
     }
@@ -3016,7 +3074,9 @@ bool QSocIomuxGenerator::buildPlan(
         valid = validatePadCapability(localPlan, &localErrors);
     }
     if (valid && localErrors.isEmpty()) {
-        valid = validatePadConstraints(&localPlan, &localErrors);
+        for (QSocPadCellPlan &cell : localPlan.padCells) {
+            valid = validatePadConstraints(cell, &localErrors) && valid;
+        }
     }
     if (valid && localErrors.isEmpty()) {
         valid = composeMmio(&localPlan, &localErrors);
@@ -3046,7 +3106,7 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
     const QSocIomuxPlan &plan, quint32 pin)
 {
     QList<QSocIomuxCorePort> ports;
-    const QSocPadEncoding    encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    const QSocPadModel      &model = plan.padModel;
     if (plan.option.gpio) {
         ports.append({QString("pin_%1_input_enable").arg(pin), 1});
         ports.append({QString("pin_%1_output_value").arg(pin), 1});
@@ -3056,17 +3116,17 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
         ports.append({QString("pin_%1_output_enable_src").arg(pin), 2});
     }
     if (plan.option.padControl) {
-        if (encoding.hasPull()) {
-            ports.append({QString("pin_%1_pull_mode").arg(pin), encoding.modeWidth});
-            if (encoding.upSelWidth > 0) {
-                ports.append({QString("pin_%1_up_sel").arg(pin), encoding.upSelWidth});
+        if (model.hasPull()) {
+            ports.append({QString("pin_%1_pull_mode").arg(pin), model.modeWidth});
+            if (model.upSelWidth > 0) {
+                ports.append({QString("pin_%1_up_sel").arg(pin), model.upSelWidth});
             }
-            if (encoding.downSelWidth > 0) {
-                ports.append({QString("pin_%1_down_sel").arg(pin), encoding.downSelWidth});
+            if (model.downSelWidth > 0) {
+                ports.append({QString("pin_%1_down_sel").arg(pin), model.downSelWidth});
             }
             ports.append({QString("pin_%1_pull_src").arg(pin), 1});
         }
-        for (const QSocPadEncoding::Control &item : encoding.control) {
+        for (const QSocPadModel::Control &item : model.control) {
             if (item.width == 0) {
                 continue;
             }
@@ -3081,10 +3141,10 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
             ports.append({QString("pin_%1_rx_inv_s%2").arg(pin).arg(slot), 1});
         }
-        if (encoding.hasPull()) {
+        if (model.hasPull()) {
             ports.append({QString("pin_%1_pull_inv").arg(pin), 1});
         }
-        for (const QSocPadEncoding::Control &item : encoding.control) {
+        for (const QSocPadModel::Control &item : model.control) {
             if (item.width > 0) {
                 ports.append({QString("pin_%1_%2_inv").arg(pin).arg(item.name), 1});
             }
@@ -3102,18 +3162,18 @@ QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
 QList<QSocIomuxCorePort> QSocIomuxGenerator::corePadSelectPorts(const QSocIomuxPlan &plan)
 {
     QList<QSocIomuxCorePort> ports;
-    const QSocPadEncoding    encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
-    const quint32            width    = kPadLane * plan.pinCount;
-    if (encoding.hasPull()) {
+    const QSocPadModel      &model = plan.padModel;
+    const quint32            width = kPadLane * plan.pinCount;
+    if (model.hasPull()) {
         ports.append({QStringLiteral("pad_pull_mode"), width});
-        if (encoding.upSelWidth > 0) {
+        if (model.upSelWidth > 0) {
             ports.append({QStringLiteral("pad_up_sel"), width});
         }
-        if (encoding.downSelWidth > 0) {
+        if (model.downSelWidth > 0) {
             ports.append({QStringLiteral("pad_down_sel"), width});
         }
     }
-    for (const QSocPadEncoding::Control &item : encoding.control) {
+    for (const QSocPadModel::Control &item : model.control) {
         if (item.width > 0) {
             ports.append({QString("pad_%1_select").arg(item.name), width});
         }
@@ -3126,9 +3186,9 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
     if (plan.pinCount == 0 || plan.hsSlots == 0) {
         return QString();
     }
-    const quint32         width    = selectorWidth(plan.hsSlots);
-    const quint64         dense    = quint64(plan.hsSlots) * plan.pinCount;
-    const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
+    const quint32       width = selectorWidth(plan.hsSlots);
+    const quint64       dense = quint64(plan.hsSlots) * plan.pinCount;
+    const QSocPadModel &model = plan.padModel;
 
     QStringList lines;
     lines.append("// Generated by QSoC. Do not edit.");
@@ -3156,19 +3216,15 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             ports.append(QString("    input  wire        %1").arg(endpointName(port)));
         }
     }
-    const QSocPadSafePlan &safe = plan.integration.padCell.safe;
-    if (safe.declared) {
+    if (model.safe) {
         ports.append(QStringLiteral("    input  wire        pad_force_i"));
     }
     /* The safe row sits above every register and slot, so it wraps the
      * finished expression of each pad output. */
     const auto withForce = [&](const QString &expression, const QString &safeValue) {
-        return safe.declared ? QString("pad_force_i ? %1 : (%2)").arg(safeValue, expression)
-                             : expression;
+        return model.safe ? QString("pad_force_i ? %1 : (%2)").arg(safeValue, expression)
+                          : expression;
     };
-    const QString safeIe = QString("1'b%1").arg(safe.inputEnable);
-    const QString safeOv = QString("1'b%1").arg(safe.outputValue);
-    const QString safeOe = QString("1'b%1").arg(safe.outputEnable);
     for (qsizetype index = 0; index < ports.size(); ++index) {
         const QString suffix = index + 1 == ports.size() ? QString() : QString(",");
         lines.append(ports.at(index) + suffix);
@@ -3177,6 +3233,11 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
     lines.append(QString());
 
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+        const QSocPadEncoding  encoding = padEncoding(plan.padClass(pin), model);
+        const QSocPadSafePlan &safe     = plan.padClass(pin).safe;
+        const QString          safeIe   = QString("1'b%1").arg(safe.inputEnable);
+        const QString          safeOv   = QString("1'b%1").arg(safe.outputValue);
+        const QString          safeOe   = QString("1'b%1").arg(safe.outputEnable);
         lines.append(QString("reg [2:0] tx_bundle_%1;").arg(pin));
         lines.append("always @(*) begin");
         lines.append(QString("    case (pin_%1_select_i)").arg(pin));
@@ -3278,11 +3339,11 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             lines.append(QString("assign pad_%1_o%2 = %3;")
                              .arg(name, padLane(pin), padLaneValue(width, value)));
         };
-        if (encoding.hasPull()) {
+        if (model.hasPull()) {
             emitCode(
                 "pull_mode",
                 "pull_mode",
-                encoding.modeWidth,
+                model.modeWidth,
                 "pull_src",
                 encoding.requestMode(safe.pull),
                 0,
@@ -3291,17 +3352,17 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                         plan,
                         r,
                         "pull",
-                        encoding.modeWidth,
+                        model.modeWidth,
                         0,
                         encoding.routeMode(r),
                         encoding.requestMode(r.pullSelect.on),
                         encoding.requestMode(r.pullSelect.off));
                 });
-            if (encoding.upSelWidth > 0) {
+            if (model.upSelWidth > 0) {
                 emitCode(
                     "up_sel",
                     "up_sel",
-                    encoding.upSelWidth,
+                    model.upSelWidth,
                     "pull_src",
                     encoding.requestUpSel(safe.pull),
                     0,
@@ -3310,18 +3371,18 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                             plan,
                             r,
                             "pull",
-                            encoding.upSelWidth,
+                            model.upSelWidth,
                             0,
                             encoding.routeUpSel(r),
                             encoding.requestUpSel(r.pullSelect.on),
                             encoding.requestUpSel(r.pullSelect.off));
                     });
             }
-            if (encoding.downSelWidth > 0) {
+            if (model.downSelWidth > 0) {
                 emitCode(
                     "down_sel",
                     "down_sel",
-                    encoding.downSelWidth,
+                    model.downSelWidth,
                     "pull_src",
                     encoding.requestDownSel(safe.pull),
                     0,
@@ -3330,7 +3391,7 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                             plan,
                             r,
                             "pull",
-                            encoding.downSelWidth,
+                            model.downSelWidth,
                             0,
                             encoding.routeDownSel(r),
                             encoding.requestDownSel(r.pullSelect.on),
@@ -3339,8 +3400,9 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             }
         }
         for (qsizetype index = 0; index < encoding.control.size(); ++index) {
-            const QSocPadEncoding::Control &item = encoding.control.at(index);
-            if (item.width == 0) {
+            const QSocPadEncoding::Control &item       = encoding.control.at(index);
+            const quint32                   fieldWidth = model.control.at(index).width;
+            if (fieldWidth == 0) {
                 continue;
             }
             const QByteArray name = item.name.toUtf8();
@@ -3349,7 +3411,7 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
             emitCode(
                 out.constData(),
                 name.constData(),
-                item.width,
+                fieldWidth,
                 src.constData(),
                 encoding.controlCodeOrDefault(index, safe.control.value(item.name)),
                 item.defaultCode,
@@ -3359,7 +3421,7 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                         plan,
                         r,
                         item.name,
-                        item.width,
+                        fieldWidth,
                         item.defaultCode,
                         encoding.routeControlCode(r, index),
                         encoding.controlCodeOrDefault(index, request.select.on.mode),
@@ -3505,8 +3567,8 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     lines.append(QString("wire %1 tx_output_value_w;").arg(vectorRange(dense)));
     lines.append(QString("wire %1 tx_output_enable_w;").arg(vectorRange(dense)));
     lines.append(QString("wire %1 rx_input_value_w;").arg(vectorRange(dense)));
-    const QSocPadCellPlan &padCell = plan.integration.padCell;
-    if (padCell.declared()) {
+    const QSocPadModel &model = plan.padModel;
+    if (plan.hasPadCell()) {
         /* With a pad cell the four control vectors stay inside this module. The
          * core keeps its port names, so they become wires here. */
         lines.append(QString("wire %1 pad_input_value_i;").arg(vectorRange(plan.pinCount)));
@@ -3652,7 +3714,7 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
             coreConnections.append(QString("    .%1(%1)").arg(endpointName(port)));
         }
     }
-    if (padCell.safe.declared) {
+    if (model.safe) {
         coreConnections.append(QStringLiteral("    .pad_force_i(pad_force_i)"));
     }
     if (plan.option.interrupt) {
@@ -3677,25 +3739,25 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
         lines.append(QString());
     }
 
-    if (padCell.declared()) {
+    if (plan.hasPadCell()) {
         QStringList padConnections;
         padConnections.append("    .pad_io(pad_io)");
-        if (!padCell.portInputValue.isEmpty()) {
+        if (model.inputValue) {
             padConnections.append("    .pad_input_value_o(pad_input_value_i)");
         }
-        if (!padCell.portInputEnable.isEmpty()) {
+        if (model.inputEnable) {
             padConnections.append("    .pad_input_enable_i(pad_input_enable_o)");
         }
-        if (!padCell.portOutputValue.isEmpty()) {
+        if (model.outputValue) {
             padConnections.append("    .pad_output_value_i(pad_output_value_o)");
         }
-        if (!padCell.portOutputEnable.isEmpty()) {
+        if (model.outputEnable) {
             padConnections.append("    .pad_output_enable_i(pad_output_enable_o)");
         }
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
             padConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
         }
-        if (padCell.portInputValue.isEmpty()) {
+        if (!model.inputValue) {
             lines.append(QString("assign pad_input_value_i = %1'b0;").arg(plan.pinCount));
         }
         lines.append(QString("%1_pad u_pad (").arg(plan.moduleName));
@@ -3722,31 +3784,29 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
 
 QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
 {
-    const QSocPadCellPlan &cell = plan.integration.padCell;
-    if (plan.pinCount == 0 || !cell.declared()) {
+    if (plan.pinCount == 0 || !plan.hasPadCell()) {
         return QString();
     }
-    const QSocPadEncoding encoding = padEncoding(cell);
-    const bool            hasPull  = encoding.hasPull();
+    const QSocPadModel &model = plan.padModel;
 
     QStringList lines;
     lines.append("// Generated by QSoC. Do not edit.");
     lines.append(QString("module %1_pad (").arg(plan.moduleName));
     QStringList ports;
     ports.append(QString("    inout  wire %1 pad_io").arg(vectorRange(plan.pinCount)));
-    if (!cell.portInputValue.isEmpty()) {
+    if (model.inputValue) {
         ports.append(
             QString("    output wire %1 pad_input_value_o").arg(vectorRange(plan.pinCount)));
     }
-    if (!cell.portInputEnable.isEmpty()) {
+    if (model.inputEnable) {
         ports.append(
             QString("    input  wire %1 pad_input_enable_i").arg(vectorRange(plan.pinCount)));
     }
-    if (!cell.portOutputValue.isEmpty()) {
+    if (model.outputValue) {
         ports.append(
             QString("    input  wire %1 pad_output_value_i").arg(vectorRange(plan.pinCount)));
     }
-    if (!cell.portOutputEnable.isEmpty()) {
+    if (model.outputEnable) {
         ports.append(
             QString("    input  wire %1 pad_output_enable_i").arg(vectorRange(plan.pinCount)));
     }
@@ -3764,7 +3824,9 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
         return QString("pad_%1_i%2").arg(name, padLane(pin));
     };
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
-        if (hasPull) {
+        const QSocPadCellPlan &cell     = plan.padClass(pin);
+        const QSocPadEncoding  encoding = padEncoding(cell, model);
+        if (encoding.hasPull()) {
             QString mode = slice("pull_mode", pin);
             if (encoding.weaves) {
                 /* The keeper follows the pad and the oscillator opposes it. The
@@ -3846,38 +3908,48 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
         lines.append(QString());
     }
 
-    if (!cell.constraint.isEmpty()) {
+    bool anyConstraint = false;
+    bool anyTemporal   = false;
+    for (const QSocPadCellPlan &cell : plan.padCells) {
+        for (const QSocPadConstraint &item : cell.constraint) {
+            anyConstraint = true;
+            anyTemporal   = anyTemporal || item.temporal;
+        }
+    }
+    if (anyConstraint) {
         /* The constraints live here, next to the nets they name, so no proof
          * needs a hierarchical reference. The guard keeps the file Verilog-2001
          * for every tool that does not define FORMAL. Temporal properties clock
          * on the formal global clock because this module has none of its own. */
         lines.append("`ifdef FORMAL");
-        bool anyTemporal = false;
-        for (const QSocPadConstraint &item : cell.constraint) {
-            anyTemporal = anyTemporal || item.temporal;
-        }
         if (anyTemporal) {
             lines.append("(* gclk *) wire formal_clk;");
         }
-        for (qsizetype index = 0; index < cell.constraint.size(); ++index) {
-            const QSocPadConstraint &item = cell.constraint.at(index);
-            const QString verb = item.assume ? QStringLiteral("assume") : QStringLiteral("assert");
-            for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
-                QString body;
-                rewriteConstraint(cell, item.body, pin, &body, nullptr, nullptr);
-                if (item.temporal) {
-                    /* Clocked immediate form. The open engine has $past, $rose
-                     * and $stable but no SVA sequences, so an implication is
-                     * written as a boolean. */
-                    lines.append(QString("always @(posedge formal_clk) %1_%2_%3: %4(%5);")
-                                     .arg(verb, item.name)
-                                     .arg(pin)
-                                     .arg(verb, body));
-                } else {
-                    lines.append(QString("always @(*) %1_%2_%3: %4(%5);")
-                                     .arg(verb, item.name)
-                                     .arg(pin)
-                                     .arg(verb, body));
+        for (qsizetype classIndex = 0; classIndex < plan.padCells.size(); ++classIndex) {
+            const QSocPadCellPlan &cell = plan.padCells.at(classIndex);
+            for (const QSocPadConstraint &item : cell.constraint) {
+                const QString verb = item.assume ? QStringLiteral("assume")
+                                                 : QStringLiteral("assert");
+                for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
+                    if (plan.pinClass.at(pin) != classIndex) {
+                        continue;
+                    }
+                    QString body;
+                    rewriteConstraint(cell, item.body, pin, &body, nullptr, nullptr);
+                    if (item.temporal) {
+                        /* Clocked immediate form. The open engine has $past,
+                         * $rose and $stable but no SVA sequences, so an
+                         * implication is written as a boolean. */
+                        lines.append(QString("always @(posedge formal_clk) %1_%2_%3: %4(%5);")
+                                         .arg(verb, item.name)
+                                         .arg(pin)
+                                         .arg(verb, body));
+                    } else {
+                        lines.append(QString("always @(*) %1_%2_%3: %4(%5);")
+                                         .arg(verb, item.name)
+                                         .arg(pin)
+                                         .arg(verb, body));
+                    }
                 }
             }
         }
@@ -3892,7 +3964,7 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
 QString QSocIomuxGenerator::padConstraintForPin(
     const QSocIomuxPlan &plan, qsizetype index, quint32 pin)
 {
-    const QSocPadCellPlan &cell = plan.integration.padCell;
+    const QSocPadCellPlan &cell = plan.padClass(pin);
     if (index < 0 || index >= cell.constraint.size()) {
         return QString();
     }
@@ -3907,7 +3979,7 @@ QString QSocIomuxGenerator::generateFileList(const QSocIomuxPlan &plan)
         return QString();
     }
     QString list = QString("%1_regs.v\n%1_conn.v\n%1.v\n").arg(plan.moduleName);
-    if (plan.integration.padCell.declared()) {
+    if (plan.hasPadCell()) {
         list += QString("%1_pad.v\n").arg(plan.moduleName);
     }
     return list;
@@ -3930,10 +4002,10 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
     lines.append(QString("        link: %1").arg(integration.clock));
     lines.append("      rst_ni:");
     lines.append(QString("        link: %1").arg(integration.reset));
-    if (integration.padCell.declared()) {
+    if (plan.hasPadCell()) {
         lines.append("      pad_io:");
         lines.append(QString("        uplink: %1").arg(integration.padIo));
-        if (integration.padCell.safe.declared) {
+        if (plan.padModel.safe) {
             lines.append("      pad_force_i:");
             lines.append(QString("        link: %1").arg(integration.force));
         }
@@ -4019,9 +4091,9 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         blocks.append({"interrupt", qsizetype(8) * bankWords});
     }
     if (plan.option.invert) {
-        const QSocPadEncoding encoding = padEncoding(plan.integration.padCell);
-        qsizetype             nets     = encoding.hasPull() ? 1 : 0;
-        for (const QSocPadEncoding::Control &item : encoding.control) {
+        const QSocPadModel &model = plan.padModel;
+        qsizetype           nets  = model.hasPull() ? 1 : 0;
+        for (const QSocPadModel::Control &item : model.control) {
             nets += item.width > 0 ? 1 : 0;
         }
         blocks.append({"invert", (qsizetype(3 + plan.hsSlots) + nets) * bankWords});
@@ -4032,18 +4104,18 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     if (plan.option.padControl) {
         /* One word per pin when the cell has a pull table or a selectable
          * control in the first four, then one per group of eight holding one. */
-        const QSocPadEncoding encoding   = padEncoding(plan.integration.padCell);
-        const auto            selectable = [&](qsizetype first, qsizetype count) {
-            for (qsizetype index = first; index < std::min(encoding.control.size(), first + count);
+        const QSocPadModel &model      = plan.padModel;
+        const auto          selectable = [&](qsizetype first, qsizetype count) {
+            for (qsizetype index = first; index < std::min(model.control.size(), first + count);
                  ++index) {
-                if (encoding.control.at(index).width > 0) {
+                if (model.control.at(index).width > 0) {
                     return true;
                 }
             }
             return false;
         };
-        qsizetype words = encoding.hasPull() || selectable(0, kPadWordLanes) ? 1 : 0;
-        for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < encoding.control.size();
+        qsizetype words = model.hasPull() || selectable(0, kPadWordLanes) ? 1 : 0;
+        for (qsizetype word = 0; kPadWordLanes + word * kCtlWordLanes < model.control.size();
              ++word) {
             words += selectable(kPadWordLanes + word * kCtlWordLanes, kCtlWordLanes) ? 1 : 0;
         }
@@ -4131,8 +4203,7 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     lines.append(QString("feature: 0x%1 at offset 0xc").arg(wordAt(12), 8, 16, QLatin1Char('0')));
     lines.append("reset: every selector resets to 0 and selects slot 0");
     lines.append("rx: pad input broadcasts to every declared sink regardless of the selector");
-    if (plan.integration.padCell.declared()) {
-        const QSocPadCellPlan &cell = plan.integration.padCell;
+    for (const QSocPadCellPlan &cell : plan.padCells) {
         lines.append(QString("pad cell: %1, pull modes %2, controls %3, constraints %4")
                          .arg(cell.cell)
                          .arg(cell.pull.mode.size())
@@ -4157,7 +4228,7 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                              .arg(parts.join(", ")));
         }
         /* The numbering is the software contract of pin_pad_ctrl. */
-        const QSocPadEncoding encoding = padEncoding(cell);
+        const QSocPadEncoding encoding = padEncoding(cell, plan.padModel);
         if (encoding.hasPull()) {
             lines.append(QString("pull modes: %1").arg(encoding.modeSummary()));
             const auto strengths = [&](const char *name, const QList<QSocPadTableRow> &rows) {

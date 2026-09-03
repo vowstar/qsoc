@@ -3531,19 +3531,20 @@ void Test::padCellPortsAreCheckedAgainstTheLibrary()
     QVERIFY2(
         QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
         qPrintable(errors.join('\n')));
-    QVERIFY(plan.integration.padCell.declared());
-    QVERIFY(QSocIomuxGenerator::checkPadCellPorts(plan, padCellPorts(), &errors));
+    QVERIFY(plan.hasPadCell());
+    const QSocPadCellPlan &cell = plan.padCells.first();
+    QVERIFY(QSocIomuxGenerator::checkPadCellPorts(cell, padCellPorts(), &errors));
     QVERIFY(errors.isEmpty());
 
     QMap<QString, QString> missing = padCellPorts();
     missing.remove("OE");
-    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, missing, &errors));
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(cell, missing, &errors));
     QCOMPARE(errors.size(), 1);
     QVERIFY(errors.first().contains("gpio_pad_ps has no port OE"));
 
     QMap<QString, QString> wrongWay = padCellPorts();
     wrongWay["C"]                   = "in";
-    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, wrongWay, &errors));
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(cell, wrongWay, &errors));
     QCOMPARE(errors.size(), 2);
     QVERIFY(errors.first().contains("port C is in, expected out"));
     QVERIFY(errors.last().contains("input pins C are not named"));
@@ -3554,7 +3555,7 @@ void Test::padCellPortsAreCheckedAgainstTheLibrary()
     extra.insert("ANE", "in");
     extra.insert("VDDIO", "inout");
     extra.insert("STATUS", "out");
-    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(plan, extra, &errors));
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(cell, extra, &errors));
     QCOMPARE(
         errors,
         QStringList{"IOMUX_PAD generator.pad_cell: gpio_pad_ps input pins ANE, SL, VDDIO are not "
@@ -5069,7 +5070,8 @@ void Test::wovenKeeperCarriesItsStrength()
             &plan,
             &errors),
         qPrintable(errors.join('\n')));
-    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    const QSocPadEncoding encoding
+        = QSocIomuxGenerator::padEncoding(plan.padClass(0), plan.padModel);
     QCOMPARE(encoding.modeWidth, 3U);
     QCOMPARE(encoding.upSelWidth, 1U);
     QCOMPARE(encoding.downSelWidth, 0U);
@@ -5173,7 +5175,8 @@ void Test::nativeKeeperRowIsSelectedNotWoven()
     QVERIFY2(
         QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
         qPrintable(errors.join('\n')));
-    const QSocPadEncoding encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
+    const QSocPadEncoding encoding
+        = QSocIomuxGenerator::padEncoding(plan.padClass(0), plan.padModel);
     QVERIFY(!encoding.weaves);
     QVERIFY(encoding.supports(QSocPadEncoding::Keeper));
     QVERIFY(!encoding.supports(QSocPadEncoding::Oscillator));
@@ -5562,7 +5565,7 @@ void Test::safeRowOutranksEveryOtherSource()
     QVERIFY2(
         QSocIomuxGenerator::buildPlan(makeSafeRowDefinition(), &plan, &errors),
         qPrintable(errors.join('\n')));
-    const QSocPadSafePlan &safe = plan.integration.padCell.safe;
+    const QSocPadSafePlan &safe = plan.padClass(0).safe;
     QVERIFY(safe.declared);
     QCOMPARE(safe.inputEnable, quint8(1));
     QCOMPARE(safe.outputEnable, quint8(0));

@@ -121,8 +121,8 @@ QString expectedPadExpression(
     if (plan.option.invert) {
         expression = QString("(%1) ^ pin_%2_%3_inv_i").arg(expression).arg(pin).arg(roleName);
     }
-    const QSocPadSafePlan &safe = plan.integration.padCell.safe;
-    if (safe.declared) {
+    const QSocPadSafePlan &safe = plan.padClass(pin).safe;
+    if (plan.padModel.safe) {
         const quint8 value = role == QSocIomuxRole::InputEnable   ? safe.inputEnable
                              : role == QSocIomuxRole::OutputValue ? safe.outputValue
                                                                   : safe.outputEnable;
@@ -184,8 +184,9 @@ QString expectedCode(
 void appendPadCodeAssertions(
     QStringList *lines, const QSocIomuxPlan &plan, quint32 pin, const QSocIomuxRoutePlan *route)
 {
-    const QSocPadEncoding  encoding = QSocIomuxGenerator::padEncoding(plan.integration.padCell);
-    const QSocPadSafePlan &safe     = plan.integration.padCell.safe;
+    const QSocPadModel    &model    = plan.padModel;
+    const QSocPadEncoding  encoding = QSocIomuxGenerator::padEncoding(plan.padClass(pin), model);
+    const QSocPadSafePlan &safe     = plan.padClass(pin).safe;
     const auto             expect   = [&](const char    *name,
                                           const char    *reg,
                                           quint32        width,
@@ -197,7 +198,7 @@ void appendPadCodeAssertions(
                   ? QString("pin_%1_%2_i ? pin_%1_%3_i : %4").arg(pin).arg(src, reg, value)
                   : value;
         const QString forced
-            = safe.declared
+            = model.safe
                   ? QString("pad_force_i ? %1'd%2 : (%3)").arg(width).arg(safeCode).arg(chosen)
                   : chosen;
         lines->append(QString("        assert (pad_%1_w%2 == %3);")
@@ -206,11 +207,11 @@ void appendPadCodeAssertions(
                               QSocIomuxGenerator::padLane(pin),
                               QSocIomuxGenerator::padLaneValue(width, "(" + forced + ")")));
     };
-    if (encoding.hasPull()) {
+    if (model.hasPull()) {
         expect(
             "pull_mode",
             "pull_mode",
-            encoding.modeWidth,
+            model.modeWidth,
             "pull_src",
             encoding.requestMode(safe.pull),
             route ? expectedCode(
@@ -218,16 +219,16 @@ void appendPadCodeAssertions(
                         *route,
                         "pull",
                         route->pullSelect.link,
-                        encoding.modeWidth,
+                        model.modeWidth,
                         encoding.routeMode(*route),
                         encoding.requestMode(route->pullSelect.on),
                         encoding.requestMode(route->pullSelect.off))
-                  : QString("%1'd0").arg(encoding.modeWidth));
-        if (encoding.upSelWidth > 0) {
+                  : QString("%1'd0").arg(model.modeWidth));
+        if (model.upSelWidth > 0) {
             expect(
                 "up_sel",
                 "up_sel",
-                encoding.upSelWidth,
+                model.upSelWidth,
                 "pull_src",
                 encoding.requestUpSel(safe.pull),
                 route ? expectedCode(
@@ -235,17 +236,17 @@ void appendPadCodeAssertions(
                             *route,
                             "pull",
                             route->pullSelect.link,
-                            encoding.upSelWidth,
+                            model.upSelWidth,
                             encoding.routeUpSel(*route),
                             encoding.requestUpSel(route->pullSelect.on),
                             encoding.requestUpSel(route->pullSelect.off))
-                      : QString("%1'd0").arg(encoding.upSelWidth));
+                      : QString("%1'd0").arg(model.upSelWidth));
         }
-        if (encoding.downSelWidth > 0) {
+        if (model.downSelWidth > 0) {
             expect(
                 "down_sel",
                 "down_sel",
-                encoding.downSelWidth,
+                model.downSelWidth,
                 "pull_src",
                 encoding.requestDownSel(safe.pull),
                 route ? expectedCode(
@@ -253,16 +254,17 @@ void appendPadCodeAssertions(
                             *route,
                             "pull",
                             route->pullSelect.link,
-                            encoding.downSelWidth,
+                            model.downSelWidth,
                             encoding.routeDownSel(*route),
                             encoding.requestDownSel(route->pullSelect.on),
                             encoding.requestDownSel(route->pullSelect.off))
-                      : QString("%1'd0").arg(encoding.downSelWidth));
+                      : QString("%1'd0").arg(model.downSelWidth));
         }
     }
     for (qsizetype index = 0; index < encoding.control.size(); ++index) {
-        const QSocPadEncoding::Control &item = encoding.control.at(index);
-        if (item.width == 0) {
+        const QSocPadEncoding::Control &item       = encoding.control.at(index);
+        const quint32                   fieldWidth = model.control.at(index).width;
+        if (fieldWidth == 0) {
             continue;
         }
         const QByteArray out  = (item.name + "_select").toUtf8();
@@ -271,7 +273,7 @@ void appendPadCodeAssertions(
         expect(
             out.constData(),
             name.constData(),
-            item.width,
+            fieldWidth,
             src.constData(),
             encoding.controlCodeOrDefault(index, safe.control.value(item.name)),
             route ? expectedCode(
@@ -279,13 +281,13 @@ void appendPadCodeAssertions(
                         *route,
                         item.name,
                         route->control.value(item.name).select.link,
-                        item.width,
+                        fieldWidth,
                         encoding.routeControlCode(*route, index),
                         encoding.controlCodeOrDefault(
                             index, route->control.value(item.name).select.on.mode),
                         encoding.controlCodeOrDefault(
                             index, route->control.value(item.name).select.off.mode))
-                  : QString("%1'd%2").arg(item.width).arg(item.defaultCode));
+                  : QString("%1'd%2").arg(fieldWidth).arg(item.defaultCode));
     }
 }
 
@@ -341,7 +343,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     for (const QString &name : selectPortNames(plan)) {
         declarations.append(QString("    input logic %1").arg(name));
     }
-    if (plan.integration.padCell.safe.declared) {
+    if (plan.padModel.safe) {
         declarations.append(QStringLiteral("    input logic pad_force_i"));
     }
     for (qsizetype index = 0; index < declarations.size(); ++index) {
@@ -412,7 +414,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
     for (const QString &name : selectPortNames(plan)) {
         coreConnections.append(QString("    .%1(%1)").arg(name));
     }
-    if (plan.integration.padCell.safe.declared) {
+    if (plan.padModel.safe) {
         coreConnections.append(QStringLiteral("    .pad_force_i(pad_force_i)"));
     }
     lines.append(QString("%1_core u_core (").arg(plan.moduleName));
@@ -458,8 +460,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
                              .arg(pin)
                              .arg(width)
                              .arg(plan.hsSlots));
-            const bool plain = !plan.option.gpio && !plan.option.invert
-                               && !plan.integration.padCell.safe.declared;
+            const bool plain = !plan.option.gpio && !plan.option.invert && !plan.padModel.safe;
             for (const auto &[name, role] :
                  {std::pair{"input_enable", QSocIomuxRole::InputEnable},
                   std::pair{"output_value", QSocIomuxRole::OutputValue},
@@ -591,54 +592,61 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generate(const QSocIomuxPlan &plan, q
 
 QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan)
 {
-    const QSocPadCellPlan &cell = plan.integration.padCell;
-    if (plan.pinCount == 0 || !cell.declared() || cell.constraint.isEmpty()) {
+    bool anyConstraint = false;
+    for (const QSocPadCellPlan &cell : plan.padCells) {
+        anyConstraint = anyConstraint || !cell.constraint.isEmpty();
+    }
+    if (plan.pinCount == 0 || !anyConstraint) {
         return {};
     }
-    const QString name = plan.moduleName;
-    QStringList   sv;
+    const QSocPadModel &model = plan.padModel;
+    const QString       name  = plan.moduleName;
+    QStringList         sv;
     sv.append("// Generated by QSoC. Do not edit.");
     sv.append("`default_nettype none");
     sv.append(QString());
 
-    /* A stub of the cell. Directions come from the module library, so a harness
-     * that elaborates is one more check that the declaration named real ports. */
-    QStringList stubPorts;
-    for (auto it = cell.cellPorts.cbegin(); it != cell.cellPorts.cend(); ++it) {
-        const QString dir = it.value() == "out"     ? QStringLiteral("output")
-                            : it.value() == "inout" ? QStringLiteral("inout")
-                                                    : QStringLiteral("input");
-        stubPorts.append(QString("    %1 wire %2").arg(dir, it.key()));
-    }
-    sv.append(QString("module %1 (").arg(cell.cell));
-    sv.append(stubPorts.join(",\n"));
-    sv.append(");");
-    /* An empty body reads as a blackbox and the flow refuses it. Every output
-     * takes a free value instead, which is the honest model of a receiver the
-     * proof knows nothing about. */
-    for (auto it = cell.cellPorts.cbegin(); it != cell.cellPorts.cend(); ++it) {
-        if (it.value() == "out") {
-            sv.append(QString("(* anyseq *) reg %1_any;").arg(it.key()));
-            sv.append(QString("assign %1 = %1_any;").arg(it.key()));
+    /* A stub of each cell. Directions come from the module library, so a
+     * harness that elaborates is one more check that the declaration named
+     * real ports. */
+    for (const QSocPadCellPlan &cell : plan.padCells) {
+        QStringList stubPorts;
+        for (auto it = cell.cellPorts.cbegin(); it != cell.cellPorts.cend(); ++it) {
+            const QString dir = it.value() == "out"     ? QStringLiteral("output")
+                                : it.value() == "inout" ? QStringLiteral("inout")
+                                                        : QStringLiteral("input");
+            stubPorts.append(QString("    %1 wire %2").arg(dir, it.key()));
         }
+        sv.append(QString("module %1 (").arg(cell.cell));
+        sv.append(stubPorts.join(",\n"));
+        sv.append(");");
+        /* An empty body reads as a blackbox and the flow refuses it. Every
+         * output takes a free value instead, which is the honest model of a
+         * receiver the proof knows nothing about. */
+        for (auto it = cell.cellPorts.cbegin(); it != cell.cellPorts.cend(); ++it) {
+            if (it.value() == "out") {
+                sv.append(QString("(* anyseq *) reg %1_any;").arg(it.key()));
+                sv.append(QString("assign %1 = %1_any;").arg(it.key()));
+            }
+        }
+        sv.append("endmodule");
+        sv.append(QString());
     }
-    sv.append("endmodule");
-    sv.append(QString());
 
     /* Free inputs of the pad module become free inputs of the harness. */
     const QString range = QString("[%1:0]").arg(plan.pinCount - 1);
     QStringList   harnessPorts;
     QStringList   padConnections = {"    .pad_io(pad_io)"};
     sv.append(QString("module %1_pad_formal (").arg(name));
-    if (!cell.portInputEnable.isEmpty()) {
+    if (model.inputEnable) {
         harnessPorts.append(QString("    input wire %1 pad_input_enable_i").arg(range));
         padConnections.append("    .pad_input_enable_i(pad_input_enable_i)");
     }
-    if (!cell.portOutputValue.isEmpty()) {
+    if (model.outputValue) {
         harnessPorts.append(QString("    input wire %1 pad_output_value_i").arg(range));
         padConnections.append("    .pad_output_value_i(pad_output_value_i)");
     }
-    if (!cell.portOutputEnable.isEmpty()) {
+    if (model.outputEnable) {
         harnessPorts.append(QString("    input wire %1 pad_output_enable_i").arg(range));
         padConnections.append("    .pad_output_enable_i(pad_output_enable_i)");
     }
@@ -650,7 +658,7 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
     sv.append(harnessPorts.join(",\n"));
     sv.append(");");
     sv.append(QString("wire %1 pad_io;").arg(range));
-    if (!cell.portInputValue.isEmpty()) {
+    if (model.inputValue) {
         sv.append(QString("wire %1 pad_input_value_o;").arg(range));
         padConnections.append("    .pad_input_value_o(pad_input_value_o)");
     }
