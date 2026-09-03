@@ -579,7 +579,7 @@ void Test::generatedTestbenchPassesVerilator()
     writeTextFile(
         outputDirectory.filePath(moduleName + QStringLiteral("_uvm_tb.sv")),
         collateral.testbenchSource);
-    const QString fileListName = moduleName + QStringLiteral("_uvm.f");
+    const QString fileListName = moduleName + QStringLiteral("_uvm.fl");
     writeTextFile(outputDirectory.filePath(fileListName), collateral.fileList);
 
     const QString     topName         = moduleName + QStringLiteral("_uvm_tb");

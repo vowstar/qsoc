@@ -153,8 +153,10 @@ Add `--with-formal` to generate a matching formal harness and SymbiYosys job:
 qsoc generate module --with-formal -l <library> <module>
 ```
 
-The command selects three files in the same output directory:
-`<module>.v`, `<module>_formal.sv`, and `<module>_formal.sby`. Generation checks
+The command selects four files in the same output directory:
+`<module>.v`, `<module>_formal.sv`, `<module>_formal.sby`, and
+`<module>_formal.fl`, the list of what the proof reads. The design file
+carries no verification code. Generation checks
 all selected targets before opening or replacing a selected output file. If any
 target exists, the command fails without replacing any selected file unless
 `-f` or `--force` is present.
@@ -194,7 +196,7 @@ qsoc generate module --with-uvm -l <library> <module>
 ```
 
 The command selects `<module>.v`, `<module>_uvm_if.sv`,
-`<module>_uvm_pkg.sv`, `<module>_uvm_tb.sv`, and `<module>_uvm.f`. The file
+`<module>_uvm_pkg.sv`, `<module>_uvm_tb.sv`, and `<module>_uvm.fl`. The file
 list contains relative generated sources; the UVM library remains an external
 dependency. Set `UVM_HOME` to the UVM checkout root and run from the generated
 module directory. The following invocation is verified with UVM 2020.3.1 and

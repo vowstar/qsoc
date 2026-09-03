@@ -114,7 +114,7 @@ private:
             QDir(outputDirectory).filePath("timer_ctrl_uvm_if.sv"),
             QDir(outputDirectory).filePath("timer_ctrl_uvm_pkg.sv"),
             QDir(outputDirectory).filePath("timer_ctrl_uvm_tb.sv"),
-            QDir(outputDirectory).filePath("timer_ctrl_uvm.f"),
+            QDir(outputDirectory).filePath("timer_ctrl_uvm.fl"),
         };
     }
 

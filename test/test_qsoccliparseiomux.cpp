@@ -129,7 +129,7 @@ private:
             QDir(outputDirectory).filePath("iomux0_regs.v"),
             QDir(outputDirectory).filePath("iomux0_conn.v"),
             QDir(outputDirectory).filePath("iomux0.v"),
-            QDir(outputDirectory).filePath("iomux0.f"),
+            QDir(outputDirectory).filePath("iomux0.fl"),
             QDir(outputDirectory).filePath("iomux0.iomux.rpt"),
         };
     }
@@ -289,7 +289,7 @@ void Test::generateWritesArtifactsAndRequiresForce()
     QVERIFY(top.contains("module iomux0_core ("));
     QVERIFY(top.contains("module iomux0 ("));
     QVERIFY(top.contains("iomux0_regs u_regs ("));
-    const QString fileList = readTextFile(QDir(outputDirectory).filePath("iomux0.f"));
+    const QString fileList = readTextFile(QDir(outputDirectory).filePath("iomux0.fl"));
     QCOMPARE(fileList, QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
     const QString report = readTextFile(QDir(outputDirectory).filePath("iomux0.iomux.rpt"));
     QVERIFY(report.contains("IOMUX route report for iomux0"));
@@ -327,7 +327,8 @@ void Test::generateWithFormalAndUvmTargetsRegs()
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_if.sv"));
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_pkg.sv"));
     paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_tb.sv"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm.f"));
+    paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm.fl"));
+    paths.append(QDir(outputDirectory).filePath("iomux0_formal.fl"));
     for (const QString &path : paths) {
         QVERIFY2(QFile::exists(path), qPrintable(path));
     }

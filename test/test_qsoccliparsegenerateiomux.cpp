@@ -1002,7 +1002,7 @@ pvss:
     QVERIFY2(
         report.contains("north: 2 items\n  0 u_pad/u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
         qPrintable(report));
-    QVERIFY2(readTextFile(out.filePath("iomux0.f")).contains("iomux0_ring.v\n"), qPrintable(report));
+    QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_ring.v\n"), qPrintable(report));
 }
 
 } // namespace

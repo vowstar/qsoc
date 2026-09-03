@@ -3711,16 +3711,27 @@ void Test::padModuleDrivesPinsFromTheTable()
         "(pad_pull_mode_i[7:4] == 4'd4) ? (pad_io[1] ? 4'd2 : 4'd1) : pad_pull_mode_i[7:4];"));
     QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
     QVERIFY(pad.contains("    .PE(PE_1_w),"));
-    QVERIFY(pad.contains("`ifdef FORMAL"));
-    QVERIFY(
-        pad.contains("always @(*) assert_pull_select_needs_enable_0: assert(!PS_0_w || PE_0_w);"));
-    QVERIFY(pad.contains(
-        "always @(*) assume_ie_oe_exclusive_1: "
-        "assume(!(pad_input_enable_i[1] && pad_output_enable_i[1]));"));
-    QVERIFY(pad.contains(
-        "always @(posedge formal_clk) assume_pull_holds_across_oe_rise_0: "
-        "assume(!$rose(pad_output_enable_i[0]) || $stable(PE_0_w));"));
+    /* The design file carries no verification code; the harness reaches the
+     * pad nets through u_pad instead. */
+    QVERIFY(!pad.contains("FORMAL"));
+    QVERIFY(!pad.contains("assert"));
     QVERIFY(!pad.contains("always @(*) begin"));
+    /* The stub of the cell holds them, once, over the cell's own pins; the
+     * pad module instantiates it per pin. */
+    QSocIomuxPlan stubbed         = plan;
+    stubbed.padCells[0].cellPorts = padCellPorts();
+    const QString harness         = QSocIomuxFormal::generatePad(stubbed).systemVerilog;
+    QVERIFY(harness.contains("module gpio_pad_ps ("));
+    QVERIFY(harness.contains("(* gclk *) wire formal_clk;"));
+    QVERIFY(harness.contains("always @(*) assert_pull_select_needs_enable: assert(!PS || PE);"));
+    QVERIFY(harness.contains("always @(*) assume_ie_oe_exclusive: assume(!(IE && OE));"));
+    QVERIFY(harness.contains(
+        "always @(posedge formal_clk) assume_pull_holds_across_oe_rise: "
+        "assume(!$rose(OE) || $stable(PE));"));
+    QVERIFY(!harness.contains("u_pad."));
+    QVERIFY(
+        QSocIomuxFormal::generateFileList(plan).endsWith(
+            "iomux0_pad.v\niomux0_regs_formal.sv\niomux0_hs_formal.sv\niomux0_pad_formal.sv\n"));
 
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
     QVERIFY(top.contains("    inout  wire [1:0] pad_io,"));
@@ -3925,16 +3936,6 @@ gpio_pad_ps u_pad_1 (
     .PS(PS_1_w),
     .DS(DS_1_w)
 );
-
-`ifdef FORMAL
-(* gclk *) wire formal_clk;
-always @(*) assert_pull_select_needs_enable_0: assert(!PS_0_w || PE_0_w);
-always @(*) assert_pull_select_needs_enable_1: assert(!PS_1_w || PE_1_w);
-always @(*) assume_ie_oe_exclusive_0: assume(!(pad_input_enable_i[0] && pad_output_enable_i[0]));
-always @(*) assume_ie_oe_exclusive_1: assume(!(pad_input_enable_i[1] && pad_output_enable_i[1]));
-always @(posedge formal_clk) assume_pull_holds_across_oe_rise_0: assume(!$rose(pad_output_enable_i[0]) || $stable(PE_0_w));
-always @(posedge formal_clk) assume_pull_holds_across_oe_rise_1: assume(!$rose(pad_output_enable_i[1]) || $stable(PE_1_w));
-`endif
 
 endmodule
 )gold");

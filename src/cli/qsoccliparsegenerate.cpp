@@ -361,7 +361,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         const QString regsPath        = outputFilePath(moduleName + QStringLiteral("_regs.v"));
         const QString connPath        = outputFilePath(moduleName + QStringLiteral("_conn.v"));
         const QString topPath         = outputFilePath(moduleName + QStringLiteral(".v"));
-        const QString listPath        = outputFilePath(moduleName + QStringLiteral(".f"));
+        const QString listPath        = outputFilePath(moduleName + QStringLiteral(".fl"));
         const QString reportPath      = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
         const QString integrationPath = outputFilePath(
             moduleName + QStringLiteral("_integration.soc_net"));
@@ -401,6 +401,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         QString formalSbyPath;
         QString hsFormalSystemVerilogPath;
         QString hsFormalSbyPath;
+        QString padFormalSystemVerilogPath;
+        QString padFormalSbyPath;
+        QString formalListPath;
         quint32 bankPins = QSocIomuxFormal::kDefaultBankPins;
         if (parser.isSet("formal-bank")) {
             bool ok  = false;
@@ -425,13 +428,15 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             artifacts.push_back({hsFormalSbyPath, hsCollateral.sby.toUtf8()});
             const QSocIomuxFormalCollateral padCollateral = QSocIomuxFormal::generatePad(plan);
             if (!padCollateral.systemVerilog.isEmpty()) {
+                padFormalSystemVerilogPath = outputFilePath(
+                    moduleName + QStringLiteral("_pad_formal.sv"));
+                padFormalSbyPath = outputFilePath(moduleName + QStringLiteral("_pad_formal.sby"));
                 artifacts.push_back(
-                    {outputFilePath(moduleName + QStringLiteral("_pad_formal.sv")),
-                     padCollateral.systemVerilog.toUtf8()});
-                artifacts.push_back(
-                    {outputFilePath(moduleName + QStringLiteral("_pad_formal.sby")),
-                     padCollateral.sby.toUtf8()});
+                    {padFormalSystemVerilogPath, padCollateral.systemVerilog.toUtf8()});
+                artifacts.push_back({padFormalSbyPath, padCollateral.sby.toUtf8()});
             }
+            formalListPath = outputFilePath(moduleName + QStringLiteral("_formal.fl"));
+            artifacts.push_back({formalListPath, QSocIomuxFormal::generateFileList(plan).toUtf8()});
         }
         QString uvmInterfacePath;
         QString uvmPackagePath;
@@ -442,7 +447,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             uvmInterfacePath = outputFilePath(moduleName + QStringLiteral("_regs_uvm_if.sv"));
             uvmPackagePath   = outputFilePath(moduleName + QStringLiteral("_regs_uvm_pkg.sv"));
             uvmTestbenchPath = outputFilePath(moduleName + QStringLiteral("_regs_uvm_tb.sv"));
-            uvmFileListPath  = outputFilePath(moduleName + QStringLiteral("_regs_uvm.f"));
+            uvmFileListPath  = outputFilePath(moduleName + QStringLiteral("_regs_uvm.fl"));
             artifacts.push_back({uvmInterfacePath, collateral.interfaceSource.toUtf8()});
             artifacts.push_back({uvmPackagePath, collateral.packageSource.toUtf8()});
             artifacts.push_back({uvmTestbenchPath, collateral.testbenchSource.toUtf8()});
@@ -469,6 +474,14 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             messages.append(
                 QCoreApplication::translate("main", "Generated HS formal collateral: %1, %2")
                     .arg(hsFormalSystemVerilogPath, hsFormalSbyPath));
+            if (!padFormalSystemVerilogPath.isEmpty()) {
+                messages.append(
+                    QCoreApplication::translate("main", "Generated pad formal collateral: %1, %2")
+                        .arg(padFormalSystemVerilogPath, padFormalSbyPath));
+            }
+            messages.append(
+                QCoreApplication::translate("main", "Generated formal file list: %1")
+                    .arg(formalListPath));
             const quint32 banks = (plan.pinCount + bankPins - 1) / bankPins;
             if (banks > 1) {
                 messages.append(
@@ -559,6 +572,10 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             QStringLiteral("%1/%2_formal.sby").arg(relativeDirectory, moduleName));
         artifacts.push_back({formalSystemVerilogPath, formalCollateral.systemVerilog.toUtf8()});
         artifacts.push_back({formalSbyPath, formalCollateral.sby.toUtf8()});
+        artifacts.push_back(
+            {outputDirectory.filePath(
+                 QStringLiteral("%1/%2_formal.fl").arg(relativeDirectory, moduleName)),
+             QStringLiteral("%1.v\n%1_formal.sv\n").arg(moduleName).toUtf8()});
     }
     QString uvmInterfacePath;
     QString uvmPackagePath;
@@ -572,7 +589,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         uvmTestbenchPath = outputDirectory.filePath(
             QStringLiteral("%1/%2_uvm_tb.sv").arg(relativeDirectory, moduleName));
         uvmFileListPath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_uvm.f").arg(relativeDirectory, moduleName));
+            QStringLiteral("%1/%2_uvm.fl").arg(relativeDirectory, moduleName));
         artifacts.push_back({uvmInterfacePath, uvmCollateral.interfaceSource.toUtf8()});
         artifacts.push_back({uvmPackagePath, uvmCollateral.packageSource.toUtf8()});
         artifacts.push_back({uvmTestbenchPath, uvmCollateral.testbenchSource.toUtf8()});

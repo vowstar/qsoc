@@ -4679,54 +4679,6 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
         lines.append(QString());
     }
 
-    bool anyConstraint = false;
-    bool anyTemporal   = false;
-    for (const QSocPadCellPlan &cell : plan.padCells) {
-        for (const QSocPadConstraint &item : cell.constraint) {
-            anyConstraint = true;
-            anyTemporal   = anyTemporal || item.temporal;
-        }
-    }
-    if (anyConstraint) {
-        /* The constraints live here, next to the nets they name, so no proof
-         * needs a hierarchical reference. The guard keeps the file Verilog-2001
-         * for every tool that does not define FORMAL. Temporal properties clock
-         * on the formal global clock because this module has none of its own. */
-        lines.append("`ifdef FORMAL");
-        if (anyTemporal) {
-            lines.append("(* gclk *) wire formal_clk;");
-        }
-        for (qsizetype classIndex = 0; classIndex < plan.padCells.size(); ++classIndex) {
-            const QSocPadCellPlan &cell = plan.padCells.at(classIndex);
-            for (const QSocPadConstraint &item : cell.constraint) {
-                const QString verb = item.assume ? QStringLiteral("assume")
-                                                 : QStringLiteral("assert");
-                for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
-                    if (plan.pinClass.at(pin) != classIndex) {
-                        continue;
-                    }
-                    QString body;
-                    rewriteConstraint(cell, item.body, pin, &body, nullptr, nullptr);
-                    if (item.temporal) {
-                        /* Clocked immediate form. The open engine has $past,
-                         * $rose and $stable but no SVA sequences, so an
-                         * implication is written as a boolean. */
-                        lines.append(QString("always @(posedge formal_clk) %1_%2_%3: %4(%5);")
-                                         .arg(verb, item.name)
-                                         .arg(pin)
-                                         .arg(verb, body));
-                    } else {
-                        lines.append(QString("always @(*) %1_%2_%3: %4(%5);")
-                                         .arg(verb, item.name)
-                                         .arg(pin)
-                                         .arg(verb, body));
-                    }
-                }
-            }
-        }
-        lines.append("`endif");
-        lines.append(QString());
-    }
     lines.append("endmodule");
     lines.append(QString());
     return lines.join('\n');
@@ -5176,18 +5128,6 @@ QString QSocIomuxGenerator::generateRingReport(const QSocIomuxPlan &plan)
     }
     lines.append(QString());
     return lines.join('\n');
-}
-
-QString QSocIomuxGenerator::padConstraintForPin(
-    const QSocIomuxPlan &plan, qsizetype index, quint32 pin)
-{
-    const QSocPadCellPlan &cell = plan.padClass(pin);
-    if (index < 0 || index >= cell.constraint.size()) {
-        return QString();
-    }
-    QString body;
-    rewriteConstraint(cell, cell.constraint.at(index).body, pin, &body, nullptr, nullptr);
-    return body;
 }
 
 QString QSocIomuxGenerator::generateFileList(const QSocIomuxPlan &plan)

@@ -26,11 +26,15 @@ QSocIomuxFormalCollateral generate(const QSocIomuxPlan &plan, quint32 bankPins =
 /**
  * @brief Harness for the pad module: the declared constraints, per pin.
  *
- * Empty when no pad cell is declared or it carries no constraint. The cell
- * itself is a stub built from the library port table, so the proof speaks
- * about the wiring this generator emits and nothing inside the cell.
+ * Empty when no pad cell is declared or it carries no constraint. The
+ * constraints are written here, reaching the pad module's nets through the
+ * `u_pad` instance, so the design file carries no verification code. The
+ * cell itself is a stub built from the library port table, so the proof
+ * speaks about the wiring this generator emits and nothing inside the cell.
  */
 QSocIomuxFormalCollateral generatePad(const QSocIomuxPlan &plan);
+/** The files every proof of the block reads: the design first, then the harnesses. */
+QString generateFileList(const QSocIomuxPlan &plan);
 
 } // namespace QSocIomuxFormal
 

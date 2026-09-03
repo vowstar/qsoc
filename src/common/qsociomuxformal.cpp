@@ -607,6 +607,28 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generate(const QSocIomuxPlan &plan, q
     return collateral;
 }
 
+QString QSocIomuxFormal::generateFileList(const QSocIomuxPlan &plan)
+{
+    if (plan.pinCount == 0 || plan.hsSlots == 0) {
+        return QString();
+    }
+    QStringList files
+        = {plan.moduleName + "_regs.v", plan.moduleName + "_conn.v", plan.moduleName + ".v"};
+    bool anyConstraint = false;
+    for (const QSocPadCellPlan &cell : plan.padCells) {
+        anyConstraint = anyConstraint || !cell.constraint.isEmpty();
+    }
+    if (plan.hasPadCell()) {
+        files.append(plan.moduleName + "_pad.v");
+    }
+    files.append(plan.moduleName + "_regs_formal.sv");
+    files.append(plan.moduleName + "_hs_formal.sv");
+    if (anyConstraint) {
+        files.append(plan.moduleName + "_pad_formal.sv");
+    }
+    return files.join('\n') + "\n";
+}
+
 QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan)
 {
     bool anyConstraint = false;
@@ -645,6 +667,30 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
                 sv.append(QString("(* anyseq *) reg %1_any;").arg(it.key()));
                 sv.append(QString("assign %1 = %1_any;").arg(it.key()));
             }
+        }
+        /* The constraints are written over the cell's own pins, so the stub
+         * is their natural home: the pad module instantiates it once per pin
+         * of the class and every pin gets its copy, named by its instance.
+         * The design file carries none of this. Temporal properties clock on
+         * the formal global clock because the pad has no clock; the open
+         * engine has $past, $rose and $stable but no SVA sequences, so an
+         * implication is written as a boolean. */
+        bool anyTemporal = false;
+        for (const QSocPadConstraint &item : cell.constraint) {
+            anyTemporal = anyTemporal || item.temporal;
+        }
+        if (anyTemporal) {
+            sv.append("(* gclk *) wire formal_clk;");
+        }
+        for (const QSocPadConstraint &item : cell.constraint) {
+            const QString verb = item.assume ? QStringLiteral("assume") : QStringLiteral("assert");
+            sv.append(QString("%1 %2_%3: %2(%4);")
+                          .arg(
+                              item.temporal ? QStringLiteral("always @(posedge formal_clk)")
+                                            : QStringLiteral("always @(*)"),
+                              verb,
+                              item.name,
+                              item.body));
         }
         sv.append("endmodule");
         sv.append(QString());

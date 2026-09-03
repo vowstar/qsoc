@@ -241,10 +241,11 @@ The open engine has no SVA sequences, so write an implication as a boolean.
 The generator settles `kind` when it is absent. A body over pull and drive
 ports alone is a claim about logic this generator emits, so it is an
 `assert`. A body that reaches a role port speaks about what routes and
-registers will do, so it is an `assume`. The constraints live in `_pad.v`
-under `ifdef FORMAL`, and `--with-formal` emits `<module>_pad_formal.sby`
-that proves them against a stub of the cell built from the library port
-table. A false claim fails by name.
+registers will do, so it is an `assume`. `--with-formal` writes them into
+`<module>_pad_formal.sv`, where they reach the nets of the pad module
+through its `u_pad` instance, and `<module>_pad_formal.sby` proves them
+against a stub of the cell built from the library port table. `_pad.v`
+itself carries no verification code. A false claim fails by name.
 
 == Pad Classes
 <iomux-pad-classes>
@@ -571,8 +572,11 @@ one bus cycle to register as an edge.
 <iomux-generated-artifacts>
 Generation writes six files under `output/<library>/<module>/`:
 `<module>_regs.v`, `<module>_conn.v`, `<module>.v` with the private core and
-the public wrapper, the `<module>.f` file list, the `<module>.iomux.rpt`
-route report, and the `<module>_integration.soc_net` fragment. Selector
+the public wrapper, the `<module>.fl` file list, the `<module>.iomux.rpt`
+route report, and the `<module>_integration.soc_net` fragment. Every `.v`
+is Verilog-2001 for synthesis and simulation and carries no verification
+code; verification lives in the `_formal.sv` files and their `.sby` jobs,
+listed by `<module>_formal.fl`, and never enters `<module>.fl`. Selector
 sidebands stay inside the wrapper and never reach the public interface. Each
 endpoint port carries a `function.signal` comment in the wrapper header. The
 report shows each selector location and lists unused slots per pin.
@@ -608,8 +612,10 @@ every option register free and asserts, per slot and for invalid codes, the
 pad bundle after source selection, inversion, and the safe row under
 `pad_force_i`, the pull mode, strength selects, and every control row after
 their source bits and the same force, and every receive sink after
-substitution and inversion. A pad cell adds the constraint proof described
-above.
+substitution and inversion. A pad cell with constraints adds the pad proof
+described above. `<module>_formal.fl` lists the design files the proofs
+read followed by the harnesses, so another engine can take the whole set
+in one go.
 
 The routing proof is per pin, and one job over a whole design grows faster
 than the pin count, so the job file cuts the pins into banks of

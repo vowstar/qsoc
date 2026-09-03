@@ -640,9 +640,7 @@ public:
      */
     static QSocIoRingGeometry ringGeometry(const QSocIomuxPlan &plan);
     /** The DEF of the ring, empty when the geometry is incomplete. */
-    static QString generateRingDef(const QSocIomuxPlan &plan);
-    /** The constraint body with cell ports rewritten to the nets of one pin. */
-    static QString    padConstraintForPin(const QSocIomuxPlan &plan, qsizetype index, quint32 pin);
+    static QString    generateRingDef(const QSocIomuxPlan &plan);
     static QString    generateFileList(const QSocIomuxPlan &plan);
     static QString    generateIntegrationNetlist(const QSocIomuxPlan &plan);
     static YAML::Node describeModuleYaml(const QSocIomuxPlan &plan);
