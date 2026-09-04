@@ -1300,6 +1300,11 @@ YAML::Node QSocModuleManager::getModuleYaml(const QString &moduleName)
 {
     YAML::Node result;
 
+    /* A derived shell has no stored entry; its view comes from the source. */
+    if (!iomuxShellBase(moduleName).isEmpty()) {
+        return result;
+    }
+
     /* Check if module exists in moduleData */
     if (!isModuleExist(moduleName)) {
         QSocConsole::warn() << "Module does not exist:" << moduleName;
@@ -1312,10 +1317,50 @@ YAML::Node QSocModuleManager::getModuleYaml(const QString &moduleName)
     return result;
 }
 
+QString QSocModuleManager::iomuxShellBase(const QString &moduleName)
+{
+    const QString suffix = QSocIomuxGenerator::ioModuleName(QString());
+    if (!moduleName.endsWith(suffix) || moduleName.size() <= suffix.size()) {
+        return QString();
+    }
+    const QString base = moduleName.left(moduleName.size() - suffix.size());
+    if (!moduleData[base.toStdString()].IsDefined()
+        || moduleData[moduleName.toStdString()].IsDefined()) {
+        return QString();
+    }
+    const YAML::Node stored = moduleData[base.toStdString()];
+    if (!stored["generator"]) {
+        return QString();
+    }
+    const QSocModuleDefinition definition = moduleYamlToDefinition(QString(), base, stored);
+    if (!QSocIomuxGenerator::isIomux(definition)) {
+        return QString();
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    return QSocIomuxGenerator::buildPlan(definition, &plan, &errors) && plan.hasPadCell()
+               ? base
+               : QString();
+}
+
 YAML::Node QSocModuleManager::getResolvedModuleYaml(const QString &moduleName, QStringList *errors)
 {
     if (errors) {
         errors->clear();
+    }
+    const QString shellBase = iomuxShellBase(moduleName);
+    if (!shellBase.isEmpty()) {
+        const QSocModuleDefinition definition
+            = moduleYamlToDefinition(QString(), shellBase, moduleData[shellBase.toStdString()]);
+        QSocIomuxPlan plan;
+        QStringList   localErrors;
+        if (QSocIomuxGenerator::buildPlan(definition, &plan, &localErrors)) {
+            return QSocIomuxGenerator::describeIoModuleYaml(plan);
+        }
+        if (errors) {
+            *errors = localErrors;
+        }
+        return YAML::Node();
     }
     const YAML::Node stored = getModuleYaml(moduleName);
     if (!stored || !stored["generator"]) {
@@ -1775,7 +1820,8 @@ bool QSocModuleManager::remove(const QStringList &libraryNameList)
 
 bool QSocModuleManager::isModuleExist(const QString &moduleName)
 {
-    return moduleData[moduleName.toStdString()].IsDefined();
+    return moduleData[moduleName.toStdString()].IsDefined()
+           || !iomuxShellBase(moduleName).isEmpty();
 }
 
 bool QSocModuleManager::isModuleExist(const QRegularExpression &moduleNameRegex)

@@ -625,9 +625,18 @@ public:
     static QString            generateConnVerilog(const QSocIomuxPlan &plan);
     static QString            generateRegsVerilog(const QSocIomuxPlan &plan);
     static QString            generateTopVerilog(const QSocIomuxPlan &plan);
-    static QString            generatePadVerilog(const QSocIomuxPlan &plan);
-    /** The ring cells the mux does not drive, empty without an io_ring. */
-    static QString generateRingVerilog(const QSocIomuxPlan &plan);
+    /**
+     * @brief The pad shell: decode, cell instances, direct cells, and the ring.
+     *
+     * A sibling of the wrapper at the chip top, so pads, the reset and clock
+     * sources, and everything physical stay out of the digital block. Empty
+     * without a pad cell.
+     */
+    static QString generateIoVerilog(const QSocIomuxPlan &plan);
+    /** `<module>_io`, the shell module and the suffix the module manager derives it by. */
+    static QString ioModuleName(const QString &moduleName);
+    /** The module library view of the shell, empty without a pad cell. */
+    static YAML::Node describeIoModuleYaml(const QSocIomuxPlan &plan);
     /** Every ring instance by side, in order, with what it stands for. */
     static QString generateRingReport(const QSocIomuxPlan &plan);
     /**

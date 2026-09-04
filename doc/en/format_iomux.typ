@@ -105,9 +105,15 @@ neither.
 == Pad Cell
 <iomux-pad-cell>
 `generator.pad_cell` names the pad cell the design uses and the generator
-instantiates it, one per pin, in `<module>_pad.v`. The public wrapper then
-exposes a single `pad_io` vector in place of the four pad vectors, and
-`integration.pad` names only `io`, the net that vector uplinks to. With a
+instantiates it, one per pin, in `<module>_io.v`, the pad shell. The shell
+is a sibling of the wrapper, not a child: the wrapper stays digital and
+drives the abstract pad bus out, the four role vectors and one 4-bit lane
+per pin for the pull mode, each strength select, and each control, and the
+shell turns that bus into cell pins. Reset and clock sources, the pads, and
+everything physical live in the shell, which the chip top places like any
+other block and a flow can replace whole. The integration fragment
+instantiates both and wires the bus between them, so `integration.pad`
+names only `io`, the net the shell's `pad_io` vector uplinks to. With a
 `safe` row the wrapper also takes `pad_force_i`, linked from
 `integration.force`.
 
@@ -242,9 +248,9 @@ The generator settles `kind` when it is absent. A body over pull and drive
 ports alone is a claim about logic this generator emits, so it is an
 `assert`. A body that reaches a role port speaks about what routes and
 registers will do, so it is an `assume`. `--with-formal` writes them into
-`<module>_pad_formal.sv`, where they reach the nets of the pad module
-through its `u_pad` instance, and `<module>_pad_formal.sby` proves them
-against a stub of the cell built from the library port table. `_pad.v`
+the stub of the cell in `<module>_io_formal.sv`, built from the library port
+table, so every pin that instantiates the cell carries a copy named by its
+instance, and `<module>_io_formal.sby` proves them over the shell. `_io.v`
 itself carries no verification code. A false claim fails by name.
 
 == Pad Classes
@@ -334,24 +340,22 @@ wrapper with the direction of the cell port, an `inout` uplinks and the rest
 link in the integration fragment, and every input of the cell must be
 named.
 
-Generation adds `<module>_ring.v`, a module the wrapper instantiates as
-`u_ring` beside `u_pad`, holding the corners, supplies, plain cells, and direct
-cells, and `<module>.ring.rpt`, one table per side with each instance, its
-cell, and what it stands for. The signal pads stay in `<module>_pad.v`, and
-a pin on a side whose class cell has a `variant` for it instantiates that
-variant under the same instance name. Instance names carry identity, never
-position: `u_pad/u_pad_<pin>`, `u_ring/u_<net>_<k>` with `k` counting that
-net around the ring or the `id` an item gives, `u_ring/u_corner_<nw|sw|se|ne>`,
-`u_ring/u_<cell>_<k>` counting that cell or the `name` an item gives, and
-`u_ring/u_<key>` for a direct cell. Moving a pad to another side or reordering a side changes the
-report and, when the library has variants, the module a pad instantiates,
-and nothing else.
+The corners, supplies, plain cells, and direct cells join the signal pads in
+`<module>_io.v`, and `<module>.ring.rpt` lists one table per side with each
+instance, its cell, and what it stands for. A pin on a side whose class cell
+has a `variant` for it instantiates that variant under the same instance
+name. Instance names carry identity, never position: `u_pad_<pin>`,
+`u_<net>_<k>` with `k` counting that net around the ring or the `id` an item
+gives, `u_corner_<nw|sw|se|ne>`, `u_<cell>_<k>` counting that cell or the
+`name` an item gives, and `u_<key>` for a direct cell. Moving a pad to
+another side or reordering a side changes the report and, when the library
+has variants, the module a pad instantiates, and nothing else.
 
 With a `die`, a `corner`, and a `width` in `io_lib` for every cell on the
-ring, generation also writes `<module>_ring.def`: `DIEAREA`, and every
+ring, generation also writes `<module>_io.def`: `DIEAREA`, and every
 corner, pad, supply, plain cell, direct cell, and fill as a `FIXED`
-component named by its path below `prefix`, which defaults to the
-integration instance and a slash. `die` is the area the ring occupies, the
+component named by its path below `prefix`, which defaults to the shell
+instance, `<instance>_io`, and a slash. `die` is the area the ring occupies, the
 inside of the seal ring, not the cut die. Corners, supplies, plain cells,
 and fills carry `SOURCE DIST`, so a back end knows the netlist never drives
 them. Each side packs from its first corner in the order written, going
@@ -359,7 +363,7 @@ clockwise from the north-west corner: west top to bottom, south left to
 right, east bottom to top, north right to left. An item's `gap` leaves that
 many microns before it and `offset` pins it at that distance from the
 corner; fill cells of kind `fill`, widest first, close every gap and each
-side's tail, and appear in `<module>_ring.v` as `u_fill_<side>_<k>`. The
+side's tail, and appear in `<module>_io.v` as `u_fill_<side>_<k>`. The
 ring has one depth: a cell without a `height` takes the corner's, and a
 corner without one is square. Orientations follow the
 usual convention, west `E`, south `N`, east `W`, north `S`, and the corners
@@ -573,7 +577,8 @@ one bus cycle to register as an edge.
 Generation writes six files under `output/<library>/<module>/`:
 `<module>_regs.v`, `<module>_conn.v`, `<module>.v` with the private core and
 the public wrapper, the `<module>.fl` file list, the `<module>.iomux.rpt`
-route report, and the `<module>_integration.soc_net` fragment. Every `.v`
+route report, and the `<module>_integration.soc_net` fragment, plus
+`<module>_io.v`, the pad shell, when a pad cell is declared. Every `.v`
 is Verilog-2001 for synthesis and simulation and carries no verification
 code; verification lives in the `_formal.sv` files and their `.sby` jobs,
 listed by `<module>_formal.fl`, and never enters `<module>.fl`. Selector
@@ -592,8 +597,12 @@ qsoc generate verilog --merge <base.soc_net> <module>_integration.soc_net
 ```
 
 The fragment instantiates the public wrapper once and connects the clock, the
-reset, the four pad vectors, the control bus, and every non-constant endpoint
-exactly once. The control link must carry exactly one master before the merge
+reset, the pad bus, the control bus, and every non-constant endpoint exactly
+once. With a pad cell it also instantiates the shell as `<instance>_io`,
+links the bus between the two on nets named `<instance>_pad_<signal>`,
+uplinks `pad_io` and every `inout` net of a direct cell, and links the other
+direct nets. The merge flow knows `<module>_io` from the source alone, so
+nothing has to be imported. The control link must carry exactly one master before the merge
 and exactly one master and one slave after it. An invalid generator source
 blocks the whole netlist instead of falling back to a stale module view. A
 generated IOMUX instance name may not already exist in another merged input.

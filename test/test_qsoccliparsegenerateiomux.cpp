@@ -879,8 +879,8 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     createProject(directory, moduleText);
     const CommandResult generated = generateModule(directory);
     QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
-    const QString padPath = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_pad.v");
-    const QString pad = readTextFile(padPath);
+    const QString padPath = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_io.v");
+    const QString pad     = readTextFile(padPath);
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_3 ("), qPrintable(pad));
     const QString report = readTextFile(
         QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0.iomux.rpt"));
@@ -985,24 +985,25 @@ pvss:
         generated.output.contains("Ring DEF not written, needs io_ring.die"),
         qPrintable(generated.output));
     const QDir out(QDir(directory.path()).filePath("output/peripheral/iomux0"));
-    QVERIFY(!QFile::exists(out.filePath("iomux0_ring.def")));
-    const QString ring = readTextFile(out.filePath("iomux0_ring.v"));
-    QVERIFY2(ring.contains("pvss u_VSS_0 ();"), qPrintable(ring));
+    QVERIFY(!QFile::exists(out.filePath("iomux0_io.def")));
+    const QString ring = readTextFile(out.filePath("iomux0_io.v"));
+    QVERIFY2(ring.contains("module iomux0_io ("), qPrintable(ring));
     QVERIFY2(ring.contains("pvss u_VSS_1 ();"), qPrintable(ring));
     QVERIFY2(
         ring.contains("rst_pad u_rst (\n    .C(rst_n),\n    .IE(1'b1),\n    .PAD(pad_rst_n)\n);"),
         qPrintable(ring));
     QVERIFY2(ring.contains("    inout  wire pad_rst_n\n"), qPrintable(ring));
-    const QString pad = readTextFile(out.filePath("iomux0_pad.v"));
+    const QString pad = readTextFile(out.filePath("iomux0_io.v"));
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_0 ("), qPrintable(pad));
     QVERIFY2(pad.contains("gpio_pad_ps_v u_pad_3 ("), qPrintable(pad));
     const QString top = readTextFile(out.filePath("iomux0.v"));
-    QVERIFY2(top.contains("iomux0_ring u_ring ("), qPrintable(top));
+    QVERIFY2(!top.contains("u_pad") && !top.contains("pad_rst_n"), qPrintable(top));
+    QVERIFY2(pad.contains("pvss u_VSS_0 ();"), qPrintable(pad));
     const QString report = readTextFile(out.filePath("iomux0.ring.rpt"));
     QVERIFY2(
-        report.contains("north: 2 items\n  0 u_pad/u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
+        report.contains("north: 2 items\n  0 u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
         qPrintable(report));
-    QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_ring.v\n"), qPrintable(report));
+    QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_io.v\n"), qPrintable(report));
 }
 
 } // namespace

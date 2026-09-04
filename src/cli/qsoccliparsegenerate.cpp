@@ -335,7 +335,10 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
 
         const QStringList libraryModules = moduleManager->listModulesInLibrary(libraryName);
         for (const QString &suffix :
-             {QStringLiteral("_regs"), QStringLiteral("_conn"), QStringLiteral("_core")}) {
+             {QStringLiteral("_regs"),
+              QStringLiteral("_conn"),
+              QStringLiteral("_core"),
+              QStringLiteral("_io")}) {
             const QString derived = moduleName + suffix;
             if (libraryModules.contains(derived)) {
                 return showError(
@@ -373,22 +376,20 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
                {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
                {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
+        const QString ioModule = QSocIomuxGenerator::ioModuleName(moduleName);
         if (plan.hasPadCell()) {
             artifacts.push_back(
-                {outputFilePath(moduleName + QStringLiteral("_pad.v")),
-                 QSocIomuxGenerator::generatePadVerilog(plan).toUtf8()});
+                {outputFilePath(ioModule + QStringLiteral(".v")),
+                 QSocIomuxGenerator::generateIoVerilog(plan).toUtf8()});
         }
         if (plan.ioRing.declared) {
-            artifacts.push_back(
-                {outputFilePath(moduleName + QStringLiteral("_ring.v")),
-                 QSocIomuxGenerator::generateRingVerilog(plan).toUtf8()});
             artifacts.push_back(
                 {outputFilePath(moduleName + QStringLiteral(".ring.rpt")),
                  QSocIomuxGenerator::generateRingReport(plan).toUtf8()});
             const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
             if (geometry.complete) {
                 artifacts.push_back(
-                    {outputFilePath(moduleName + QStringLiteral("_ring.def")),
+                    {outputFilePath(ioModule + QStringLiteral(".def")),
                      QSocIomuxGenerator::generateRingDef(plan).toUtf8()});
             } else {
                 showInfo(
@@ -428,9 +429,8 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             artifacts.push_back({hsFormalSbyPath, hsCollateral.sby.toUtf8()});
             const QSocIomuxFormalCollateral padCollateral = QSocIomuxFormal::generatePad(plan);
             if (!padCollateral.systemVerilog.isEmpty()) {
-                padFormalSystemVerilogPath = outputFilePath(
-                    moduleName + QStringLiteral("_pad_formal.sv"));
-                padFormalSbyPath = outputFilePath(moduleName + QStringLiteral("_pad_formal.sby"));
+                padFormalSystemVerilogPath = outputFilePath(ioModule + QStringLiteral("_formal.sv"));
+                padFormalSbyPath = outputFilePath(ioModule + QStringLiteral("_formal.sby"));
                 artifacts.push_back(
                     {padFormalSystemVerilogPath, padCollateral.systemVerilog.toUtf8()});
                 artifacts.push_back({padFormalSbyPath, padCollateral.sby.toUtf8()});
