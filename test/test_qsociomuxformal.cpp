@@ -554,10 +554,10 @@ QSocIomuxPlan padPlan(const QString &claim)
 QStringList padSbyTasks(const QTemporaryDir &directory, const QSocIomuxPlan &plan)
 {
     const QDir dir(directory.path());
-    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
     const QSocIomuxFormalCollateral collateral = QSocIomuxFormal::generatePad(plan);
-    writeTextFile(dir.filePath("iomux0_pad_formal.sv"), collateral.systemVerilog);
-    writeTextFile(dir.filePath("iomux0_pad_formal.sby"), collateral.sby);
+    writeTextFile(dir.filePath("iomux0_io_formal.sv"), collateral.systemVerilog);
+    writeTextFile(dir.filePath("iomux0_io_formal.sby"), collateral.sby);
     return {QStringLiteral("prove"), QStringLiteral("bmc")};
 }
 
@@ -580,7 +580,7 @@ void Test::padConstraintsPassSbyWhenAvailable()
         const CommandResult result = runCommand(
             directory.path(),
             sby,
-            {QStringLiteral("-f"), QStringLiteral("iomux0_pad_formal.sby"), task});
+            {QStringLiteral("-f"), QStringLiteral("iomux0_io_formal.sby"), task});
         QVERIFY2(result.started, result.output.constData());
         QVERIFY2(result.finished, result.output.constData());
         QCOMPARE(result.exitStatus, QProcess::NormalExit);
@@ -607,7 +607,7 @@ void Test::padConstraintFalseClaimFailsSbyWhenAvailable()
     const CommandResult result = runCommand(
         directory.path(),
         sby,
-        {QStringLiteral("-f"), QStringLiteral("iomux0_pad_formal.sby"), QStringLiteral("bmc")});
+        {QStringLiteral("-f"), QStringLiteral("iomux0_io_formal.sby"), QStringLiteral("bmc")});
     QVERIFY2(result.started, result.output.constData());
     QVERIFY2(result.finished, result.output.constData());
     QVERIFY2(result.exitCode != 0, result.output.constData());

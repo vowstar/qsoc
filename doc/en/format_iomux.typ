@@ -105,9 +105,15 @@ neither.
 == Pad Cell
 <iomux-pad-cell>
 `generator.pad_cell` names the pad cell the design uses and the generator
-instantiates it, one per pin, in `<module>_pad.v`. The public wrapper then
-exposes a single `pad_io` vector in place of the four pad vectors, and
-`integration.pad` names only `io`, the net that vector uplinks to. With a
+instantiates it, one per pin, in `<module>_io.v`, the pad shell. The shell
+is a sibling of the wrapper, not a child: the wrapper stays digital and
+drives the abstract pad bus out, the four role vectors and one 4-bit lane
+per pin for the pull mode, each strength select, and each control, and the
+shell turns that bus into cell pins. Reset and clock sources, the pads, and
+everything physical live in the shell, which the chip top places like any
+other block and a flow can replace whole. The integration fragment
+instantiates both and wires the bus between them, so `integration.pad`
+names only `io`, the net the shell's `pad_io` vector uplinks to. With a
 `safe` row the wrapper also takes `pad_force_i`, linked from
 `integration.force`.
 
@@ -163,7 +169,7 @@ The control name is yours. It must be a Verilog identifier, because it
 appears as is in ports, register fields, and the report, and it may not be
 one of the names in the table below. Every cell pin is named once, by a
 role, by `pull`, or by one control. A cell may declare up to 16 controls of
-up to 256 rows each. A route asks for a row by label under `control`, as in
+up to 16 rows each. A route asks for a row by label under `control`, as in
 `control: {drive: high, slew: fast}`. A slot that names none, an unrouted
 slot, and a selector value above the slot count all take the default. A
 control with one row has nothing to select: its pins take that row, it owns
@@ -242,9 +248,9 @@ The generator settles `kind` when it is absent. A body over pull and drive
 ports alone is a claim about logic this generator emits, so it is an
 `assert`. A body that reaches a role port speaks about what routes and
 registers will do, so it is an `assume`. `--with-formal` writes them into
-`<module>_pad_formal.sv`, where they reach the nets of the pad module
-through its `u_pad` instance, and `<module>_pad_formal.sby` proves them
-against a stub of the cell built from the library port table. `_pad.v`
+the stub of the cell in `<module>_io_formal.sv`, built from the library port
+table, so every pin that instantiates the cell carries a copy named by its
+instance, and `<module>_io_formal.sby` proves them over the shell. `_io.v`
 itself carries no verification code. A false claim fails by name.
 
 == Pad Classes
@@ -299,15 +305,18 @@ pad_model:
 corners, breakers, and cells the mux does not drive such as an oscillator or the
 reset pad. It is optional, and a design without it generates exactly what it
 did before. `generator.io_lib` describes the cells it names: the `kind`
-(`signal`, `power`, `corner`, `fill`, `other`), the `width` and `height` in
-microns, and for a signal cell the module each side takes under `variant`.
+(`signal`, `power`, `corner`, `fill`, `other`), the `width` and `height` of
+its own box in microns, and what happens across the two axes under
+`variant`.
 Neither block knows a net or a port of the mux; each side lists identities in
 placement order and nothing else.
 
 ```yaml
 io_lib:
-  PDDW33: {kind: signal, width: 40, variant: {north: PDDW33_V, south: PDDW33_V}}
-  PVSS:   {kind: power, width: 20}
+  PDDW33:  {kind: signal, width: 40, variant: {west_east: PDDW33_H, north_south: PDDW33_V}}
+  PVSS:    {kind: power, width: 20, variant: rotate}
+  PVDD:    {kind: power, width: 20, variant: rotate}
+  PRCUT:   {kind: other, width: 5}
   PCORNER: {kind: corner, width: 60}
 io_ring:
   die: {width: 5100, height: 5200}
@@ -319,39 +328,58 @@ io_ring:
     west:  [{power: VSS}, {pin: 0}, {pin: 1}, {direct: rst}]
     south: [{power: VDDIO}, {pin: 2}, {cell: PRCUT}]
     east:  [{pin: 3}, {power: VSS, id: 7}]
-    north: []
+    north: [{power: VDDIO}]
 ```
 
 An item is one of `pin`, `power`, `cell`, or `direct`. Every pin appears on
 exactly one side. A `power` item names a net declared under `power`, a
 `cell` item any cell with no ports of its own, a breaker, a clamp, an
-explicit filler, and a `direct` item a key declared under `direct`; a corner
-or supply that `io_lib` describes must be declared as such. A `variant`
-applies to every kind, so a supply or breaker that comes in a horizontal
-and a vertical form takes the right one on each side. A direct cell maps each of its
+explicit filler, and a `direct` item a key declared under `direct`. A cell
+`io_lib` describes has to be used as its kind says: a supply belongs under
+`power`, where its net is named and its instances are counted per net, and
+a corner under `corner`, so only an `other` or a `fill` cell is a `cell`
+item.
+
+The west and east sides are one axis, the north and south sides the other.
+The two sides of an axis always sit 180 degrees apart, so a cell that lands
+on both axes must say what happens across them: `variant: rotate` when one
+layout serves both, or `variant: {west_east: A, north_south: B}` when the
+library draws one cell per axis. Silence would not tell the two apart, so a
+cell on both axes without either is an error, and a cell the library does not
+describe at all is not, because there is no variant to pick. A cell on one
+axis needs neither, and a map that names one axis and not the other is
+refused. An axis entry may also carry its own box, `{cell: A, width: 90,
+height: 45}`, measured in the cell's own frame like every other box here;
+without it the axis keeps the box of the cell it belongs to. The rule
+applies to every kind that sits on a side, so a supply, a breaker, or a fill
+that comes in two forms takes the right one on each side. A fill reaches
+every side it can, so it counts as sitting on both axes. A corner sits on
+neither, and declaring an axis map on one is refused. A direct cell maps each of its
 ports to a wrapper net or to `1'b0` or `1'b1`; the nets become ports of the
 wrapper with the direction of the cell port, an `inout` uplinks and the rest
 link in the integration fragment, and every input of the cell must be
 named.
 
-Generation adds `<module>_ring.v`, a module the wrapper instantiates as
-`u_ring` beside `u_pad`, holding the corners, supplies, plain cells, and direct
-cells, and `<module>.ring.rpt`, one table per side with each instance, its
-cell, and what it stands for. The signal pads stay in `<module>_pad.v`, and
-a pin on a side whose class cell has a `variant` for it instantiates that
-variant under the same instance name. Instance names carry identity, never
-position: `u_pad/u_pad_<pin>`, `u_ring/u_<net>_<k>` with `k` counting that
-net around the ring or the `id` an item gives, `u_ring/u_corner_<nw|sw|se|ne>`,
-`u_ring/u_<cell>_<k>` counting that cell or the `name` an item gives, and
-`u_ring/u_<key>` for a direct cell. Moving a pad to another side or reordering a side changes the
-report and, when the library has variants, the module a pad instantiates,
-and nothing else.
+The corners, supplies, plain cells, and direct cells join the signal pads in
+`<module>_io.v`, and `<module>.ring.rpt` lists one table per side with each
+instance, its cell, and what it stands for. A pin on a side whose class cell
+has a `variant` for it instantiates that variant under the same instance
+name. Instance names carry identity, never position: `u_pad_<pin>`,
+`u_<net>_<k>` with `k` counting that net around the ring or the `id` an item
+gives, `u_corner_<nw|sw|se|ne>`, `u_<cell>_<k>` counting that cell or the
+`name` an item gives, and `u_<key>` for a direct cell. Moving a pad to
+another side or reordering a side changes the report and, when the library
+has variants, the module a pad instantiates, and nothing else.
 
 With a `die`, a `corner`, and a `width` in `io_lib` for every cell on the
-ring, generation also writes `<module>_ring.def`: `DIEAREA`, and every
+ring, generation also writes `<module>_io.def`: `DIEAREA`, and every
 corner, pad, supply, plain cell, direct cell, and fill as a `FIXED`
-component named by its path below `prefix`, which defaults to the
-integration instance and a slash. `die` is the area the ring occupies, the
+component named by its path below `prefix`, which defaults to the shell
+instance, `<instance>_io`. A `prefix` of your own is a path of Verilog
+identifiers separated by `/`, and the separator before the instance is
+added when you leave it off. Every length here is in microns, between a
+nanometre, which the DEF grid is, and a metre, which no die is; a number
+outside that is refused as a units slip. `die` is the area the ring occupies, the
 inside of the seal ring, not the cut die. Corners, supplies, plain cells,
 and fills carry `SOURCE DIST`, so a back end knows the netlist never drives
 them. Each side packs from its first corner in the order written, going
@@ -359,14 +387,26 @@ clockwise from the north-west corner: west top to bottom, south left to
 right, east bottom to top, north right to left. An item's `gap` leaves that
 many microns before it and `offset` pins it at that distance from the
 corner; fill cells of kind `fill`, widest first, close every gap and each
-side's tail, and appear in `<module>_ring.v` as `u_fill_<side>_<k>`. The
+side's tail, and appear in `<module>_io.v` as `u_fill_<side>_<k>`. The
 ring has one depth: a cell without a `height` takes the corner's, and a
-corner without one is square. Orientations follow the
-usual convention, west `E`, south `N`, east `W`, north `S`, and the corners
-`N`, `W`, `S`, `E` from the south-west round, each overridable under
-`orient`. When something is missing the DEF is not written and the report's
-`def:` line says what it needs; a side whose cells exceed its length, or an
-`offset` that reaches back over the item before it, is refused the same way.
+corner without one is square. Orientations follow the usual convention, west `E`, south `N`, east `W`,
+north `S`, and the corners `N`, `W`, `S`, `E` from the south-west round,
+each overridable under `orient`. A cell lies along its edge, so the west and
+east sides take a quarter turn, `E`, `W`, `FE` or `FW`, and the north and
+south sides take none, `N`, `S`, `FN` or `FS`; a value from the wrong family
+is refused. A corner lies along no edge and takes any of the eight. A flip keeps the box, a quarter turn shows it the other way
+round, and the footprint of every cell and corner follows from that, so a
+corner that is not square still lands flush and each side starts past the
+extent its first corner actually shows. When something is missing the DEF is not written and the report's
+`def:` line says what it needs, and the other artifacts are written as
+usual. A contradiction is different: a side whose cells exceed its length,
+or an `offset` that reaches back over the item before it, is a source error
+and stops generation, because no extra input would fix it. So is a ring
+that does not fit across the die: the two rows of an axis face each other,
+so their depths together have to fit the die between them. Two ring cells
+may not answer to one name either, whichever of the running count, an `id`
+and an explicit `name` produced it, and none may take a name a pad or a
+corner already owns.
 
 == Register Layout
 <iomux-register-layout>
@@ -573,7 +613,8 @@ one bus cycle to register as an edge.
 Generation writes six files under `output/<library>/<module>/`:
 `<module>_regs.v`, `<module>_conn.v`, `<module>.v` with the private core and
 the public wrapper, the `<module>.fl` file list, the `<module>.iomux.rpt`
-route report, and the `<module>_integration.soc_net` fragment. Every `.v`
+route report, and the `<module>_integration.soc_net` fragment, plus
+`<module>_io.v`, the pad shell, when a pad cell is declared. Every `.v`
 is Verilog-2001 for synthesis and simulation and carries no verification
 code; verification lives in the `_formal.sv` files and their `.sby` jobs,
 listed by `<module>_formal.fl`, and never enters `<module>.fl`. Selector
@@ -592,8 +633,12 @@ qsoc generate verilog --merge <base.soc_net> <module>_integration.soc_net
 ```
 
 The fragment instantiates the public wrapper once and connects the clock, the
-reset, the four pad vectors, the control bus, and every non-constant endpoint
-exactly once. The control link must carry exactly one master before the merge
+reset, the pad bus, the control bus, and every non-constant endpoint exactly
+once. With a pad cell it also instantiates the shell as `<instance>_io`,
+links the bus between the two on nets named `<instance>_pad_<signal>`,
+uplinks `pad_io` and every `inout` net of a direct cell, and links the other
+direct nets. The merge flow knows `<module>_io` from the source alone, so
+nothing has to be imported. The control link must carry exactly one master before the merge
 and exactly one master and one slave after it. An invalid generator source
 blocks the whole netlist instead of falling back to a stale module view. A
 generated IOMUX instance name may not already exist in another merged input.

@@ -494,6 +494,7 @@ private slots:
     void generatedIntegrationRejectsInvalidAssemblyAndKeepsSentinel();
     void padCellPortsAcceptLibraryDirectionSpelling();
     void ioRingCellsAreCheckedAndEmitted();
+    void brokenSourceReportsItselfNotAMissingShell();
 };
 
 QStringList      Test::messages;
@@ -681,6 +682,63 @@ void Test::invalidGeneratorBlocksNetlistGeneration()
         qPrintable(merged.output));
     QVERIFY2(merged.output.contains("IOMUX_REQUIRED generator.pin_count"), qPrintable(merged.output));
     QVERIFY(!QFile::exists(QDir(directory.path()).filePath("output/iomux_soc_top.v")));
+}
+
+/* The shell exists because the source names a pad cell, not because the
+ * source is valid. A merge over a broken one has to say what is broken, not
+ * that the shell went missing. */
+void Test::brokenSourceReportsItselfNotAMissingShell()
+{
+    QTemporaryDir directory;
+    QString       moduleText = moduleLibrary;
+    const QString oldPad     = R"(      pad:
+        input_value: pad_input_value
+        input_enable: pad_input_enable
+        output_value: pad_output_value
+        output_enable: pad_output_enable
+)";
+    QVERIFY(moduleText.contains(oldPad));
+    moduleText.replace(oldPad, "      pad:\n        io: chip_gpio\n");
+    moduleText.replace(
+        "    integration:\n",
+        R"(    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+    integration:
+)");
+    moduleText += R"(gpio_pad_ps:
+  port:
+    PAD: {type: logic, direction: inout}
+    C: {type: logic, direction: output}
+    IE: {type: logic, direction: input}
+    I: {type: logic, direction: input}
+    OE: {type: logic, direction: input}
+)";
+    createProject(directory, moduleText);
+    const CommandResult generated = generateModule(directory);
+    QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
+    const QString fragment = readTextFile(
+        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net"));
+    QVERIFY2(fragment.contains("module: iomux0_io"), qPrintable(fragment));
+
+    /* Break the source after the fragment already names the shell. */
+    QString broken = moduleText;
+    broken.replace("    pin_count: 4\n", "    pin_count: 4\n    nonsense: 1\n");
+    QVERIFY(broken != moduleText);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), broken);
+    writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), baseNetlist);
+    const CommandResult merged = mergeTop(directory);
+    QVERIFY2(merged.exitCode != 0, qPrintable(merged.output));
+    QVERIFY2(
+        merged.output.contains("IOMUX_UNSUPPORTED generator.nonsense"), qPrintable(merged.output));
+    QVERIFY2(
+        !merged.output.contains("iomux0_io") || !merged.output.contains("does not exist"),
+        qPrintable(merged.output));
 }
 
 void Test::controlBusInstanceLinkMerges()
@@ -879,8 +937,8 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     createProject(directory, moduleText);
     const CommandResult generated = generateModule(directory);
     QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
-    const QString padPath = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_pad.v");
-    const QString pad = readTextFile(padPath);
+    const QString padPath = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_io.v");
+    const QString pad     = readTextFile(padPath);
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_3 ("), qPrintable(pad));
     const QString report = readTextFile(
         QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0.iomux.rpt"));
@@ -944,8 +1002,8 @@ pvss:
           up: ["1", "1"]
           down: ["1", "0"]
     io_lib:
-      gpio_pad_ps: {kind: signal, width: 40, variant: {north: gpio_pad_ps_v}}
-      pvss: {kind: power, width: 20}
+      gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: gpio_pad_ps, north_south: gpio_pad_ps_v}}
+      pvss: {kind: power, width: 20, variant: rotate}
     io_ring:
       power: {VSS: pvss}
       direct:
@@ -985,24 +1043,25 @@ pvss:
         generated.output.contains("Ring DEF not written, needs io_ring.die"),
         qPrintable(generated.output));
     const QDir out(QDir(directory.path()).filePath("output/peripheral/iomux0"));
-    QVERIFY(!QFile::exists(out.filePath("iomux0_ring.def")));
-    const QString ring = readTextFile(out.filePath("iomux0_ring.v"));
-    QVERIFY2(ring.contains("pvss u_VSS_0 ();"), qPrintable(ring));
+    QVERIFY(!QFile::exists(out.filePath("iomux0_io.def")));
+    const QString ring = readTextFile(out.filePath("iomux0_io.v"));
+    QVERIFY2(ring.contains("module iomux0_io ("), qPrintable(ring));
     QVERIFY2(ring.contains("pvss u_VSS_1 ();"), qPrintable(ring));
     QVERIFY2(
         ring.contains("rst_pad u_rst (\n    .C(rst_n),\n    .IE(1'b1),\n    .PAD(pad_rst_n)\n);"),
         qPrintable(ring));
     QVERIFY2(ring.contains("    inout  wire pad_rst_n\n"), qPrintable(ring));
-    const QString pad = readTextFile(out.filePath("iomux0_pad.v"));
+    const QString pad = readTextFile(out.filePath("iomux0_io.v"));
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_0 ("), qPrintable(pad));
     QVERIFY2(pad.contains("gpio_pad_ps_v u_pad_3 ("), qPrintable(pad));
     const QString top = readTextFile(out.filePath("iomux0.v"));
-    QVERIFY2(top.contains("iomux0_ring u_ring ("), qPrintable(top));
+    QVERIFY2(!top.contains("u_pad") && !top.contains("pad_rst_n"), qPrintable(top));
+    QVERIFY2(pad.contains("pvss u_VSS_0 ();"), qPrintable(pad));
     const QString report = readTextFile(out.filePath("iomux0.ring.rpt"));
     QVERIFY2(
-        report.contains("north: 2 items\n  0 u_pad/u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
+        report.contains("north: 2 items\n  0 u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
         qPrintable(report));
-    QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_ring.v\n"), qPrintable(report));
+    QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_io.v\n"), qPrintable(report));
 }
 
 } // namespace

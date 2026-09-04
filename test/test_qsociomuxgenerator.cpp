@@ -2347,6 +2347,13 @@ private slots:
     void ioRingRejectsBadItems();
     void directRingCellPortsAreChecked();
     void ioRingGeometryPlacesEveryCellOrSaysWhatIsMissing();
+    void ioRingTurnsEveryBoxWithItsOrientation();
+    void ioRingNeedsNoLibraryToPlaceItsCells();
+    void ioRingFillsBySideNotByBaseBox();
+    void ioRingMeasuresOneModuleOncePerAxis();
+    void ioRingRefusesATailItsFillsCannotClose();
+    void ioRingRefusesCellsDeeperThanTheDie();
+    void singlePinPadBusStaysAVector();
     void linksNeedAPadCellAndRowsToChooseFrom();
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
@@ -3006,10 +3013,13 @@ void Test::projectionMatchesWrapperHeader()
     QCOMPARE(
         wrapperPortSignatures(singlePinTop, singlePinPlan.moduleName),
         projectionPortSignatures(singlePinProjection));
+    /* The pad bus is indexed per pin wherever it is used, so it stays a
+     * vector at one pin; a scalar there would not compile. */
     QCOMPARE(
         QString::fromStdString(
             singlePinProjection["port"]["pad_input_value_i"]["type"].as<std::string>()),
-        QString("logic"));
+        QString("logic[0:0]"));
+    QVERIFY(singlePinTop.contains("input  wire [0:0] pad_input_value_i,"));
 }
 
 void Test::integrationNetlistConnectsEverythingOnce()
@@ -3479,6 +3489,39 @@ QString padIntegrationBlock()
 )");
 }
 
+/* The benches were written against a wrapper that carried the pad; now the
+ * shell does. The wrapper takes the bus and the shell takes pad_io. */
+QString withShell(const QString &bench, const QSocIomuxPlan &plan)
+{
+    const QString range = QString("[%1:0]").arg(plan.pinCount - 1);
+    QStringList   wires = {
+        QString("    wire %1 sh_input_value, sh_input_enable, sh_output_value, sh_output_enable;")
+            .arg(range)};
+    QStringList shell
+        = {"    .pad_io(pad)",
+           "    .pad_input_value_o(sh_input_value)",
+           "    .pad_input_enable_i(sh_input_enable)",
+           "    .pad_output_value_i(sh_output_value)",
+           "    .pad_output_enable_i(sh_output_enable)"};
+    QStringList dut
+        = {".pad_input_value_i(sh_input_value)",
+           ".pad_input_enable_o(sh_input_enable)",
+           ".pad_output_value_o(sh_output_value)",
+           ".pad_output_enable_o(sh_output_enable)"};
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        wires.append(QString("    wire [%1:0] sh_%2;").arg(port.width - 1).arg(port.name));
+        shell.append(QString("    .%1_i(sh_%1)").arg(port.name));
+        dut.append(QString(".%1_o(sh_%1)").arg(port.name));
+    }
+    QString result = bench;
+    result.replace(".pad_io(pad)", dut.join(", "));
+    result.replace(
+        "    iomux0 dut (",
+        wires.join('\n') + "\n    iomux0_io u_io (\n" + shell.join(",\n")
+            + "\n    );\n    iomux0 dut (");
+    return result;
+}
+
 QSocModuleDefinition makePadCellDefinition(const QString &padCell = padCellBlock())
 {
     return makeDefinition(QString(R"(generator:
@@ -3697,7 +3740,7 @@ void Test::padModuleDrivesPinsFromTheTable()
         QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
         qPrintable(errors.join('\n')));
 
-    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
     /* Modes are fixed: 1 up, 2 down, 3 keeper, 4 oscillator, then bus_hold 5. */
     QVERIFY(pad.contains(
         "wire PE_0_w = (pad_mode_eff_0 == 4'd1) ? 1'b1 : "
@@ -3731,26 +3774,33 @@ void Test::padModuleDrivesPinsFromTheTable()
     QVERIFY(!harness.contains("u_pad."));
     QVERIFY(
         QSocIomuxFormal::generateFileList(plan).endsWith(
-            "iomux0_pad.v\niomux0_regs_formal.sv\niomux0_hs_formal.sv\niomux0_pad_formal.sv\n"));
+            "iomux0_io.v\niomux0_regs_formal.sv\niomux0_hs_formal.sv\niomux0_io_formal.sv\n"));
 
+    /* The wrapper is digital: it drives the bus out and never sees a pad. */
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
-    QVERIFY(top.contains("    inout  wire [1:0] pad_io,"));
-    QVERIFY(top.contains("wire [1:0] pad_output_enable_o;"));
+    QVERIFY(!top.contains("pad_io"));
+    QVERIFY(top.contains("    output wire [1:0] pad_output_enable_o,"));
+    QVERIFY(top.contains("    output wire [7:0] pad_pull_mode_o,"));
+    QVERIFY(top.contains("    output wire [7:0] pad_drive_select_o,"));
     /* The core resolves the slot codes; the wrapper only carries them. */
     QVERIFY(top.contains(
         "assign pad_pull_mode_o[3:0] = {1'b0, (pin_0_select_i == 2'd0) ? 3'd1 : 3'd0};"));
     QVERIFY(top.contains(
         "assign pad_pull_mode_o[7:4] = {1'b0, (pin_1_select_i == 2'd0) ? 3'd5 : "
         "(pin_1_select_i == 2'd1) ? 3'd3 : (pin_1_select_i == 2'd2) ? 3'd4 : 3'd0};"));
-    QVERIFY(top.contains("wire [7:0] pad_pull_mode_w;"));
-    QVERIFY(top.contains("    .pad_pull_mode_i(pad_pull_mode_w)"));
-    QVERIFY(top.contains("    .pad_pull_mode_o(pad_pull_mode_w)"));
-    QVERIFY(top.contains("iomux0_pad u_pad ("));
+    QVERIFY(top.contains("    .pad_pull_mode_o(pad_pull_mode_o)"));
+    QVERIFY(!top.contains("u_pad"));
+    QVERIFY(pad.contains("module iomux0_io (\n    inout  wire [1:0] pad_io,"));
 
-    QVERIFY(QSocIomuxGenerator::generateFileList(plan).endsWith("iomux0_pad.v\n"));
+    QVERIFY(QSocIomuxGenerator::generateFileList(plan).endsWith("iomux0_io.v\n"));
     const QString netlist = QSocIomuxGenerator::generateIntegrationNetlist(plan);
-    QVERIFY(netlist.contains("      pad_io:\n        uplink: chip_gpio"));
-    QVERIFY(!netlist.contains("pad_input_value_i"));
+    QVERIFY(netlist.contains(
+        "  u_iomux0_io:\n    module: iomux0_io\n    port:\n      pad_io:\n        uplink: "
+        "chip_gpio"));
+    QVERIFY(netlist.contains("      pad_input_value_i:\n        link: u_iomux0_pad_input_value\n"));
+    QVERIFY(netlist.contains("      pad_input_value_o:\n        link: u_iomux0_pad_input_value\n"));
+    QVERIFY(
+        netlist.contains("      pad_drive_select_i:\n        link: u_iomux0_pad_drive_select\n"));
     QVERIFY(
         QSocIomuxGenerator::generateReport(plan).contains(
             "pad cell: gpio_pad_ps, pull modes 4, controls 1, constraints 3"));
@@ -3808,7 +3858,7 @@ module tb;
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
         chk("pin0_driven_low", pad[0], 1'b0);
         uart0_tx = 1; #1 chk("pin0_driven_high", pad[0], 1'b1);
-        chk("pin0_drive_high_selected", dut.u_pad.DS_0_w, 1'b1);
+        chk("pin0_drive_high_selected", u_io.DS_0_w, 1'b1);
         chk("pin1_bus_hold_row_pulls_up", pad[1], 1'b1);
         chk("pin1_receiver_sees_it", sda_in, 1'b1);
         /* keeper: hold the pad while the mode changes, a floating node in a
@@ -3822,11 +3872,11 @@ module tb;
         drv_en = 1; drv_val = 1;
         wr(14'h100, 32'h0000_0020);
         repeat (2) @(posedge clk);
-        chk("osc_pad_high_asks_pull_down_PE", dut.u_pad.PE_1_w, 1'b1);
-        chk("osc_pad_high_asks_pull_down_PS", dut.u_pad.PS_1_w, 1'b0);
+        chk("osc_pad_high_asks_pull_down_PE", u_io.PE_1_w, 1'b1);
+        chk("osc_pad_high_asks_pull_down_PS", u_io.PS_1_w, 1'b0);
         drv_val = 0; #2
-        chk("osc_pad_low_asks_pull_up_PE", dut.u_pad.PE_1_w, 1'b1);
-        chk("osc_pad_low_asks_pull_up_PS", dut.u_pad.PS_1_w, 1'b1);
+        chk("osc_pad_low_asks_pull_up_PE", u_io.PE_1_w, 1'b1);
+        chk("osc_pad_low_asks_pull_up_PS", u_io.PS_1_w, 1'b1);
         if (fails == 0) $display("TEST_PASS");
         $finish;
     end
@@ -3855,9 +3905,9 @@ void Test::padLevelsFollowRequestsWhenIverilogIsAvailable()
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
-    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
     writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
-    writeTextFile(dir.filePath("tb.v"), padLevelTestbench());
+    writeTextFile(dir.filePath("tb.v"), withShell(padLevelTestbench(), plan));
 
     QProcess process;
     process.setWorkingDirectory(directory.path());
@@ -3872,7 +3922,7 @@ void Test::padLevelsFollowRequestsWhenIverilogIsAvailable()
          "iomux0_regs.v",
          "iomux0_conn.v",
          "iomux0.v",
-         "iomux0_pad.v",
+         "iomux0_io.v",
          "gpio_pad_ps.v",
          "tb.v"});
     QVERIFY(process.waitForStarted());
@@ -3897,7 +3947,7 @@ void Test::padLevelsFollowRequestsWhenIverilogIsAvailable()
 QString frozenPadVerilog()
 {
     return QStringLiteral(R"gold(// Generated by QSoC. Do not edit.
-module iomux0_pad (
+module iomux0_io (
     inout  wire [1:0] pad_io,
     output wire [1:0] pad_input_value_o,
     input  wire [1:0] pad_input_enable_i,
@@ -4037,7 +4087,7 @@ void Test::frozenPadArtifactsMatch()
     QVERIFY2(
         QSocIomuxGenerator::buildPlan(makePadCellDefinition(), &plan, &errors),
         qPrintable(errors.join('\n')));
-    compareText(QSocIomuxGenerator::generatePadVerilog(plan), frozenPadVerilog());
+    compareText(QSocIomuxGenerator::generateIoVerilog(plan), frozenPadVerilog());
     compareText(QSocIomuxGenerator::generateReport(plan), frozenPadReport());
 }
 
@@ -4690,32 +4740,32 @@ module tb;
     initial begin
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
         /* slot 0 of pin 0 asks for up and high drive */
-        chk("slot_pull_up_PE", dut.u_pad.PE_0_w, 1'b1);
-        chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
-        chk("slot_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        chk("slot_pull_up_PE", u_io.PE_0_w, 1'b1);
+        chk("slot_pull_up_PS", u_io.PS_0_w, 1'b1);
+        chk("slot_drive_high", u_io.DS_0_w, 1'b1);
         /* the register alone changes nothing: mode 2 is down */
         wr(14'h1800, 32'h0000_0002);
         repeat (2) @(posedge clk);
-        chk("reg_idle_PS", dut.u_pad.PS_0_w, 1'b1);
-        chk("reg_idle_DS", dut.u_pad.DS_0_w, 1'b1);
+        chk("reg_idle_PS", u_io.PS_0_w, 1'b1);
+        chk("reg_idle_DS", u_io.DS_0_w, 1'b1);
         /* each source bit hands over its own code and nothing else */
         wr(14'h1000, 32'h0000_0040);
         repeat (2) @(posedge clk);
-        chk("reg_pull_down_PE", dut.u_pad.PE_0_w, 1'b1);
-        chk("reg_pull_down_PS", dut.u_pad.PS_0_w, 1'b0);
-        chk("drive_still_slot", dut.u_pad.DS_0_w, 1'b1);
+        chk("reg_pull_down_PE", u_io.PE_0_w, 1'b1);
+        chk("reg_pull_down_PS", u_io.PS_0_w, 1'b0);
+        chk("drive_still_slot", u_io.DS_0_w, 1'b1);
         wr(14'h1000, 32'h0001_0040);
         repeat (2) @(posedge clk);
-        chk("reg_drive_low", dut.u_pad.DS_0_w, 1'b0);
+        chk("reg_drive_low", u_io.DS_0_w, 1'b0);
         /* mode 0 is none, and the drive lane at bit 16 holds row 1, high */
         wr(14'h1800, 32'h0001_0000);
         repeat (2) @(posedge clk);
-        chk("reg_pull_none_PE", dut.u_pad.PE_0_w, 1'b0);
-        chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        chk("reg_pull_none_PE", u_io.PE_0_w, 1'b0);
+        chk("reg_drive_high", u_io.DS_0_w, 1'b1);
         /* releasing the source bits returns the slot request */
         wr(14'h1000, 32'h0000_0000);
         repeat (2) @(posedge clk);
-        chk("slot_again_PS", dut.u_pad.PS_0_w, 1'b1);
+        chk("slot_again_PS", u_io.PS_0_w, 1'b1);
         /* mode 3 reaches the weave through the register too */
         drv_en = 1; drv_val = 1;
         wr(14'h1804, 32'h0000_0003);
@@ -4800,9 +4850,9 @@ void Test::registerPadControlReachesThePadWhenIverilogIsAvailable()
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
-    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
     writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
-    writeTextFile(dir.filePath("tb.v"), padControlTestbench());
+    writeTextFile(dir.filePath("tb.v"), withShell(padControlTestbench(), plan));
 
     QProcess process;
     process.setWorkingDirectory(directory.path());
@@ -4817,7 +4867,7 @@ void Test::registerPadControlReachesThePadWhenIverilogIsAvailable()
          "iomux0_regs.v",
          "iomux0_conn.v",
          "iomux0.v",
-         "iomux0_pad.v",
+         "iomux0_io.v",
          "gpio_pad_ps.v",
          "tb.v"});
     QVERIFY(process.waitForStarted());
@@ -5092,7 +5142,7 @@ void Test::wovenKeeperCarriesItsStrength()
     QVERIFY(upSel != nullptr);
     QCOMPARE(upSel->lsb, 4U);
     QVERIFY(findField(plan.mmio, "pin_pad_ctrl_0", "down_sel") == nullptr);
-    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
     QVERIFY(pad.contains(
         "wire PE_1_w = (pad_mode_eff_1 == 4'd1 && pad_up_sel_i[7:4] == 4'd0) ? 1'b1 : "
         "(pad_mode_eff_1 == 4'd1 && pad_up_sel_i[7:4] == 4'd1) ? 1'b1 : "
@@ -5148,7 +5198,7 @@ void Test::unreachableModeLandsOnNone()
     QVERIFY2(
         QSocIomuxGenerator::buildPlan(makePadCellDefinition(padCell), &plan, &errors),
         qPrintable(errors.join('\n')));
-    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
     QVERIFY(pad.contains(
         "wire PE_0_w = (pad_mode_eff_0 == 4'd1) ? 1'b1 : (pad_mode_eff_0 == 4'd2) "
         "? 1'b1 : (pad_mode_eff_0 == 4'd5) ? 1'b1 : 1'b1;"));
@@ -5192,7 +5242,7 @@ void Test::nativeKeeperRowIsSelectedNotWoven()
     QVERIFY(!encoding.weaves);
     QVERIFY(encoding.supports(QSocPadEncoding::Keeper));
     QVERIFY(!encoding.supports(QSocPadEncoding::Oscillator));
-    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
     QVERIFY(!pad.contains("pad_mode_eff_"));
     QVERIFY(pad.contains(
         "wire PS_0_w = (pad_pull_mode_i[3:0] == 4'd1) ? 1'b1 : "
@@ -5447,19 +5497,19 @@ module tb;
     initial begin
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
         /* the net moves the drive row without a bus write */
-        chk("oe_low_is_low_drive", dut.u_pad.DS_0_w, 1'b0);
-        sda_oe = 1; #1 chk("oe_high_is_high_drive", dut.u_pad.DS_0_w, 1'b1);
-        sda_oe = 0; #1 chk("oe_back_low", dut.u_pad.DS_0_w, 1'b0);
+        chk("oe_low_is_low_drive", u_io.DS_0_w, 1'b0);
+        sda_oe = 1; #1 chk("oe_high_is_high_drive", u_io.DS_0_w, 1'b1);
+        sda_oe = 0; #1 chk("oe_back_low", u_io.DS_0_w, 1'b0);
         /* awake: inverted sleep_n is 0, the off row, pull up */
-        chk("awake_pull_up_PS", dut.u_pad.PS_1_w, 1'b1);
-        sleep_n = 0; #1 chk("asleep_pull_down_PS", dut.u_pad.PS_1_w, 1'b0);
-        chk("asleep_pull_down_PE", dut.u_pad.PE_1_w, 1'b1);
+        chk("awake_pull_up_PS", u_io.PS_1_w, 1'b1);
+        sleep_n = 0; #1 chk("asleep_pull_down_PS", u_io.PS_1_w, 1'b0);
+        chk("asleep_pull_down_PE", u_io.PE_1_w, 1'b1);
         sleep_n = 1;
         /* the register source bit wins over the net */
         wr(14'h1800, 32'h0000_0000);
         wr(14'h1000, 32'h0001_0000);
         repeat (2) @(posedge clk);
-        sda_oe = 1; #1 chk("register_overrides_net", dut.u_pad.DS_0_w, 1'b0);
+        sda_oe = 1; #1 chk("register_overrides_net", u_io.DS_0_w, 1'b0);
         if (fails == 0) $display("TEST_PASS");
         $finish;
     end
@@ -5493,9 +5543,9 @@ void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
-    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
     writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
-    writeTextFile(dir.filePath("tb.v"), linkedRowTestbench());
+    writeTextFile(dir.filePath("tb.v"), withShell(linkedRowTestbench(), plan));
 
     QProcess process;
     process.setWorkingDirectory(directory.path());
@@ -5510,7 +5560,7 @@ void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
          "iomux0_regs.v",
          "iomux0_conn.v",
          "iomux0.v",
-         "iomux0_pad.v",
+         "iomux0_io.v",
          "gpio_pad_ps.v",
          "tb.v"});
     QVERIFY(process.waitForStarted());
@@ -5712,26 +5762,26 @@ module tb;
     initial begin
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
         chk("slot_drives_oe", dut.pad_output_enable_o[0], 1'b1);
-        chk("slot_pull_up_PS", dut.u_pad.PS_0_w, 1'b1);
-        chk("slot_drive_low", dut.u_pad.DS_0_w, 1'b0);
+        chk("slot_pull_up_PS", u_io.PS_0_w, 1'b1);
+        chk("slot_drive_low", u_io.DS_0_w, 1'b0);
         /* the register claims the pin, then force takes it away */
         wr(14'h1800, 32'h0001_0000);
         wr(14'h1000, 32'h0001_0040);
         repeat (2) @(posedge clk);
-        chk("reg_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        chk("reg_drive_high", u_io.DS_0_w, 1'b1);
         force_n = 1; #1;
         chk("forced_oe_off", dut.pad_output_enable_o[0], 1'b0);
         chk("forced_ie_on", dut.pad_input_enable_o[0], 1'b1);
-        chk("forced_pull_down_PS", dut.u_pad.PS_0_w, 1'b0);
-        chk("forced_pull_down_PE", dut.u_pad.PE_0_w, 1'b1);
-        chk("forced_drive_high", dut.u_pad.DS_0_w, 1'b1);
+        chk("forced_pull_down_PS", u_io.PS_0_w, 1'b0);
+        chk("forced_pull_down_PE", u_io.PE_0_w, 1'b1);
+        chk("forced_drive_high", u_io.DS_0_w, 1'b1);
         /* a bus write during force changes nothing on the pad */
         wr(14'h1000, 32'h0000_0000);
         repeat (2) @(posedge clk);
-        chk("forced_holds_through_write", dut.u_pad.PS_0_w, 1'b0);
-        chk("forced_drive_high_over_slot_low", dut.u_pad.DS_0_w, 1'b1);
+        chk("forced_holds_through_write", u_io.PS_0_w, 1'b0);
+        chk("forced_drive_high_over_slot_low", u_io.DS_0_w, 1'b1);
         force_n = 0; #1;
-        chk("released_slot_pull_up", dut.u_pad.PS_0_w, 1'b1);
+        chk("released_slot_pull_up", u_io.PS_0_w, 1'b1);
         chk("released_slot_oe", dut.pad_output_enable_o[0], 1'b1);
         if (fails == 0) $display("TEST_PASS");
         $finish;
@@ -5766,9 +5816,9 @@ void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
-    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
     writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
-    writeTextFile(dir.filePath("tb.v"), safeRowTestbench());
+    writeTextFile(dir.filePath("tb.v"), withShell(safeRowTestbench(), plan));
 
     QProcess process;
     process.setWorkingDirectory(directory.path());
@@ -5783,7 +5833,7 @@ void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
          "iomux0_regs.v",
          "iomux0_conn.v",
          "iomux0.v",
-         "iomux0_pad.v",
+         "iomux0_io.v",
          "gpio_pad_ps.v",
          "tb.v"});
     QVERIFY(process.waitForStarted());
@@ -5848,7 +5898,7 @@ void Test::unroutedSlotsTakeTheDeclaredDefaultRow()
     QVERIFY(core.contains("assign pad_drive_select_o[7:4] = {3'b0, 1'd1};"));
     /* The pad module lands unknown codes on the same row. */
     QVERIFY(
-        QSocIomuxGenerator::generatePadVerilog(plan).contains(
+        QSocIomuxGenerator::generateIoVerilog(plan).contains(
             "wire DS_0_w = (pad_drive_select_i[3:0] == 4'd0) ? 1'b0 : 1'b1;"));
     QVERIFY(
         QSocIomuxGenerator::generateReport(plan).contains(
@@ -6256,8 +6306,8 @@ module tb;
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
         chk("pin0_driven_low", pad[0], 1'b0);
         uart0_tx = 1; #1 chk("pin0_driven_high", pad[0], 1'b1);
-        chk("pin0_drive_high_selected", dut.u_pad.DS_0_w, 1'b1);
-        chk("pin2_open_drain_selected", dut.u_pad.OD_2_w, 1'b1);
+        chk("pin0_drive_high_selected", u_io.DS_0_w, 1'b1);
+        chk("pin2_open_drain_selected", u_io.OD_2_w, 1'b1);
         chk("pin2_released_reads_pullup", pad[2], 1'b1);
         chk("pin2_receiver_sees_high", sda_in, 1'b1);
         sda_out = 0; #1 chk("pin2_pulls_low", pad[2], 1'b0);
@@ -6291,7 +6341,7 @@ void Test::padClassesShareOneRegisterModel()
     }
 
     /* Each pin instantiates its own class and decodes only what it has. */
-    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
     QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
     QVERIFY(pad.contains("gpio_pad_od u_pad_2 ("));
     QVERIFY(pad.contains("wire DS_0_w = (pad_drive_select_i[3:0] == 4'd1) ? 1'b1 : 1'b0;"));
@@ -6323,9 +6373,10 @@ void Test::padClassesShareOneRegisterModel()
 QString ioRingBlock()
 {
     return QStringLiteral(R"yaml(    io_lib:
-      gpio_pad_ps: {kind: signal, width: 40, variant: {north: gpio_pad_ps_v, south: gpio_pad_ps_v}}
+      gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: gpio_pad_ps, north_south: gpio_pad_ps_v}}
+      gpio_pad_od: {kind: signal, width: 40, variant: rotate}
       HPVSS: {kind: power, width: 20}
-      HPVDD: {kind: power, width: 20, variant: {south: HPVDD_V}}
+      HPVDD: {kind: power, width: 20, variant: {west_east: HPVDD, north_south: HPVDD_V}}
       HPCORNER: {kind: corner, width: 60}
       HPRCUT: {kind: other, width: 5}
     io_ring:
@@ -6370,9 +6421,9 @@ void Test::ioRingNamesEveryCellFromIdentity()
     QCOMPARE(plan.padModule(0), QStringLiteral("gpio_pad_ps"));
     QCOMPARE(plan.padModule(2), QStringLiteral("gpio_pad_od"));
 
-    const QString ring = QSocIomuxGenerator::generateRingVerilog(plan);
-    QVERIFY(ring.contains(
-        "module iomux0_ring (\n    output wire rst_n,\n    inout  wire pad_rst_n\n);"));
+    const QString ring = QSocIomuxGenerator::generateIoVerilog(plan);
+    QVERIFY(ring.contains("module iomux0_io (\n    inout  wire [3:0] pad_io,"));
+    QVERIFY(ring.contains("    output wire rst_n,\n    inout  wire pad_rst_n\n);"));
     QVERIFY(ring.contains("HPCORNER u_corner_nw ();"));
     QVERIFY(ring.contains("HPVSS u_VSS_0 ();"));
     QVERIFY(ring.contains("HPVSS u_VSS_1 ();"));
@@ -6380,37 +6431,41 @@ void Test::ioRingNamesEveryCellFromIdentity()
     QVERIFY(ring.contains("HPRCUT u_HPRCUT_0 ();"));
     QVERIFY(
         ring.contains("rst_pad u_rst (\n    .C(rst_n),\n    .IE(1'b1),\n    .PAD(pad_rst_n)\n);"));
-    QVERIFY(!ring.contains("u_pad_"));
 
     /* The pad module takes the side variant; the instance name stays. */
-    const QString pad = QSocIomuxGenerator::generatePadVerilog(plan);
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
     QVERIFY(pad.contains("gpio_pad_ps u_pad_0 ("));
     QVERIFY(pad.contains("gpio_pad_ps_v u_pad_1 ("));
     QVERIFY(pad.contains("gpio_pad_od u_pad_2 ("));
 
+    /* Nothing physical reaches the wrapper; the fragment wires the two as siblings. */
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
-    QVERIFY(top.contains("    output wire rst_n,"));
-    QVERIFY(top.contains("    inout  wire pad_rst_n,"));
-    QVERIFY(top.contains("iomux0_ring u_ring (\n    .rst_n(rst_n),\n    .pad_rst_n(pad_rst_n)\n);"));
-    QVERIFY(QSocIomuxGenerator::generateFileList(plan).contains("iomux0_ring.v\n"));
+    QVERIFY(!top.contains("pad_rst_n") && !top.contains("(rst_n)") && !top.contains("u_io"));
+    QVERIFY(!top.contains("pad_io"));
+    QVERIFY(QSocIomuxGenerator::generateFileList(plan).contains("iomux0_io.v\n"));
     const QString netlist = QSocIomuxGenerator::generateIntegrationNetlist(plan);
+    QVERIFY(netlist.contains(
+        "  u_iomux0_io:\n    module: iomux0_io\n    port:\n      pad_io:\n        uplink: "
+        "chip_gpio\n"));
+    QVERIFY(netlist.contains("      pad_pull_mode_o:\n        link: u_iomux0_pad_pull_mode\n"));
+    QVERIFY(netlist.contains("      pad_pull_mode_i:\n        link: u_iomux0_pad_pull_mode\n"));
     QVERIFY(netlist.contains("      pad_rst_n:\n        uplink: pad_rst_n\n"));
     QVERIFY(netlist.contains("      rst_n:\n        link: rst_n\n"));
 
     const QString report = QSocIomuxGenerator::generateRingReport(plan);
     QVERIFY(report.contains("die: 1000 x 1000 um"));
     QVERIFY(report.contains(
-        "west: 3 items\n  0 u_ring/u_VSS_0 HPVSS power VSS\n"
-        "  1 u_pad/u_pad_0 gpio_pad_ps pin 0 class ps\n"
-        "  2 u_ring/u_rst rst_pad direct rst\n"));
+        "west: 3 items\n  0 u_VSS_0 HPVSS power VSS\n"
+        "  1 u_pad_0 gpio_pad_ps pin 0 class ps\n"
+        "  2 u_rst rst_pad direct rst\n"));
     QVERIFY(report.contains(
-        "south: 3 items\n  0 u_ring/u_VDDIO_0 HPVDD_V power VDDIO\n"
-        "  1 u_pad/u_pad_2 gpio_pad_od pin 2 class od\n"
-        "  2 u_ring/u_HPRCUT_0 HPRCUT cell\n"));
+        "south: 3 items\n  0 u_VDDIO_0 HPVDD_V power VDDIO\n"
+        "  1 u_pad_2 gpio_pad_od pin 2 class od\n"
+        "  2 u_HPRCUT_0 HPRCUT cell\n"));
     QVERIFY(report.contains(
-        "east: 2 items\n  0 u_pad/u_pad_3 gpio_pad_od pin 3 class od\n"
-        "  1 u_ring/u_VSS_1 HPVSS power VSS\n"));
-    QVERIFY(report.contains("north: 1 items\n  0 u_pad/u_pad_1 gpio_pad_ps_v pin 1 class ps\n"));
+        "east: 2 items\n  0 u_pad_3 gpio_pad_od pin 3 class od\n"
+        "  1 u_VSS_1 HPVSS power VSS\n"));
+    QVERIFY(report.contains("north: 1 items\n  0 u_pad_1 gpio_pad_ps_v pin 1 class ps\n"));
 }
 
 void Test::ioRingKeepsNamesWhenPadsMove()
@@ -6428,11 +6483,20 @@ void Test::ioRingKeepsNamesWhenPadsMove()
     const QSocIomuxPlan after = ringPlan(moved);
     QVERIFY(after.ioRing.declared);
 
-    QStringList ringBefore = QSocIomuxGenerator::generateRingVerilog(before).split('\n');
-    QStringList ringAfter  = QSocIomuxGenerator::generateRingVerilog(after).split('\n');
-    ringBefore.sort();
-    ringAfter.sort();
-    QCOMPARE(ringAfter, ringBefore);
+    /* Every line that is not a pad instance header is the same set. */
+    const auto ringLines = [](const QString &verilog) {
+        QStringList lines;
+        for (const QString &line : verilog.split('\n')) {
+            if (!line.contains(" u_pad_")) {
+                lines.append(line);
+            }
+        }
+        lines.sort();
+        return lines;
+    };
+    QCOMPARE(
+        ringLines(QSocIomuxGenerator::generateIoVerilog(after)),
+        ringLines(QSocIomuxGenerator::generateIoVerilog(before)));
 
     const auto instances = [](const QString &verilog) {
         QStringList names;
@@ -6443,24 +6507,33 @@ void Test::ioRingKeepsNamesWhenPadsMove()
         }
         return names;
     };
-    const QString padBefore = QSocIomuxGenerator::generatePadVerilog(before);
-    const QString padAfter  = QSocIomuxGenerator::generatePadVerilog(after);
+    const QString padBefore = QSocIomuxGenerator::generateIoVerilog(before);
+    const QString padAfter  = QSocIomuxGenerator::generateIoVerilog(after);
     QCOMPARE(instances(padAfter), instances(padBefore));
     QVERIFY(padAfter.contains("gpio_pad_ps_v u_pad_0 ("));
     QVERIFY(padAfter.contains("gpio_pad_ps u_pad_1 ("));
+    const auto padLines = [](const QString &verilog) {
+        QStringList lines;
+        for (const QString &line : verilog.split('\n')) {
+            if (line.contains(" u_pad_") || line.contains("_w = ") || line.startsWith("    .")) {
+                lines.append(line);
+            }
+        }
+        return lines;
+    };
     QCOMPARE(
-        QString(padAfter)
-            .replace("gpio_pad_ps_v u_pad_0", "gpio_pad_ps u_pad_0")
-            .replace("gpio_pad_ps u_pad_1", "gpio_pad_ps_v u_pad_1"),
-        padBefore);
+        padLines(QString(padAfter)
+                     .replace("gpio_pad_ps_v u_pad_0", "gpio_pad_ps u_pad_0")
+                     .replace("gpio_pad_ps u_pad_1", "gpio_pad_ps_v u_pad_1")),
+        padLines(padBefore));
     QCOMPARE(
         QSocIomuxGenerator::generateTopVerilog(after),
         QSocIomuxGenerator::generateTopVerilog(before));
     QVERIFY(
         QSocIomuxGenerator::generateRingReport(after).contains(
-            "west: 4 items\n  0 u_ring/u_VSS_0 HPVSS power VSS\n  1 u_pad/u_pad_1 gpio_pad_ps pin "
+            "west: 4 items\n  0 u_VSS_0 HPVSS power VSS\n  1 u_pad_1 gpio_pad_ps pin "
             "1 class ps\n"
-            "  2 u_ring/u_rst rst_pad direct rst\n  3 u_ring/u_VSS_1 HPVSS power VSS\n"));
+            "  2 u_rst rst_pad direct rst\n  3 u_VSS_1 HPVSS power VSS\n"));
 }
 
 void Test::ioRingRejectsBadItems_data()
@@ -6492,9 +6565,45 @@ void Test::ioRingRejectsBadItems_data()
         "port: {PAD: pad_rst_n, C: rst_n, IE: \"1'b1\"}",
         "port: {PAD: rst_n, C: rst_n, IE: \"1'b1\"}")
                                     << "net rst_n is already used by another direct port";
-    QTest::newRow("bad-variant-side") << edit(
-        "variant: {north: gpio_pad_ps_v, south: gpio_pad_ps_v}", "variant: {up: gpio_pad_ps_v}")
-                                      << "must be west, south, east, or north";
+    QTest::newRow("variant-one-axis") << edit(
+        "variant: {west_east: gpio_pad_ps, north_south: gpio_pad_ps_v}",
+        "variant: {west_east: gpio_pad_ps}")
+                                      << "names west_east and north_south together";
+    QTest::newRow("variant-bad-word")
+        << edit("variant: {west_east: gpio_pad_ps, north_south: gpio_pad_ps_v}", "variant: mirror")
+        << "must be rotate, or a map of west_east and north_south";
+    QTest::newRow("both-axes-undeclared")
+        << edit(
+               "gpio_pad_od: {kind: signal, width: 40, variant: rotate}",
+               "gpio_pad_od: {kind: signal, width: 40}")
+        << "sits on both axes: write rotate when one layout serves both";
+    QTest::newRow("power-named-twice")
+        << edit("east:  [{pin: 3}, {power: VSS}]", "east:  [{pin: 3}, {power: VSS, id: 0}]")
+        << "are both named u_VSS_0";
+    QTest::newRow("cell-named-over-a-pad")
+        << edit("{cell: HPRCUT}", "{cell: HPRCUT, name: u_pad_1}") << "are both named u_pad_1";
+    QTest::newRow("cell-item-is-a-supply")
+        << edit("{cell: HPRCUT}", "{cell: HPVSS}") << "HPVSS is declared power in io_lib";
+    QTest::newRow("width-below-the-grid")
+        << edit("HPRCUT: {kind: other, width: 5}", "HPRCUT: {kind: other, width: 0.0000001}")
+        << "below one nanometre";
+    QTest::newRow("die-in-nanometres")
+        << edit("die: {width: 1000, height: 1000}", "die: {width: 1000000000, height: 1000000000}")
+        << "microns are the unit here";
+    QTest::newRow("prefix-is-not-a-path")
+        << edit("      corner: HPCORNER\n", "      corner: HPCORNER\n      prefix: \"a ; b\"\n")
+        << "must be a hierarchical path";
+    QTest::newRow("orient-wrong-family-north")
+        << edit("      corner: HPCORNER\n", "      corner: HPCORNER\n      orient: {north: E}\n")
+        << "the north side takes N, S, FN, or FS";
+    QTest::newRow("corner-takes-no-axis")
+        << edit(
+               "HPCORNER: {kind: corner, width: 60}",
+               "HPCORNER: {kind: corner, width: 60, variant: {west_east: A, north_south: B}}")
+        << "a corner sits on no axis, so it takes rotate or nothing";
+    QTest::newRow("orient-wrong-family")
+        << edit("      corner: HPCORNER\n", "      corner: HPCORNER\n      orient: {west: N}\n")
+        << "the west side takes E, W, FE, or FW";
     QTest::newRow("bad-kind") << edit("{kind: other, width: 5}", "{kind: seal, width: 5}")
                               << "must be signal, power, corner, fill, or other";
 }
@@ -6510,6 +6619,227 @@ void Test::ioRingRejectsBadItems()
     QVERIFY2(errors.join('\n').contains(message), qPrintable(errors.join('\n')));
 }
 
+/* A ring whose corner is not square and whose pad is drawn once per axis:
+ * every box turns with the orientation its side takes, so a quarter turn
+ * shows the box the other way round. */
+void Test::ioRingTurnsEveryBoxWithItsOrientation()
+{
+    QString ring = ioRingBlock();
+    ring.replace(
+        "HPCORNER: {kind: corner, width: 60}", "HPCORNER: {kind: corner, width: 90, height: 60}");
+    ring.replace(
+        "gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: gpio_pad_ps, north_south: "
+        "gpio_pad_ps_v}}",
+        "gpio_pad_ps: {kind: signal, width: 40, height: 100, variant: {west_east: {cell: "
+        "gpio_pad_ps, width: 40, height: 100}, north_south: {cell: gpio_pad_ps_v, width: 50, "
+        "height: 90}}}");
+    ring.replace(
+        "      gpio_pad_od: {kind: signal, width: 40, variant: rotate}\n",
+        "      gpio_pad_od: {kind: signal, width: 40, height: 100, variant: rotate}\n"
+        "      rst_pad: {kind: signal, width: 40, height: 100}\n");
+    const QSocIomuxPlan      plan     = ringPlan(ring);
+    const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
+    QVERIFY2(geometry.complete, qPrintable(geometry.missing.join("; ")));
+    const QString def = QSocIomuxGenerator::generateRingDef(plan);
+
+    /* The corner is 90 wide and 60 deep. North-west and south-east take a
+     * quarter turn, so they stand 60 across and 90 tall; the other two do
+     * not. Each sits flush in its own corner of the die. */
+    QVERIFY2(def.contains("u_corner_sw HPCORNER + SOURCE DIST + FIXED ( 0 0 ) N ;"), qPrintable(def));
+    QVERIFY2(
+        def.contains("u_corner_se HPCORNER + SOURCE DIST + FIXED ( 940000 0 ) W ;"),
+        qPrintable(def));
+    QVERIFY2(
+        def.contains("u_corner_ne HPCORNER + SOURCE DIST + FIXED ( 910000 940000 ) S ;"),
+        qPrintable(def));
+    QVERIFY2(
+        def.contains("u_corner_nw HPCORNER + SOURCE DIST + FIXED ( 0 910000 ) E ;"),
+        qPrintable(def));
+
+    /* Each side starts past the corner it begins at, by that corner's turned
+     * extent along the edge. */
+    QVERIFY2(def.contains("u_VSS_0 HPVSS + SOURCE DIST + FIXED ( 0 890000 ) E ;"), qPrintable(def));
+    QVERIFY2(def.contains("u_VDDIO_0 HPVDD_V + SOURCE DIST + FIXED ( 90000 0 ) N ;"), qPrintable(def));
+
+    /* The pad is drawn once per axis with its own box: 40 along and 100 deep
+     * on the west, 50 along and 90 deep on the north. */
+    QVERIFY2(def.contains("u_pad_0 gpio_pad_ps + FIXED ( 0 850000 ) E ;"), qPrintable(def));
+    QVERIFY2(def.contains("u_pad_1 gpio_pad_ps_v + FIXED ( 860000 910000 ) S ;"), qPrintable(def));
+
+    const QString report = QSocIomuxGenerator::generateRingReport(plan);
+    QVERIFY2(
+        report.contains("  1 u_pad_0 gpio_pad_ps pin 0 class ps at 20 width 40 xy 0 850 E"),
+        qPrintable(report));
+}
+
+/* Without io_lib nothing has a variant to pick, so the axis rule has nothing
+ * to say and the netlist still comes out; only the DEF waits for sizes. */
+void Test::ioRingNeedsNoLibraryToPlaceItsCells()
+{
+    QString         ring  = ioRingBlock();
+    const qsizetype start = ring.indexOf("    io_lib:");
+    const qsizetype end   = ring.indexOf("    io_ring:");
+    QVERIFY(start >= 0 && end > start);
+    ring.remove(start, end - start);
+    QVERIFY(!ring.contains("io_lib"));
+    const QSocIomuxPlan plan = ringPlan(ring);
+    QVERIFY(plan.ioRing.declared);
+    /* Every pin keeps its class cell, because no variant exists to pick. */
+    QCOMPARE(plan.padModule(0), QStringLiteral("gpio_pad_ps"));
+    QCOMPARE(plan.padModule(1), QStringLiteral("gpio_pad_ps"));
+    QVERIFY(QSocIomuxGenerator::generateIoVerilog(plan).contains("HPVSS u_VSS_0 ();"));
+    const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
+    QVERIFY(!geometry.complete);
+    QVERIFY(geometry.contradiction.isEmpty());
+    QVERIFY2(
+        geometry.missing.join("; ").contains("io_lib.HPCORNER.width"),
+        qPrintable(geometry.missing.join("; ")));
+}
+
+/* A fill drawn once per axis is wider on one than on the other, so the order
+ * fills are tried in is settled per side. */
+void Test::ioRingFillsBySideNotByBaseBox()
+{
+    QString ring = ioRingBlock();
+    ring.replace(
+        "      HPRCUT: {kind: other, width: 5}\n",
+        "      HPRCUT: {kind: other, width: 5}\n"
+        "      rst_pad: {kind: signal, width: 40}\n"
+        "      HPFILL: {kind: fill, width: 1, variant: {west_east: {cell: HPFILL_H, width: 10}, "
+        "north_south: {cell: HPFILL_V, width: 1}}}\n");
+    const QSocIomuxPlan      plan     = ringPlan(ring);
+    const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
+    QVERIFY2(geometry.complete, qPrintable(geometry.missing.join("; ")));
+    /* The west side takes the 10 um form, the north the 1 um one, and each
+     * closes its own tail exactly. */
+    QMap<QString, QMap<QString, int>> bySide;
+    for (const QSocIoRingPlacement &item : geometry.placement) {
+        if (item.meaning == "fill") {
+            ++bySide[item.side][item.cell];
+        }
+    }
+    QCOMPARE(bySide.value("west").keys(), QStringList{"HPFILL_H"});
+    QCOMPARE(bySide.value("north").keys(), QStringList{"HPFILL_V"});
+    QCOMPARE(bySide.value("west").value("HPFILL_H"), 78);
+    QCOMPARE(bySide.value("north").value("HPFILL_V"), 840);
+}
+
+/* One module may serve both axes and still be drawn to a different box on
+ * each, so the side has to decide which box answers, not the order the two
+ * entries happen to sit in. */
+void Test::ioRingMeasuresOneModuleOncePerAxis()
+{
+    QString ring = ioRingBlock();
+    ring.replace(
+        "gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: gpio_pad_ps, north_south: "
+        "gpio_pad_ps_v}}",
+        "gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: {cell: pad_turned, width: 40, "
+        "height: 100}, north_south: {cell: pad_turned, width: 50, height: 90}}}");
+    ring.replace(
+        "      HPRCUT: {kind: other, width: 5}\n",
+        "      HPRCUT: {kind: other, width: 5}\n"
+        "      gpio_pad_od: {kind: signal, width: 40, height: 100, variant: rotate}\n"
+        "      rst_pad: {kind: signal, width: 40, height: 100}\n");
+    ring.replace("      gpio_pad_od: {kind: signal, width: 40, variant: rotate}\n", "");
+    const QSocIomuxPlan      plan     = ringPlan(ring);
+    const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
+    QVERIFY2(geometry.complete, qPrintable(geometry.missing.join("; ")));
+    /* Both sides instantiate pad_turned, and each takes its own axis's box:
+     * 40 along on the west, 50 along on the north. */
+    for (const QSocIoRingPlacement &item : geometry.placement) {
+        if (item.instance == "u_pad_0") {
+            QCOMPARE(item.cell, QStringLiteral("pad_turned"));
+            QCOMPARE(item.width, 40.0);
+        }
+        if (item.instance == "u_pad_1") {
+            QCOMPARE(item.cell, QStringLiteral("pad_turned"));
+            QCOMPARE(item.width, 50.0);
+        }
+    }
+}
+
+/* Fill cells exist to close the ring, so a tail they cannot reach is a hole,
+ * and a hole stops generation instead of shipping. */
+void Test::ioRingRefusesATailItsFillsCannotClose()
+{
+    QString ring = ioRingBlock();
+    ring.replace(
+        "      HPRCUT: {kind: other, width: 5}\n",
+        "      HPRCUT: {kind: other, width: 5}\n"
+        "      gpio_pad_od: {kind: signal, width: 40, variant: rotate}\n"
+        "      rst_pad: {kind: signal, width: 40}\n"
+        "      HPFILL7: {kind: fill, width: 7, variant: rotate}\n");
+    ring.replace("      gpio_pad_od: {kind: signal, width: 40, variant: rotate}\n", "");
+    const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(ringPlan(ring));
+    QVERIFY(!geometry.complete);
+    QVERIFY2(
+        geometry.contradiction.join("; ").contains("um the fill cells cannot close"),
+        qPrintable(geometry.contradiction.join("; ")));
+}
+
+/* The ring is checked across the edge as well as along it: a row deeper than
+ * the die would put a cell outside it, or on top of the opposite row. */
+void Test::ioRingRefusesCellsDeeperThanTheDie()
+{
+    QString ring = ioRingBlock();
+    ring.replace(
+        "      HPRCUT: {kind: other, width: 5}\n",
+        "      HPRCUT: {kind: other, width: 5}\n"
+        "      gpio_pad_od: {kind: signal, width: 40, variant: rotate}\n"
+        "      rst_pad: {kind: signal, width: 40}\n");
+    ring.replace(
+        "      gpio_pad_od: {kind: signal, width: 40, variant: rotate}\n      HPVSS", "      HPVSS");
+    ring.replace(
+        "gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: gpio_pad_ps, north_south: "
+        "gpio_pad_ps_v}}",
+        "gpio_pad_ps: {kind: signal, width: 40, height: 1200, variant: {west_east: gpio_pad_ps, "
+        "north_south: gpio_pad_ps_v}}");
+    const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(ringPlan(ring));
+    QVERIFY(!geometry.complete);
+    QVERIFY2(
+        geometry.contradiction.join("; ").contains("deep in a 1000 um die"),
+        qPrintable(geometry.contradiction.join("; ")));
+}
+
+/* Every use of the pad bus indexes it per pin, so one pin is still a vector.
+ * A scalar there produces a shell no tool will read. */
+void Test::singlePinPadBusStaysAVector()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QString       classes = padClassesBlock();
+    classes.replace("      od:\n", "      unused:\n");
+    const QSocModuleDefinition definition = makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 14
+    pin_count: 1
+    hs_slots: 2
+    option:
+      pad_control: true
+%1    pin_cell:
+      default: ps
+%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: up
+        control: {drive: high}
+)")
+                                                               .arg(classes, padIntegrationBlock()));
+    QVERIFY2(QSocIomuxGenerator::buildPlan(definition, &plan, &errors), qPrintable(errors.join('\n')));
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY2(top.contains("output wire [0:0] pad_output_enable_o,"), qPrintable(top));
+    QVERIFY2(top.contains("output wire [3:0] pad_pull_mode_o,"), qPrintable(top));
+    const QString shell = QSocIomuxGenerator::generateIoVerilog(plan);
+    QVERIFY2(shell.contains("inout  wire [0:0] pad_io,"), qPrintable(shell));
+    QVERIFY2(shell.contains("output wire [0:0] pad_input_value_o,"), qPrintable(shell));
+}
+
 void Test::ioRingGeometryPlacesEveryCellOrSaysWhatIsMissing()
 {
     /* The base fixture lacks two widths: no DEF, and the report says which. */
@@ -6518,16 +6848,15 @@ void Test::ioRingGeometryPlacesEveryCellOrSaysWhatIsMissing()
     QVERIFY(QSocIomuxGenerator::generateRingDef(partial).isEmpty());
     QVERIFY(
         QSocIomuxGenerator::generateRingReport(partial).contains(
-            "def: not written, needs io_lib.rst_pad.width; io_lib.gpio_pad_od.width"));
+            "def: not written, needs io_lib.rst_pad.width"));
 
     QString complete = ioRingBlock();
     complete.replace(
         "      HPRCUT: {kind: other, width: 5}\n",
         "      HPRCUT: {kind: other, width: 5}\n"
-        "      gpio_pad_od: {kind: signal, width: 40}\n"
         "      rst_pad: {kind: signal, width: 40}\n"
-        "      HPFILL5: {kind: fill, width: 5}\n"
-        "      HPFILL1: {kind: fill, width: 1}\n");
+        "      HPFILL5: {kind: fill, width: 5, variant: rotate}\n"
+        "      HPFILL1: {kind: fill, width: 1, variant: rotate}\n");
     const QSocIomuxPlan      plan     = ringPlan(complete);
     const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
     QVERIFY2(geometry.complete, qPrintable(geometry.missing.join("; ")));
@@ -6538,41 +6867,36 @@ void Test::ioRingGeometryPlacesEveryCellOrSaysWhatIsMissing()
     QVERIFY(def.contains(
         "DESIGN iomux0 ;\nUNITS DISTANCE MICRONS 1000 ;\nDIEAREA ( 0 0 ) ( 1000000 1000000 ) ;"));
     QVERIFY(def.contains("COMPONENTS 664 ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_corner_sw HPCORNER + SOURCE DIST + FIXED ( 0 0 ) N ;"));
     QVERIFY(
-        def.contains("- u_iomux0/u_ring/u_corner_sw HPCORNER + SOURCE DIST + FIXED ( 0 0 ) N ;"));
+        def.contains("- u_iomux0_io/u_corner_se HPCORNER + SOURCE DIST + FIXED ( 940000 0 ) W ;"));
     QVERIFY(def.contains(
-        "- u_iomux0/u_ring/u_corner_se HPCORNER + SOURCE DIST + FIXED ( 940000 0 ) W ;"));
-    QVERIFY(def.contains(
-        "- u_iomux0/u_ring/u_corner_ne HPCORNER + SOURCE DIST + FIXED ( 940000 940000 ) S ;"));
-    QVERIFY(def.contains(
-        "- u_iomux0/u_ring/u_corner_nw HPCORNER + SOURCE DIST + FIXED ( 0 940000 ) E ;"));
-    QVERIFY(def.contains("- u_iomux0/u_ring/u_VSS_0 HPVSS + SOURCE DIST + FIXED ( 0 920000 ) E ;"));
-    QVERIFY(def.contains("- u_iomux0/u_pad/u_pad_0 gpio_pad_ps + FIXED ( 0 880000 ) E ;"));
-    QVERIFY(def.contains("- u_iomux0/u_ring/u_rst rst_pad + FIXED ( 0 840000 ) E ;"));
-    QVERIFY(def.contains(
-        "- u_iomux0/u_ring/u_fill_west_0 HPFILL5 + SOURCE DIST + FIXED ( 0 835000 ) E ;"));
+        "- u_iomux0_io/u_corner_ne HPCORNER + SOURCE DIST + FIXED ( 940000 940000 ) S ;"));
     QVERIFY(
-        def.contains("- u_iomux0/u_ring/u_VDDIO_0 HPVDD_V + SOURCE DIST + FIXED ( 60000 0 ) N ;"));
-    QVERIFY(def.contains("- u_iomux0/u_pad/u_pad_2 gpio_pad_od + FIXED ( 80000 0 ) N ;"));
+        def.contains("- u_iomux0_io/u_corner_nw HPCORNER + SOURCE DIST + FIXED ( 0 940000 ) E ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_VSS_0 HPVSS + SOURCE DIST + FIXED ( 0 920000 ) E ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_pad_0 gpio_pad_ps + FIXED ( 0 880000 ) E ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_rst rst_pad + FIXED ( 0 840000 ) E ;"));
     QVERIFY(
-        def.contains("- u_iomux0/u_ring/u_HPRCUT_0 HPRCUT + SOURCE DIST + FIXED ( 120000 0 ) N ;"));
-    QVERIFY(def.contains("- u_iomux0/u_pad/u_pad_3 gpio_pad_od + FIXED ( 940000 60000 ) W ;"));
+        def.contains("- u_iomux0_io/u_fill_west_0 HPFILL5 + SOURCE DIST + FIXED ( 0 835000 ) E ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_VDDIO_0 HPVDD_V + SOURCE DIST + FIXED ( 60000 0 ) N ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_pad_2 gpio_pad_od + FIXED ( 80000 0 ) N ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_HPRCUT_0 HPRCUT + SOURCE DIST + FIXED ( 120000 0 ) N ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_pad_3 gpio_pad_od + FIXED ( 940000 60000 ) W ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_VSS_1 HPVSS + SOURCE DIST + FIXED ( 940000 100000 ) W ;"));
+    QVERIFY(def.contains("- u_iomux0_io/u_pad_1 gpio_pad_ps_v + FIXED ( 900000 940000 ) S ;"));
     QVERIFY(def.contains(
-        "- u_iomux0/u_ring/u_VSS_1 HPVSS + SOURCE DIST + FIXED ( 940000 100000 ) W ;"));
-    QVERIFY(def.contains("- u_iomux0/u_pad/u_pad_1 gpio_pad_ps_v + FIXED ( 900000 940000 ) S ;"));
-    QVERIFY(def.contains(
-        "- u_iomux0/u_ring/u_fill_north_167 HPFILL5 + SOURCE DIST + FIXED ( 60000 940000 ) S ;"));
+        "- u_iomux0_io/u_fill_north_167 HPFILL5 + SOURCE DIST + FIXED ( 60000 940000 ) S ;"));
     QVERIFY(def.contains("END COMPONENTS\n\nEND DESIGN\n"));
 
     /* The fills also exist in the netlist, and the report carries offsets. */
-    const QString ring = QSocIomuxGenerator::generateRingVerilog(plan);
+    const QString ring = QSocIomuxGenerator::generateIoVerilog(plan);
     QVERIFY(ring.contains("HPFILL5 u_fill_west_0 ();"));
     QVERIFY(ring.contains("HPFILL5 u_fill_north_167 ();"));
     const QString report = QSocIomuxGenerator::generateRingReport(plan);
     QVERIFY(
         report.contains("def: written, offsets below are microns from each side's first corner"));
-    QVERIFY(
-        report.contains("  1 u_pad/u_pad_0 gpio_pad_ps pin 0 class ps at 20 width 40 xy 0 880 E"));
+    QVERIFY(report.contains("  1 u_pad_0 gpio_pad_ps pin 0 class ps at 20 width 40 xy 0 880 E"));
     QVERIFY(report.contains("west: 159 items"));
 
     /* A gap leaves room the fills close, an offset that reaches back is refused,
@@ -6582,32 +6906,31 @@ void Test::ioRingGeometryPlacesEveryCellOrSaysWhatIsMissing()
         "{power: VSS}, {pin: 0}, {direct: rst}", "{power: VSS}, {pin: 0, gap: 10}, {direct: rst}");
     const QString gappedDef = QSocIomuxGenerator::generateRingDef(ringPlan(gapped));
     QVERIFY(gappedDef.contains(
-        "- u_iomux0/u_ring/u_fill_west_0 HPFILL5 + SOURCE DIST + FIXED ( 0 915000 ) E ;"));
+        "- u_iomux0_io/u_fill_west_0 HPFILL5 + SOURCE DIST + FIXED ( 0 915000 ) E ;"));
     QVERIFY(gappedDef.contains(
-        "- u_iomux0/u_ring/u_fill_west_1 HPFILL5 + SOURCE DIST + FIXED ( 0 910000 ) E ;"));
-    QVERIFY(gappedDef.contains("- u_iomux0/u_pad/u_pad_0 gpio_pad_ps + FIXED ( 0 870000 ) E ;"));
+        "- u_iomux0_io/u_fill_west_1 HPFILL5 + SOURCE DIST + FIXED ( 0 910000 ) E ;"));
+    QVERIFY(gappedDef.contains("- u_iomux0_io/u_pad_0 gpio_pad_ps + FIXED ( 0 870000 ) E ;"));
     QString reaching = complete;
     reaching.replace("{direct: rst}", "{direct: rst, offset: 10}");
     const QSocIoRingGeometry back = QSocIomuxGenerator::ringGeometry(ringPlan(reaching));
     QVERIFY(!back.complete);
     QVERIFY2(
-        back.missing.join("; ").contains("u_ring/u_rst offset 10 overlaps the item before it"),
-        qPrintable(back.missing.join("; ")));
+        back.contradiction.join("; ").contains("u_rst offset 10 overlaps the item before it"),
+        qPrintable(back.contradiction.join("; ")));
     QString tight = complete;
     tight.replace("die: {width: 1000, height: 1000}", "die: {width: 200, height: 200}");
     const QSocIoRingGeometry full = QSocIomuxGenerator::ringGeometry(ringPlan(tight));
     QVERIFY(!full.complete);
     QVERIFY2(
-        full.missing.join("; ").contains("west side holds 100 um of cells in 80 um"),
-        qPrintable(full.missing.join("; ")));
+        full.contradiction.join("; ").contains("west side holds 100 um of cells in 80 um"),
+        qPrintable(full.contradiction.join("; ")));
     QString custom = complete;
     custom.replace(
         "      corner: HPCORNER\n",
-        "      corner: HPCORNER\n      prefix: chip/\n      orient: {west: FN, sw: FS}\n");
+        "      corner: HPCORNER\n      prefix: chip/\n      orient: {west: FE, sw: FS}\n");
     const QString customDef = QSocIomuxGenerator::generateRingDef(ringPlan(custom));
-    QVERIFY(customDef.contains("- chip/u_pad/u_pad_0 gpio_pad_ps + FIXED ( 0 880000 ) FN ;"));
-    QVERIFY(customDef.contains(
-        "- chip/u_ring/u_corner_sw HPCORNER + SOURCE DIST + FIXED ( 0 0 ) FS ;"));
+    QVERIFY(customDef.contains("- chip/u_pad_0 gpio_pad_ps + FIXED ( 0 880000 ) FE ;"));
+    QVERIFY(customDef.contains("- chip/u_corner_sw HPCORNER + SOURCE DIST + FIXED ( 0 0 ) FS ;"));
 }
 
 void Test::directRingCellPortsAreChecked()
@@ -6751,10 +7074,10 @@ void Test::padClassesDriveTheirOwnCellsWhenIverilogIsAvailable()
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
-    writeTextFile(dir.filePath("iomux0_pad.v"), QSocIomuxGenerator::generatePadVerilog(plan));
+    writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
     writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
     writeTextFile(dir.filePath("gpio_pad_od.v"), padOpenDrainModel());
-    writeTextFile(dir.filePath("tb.v"), padClassesTestbench());
+    writeTextFile(dir.filePath("tb.v"), withShell(padClassesTestbench(), plan));
 
     QProcess process;
     process.setWorkingDirectory(directory.path());
@@ -6769,7 +7092,7 @@ void Test::padClassesDriveTheirOwnCellsWhenIverilogIsAvailable()
          "iomux0_regs.v",
          "iomux0_conn.v",
          "iomux0.v",
-         "iomux0_pad.v",
+         "iomux0_io.v",
          "gpio_pad_ps.v",
          "gpio_pad_od.v",
          "tb.v"});

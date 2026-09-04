@@ -277,6 +277,17 @@ public slots:
     YAML::Node getResolvedModuleYaml(const QString &moduleName, QStringList *errors = nullptr);
 
     /**
+     * @brief The IOMUX source a derived pad shell name belongs to.
+     *
+     * `<module>_io` exists whenever `<module>` is an IOMUX source with a pad
+     * cell and no module of that name is stored; its view is generated.
+     *
+     * @param moduleName a module name from a netlist
+     * @return the source module name, or empty when the name is not a shell
+     */
+    QString iomuxShellBase(const QString &moduleName);
+
+    /**
      * @brief Save the library YAML object to library file.
      * @details This function will save the library YAML object to library file.
      * @param libraryName The basename of the library file without ext.

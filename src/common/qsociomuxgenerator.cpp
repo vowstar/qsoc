@@ -384,6 +384,10 @@ const QSet<QString> kIoRingItemKeys
     = {"pin", "power", "cell", "direct", "id", "name", "offset", "gap"};
 const QSet<QString> kIoRingOrientKeys = {"west", "south", "east", "north", "nw", "sw", "se", "ne"};
 const QSet<QString> kDefOrients       = {"N", "S", "E", "W", "FN", "FS", "FE", "FW"};
+/* A quarter turn swaps the footprint; a flip never does. */
+const QSet<QString> kQuarterOrients   = {"E", "W", "FE", "FW"};
+const QSet<QString> kIoLibAxisKeys    = {"west_east", "north_south"};
+const QSet<QString> kIoLibBoxKeys     = {"cell", "width", "height"};
 const QSet<QString> kIoRingDirectKeys = {"cell", "port"};
 const QSet<QString> kConstraintKeys   = {"name", "kind", "expr", "property"};
 const QSet<QString> kPadPortKeys
@@ -1019,6 +1023,17 @@ bool parseMicrons(const YAML::Node &node, const QString &path, double *value, QS
         appendError(errors, "VALUE", path, "must be a non-negative number of microns");
         return false;
     }
+    /* The DEF grid is a nanometre, and no die is a metre across. A number
+     * outside that is a units slip, and one caught here costs a line where
+     * one caught later costs a floorplan. */
+    if (parsed > 0 && parsed < 0.001) {
+        appendError(errors, "VALUE", path, "is below one nanometre, which the DEF grid cannot hold");
+        return false;
+    }
+    if (parsed > 1000000) {
+        appendError(errors, "VALUE", path, "is over a metre; microns are the unit here");
+        return false;
+    }
     *value = parsed;
     return true;
 }
@@ -1067,30 +1082,75 @@ bool parseIoLib(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *errors
                     && valid;
         }
         if (entry.second["variant"]) {
-            const YAML::Node variant = entry.second["variant"];
-            if (!variant.IsMap()) {
-                appendError(errors, "TYPE", cellPath + ".variant", "must be a map of side to module");
+            const YAML::Node variant     = entry.second["variant"];
+            const QString    variantPath = cellPath + ".variant";
+            if (variant.IsScalar() && variant.Scalar() == "rotate") {
+                cell.rotates = true;
+            } else if (variant.IsScalar()) {
+                appendError(
+                    errors,
+                    "VALUE",
+                    variantPath,
+                    "must be rotate, or a map of west_east and north_south");
+                valid = false;
+            } else if (!variant.IsMap()) {
+                appendError(errors, "TYPE", variantPath, "must be rotate or a map");
+                valid = false;
+            } else if (!validateMap(variant, kIoLibAxisKeys, variantPath, errors)) {
+                valid = false;
+            } else if (!variant["west_east"] || !variant["north_south"]) {
+                /* Both sides of an axis take the same cell, so naming one axis
+                 * and not the other cannot be what the source means. */
+                appendError(
+                    errors, "REQUIRED", variantPath, "names west_east and north_south together");
                 valid = false;
             } else {
-                for (const auto &item : variant) {
-                    const QString side = QString::fromStdString(item.first.Scalar());
-                    if (!QSocIomuxGenerator::ringSides().contains(side)) {
-                        appendError(
-                            errors,
-                            "VALUE",
-                            cellPath + ".variant." + side,
-                            "must be west, south, east, or north");
+                for (const QString &key :
+                     {QStringLiteral("west_east"), QStringLiteral("north_south")}) {
+                    const YAML::Node axisNode = variant[key.toStdString()];
+                    const QString    axisPath = variantPath + "." + key;
+                    QSocIoLibVariant item;
+                    if (axisNode.IsScalar()) {
+                        if (!parseIdentifier(axisNode, axisPath, &item.cell, errors)) {
+                            valid = false;
+                            continue;
+                        }
+                    } else if (!validateMap(axisNode, kIoLibBoxKeys, axisPath, errors)) {
                         valid = false;
                         continue;
-                    }
-                    QString module;
-                    if (parseIdentifier(item.second, cellPath + ".variant." + side, &module, errors)) {
-                        cell.variant.insert(side, module);
-                    } else {
+                    } else if (!axisNode["cell"]) {
+                        appendError(errors, "REQUIRED", axisPath + ".cell", "property is required");
                         valid = false;
+                        continue;
+                    } else {
+                        valid = parseIdentifier(
+                                    axisNode["cell"], axisPath + ".cell", &item.cell, errors)
+                                && valid;
+                        if (axisNode["width"]) {
+                            valid = parseMicrons(
+                                        axisNode["width"], axisPath + ".width", &item.width, errors)
+                                    && valid;
+                        }
+                        if (axisNode["height"]) {
+                            valid = parseMicrons(
+                                        axisNode["height"],
+                                        axisPath + ".height",
+                                        &item.height,
+                                        errors)
+                                    && valid;
+                        }
                     }
+                    cell.axis.insert(key, item);
                 }
             }
+        }
+        if (cell.kind == "corner" && !cell.axis.isEmpty()) {
+            appendError(
+                errors,
+                "CONFLICT",
+                cellPath + ".variant",
+                "a corner sits on no axis, so it takes rotate or nothing");
+            valid = false;
         }
         plan->ioLib.insert(cell.name, cell);
     }
@@ -1132,7 +1192,24 @@ bool parseIoRing(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *error
         valid = parseIdentifier(node["corner"], path + ".corner", &ring.corner, errors) && valid;
     }
     if (node["prefix"]) {
-        valid = parseScalar(node["prefix"], path + ".prefix", &ring.prefix, errors) && valid;
+        if (!parseScalar(node["prefix"], path + ".prefix", &ring.prefix, errors)) {
+            valid = false;
+        } else {
+            static const QRegularExpression hierarchy(
+                "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*/?$");
+            if (!hierarchy.match(ring.prefix).hasMatch()) {
+                appendError(
+                    errors,
+                    "VALUE",
+                    path + ".prefix",
+                    "must be a hierarchical path of Verilog identifiers separated by /");
+                valid = false;
+            } else if (!ring.prefix.endsWith('/')) {
+                /* The instance name follows it, so it ends at a separator
+                 * whether or not the source wrote one. */
+                ring.prefix += '/';
+            }
+        }
     }
     if (node["orient"]) {
         if (!validateMap(node["orient"], kIoRingOrientKeys, path + ".orient", errors)) {
@@ -1149,6 +1226,25 @@ bool parseIoRing(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *error
                         "VALUE",
                         path + ".orient." + key,
                         "must be a DEF orientation: N, S, E, W, FN, FS, FE, or FW");
+                    valid = false;
+                } else if (
+                    !QSocIomuxGenerator::ringAxis(key).isEmpty()
+                    && QSocIomuxGenerator::ringQuarterTurn(value)
+                           != (QSocIomuxGenerator::ringAxis(key) == "west_east")) {
+                    /* A cell lies along its edge, so the west and east sides
+                     * take a quarter turn and the north and south sides do
+                     * not. The other four values of each family are the flips,
+                     * which keep the footprint. */
+                    appendError(
+                        errors,
+                        "VALUE",
+                        path + ".orient." + key,
+                        QString("the %1 side takes %2")
+                            .arg(
+                                key,
+                                QSocIomuxGenerator::ringAxis(key) == "west_east"
+                                    ? QStringLiteral("E, W, FE, or FW")
+                                    : QStringLiteral("N, S, FN, or FS")));
                     valid = false;
                 } else {
                     ring.orient.insert(key, value);
@@ -1367,8 +1463,8 @@ bool parseIoRing(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *error
             QString("pins %1 are on no side").arg(missing.join(", ")));
         valid = false;
     }
-    if (!placed.isEmpty() && plan->padCells.isEmpty()) {
-        appendError(errors, "CONFLICT", path + ".sides", "a pin on the ring needs a pad cell");
+    if (plan->padCells.isEmpty()) {
+        appendError(errors, "CONFLICT", path, "needs pad_cells, the ring is the pad shell");
         valid = false;
     }
     /* A cell the library describes must be used as the library says. */
@@ -1389,6 +1485,139 @@ bool parseIoRing(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *error
     for (auto it = ring.power.cbegin(); it != ring.power.cend(); ++it) {
         expectKind(it.value(), "power", path + ".power." + it.key());
     }
+    /* A cell item is for what the ring holds and the netlist never drives:
+     * a breaker, a clamp, an explicit filler. A supply belongs under power
+     * so its net is named and its instances are counted per net. */
+    for (const QString &side : QSocIomuxGenerator::ringSides()) {
+        for (const QSocIoRingItem &item : ring.side.value(side)) {
+            if (item.kind != QSocIoRingItem::Cell || !plan->ioLib.contains(item.name)) {
+                continue;
+            }
+            const QString kind = plan->ioLib.value(item.name).kind;
+            if (kind == "other" || kind == "fill") {
+                continue;
+            }
+            appendError(
+                errors,
+                "KIND",
+                path + ".sides." + side,
+                QString("%1 is declared %2 in io_lib, so it is not a cell item")
+                    .arg(item.name, kind));
+            valid = false;
+        }
+    }
+    /* A cell on both axes says what happens across them, because silence
+     * cannot tell a library that rotates from one that ships a pair. */
+    {
+        QMap<QString, QSet<QString>> axes;
+        const auto                   use = [&](const QString &cell, const QString &side) {
+            const QString axis = QSocIomuxGenerator::ringAxis(side);
+            if (!cell.isEmpty() && !axis.isEmpty()) {
+                axes[cell].insert(axis);
+            }
+        };
+        for (const QString &side : QSocIomuxGenerator::ringSides()) {
+            for (const QSocIoRingItem &item : ring.side.value(side)) {
+                switch (item.kind) {
+                case QSocIoRingItem::Pin:
+                    use(plan->padClass(item.pin).cell, side);
+                    break;
+                case QSocIoRingItem::Power:
+                    use(ring.power.value(item.name), side);
+                    break;
+                case QSocIoRingItem::Cell:
+                    use(item.name, side);
+                    break;
+                case QSocIoRingItem::Direct:
+                    for (const QSocIoRingDirect &direct : ring.direct) {
+                        if (direct.key == item.name) {
+                            use(direct.cell, side);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        /* Fill closes whatever slack a side leaves, so it reaches every side. */
+        QSet<QString> sidesInUse;
+        for (const QString &side : QSocIomuxGenerator::ringSides()) {
+            if (!ring.side.value(side).isEmpty()) {
+                sidesInUse.insert(QSocIomuxGenerator::ringAxis(side));
+            }
+        }
+        for (const QSocIoLibCell &cell : plan->ioLib) {
+            if (cell.kind == "fill") {
+                axes[cell.name] = sidesInUse;
+            }
+        }
+        for (auto it = axes.cbegin(); it != axes.cend(); ++it) {
+            /* A cell the library never describes takes the same module on
+             * every side, so its silence says nothing and io_lib stays
+             * optional. */
+            if (it.value().size() < 2 || !plan->ioLib.contains(it.key())
+                || plan->ioLib.value(it.key()).declaresAxes()) {
+                continue;
+            }
+            appendError(
+                errors,
+                "REQUIRED",
+                QString("generator.io_lib.%1.variant").arg(it.key()),
+                "sits on both axes: write rotate when one layout serves both, or name the "
+                "cell each axis takes");
+            valid = false;
+        }
+    }
+
+    /* Two ring cells may not answer to one name, whichever of the counter,
+     * an id and an explicit name produced it, and none may take a name the
+     * pads or the corners already own. */
+    if (valid) {
+        QMap<QString, QString> taken;
+        for (quint32 pin = 0; pin < plan->pinCount; ++pin) {
+            taken.insert(QString("u_pad_%1").arg(pin), QString("pin %1").arg(pin));
+        }
+        for (const char *corner : {"nw", "sw", "se", "ne"}) {
+            taken.insert(QString("u_corner_%1").arg(corner), QStringLiteral("a corner"));
+        }
+        QMap<QString, int> count;
+        for (const QString &side : QSocIomuxGenerator::ringSides()) {
+            for (const QSocIoRingItem &item : ring.side.value(side)) {
+                QString name;
+                QString what;
+                switch (item.kind) {
+                case QSocIoRingItem::Pin:
+                    continue;
+                case QSocIoRingItem::Power: {
+                    const int number = item.id >= 0 ? item.id : count[item.name]++;
+                    name             = QString("u_%1_%2").arg(item.name).arg(number);
+                    what             = QString("net %1").arg(item.name);
+                    break;
+                }
+                case QSocIoRingItem::Cell: {
+                    const int number = count[item.name]++;
+                    name = item.instance.isEmpty() ? QString("u_%1_%2").arg(item.name).arg(number)
+                                                   : item.instance;
+                    what = QString("cell %1").arg(item.name);
+                    break;
+                }
+                case QSocIoRingItem::Direct:
+                    name = QString("u_%1").arg(item.name);
+                    what = QString("direct %1").arg(item.name);
+                    break;
+                }
+                if (taken.contains(name)) {
+                    appendError(
+                        errors,
+                        "CONFLICT",
+                        path + ".sides." + side,
+                        QString("%1 and %2 are both named %3").arg(what, taken.value(name), name));
+                    valid = false;
+                }
+                taken.insert(name, what);
+            }
+        }
+    }
+
     /* Wrapper nets of the direct cells are declared once each. */
     QSet<QString> nets;
     for (const QSocIoRingDirect &direct : ring.direct) {
@@ -3123,6 +3352,45 @@ quint32 interruptLineCount(const QSocIomuxPlan &plan)
     return dataWidth == 0 ? 0 : (plan.pinCount + dataWidth - 1) / dataWidth;
 }
 
+/**
+ * @brief The abstract pad bus: the four roles and every select lane.
+ *
+ * The wrapper drives it out, the shell takes it in. Its shape depends on the
+ * pad model alone, never on which cell a pin instantiates.
+ */
+QList<QSocMmioPortDescription> padBusPorts(const QSocIomuxPlan &plan, bool wrapperSide)
+{
+    QList<QSocMmioPortDescription> ports;
+    const auto                     out = [&](const QString &name, quint32 width) {
+        ports.append(
+            {name, wrapperSide ? QStringLiteral("output") : QStringLiteral("input"), width});
+    };
+    ports.append(
+        {"pad_input_value_" + QString(wrapperSide ? "i" : "o"),
+         wrapperSide ? QStringLiteral("input") : QStringLiteral("output"),
+         plan.pinCount});
+    out("pad_input_enable_" + QString(wrapperSide ? "o" : "i"), plan.pinCount);
+    out("pad_output_value_" + QString(wrapperSide ? "o" : "i"), plan.pinCount);
+    out("pad_output_enable_" + QString(wrapperSide ? "o" : "i"), plan.pinCount);
+    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
+        out(port.name + (wrapperSide ? "_o" : "_i"), port.width);
+    }
+    return ports;
+}
+
+/** Ports the body indexes, which therefore carry a range at any width. */
+QSet<QString> padBusNames(const QSocIomuxPlan &plan)
+{
+    QSet<QString> names = {QStringLiteral("pad_io")};
+    for (const QSocMmioPortDescription &port : padBusPorts(plan, true)) {
+        names.insert(port.name);
+    }
+    for (const QSocMmioPortDescription &port : padBusPorts(plan, false)) {
+        names.insert(port.name);
+    }
+    return names;
+}
+
 QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
 {
     QList<QSocMmioPortDescription> ports;
@@ -3131,30 +3399,9 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
             ports.append(port);
         }
     }
-    if (plan.hasPadCell()) {
-        ports.append({"pad_io", "inout", plan.pinCount});
-        if (plan.padModel.safe) {
-            ports.append({"pad_force_i", "input", 1});
-        }
-    } else {
-        ports.append({"pad_input_value_i", "input", plan.pinCount});
-        ports.append({"pad_input_enable_o", "output", plan.pinCount});
-        ports.append({"pad_output_value_o", "output", plan.pinCount});
-        ports.append({"pad_output_enable_o", "output", plan.pinCount});
-    }
-    for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
-        for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-            if (it.value().startsWith("1'b")) {
-                continue;
-            }
-            const QString direction = direct.cellPorts.value(it.key());
-            ports.append(
-                {it.value(),
-                 direction == "out"     ? QStringLiteral("output")
-                 : direction == "inout" ? QStringLiteral("inout")
-                                        : QStringLiteral("input"),
-                 1});
-        }
+    ports.append(padBusPorts(plan, true));
+    if (plan.padModel.safe) {
+        ports.append({"pad_force_i", "input", 1});
     }
     if (plan.option.interrupt) {
         /* Endpoints stay last, because the wrapper aligns route comments by
@@ -3168,6 +3415,31 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
                  ? QStringLiteral("output")
                  : QStringLiteral("input"),
              1});
+    }
+    return ports;
+}
+
+/**
+ * @brief The ports of the shell: the pad, the bus, and the direct nets.
+ */
+QList<QSocMmioPortDescription> shellPortDescriptions(const QSocIomuxPlan &plan)
+{
+    QList<QSocMmioPortDescription> ports;
+    ports.append({"pad_io", "inout", plan.pinCount});
+    ports.append(padBusPorts(plan, false));
+    for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
+        for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
+            if (it.value().startsWith("1'b")) {
+                continue;
+            }
+            const QString direction = direct.cellPorts.value(it.key());
+            ports.append(
+                {it.value(),
+                 direction == "out"     ? QStringLiteral("output")
+                 : direction == "inout" ? QStringLiteral("inout")
+                                        : QStringLiteral("input"),
+                 1});
+        }
     }
     return ports;
 }
@@ -3515,10 +3787,63 @@ QString QSocIomuxPlan::padModule(quint32 pin) const
 
 QString QSocIomuxPlan::ringModule(const QString &cell, const QString &side) const
 {
-    if (side.isEmpty() || !ioLib.contains(cell)) {
-        return cell;
+    return ioLibBox(cell, side).cell;
+}
+
+QSocIoLibVariant QSocIomuxPlan::ioLibBox(const QString &cell, const QString &side) const
+{
+    QSocIoLibVariant box;
+    box.cell = cell;
+    if (!ioLib.contains(cell)) {
+        /* A variant name measures as the entry that declares it, so a caller
+         * holding an already resolved module still finds its box. */
+        const QString wanted = QSocIomuxGenerator::ringAxis(side);
+        for (const QSocIoLibCell &owner : ioLib) {
+            for (auto it = owner.axis.cbegin(); it != owner.axis.cend(); ++it) {
+                /* One module may serve both axes with a different box on
+                 * each, so the side decides which entry answers. */
+                if (it.value().cell != cell || (!wanted.isEmpty() && it.key() != wanted)) {
+                    continue;
+                }
+                box.width  = it.value().width > 0 ? it.value().width : owner.width;
+                box.height = it.value().height > 0 ? it.value().height : owner.height;
+                return box;
+            }
+        }
+        return box;
     }
-    return ioLib.value(cell).variant.value(side, cell);
+    const QSocIoLibCell entry = ioLib.value(cell);
+    box.width                 = entry.width;
+    box.height                = entry.height;
+    const QString axis        = QSocIomuxGenerator::ringAxis(side);
+    if (axis.isEmpty() || !entry.axis.contains(axis)) {
+        return box;
+    }
+    const QSocIoLibVariant &item = entry.axis.value(axis);
+    box.cell                     = item.cell;
+    if (item.width > 0) {
+        box.width = item.width;
+    }
+    if (item.height > 0) {
+        box.height = item.height;
+    }
+    return box;
+}
+
+QString QSocIomuxGenerator::ringAxis(const QString &side)
+{
+    if (side == "west" || side == "east") {
+        return QStringLiteral("west_east");
+    }
+    if (side == "north" || side == "south") {
+        return QStringLiteral("north_south");
+    }
+    return QString();
+}
+
+bool QSocIomuxGenerator::ringQuarterTurn(const QString &orient)
+{
+    return kQuarterOrients.contains(orient);
 }
 
 const QStringList &QSocIomuxGenerator::ringSides()
@@ -3664,14 +3989,14 @@ bool QSocIomuxGenerator::checkPadCellPorts(
             return;
         }
         if (!cellPorts.contains(port)) {
-            local.append(QString("IOMUX_PAD generator.pad_cell.%1: %2 has no port %3")
-                             .arg(what, cell.cell, port));
+            local.append(
+                QString("IOMUX_PAD %1.%2: %3 has no port %4").arg(cell.path, what, cell.cell, port));
             return;
         }
         const QString have = cellPorts.value(port);
         if (have != want && have != "inout") {
-            local.append(QString("IOMUX_PAD generator.pad_cell.%1: %2 port %3 is %4, expected %5")
-                             .arg(what, cell.cell, port, have, want));
+            local.append(QString("IOMUX_PAD %1.%2: %3 port %4 is %5, expected %6")
+                             .arg(cell.path, what, cell.cell, port, have, want));
         }
     };
 
@@ -3709,10 +4034,9 @@ bool QSocIomuxGenerator::checkPadCellPorts(
     }
     if (!undriven.isEmpty()) {
         undriven.sort();
-        local.append(QString(
-                         "IOMUX_PAD generator.pad_cell: %1 input pins %2 are not named by any "
-                         "role, pull, or control")
-                         .arg(cell.cell, undriven.join(", ")));
+        local.append(
+            QString("IOMUX_PAD %1: %2 input pins %3 are not named by any role, pull, or control")
+                .arg(cell.path, cell.cell, undriven.join(", ")));
     }
 
     local.sort(Qt::CaseSensitive);
@@ -4290,15 +4614,16 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
 
     QStringList lines;
     lines.append(QString("module %1 (").arg(plan.moduleName));
-    QStringList     declarations;
-    QStringList     comments;
-    const qsizetype firstEndpoint = publicPorts.size() - endpoints.size();
+    QStringList         declarations;
+    QStringList         comments;
+    const QSet<QString> buses         = padBusNames(plan);
+    const qsizetype     firstEndpoint = publicPorts.size() - endpoints.size();
     for (qsizetype index = 0; index < publicPorts.size(); ++index) {
         const QSocMmioPortDescription &port = publicPorts.at(index);
         const QString keyword = port.direction == "output"  ? QStringLiteral("output")
                                 : port.direction == "inout" ? QStringLiteral("inout ")
                                                             : QStringLiteral("input ");
-        if (port.width == 1) {
+        if (port.width == 1 && !buses.contains(port.name)) {
             declarations.append(QString("    %1 wire %2").arg(keyword, port.name));
         } else {
             declarations.append(
@@ -4320,17 +4645,6 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     lines.append(QString("wire %1 tx_output_enable_w;").arg(vectorRange(dense)));
     lines.append(QString("wire %1 rx_input_value_w;").arg(vectorRange(dense)));
     const QSocPadModel &model = plan.padModel;
-    if (plan.hasPadCell()) {
-        /* With a pad cell the four control vectors stay inside this module. The
-         * core keeps its port names, so they become wires here. */
-        lines.append(QString("wire %1 pad_input_value_i;").arg(vectorRange(plan.pinCount)));
-        lines.append(QString("wire %1 pad_input_enable_o;").arg(vectorRange(plan.pinCount)));
-        lines.append(QString("wire %1 pad_output_value_o;").arg(vectorRange(plan.pinCount)));
-        lines.append(QString("wire %1 pad_output_enable_o;").arg(vectorRange(plan.pinCount)));
-    }
-    for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
-        lines.append(QString("wire %1 %2_w;").arg(vectorRange(port.width), port.name));
-    }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         lines.append(QString("wire %1 pin_%2_select_w;").arg(vectorRange(width)).arg(pin));
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
@@ -4453,7 +4767,7 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_enable_i(tx_output_enable_w)",
            "    .rx_input_value_o(rx_input_value_w)"};
     for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
-        coreConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
+        coreConnections.append(QString("    .%1_o(%1_o)").arg(port.name));
     }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         coreConnections.append(QString("    .pin_%1_select_i(pin_%1_select_w)").arg(pin));
@@ -4491,53 +4805,6 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
         lines.append(QString());
     }
 
-    if (plan.hasPadCell()) {
-        QStringList padConnections;
-        padConnections.append("    .pad_io(pad_io)");
-        if (model.inputValue) {
-            padConnections.append("    .pad_input_value_o(pad_input_value_i)");
-        }
-        if (model.inputEnable) {
-            padConnections.append("    .pad_input_enable_i(pad_input_enable_o)");
-        }
-        if (model.outputValue) {
-            padConnections.append("    .pad_output_value_i(pad_output_value_o)");
-        }
-        if (model.outputEnable) {
-            padConnections.append("    .pad_output_enable_i(pad_output_enable_o)");
-        }
-        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
-            padConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
-        }
-        if (!model.inputValue) {
-            lines.append(QString("assign pad_input_value_i = %1'b0;").arg(plan.pinCount));
-        }
-        lines.append(QString("%1_pad u_pad (").arg(plan.moduleName));
-        for (qsizetype index = 0; index < padConnections.size(); ++index) {
-            const QString suffix = index + 1 == padConnections.size() ? QString() : QString(",");
-            lines.append(padConnections.at(index) + suffix);
-        }
-        lines.append(");");
-        lines.append(QString());
-    }
-    if (plan.ioRing.declared) {
-        QStringList ringConnections;
-        for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
-            for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-                if (!it.value().startsWith("1'b")) {
-                    ringConnections.append(QString("    .%1(%1)").arg(it.value()));
-                }
-            }
-        }
-        lines.append(QString("%1_ring u_ring (").arg(plan.moduleName));
-        for (qsizetype index = 0; index < ringConnections.size(); ++index) {
-            const QString suffix = index + 1 == ringConnections.size() ? QString() : QString(",");
-            lines.append(ringConnections.at(index) + suffix);
-        }
-        lines.append(");");
-        lines.append(QString());
-    }
-
     lines.append(QString("%1_core u_core (").arg(plan.moduleName));
     for (qsizetype index = 0; index < coreConnections.size(); ++index) {
         const QString suffix = index + 1 == coreConnections.size() ? QString() : QString(",");
@@ -4551,7 +4818,86 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     return generateCoreVerilog(plan) + "\n" + lines.join('\n');
 }
 
-QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
+namespace {
+
+/**
+ * @brief One ring instance with its cell and what it stands for.
+ */
+struct RingInstance
+{
+    QString instance; /**< Path below the wrapper */
+    QString cell;     /**< The module this side instantiates */
+    QString base;     /**< The name the source wrote, which the library measures */
+    QString meaning;
+    bool    inRing = true; /**< False for a signal pad, which lives in the pad module */
+};
+
+/**
+ * @brief The instances of one side, in order; supplies and plain cells count
+ * per net or cell across the whole ring unless an item names its own.
+ */
+QList<RingInstance> ringInstances(
+    const QSocIomuxPlan &plan, const QString &side, QMap<QString, int> *count)
+{
+    QList<RingInstance> result;
+    for (const QSocIoRingItem &item : plan.ioRing.side.value(side)) {
+        switch (item.kind) {
+        case QSocIoRingItem::Pin:
+            result.append(
+                {QString("u_pad_%1").arg(item.pin),
+                 plan.padModule(item.pin),
+                 plan.padClass(item.pin).cell,
+                 QString("pin %1 class %2").arg(item.pin).arg(plan.padClass(item.pin).name),
+                 false});
+            break;
+        case QSocIoRingItem::Power: {
+            const int number = item.id >= 0 ? item.id : (*count)[item.name]++;
+            result.append(
+                {QString("u_%1_%2").arg(item.name).arg(number),
+                 plan.ringModule(plan.ioRing.power.value(item.name), side),
+                 plan.ioRing.power.value(item.name),
+                 QString("power %1").arg(item.name)});
+            break;
+        }
+        case QSocIoRingItem::Cell: {
+            const int number = (*count)[item.name]++;
+            result.append(
+                {item.instance.isEmpty() ? QString("u_%1_%2").arg(item.name).arg(number)
+                                         : item.instance,
+                 plan.ringModule(item.name, side),
+                 item.name,
+                 QStringLiteral("cell")});
+            break;
+        }
+        case QSocIoRingItem::Direct:
+            result.append(
+                {QString("u_%1").arg(item.name),
+                 [&] {
+                     for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
+                         if (direct.key == item.name) {
+                             return plan.ringModule(direct.cell, side);
+                         }
+                     }
+                     return QString();
+                 }(),
+                 [&] {
+                     for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
+                         if (direct.key == item.name) {
+                             return direct.cell;
+                         }
+                     }
+                     return QString();
+                 }(),
+                 QString("direct %1").arg(item.name)});
+            break;
+        }
+    }
+    return result;
+}
+
+} // namespace
+
+QString QSocIomuxGenerator::generateIoVerilog(const QSocIomuxPlan &plan)
 {
     if (plan.pinCount == 0 || !plan.hasPadCell()) {
         return QString();
@@ -4560,31 +4906,20 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
 
     QStringList lines;
     lines.append("// Generated by QSoC. Do not edit.");
-    lines.append(QString("module %1_pad (").arg(plan.moduleName));
-    QStringList ports;
-    ports.append(QString("    inout  wire %1 pad_io").arg(vectorRange(plan.pinCount)));
-    if (model.inputValue) {
-        ports.append(
-            QString("    output wire %1 pad_input_value_o").arg(vectorRange(plan.pinCount)));
-    }
-    if (model.inputEnable) {
-        ports.append(
-            QString("    input  wire %1 pad_input_enable_i").arg(vectorRange(plan.pinCount)));
-    }
-    if (model.outputValue) {
-        ports.append(
-            QString("    input  wire %1 pad_output_value_i").arg(vectorRange(plan.pinCount)));
-    }
-    if (model.outputEnable) {
-        ports.append(
-            QString("    input  wire %1 pad_output_enable_i").arg(vectorRange(plan.pinCount)));
-    }
-    for (const QSocIomuxCorePort &port : corePadSelectPorts(plan)) {
-        ports.append(QString("    input  wire %1 %2_i").arg(vectorRange(port.width), port.name));
-    }
+    lines.append(QString("module %1 (").arg(ioModuleName(plan.moduleName)));
+    const QList<QSocMmioPortDescription> ports = shellPortDescriptions(plan);
+    const QSet<QString>                  buses = padBusNames(plan);
     for (qsizetype index = 0; index < ports.size(); ++index) {
-        const QString suffix = index + 1 == ports.size() ? QString() : QString(",");
-        lines.append(ports.at(index) + suffix);
+        const QSocMmioPortDescription &port = ports.at(index);
+        const QString keyword = port.direction == "output"  ? QStringLiteral("output")
+                                : port.direction == "inout" ? QStringLiteral("inout ")
+                                                            : QStringLiteral("input ");
+        const QString suffix  = index + 1 == ports.size() ? QString() : QString(",");
+        lines.append(
+            port.width == 1 && !buses.contains(port.name)
+                ? QString("    %1 wire %2%3").arg(keyword, port.name, suffix)
+                : QString("    %1 wire %2 %3%4")
+                      .arg(keyword, vectorRange(port.width), port.name, suffix));
     }
     lines.append(");");
     lines.append(QString());
@@ -4595,6 +4930,10 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         const QSocPadCellPlan &cell     = plan.padClass(pin);
         const QSocPadEncoding  encoding = padEncoding(cell, model);
+        if (cell.portInputValue.isEmpty()) {
+            /* A cell with no receiver reads as zero, so the bus is always driven. */
+            lines.append(QString("assign pad_input_value_o[%1] = 1'b0;").arg(pin));
+        }
         if (encoding.hasPull()) {
             QString mode = slice("pull_mode", pin);
             if (encoding.weaves) {
@@ -4679,157 +5018,54 @@ QString QSocIomuxGenerator::generatePadVerilog(const QSocIomuxPlan &plan)
         lines.append(QString());
     }
 
-    lines.append("endmodule");
-    lines.append(QString());
-    return lines.join('\n');
-}
-
-namespace {
-
-/**
- * @brief One ring instance with its cell and what it stands for.
- */
-struct RingInstance
-{
-    QString instance; /**< Path below the wrapper */
-    QString cell;
-    QString meaning;
-    bool    inRing = true; /**< False for a signal pad, which lives in the pad module */
-};
-
-/**
- * @brief The instances of one side, in order; supplies and plain cells count
- * per net or cell across the whole ring unless an item names its own.
- */
-QList<RingInstance> ringInstances(
-    const QSocIomuxPlan &plan, const QString &side, QMap<QString, int> *count)
-{
-    QList<RingInstance> result;
-    for (const QSocIoRingItem &item : plan.ioRing.side.value(side)) {
-        switch (item.kind) {
-        case QSocIoRingItem::Pin:
-            result.append(
-                {QString("u_pad/u_pad_%1").arg(item.pin),
-                 plan.padModule(item.pin),
-                 QString("pin %1 class %2").arg(item.pin).arg(plan.padClass(item.pin).name),
-                 false});
-            break;
-        case QSocIoRingItem::Power: {
-            const int number = item.id >= 0 ? item.id : (*count)[item.name]++;
-            result.append(
-                {QString("u_ring/u_%1_%2").arg(item.name).arg(number),
-                 plan.ringModule(plan.ioRing.power.value(item.name), side),
-                 QString("power %1").arg(item.name)});
-            break;
-        }
-        case QSocIoRingItem::Cell: {
-            const int number = (*count)[item.name]++;
-            result.append(
-                {QString("u_ring/%1")
-                     .arg(
-                         item.instance.isEmpty() ? QString("u_%1_%2").arg(item.name).arg(number)
-                                                 : item.instance),
-                 plan.ringModule(item.name, side),
-                 QStringLiteral("cell")});
-            break;
-        }
-        case QSocIoRingItem::Direct:
-            result.append(
-                {QString("u_ring/u_%1").arg(item.name),
-                 [&] {
-                     for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
-                         if (direct.key == item.name) {
-                             return plan.ringModule(direct.cell, side);
-                         }
-                     }
-                     return QString();
-                 }(),
-                 QString("direct %1").arg(item.name)});
-            break;
-        }
-    }
-    return result;
-}
-
-} // namespace
-
-QString QSocIomuxGenerator::generateRingVerilog(const QSocIomuxPlan &plan)
-{
-    if (!plan.ioRing.declared) {
-        return QString();
-    }
-    const QSocIoRingPlan &ring = plan.ioRing;
-    QStringList           lines;
-    lines.append("// Generated by QSoC. Do not edit.");
-    lines.append(QString("module %1_ring (").arg(plan.moduleName));
-    QStringList ports;
-    for (const QSocIoRingDirect &direct : ring.direct) {
-        for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-            if (it.value().startsWith("1'b")) {
-                continue;
-            }
-            const QString direction = direct.cellPorts.value(it.key());
-            ports.append(QString("    %1 wire %2")
-                             .arg(
-                                 direction == "out"     ? QStringLiteral("output")
-                                 : direction == "inout" ? QStringLiteral("inout ")
-                                                        : QStringLiteral("input "),
-                                 it.value()));
-        }
-    }
-    for (qsizetype index = 0; index < ports.size(); ++index) {
-        const QString suffix = index + 1 == ports.size() ? QString() : QString(",");
-        lines.append(ports.at(index) + suffix);
-    }
-    lines.append(");");
-    lines.append(QString());
-    if (!ring.corner.isEmpty()) {
-        for (const char *corner : {"nw", "sw", "se", "ne"}) {
-            lines.append(QString("%1 u_corner_%2 ();").arg(ring.corner, QString(corner)));
-        }
+    if (plan.ioRing.declared) {
+        const QSocIoRingPlan &ring = plan.ioRing;
         lines.append(QString());
-    }
-    QMap<QString, int> powerCount;
-    for (const QString &side : ringSides()) {
-        for (const RingInstance &item : ringInstances(plan, side, &powerCount)) {
-            if (!item.inRing) {
-                continue;
+        if (!ring.corner.isEmpty()) {
+            for (const char *corner : {"nw", "sw", "se", "ne"}) {
+                lines.append(QString("%1 u_corner_%2 ();").arg(ring.corner, QString(corner)));
             }
-            const QString name = item.instance.mid(QStringLiteral("u_ring/").size());
-            if (!item.meaning.startsWith("direct ")) {
-                lines.append(QString("%1 %2 ();").arg(item.cell, name));
-                continue;
-            }
-            for (const QSocIoRingDirect &direct : ring.direct) {
-                if ("u_" + direct.key != name) {
+            lines.append(QString());
+        }
+        QMap<QString, int> powerCount;
+        for (const QString &side : ringSides()) {
+            for (const RingInstance &item : ringInstances(plan, side, &powerCount)) {
+                if (!item.inRing) {
                     continue;
                 }
-                QStringList connections;
-                for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-                    connections.append(QString("    .%1(%2)").arg(it.key(), it.value()));
-                }
-                if (connections.isEmpty()) {
+                const QString name = item.instance;
+                if (!item.meaning.startsWith("direct ")) {
                     lines.append(QString("%1 %2 ();").arg(item.cell, name));
                     continue;
                 }
-                lines.append(QString("%1 %2 (").arg(item.cell, name));
-                lines.append(connections.join(",\n"));
-                lines.append(");");
+                for (const QSocIoRingDirect &direct : ring.direct) {
+                    if ("u_" + direct.key != name) {
+                        continue;
+                    }
+                    QStringList connections;
+                    for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
+                        connections.append(QString("    .%1(%2)").arg(it.key(), it.value()));
+                    }
+                    if (connections.isEmpty()) {
+                        lines.append(QString("%1 %2 ();").arg(item.cell, name));
+                        continue;
+                    }
+                    lines.append(QString("%1 %2 (").arg(item.cell, name));
+                    lines.append(connections.join(",\n"));
+                    lines.append(");");
+                }
+            }
+        }
+        const QSocIoRingGeometry geometry = ringGeometry(plan);
+        if (geometry.complete) {
+            lines.append(QString());
+            for (const QSocIoRingPlacement &item : geometry.placement) {
+                if (item.meaning == "fill") {
+                    lines.append(QString("%1 %2 ();").arg(item.cell, item.instance));
+                }
             }
         }
     }
-    const QSocIoRingGeometry geometry = ringGeometry(plan);
-    if (geometry.complete) {
-        lines.append(QString());
-        for (const QSocIoRingPlacement &item : geometry.placement) {
-            if (item.meaning == "fill") {
-                lines.append(
-                    QString("%1 %2 ();")
-                        .arg(item.cell, item.instance.mid(QStringLiteral("u_ring/").size())));
-            }
-        }
-    }
-    lines.append(QString());
     lines.append("endmodule");
     lines.append(QString());
     return lines.join('\n');
@@ -4889,139 +5125,203 @@ QSocIoRingGeometry QSocIomuxGenerator::ringGeometry(const QSocIomuxPlan &plan)
     if (ring.corner.isEmpty()) {
         geometry.missing.append(QStringLiteral("io_ring.corner"));
     }
-    /* A side variant measures as its base cell unless the library lists it. */
-    const auto baseCell = [&](const QString &cell) {
-        if (plan.ioLib.contains(cell)) {
-            return cell;
-        }
-        for (const QSocIoLibCell &entry : plan.ioLib) {
-            if (entry.variant.values().contains(cell)) {
-                return entry.name;
+    /* The box a cell shows on one side: its library box, turned by the
+     * orientation that side takes. `along` runs with the edge, `depth` into
+     * the die. */
+    double     cornerDepth = 0;
+    const auto extent =
+        [&](const QString &named, const QString &side, double *along, double *depth) {
+            const QSocIoLibVariant box = plan.ioLibBox(named, side);
+            if (box.width <= 0) {
+                const QString need = QString("io_lib.%1.width").arg(named);
+                if (!geometry.missing.contains(need)) {
+                    geometry.missing.append(need);
+                }
+                return false;
+            }
+            /* The ring has one depth: a cell without a height takes the corner's. */
+            const double height  = box.height > 0 ? box.height : cornerDepth;
+            const bool   quarter = ringQuarterTurn(ringOrient(ring, side));
+            const double footX   = quarter ? height : box.width;
+            const double footY   = quarter ? box.width : height;
+            const bool   upright = side == "west" || side == "east";
+            *along               = upright ? footY : footX;
+            *depth               = upright ? footX : footY;
+            return true;
+        };
+    /* The corners come first: they set the ring depth and where each side
+     * starts. A corner turned a quarter shows its box the other way round. */
+    QMap<QString, double> cornerX;
+    QMap<QString, double> cornerY;
+    if (!ring.corner.isEmpty()) {
+        const QSocIoLibVariant box = plan.ioLibBox(ring.corner, QString());
+        if (box.width <= 0) {
+            geometry.missing.append(QString("io_lib.%1.width").arg(ring.corner));
+        } else {
+            cornerDepth = box.height > 0 ? box.height : box.width;
+            for (const char *name : {"nw", "sw", "se", "ne"}) {
+                const bool quarter = ringQuarterTurn(ringOrient(ring, QString(name)));
+                cornerX[name]      = quarter ? cornerDepth : box.width;
+                cornerY[name]      = quarter ? box.width : cornerDepth;
             }
         }
-        return cell;
-    };
-    const auto size = [&](const QString &named, double *width, double *height) {
-        const QString       cell  = baseCell(named);
-        const QSocIoLibCell entry = plan.ioLib.value(cell);
-        if (!plan.ioLib.contains(cell) || entry.width <= 0) {
-            const QString need = QString("io_lib.%1.width").arg(cell);
-            if (!geometry.missing.contains(need)) {
-                geometry.missing.append(need);
-            }
-            return false;
-        }
-        *width  = entry.width;
-        *height = entry.height;
-        return true;
-    };
-    /* The ring has one depth: a cell without a height takes the corner's,
-     * and the corner without one is square. */
-    double cornerWidth  = 0;
-    double cornerHeight = 0;
-    if (!ring.corner.isEmpty() && size(ring.corner, &cornerWidth, &cornerHeight)
-        && cornerHeight <= 0) {
-        cornerHeight = cornerWidth;
     }
-    const auto depthOf = [&](double height) { return height > 0 ? height : cornerHeight; };
+    /* Where each side's offsets start, and how much room they have. */
+    const auto sideStart = [&](const QString &side) {
+        if (side == "west") {
+            return cornerY.value("nw");
+        }
+        if (side == "south") {
+            return cornerX.value("sw");
+        }
+        if (side == "east") {
+            return cornerY.value("se");
+        }
+        return cornerX.value("ne");
+    };
+    const auto sideLength = [&](const QString &side) {
+        if (side == "west") {
+            return ring.dieHeight - cornerY.value("nw") - cornerY.value("sw");
+        }
+        if (side == "south") {
+            return ring.dieWidth - cornerX.value("sw") - cornerX.value("se");
+        }
+        if (side == "east") {
+            return ring.dieHeight - cornerY.value("se") - cornerY.value("ne");
+        }
+        return ring.dieWidth - cornerX.value("ne") - cornerX.value("nw");
+    };
     /* Fill cells, widest first, close whatever the items leave open. */
-    QList<std::pair<double, QString>> fills;
+    QStringList fills;
     for (const QSocIoLibCell &cell : plan.ioLib) {
-        if (cell.kind == "fill" && cell.width > 0) {
-            fills.append({cell.width, cell.name});
+        if (cell.kind == "fill") {
+            fills.append(cell.name);
         }
     }
-    std::sort(fills.begin(), fills.end(), [](const auto &left, const auto &right) {
-        return left.first > right.first;
-    });
 
     QMap<QString, int>         powerCount;
+    QMap<QString, double>      deepest;
     QList<QSocIoRingPlacement> placement;
-    bool                       fits = true;
     for (const QString &side : ringSides()) {
-        const QList<RingInstance>    items  = ringInstances(plan, side, &powerCount);
-        const QList<QSocIoRingItem> &source = ring.side.value(side);
-        const double length    = (side == "west" || side == "east" ? ring.dieHeight : ring.dieWidth)
-                                 - 2 * cornerWidth;
-        double       cursor    = 0;
-        int          fillIndex = 0;
-        const auto   fillTo    = [&](double end) {
-            for (const auto &[width, cell] : fills) {
-                while (end - cursor >= width - 1e-9) {
+        const QList<RingInstance>    items     = ringInstances(plan, side, &powerCount);
+        const QList<QSocIoRingItem> &source    = ring.side.value(side);
+        const double                 length    = sideLength(side);
+        double                       cursor    = 0;
+        int                          fillIndex = 0;
+        /* A fill drawn once per axis measures differently on each, so the
+         * order is settled on the side being filled, not once for the ring. */
+        QList<std::pair<double, QString>> sideFills;
+        for (const QString &cell : fills) {
+            double along = 0;
+            double depth = 0;
+            if (extent(cell, side, &along, &depth) && along > 0) {
+                sideFills.append({along, cell});
+            }
+        }
+        std::sort(sideFills.begin(), sideFills.end(), [](const auto &left, const auto &right) {
+            return left.first > right.first;
+        });
+        const auto fillTo = [&](double end) {
+            for (const auto &[along, cell] : sideFills) {
+                while (end - cursor >= along - 1e-9) {
                     placement.append(
-                        {QString("u_ring/u_fill_%1_%2").arg(side).arg(fillIndex++),
+                        {QString("u_fill_%1_%2").arg(side).arg(fillIndex++),
+                         plan.ringModule(cell, side),
                          cell,
                          QStringLiteral("fill"),
                          side,
                          cursor,
-                         width});
-                    cursor += width;
+                         along});
+                    cursor += along;
                 }
+            }
+            /* A ring has to close. Fills exist to close it, so a tail they
+             * cannot reach is a hole the source has to fix, not a rounding
+             * detail to swallow. */
+            if (!sideFills.isEmpty() && end - cursor > 1e-9) {
+                geometry.contradiction.append(
+                    QString("%1 side leaves %2 um the fill cells cannot close")
+                        .arg(side)
+                        .arg(end - cursor));
             }
             cursor = end;
         };
         for (qsizetype index = 0; index < items.size(); ++index) {
-            const RingInstance   &item   = items.at(index);
-            const QSocIoRingItem &entry  = source.at(index);
-            double                width  = 0;
-            double                height = 0;
-            if (!size(item.cell, &width, &height)) {
+            const RingInstance   &item  = items.at(index);
+            const QSocIoRingItem &entry = source.at(index);
+            double                along = 0;
+            double                depth = 0;
+            if (!extent(item.base, side, &along, &depth)) {
                 continue;
             }
             double start = cursor + entry.gap;
             if (entry.offset >= 0) {
                 if (entry.offset < cursor - 1e-9) {
-                    geometry.missing.append(QString("%1 offset %2 overlaps the item before it")
-                                                .arg(item.instance)
-                                                .arg(entry.offset));
-                    fits = false;
+                    geometry.contradiction.append(QString("%1 offset %2 overlaps the item before it")
+                                                      .arg(item.instance)
+                                                      .arg(entry.offset));
                 }
                 start = std::max(start, entry.offset);
             }
             if (start > cursor + 1e-9) {
                 fillTo(start);
             }
-            placement.append({item.instance, item.cell, item.meaning, side, start, width});
-            cursor = start + width;
+            deepest[side] = std::max(deepest.value(side), depth);
+            placement.append(
+                {item.instance, item.cell, item.base, item.meaning, side, start, along});
+            cursor = start + along;
         }
-        if (geometry.missing.isEmpty()) {
+        if (geometry.missing.isEmpty() && geometry.contradiction.isEmpty()) {
             if (cursor > length + 1e-9) {
-                geometry.missing.append(QString("%1 side holds %2 um of cells in %3 um")
-                                            .arg(side)
-                                            .arg(cursor)
-                                            .arg(length));
-                fits = false;
+                geometry.contradiction.append(QString("%1 side holds %2 um of cells in %3 um")
+                                                  .arg(side)
+                                                  .arg(cursor)
+                                                  .arg(length));
             } else {
                 fillTo(length);
             }
         }
     }
-    if (!geometry.missing.isEmpty() || !fits) {
+    /* The two rows of an axis face each other across the die, so together
+     * they have to fit in it, not just each on its own. */
+    for (const auto &[low, high, span] :
+         {std::tuple{QStringLiteral("west"), QStringLiteral("east"), ring.dieWidth},
+          std::tuple{QStringLiteral("south"), QStringLiteral("north"), ring.dieHeight}}) {
+        const double used = deepest.value(low) + deepest.value(high);
+        if (used > span + 1e-9) {
+            geometry.contradiction.append(QString("the %1 and %2 rows are %3 um deep in a %4 um die")
+                                              .arg(low, high)
+                                              .arg(used)
+                                              .arg(span));
+        }
+    }
+    if (!geometry.missing.isEmpty() || !geometry.contradiction.isEmpty()) {
         return geometry;
     }
     for (QSocIoRingPlacement &item : placement) {
-        double width  = 0;
-        double height = 0;
-        size(item.cell, &width, &height);
+        double along = 0;
+        double depth = 0;
+        extent(item.base, item.side, &along, &depth);
         const auto [x, y]
-            = ringPoint(ring, item.side, cornerWidth, item.offset, item.width, depthOf(height));
+            = ringPoint(ring, item.side, sideStart(item.side), item.offset, item.width, depth);
         item.x      = x;
         item.y      = y;
         item.orient = ringOrient(ring, item.side);
     }
     const std::pair<const char *, std::pair<double, double>> corners[]
         = {{"sw", {0, 0}},
-           {"se", {ring.dieWidth - cornerWidth, 0}},
-           {"ne", {ring.dieWidth - cornerWidth, ring.dieHeight - cornerHeight}},
-           {"nw", {0, ring.dieHeight - cornerHeight}}};
+           {"se", {ring.dieWidth - cornerX.value("se"), 0}},
+           {"ne", {ring.dieWidth - cornerX.value("ne"), ring.dieHeight - cornerY.value("ne")}},
+           {"nw", {0, ring.dieHeight - cornerY.value("nw")}}};
     for (const auto &[name, point] : corners) {
         placement.prepend(
-            {QString("u_ring/u_corner_%1").arg(name),
+            {QString("u_corner_%1").arg(name),
+             ring.corner,
              ring.corner,
              QStringLiteral("corner"),
              QString(name),
              0,
-             cornerWidth,
+             cornerX.value(name),
              point.first,
              point.second,
              ringOrient(ring, name)});
@@ -5037,8 +5337,9 @@ QString QSocIomuxGenerator::generateRingDef(const QSocIomuxPlan &plan)
     if (!geometry.complete) {
         return QString();
     }
-    const QString prefix = plan.ioRing.prefix.isEmpty() ? plan.integration.instance + "/"
-                                                        : plan.ioRing.prefix;
+    const QString prefix = plan.ioRing.prefix.isEmpty()
+                               ? ioModuleName(plan.integration.instance) + "/"
+                               : plan.ioRing.prefix;
     const auto    unit   = [](double microns) { return qint64(std::llround(microns * 1000.0)); };
     QStringList   lines;
     lines.append("# Generated by QSoC. Do not edit.");
@@ -5083,11 +5384,13 @@ QString QSocIomuxGenerator::generateRingReport(const QSocIomuxPlan &plan)
         lines.append(QString("die: %1 x %2 um").arg(ring.dieWidth).arg(ring.dieHeight));
     }
     if (!ring.corner.isEmpty()) {
-        lines.append(QString("corner: %1, u_ring/u_corner_nw sw se ne").arg(ring.corner));
+        lines.append(QString("corner: %1, u_corner_nw sw se ne").arg(ring.corner));
     }
     lines.append("instance names come from identity: a pad that moves keeps its name");
     if (geometry.complete) {
         lines.append("def: written, offsets below are microns from each side's first corner");
+    } else if (!geometry.contradiction.isEmpty()) {
+        lines.append(QString("def: not written, %1").arg(geometry.contradiction.join("; ")));
     } else {
         lines.append(QString("def: not written, needs %1").arg(geometry.missing.join("; ")));
     }
@@ -5137,10 +5440,7 @@ QString QSocIomuxGenerator::generateFileList(const QSocIomuxPlan &plan)
     }
     QString list = QString("%1_regs.v\n%1_conn.v\n%1.v\n").arg(plan.moduleName);
     if (plan.hasPadCell()) {
-        list += QString("%1_pad.v\n").arg(plan.moduleName);
-    }
-    if (plan.ioRing.declared) {
-        list += QString("%1_ring.v\n").arg(plan.moduleName);
+        list += ioModuleName(plan.moduleName) + ".v\n";
     }
     return list;
 }
@@ -5162,12 +5462,17 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
     lines.append(QString("        link: %1").arg(integration.clock));
     lines.append("      rst_ni:");
     lines.append(QString("        link: %1").arg(integration.reset));
+    /* The bus between the core and the shell takes the instance's name, so
+     * two blocks on one chip never share a net. */
+    const auto busNet = [&](const QSocMmioPortDescription &port) {
+        QString name = port.name;
+        name.chop(2);
+        return integration.instance + "_" + name;
+    };
     if (plan.hasPadCell()) {
-        lines.append("      pad_io:");
-        lines.append(QString("        uplink: %1").arg(integration.padIo));
-        if (plan.padModel.safe) {
-            lines.append("      pad_force_i:");
-            lines.append(QString("        link: %1").arg(integration.force));
+        for (const QSocMmioPortDescription &port : padBusPorts(plan, true)) {
+            lines.append(QString("      %1:").arg(port.name));
+            lines.append(QString("        link: %1").arg(busNet(port)));
         }
     } else {
         lines.append("      pad_input_value_i:");
@@ -5179,25 +5484,40 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
         lines.append("      pad_output_enable_o:");
         lines.append(QString("        link: %1").arg(integration.padOutputEnable));
     }
-    for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
-        for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-            if (it.value().startsWith("1'b")) {
-                continue;
-            }
-            lines.append(QString("      %1:").arg(it.value()));
-            lines.append(QString("        %1: %2")
-                             .arg(
-                                 direct.cellPorts.value(it.key()) == "inout"
-                                     ? QStringLiteral("uplink")
-                                     : QStringLiteral("link"),
-                                 it.value()));
-        }
+    if (plan.padModel.safe) {
+        lines.append("      pad_force_i:");
+        lines.append(QString("        link: %1").arg(integration.force));
     }
     for (const EndpointPort &port : endpointPorts(plan)) {
         lines.append(QString("      %1:").arg(endpointName(port)));
         lines.append(QString("        link: %1").arg(port.endpoint->link));
         if (port.endpoint->bit.has_value()) {
             lines.append(QString("        bits: \"[%1]\"").arg(*port.endpoint->bit));
+        }
+    }
+    if (plan.hasPadCell()) {
+        lines.append(QString("  %1:").arg(ioModuleName(integration.instance)));
+        lines.append(QString("    module: %1").arg(ioModuleName(plan.moduleName)));
+        lines.append("    port:");
+        lines.append("      pad_io:");
+        lines.append(QString("        uplink: %1").arg(integration.padIo));
+        for (const QSocMmioPortDescription &port : padBusPorts(plan, false)) {
+            lines.append(QString("      %1:").arg(port.name));
+            lines.append(QString("        link: %1").arg(busNet(port)));
+        }
+        for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
+            for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
+                if (it.value().startsWith("1'b")) {
+                    continue;
+                }
+                lines.append(QString("      %1:").arg(it.value()));
+                lines.append(QString("        %1: %2")
+                                 .arg(
+                                     direct.cellPorts.value(it.key()) == "inout"
+                                         ? QStringLiteral("uplink")
+                                         : QStringLiteral("link"),
+                                     it.value()));
+            }
         }
     }
     lines.append("bus:");
@@ -5208,16 +5528,40 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
     return lines.join('\n');
 }
 
+QString QSocIomuxGenerator::ioModuleName(const QString &moduleName)
+{
+    return moduleName + "_io";
+}
+
+YAML::Node QSocIomuxGenerator::describeIoModuleYaml(const QSocIomuxPlan &plan)
+{
+    YAML::Node module(YAML::NodeType::Map);
+    if (plan.pinCount == 0 || plan.hsSlots == 0 || !plan.hasPadCell()) {
+        return module;
+    }
+    const QSet<QString> buses = padBusNames(plan);
+    for (const QSocMmioPortDescription &port : shellPortDescriptions(plan)) {
+        YAML::Node portNode(YAML::NodeType::Map);
+        portNode["type"]      = port.width == 1 && !buses.contains(port.name)
+                                    ? std::string("logic")
+                                    : QString("logic[%1:0]").arg(port.width - 1).toStdString();
+        portNode["direction"] = port.direction.toStdString();
+        module["port"][port.name.toStdString()] = portNode;
+    }
+    return module;
+}
+
 YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
 {
     YAML::Node module(YAML::NodeType::Map);
     if (plan.pinCount == 0 || plan.hsSlots == 0) {
         return module;
     }
+    const QSet<QString>                  buses = padBusNames(plan);
     const QList<QSocMmioPortDescription> ports = publicPortDescriptions(plan);
     for (const QSocMmioPortDescription &port : ports) {
         YAML::Node portNode(YAML::NodeType::Map);
-        portNode["type"]      = port.width == 1
+        portNode["type"]      = port.width == 1 && !buses.contains(port.name)
                                     ? std::string("logic")
                                     : QString("logic[%1:0]").arg(port.width - 1).toStdString();
         portNode["direction"] = port.direction.toStdString();

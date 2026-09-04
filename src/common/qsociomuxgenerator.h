@@ -376,13 +376,39 @@ struct QSocPadModel
 /**
  * @brief One cell of the IO library: what the ring needs beyond its ports.
  */
+/**
+ * @brief What a cell is on one axis: the module, and its box when it differs.
+ *
+ * A width or height of zero means the base cell's, which is the usual case:
+ * a variant that only redraws the inside keeps the box of the cell it
+ * belongs to.
+ */
+struct QSocIoLibVariant
+{
+    QString cell;
+    double  width  = 0;
+    double  height = 0;
+
+    bool operator==(const QSocIoLibVariant &) const = default;
+};
+
+/**
+ * @brief One cell of the IO library: what the ring needs beyond its ports.
+ *
+ * The two sides of an axis are always 180 degrees apart, so a cell that sits
+ * on both axes has to say what happens across them: `rotates` when one layout
+ * serves both, or one entry per axis when the library draws two.
+ */
 struct QSocIoLibCell
 {
-    QString                name;       /**< Module name, the key under io_lib */
-    QString                kind;       /**< signal, power, corner, fill, or other */
-    double                 width  = 0; /**< Along the die edge, 0 when not given */
-    double                 height = 0;
-    QMap<QString, QString> variant; /**< Side to the module that side takes */
+    QString name;        /**< Module name, the key under io_lib */
+    QString kind;        /**< signal, power, corner, fill, or other */
+    double  width   = 0; /**< Along the die edge in its own frame, 0 when not given */
+    double  height  = 0;
+    bool    rotates = false;              /**< `variant: rotate` */
+    QMap<QString, QSocIoLibVariant> axis; /**< `west_east` and `north_south` */
+
+    bool declaresAxes() const { return rotates || !axis.isEmpty(); }
 
     bool operator==(const QSocIoLibCell &) const = default;
 };
@@ -425,7 +451,8 @@ struct QSocIoRingItem
 struct QSocIoRingPlacement
 {
     QString instance; /**< Path below the wrapper */
-    QString cell;
+    QString cell;     /**< The module this side instantiates */
+    QString base;     /**< The name the source wrote, which the library measures */
     QString meaning;
     QString side;
     double  offset = 0; /**< Along the side from its first corner */
@@ -440,8 +467,16 @@ struct QSocIoRingPlacement
  */
 struct QSocIoRingGeometry
 {
-    bool                       complete = false;
-    QStringList                missing; /**< What the geometry still needs */
+    bool        complete = false;
+    QStringList missing; /**< What the geometry still needs */
+    /**
+     * @brief What no extra input can fix: a side that cannot hold its cells,
+     * an offset that reaches back over the item before it.
+     *
+     * Missing information only leaves the DEF unwritten. A contradiction is
+     * a source error and stops generation.
+     */
+    QStringList                contradiction;
     QList<QSocIoRingPlacement> placement;
 };
 
@@ -493,6 +528,8 @@ struct QSocIomuxPlan
     QString padModule(quint32 pin) const;
     /** The module a ring cell takes on a side: `io_lib`'s variant for it, or the cell itself. */
     QString ringModule(const QString &cell, const QString &side) const;
+    /** The module and the box a cell takes on a side; a zero width means the library has none. */
+    QSocIoLibVariant ioLibBox(const QString &cell, const QString &side) const;
 
     bool operator==(const QSocIomuxPlan &) const = default;
 };
@@ -621,13 +658,26 @@ public:
         QStringList                  *errors = nullptr);
     /** The sides in placement order: west, south, east, north. */
     static const QStringList &ringSides();
-    static QString            generateCoreVerilog(const QSocIomuxPlan &plan);
-    static QString            generateConnVerilog(const QSocIomuxPlan &plan);
-    static QString            generateRegsVerilog(const QSocIomuxPlan &plan);
-    static QString            generateTopVerilog(const QSocIomuxPlan &plan);
-    static QString            generatePadVerilog(const QSocIomuxPlan &plan);
-    /** The ring cells the mux does not drive, empty without an io_ring. */
-    static QString generateRingVerilog(const QSocIomuxPlan &plan);
+    /** The axis a side belongs to, `west_east` or `north_south`; empty for a corner. */
+    static QString ringAxis(const QString &side);
+    /** Whether a DEF orientation turns the cell a quarter, which swaps its footprint. */
+    static bool    ringQuarterTurn(const QString &orient);
+    static QString generateCoreVerilog(const QSocIomuxPlan &plan);
+    static QString generateConnVerilog(const QSocIomuxPlan &plan);
+    static QString generateRegsVerilog(const QSocIomuxPlan &plan);
+    static QString generateTopVerilog(const QSocIomuxPlan &plan);
+    /**
+     * @brief The pad shell: decode, cell instances, direct cells, and the ring.
+     *
+     * A sibling of the wrapper at the chip top, so pads, the reset and clock
+     * sources, and everything physical stay out of the digital block. Empty
+     * without a pad cell.
+     */
+    static QString generateIoVerilog(const QSocIomuxPlan &plan);
+    /** `<module>_io`, the shell module and the suffix the module manager derives it by. */
+    static QString ioModuleName(const QString &moduleName);
+    /** The module library view of the shell, empty without a pad cell. */
+    static YAML::Node describeIoModuleYaml(const QSocIomuxPlan &plan);
     /** Every ring instance by side, in order, with what it stands for. */
     static QString generateRingReport(const QSocIomuxPlan &plan);
     /**
