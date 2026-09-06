@@ -297,34 +297,6 @@ void bindRemoteConnectionToAgent(QSocRemoteConnection *conn, QSocAgent *agent)
 }
 
 /**
- * @brief Format model list for /model command output
- */
-QString formatModelList(QLLMService *llmService)
-{
-    QStringList models  = llmService->availableModels();
-    QString     current = llmService->getCurrentModelId();
-    QString     result  = "Available models:\n";
-
-    for (const QString &modelId : models) {
-        LLMModelConfig cfg    = llmService->getModelConfig(modelId);
-        QString        marker = (modelId == current) ? "* " : "  ";
-        QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
-        QString        info   = QString("(%1K ctx, %2K out)")
-                                    .arg(cfg.contextTokens / 1000)
-                                    .arg(cfg.maxOutputTokens > 0 ? cfg.maxOutputTokens / 1000 : 0);
-        if (cfg.reasoning) {
-            info += " [reasoning]";
-        }
-        result += QString("  %1%-30s %2 %3\n").arg(marker, modelId, info);
-    }
-
-    return result;
-}
-
-/**
- * @brief Handle /model command, returns true if command was handled
- */
-/**
  * @brief Apply model switch: update endpoint + sync agent context budget
  */
 void applyModelSwitch(
