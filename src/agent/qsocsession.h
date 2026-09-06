@@ -66,7 +66,6 @@ public:
         bool        registryModel   = false;
         QString     modelId;
         QString     effortLevel;
-        QString     reasoningModel;
         bool        planMode   = false;
         bool        remoteMode = false;
         QString     remoteName;

@@ -651,9 +651,6 @@ void QLLMService::loadConfigSettings()
                 if (node["max_output_tokens"]) {
                     modelCfg.maxOutputTokens = node["max_output_tokens"].as<int>();
                 }
-                if (node["reasoning"]) {
-                    modelCfg.reasoning = node["reasoning"].as<bool>();
-                }
                 if (node["effort"]) {
                     modelCfg.effort = QString::fromStdString(node["effort"].as<std::string>());
                 }
@@ -1012,11 +1009,7 @@ void QLLMService::abortStream()
 }
 
 void QLLMService::sendChatCompletionStream(
-    const json    &messages,
-    const json    &tools,
-    double         temperature,
-    const QString &reasoningEffort,
-    const QString &modelOverride)
+    const json &messages, const json &tools, double temperature, const QString &reasoningEffort)
 {
     if (!hasEndpoint()) {
         emit streamError(QStringLiteral("No LLM endpoint configured"));
@@ -1056,9 +1049,7 @@ void QLLMService::sendChatCompletionStream(
         payload.erase("temperature");
     }
 
-    if (!modelOverride.isEmpty()) {
-        payload["model"] = modelOverride.toStdString();
-    } else if (!endpoint.model.isEmpty()) {
+    if (!endpoint.model.isEmpty()) {
         payload["model"] = endpoint.model.toStdString();
     }
 

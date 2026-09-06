@@ -346,12 +346,6 @@ public:
     void setEffortLevel(const QString &level);
 
     /**
-     * @brief Set the reasoning model
-     * @param model Model name to use when effort is set (empty=use primary)
-     */
-    void setReasoningModel(const QString &model);
-
-    /**
      * @brief Set the memory manager for persistent memory injection
      * @param manager Pointer to the memory manager
      */

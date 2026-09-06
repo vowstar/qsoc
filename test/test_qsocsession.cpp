@@ -32,7 +32,6 @@ QSocSession::RunRecord startedRun(
         .registryModel   = true,
         .modelId         = QStringLiteral("model-primary"),
         .effortLevel     = QStringLiteral("high"),
-        .reasoningModel  = QString(),
         .planMode        = false,
         .remoteMode      = false,
         .remoteName      = QString(),
@@ -733,12 +732,11 @@ private slots:
             session.appendMeta(QStringLiteral("created"), QStringLiteral("2026-07-22T00:00:00Z")));
         auto started = startedRun(
             QStringLiteral("run-a"), QStringLiteral("finish the task"), QStringLiteral("goal-a"));
-        started.reasoningModel = QStringLiteral("model-reasoning");
-        started.planMode       = true;
-        started.remoteMode     = true;
-        started.remoteName     = QStringLiteral("remote-a");
-        started.projectRoot    = QStringLiteral("/workspace/remote-root");
-        started.workingDir     = QStringLiteral("/workspace/remote-project");
+        started.planMode    = true;
+        started.remoteMode  = true;
+        started.remoteName  = QStringLiteral("remote-a");
+        started.projectRoot = QStringLiteral("/workspace/remote-root");
+        started.workingDir  = QStringLiteral("/workspace/remote-project");
         QVERIFY(session.appendRun(started));
         QVERIFY(QFile::exists(path));
         QVERIFY(session.appendRun(
@@ -766,7 +764,6 @@ private slots:
         QVERIFY(latest->registryModel);
         QCOMPARE(latest->modelId, QStringLiteral("model-primary"));
         QCOMPARE(latest->effortLevel, QStringLiteral("high"));
-        QCOMPARE(latest->reasoningModel, QStringLiteral("model-reasoning"));
         QVERIFY(latest->planMode);
         QVERIFY(latest->remoteMode);
         QCOMPARE(latest->remoteName, QStringLiteral("remote-a"));
@@ -961,7 +958,6 @@ private slots:
             .registryModel  = true,
             .modelId        = QStringLiteral("model-updated"),
             .effortLevel    = QStringLiteral("medium"),
-            .reasoningModel = QStringLiteral("reasoning-updated"),
             .planMode       = true,
             .remoteMode     = true,
             .remoteName     = QStringLiteral("remote-b"),
@@ -981,12 +977,50 @@ private slots:
         QVERIFY(latest->registryModel);
         QCOMPARE(latest->modelId, QStringLiteral("model-updated"));
         QCOMPARE(latest->effortLevel, QStringLiteral("medium"));
-        QCOMPARE(latest->reasoningModel, QStringLiteral("reasoning-updated"));
         QVERIFY(latest->planMode);
         QVERIFY(latest->remoteMode);
         QCOMPARE(latest->remoteName, QStringLiteral("remote-b"));
         QCOMPARE(latest->projectRoot, QStringLiteral("/workspace/updated-root"));
         QCOMPARE(latest->workingDir, QStringLiteral("/workspace/updated"));
+    }
+
+    /* Sessions written before a context key was retired still resume:
+     * a key the reader no longer knows is ignored, not rejected. */
+    void testLatestRunAcceptsContextWithRetiredKeys()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString path = QDir(tempDir.path()).filePath(QStringLiteral("session.jsonl"));
+        QFile         file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+        const json context = {
+            {"model_id", "model-primary"},
+            {"registry_model", true},
+            {"effort_level", "high"},
+            {"reasoning_model", "retired-override"},
+            {"plan_mode", false},
+            {"remote_mode", false},
+            {"remote_name", ""},
+            {"project_root", "/workspace/project"},
+            {"working_dir", "/workspace/project"},
+        };
+        const QByteArray line = QByteArray::fromStdString(
+            json({{"type", "run"},
+                  {"run_id", "run-a"},
+                  {"event", "started"},
+                  {"input", "resume me"},
+                  {"context", context}})
+                .dump()
+            + "\n");
+        QCOMPARE(file.write(line), qint64(line.size()));
+        file.close();
+
+        const auto latest = QSocSession::latestRun(path);
+        QVERIFY(latest.has_value());
+        QVERIFY(latest->event == QSocSession::RunEvent::Started);
+        QVERIFY(latest->contextPresent);
+        QCOMPARE(latest->modelId, QStringLiteral("model-primary"));
+        QCOMPARE(latest->effortLevel, QStringLiteral("high"));
     }
 
     void testLatestRunRejectsMalformedContext()
@@ -995,7 +1029,6 @@ private slots:
             {"model_id", "model-primary"},
             {"registry_model", true},
             {"effort_level", "high"},
-            {"reasoning_model", ""},
             {"plan_mode", false},
             {"remote_mode", false},
             {"remote_name", ""},

@@ -53,7 +53,6 @@ struct LLMModelConfig
     int     timeout         = 120000; /* Request timeout ms */
     int     contextTokens   = 128000; /* Context window size */
     int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
-    bool    reasoning       = false;  /* Supports thinking/reasoning mode */
     QString effort;                   /* Default effort: empty/off, "low", "medium", "high" */
 
     /* Multimodal capability flags. Default text-only so a misconfigured
@@ -310,8 +309,7 @@ public slots:
         const json    &messages,
         const json    &tools           = json::array(),
         double         temperature     = 0.2,
-        const QString &reasoningEffort = QString(),
-        const QString &modelOverride   = QString());
+        const QString &reasoningEffort = QString());
 
     /**
      * @brief Abort the current streaming request

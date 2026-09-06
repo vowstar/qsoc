@@ -368,7 +368,7 @@ bool handleModelCommand(
             LLMModelConfig     cfg = llmService->getModelConfig(modelId);
             QTuiMenu::MenuItem item;
             item.label  = modelId;
-            item.hint   = cfg.reasoning ? "[R]" : "";
+            item.hint   = cfg.effort;
             item.marked = (modelId == current);
             items.append(item);
         }
@@ -838,9 +838,6 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         {"effort",
          QCoreApplication::translate("main", "Reasoning effort level (low/medium/high)."),
          "level"},
-        {"model-reasoning",
-         QCoreApplication::translate("main", "Model to use when reasoning effort is set."),
-         "model"},
         {"resume",
          QCoreApplication::translate(
              "main",
@@ -952,11 +949,6 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QString effortStr = socConfig->getValue("agent.effort");
         if (!effortStr.isEmpty()) {
             config.effortLevel = effortStr;
-        }
-
-        QString reasoningModelStr = socConfig->getValue("llm.model_reasoning");
-        if (!reasoningModelStr.isEmpty()) {
-            config.reasoningModel = reasoningModelStr;
         }
 
         QString autoLoadMemoryStr = socConfig->getValue("agent.auto_load_memory");
@@ -1134,9 +1126,6 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     }
     if (parser.isSet("effort")) {
         config.effortLevel = parser.value("effort").toLower();
-    }
-    if (parser.isSet("model-reasoning")) {
-        config.reasoningModel = parser.value("model-reasoning");
     }
 
     /* Expose the project path so AGENTS.md / AGENTS.local.md get loaded
@@ -3638,11 +3627,10 @@ bool QSocCliWorker::runAgentLoop(
         record.registryModel  = !llmService->getCurrentModelId().isEmpty();
         record.modelId = record.registryModel ? llmService->getCurrentModelId()
                                               : socConfig->getValue(QStringLiteral("llm.model"));
-        record.effortLevel    = config.effortLevel;
-        record.reasoningModel = config.reasoningModel;
-        record.planMode       = config.planMode;
-        record.remoteMode     = config.remoteMode;
-        record.remoteName     = config.remoteName;
+        record.effortLevel = config.effortLevel;
+        record.planMode    = config.planMode;
+        record.remoteMode  = config.remoteMode;
+        record.remoteName  = config.remoteName;
         if (config.remoteMode) {
             record.projectRoot = remoteConn->path()->root();
             record.workingDir  = workingDir;
@@ -3789,10 +3777,9 @@ bool QSocCliWorker::runAgentLoop(
         if (modelConfig.contextTokens > 0) {
             config.maxContextTokens = modelConfig.contextTokens;
         }
-        config.effortLevel    = record.effortLevel;
-        config.reasoningModel = record.reasoningModel;
-        config.modelId        = record.registryModel ? record.modelId : QString();
-        config.planMode       = record.planMode;
+        config.effortLevel = record.effortLevel;
+        config.modelId     = record.registryModel ? record.modelId : QString();
+        config.planMode    = record.planMode;
         agent->setConfig(config);
         statusBarWidget.setModel(record.modelId);
         statusBarWidget.setEffortLevel(record.effortLevel);
@@ -6666,17 +6653,11 @@ bool QSocCliWorker::runAgentLoop(
             auto connBtwEsc = QObject::connect(
                 &inputMonitor, &QAgentInputMonitor::escPressed, sideLlm, &QLLMService::abortStream);
 
-            const QString effortLevel = agent->getConfig().effortLevel;
-            QString       modelOverride;
-            if (!effortLevel.isEmpty() && !agent->getConfig().reasoningModel.isEmpty()) {
-                modelOverride = agent->getConfig().reasoningModel;
-            }
             sideLlm->sendChatCompletionStream(
                 sideMessages,
                 json::array(),
                 agent->getConfig().temperature,
-                effortLevel,
-                modelOverride);
+                agent->getConfig().effortLevel);
             /* streamError can fire synchronously (e.g. no endpoint); exec()
              * after quit() would hang forever. */
             if (!btwDone) {
@@ -8776,9 +8757,6 @@ bool QSocCliWorker::runAgentLoop(
                             QString         info
                                 = QString("\nEffort: %1")
                                       .arg(cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
-                            if (!cfg.reasoningModel.isEmpty()) {
-                                info += QString(" (model: %1)").arg(cfg.reasoningModel);
-                            }
                             info += "\n";
                             compositor.printContent(info);
                         } else if (level == "off") {
@@ -9457,9 +9435,6 @@ bool QSocCliWorker::runAgentLoop(
                             QString         info
                                 = QString("\nEffort: %1")
                                       .arg(cfg.effortLevel.isEmpty() ? "off" : cfg.effortLevel);
-                            if (!cfg.reasoningModel.isEmpty()) {
-                                info += QString(" (model: %1)").arg(cfg.reasoningModel);
-                            }
                             info += "\n";
                             compositor.printContent(info);
                         } else if (level == "off") {

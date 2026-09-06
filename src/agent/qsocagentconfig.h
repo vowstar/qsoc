@@ -43,9 +43,6 @@ struct QSocAgentConfig
     /* Reasoning effort level: empty=off, "low", "medium", "high" */
     QString effortLevel;
 
-    /* Reasoning model: empty=use primary model when effort is set */
-    QString reasoningModel;
-
     /* Project instructions (AGENTS.md / AGENTS.local.md) */
     QString projectPath; /* Set by parseAgent; empty = no project instructions loaded */
 

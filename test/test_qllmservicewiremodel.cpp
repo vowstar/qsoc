@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QHash>
 #include <QHostAddress>
+#include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -119,11 +120,24 @@ private:
             json::parse(buffer.mid(bodyStart, contentLength).toStdString(), nullptr, false));
         buffers_.remove(socket);
 
-        const json reply = {
-            {"choices", json::array({{{"message", {{"role", "assistant"}, {"content", "ok"}}}}})}};
-        const QByteArray body    = QByteArray::fromStdString(reply.dump());
-        QByteArray       headers = QByteArrayLiteral(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ");
+        QByteArray body;
+        QByteArray contentType;
+        if (requests_.last().value("stream", false)) {
+            const json finish = {
+                {"choices",
+                 json::array({{{"delta", {{"content", "ok"}}}, {"finish_reason", "stop"}}})}};
+            body        = QByteArrayLiteral("data: ") + QByteArray::fromStdString(finish.dump())
+                          + QByteArrayLiteral("\n\ndata: [DONE]\n\n");
+            contentType = QByteArrayLiteral("text/event-stream");
+        } else {
+            const json reply = {
+                {"choices",
+                 json::array({{{"message", {{"role", "assistant"}, {"content", "ok"}}}}})}};
+            body        = QByteArray::fromStdString(reply.dump());
+            contentType = QByteArrayLiteral("application/json");
+        }
+        QByteArray headers = QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: ") + contentType
+                             + QByteArrayLiteral("\r\nContent-Length: ");
         headers += QByteArray::number(body.size());
         headers += QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
         socket->write(headers + body);
@@ -211,6 +225,31 @@ private slots:
         QVERIFY(llm.sendRequest(QStringLiteral("hi")).success);
         QCOMPARE(server.requestCount(), 1);
         QCOMPARE(wireModel(server.request(0)), QStringLiteral("served-model"));
+    }
+
+    /* Effort is a dial on the current entry, never a model switch: the
+     * streaming request carries reasoning_effort and the entry's wire name. */
+    void effortRidesOnTheCurrentModel()
+    {
+        CaptureServer server;
+        QVERIFY(server.listen());
+        ScopedConfig scope(twoEntriesOneServedModel(server.url()));
+
+        QSocConfig  config;
+        QLLMService llm(nullptr, &config);
+        QVERIFY(llm.setCurrentModel(QStringLiteral("flash-b")));
+
+        QSignalSpy done(&llm, &QLLMService::streamComplete);
+        QSignalSpy failed(&llm, &QLLMService::streamError);
+        json       messages = json::array();
+        messages.push_back({{"role", "user"}, {"content", "hi"}});
+        llm.sendChatCompletionStream(messages, json::array(), 0.2, QStringLiteral("high"));
+        QTRY_VERIFY(done.count() + failed.count() == 1);
+
+        QCOMPARE(server.requestCount(), 1);
+        const json &request = server.request(0);
+        QCOMPARE(wireModel(request), QStringLiteral("served-model"));
+        QCOMPARE(request.value("reasoning_effort", std::string()), std::string("high"));
     }
 
     /* Sub-agents and memory children run on clones; the clone must

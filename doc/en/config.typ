@@ -125,7 +125,6 @@ so you only need to configure the endpoint URL, API key, and model name.
     [llm.url], [API endpoint URL (OpenAI Chat Completions format)],
     [llm.key], [API key for authentication (optional for local services)],
     [llm.model], [Model name to use],
-    [llm.model_reasoning], [Model for reasoning/effort mode (optional)],
     [llm.timeout], [Request timeout in milliseconds (default: 30000)],
     [llm.cost_input_per_mtok],
     [Input price per million tokens (used by `/cost`)],
@@ -206,7 +205,6 @@ with different URLs. Every key under `<id>:` is optional except `url`.
     [`timeout`], [Request timeout in milliseconds],
     [`context`], [Context window in tokens],
     [`max_output_tokens`], [Reply cap; `0` defers to the backend],
-    [`reasoning`], [`true` enables thinking / reasoning mode],
     [`effort`], [Reasoning effort: `low`, `medium`, `high`],
     [`modalities.image`], [`true` opts the model into image input],
     [`modalities.image_max_tokens`],
@@ -234,7 +232,6 @@ llm:
       timeout: 180000
       context: 131072
       max_output_tokens: 32768
-      reasoning: true
       effort: high
     my-omni:
       name: My Omnimodal

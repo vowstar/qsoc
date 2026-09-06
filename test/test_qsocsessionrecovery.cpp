@@ -38,7 +38,6 @@ QSocSession::RunRecord runRecord(
         .registryModel   = true,
         .modelId         = QStringLiteral("model-primary"),
         .effortLevel     = QStringLiteral("high"),
-        .reasoningModel  = QString(),
         .planMode        = false,
         .remoteMode      = true,
         .remoteName      = QStringLiteral("remote-a"),
@@ -120,7 +119,6 @@ void Test::executionContextMustMatch_data()
     QTest::newRow("model") << QStringLiteral("model");
     QTest::newRow("model-kind") << QStringLiteral("model-kind");
     QTest::newRow("effort") << QStringLiteral("effort");
-    QTest::newRow("reasoning-model") << QStringLiteral("reasoning-model");
     QTest::newRow("plan-mode") << QStringLiteral("plan-mode");
     QTest::newRow("remote-mode") << QStringLiteral("remote-mode");
     QTest::newRow("remote-name") << QStringLiteral("remote-name");
@@ -138,8 +136,6 @@ void Test::executionContextMustMatch()
         context.registryModel = false;
     } else if (field == QStringLiteral("effort")) {
         context.effortLevel = QStringLiteral("medium");
-    } else if (field == QStringLiteral("reasoning-model")) {
-        context.reasoningModel = QStringLiteral("reasoning-other");
     } else if (field == QStringLiteral("plan-mode")) {
         context.planMode = true;
     } else if (field == QStringLiteral("remote-mode")) {

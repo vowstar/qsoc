@@ -1307,13 +1307,8 @@ void QSocAgent::processStreamIteration()
             return;
         }
 
-        /* Determine model override for reasoning */
         const double  temperature = owner->agentConfig.temperature;
         const QString effortLevel = owner->agentConfig.effortLevel;
-        QString       modelOverride;
-        if (!effortLevel.isEmpty() && !owner->agentConfig.reasoningModel.isEmpty()) {
-            modelOverride = owner->agentConfig.reasoningModel;
-        }
 
         if (run->llm.isNull() || run->tools.isNull()) {
             owner->finishStreamRun(
@@ -1353,8 +1348,7 @@ void QSocAgent::processStreamIteration()
             return;
         }
         owner->totalInputTokens.fetch_add(inputTokens);
-        run->llm->sendChatCompletionStream(
-            messagesWithSystem, tools, temperature, effortLevel, modelOverride);
+        run->llm->sendChatCompletionStream(messagesWithSystem, tools, temperature, effortLevel);
         return;
     }
 }
@@ -2989,11 +2983,6 @@ void QSocAgent::setApprovedPlan(const QString &plan)
 void QSocAgent::setEffortLevel(const QString &level)
 {
     agentConfig.effortLevel = level;
-}
-
-void QSocAgent::setReasoningModel(const QString &model)
-{
-    agentConfig.reasoningModel = model;
 }
 
 void QSocAgent::setConfig(const QSocAgentConfig &config)

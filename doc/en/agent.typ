@@ -19,7 +19,6 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`--temperature <n>`], [LLM temperature 0.0--1.0 (default: 0.2)],
     [`--no-stream`], [Disable streaming output],
     [`--effort <level>`], [Reasoning effort: low, medium, high],
-    [`--model-reasoning <model>`], [Model to use when effort is set],
     [`--resume [id]`],
     [Resume a session by id prefix, title, or branch; pick from list if
      omitted. A short title is auto-generated after the first turn (see
@@ -42,7 +41,7 @@ LLM tool calling to execute multi-step workflows through natural language.
 ```bash
 qsoc agent
 qsoc agent -d /path/to/project -p myproject
-qsoc agent --effort high --model-reasoning deepseek-v4-pro
+qsoc agent --effort high
 qsoc agent --continue
 qsoc agent --resume abc123
 ```
@@ -645,33 +644,15 @@ filesystem.
 
 == Reasoning Effort
 <agent-effort>
-The `--effort` option enables extended reasoning for complex tasks. When set,
-a `reasoning_effort` parameter is sent to the LLM API.
-
-If `llm.model_reasoning` is configured, the agent automatically switches to that
-model when effort is set, and switches back when effort is off. This allows
-pairing a fast model for normal use with a reasoning model for hard problems.
+The `--effort` option and the `/effort` command set the reasoning effort
+sent to the current model as `reasoning_effort`. `off` sends nothing.
+Switching models with `/model` resets the level to that entry's `effort`
+default. To pair a fast model with a reasoning model, declare both under
+`llm.models` and switch between them.
 
 The receiving side always parses `reasoning_content` and `reasoning_details`
 fields from the SSE stream, regardless of the `--effort` setting. Reasoning
 output is displayed in dim text.
-
-#figure(
-  align(center)[#table(
-    columns: (0.25fr, 0.45fr, 1fr),
-    align: (auto, auto, left),
-    table.header([`--effort`], [`model_reasoning`], [Behavior]),
-    table.hline(),
-    [not set], [not set], [Primary model, no reasoning parameter],
-    [not set], [set], [Primary model; reasoning model idle],
-    [`high`], [not set], [Primary model + `reasoning_effort`],
-    [`high`],
-    [`deepseek-v4-pro`],
-    [Switch to reasoning model + `reasoning_effort`],
-  )],
-  caption: [MODEL SELECTION BEHAVIOR],
-  kind: table,
-)
 
 == Context Compaction
 <agent-context-compaction>

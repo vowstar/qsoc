@@ -155,7 +155,6 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
     const nlohmann::json &context = line["context"];
     if (!context.is_object() || !context.contains("model_id") || !context["model_id"].is_string()
         || !context.contains("effort_level") || !context["effort_level"].is_string()
-        || !context.contains("reasoning_model") || !context["reasoning_model"].is_string()
         || !context.contains("registry_model") || !context["registry_model"].is_boolean()
         || !context.contains("plan_mode") || !context["plan_mode"].is_boolean()
         || !context.contains("remote_mode") || !context["remote_mode"].is_boolean()
@@ -169,7 +168,6 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
     record->registryModel  = context["registry_model"].get<bool>();
     record->modelId        = QString::fromStdString(context["model_id"].get<std::string>());
     record->effortLevel    = QString::fromStdString(context["effort_level"].get<std::string>());
-    record->reasoningModel = QString::fromStdString(context["reasoning_model"].get<std::string>());
     record->planMode       = context["plan_mode"].get<bool>();
     record->remoteMode     = context["remote_mode"].get<bool>();
     record->remoteName     = QString::fromStdString(context["remote_name"].get<std::string>());
@@ -411,7 +409,6 @@ bool QSocSession::appendRun(const RunRecord &record)
             {"model_id", record.modelId.toStdString()},
             {"registry_model", record.registryModel},
             {"effort_level", record.effortLevel.toStdString()},
-            {"reasoning_model", record.reasoningModel.toStdString()},
             {"plan_mode", record.planMode},
             {"remote_mode", record.remoteMode},
             {"remote_name", record.remoteName.toStdString()},
