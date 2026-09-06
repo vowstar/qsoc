@@ -401,7 +401,7 @@ void Test::aDispatchedChildIsToldTheWorkspaceItsToolsReach()
 
     QSocConfig  serviceConfig;
     QLLMService service(nullptr, &serviceConfig);
-    QCOMPARE(service.endpointCount(), 1);
+    QVERIFY(service.hasEndpoint());
     QSocAgentDefinitionRegistry definitions;
     definitions.registerBuiltins();
     QSocSubAgentTaskSource tasks;
@@ -451,7 +451,7 @@ void Test::aDispatchedChildIsNotStoppedByTheParentHostHealth()
 
     QSocConfig  serviceConfig;
     QLLMService service(nullptr, &serviceConfig);
-    QCOMPARE(service.endpointCount(), 1);
+    QVERIFY(service.hasEndpoint());
     QSocAgentDefinitionRegistry definitions;
     definitions.registerBuiltins();
     QSocSubAgentTaskSource tasks;

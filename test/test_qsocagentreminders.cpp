@@ -172,7 +172,7 @@ void configureTestService(QLLMService &service, const QUrl &url)
     endpoint.url     = url;
     endpoint.model   = QStringLiteral("test-model");
     endpoint.timeout = 3000;
-    service.addEndpoint(endpoint);
+    service.setEndpoint(endpoint);
 }
 
 QSet<QString> requestToolNames(const json &request)

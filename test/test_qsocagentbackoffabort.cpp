@@ -611,7 +611,7 @@ void configureService(QLLMService &service, const MockServer &server)
     endpoint.url     = server.url();
     endpoint.model   = QStringLiteral("test-model");
     endpoint.timeout = 10000;
-    service.addEndpoint(endpoint);
+    service.setEndpoint(endpoint);
 }
 
 QSocAgentConfig testConfig()
@@ -1969,7 +1969,7 @@ private slots:
         });
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
         QSocSubAgentTaskSource tasks;
@@ -2900,7 +2900,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
         QSocSubAgentTaskSource tasks;
@@ -2947,7 +2947,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
         QSocSubAgentTaskSource tasks;
@@ -2994,7 +2994,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
         QSocSubAgentTaskSource tasks;
@@ -3038,7 +3038,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
         QSocSubAgentTaskSource tasks;
@@ -3098,7 +3098,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
 
         QTemporaryDir markerDir;
         QVERIFY(markerDir.isValid());
@@ -3176,7 +3176,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
 
         /* Exits 2, so the hook blocks the prompt: the child reaches a real
          * Failed through runError while start() is still nested. */
@@ -3260,7 +3260,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
 
         HookCommandConfig command;
         command.command = QStringLiteral("sleep 0.4; exit 0");
@@ -3319,7 +3319,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
 
         HookCommandConfig command;
         command.command = QStringLiteral("sleep 0.4; exit 0");
@@ -3381,7 +3381,7 @@ private slots:
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
-        QCOMPARE(service.endpointCount(), 1);
+        QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
         QSocSubAgentTaskSource tasks;

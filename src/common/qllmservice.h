@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stop_token>
 #include <QByteArray>
 #include <QNetworkAccessManager>
@@ -83,15 +84,6 @@ struct LLMResponse
 };
 
 /**
- * @brief Fallback strategy for multiple endpoints
- */
-enum class LLMFallbackStrategy : std::uint8_t {
-    Sequential, /* Try endpoints in order */
-    Random,     /* Try endpoints in random order */
-    RoundRobin  /* Rotate through endpoints */
-};
-
-/**
  * @brief The QLLMService class provides a unified interface for LLM API services
  * @details This class handles API communication using OpenAI Chat Completions format.
  */
@@ -158,33 +150,21 @@ public slots:
     /* Endpoint management */
 
     /**
-     * @brief Add an endpoint to the service
-     * @param endpoint Endpoint configuration to add
+     * @brief Replace the endpoint every request goes to
+     * @param endpoint Endpoint configuration
      */
-    void addEndpoint(const LLMEndpoint &endpoint);
+    void setEndpoint(const LLMEndpoint &endpoint);
 
     /**
-     * @brief Clear all endpoints
+     * @brief Drop the endpoint; requests fail until one is set again
      */
-    void clearEndpoints();
+    void clearEndpoint();
 
     /**
-     * @brief Get the number of configured endpoints
-     * @return Number of endpoints
-     */
-    int endpointCount() const;
-
-    /**
-     * @brief Check if at least one endpoint is configured
-     * @return True if at least one endpoint is available
+     * @brief Check if an endpoint is configured
+     * @return True if an endpoint is available
      */
     bool hasEndpoint() const;
-
-    /**
-     * @brief Set the fallback strategy
-     * @param strategy Strategy to use when an endpoint fails
-     */
-    void setFallbackStrategy(LLMFallbackStrategy strategy);
 
     /* Model registry */
 
@@ -370,22 +350,12 @@ private:
         Stopped
     };
 
-    struct EndpointAttempt
-    {
-        LLMEndpoint endpoint;
-        int         index    = 0;
-        quint64     revision = 0;
-    };
-
     struct StreamState;
     using StreamStatePtr = std::shared_ptr<StreamState>;
 
     QPointer<QNetworkAccessManager> networkManager;
     QSocConfig                     *config = nullptr;
-    QList<LLMEndpoint>              endpoints;
-    int                             currentEndpoint  = 0;
-    quint64                         endpointRevision = 0;
-    LLMFallbackStrategy             fallbackStrategy = LLMFallbackStrategy::Sequential;
+    std::optional<LLMEndpoint>      activeEndpoint;
     QMap<QString, LLMModelConfig>   modelConfigs;
     QString                         defaultModelId;
     QString                         currentModelId;
@@ -399,15 +369,6 @@ private:
      * @brief Set up network proxy based on configuration settings
      */
     void setupNetworkProxy();
-
-    /**
-     * @brief Select an endpoint and reserve the next round-robin slot
-     * @return Selected endpoint, or empty endpoint if none available
-     */
-    LLMEndpoint selectEndpoint();
-
-    QList<EndpointAttempt> endpointAttempts();
-    void                   commitEndpoint(const EndpointAttempt &attempt);
 
     /**
      * @brief Prepare network request for an endpoint

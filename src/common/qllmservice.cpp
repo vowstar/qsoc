@@ -10,7 +10,6 @@
 #include <QDebug>
 #include <QEventLoop>
 #include <QNetworkRequest>
-#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSet>
 #include <QTimer>
@@ -255,8 +254,8 @@ QLLMService::~QLLMService()
         std::fill(str.begin(), str.end(), QChar(u'\0'));
         str.clear();
     };
-    for (auto &endpoint : endpoints) {
-        wipe(endpoint.key);
+    if (activeEndpoint) {
+        wipe(activeEndpoint->key);
     }
     for (auto &model : modelConfigs) {
         wipe(model.key);
@@ -265,19 +264,14 @@ QLLMService::~QLLMService()
 
 QLLMService *QLLMService::clone(QObject *parent) const
 {
-    /* The constructor calls loadConfigSettings(), which re-parses
-     * endpoints + modelConfigs from the same QSocConfig. That gives
-     * the clone its OWN copies of those structures (and own QNAM,
-     * own streaming state). Then we align the clone with the
-     * parent's currently selected model and fallback strategy. */
-    auto *child             = new QLLMService(parent, config);
-    child->fallbackStrategy = fallbackStrategy;
+    /* The constructor calls loadConfigSettings(), which re-parses the
+     * endpoint + modelConfigs from the same QSocConfig. That gives the
+     * clone its OWN copies of those structures (and own QNAM, own
+     * streaming state). Then we align the clone with the parent's
+     * currently selected model. */
+    auto *child = new QLLMService(parent, config);
     if (!currentModelId.isEmpty()) {
-        /* setCurrentModel keeps endpoint index + currentModelId in
-         * sync against modelConfigs, so prefer it over manual copies. */
         child->setCurrentModel(currentModelId);
-    } else {
-        child->currentEndpoint = currentEndpoint;
     }
     return child;
 }
@@ -298,27 +292,19 @@ QSocConfig *QLLMService::getConfig()
 
 /* Endpoint management */
 
-void QLLMService::addEndpoint(const LLMEndpoint &endpoint)
+void QLLMService::setEndpoint(const LLMEndpoint &endpoint)
 {
-    endpoints.append(endpoint);
-    ++endpointRevision;
+    activeEndpoint = endpoint;
 }
 
-void QLLMService::clearEndpoints()
+void QLLMService::clearEndpoint()
 {
-    endpoints.clear();
-    currentEndpoint = 0;
-    ++endpointRevision;
-}
-
-int QLLMService::endpointCount() const
-{
-    return static_cast<int>(endpoints.size());
+    activeEndpoint.reset();
 }
 
 bool QLLMService::hasEndpoint() const
 {
-    return !endpoints.isEmpty();
+    return activeEndpoint.has_value();
 }
 
 QStringList QLLMService::availableModels() const
@@ -355,11 +341,6 @@ bool QLLMService::setCurrentModel(const QString &modelId)
     currentModelId                  = modelId;
     const LLMModelConfig &modelConf = modelConfigs[modelId];
 
-    /* Rebuild primary endpoint from model config */
-    endpoints.clear();
-    currentEndpoint = 0;
-    ++endpointRevision;
-
     LLMEndpoint endpoint;
     endpoint.name            = modelConf.name;
     endpoint.url             = QUrl(modelConf.url);
@@ -368,18 +349,9 @@ bool QLLMService::setCurrentModel(const QString &modelId)
     endpoint.timeout         = modelConf.timeout;
     endpoint.maxOutputTokens = modelConf.maxOutputTokens;
     endpoint.authHeader      = modelConf.authHeader;
-    endpoints.append(endpoint);
+    activeEndpoint           = endpoint;
 
     return true;
-}
-
-void QLLMService::setFallbackStrategy(LLMFallbackStrategy strategy)
-{
-    if (fallbackStrategy == strategy) {
-        return;
-    }
-    fallbackStrategy = strategy;
-    ++endpointRevision;
 }
 
 /* LLM request methods */
@@ -394,31 +366,13 @@ LLMResponse QLLMService::sendRequest(
         return response;
     }
 
-    const QPointer<QLLMService> owner(this);
-
-    const QList<EndpointAttempt> attempts = endpointAttempts();
-    for (const EndpointAttempt &attempt : attempts) {
-        const LLMEndpoint &endpoint = attempt.endpoint;
-        LLMResponse        response
-            = sendRequestToEndpoint(endpoint, prompt, systemPrompt, temperature, jsonMode);
-
-        if (owner.isNull()) {
-            return response;
-        }
-        if (owner->networkManager.isNull()) {
-            return response;
-        }
-        if (response.success) {
-            owner->commitEndpoint(attempt);
-            return response;
-        }
-
+    /* Copy first: the nested wait may destroy this service. */
+    const LLMEndpoint endpoint = *activeEndpoint;
+    LLMResponse       response
+        = sendRequestToEndpoint(endpoint, prompt, systemPrompt, temperature, jsonMode);
+    if (!response.success) {
         QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << response.errorMessage;
     }
-
-    LLMResponse response;
-    response.success      = false;
-    response.errorMessage = "All LLM endpoints failed";
     return response;
 }
 
@@ -439,7 +393,7 @@ void QLLMService::sendRequestAsync(
         return;
     }
 
-    LLMEndpoint endpoint = selectEndpoint();
+    const LLMEndpoint endpoint = *activeEndpoint;
 
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
@@ -606,9 +560,7 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
 
 void QLLMService::loadConfigSettings()
 {
-    endpoints.clear();
-    currentEndpoint = 0;
-    ++endpointRevision;
+    activeEndpoint.reset();
     modelConfigs.clear();
     defaultModelId.clear();
     currentModelId.clear();
@@ -724,18 +676,8 @@ void QLLMService::loadConfigSettings()
                 endpoint.maxOutputTokens = maxOutputStr.toInt();
             }
 
-            endpoints.append(endpoint);
+            activeEndpoint = endpoint;
         }
-    }
-
-    /* Load fallback strategy */
-    QString fallbackStr = config->getValue("llm.fallback", "sequential").toLower();
-    if (fallbackStr == "random") {
-        fallbackStrategy = LLMFallbackStrategy::Random;
-    } else if (fallbackStr == "round-robin" || fallbackStr == "roundrobin") {
-        fallbackStrategy = LLMFallbackStrategy::RoundRobin;
-    } else {
-        fallbackStrategy = LLMFallbackStrategy::Sequential;
     }
 }
 
@@ -749,77 +691,6 @@ void QLLMService::setupNetworkProxy()
      * bootstrap is owned by main.cpp / QSocProxy so DefaultProxy still
      * resolves to the env / libproxy proxy when nothing is configured. */
     QSocProxy::apply(networkManager, QSocProxy::fromLegacyConfig(config));
-}
-
-LLMEndpoint QLLMService::selectEndpoint()
-{
-    if (endpoints.isEmpty()) {
-        return {};
-    }
-
-    int index = currentEndpoint % static_cast<int>(endpoints.size());
-    switch (fallbackStrategy) {
-    case LLMFallbackStrategy::Random:
-        index = QRandomGenerator::global()->bounded(static_cast<int>(endpoints.size()));
-        break;
-    case LLMFallbackStrategy::RoundRobin:
-        currentEndpoint = (index + 1) % static_cast<int>(endpoints.size());
-        break;
-    case LLMFallbackStrategy::Sequential:
-    default:
-        break;
-    }
-    ++endpointRevision;
-    return endpoints.at(index);
-}
-
-QList<QLLMService::EndpointAttempt> QLLMService::endpointAttempts()
-{
-    QList<EndpointAttempt> attempts;
-    attempts.reserve(endpoints.size());
-    if (endpoints.isEmpty()) {
-        return attempts;
-    }
-
-    const quint64 revision = ++endpointRevision;
-
-    if (fallbackStrategy == LLMFallbackStrategy::Random) {
-        for (qsizetype index = 0; index < endpoints.size(); ++index) {
-            attempts.append({endpoints.at(index), static_cast<int>(index), revision});
-        }
-        std::shuffle(attempts.begin(), attempts.end(), *QRandomGenerator::global());
-        return attempts;
-    }
-
-    const int start = currentEndpoint % static_cast<int>(endpoints.size());
-    if (fallbackStrategy == LLMFallbackStrategy::RoundRobin) {
-        currentEndpoint = (start + 1) % static_cast<int>(endpoints.size());
-    }
-    for (qsizetype offset = 0; offset < endpoints.size(); ++offset) {
-        const int index = (start + static_cast<int>(offset)) % static_cast<int>(endpoints.size());
-        attempts.append({endpoints.at(index), index, revision});
-    }
-    return attempts;
-}
-
-void QLLMService::commitEndpoint(const EndpointAttempt &attempt)
-{
-    if (attempt.revision != endpointRevision || attempt.index < 0
-        || attempt.index >= endpoints.size()) {
-        return;
-    }
-
-    switch (fallbackStrategy) {
-    case LLMFallbackStrategy::Sequential:
-        currentEndpoint = attempt.index;
-        break;
-    case LLMFallbackStrategy::RoundRobin:
-        currentEndpoint = (attempt.index + 1) % static_cast<int>(endpoints.size());
-        break;
-    case LLMFallbackStrategy::Random:
-        break;
-    }
-    ++endpointRevision;
 }
 
 QNetworkRequest QLLMService::prepareRequest(const LLMEndpoint &endpoint) const
@@ -1027,8 +898,8 @@ void QLLMService::sendChatCompletionStream(
         }
     }
 
-    LLMEndpoint     endpoint = selectEndpoint();
-    QNetworkRequest request  = prepareRequest(endpoint);
+    const LLMEndpoint endpoint = *activeEndpoint;
+    QNetworkRequest   request  = prepareRequest(endpoint);
 
     /* Build payload with streaming enabled */
     json payload;
@@ -1705,100 +1576,86 @@ json QLLMService::sendChatCompletion(
 
     const QPointer<QLLMService> owner(this);
 
-    QString                      lastError = QStringLiteral("All LLM endpoints failed");
-    const QList<EndpointAttempt> attempts  = endpointAttempts();
-    for (const EndpointAttempt &attempt : attempts) {
-        if (stopToken.stop_requested()) {
-            return {{"error", "Request cancelled"}};
-        }
-        const LLMEndpoint &endpoint = attempt.endpoint;
-        QNetworkRequest    request  = owner->prepareRequest(endpoint);
+    const LLMEndpoint endpoint = *activeEndpoint;
+    QNetworkRequest   request  = prepareRequest(endpoint);
 
-        /* Build payload with messages and tools */
-        json payload;
-        payload["messages"]    = messages;
-        payload["temperature"] = temperature;
-        payload["stream"]      = false;
+    /* Build payload with messages and tools */
+    json payload;
+    payload["messages"]    = messages;
+    payload["temperature"] = temperature;
+    payload["stream"]      = false;
 
-        if (!endpoint.model.isEmpty()) {
-            payload["model"] = endpoint.model.toStdString();
-        }
-
-        /* Add tools if provided */
-        if (!tools.empty()) {
-            payload["tools"] = tools;
-        }
-
-        /* Set max output tokens from endpoint config */
-        if (endpoint.maxOutputTokens > 0) {
-            payload["max_tokens"] = endpoint.maxOutputTokens;
-        }
-
-        if (owner->networkManager.isNull()) {
-            return {{"error", "Network manager destroyed"}};
-        }
-        if (stopToken.stop_requested()) {
-            return {{"error", "Request cancelled"}};
-        }
-        QNetworkReply *networkReply
-            = owner->networkManager->post(request, QByteArray::fromStdString(payload.dump()));
-        const NetworkWaitResult wait
-            = waitForNetworkReply(networkReply, endpoint.timeout, stopToken);
-        QPointer<QNetworkReply> reply = wait.reply;
-
-        if (wait.cancelled || stopToken.stop_requested()) {
-            drainNetworkReply(reply.data());
-            return {{"error", "Request cancelled"}};
-        }
-
-        if (owner.isNull()) {
-            return {{"error", "LLM service destroyed"}};
-        }
-        if (owner->networkManager.isNull()) {
-            return {{"error", "Network manager destroyed"}};
-        }
-        if (reply.isNull()) {
-            QSocConsole::warn() << "Endpoint" << endpoint.name << "failed: Network reply destroyed";
-            continue;
-        }
-
-        if (reply->error() != QNetworkReply::NoError) {
-            QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << reply->errorString();
-            reply->deleteLater();
-            if (stopToken.stop_requested()) {
-                return {{"error", "Request cancelled"}};
-            }
-            continue;
-        }
-
-        const QByteArray responseData = reply->readAll();
-        reply->deleteLater();
-
-        try {
-            json    response = json::parse(responseData.toStdString());
-            QString validationError;
-            if (!extractAssistantMessage(response, nullptr, &validationError)) {
-                lastError = validationError;
-                QSocConsole::warn()
-                    << "Endpoint" << endpoint.name << "returned an invalid chat response";
-                if (stopToken.stop_requested()) {
-                    return {{"error", "Request cancelled"}};
-                }
-                continue;
-            }
-            if (stopToken.stop_requested()) {
-                return {{"error", "Request cancelled"}};
-            }
-            owner->commitEndpoint(attempt);
-            return response;
-        } catch (const json::exception &e) {
-            QSocConsole::warn() << "JSON parse error:" << e.what();
-            if (stopToken.stop_requested()) {
-                return {{"error", "Request cancelled"}};
-            }
-            continue;
-        }
+    if (!endpoint.model.isEmpty()) {
+        payload["model"] = endpoint.model.toStdString();
     }
 
-    return {{"error", lastError.toStdString()}};
+    /* Add tools if provided */
+    if (!tools.empty()) {
+        payload["tools"] = tools;
+    }
+
+    /* Set max output tokens from endpoint config */
+    if (endpoint.maxOutputTokens > 0) {
+        payload["max_tokens"] = endpoint.maxOutputTokens;
+    }
+
+    if (networkManager.isNull()) {
+        return {{"error", "Network manager destroyed"}};
+    }
+    QNetworkReply *networkReply
+        = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    const NetworkWaitResult wait  = waitForNetworkReply(networkReply, endpoint.timeout, stopToken);
+    QPointer<QNetworkReply> reply = wait.reply;
+
+    if (wait.cancelled || stopToken.stop_requested()) {
+        drainNetworkReply(reply.data());
+        return {{"error", "Request cancelled"}};
+    }
+
+    if (owner.isNull()) {
+        return {{"error", "LLM service destroyed"}};
+    }
+    if (owner->networkManager.isNull()) {
+        return {{"error", "Network manager destroyed"}};
+    }
+    if (reply.isNull()) {
+        QSocConsole::warn() << "Endpoint" << endpoint.name << "failed: Network reply destroyed";
+        return {{"error", "Network reply destroyed"}};
+    }
+
+    if (reply->error() != QNetworkReply::NoError) {
+        const QString error = reply->errorString();
+        QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << error;
+        reply->deleteLater();
+        if (stopToken.stop_requested()) {
+            return {{"error", "Request cancelled"}};
+        }
+        return {{"error", error.toStdString()}};
+    }
+
+    const QByteArray responseData = reply->readAll();
+    reply->deleteLater();
+
+    try {
+        json    response = json::parse(responseData.toStdString());
+        QString validationError;
+        if (!extractAssistantMessage(response, nullptr, &validationError)) {
+            QSocConsole::warn() << "Endpoint" << endpoint.name
+                                << "returned an invalid chat response";
+            if (stopToken.stop_requested()) {
+                return {{"error", "Request cancelled"}};
+            }
+            return {{"error", validationError.toStdString()}};
+        }
+        if (stopToken.stop_requested()) {
+            return {{"error", "Request cancelled"}};
+        }
+        return response;
+    } catch (const json::exception &e) {
+        QSocConsole::warn() << "JSON parse error:" << e.what();
+        if (stopToken.stop_requested()) {
+            return {{"error", "Request cancelled"}};
+        }
+        return {{"error", e.what()}};
+    }
 }

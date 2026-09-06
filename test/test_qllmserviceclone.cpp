@@ -453,15 +453,15 @@ private slots:
         LLMEndpoint manual;
         manual.name = QStringLiteral("local");
         manual.url  = QUrl(QStringLiteral("http://localhost:1234/v1/chat"));
-        parent->addEndpoint(manual);
-        QCOMPARE(parent->endpointCount(), 1);
+        parent->setEndpoint(manual);
+        QVERIFY(parent->hasEndpoint());
 
         auto *child = parent->clone(this);
         /* Clone has no config → loadConfigSettings did not pick up
          * endpoints. Manual endpoints are NOT carried; that is the
          * documented contract (configuration source-of-truth is
          * QSocConfig). */
-        QCOMPARE(child->endpointCount(), 0);
+        QVERIFY(!child->hasEndpoint());
 
         delete child;
         delete parent;
@@ -490,37 +490,8 @@ private slots:
         auto *clone  = parent->clone(this);
         delete parent;
         /* clone now stands alone */
-        QCOMPARE(clone->endpointCount(), 0);
+        QVERIFY(!clone->hasEndpoint());
         delete clone;
-    }
-
-    /* clone() preserves fallback selection independently of endpoint config. */
-    void testCloneCopiesFallbackStrategy()
-    {
-        MockHttpServer firstServer;
-        MockHttpServer secondServer;
-        QVERIFY(firstServer.listen());
-        QVERIFY(secondServer.listen());
-        firstServer.enqueue(jsonResponse(QStringLiteral("first")));
-        firstServer.enqueue(jsonResponse(QStringLiteral("first again")));
-        secondServer.enqueue(jsonResponse(QStringLiteral("second")));
-
-        auto *parent = new QLLMService(this, nullptr);
-        parent->setFallbackStrategy(LLMFallbackStrategy::RoundRobin);
-        auto *child = parent->clone(this);
-        child->addEndpoint(endpointFor(firstServer));
-        child->addEndpoint(endpointFor(secondServer));
-
-        const SyncResult first  = sendSyncRequest(child, false);
-        const SyncResult second = sendSyncRequest(child, false);
-        QVERIFY2(first.error.isEmpty(), qPrintable(first.error));
-        QVERIFY2(second.error.isEmpty(), qPrintable(second.error));
-        QCOMPARE(first.content, QStringLiteral("first"));
-        QCOMPARE(second.content, QStringLiteral("second"));
-        QVERIFY2(waitForNoReplies(child), "clone replies were not deleted");
-
-        delete child;
-        delete parent;
     }
 
     void testAbortFromContentStopsSameDelta()
@@ -535,7 +506,7 @@ private slots:
         server.enqueue(deltaResponse(delta, true, true, true));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         StreamEvents events;
         bool         abortRequested = false;
@@ -575,7 +546,7 @@ private slots:
         server.enqueue(deltaResponse(delta, false, false));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         StreamEvents events;
         bool         abortRequested = false;
@@ -630,7 +601,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("new content")));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         StreamEvents events;
         bool         restarted = false;
@@ -679,7 +650,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("new content")));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         StreamEvents events;
         bool         restarted = false;
@@ -725,7 +696,7 @@ private slots:
         server.enqueue(deltaResponse(delta, true, true, true));
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->addEndpoint(endpointFor(server));
+        service->setEndpoint(endpointFor(server));
 
         StreamEvents events;
         bool         deleted = false;
@@ -780,7 +751,7 @@ private slots:
         }
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->addEndpoint(endpointFor(server));
+        service->setEndpoint(endpointFor(server));
 
         int     completionCount = 0;
         int     errorCount      = 0;
@@ -832,7 +803,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("recovered")));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         StreamEvents            events;
         QPointer<QNetworkReply> reply;
@@ -889,7 +860,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("replacement")));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         StreamEvents events;
         bool         replaced = false;
@@ -933,14 +904,14 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
         QVERIFY2(waitUntil([&]() { return runningReply(&service) != nullptr; }), "no active reply");
         QPointer<QNetworkReply> oldReply = runningReply(&service);
 
-        service.clearEndpoints();
+        service.clearEndpoint();
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
         QCOMPARE(events.errors, QStringList({QStringLiteral("No LLM endpoint configured")}));
 
@@ -998,7 +969,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1047,7 +1018,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1070,7 +1041,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1101,7 +1072,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1140,7 +1111,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1184,7 +1155,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1207,7 +1178,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1248,7 +1219,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         QObject                 callbacks;
@@ -1320,7 +1291,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         QObject                 callbacks;
@@ -1391,7 +1362,7 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("nested complete")));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         QStringList eventOrder;
         bool        nestedStarted     = false;
@@ -1616,7 +1587,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1627,52 +1598,6 @@ private slots:
 
         QCOMPARE(events.errors, QStringList({QStringLiteral("Invalid tool call from LLM")}));
         QVERIFY(events.completed.isEmpty());
-    }
-
-    void testMalformedSyncResponseFallsBack_data()
-    {
-        QTest::addColumn<bool>("chatCompletion");
-        QTest::addColumn<QByteArray>("malformedBody");
-
-        QTest::newRow("request-syntax") << false << QByteArrayLiteral("{");
-
-        json wrongContent;
-        wrongContent["choices"] = json::array();
-        wrongContent["choices"].push_back(json::object());
-        wrongContent["choices"][0]["message"]["content"] = 7;
-        QTest::newRow("request-type") << false << QByteArray::fromStdString(wrongContent.dump());
-
-        QTest::newRow("request-range") << false << QByteArrayLiteral("1e10000");
-        QTest::newRow("chat-syntax") << true << QByteArrayLiteral("{");
-        QTest::newRow("chat-range") << true << QByteArrayLiteral("1e10000");
-
-        json invalidToolCall  = assistantToolCall();
-        invalidToolCall["id"] = "";
-        QTest::newRow("chat-invalid-tool-call")
-            << true
-            << encodedJson(assistantResponse(
-                   {{"content", nullptr}, {"tool_calls", json::array({invalidToolCall})}}));
-    }
-
-    void testMalformedSyncResponseFallsBack()
-    {
-        QFETCH(bool, chatCompletion);
-        QFETCH(QByteArray, malformedBody);
-
-        MockHttpServer server;
-        QVERIFY(server.listen());
-        server.enqueue({QByteArrayLiteral("application/json"), malformedBody});
-        server.enqueue(jsonResponse(QStringLiteral("recovered")));
-
-        QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
-        service.addEndpoint(endpointFor(server));
-
-        const SyncResult result = sendSyncRequest(&service, chatCompletion);
-        QVERIFY2(waitForNoReplies(&service), "fallback replies were not deleted");
-        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
-        QCOMPARE(result.content, QStringLiteral("recovered"));
-        QCOMPARE(server.requestCount(), 2);
     }
 
     void testSyncToolCallWithNullContentSucceeds()
@@ -1690,7 +1615,7 @@ private slots:
             {QByteArrayLiteral("application/json"), QByteArray::fromStdString(responseBody.dump())});
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         const LLMResponse response = service.sendRequest(QStringLiteral("runtime prompt"));
         QVERIFY2(waitForNoReplies(&service), "null-content reply was not deleted");
@@ -1705,7 +1630,7 @@ private slots:
         QVERIFY(server.listen());
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         QNetworkAccessManager *manager = service.findChild<QNetworkAccessManager *>();
         QVERIFY(manager != nullptr);
         delete manager;
@@ -1732,7 +1657,7 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("ignored")));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         service.sendRequestAsync(QStringLiteral("runtime prompt"), emptyCallback);
         QVERIFY(waitForNoReplies(&service));
 
@@ -1747,7 +1672,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         QNetworkAccessManager *manager = service.findChild<QNetworkAccessManager *>();
@@ -1786,7 +1711,7 @@ private slots:
         QLLMService service(nullptr, nullptr);
         LLMEndpoint endpoint = endpointFor(server);
         endpoint.timeout     = terminalPath == QStringLiteral("timeout") ? 20 : 500;
-        service.addEndpoint(endpoint);
+        service.setEndpoint(endpoint);
 
         QObject callbacks;
         bool    actionTaken = false;
@@ -1852,7 +1777,7 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("async complete")));
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->addEndpoint(endpointFor(server));
+        service->setEndpoint(endpointFor(server));
 
         int     callbackCount = 0;
         bool    success       = false;
@@ -1888,7 +1813,7 @@ private slots:
         server.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{}"), 0, true});
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->addEndpoint(endpointFor(server));
+        service->setEndpoint(endpointFor(server));
 
         QObject callbacks;
         bool    actionTaken = false;
@@ -1940,7 +1865,7 @@ private slots:
         server.enqueue(deltaResponse({{"content", "pending"}}, false, true, true));
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->addEndpoint(endpointFor(server));
+        service->setEndpoint(endpointFor(server));
 
         QObject callbacks;
         bool    actionTaken = false;
@@ -2012,7 +1937,7 @@ private slots:
         QPointer<QLLMService> service  = new QLLMService(nullptr, nullptr);
         LLMEndpoint           endpoint = endpointFor(server);
         endpoint.timeout               = 3000;
-        service->addEndpoint(endpoint);
+        service->setEndpoint(endpoint);
 
         QObject                         callbacks;
         QPointer<QNetworkReply>         observedReply;
@@ -2079,182 +2004,9 @@ private slots:
             QCOMPARE(result.error, QStringLiteral("Network manager destroyed"));
         } else {
             QVERIFY(service->findChild<QNetworkAccessManager *>() != nullptr);
-            QCOMPARE(result.error, QStringLiteral("All LLM endpoints failed"));
+            QCOMPARE(result.error, QStringLiteral("Network reply destroyed"));
         }
         delete service.data();
-    }
-
-    void testDestroyedSyncReplyFallsBack_data()
-    {
-        QTest::addColumn<bool>("chatCompletion");
-        QTest::newRow("request") << false;
-        QTest::newRow("chat") << true;
-    }
-
-    void testDestroyedSyncReplyFallsBack()
-    {
-        QFETCH(bool, chatCompletion);
-
-        /* Distinct hosts: after the abort, Qt may still deliver a stale queued
-         * receive on the first channel, which closes whatever socket that
-         * channel is connecting; a same-host fallback would land on it. */
-        MockHttpServer firstServer;
-        MockHttpServer secondServer;
-        QVERIFY(firstServer.listen());
-        QVERIFY(secondServer.listen());
-        firstServer.enqueue(
-            {QByteArrayLiteral("application/json"), QByteArrayLiteral("{"), 0, true});
-        secondServer.enqueue(jsonResponse(QStringLiteral("recovered")));
-
-        QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(firstServer));
-        service.addEndpoint(endpointFor(secondServer));
-
-        QObject                 callbacks;
-        QPointer<QNetworkReply> deletedReply;
-        bool                    replyDeleted = false;
-        connect(
-            &firstServer,
-            &MockHttpServer::responseSent,
-            &callbacks,
-            [&](int responseIndex) {
-                if (responseIndex != 0 || !deletedReply.isNull()) {
-                    return;
-                }
-                deletedReply = runningReply(&service);
-                replyDeleted = !deletedReply.isNull();
-                delete deletedReply.data();
-            },
-            Qt::DirectConnection);
-
-        const SyncResult result = sendSyncRequest(&service, chatCompletion);
-        QVERIFY(replyDeleted);
-        QVERIFY(deletedReply.isNull());
-        QVERIFY2(waitForNoReplies(&service), "fallback sync replies were not deleted");
-        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
-        QCOMPARE(result.content, QStringLiteral("recovered"));
-        QCOMPARE(firstServer.requestCount(), 1);
-        QCOMPARE(secondServer.requestCount(), 1);
-    }
-
-    void testReentrantSyncFallbackUsesStableOrder_data()
-    {
-        QTest::addColumn<bool>("chatCompletion");
-        QTest::newRow("request") << false;
-        QTest::newRow("chat") << true;
-    }
-
-    void testReentrantSyncFallbackUsesStableOrder()
-    {
-        QFETCH(bool, chatCompletion);
-
-        MockHttpServer firstServer;
-        MockHttpServer secondServer;
-        QVERIFY(firstServer.listen());
-        QVERIFY(secondServer.listen());
-
-        firstServer.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{")});
-        firstServer.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{")});
-        firstServer.enqueue(jsonResponse(QStringLiteral("wrong endpoint")));
-        secondServer.enqueue(jsonResponse(QStringLiteral("inner")));
-        secondServer.enqueue(jsonResponse(QStringLiteral("outer")));
-
-        QLLMService service(nullptr, nullptr);
-        LLMEndpoint first  = endpointFor(firstServer);
-        first.name         = QStringLiteral("first");
-        LLMEndpoint second = endpointFor(secondServer);
-        second.name        = QStringLiteral("second");
-        service.addEndpoint(first);
-        service.addEndpoint(second);
-
-        QObject    callbacks;
-        bool       nestedStarted = false;
-        SyncResult innerResult;
-        connect(
-            &firstServer,
-            &MockHttpServer::responseSent,
-            &callbacks,
-            [&](int responseIndex) {
-                if (responseIndex != 0 || nestedStarted) {
-                    return;
-                }
-                nestedStarted = true;
-                innerResult   = sendSyncRequest(&service, chatCompletion);
-            },
-            Qt::DirectConnection);
-
-        const SyncResult outerResult = sendSyncRequest(&service, chatCompletion);
-        QVERIFY2(waitForNoReplies(&service), "reentrant fallback replies were not deleted");
-
-        QVERIFY(nestedStarted);
-        QVERIFY2(innerResult.error.isEmpty(), qPrintable(innerResult.error));
-        QCOMPARE(innerResult.content, QStringLiteral("inner"));
-        QVERIFY2(outerResult.error.isEmpty(), qPrintable(outerResult.error));
-        QCOMPARE(outerResult.content, QStringLiteral("outer"));
-
-        secondServer.enqueue(jsonResponse(QStringLiteral("next")));
-        const SyncResult nextResult = sendSyncRequest(&service, chatCompletion);
-        QVERIFY2(nextResult.error.isEmpty(), qPrintable(nextResult.error));
-        QCOMPARE(nextResult.content, QStringLiteral("next"));
-        QVERIFY(!firstServer.eofSent(2));
-    }
-
-    void testReconfiguredEndpointsRejectStaleCommit_data()
-    {
-        QTest::addColumn<bool>("chatCompletion");
-        QTest::newRow("request") << false;
-        QTest::newRow("chat") << true;
-    }
-
-    void testReconfiguredEndpointsRejectStaleCommit()
-    {
-        QFETCH(bool, chatCompletion);
-
-        MockHttpServer oldFirst;
-        MockHttpServer oldSecond;
-        MockHttpServer newFirst;
-        MockHttpServer newSecond;
-        QVERIFY(oldFirst.listen());
-        QVERIFY(oldSecond.listen());
-        QVERIFY(newFirst.listen());
-        QVERIFY(newSecond.listen());
-
-        oldFirst.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{")});
-        oldSecond.enqueue(jsonResponse(QStringLiteral("old success")));
-        newFirst.enqueue(jsonResponse(QStringLiteral("new first")));
-        newSecond.enqueue(jsonResponse(QStringLiteral("new second")));
-
-        QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(oldFirst));
-        service.addEndpoint(endpointFor(oldSecond));
-
-        QObject callbacks;
-        bool    rebuilt = false;
-        connect(
-            &oldSecond,
-            &MockHttpServer::responseSent,
-            &callbacks,
-            [&](int responseIndex) {
-                if (responseIndex != 0 || rebuilt) {
-                    return;
-                }
-                rebuilt = true;
-                service.clearEndpoints();
-                service.addEndpoint(endpointFor(newFirst));
-                service.addEndpoint(endpointFor(newSecond));
-            },
-            Qt::DirectConnection);
-
-        const SyncResult oldResult = sendSyncRequest(&service, chatCompletion);
-        QVERIFY(rebuilt);
-        QVERIFY2(oldResult.error.isEmpty(), qPrintable(oldResult.error));
-        QCOMPARE(oldResult.content, QStringLiteral("old success"));
-
-        const SyncResult newResult = sendSyncRequest(&service, chatCompletion);
-        QVERIFY2(waitForNoReplies(&service), "reconfigured endpoint replies were not deleted");
-        QVERIFY2(newResult.error.isEmpty(), qPrintable(newResult.error));
-        QCOMPARE(newResult.content, QStringLiteral("new first"));
-        QVERIFY(!newSecond.eofSent(0));
     }
 
     void testRandomFallbackTriesEachEndpoint_data()
@@ -2264,170 +2016,14 @@ private slots:
         QTest::newRow("chat") << true;
     }
 
-    void testRandomFallbackTriesEachEndpoint()
-    {
-        QFETCH(bool, chatCompletion);
-
-        constexpr int  requestCount = 32;
-        MockHttpServer failedServer;
-        MockHttpServer healthyServer;
-        QVERIFY(failedServer.listen());
-        QVERIFY(healthyServer.listen());
-        for (int index = 0; index < requestCount * 2; ++index) {
-            failedServer.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{")});
-        }
-        for (int index = 0; index < requestCount; ++index) {
-            healthyServer.enqueue(jsonResponse(QStringLiteral("healthy")));
-        }
-
-        int healthyRequests = 0;
-        connect(
-            &healthyServer,
-            &MockHttpServer::responseSent,
-            this,
-            [&](int) { ++healthyRequests; },
-            Qt::DirectConnection);
-
-        QSocTestCapture capture;
-        QLLMService     service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(failedServer));
-        service.addEndpoint(endpointFor(healthyServer));
-        service.setFallbackStrategy(LLMFallbackStrategy::Random);
-
-        for (int index = 0; index < requestCount; ++index) {
-            const SyncResult result = sendSyncRequest(&service, chatCompletion);
-            QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
-            QCOMPARE(result.content, QStringLiteral("healthy"));
-        }
-        QVERIFY2(waitForNoReplies(&service), "random fallback replies were not deleted");
-        QCOMPARE(healthyRequests, requestCount);
-    }
-
-    void testRoundRobinSyncRotates_data()
-    {
-        QTest::addColumn<bool>("chatCompletion");
-        QTest::newRow("request") << false;
-        QTest::newRow("chat") << true;
-    }
-
-    void testRoundRobinSyncRotates()
-    {
-        QFETCH(bool, chatCompletion);
-
-        MockHttpServer firstServer;
-        MockHttpServer secondServer;
-        QVERIFY(firstServer.listen());
-        QVERIFY(secondServer.listen());
-        for (int index = 0; index < 2; ++index) {
-            firstServer.enqueue(jsonResponse(QStringLiteral("first")));
-            secondServer.enqueue(jsonResponse(QStringLiteral("second")));
-        }
-
-        QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(firstServer));
-        service.addEndpoint(endpointFor(secondServer));
-        service.setFallbackStrategy(LLMFallbackStrategy::RoundRobin);
-
-        const QStringList expected = {
-            QStringLiteral("first"),
-            QStringLiteral("second"),
-            QStringLiteral("first"),
-            QStringLiteral("second"),
-        };
-        for (const QString &content : expected) {
-            const SyncResult result = sendSyncRequest(&service, chatCompletion);
-            QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
-            QCOMPARE(result.content, content);
-        }
-        QVERIFY2(waitForNoReplies(&service), "round-robin sync replies were not deleted");
-    }
-
-    void testRoundRobinAsyncRotates()
-    {
-        MockHttpServer firstServer;
-        MockHttpServer secondServer;
-        QVERIFY(firstServer.listen());
-        QVERIFY(secondServer.listen());
-        for (int index = 0; index < 2; ++index) {
-            firstServer.enqueue(jsonResponse(QStringLiteral("first")));
-            secondServer.enqueue(jsonResponse(QStringLiteral("second")));
-        }
-
-        QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(firstServer));
-        service.addEndpoint(endpointFor(secondServer));
-        service.setFallbackStrategy(LLMFallbackStrategy::RoundRobin);
-
-        const QStringList expected = {
-            QStringLiteral("first"),
-            QStringLiteral("second"),
-            QStringLiteral("first"),
-            QStringLiteral("second"),
-        };
-        for (const QString &content : expected) {
-            bool        completed = false;
-            LLMResponse response;
-            service
-                .sendRequestAsync(QStringLiteral("runtime prompt"), [&](const LLMResponse &result) {
-                    response  = result;
-                    completed = true;
-                });
-            QVERIFY2(waitUntil([&]() { return completed; }), "async request did not finish");
-            QVERIFY2(response.success, qPrintable(response.errorMessage));
-            QCOMPARE(response.content, content);
-        }
-        QVERIFY2(waitForNoReplies(&service), "round-robin async replies were not deleted");
-    }
-
-    void testRoundRobinStreamRotates()
-    {
-        MockHttpServer firstServer;
-        MockHttpServer secondServer;
-        QVERIFY(firstServer.listen());
-        QVERIFY(secondServer.listen());
-        for (int index = 0; index < 2; ++index) {
-            firstServer.enqueue(contentOnlyDoneResponse(QStringLiteral("first")));
-            secondServer.enqueue(contentOnlyDoneResponse(QStringLiteral("second")));
-        }
-
-        StreamEvents events;
-        QLLMService  service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(firstServer));
-        service.addEndpoint(endpointFor(secondServer));
-        service.setFallbackStrategy(LLMFallbackStrategy::RoundRobin);
-        recordStreamEvents(&service, &events);
-
-        const QStringList expected = {
-            QStringLiteral("first"),
-            QStringLiteral("second"),
-            QStringLiteral("first"),
-            QStringLiteral("second"),
-        };
-        for (const QString &content : expected) {
-            const qsizetype completed = events.completed.size();
-            service.sendChatCompletionStream(json::array(), json::array(), 0.0);
-            QVERIFY2(
-                waitUntil([&]() {
-                    return events.completed.size() > completed || !events.errors.isEmpty();
-                }),
-                "stream request did not finish");
-            QVERIFY2(events.errors.isEmpty(), qPrintable(events.errors.join(QLatin1Char('\n'))));
-            QCOMPARE(completionContent(events.completed.last()), content);
-            QVERIFY2(waitForNoReplies(&service), "round-robin stream reply was not deleted");
-        }
-    }
-
     void testSyncCancellationIsRequestScoped()
     {
         QSocTestCapture capture;
         MockHttpServer  primary;
-        MockHttpServer  fallback;
         QVERIFY(primary.listen());
-        QVERIFY(fallback.listen());
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(primary));
-        service.addEndpoint(endpointFor(fallback));
+        service.setEndpoint(endpointFor(primary));
 
         std::stop_source stopped;
         stopped.request_stop();
@@ -2437,12 +2033,10 @@ private slots:
             QString::fromStdString(preStopped.value("error", std::string())),
             QStringLiteral("Request cancelled"));
         QCOMPARE(primary.requestCount(), 0);
-        QCOMPARE(fallback.requestCount(), 0);
 
         MockResponse held = jsonResponse(QStringLiteral("cancelled response"));
         held.splitAt      = held.body.size() / 2;
         primary.enqueue(held);
-        fallback.enqueue(jsonResponse(QStringLiteral("must not run")));
 
         std::stop_source active;
         const auto       connection = connect(
@@ -2459,7 +2053,6 @@ private slots:
             QString::fromStdString(cancelled.value("error", std::string())),
             QStringLiteral("Request cancelled"));
         QCOMPARE(primary.requestCount(), 1);
-        QCOMPARE(fallback.requestCount(), 0);
         QVERIFY(runningReply(&service) != nullptr);
         QVERIFY2(primary.releaseSplit(), "cancelled transport was closed instead of drained");
         QVERIFY2(waitForNoReplies(&service), "cancelled reply was not deleted after drain");
@@ -2470,7 +2063,6 @@ private slots:
             = service.sendChatCompletion(json::array(), json::array(), 0.0, fresh.get_token());
         QCOMPARE(completionContent(response), QStringLiteral("fresh response"));
         QCOMPARE(primary.requestCount(), 2);
-        QCOMPARE(fallback.requestCount(), 0);
         QVERIFY2(waitForNoReplies(&service), "fresh reply was not deleted");
         QVERIFY2(
             !capture.text().contains(QStringLiteral("device not open")), qPrintable(capture.text()));
@@ -2490,7 +2082,7 @@ private slots:
 
         {
             QLLMService service(nullptr, nullptr);
-            service.addEndpoint(endpointFor(server));
+            service.setEndpoint(endpointFor(server));
 
             int        completionCount = 0;
             QString    streamContent;
@@ -2554,7 +2146,7 @@ private slots:
             QLLMService service(nullptr, nullptr);
             LLMEndpoint endpoint = endpointFor(server);
             endpoint.timeout     = 2000;
-            service.addEndpoint(endpoint);
+            service.setEndpoint(endpoint);
 
             QPointer<QNetworkReply> retiredReply;
             SyncResult              recapResult;
@@ -2628,7 +2220,7 @@ private slots:
 
         {
             QLLMService service(nullptr, nullptr);
-            service.addEndpoint(endpointFor(server));
+            service.setEndpoint(endpointFor(server));
 
             int     completionCount = 0;
             int     errorCount      = 0;
@@ -2668,7 +2260,7 @@ private slots:
         server.enqueue(deltaResponse({{"content", "pending"}}, false, true, true));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         int completionCount = 0;
         int errorCount      = 0;
@@ -2723,7 +2315,7 @@ private slots:
         QLLMService service(nullptr, nullptr);
         LLMEndpoint endpoint = endpointFor(server);
         endpoint.timeout     = timeout ? 20 : 3000;
-        service.addEndpoint(endpoint);
+        service.setEndpoint(endpoint);
 
         int     completionCount = 0;
         int     errorCount      = 0;
@@ -2761,7 +2353,7 @@ private slots:
         server.enqueue(streamResponse(QStringLiteral("second"), true, 1000));
 
         QLLMService service(nullptr, nullptr);
-        service.addEndpoint(endpointFor(server));
+        service.setEndpoint(endpointFor(server));
 
         QStringList completedContents;
         QStringList errors;
