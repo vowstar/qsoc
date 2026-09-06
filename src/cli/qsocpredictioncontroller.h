@@ -7,6 +7,7 @@
 #include "common/qllmservice.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QString>
 
 /**
@@ -87,13 +88,14 @@ private:
     /** @brief Count assistant messages in the conversation. */
     static int assistantTurnCount(const json &messages);
 
-    QLLMService *llm                = nullptr; /* Cloned service, own QNAM */
-    bool         enabled            = true;
-    bool         inFlight           = false;
-    bool         lastTurnError      = false;
-    quint64      generation         = 0;  /* Cancellation token */
-    int          lastPredictedTurns = -1; /* Dedup by assistant-turn count */
-    QString      ghost;
+    QLLMService                *llm = nullptr; /* Cloned service, own QNAM */
+    QPointer<const QLLMService> mainLlm;       /* Followed for model switches */
+    bool                        enabled            = true;
+    bool                        inFlight           = false;
+    bool                        lastTurnError      = false;
+    quint64                     generation         = 0;  /* Cancellation token */
+    int                         lastPredictedTurns = -1; /* Dedup by assistant-turn count */
+    QString                     ghost;
 };
 
 #endif // QSOCPREDICTIONCONTROLLER_H

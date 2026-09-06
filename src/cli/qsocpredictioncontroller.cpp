@@ -36,7 +36,8 @@ QSocPredictionController::QSocPredictionController(QObject *parent, const QLLMSe
     : QObject(parent)
 {
     if (mainLlm != nullptr) {
-        llm = mainLlm->clone(this);
+        llm           = mainLlm->clone(this);
+        this->mainLlm = mainLlm;
     }
 }
 
@@ -121,6 +122,12 @@ void QSocPredictionController::requestPrediction(const json &messages)
     const QString transcript = buildTranscript(messages);
     if (transcript.isEmpty()) {
         return;
+    }
+
+    /* The clone was taken at startup; follow the model the user has
+     * since selected on the main service. */
+    if (!mainLlm.isNull() && llm->getCurrentModelId() != mainLlm->getCurrentModelId()) {
+        llm->setCurrentModel(mainLlm->getCurrentModelId());
     }
 
     /* Cancellation token: a callback whose token no longer matches is dropped. */
