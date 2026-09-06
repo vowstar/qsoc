@@ -694,6 +694,18 @@ QString QSocToolAgent::execute(const json &arguments)
             R"({"status":"error","error":"LLM service or tool registry not configured"})");
     }
 
+    const QString childModel = isFork ? QString() : def->model;
+    if (!childModel.isEmpty() && !effectiveLlm->availableModels().contains(childModel)) {
+        return QString::fromStdString(
+            json{
+                {"status", "error"},
+                {"error",
+                 QStringLiteral("definition model '%1' is not in llm.models")
+                     .arg(childModel)
+                     .toStdString()}}
+                .dump());
+    }
+
     /* When isolation == "worktree" and the parent is a git repo,
      * create a fresh detached worktree off HEAD and route the
      * child's projectPath there. Silent fallback to no isolation
@@ -747,7 +759,10 @@ QString QSocToolAgent::execute(const json &arguments)
      * invariant. The clone shares the same QSocConfig, so model and
      * endpoint selection stay in sync. */
     auto *childLlm = effectiveLlm->clone(nullptr);
-    auto *child    = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
+    if (!childModel.isEmpty()) {
+        childLlm->setCurrentModel(childModel);
+    }
+    auto *child = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */
     if (childHost != nullptr) {
         /* The child resolves its tools through this binding on every call, so

@@ -338,6 +338,7 @@ void applyModelSwitch(
         }
         /* Apply model's default effort level */
         agentCfg.effortLevel = cfg.effort;
+        agentCfg.modelId     = modelId;
         agent->setConfig(agentCfg);
         qout << "Model: " << modelId << " (" << cfg.name << ")" << Qt::endl;
 

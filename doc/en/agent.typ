@@ -878,7 +878,8 @@ group with the offending path.
     [`inject_project_md`],
     [`true` (default) injects `AGENTS.md`. `false` skips it.],
     [`model`],
-    [Override model id for this child. Empty inherits the parent.],
+    [An `llm.models` key the child runs on. Empty inherits the parent;
+     an unknown key fails the spawn.],
   )],
   caption: [SUB-AGENT DEFINITION FRONTMATTER],
   kind: table,
