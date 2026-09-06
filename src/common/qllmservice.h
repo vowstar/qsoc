@@ -44,8 +44,9 @@ struct LLMEndpoint
  */
 struct LLMModelConfig
 {
-    QString id;                       /* Model ID (config key, sent to API) */
-    QString name;                     /* Friendly display name */
+    QString id;                       /* Config key; the handle users select */
+    QString name;                     /* Display name (defaults to id) */
+    QString model;                    /* Name sent on the wire (defaults to id) */
     QString url;                      /* API endpoint URL */
     QString key;                      /* API key (empty = no auth) */
     QString authHeader;               /* See LLMEndpoint::authHeader */

@@ -361,10 +361,10 @@ bool QLLMService::setCurrentModel(const QString &modelId)
     ++endpointRevision;
 
     LLMEndpoint endpoint;
-    endpoint.name            = modelConf.name.isEmpty() ? modelConf.id : modelConf.name;
+    endpoint.name            = modelConf.name;
     endpoint.url             = QUrl(modelConf.url);
     endpoint.key             = modelConf.key;
-    endpoint.model           = modelConf.id;
+    endpoint.model           = modelConf.model;
     endpoint.timeout         = modelConf.timeout;
     endpoint.maxOutputTokens = modelConf.maxOutputTokens;
     endpoint.authHeader      = modelConf.authHeader;
@@ -629,6 +629,9 @@ void QLLMService::loadConfigSettings()
                 if (node["name"]) {
                     modelCfg.name = QString::fromStdString(node["name"].as<std::string>());
                 }
+                if (node["model"]) {
+                    modelCfg.model = QString::fromStdString(node["model"].as<std::string>());
+                }
                 if (node["url"]) {
                     modelCfg.url = QString::fromStdString(node["url"].as<std::string>());
                 }
@@ -679,6 +682,12 @@ void QLLMService::loadConfigSettings()
                     }
                 }
 
+                if (modelCfg.name.isEmpty()) {
+                    modelCfg.name = modelCfg.id;
+                }
+                if (modelCfg.model.isEmpty()) {
+                    modelCfg.model = modelCfg.id;
+                }
                 modelConfigs[modelCfg.id] = modelCfg;
             } catch (const YAML::Exception &err) {
                 QSocConsole::warn() << "Failed to parse model config:" << err.what();

@@ -183,8 +183,10 @@ llm:
 <llm-models-registry>
 The flat `llm.url` / `llm.key` form above is fine for a single backend.
 For multi-model setups, declare each model under `llm.models.<id>:` and
-point `llm.model` at the default one. Every key under `<id>:` is
-optional except `url`.
+point `llm.model` at the default one. The `<id>` is the handle qsoc uses
+in `/model` and `llm.model`; `model` is the name sent to the server and
+defaults to `<id>`, so one served model can sit behind several entries
+with different URLs. Every key under `<id>:` is optional except `url`.
 
 #figure(
   align(center)[#table(
@@ -193,6 +195,8 @@ optional except `url`.
     table.header([Field], [Description]),
     table.hline(),
     [`name`], [Display name shown in pickers and status lines],
+    [`model`],
+    [Model name sent in the request body; defaults to the entry key],
     [`url`], [Chat Completions endpoint URL (required)],
     [`key`], [API key; empty for keyless local services],
     [`auth_header`],
@@ -243,6 +247,14 @@ llm:
         image: true
         image_max_tokens: 4000
         image_max_dimension: 1568
+    my-omni-mirror:
+      name: My Omnimodal (mirror)
+      model: my-omni
+      url: https://mirror.example.com/v1/chat/completions
+      key: sk-yyy
+      context: 1048576
+      modalities:
+        image: true
 ```
 
 == LSP Configuration

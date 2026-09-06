@@ -339,8 +339,7 @@ void applyModelSwitch(
         /* Apply model's default effort level */
         agentCfg.effortLevel = cfg.effort;
         agent->setConfig(agentCfg);
-        QString name = cfg.name.isEmpty() ? cfg.id : cfg.name;
-        qout << "Model: " << modelId << " (" << name << ")" << Qt::endl;
+        qout << "Model: " << modelId << " (" << cfg.name << ")" << Qt::endl;
 
         /* Persist model selection to the effective config file.
          * Write to project config if it exists, otherwise user config. */
@@ -422,8 +421,7 @@ bool handleModelCommand(
         for (const QString &modelId : models) {
             LLMModelConfig cfg    = llmService->getModelConfig(modelId);
             QString        marker = (modelId == current) ? "* " : "  ";
-            QString        name   = cfg.name.isEmpty() ? cfg.id : cfg.name;
-            qout << "  " << marker << modelId << "  " << name << Qt::endl;
+            qout << "  " << marker << modelId << "  " << cfg.name << Qt::endl;
         }
     }
     return true;
