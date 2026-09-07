@@ -18,7 +18,7 @@ Create a draft, edit the generated library file, then validate it:
 ```bash
 qsoc module create --generator iomux -l <library> <module>
 qsoc module validate -l <library> <module>
-qsoc generate module -l <library> <module>
+qsoc generate module -l <library> <module>        # -f replaces existing outputs
 ```
 
 `create` writes a recognized but incomplete draft. `validate` reports the
@@ -68,14 +68,17 @@ when omitted; an explicit 4 and the default generate byte-identical files.
 Both are generation-time configuration, not Verilog parameters. `build` is a
 number from 0 to 255 the design chooses, 0 when omitted, and reads back in
 the low byte of the `version` word so firmware can tell one build of the
-same layout from another.
+same layout from another. `data_width` is 32 or 64 and `address_width` is
+the bus address width; both default to 32. An IOMUX entry may not also carry
+manual `parameter`, `port`, or `bus` sections.
 
 Each route names a `pin` below `pin_count`, a `slot` below `hs_slots`, and
 non-empty `function` and `signal` labels used only for reports. A `(pin,
-slot)` pair appears at most once. Role values are an endpoint map with `link`,
-an optional `bit`, and an optional boolean `invert`, or for the three output
-roles the integer `0` or `1`. An omitted output role drives `0`; an omitted
-`input_value` declares no sink. HDL expressions, slices, and concatenations
+slot)` pair appears at most once, and an `input_value` sink (`link` plus
+`bit`) is driven by at most one route. Role values are an endpoint map with
+`link`, an optional `bit`, and an optional boolean `invert`, or for every role
+but `input_value` the integer `0` or `1`. An omitted output role drives `0`;
+an omitted `input_value` declares no sink. HDL expressions, slices, and concatenations
 are rejected.
 
 An `output_value` endpoint may add `open_drain: true`. It then stands for
@@ -304,7 +307,7 @@ pad_model:
 `generator.io_ring` places the pads and the cells around them: supplies,
 corners, breakers, and cells the mux does not drive such as an oscillator or the
 reset pad. It is optional, and a design without it generates exactly what it
-did before. `generator.io_lib` describes the cells it names: the `kind`
+did before; a design with it needs a `pad_cell`. `generator.io_lib` describes the cells it names: the `kind`
 (`signal`, `power`, `corner`, `fill`, `other`), the `width` and `height` of
 its own box in microns, and what happens across the two axes under
 `variant`.
@@ -383,8 +386,9 @@ outside that is refused as a units slip. `die` is the area the ring occupies, th
 inside of the seal ring, not the cut die. Corners, supplies, plain cells,
 and fills carry `SOURCE DIST`, so a back end knows the netlist never drives
 them. Each side packs from its first corner in the order written, going
-clockwise from the north-west corner: west top to bottom, south left to
-right, east bottom to top, north right to left. An item's `gap` leaves that
+around from the north-west corner: west top to bottom, south left to right,
+east bottom to top, north right to left, which is counter-clockwise in DEF's
+y-up coordinates. Every pin must appear on exactly one side. An item's `gap` leaves that
 many microns before it and `offset` pins it at that distance from the
 corner; fill cells of kind `fill`, widest first, close every gap and each
 side's tail, and appear in `<module>_io.v` as `u_fill_<side>_<k>`. The
@@ -442,8 +446,8 @@ Every block has a fixed byte base, and a block whose option is off leaves
 its region empty: an offset means the same thing on every design, so a
 driver carries constants and reads `feature` only to learn which blocks
 answer. A read from an empty region returns 0 and a write to it returns
-SLVERR. The map spans 16 KB, so `address_width` is at least 14; a design
-whose `pin_ctl_k` words run past 0x4000 needs more and the report says so.
+SLVERR. The map spans 16 KB, so `address_width` is at least 14; a smaller
+value is rejected.
 
 #figure(
   align(center)[#table(
@@ -496,7 +500,7 @@ on every design. Absent fields read zero.
     [5:4], [`output_enable_src`], [`gpio`],
     [6], [`pull_src`], [`pad_control`, when the cell has a pull table],
     [8 + k], [`rx_src_sk`], [`rx_override`, one bit per slot k],
-    [16 + i], [`<control>_src`], [`pad_control`, i is the control's declaration index, a single-row control keeps its index and has no bit],
+    [16 + i], [`<control>_src`], [`pad_control`, i is the control's index in the block's control order, the same order as its lane; a single-row control keeps its index and has no bit],
   )],
   caption: [PIN_SRC_CTRL LAYOUT],
 )
@@ -525,13 +529,14 @@ two bus cycles to become readable.
 `generator.option.pad_control` needs a `pad_cell` with a pull table or a
 control of more than one row. It appends one `pin_pad_ctrl` word per pin
 holding the pull fields and the first four controls, then one `pin_ctl_k`
-word per pin for each further group of eight controls, each control in a
-4-bit lane at bit `4 * (i mod 8)` in declaration order. A single-row control
+word per pin for each further group of eight controls, control `i` in the
+4-bit lane at bit `4 * ((i - 4) mod 8)` of `pin_ctl_k`, `k = (i - 4) div 8`,
+in the block's control order. A single-row control
 keeps its lane empty, so its neighbours never move, and a group whose
 controls are all single-row emits no word while `k` still counts it. The
 fields below are present only when the cell has something for them to select
 and each is as wide as its table needs; a table has at most 16 rows. Between
-the core and `<module>_pad` the same selects travel in one 4-bit lane per pin,
+the core and `<module>_io` the same selects travel in one 4-bit lane per pin,
 `[4 * pin + 3 : 4 * pin]`, whatever the table needs, so a pin's slice never
 moves when a table grows.
 
@@ -621,6 +626,8 @@ listed by `<module>_formal.fl`, and never enters `<module>.fl`. Selector
 sidebands stay inside the wrapper and never reach the public interface. Each
 endpoint port carries a `function.signal` comment in the wrapper header. The
 report shows each selector location and lists unused slots per pin.
+Generation refuses a library that already holds a module named
+`<module>_regs`, `<module>_conn`, `<module>_core`, or `<module>_io`.
 
 == Integration
 <iomux-integration>
@@ -679,7 +686,9 @@ change to their routes.
 
 == UVM Collateral
 <iomux-uvm-collateral>
-`--with-uvm` reuses the MMIO UVM testbench for `<module>_regs` only. It
-covers the register slave and does not cover routing, the connection fabric,
-or the pads; those are covered by the directed simulation and the formal
-routing proof.
+`--with-uvm` reuses the MMIO UVM testbench for `<module>_regs` only, writing
+`<module>_regs_uvm_if.sv`, `<module>_regs_uvm_pkg.sv`,
+`<module>_regs_uvm_tb.sv`, and `<module>_regs_uvm.fl`. It covers the
+register slave and does not cover routing, the connection fabric, or the
+pads; those are covered by the directed simulation and the formal routing
+proof.
