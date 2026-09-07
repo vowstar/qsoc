@@ -1,7 +1,8 @@
 = Configuration Overview
 <config-overview>
-QSoC provides a flexible configuration system that supports multiple configuration levels and sources.
-This document describes the available configuration options and how they are managed.
+Configuration comes from layered `qsoc.yml` files and a short list of
+environment variables. This chapter lists the layers, the keys, and what
+each key does.
 
 == Configuration Files
 <config-files>
@@ -44,6 +45,11 @@ memory live at `<root>/skills/` and `<root>/memory/` respectively.
 
 `$XDG_CONFIG_HOME` is honored on every platform: if set, the user root
 becomes `$XDG_CONFIG_HOME/qsoc` instead of `~/.config/qsoc`.
+
+Same-name skills in higher layers shadow lower ones. Listings and
+`skill_find` with the default `scope: "all"` show the effective (unshadowed)
+set; pass `scope: "system"` / `"user"` / `"project"` to inspect a specific
+layer for debugging.
 
 == Configuration Priority
 <config-priority>
@@ -96,20 +102,16 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
   kind: table,
 )
 
-The legacy names `QSOC_AI_PROVIDER`, `QSOC_API_KEY`, `QSOC_AI_MODEL`, and
-`QSOC_API_URL` are still read and map to the flat `provider`, `api_key`,
-`ai_model`, and `api_url` keys.
-
-Same-name skills in higher layers shadow lower ones. Listings and
-`skill_find` with the default `scope: "all"` show the effective (unshadowed)
-set; pass `scope: "system"` / `"user"` / `"project"` to inspect a specific
-layer for debugging.
-
 == LLM Configuration
 <llm-config>
-Every provider speaks the OpenAI Chat Completions format. Declare each
-model as an entry under `llm.models` and point `llm.model` at the one to
-use; `/model` switches between entries and writes the choice back.
+Every provider speaks the OpenAI Chat Completions format. Each model is
+an entry under `llm.models`; `llm.model` names the entry in use, and
+`/model` switches between entries and writes the choice back.
+
+An entry has three names. The key is the handle you type in `/model`
+and see in the status bar. `name` is the label in pickers. `model` is
+the string sent to the server, and defaults to the key. One served model
+behind two URLs is two entries with the same `model`.
 
 === Configuration Options
 <llm-options>
@@ -131,32 +133,9 @@ use; `/model` switches between entries and writes the choice back.
   kind: table,
 )
 
-=== Supported Endpoints
-<llm-endpoints>
-All major LLM providers support the OpenAI Chat Completions format:
-
-#figure(
-  align(center)[#table(
-    columns: (0.3fr, 0.7fr),
-    align: (auto, left),
-    table.header([Provider], [Endpoint URL]),
-    table.hline(),
-    [DeepSeek], [`https://api.deepseek.com/chat/completions`],
-    [OpenAI], [`https://api.openai.com/v1/chat/completions`],
-    [Groq], [`https://api.groq.com/openai/v1/chat/completions`],
-    [Ollama], [`http://localhost:11434/v1/chat/completions`],
-  )],
-  caption: [SUPPORTED LLM ENDPOINTS],
-  kind: table,
-)
-
-=== Per-Model Registry
+=== Per-Model Fields
 <llm-models-registry>
-Declare each model under `llm.models.<id>:` and point `llm.model` at the
-default one. The `<id>` is the handle qsoc uses
-in `/model` and `llm.model`; `model` is the name sent to the server and
-defaults to `<id>`, so one served model can sit behind several entries
-with different URLs. Every key under `<id>:` is optional except `url`.
+Every key under an entry is optional except `url`.
 
 #figure(
   align(center)[#table(
@@ -164,10 +143,11 @@ with different URLs. Every key under `<id>:` is optional except `url`.
     align: (auto, left),
     table.header([Field], [Description]),
     table.hline(),
-    [`name`], [Display name shown in pickers and status lines],
-    [`model`],
-    [Model name sent in the request body; defaults to the entry key],
-    [`url`], [Chat Completions endpoint URL (required)],
+    [`name`], [Label shown in pickers; defaults to the key],
+    [`model`], [Name sent in the request body; defaults to the key],
+    [`url`],
+    [Chat Completions URL (required). Cloud providers publish theirs;
+     Ollama serves `http://localhost:11434/v1/chat/completions`],
     [`key`], [API key; empty for keyless local services],
     [`auth_header`],
     [Auth header name. Empty or `Authorization` sends
@@ -176,7 +156,9 @@ with different URLs. Every key under `<id>:` is optional except `url`.
     [`timeout`], [Request timeout in milliseconds],
     [`context`], [Context window in tokens],
     [`max_output_tokens`], [Reply cap; `0` defers to the backend],
-    [`effort`], [Reasoning effort: `low`, `medium`, `high`],
+    [`effort`],
+    [Effort applied when this entry is selected: `low`, `medium`, `high`;
+     empty means off],
     [`modalities.image`], [`true` opts the model into image input],
     [`modalities.image_max_tokens`],
     [Reject the image when the client-side estimate exceeds this],
@@ -194,36 +176,38 @@ with different URLs. Every key under `<id>:` is optional except `url`.
 
 ```yaml
 llm:
-  model: my-pro
+  model: pro
   models:
-    my-pro:
-      name: My Pro (thinking)
+    pro:
+      name: Pro (thinking)
+      model: vendor-pro-2026
       url: https://api.example.com/v1/chat/completions
       key: sk-xxx
       timeout: 180000
       context: 131072
       max_output_tokens: 32768
       effort: high
-    my-omni:
-      name: My Omnimodal
+    omni:
+      name: Omni
+      model: vendor-omni-2026
       url: https://api.example.com/v1/chat/completions
       key: sk-xxx
       auth_header: api-key
       context: 1048576
-      max_output_tokens: 32768
       modalities:
         image: true
         image_max_tokens: 4000
-        image_max_dimension: 1568
-    my-omni-mirror:
-      name: My Omnimodal (mirror)
-      model: my-omni
-      url: https://mirror.example.com/v1/chat/completions
-      key: sk-yyy
+    omni-lab:
+      name: Omni (lab server)
+      model: vendor-omni-2026
+      url: http://gpu-box.lab:8000/v1/chat/completions
       context: 1048576
       modalities:
         image: true
 ```
+
+`omni` and `omni-lab` are the same served model on two servers; `/model`
+picks the server, the request body carries `vendor-omni-2026` either way.
 
 == LSP Configuration
 <lsp-config>
@@ -342,7 +326,7 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.compact_threshold],
     [Token ratio to trigger LLM compaction (default: 0.6)],
     [agent.compaction_model],
-    [Model for compaction (empty = use primary model)],
+    [`llm.models` key for compaction (empty = the selected model)],
     [agent.auto_load_memory],
     [Auto-inject memory into the system prompt (default: true)],
     [agent.memory_max_chars],
@@ -350,7 +334,7 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.memory_recall],
     [Rank and inject only relevant memories per turn (default: true)],
     [agent.memory_recall_model],
-    [Model for the recall selector (empty = primary model)],
+    [`llm.models` key for the recall selector (empty = the selected model)],
     [agent.memory_recall_max_files],
     [Max memory files selected per turn (default: 5)],
     [agent.memory_recall_per_file_cap],
@@ -360,7 +344,7 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.memory_extract],
     [Background-extract memory after each turn (default: true)],
     [agent.memory_extract_model],
-    [Model for the extraction child (empty = primary model)],
+    [`llm.models` key for the extraction child (empty = the selected model)],
     [agent.memory_extract_cadence],
     [Run extraction every N turns (default: 1)],
     [agent.memory_extract_min_messages],
@@ -368,7 +352,7 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.memory_dream],
     [Periodic memory consolidation pass (default: true)],
     [agent.memory_dream_model],
-    [Model for the consolidation child (empty = primary model)],
+    [`llm.models` key for the consolidation child (empty = the selected model)],
     [agent.memory_dream_min_hours],
     [Minimum hours between consolidations (default: 24)],
     [agent.memory_dream_min_sessions],
@@ -376,12 +360,12 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.session_title],
     [Auto-generate a session title after the first turn (default: true)],
     [agent.session_title_model],
-    [Model for the title call (empty = use primary model)],
+    [`llm.models` key for the title call (empty = the selected model)],
     [agent.away_summary],
     [Show a "while you were away" recap after the terminal loses focus
      (default: true)],
     [agent.away_summary_model],
-    [Model for the recap call (empty = use primary model)],
+    [`llm.models` key for the recap call (empty = the selected model)],
     [agent.away_summary_delay_seconds],
     [Idle seconds of lost focus before the recap is generated (default: 300)],
     [agent.context_restore],
@@ -446,10 +430,13 @@ Below is an example of a complete QSoC configuration file:
 ```yaml
 # LLM Configuration
 llm:
-  url: https://api.deepseek.com/chat/completions
-  key: sk-xxx
-  model: deepseek-v4-pro
-  timeout: 30000
+  model: pro
+  models:
+    pro:
+      model: deepseek-v4-pro
+      url: https://api.deepseek.com/chat/completions
+      key: sk-xxx
+      context: 131072
 
 # Agent Configuration
 agent:
@@ -467,21 +454,12 @@ web:
   search_api_url: http://localhost:8080
 ```
 
-== Automatic Template Creation
-<auto-template>
-When QSoC is run for the first time and the user configuration file (`~/.config/qsoc/qsoc.yml`) does not exist,
-the software will automatically create a template configuration file with recommended settings and detailed comments.
-
 == Troubleshooting
 <troubleshooting>
-If you encounter issues with QSoC startup or configuration-related problems:
-
-1. Delete the user configuration directory (`~/.config/qsoc/`) and restart the application
-  - This will cause QSoC to regenerate a fresh template configuration file
-
-2. Ensure the YAML syntax in your configuration files is valid
-  - Invalid YAML syntax can cause configuration loading failures
-
-3. Verify the LLM endpoint URL is correct
-  - All providers should use OpenAI Chat Completions compatible endpoints
-  - Test the endpoint with curl to ensure it is accessible
+1. QSoC writes a commented template to `~/.config/qsoc/qsoc.yml` on first
+   start. Delete the file and restart to get a fresh one.
+2. A YAML syntax error stops the whole file from loading; validate it
+   before looking elsewhere.
+3. `/status` shows the selected entry. If requests fail, `curl` the
+   entry's `url` with its `key` and the `model` string from the same
+   entry; the server must accept that exact name.

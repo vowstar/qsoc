@@ -58,7 +58,7 @@ llm:
       model: your-model-id
 ```
 
-@llm-config lists every endpoint option and @config-files explains which
+@llm-config lists every per-model field and @config-files explains which
 configuration layer wins.
 
 == Project Layout

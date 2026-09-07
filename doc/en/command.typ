@@ -260,8 +260,8 @@ implements and prints the reasoning; it takes the same selection options plus
 `-b` and `--bl`. `module bus remove`, `list` and `show` operate on interfaces
 already attached and need only the selection options.
 
-Both AI-assisted paths use the endpoint from @llm-config. Without an endpoint
-configured, `--ai` and `explain` fail; the other subcommands do not need one.
+Both AI-assisted paths use the model selected per @llm-config. Without one,
+`--ai` and `explain` fail; the other subcommands do not need it.
 
 == Bus Command Options
 <bus-options>

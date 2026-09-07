@@ -315,7 +315,7 @@ The following commands are available during an interactive session:
      choice is remembered in `<project>/.qsoc/host.yml` and reused on
      later connects.],
     [`/status`],
-    [Show model, session and endpoint info. In remote mode it also
+    [Show the selected model, effort, and session. In remote mode it also
      reports the bound target, the workspace, and whether the link is
      still usable.],
     [`/help`], [Show help message],
@@ -727,10 +727,10 @@ per `agent.memory_dream_min_hours` and only after
 
 === Model for Memory Work
 <agent-memory-models>
-Recall, extraction, and consolidation use the agent's configured model and
-reasoning effort. To run memory work on a different model, set
-`agent.memory_recall_model`, `agent.memory_extract_model`, or
-`agent.memory_dream_model`; an empty value uses the configured model.
+Recall, extraction, and consolidation run on the selected model and
+effort. `agent.memory_recall_model`, `agent.memory_extract_model`, and
+`agent.memory_dream_model` each name an `llm.models` key to use instead;
+empty keeps the selected model.
 
 ```yaml
 agent:
