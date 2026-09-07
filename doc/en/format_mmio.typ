@@ -16,38 +16,28 @@ qsoc generate module -l peripheral timer_ctrl
 `create` writes an empty `register` map. An empty map is a saved draft, not a
 valid generator input.
 
-`identity` names the block for software. `type` is a number or four printable
-ASCII characters packed with the first in the top byte, so `TMRC` reads as
-0x544D5243 in a register view. `version` is `major.minor.patch`, each part
-below 256. The generator places `version` at 0x0 with major `[31:24]`, minor
-`[23:16]`, patch `[15:8]`, and `type` at 0x4, both read-only. A 64-bit
-instance holds both in its first beat. A user register on offsets 0x0 to 0x7,
-or named `version` or `type`, is an error. `validate` warns when `identity`
-is absent, because a block software cannot recognise is a block software
-cannot refuse.
-
-```yaml
-    identity:
-      type: TMRC
-      version: 1.0.0
-```
+`identity` names the block for software. `type` is a number, or four
+characters from `!` to `~` packed with the first in the top byte, so `TMRC`
+reads as 0x544D5243 in a register view; a value that parses as a number is
+taken as the number. `version` is `major.minor.patch`, each part below 256.
+The generator places `version` at 0x0 with major `[31:24]`, minor `[23:16]`,
+patch `[15:8]`, and `type` at 0x4, both read-only. A 64-bit instance holds
+both in its first beat. A user register on offsets 0x0 to 0x7, or named
+`version` or `type`, is an error, so user registers start at 0x8. `validate`
+warns when `identity` is absent, because a block software cannot recognise is
+a block software cannot refuse.
 
 ```yaml
 timer_ctrl:
   generator:
     kind: mmio
     bus: axi4_lite
+    identity:
+      type: TMRC
+      version: 1.0.0
     register:
-      identification:
-        offset: 0x00
-        field:
-          device_id:
-            lsb: 0
-            width: 8
-            access: ro
-            value: 0x2a
       control:
-        offset: 0x04
+        offset: 0x08
         field:
           enable:
             lsb: 0
@@ -55,7 +45,7 @@ timer_ctrl:
             reset: 0
             output: enable_o
       status:
-        offset: 0x08
+        offset: 0x0C
         field:
           busy:
             lsb: 0
@@ -85,15 +75,16 @@ wide_status:
             input: count_i
 ```
 
-Offsets are local byte offsets. Each register occupies one complete data beat,
-so offsets must be aligned to `data_width / 8` bytes. A 64-bit register is
-therefore 8-byte aligned; the generator does not pack two independently
-addressed 32-bit registers into one beat.
+Offsets are local byte offsets below `2^address_width`. Each register
+occupies one complete data beat, so offsets must be aligned to
+`data_width / 8` bytes. A 64-bit register is therefore 8-byte aligned; the
+generator does not pack two independently addressed 32-bit registers into one
+beat. Numbers are unsigned decimal or `0x` hexadecimal.
 
 Each register needs an explicit, unique `offset` and a non-empty `field` map.
 Each field needs `lsb` and `access`; `width` defaults to 1. Register, field,
-module, input, and output names must be Verilog identifiers. Optional scalar
-`description` values do not affect RTL.
+module, input, and output names must be Verilog identifiers. A register or
+field may carry a scalar `description`; it does not affect RTL.
 
 #figure(
   align(center)[#table(
@@ -120,7 +111,9 @@ clearing write wins, so an event cannot vanish into its own acknowledgement.
 
 Fields may not overlap or cross bit `data_width - 1`. `reset` and `value` must
 fit their field width. Sideband signals must be unique and may not collide
-with fixed interface ports. A generated entry may not also contain manual
+with fixed interface ports or with the generator's own names such as
+`write_fire`, `aw_take`, or `mmio_field_<n>_q`; the error names the clash. A
+generated entry may not also contain manual
 `parameter`, `port`, or `bus` sections. Unknown generator keys are errors.
 
 == Generated Interface
@@ -161,8 +154,10 @@ all selected targets before opening or replacing a selected output file. If any
 target exists, the command fails without replacing any selected file unless
 `-f` or `--force` is present.
 
-Generation does not run the job. From `output/<library>/<module>/`, run the
-proof or cover task explicitly:
+Generation does not run the job. The job proves with `abc pdr` and runs
+`bmc` and `cover` with `smtbmc` on z3, all at depth 24, so `sby`, `yosys`,
+and `z3` must be installed. From `output/<library>/<module>/`, run the proof
+or cover task explicitly:
 
 ```bash
 sby -f <module>_formal.sby prove
@@ -199,13 +194,13 @@ The command selects `<module>.v`, `<module>_uvm_if.sv`,
 `<module>_uvm_pkg.sv`, `<module>_uvm_tb.sv`, and `<module>_uvm.fl`. The file
 list contains relative generated sources; the UVM library remains an external
 dependency. Set `UVM_HOME` to the UVM checkout root and run from the generated
-module directory. The following invocation is verified with UVM 2020.3.1 and
-Verilator 5.050:
+module directory. This is the invocation the test suite uses with Verilator:
 
 ```bash
-verilator --binary --timing --threads 1 -Wno-fatal \
+verilator --binary --timing --threads 1 \
+  -Wno-fatal -Wno-TIMESCALEMOD -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND \
   +define+UVM_NO_DPI -I"$UVM_HOME/src" "$UVM_HOME/src/uvm_pkg.sv" \
-  --top-module <module>_uvm_tb -f <module>_uvm.f
+  --top-module <module>_uvm_tb -f <module>_uvm.fl
 ./obj_dir/V<module>_uvm_tb
 ```
 
@@ -214,15 +209,16 @@ twice with a reset between runs. It checks reset reads, RW and RO fields,
 constants, reserved bits, byte strobes, all write-address and write-data
 orders, response causality and backpressure, error responses, and that illegal
 writes have no side effects. For each `w1c` field it pulses the set source
-while the bus is idle, reads the bit as one, writes a zero to that bit and
-reads it still set, then writes a one to it and reads it clear. Each channel has a 64-cycle
-timeout, followed by a three-cycle final drain. It follows the generated
-widths and sideband bindings.
+while the bus is idle, reads the bit as one, writes the complement of the bit
+(a zero there, ones everywhere else) and reads it still set, then writes the
+bit and reads it clear. Each channel has a 64-cycle timeout, followed by a
+three-cycle final drain, and the whole run aborts after 1 ms of simulated
+time. It follows the generated widths and sideband bindings.
 This is a module-specific MMIO testbench, not reusable AXI verification IP. A
 UVM error or fatal report makes the simulation process fail.
 
 `--with-formal` and `--with-uvm` are independent and may be combined. The
-combined command selects seven files. Generation locks and checks every
+combined command selects eight files. Generation locks and checks every
 selected target before writing; `--force` replaces only the selected set.
 
 == Current Limits
