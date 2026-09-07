@@ -6868,6 +6868,10 @@ bool QSocCliWorker::runAgentLoop(
                                             llmService->getCurrentModelId().isEmpty()
                                                 ? QStringLiteral("(none)")
                                                 : llmService->getCurrentModelId()));
+            if (!llmService->getCurrentModelId().isEmpty()) {
+                compositor.printContent(
+                    QString("  Request:  %1\n").arg(llmService->getCurrentModelConfig().model));
+            }
             compositor.printContent(QString("  Effort:   %1\n")
                                         .arg(
                                             agent->getConfig().effortLevel.isEmpty()

@@ -315,7 +315,8 @@ The following commands are available during an interactive session:
      choice is remembered in `<project>/.qsoc/host.yml` and reused on
      later connects.],
     [`/status`],
-    [Show the selected model, effort, and session. In remote mode it also
+    [Show the selected model, the name it sends in requests, effort, and
+     session. In remote mode it also
      reports the bound target, the workspace, and whether the link is
      still usable.],
     [`/help`], [Show help message],
