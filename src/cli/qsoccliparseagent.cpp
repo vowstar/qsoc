@@ -3624,13 +3624,11 @@ bool QSocCliWorker::runAgentLoop(
             workingDir = config.remoteMode ? QStringLiteral("/") : QDir::currentPath();
         }
         record.contextPresent = true;
-        record.registryModel  = !llmService->getCurrentModelId().isEmpty();
-        record.modelId = record.registryModel ? llmService->getCurrentModelId()
-                                              : socConfig->getValue(QStringLiteral("llm.model"));
-        record.effortLevel = config.effortLevel;
-        record.planMode    = config.planMode;
-        record.remoteMode  = config.remoteMode;
-        record.remoteName  = config.remoteName;
+        record.modelId        = llmService->getCurrentModelId();
+        record.effortLevel    = config.effortLevel;
+        record.planMode       = config.planMode;
+        record.remoteMode     = config.remoteMode;
+        record.remoteName     = config.remoteName;
         if (config.remoteMode) {
             record.projectRoot = remoteConn->path()->root();
             record.workingDir  = workingDir;
@@ -3671,13 +3669,7 @@ bool QSocCliWorker::runAgentLoop(
             *reason = QStringLiteral("the execution host no longer matches");
             return false;
         }
-        const bool    currentRegistryModel = !llmService->getCurrentModelId().isEmpty();
-        const QString currentLegacyModel   = socConfig->getValue(QStringLiteral("llm.model"));
-        const bool    savedPrimaryUnavailable
-            = record.registryModel != currentRegistryModel
-              || (record.registryModel ? !llmService->availableModels().contains(record.modelId)
-                                       : record.modelId != currentLegacyModel);
-        if (savedPrimaryUnavailable) {
+        if (!llmService->availableModels().contains(record.modelId)) {
             *reason = QStringLiteral("the saved model is no longer available");
             return false;
         }
@@ -3761,7 +3753,7 @@ bool QSocCliWorker::runAgentLoop(
             }
         }
 
-        if (record.registryModel && llmService->getCurrentModelId() != record.modelId
+        if (llmService->getCurrentModelId() != record.modelId
             && !llmService->setCurrentModel(record.modelId)) {
             if (record.remoteMode) {
                 remoteConn->setWorkingDirectory(previousWorkingDir);
@@ -3778,7 +3770,7 @@ bool QSocCliWorker::runAgentLoop(
             config.maxContextTokens = modelConfig.contextTokens;
         }
         config.effortLevel = record.effortLevel;
-        config.modelId     = record.registryModel ? record.modelId : QString();
+        config.modelId     = record.modelId;
         config.planMode    = record.planMode;
         agent->setConfig(config);
         statusBarWidget.setModel(record.modelId);

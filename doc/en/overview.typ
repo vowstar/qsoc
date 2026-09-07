@@ -44,15 +44,18 @@ qsoc generate verilog output/top.soc_net # generate output/top.v
 
 Every command accepts `--help`.
 
-The generators need no LLM configuration. The agent does: set `llm.url`,
-`llm.key`, and `llm.model` before running `qsoc agent`. QSoC writes a template
-user configuration on first start, so filling in three keys is enough:
+The generators need no LLM configuration. The agent does: declare one
+entry under `llm.models` and point `llm.model` at it before running
+`qsoc agent`. QSoC writes a template user configuration on first start:
 
 ```yaml
 llm:
-  url: https://api.example.com/chat/completions
-  key: your-api-key
-  model: your-model-id
+  model: my-model
+  models:
+    my-model:
+      url: https://api.example.com/chat/completions
+      key: your-api-key
+      model: your-model-id
 ```
 
 @llm-config lists every endpoint option and @config-files explains which

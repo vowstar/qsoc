@@ -29,7 +29,6 @@ QSocSession::RunRecord startedRun(
         .historyDigest   = QSocSession::historyDigest(json::array()),
         .inputReplaySafe = true,
         .contextPresent  = true,
-        .registryModel   = true,
         .modelId         = QStringLiteral("model-primary"),
         .effortLevel     = QStringLiteral("high"),
         .planMode        = false,
@@ -761,7 +760,6 @@ private slots:
         QCOMPARE(latest->historyDigest, QSocSession::historyDigest(json::array()));
         QVERIFY(latest->inputReplaySafe);
         QVERIFY(latest->contextPresent);
-        QVERIFY(latest->registryModel);
         QCOMPARE(latest->modelId, QStringLiteral("model-primary"));
         QCOMPARE(latest->effortLevel, QStringLiteral("high"));
         QVERIFY(latest->planMode);
@@ -899,12 +897,11 @@ private slots:
         invalid.projectRoot = QStringLiteral("/workspace/project");
         invalid.modelId.clear();
         QVERIFY(!session.appendRun(invalid));
-        invalid.registryModel = false;
+        invalid.modelId = QStringLiteral("model-primary");
         QVERIFY(session.appendRun(invalid));
         const auto latest = QSocSession::latestRun(path);
         QVERIFY(latest.has_value());
-        QVERIFY(!latest->registryModel);
-        QVERIFY(latest->modelId.isEmpty());
+        QCOMPARE(latest->modelId, QStringLiteral("model-primary"));
         QCOMPARE(latest->projectRoot, QStringLiteral("/workspace/project"));
     }
 
@@ -935,7 +932,6 @@ private slots:
         QCOMPARE(latest->messageCount, -1);
         QVERIFY(latest->historyDigest.isEmpty());
         QVERIFY(!latest->inputReplaySafe);
-        QVERIFY(!latest->registryModel);
         QVERIFY(latest->modelId.isEmpty());
         QVERIFY(latest->projectRoot.isEmpty());
         QVERIFY(latest->workingDir.isEmpty());
@@ -955,7 +951,6 @@ private slots:
             .runId          = QStringLiteral("run-a"),
             .event          = QSocSession::RunEvent::Checkpoint,
             .contextPresent = true,
-            .registryModel  = true,
             .modelId        = QStringLiteral("model-updated"),
             .effortLevel    = QStringLiteral("medium"),
             .planMode       = true,
@@ -974,7 +969,6 @@ private slots:
         QVERIFY(latest.has_value());
         QVERIFY(latest->event == QSocSession::RunEvent::ToolStarted);
         QVERIFY(latest->contextPresent);
-        QVERIFY(latest->registryModel);
         QCOMPARE(latest->modelId, QStringLiteral("model-updated"));
         QCOMPARE(latest->effortLevel, QStringLiteral("medium"));
         QVERIFY(latest->planMode);
@@ -995,7 +989,6 @@ private slots:
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
         const json context = {
             {"model_id", "model-primary"},
-            {"registry_model", true},
             {"effort_level", "high"},
             {"reasoning_model", "retired-override"},
             {"plan_mode", false},
@@ -1027,7 +1020,6 @@ private slots:
     {
         json validContext = {
             {"model_id", "model-primary"},
-            {"registry_model", true},
             {"effort_level", "high"},
             {"plan_mode", false},
             {"remote_mode", false},
@@ -1045,8 +1037,6 @@ private slots:
         emptyProjectRoot["project_root"] = "";
         json missingProjectRoot          = validContext;
         missingProjectRoot.erase("project_root");
-        json missingModelKind = validContext;
-        missingModelKind.erase("registry_model");
         json remoteMismatch           = validContext;
         remoteMismatch["remote_mode"] = true;
 
@@ -1056,7 +1046,6 @@ private slots:
              emptyDirectory,
              emptyProjectRoot,
              missingProjectRoot,
-             missingModelKind,
              remoteMismatch});
         for (const json &context : malformedContexts) {
             QTemporaryDir tempDir;

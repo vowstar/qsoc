@@ -77,11 +77,7 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
     table.header([Variable], [Sets],),
     table.hline(),
     [`QSOC_HOME`], [Environment root searched for `qsoc.yml`, skills, and memory],
-    [`QSOC_LLM_URL`], [`llm.url`],
-    [`QSOC_LLM_KEY`], [`llm.key`],
     [`QSOC_LLM_MODEL`], [`llm.model`],
-    [`QSOC_LLM_TIMEOUT`], [`llm.timeout`],
-    [`QSOC_LLM_MAX_OUTPUT_TOKENS`], [`llm.max_output_tokens`],
     [`QSOC_AGENT_TEMPERATURE`], [`agent.temperature`],
     [`QSOC_AGENT_MAX_TOKENS`], [`agent.max_tokens`],
     [`QSOC_AGENT_MAX_ITERATIONS`], [`agent.max_iterations`],
@@ -111,8 +107,9 @@ layer for debugging.
 
 == LLM Configuration
 <llm-config>
-QSoC uses a unified LLM configuration format. All providers support the OpenAI Chat Completions API format,
-so you only need to configure the endpoint URL, API key, and model name.
+Every provider speaks the OpenAI Chat Completions format. Declare each
+model as an entry under `llm.models` and point `llm.model` at the one to
+use; `/model` switches between entries and writes the choice back.
 
 === Configuration Options
 <llm-options>
@@ -122,10 +119,8 @@ so you only need to configure the endpoint URL, API key, and model name.
     align: (auto, left),
     table.header([Option], [Description]),
     table.hline(),
-    [llm.url], [API endpoint URL (OpenAI Chat Completions format)],
-    [llm.key], [API key for authentication (optional for local services)],
-    [llm.model], [Model name to use],
-    [llm.timeout], [Request timeout in milliseconds (default: 30000)],
+    [llm.model], [Key of the `llm.models` entry to use],
+    [llm.models], [Per-model entries, see @llm-models-registry],
     [llm.cost_input_per_mtok],
     [Input price per million tokens (used by `/cost`)],
     [llm.cost_output_per_mtok],
@@ -155,34 +150,10 @@ All major LLM providers support the OpenAI Chat Completions format:
   kind: table,
 )
 
-=== Configuration Examples
-<llm-examples>
-Example configurations for different providers:
-
-```yaml
-# DeepSeek
-llm:
-  url: https://api.deepseek.com/chat/completions
-  key: sk-xxx
-  model: deepseek-v4-pro
-
-# OpenAI
-llm:
-  url: https://api.openai.com/v1/chat/completions
-  key: sk-xxx
-  model: gpt-4o-mini
-
-# Local Ollama (no key required)
-llm:
-  url: http://localhost:11434/v1/chat/completions
-  model: llama3
-```
-
 === Per-Model Registry
 <llm-models-registry>
-The flat `llm.url` / `llm.key` form above is fine for a single backend.
-For multi-model setups, declare each model under `llm.models.<id>:` and
-point `llm.model` at the default one. The `<id>` is the handle qsoc uses
+Declare each model under `llm.models.<id>:` and point `llm.model` at the
+default one. The `<id>` is the handle qsoc uses
 in `/model` and `llm.model`; `model` is the name sent to the server and
 defaults to `<id>`, so one served model can sit behind several entries
 with different URLs. Every key under `<id>:` is optional except `url`.

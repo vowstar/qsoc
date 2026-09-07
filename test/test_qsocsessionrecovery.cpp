@@ -35,7 +35,6 @@ QSocSession::RunRecord runRecord(
         .historyDigest   = QSocSession::historyDigest(json::array()),
         .inputReplaySafe = true,
         .contextPresent  = true,
-        .registryModel   = true,
         .modelId         = QStringLiteral("model-primary"),
         .effortLevel     = QStringLiteral("high"),
         .planMode        = false,
@@ -102,22 +101,12 @@ void Test::legacyAndTerminalRunsWait()
         runRecord(QSocSession::RunEvent::Checkpoint), messages, unavailableContext);
     QVERIFY(plan.action == QSocSessionRecovery::Action::Wait);
     QVERIFY(plan.reason.contains(QStringLiteral("context"), Qt::CaseInsensitive));
-
-    auto emptyModelRun              = runRecord(QSocSession::RunEvent::Checkpoint);
-    auto emptyModelContext          = currentContext();
-    emptyModelRun.registryModel     = false;
-    emptyModelContext.registryModel = false;
-    emptyModelRun.modelId.clear();
-    emptyModelContext.modelId.clear();
-    plan = QSocSessionRecovery::makePlan(emptyModelRun, messages, emptyModelContext);
-    QVERIFY(plan.action == QSocSessionRecovery::Action::ResumeHistory);
 }
 
 void Test::executionContextMustMatch_data()
 {
     QTest::addColumn<QString>("field");
     QTest::newRow("model") << QStringLiteral("model");
-    QTest::newRow("model-kind") << QStringLiteral("model-kind");
     QTest::newRow("effort") << QStringLiteral("effort");
     QTest::newRow("plan-mode") << QStringLiteral("plan-mode");
     QTest::newRow("remote-mode") << QStringLiteral("remote-mode");
@@ -132,8 +121,6 @@ void Test::executionContextMustMatch()
     auto context = currentContext();
     if (field == QStringLiteral("model")) {
         context.modelId = QStringLiteral("model-other");
-    } else if (field == QStringLiteral("model-kind")) {
-        context.registryModel = false;
     } else if (field == QStringLiteral("effort")) {
         context.effortLevel = QStringLiteral("medium");
     } else if (field == QStringLiteral("plan-mode")) {

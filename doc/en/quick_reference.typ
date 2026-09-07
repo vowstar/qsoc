@@ -51,7 +51,7 @@
       [`.qsoc.yml`], [project configuration],
       [`.qsoc/`], [sessions, plans, skills, memory],
       [`~/.config/qsoc/`], [user configuration (@config-files)],
-      [`QSOC_LLM_*`], [endpoint from the environment],
+      [`QSOC_LLM_MODEL`], [model entry from the environment],
     )
 
     #strip([Agent], [@agent-commands],

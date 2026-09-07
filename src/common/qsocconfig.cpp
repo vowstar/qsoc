@@ -96,12 +96,8 @@ void QSocConfig::loadFromEnvironment()
 
     /* Compound key environment variables (highest priority) */
     const QMap<QString, QString> compoundEnvVars
-        = {/* LLM endpoint config */
-           {"QSOC_LLM_URL", "llm.url"},
-           {"QSOC_LLM_KEY", "llm.key"},
+        = {/* LLM model selection */
            {"QSOC_LLM_MODEL", "llm.model"},
-           {"QSOC_LLM_TIMEOUT", "llm.timeout"},
-           {"QSOC_LLM_MAX_OUTPUT_TOKENS", "llm.max_output_tokens"},
            /* Agent config */
            {"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
            {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
@@ -327,14 +323,19 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# LLM Configuration\n";
     out << "# =============================================================================\n";
     out << "# All LLM providers use OpenAI Chat Completions format.\n";
-    out << "# Configure URL, key (if needed), and model name.\n\n";
+    out << "# Declare each model under llm.models and pick one with llm.model.\n\n";
 
     out << "# llm:\n";
-    out << "#   url: https://api.deepseek.com/chat/completions\n";
-    out << "#   key: sk-xxx\n";
-    out << "#   model: deepseek-v4-pro\n";
-    out << "#   timeout: 30000\n";
-    out << "#   max_output_tokens: 8192   # Max output tokens (0 or omit = API default)\n\n";
+    out << "#   model: deepseek-pro\n";
+    out << "#   models:\n";
+    out << "#     deepseek-pro:\n";
+    out << "#       name: DeepSeek Pro\n";
+    out << "#       model: deepseek-v4-pro    # name sent to the server (default: key)\n";
+    out << "#       url: https://api.deepseek.com/chat/completions\n";
+    out << "#       key: sk-xxx\n";
+    out << "#       timeout: 30000\n";
+    out << "#       context: 131072\n";
+    out << "#       max_output_tokens: 8192  # 0 or omit = API default\n\n";
 
     out << "# Common endpoints:\n";
     out << "# - DeepSeek:  https://api.deepseek.com/chat/completions\n";

@@ -63,7 +63,6 @@ public:
         QString     historyDigest;
         bool        inputReplaySafe = false;
         bool        contextPresent  = false;
-        bool        registryModel   = false;
         QString     modelId;
         QString     effortLevel;
         bool        planMode   = false;

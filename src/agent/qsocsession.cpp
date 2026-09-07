@@ -141,8 +141,7 @@ std::optional<QSocSession::RunEvent> parseRunEvent(const nlohmann::json &value)
 bool validRunContext(const QSocSession::RunRecord &record)
 {
     return record.contextPresent && !record.projectRoot.trimmed().isEmpty()
-           && !record.workingDir.trimmed().isEmpty()
-           && (!record.registryModel || !record.modelId.trimmed().isEmpty())
+           && !record.workingDir.trimmed().isEmpty() && !record.modelId.trimmed().isEmpty()
            && record.remoteMode == !record.remoteName.trimmed().isEmpty();
 }
 
@@ -155,7 +154,6 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
     const nlohmann::json &context = line["context"];
     if (!context.is_object() || !context.contains("model_id") || !context["model_id"].is_string()
         || !context.contains("effort_level") || !context["effort_level"].is_string()
-        || !context.contains("registry_model") || !context["registry_model"].is_boolean()
         || !context.contains("plan_mode") || !context["plan_mode"].is_boolean()
         || !context.contains("remote_mode") || !context["remote_mode"].is_boolean()
         || !context.contains("remote_name") || !context["remote_name"].is_string()
@@ -165,7 +163,6 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
     }
 
     record->contextPresent = true;
-    record->registryModel  = context["registry_model"].get<bool>();
     record->modelId        = QString::fromStdString(context["model_id"].get<std::string>());
     record->effortLevel    = QString::fromStdString(context["effort_level"].get<std::string>());
     record->planMode       = context["plan_mode"].get<bool>();
@@ -407,7 +404,6 @@ bool QSocSession::appendRun(const RunRecord &record)
     if (record.contextPresent) {
         line["context"] = {
             {"model_id", record.modelId.toStdString()},
-            {"registry_model", record.registryModel},
             {"effort_level", record.effortLevel.toStdString()},
             {"plan_mode", record.planMode},
             {"remote_mode", record.remoteMode},

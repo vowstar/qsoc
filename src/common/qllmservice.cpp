@@ -653,31 +653,6 @@ void QLLMService::loadConfigSettings()
     } else if (!modelConfigs.isEmpty()) {
         /* Fall back to first model in registry */
         setCurrentModel(modelConfigs.firstKey());
-    } else {
-        /* Legacy: load from flat llm.url/llm.key/llm.model */
-        QString url   = config->getValue("llm.url");
-        QString key   = config->getValue("llm.key");
-        QString model = config->getValue("llm.model");
-
-        if (!url.isEmpty()) {
-            LLMEndpoint endpoint;
-            endpoint.name  = "primary";
-            endpoint.url   = QUrl(url);
-            endpoint.key   = key;
-            endpoint.model = model;
-
-            QString timeoutStr = config->getValue("llm.timeout");
-            if (!timeoutStr.isEmpty()) {
-                endpoint.timeout = timeoutStr.toInt();
-            }
-
-            QString maxOutputStr = config->getValue("llm.max_output_tokens");
-            if (!maxOutputStr.isEmpty()) {
-                endpoint.maxOutputTokens = maxOutputStr.toInt();
-            }
-
-            activeEndpoint = endpoint;
-        }
     }
 }
 

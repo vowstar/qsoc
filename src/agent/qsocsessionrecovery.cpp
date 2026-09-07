@@ -201,9 +201,7 @@ json closeToolBatch(const json &messages, const ToolScan &scan, const QSet<QStri
 bool sameExecutionContext(
     const QSocSession::RunRecord &interrupted, const QSocSession::RunRecord &current)
 {
-    return interrupted.registryModel == current.registryModel
-           && interrupted.modelId == current.modelId
-           && interrupted.effortLevel == current.effortLevel
+    return interrupted.modelId == current.modelId && interrupted.effortLevel == current.effortLevel
            && interrupted.planMode == current.planMode
            && interrupted.remoteMode == current.remoteMode
            && interrupted.remoteName == current.remoteName
