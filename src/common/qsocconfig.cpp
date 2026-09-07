@@ -81,19 +81,6 @@ void QSocConfig::loadFromEnvironment()
     /* Load from environment variables (highest priority) */
     const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 
-    /* List of supported environment variables with direct key mapping */
-    const QStringList envVars
-        = {"QSOC_AI_PROVIDER", "QSOC_API_KEY", "QSOC_AI_MODEL", "QSOC_API_URL"};
-
-    /* Load each environment variable if it exists */
-    for (const QString &var : envVars) {
-        if (env.contains(var)) {
-            /* Convert to lowercase key for consistency */
-            const QString key = var.mid(5).toLower(); /* Remove "QSOC_" prefix */
-            setValue(key, env.value(var));
-        }
-    }
-
     /* Compound key environment variables (highest priority) */
     const QMap<QString, QString> compoundEnvVars
         = {/* LLM model selection */
