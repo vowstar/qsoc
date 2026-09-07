@@ -124,6 +124,7 @@ private:
             QDir(outputDirectory).filePath("timer_ctrl.v"),
             QDir(outputDirectory).filePath("timer_ctrl_formal.sv"),
             QDir(outputDirectory).filePath("timer_ctrl_formal.sby"),
+            QDir(outputDirectory).filePath("timer_ctrl_formal.fl"),
         };
         paths.append(uvmArtifactPaths(outputDirectory));
         return paths;
@@ -146,6 +147,7 @@ private:
     }
 
 private slots:
+    void generateRejectsFormalBankForMmio();
     void initTestCase();
     void cleanupTestCase();
     void createWritesAnIncompleteDraftWithoutOverwrite();
@@ -455,15 +457,18 @@ void Test::generateWithFormalWritesAndReplacesCollateral()
     const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
     const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
     const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+    const QString formalListPath          = QDir(outputDirectory).filePath("timer_ctrl_formal.fl");
     const QStringList uvmPaths            = uvmArtifactPaths(outputDirectory);
 
     const CommandResult generated = runCommand(arguments);
     QCOMPARE(generated.exitCode, 0);
     QVERIFY2(generated.output.contains(formalSystemVerilogPath), qPrintable(generated.output));
     QVERIFY2(generated.output.contains(formalSbyPath), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains(formalListPath), qPrintable(generated.output));
     QVERIFY(QFile::exists(verilogPath));
     QVERIFY(QFile::exists(formalSystemVerilogPath));
     QVERIFY(QFile::exists(formalSbyPath));
+    QVERIFY(QFile::exists(formalListPath));
     for (const QString &path : uvmPaths) {
         QVERIFY(!QFile::exists(path));
     }
@@ -765,6 +770,26 @@ void Test::invalidGeneratorDoesNotReplaceOutput()
 }
 
 } // namespace
+
+/* --formal-bank is an IOMUX knob; on an MMIO module it must not be
+ * swallowed as if it had done something. */
+void Test::generateRejectsFormalBankForMmio()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-formal", "--formal-bank", "2", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+
+    const CommandResult generated = runCommand(arguments);
+    QCOMPARE(generated.exitCode, 1);
+    QVERIFY2(generated.output.contains("--formal-bank"), qPrintable(generated.output));
+    const QDir projectDirectory(directory.path());
+    QVERIFY(!QFile::exists(projectDirectory.filePath("output/peripheral/timer_ctrl/timer_ctrl.v")));
+}
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsoccliparsemmio.moc"

@@ -514,6 +514,12 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         return showInfo(0, messages.join('\n'));
     }
 
+    if (parser.isSet("formal-bank")) {
+        return showError(
+            1,
+            QCoreApplication::translate(
+                "main", "Error: --formal-bank applies to IOMUX modules only."));
+    }
     QString     verilog;
     QStringList errors;
     if (!QSocMmioGenerator::generateVerilog(definition, &verilog, &errors)) {
@@ -571,17 +577,18 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
     std::vector<GeneratedArtifact> artifacts = {{outputPath, verilog.toUtf8()}};
     QString                        formalSystemVerilogPath;
     QString                        formalSbyPath;
+    QString                        formalListPath;
     if (withFormal) {
         formalSystemVerilogPath = outputDirectory.filePath(
             QStringLiteral("%1/%2_formal.sv").arg(relativeDirectory, moduleName));
         formalSbyPath = outputDirectory.filePath(
             QStringLiteral("%1/%2_formal.sby").arg(relativeDirectory, moduleName));
+        formalListPath = outputDirectory.filePath(
+            QStringLiteral("%1/%2_formal.fl").arg(relativeDirectory, moduleName));
         artifacts.push_back({formalSystemVerilogPath, formalCollateral.systemVerilog.toUtf8()});
         artifacts.push_back({formalSbyPath, formalCollateral.sby.toUtf8()});
         artifacts.push_back(
-            {outputDirectory.filePath(
-                 QStringLiteral("%1/%2_formal.fl").arg(relativeDirectory, moduleName)),
-             QStringLiteral("%1.v\n%1_formal.sv\n").arg(moduleName).toUtf8()});
+            {formalListPath, QStringLiteral("%1.v\n%1_formal.sv\n").arg(moduleName).toUtf8()});
     }
     QString uvmInterfacePath;
     QString uvmPackagePath;
@@ -612,8 +619,8 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
     };
     if (withFormal) {
         messages.append(
-            QCoreApplication::translate("main", "Generated MMIO formal collateral: %1, %2")
-                .arg(formalSystemVerilogPath, formalSbyPath));
+            QCoreApplication::translate("main", "Generated MMIO formal collateral: %1, %2, %3")
+                .arg(formalSystemVerilogPath, formalSbyPath, formalListPath));
     }
     if (withUvm) {
         messages.append(
