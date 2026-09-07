@@ -825,7 +825,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                         errors,
                         "REQUIRED",
                         fieldPath + ".reset",
-                        "property is required for rw fields");
+                        "property is required for rw and w1c fields");
                     valid = false;
                 } else if (
                     field.width > 0 && field.width <= plan.dataWidth
@@ -841,7 +841,10 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                 }
                 if (field.constantValue.has_value()) {
                     appendError(
-                        errors, "ACCESS", fieldPath + ".value", "is not allowed for rw fields");
+                        errors,
+                        "ACCESS",
+                        fieldPath + ".value",
+                        "is not allowed for rw and w1c fields");
                     valid = false;
                 }
                 if (field.access == QSocMmioAccess::WriteOneClear) {
