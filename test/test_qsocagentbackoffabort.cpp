@@ -606,12 +606,12 @@ private:
 
 void configureService(QLLMService &service, const MockServer &server)
 {
-    LLMEndpoint endpoint;
+    LLMModelConfig endpoint;
     endpoint.name    = QStringLiteral("backoff-test");
-    endpoint.url     = server.url();
+    endpoint.url     = server.url().toString();
     endpoint.model   = QStringLiteral("test-model");
     endpoint.timeout = 10000;
-    service.setEndpoint(endpoint);
+    service.setModel(endpoint);
 }
 
 QSocAgentConfig testConfig()

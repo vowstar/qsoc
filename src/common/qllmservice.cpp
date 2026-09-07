@@ -254,8 +254,8 @@ QLLMService::~QLLMService()
         std::fill(str.begin(), str.end(), QChar(u'\0'));
         str.clear();
     };
-    if (activeEndpoint) {
-        wipe(activeEndpoint->key);
+    if (active) {
+        wipe(active->key);
     }
     for (auto &model : modelConfigs) {
         wipe(model.key);
@@ -292,19 +292,19 @@ QSocConfig *QLLMService::getConfig()
 
 /* Endpoint management */
 
-void QLLMService::setEndpoint(const LLMEndpoint &endpoint)
+void QLLMService::setModel(const LLMModelConfig &model)
 {
-    activeEndpoint = endpoint;
+    active = model;
 }
 
-void QLLMService::clearEndpoint()
+void QLLMService::clearModel()
 {
-    activeEndpoint.reset();
+    active.reset();
 }
 
 bool QLLMService::hasEndpoint() const
 {
-    return activeEndpoint.has_value();
+    return active.has_value();
 }
 
 QStringList QLLMService::availableModels() const
@@ -338,19 +338,8 @@ bool QLLMService::setCurrentModel(const QString &modelId)
         return false;
     }
 
-    currentModelId                  = modelId;
-    const LLMModelConfig &modelConf = modelConfigs[modelId];
-
-    LLMEndpoint endpoint;
-    endpoint.name            = modelConf.name;
-    endpoint.url             = QUrl(modelConf.url);
-    endpoint.key             = modelConf.key;
-    endpoint.model           = modelConf.model;
-    endpoint.timeout         = modelConf.timeout;
-    endpoint.maxOutputTokens = modelConf.maxOutputTokens;
-    endpoint.authHeader      = modelConf.authHeader;
-    activeEndpoint           = endpoint;
-
+    currentModelId = modelId;
+    active         = modelConfigs[modelId];
     return true;
 }
 
@@ -367,8 +356,8 @@ LLMResponse QLLMService::sendRequest(
     }
 
     /* Copy first: the nested wait may destroy this service. */
-    const LLMEndpoint endpoint = *activeEndpoint;
-    LLMResponse       response
+    const LLMModelConfig endpoint = *active;
+    LLMResponse          response
         = sendRequestToEndpoint(endpoint, prompt, systemPrompt, temperature, jsonMode);
     if (!response.success) {
         QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << response.errorMessage;
@@ -393,7 +382,7 @@ void QLLMService::sendRequestAsync(
         return;
     }
 
-    const LLMEndpoint endpoint = *activeEndpoint;
+    const LLMModelConfig endpoint = *active;
 
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
@@ -560,7 +549,7 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
 
 void QLLMService::loadConfigSettings()
 {
-    activeEndpoint.reset();
+    active.reset();
     modelConfigs.clear();
     defaultModelId.clear();
     currentModelId.clear();
@@ -668,9 +657,9 @@ void QLLMService::setupNetworkProxy()
     QSocProxy::apply(networkManager, QSocProxy::fromLegacyConfig(config));
 }
 
-QNetworkRequest QLLMService::prepareRequest(const LLMEndpoint &endpoint) const
+QNetworkRequest QLLMService::prepareRequest(const LLMModelConfig &endpoint) const
 {
-    QNetworkRequest request(endpoint.url);
+    QNetworkRequest request{QUrl(endpoint.url)};
     /* Qt may read from a closed TLS socket while retiring an HTTP/2 connection. */
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
@@ -796,11 +785,11 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
 }
 
 LLMResponse QLLMService::sendRequestToEndpoint(
-    const LLMEndpoint &endpoint,
-    const QString     &prompt,
-    const QString     &systemPrompt,
-    double             temperature,
-    bool               jsonMode)
+    const LLMModelConfig &endpoint,
+    const QString        &prompt,
+    const QString        &systemPrompt,
+    double                temperature,
+    bool                  jsonMode)
 {
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
@@ -873,8 +862,8 @@ void QLLMService::sendChatCompletionStream(
         }
     }
 
-    const LLMEndpoint endpoint = *activeEndpoint;
-    QNetworkRequest   request  = prepareRequest(endpoint);
+    const LLMModelConfig endpoint = *active;
+    QNetworkRequest      request  = prepareRequest(endpoint);
 
     /* Build payload with streaming enabled */
     json payload;
@@ -1551,8 +1540,8 @@ json QLLMService::sendChatCompletion(
 
     const QPointer<QLLMService> owner(this);
 
-    const LLMEndpoint endpoint = *activeEndpoint;
-    QNetworkRequest   request  = prepareRequest(endpoint);
+    const LLMModelConfig endpoint = *active;
+    QNetworkRequest      request  = prepareRequest(endpoint);
 
     /* Build payload with messages and tools */
     json payload;

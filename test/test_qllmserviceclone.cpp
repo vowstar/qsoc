@@ -290,11 +290,11 @@ MockResponse jsonResponse(const QString &content)
     return {QByteArrayLiteral("application/json"), QByteArray::fromStdString(body.dump()), 0};
 }
 
-LLMEndpoint endpointFor(const MockHttpServer &server)
+LLMModelConfig endpointFor(const MockHttpServer &server)
 {
-    LLMEndpoint endpoint;
+    LLMModelConfig endpoint;
     endpoint.name    = QStringLiteral("runtime-test");
-    endpoint.url     = server.url();
+    endpoint.url     = server.url().toString();
     endpoint.model   = QStringLiteral("test-model");
     endpoint.timeout = 3000;
     return endpoint;
@@ -449,11 +449,11 @@ private slots:
      * re-parses from QSocConfig). With no config, both are empty. */
     void testCloneWithoutConfigYieldsEmptyEndpoints()
     {
-        auto       *parent = new QLLMService(this, nullptr);
-        LLMEndpoint manual;
+        auto          *parent = new QLLMService(this, nullptr);
+        LLMModelConfig manual;
         manual.name = QStringLiteral("local");
-        manual.url  = QUrl(QStringLiteral("http://localhost:1234/v1/chat"));
-        parent->setEndpoint(manual);
+        manual.url  = QStringLiteral("http://localhost:1234/v1/chat");
+        parent->setModel(manual);
         QVERIFY(parent->hasEndpoint());
 
         auto *child = parent->clone(this);
@@ -506,7 +506,7 @@ private slots:
         server.enqueue(deltaResponse(delta, true, true, true));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         StreamEvents events;
         bool         abortRequested = false;
@@ -546,7 +546,7 @@ private slots:
         server.enqueue(deltaResponse(delta, false, false));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         StreamEvents events;
         bool         abortRequested = false;
@@ -601,7 +601,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("new content")));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         StreamEvents events;
         bool         restarted = false;
@@ -650,7 +650,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("new content")));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         StreamEvents events;
         bool         restarted = false;
@@ -696,7 +696,7 @@ private slots:
         server.enqueue(deltaResponse(delta, true, true, true));
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->setEndpoint(endpointFor(server));
+        service->setModel(endpointFor(server));
 
         StreamEvents events;
         bool         deleted = false;
@@ -751,7 +751,7 @@ private slots:
         }
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->setEndpoint(endpointFor(server));
+        service->setModel(endpointFor(server));
 
         int     completionCount = 0;
         int     errorCount      = 0;
@@ -803,7 +803,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("recovered")));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         StreamEvents            events;
         QPointer<QNetworkReply> reply;
@@ -860,7 +860,7 @@ private slots:
         server.enqueue(contentOnlyDoneResponse(QStringLiteral("replacement")));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         StreamEvents events;
         bool         replaced = false;
@@ -904,14 +904,14 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
         QVERIFY2(waitUntil([&]() { return runningReply(&service) != nullptr; }), "no active reply");
         QPointer<QNetworkReply> oldReply = runningReply(&service);
 
-        service.clearEndpoint();
+        service.clearModel();
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
         QCOMPARE(events.errors, QStringList({QStringLiteral("No LLM endpoint configured")}));
 
@@ -969,7 +969,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1018,7 +1018,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1041,7 +1041,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1072,7 +1072,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1111,7 +1111,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1155,7 +1155,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1178,7 +1178,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1219,7 +1219,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         QObject                 callbacks;
@@ -1291,7 +1291,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         QObject                 callbacks;
@@ -1362,7 +1362,7 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("nested complete")));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         QStringList eventOrder;
         bool        nestedStarted     = false;
@@ -1587,7 +1587,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
@@ -1615,7 +1615,7 @@ private slots:
             {QByteArrayLiteral("application/json"), QByteArray::fromStdString(responseBody.dump())});
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         const LLMResponse response = service.sendRequest(QStringLiteral("runtime prompt"));
         QVERIFY2(waitForNoReplies(&service), "null-content reply was not deleted");
@@ -1630,7 +1630,7 @@ private slots:
         QVERIFY(server.listen());
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         QNetworkAccessManager *manager = service.findChild<QNetworkAccessManager *>();
         QVERIFY(manager != nullptr);
         delete manager;
@@ -1657,7 +1657,7 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("ignored")));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         service.sendRequestAsync(QStringLiteral("runtime prompt"), emptyCallback);
         QVERIFY(waitForNoReplies(&service));
 
@@ -1672,7 +1672,7 @@ private slots:
 
         StreamEvents events;
         QLLMService  service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
         recordStreamEvents(&service, &events);
 
         QNetworkAccessManager *manager = service.findChild<QNetworkAccessManager *>();
@@ -1708,10 +1708,10 @@ private slots:
                 {QByteArrayLiteral("application/json"), QByteArrayLiteral("{}"), 0, true});
         }
 
-        QLLMService service(nullptr, nullptr);
-        LLMEndpoint endpoint = endpointFor(server);
-        endpoint.timeout     = terminalPath == QStringLiteral("timeout") ? 20 : 500;
-        service.setEndpoint(endpoint);
+        QLLMService    service(nullptr, nullptr);
+        LLMModelConfig endpoint = endpointFor(server);
+        endpoint.timeout        = terminalPath == QStringLiteral("timeout") ? 20 : 500;
+        service.setModel(endpoint);
 
         QObject callbacks;
         bool    actionTaken = false;
@@ -1777,7 +1777,7 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("async complete")));
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->setEndpoint(endpointFor(server));
+        service->setModel(endpointFor(server));
 
         int     callbackCount = 0;
         bool    success       = false;
@@ -1813,7 +1813,7 @@ private slots:
         server.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{}"), 0, true});
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->setEndpoint(endpointFor(server));
+        service->setModel(endpointFor(server));
 
         QObject callbacks;
         bool    actionTaken = false;
@@ -1865,7 +1865,7 @@ private slots:
         server.enqueue(deltaResponse({{"content", "pending"}}, false, true, true));
 
         QPointer<QLLMService> service = new QLLMService(nullptr, nullptr);
-        service->setEndpoint(endpointFor(server));
+        service->setModel(endpointFor(server));
 
         QObject callbacks;
         bool    actionTaken = false;
@@ -1935,9 +1935,9 @@ private slots:
         server.enqueue({QByteArrayLiteral("application/json"), QByteArrayLiteral("{"), 0, true});
 
         QPointer<QLLMService> service  = new QLLMService(nullptr, nullptr);
-        LLMEndpoint           endpoint = endpointFor(server);
+        LLMModelConfig        endpoint = endpointFor(server);
         endpoint.timeout               = 3000;
-        service->setEndpoint(endpoint);
+        service->setModel(endpoint);
 
         QObject                         callbacks;
         QPointer<QNetworkReply>         observedReply;
@@ -2023,7 +2023,7 @@ private slots:
         QVERIFY(primary.listen());
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(primary));
+        service.setModel(endpointFor(primary));
 
         std::stop_source stopped;
         stopped.request_stop();
@@ -2082,7 +2082,7 @@ private slots:
 
         {
             QLLMService service(nullptr, nullptr);
-            service.setEndpoint(endpointFor(server));
+            service.setModel(endpointFor(server));
 
             int        completionCount = 0;
             QString    streamContent;
@@ -2143,10 +2143,10 @@ private slots:
         server.enqueue(jsonResponse(QStringLiteral("recap complete")));
 
         {
-            QLLMService service(nullptr, nullptr);
-            LLMEndpoint endpoint = endpointFor(server);
-            endpoint.timeout     = 2000;
-            service.setEndpoint(endpoint);
+            QLLMService    service(nullptr, nullptr);
+            LLMModelConfig endpoint = endpointFor(server);
+            endpoint.timeout        = 2000;
+            service.setModel(endpoint);
 
             QPointer<QNetworkReply> retiredReply;
             SyncResult              recapResult;
@@ -2220,7 +2220,7 @@ private slots:
 
         {
             QLLMService service(nullptr, nullptr);
-            service.setEndpoint(endpointFor(server));
+            service.setModel(endpointFor(server));
 
             int     completionCount = 0;
             int     errorCount      = 0;
@@ -2260,7 +2260,7 @@ private slots:
         server.enqueue(deltaResponse({{"content", "pending"}}, false, true, true));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         int completionCount = 0;
         int errorCount      = 0;
@@ -2312,10 +2312,10 @@ private slots:
                  dataLine({{"error", expectedError.toStdString()}})});
         }
 
-        QLLMService service(nullptr, nullptr);
-        LLMEndpoint endpoint = endpointFor(server);
-        endpoint.timeout     = timeout ? 20 : 3000;
-        service.setEndpoint(endpoint);
+        QLLMService    service(nullptr, nullptr);
+        LLMModelConfig endpoint = endpointFor(server);
+        endpoint.timeout        = timeout ? 20 : 3000;
+        service.setModel(endpoint);
 
         int     completionCount = 0;
         int     errorCount      = 0;
@@ -2353,7 +2353,7 @@ private slots:
         server.enqueue(streamResponse(QStringLiteral("second"), true, 1000));
 
         QLLMService service(nullptr, nullptr);
-        service.setEndpoint(endpointFor(server));
+        service.setModel(endpointFor(server));
 
         QStringList completedContents;
         QStringList errors;

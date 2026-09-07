@@ -167,12 +167,12 @@ json assistantResponse(json message)
 
 void configureTestService(QLLMService &service, const QUrl &url)
 {
-    LLMEndpoint endpoint;
+    LLMModelConfig endpoint;
     endpoint.name    = QStringLiteral("local-test");
-    endpoint.url     = url;
+    endpoint.url     = url.toString();
     endpoint.model   = QStringLiteral("test-model");
     endpoint.timeout = 3000;
-    service.setEndpoint(endpoint);
+    service.setModel(endpoint);
 }
 
 QSet<QString> requestToolNames(const json &request)

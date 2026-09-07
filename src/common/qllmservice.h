@@ -23,34 +23,18 @@
 using json = nlohmann::json;
 
 /**
- * @brief LLM endpoint configuration
- * @details Holds configuration for a single LLM API endpoint
- */
-struct LLMEndpoint
-{
-    QString name;                    /* Endpoint name for identification */
-    QUrl    url;                     /* API endpoint URL */
-    QString key;                     /* API key (optional for local services) */
-    QString model;                   /* Model name to use */
-    int     timeout         = 30000; /* Request timeout in milliseconds */
-    int     maxOutputTokens = 0;     /* Max output tokens (0 = API default) */
-    /* Auth header name. Empty or "Authorization" sends "Bearer <key>";
-     * any other value sends the bare key under that header name. */
-    QString authHeader;
-};
-
-/**
- * @brief Model configuration from llm.models section
- * @details Each model is self-contained with its own URL, key, and limits
+ * @brief One entry of llm.models: where requests go and how the model behaves
  */
 struct LLMModelConfig
 {
-    QString id;                       /* Config key; the handle users select */
-    QString name;                     /* Display name (defaults to id) */
-    QString model;                    /* Name sent on the wire (defaults to id) */
-    QString url;                      /* API endpoint URL */
-    QString key;                      /* API key (empty = no auth) */
-    QString authHeader;               /* See LLMEndpoint::authHeader */
+    QString id;    /* Config key; the handle users select */
+    QString name;  /* Display name (defaults to id) */
+    QString model; /* Name sent on the wire (defaults to id) */
+    QString url;   /* Chat Completions endpoint URL */
+    QString key;   /* API key (empty = no auth) */
+    /* Auth header name. Empty or "Authorization" sends "Bearer <key>";
+     * any other value sends the bare key under that header name. */
+    QString authHeader;
     int     timeout         = 120000; /* Request timeout ms */
     int     contextTokens   = 128000; /* Context window size */
     int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
@@ -150,15 +134,15 @@ public slots:
     /* Endpoint management */
 
     /**
-     * @brief Replace the endpoint every request goes to
-     * @param endpoint Endpoint configuration
+     * @brief Use a model entry directly, bypassing the registry
+     * @param model The entry every request goes to
      */
-    void setEndpoint(const LLMEndpoint &endpoint);
+    void setModel(const LLMModelConfig &model);
 
     /**
-     * @brief Drop the endpoint; requests fail until one is set again
+     * @brief Drop the active model; requests fail until one is set again
      */
-    void clearEndpoint();
+    void clearModel();
 
     /**
      * @brief Check if an endpoint is configured
@@ -355,7 +339,7 @@ private:
 
     QPointer<QNetworkAccessManager> networkManager;
     QSocConfig                     *config = nullptr;
-    std::optional<LLMEndpoint>      activeEndpoint;
+    std::optional<LLMModelConfig>   active;
     QMap<QString, LLMModelConfig>   modelConfigs;
     QString                         defaultModelId;
     QString                         currentModelId;
@@ -375,7 +359,7 @@ private:
      * @param endpoint Endpoint to prepare request for
      * @return Configured network request
      */
-    QNetworkRequest prepareRequest(const LLMEndpoint &endpoint) const;
+    QNetworkRequest prepareRequest(const LLMModelConfig &endpoint) const;
 
     /**
      * @brief Build the request payload (OpenAI Chat Completions format)
@@ -410,11 +394,11 @@ private:
      * @return Response from the endpoint
      */
     LLMResponse sendRequestToEndpoint(
-        const LLMEndpoint &endpoint,
-        const QString     &prompt,
-        const QString     &systemPrompt,
-        double             temperature,
-        bool               jsonMode);
+        const LLMModelConfig &endpoint,
+        const QString        &prompt,
+        const QString        &systemPrompt,
+        double                temperature,
+        bool                  jsonMode);
 
     bool        claimTerminal(const StreamStatePtr &state, StreamOutcome outcome);
     static bool isStreamActive(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
