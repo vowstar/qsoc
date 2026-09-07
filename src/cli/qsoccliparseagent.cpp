@@ -6866,7 +6866,7 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent(QString("  Model:    %1\n")
                                         .arg(
                                             llmService->getCurrentModelId().isEmpty()
-                                                ? QStringLiteral("(default)")
+                                                ? QStringLiteral("(none)")
                                                 : llmService->getCurrentModelId()));
             compositor.printContent(QString("  Effort:   %1\n")
                                         .arg(
