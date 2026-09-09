@@ -3642,6 +3642,18 @@ void Test::padCellRejectsWhatItLacks_data()
         << "        control: {drive: high}\n"
         << "        control: {slew: fast}\n"
         << "pin 0 slot 0.control.slew: pad cell gpio_pad_ps has no control slew";
+    QTest::newRow("duplicate strength label")
+        << "          up: [\"1\", \"1\"]\n"
+        << "          up: {\"47k\": [\"1\", \"1\"], \"47k\": [\"1\", \"0\"]}\n"
+        << "IOMUX_DUPLICATE generator.pad_cell.pull.table.up.47k: strength label is duplicated";
+    QTest::newRow("duplicate pull mode")
+        << "          down: [\"1\", \"0\"]\n"
+        << "          down: [\"1\", \"0\"]\n          down: [\"0\", \"0\"]\n"
+        << "IOMUX_DUPLICATE generator.pad_cell.pull.table.down: mode is duplicated";
+    QTest::newRow("duplicate control row")
+        << "            low: [\"0\"]\n"
+        << "            low: [\"0\"]\n            low: [\"1\"]\n"
+        << "IOMUX_DUPLICATE generator.pad_cell.control.drive.table.low: row label is duplicated";
     QTest::newRow("keeper woven from a driver")
         << "        port: [PE, PS]\n"
         << "        port: [PE, PS]\n        kind: driver\n"

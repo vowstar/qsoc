@@ -164,6 +164,9 @@ cell with two pull-up strengths and one pull-down strength is expressed as
 `pull: up` for a single row and `pull: {mode: up, strength: "47k"}` for a
 labelled one.
 
+A mode name, a strength label, or a row label written twice is an error,
+so one label never names two rows.
+
 `control` declares every other input group of the cell: drive strength,
 slew rate, Schmitt trigger, analog enable, an open-drain mode pin, a filter
 enable, whatever the databook lists. Each control names its pins, a table of

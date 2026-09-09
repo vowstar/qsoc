@@ -490,7 +490,8 @@ bool parsePadDirection(
         appendError(errors, "TYPE", path, "must be a sequence or a map of labelled sequences");
         return false;
     }
-    bool valid = true;
+    bool          valid = true;
+    QSet<QString> seen;
     for (const auto &entry : node) {
         if (!entry.first.IsScalar()) {
             appendError(errors, "TYPE", path, "strength labels must be scalar");
@@ -503,6 +504,12 @@ bool parsePadDirection(
             valid = false;
             continue;
         }
+        if (seen.contains(label)) {
+            appendError(errors, "DUPLICATE", path + "." + label, "strength label is duplicated");
+            valid = false;
+            continue;
+        }
+        seen.insert(label);
         valid = parsePadRow(entry.second, path + "." + label, label, width, rows, errors) && valid;
     }
     return valid;
@@ -601,6 +608,11 @@ bool parsePadCell(
                 valid = false;
                 continue;
             }
+            if (plan->pull.has(name)) {
+                appendError(errors, "DUPLICATE", tablePath + "." + name, "mode is duplicated");
+                valid = false;
+                continue;
+            }
             if (parsePadDirection(entry.second, tablePath + "." + name, width, &rows, errors)) {
                 plan->pull.mode.insert(name, rows);
             } else {
@@ -666,6 +678,7 @@ bool parsePadCell(
                 valid = false;
                 continue;
             }
+            QSet<QString> seen;
             for (const auto &rowEntry : body["table"]) {
                 const QString label = QString::fromStdString(rowEntry.first.Scalar());
                 if (!validRowLabel(label)) {
@@ -674,6 +687,16 @@ bool parsePadCell(
                     valid = false;
                     continue;
                 }
+                if (seen.contains(label)) {
+                    appendError(
+                        errors,
+                        "DUPLICATE",
+                        itemPath + ".table." + label,
+                        "row label is duplicated");
+                    valid = false;
+                    continue;
+                }
+                seen.insert(label);
                 valid = parsePadRow(
                             rowEntry.second,
                             itemPath + ".table." + label,
