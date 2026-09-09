@@ -707,6 +707,288 @@ const QSocMmioRegisterPlan *findRegister(const QSocMmioPlan &mmio, const QString
 QString                     padCellBlock();
 QString                     padIntegrationBlock();
 
+/* Every pin carries every slot, and slot k drives the constant signature
+ * {ie, ov, oe} = k, so a pad tells which slot it follows. With a pool the
+ * same signatures sit on channels 0 to 7 and channels 8 to 15 are sinks. */
+QString sweepSource(quint32 dataWidth, bool withLs)
+{
+    QString routes;
+    for (quint32 pin = 0; pin < 256; ++pin) {
+        for (quint32 slot = (withLs ? 1U : 0U); slot < 8; ++slot) {
+            routes += QString(
+                          "      - {pin: %1, slot: %2, function: f%2, signal: p%1, "
+                          "input_enable: %3, output_value: %4, output_enable: %5}\n")
+                          .arg(pin)
+                          .arg(slot)
+                          .arg((slot >> 2) & 1)
+                          .arg((slot >> 1) & 1)
+                          .arg(slot & 1);
+        }
+    }
+    QString ls;
+    if (withLs) {
+        ls = "    ls:\n      all:\n        pins: [\"0-255\"]\n        channel:\n";
+        for (quint32 channel = 0; channel < 8; ++channel) {
+            ls += QString(
+                      "          - {channel: %1, function: c%1, signal: tx, input_enable: %2, "
+                      "output_value: %3, output_enable: %4}\n")
+                      .arg(channel)
+                      .arg((channel >> 2) & 1)
+                      .arg((channel >> 1) & 1)
+                      .arg(channel & 1);
+        }
+        for (quint32 channel = 8; channel < 16; ++channel) {
+            ls += QString(
+                      "          - {channel: %1, function: c%1, signal: rx, input_value: "
+                      "{link: sink%1}}\n")
+                      .arg(channel);
+        }
+    }
+    return QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: %1
+    address_width: 14
+    pin_count: 256
+    hs_slots: 8
+%2%3    route:
+%4)")
+        .arg(dataWidth)
+        .arg(integrationBlock(), ls, routes);
+}
+
+/* The sweep walks a rotating code across every lane of every word, so each
+ * pin sees all eight codes and every lane is written together with its
+ * neighbours. Tokens rather than arg(): the body prints with %0d. */
+QString sweepTestbench(bool withLs)
+{
+    QString sinks;
+    QString sinkPorts;
+    for (quint32 channel = 8; channel < 16; ++channel) {
+        sinks += QString("wire sink%1;\n").arg(channel);
+        sinkPorts += QString(",\n    .ls_c%1_input_value_o(sink%1)").arg(channel);
+    }
+    const QString poolBody = R"VERILOG(
+    /* Every pool pin through every channel: eight rotations of the lanes. */
+    for (r = 0; r < 8; r = r + 1) begin
+        for (w = 0; w * LANES < 256; w = w + 1) begin
+            word = {@DW@{1'b0}};
+            for (l = 0; l < LANES; l = l + 1) begin
+                chunk = (w * LANES + l + r) % 8;
+                word  = word | (chunk << (l * 8));
+            end
+            axi_write(14'hc00 + w * SW, word);
+        end
+        for (p = 0; p < 256; p = p + 1)
+            expect_pin(p, (p + r) % 8, "pool pin follows its channel");
+    end
+    /* A channel number outside the pool is an empty slot on every pin. */
+    for (w = 0; w * LANES < 256; w = w + 1) begin
+        word = {@DW@{1'b0}};
+        for (l = 0; l < LANES; l = l + 1) begin
+            chunk = 20;
+            word  = word | (chunk << (l * 8));
+        end
+        axi_write(14'hc00 + w * SW, word);
+    end
+    for (p = 0; p < 256; p = p + 1)
+        expect_pin(p, 0, "channel outside the pool is empty");
+    for (w = 0; w * LANES < 256; w = w + 1)
+        axi_write(14'hc00 + w * SW, {@DW@{1'b0}});
+
+    /* Every pad reaches a slow input: eight sinks walk the 256 pads. */
+    for (r = 0; r < 32; r = r + 1) begin
+        for (w = 8 / LANES; w * LANES < 16; w = w + 1) begin
+            word = {@DW@{1'b0}};
+            for (l = 0; l < LANES; l = l + 1) begin
+                k = w * LANES + l;
+                if (k >= 8 && k < 16) begin
+                    chunk = r * 8 + (k - 8);
+                    word  = word | (chunk << (l * 8));
+                end
+            end
+            axi_write(14'hd00 + w * SW, word);
+        end
+        pad_in = 256'd0;
+        for (k = 0; k < 8; k = k + 1)
+            if (k % 2 == 0)
+                pad_in[r * 8 + k] = 1'b1;
+        #1 sinks_seen = {sink15, sink14, sink13, sink12, sink11, sink10, sink9, sink8};
+        if (sinks_seen !== 8'h55) begin
+            failures = failures + 1;
+            $display("TEST_FAIL even pads round %0d saw %b", r, sinks_seen);
+        end
+        pad_in = 256'd0;
+        for (k = 0; k < 8; k = k + 1)
+            if (k % 2 == 1)
+                pad_in[r * 8 + k] = 1'b1;
+        #1 sinks_seen = {sink15, sink14, sink13, sink12, sink11, sink10, sink9, sink8};
+        if (sinks_seen !== 8'haa) begin
+            failures = failures + 1;
+            $display("TEST_FAIL odd pads round %0d saw %b", r, sinks_seen);
+        end
+    end
+    pad_in = 256'd0;
+)VERILOG";
+    const QString fastBody = R"VERILOG(
+    /* Every pin through every slot: eight rotations of the selector lanes. */
+    for (r = 0; r < 8; r = r + 1) begin
+        for (w = 0; w * HLANES < 256; w = w + 1) begin
+            word = {@DW@{1'b0}};
+            for (l = 0; l < HLANES; l = l + 1) begin
+                chunk = (w * HLANES + l + r) % 8;
+                word  = word | (chunk << (l * 4));
+            end
+            axi_write(14'h100 + w * SW, word);
+        end
+        for (p = 0; p < 256; p = p + 1)
+            expect_pin(p, (p + r) % 8, "selector lane drives its pin");
+    end
+    for (w = 0; w * HLANES < 256; w = w + 1)
+        axi_write(14'h100 + w * SW, {@DW@{1'b0}});
+)VERILOG";
+    QString       bench    = R"VERILOG(`timescale 1ns/1ps
+module tb;
+localparam SW     = @SW@;
+localparam LANES  = @DW@ / 8;
+localparam HLANES = @DW@ / 4;
+reg               clk_i;
+reg               rst_ni;
+reg  [13:0]       s_axi_awaddr;
+reg  [2:0]        s_axi_awprot;
+reg               s_axi_awvalid;
+wire              s_axi_awready;
+reg  [@DW@-1:0]   s_axi_wdata;
+reg  [@SW@-1:0]   s_axi_wstrb;
+reg               s_axi_wvalid;
+wire              s_axi_wready;
+wire [1:0]        s_axi_bresp;
+wire              s_axi_bvalid;
+reg               s_axi_bready;
+reg  [13:0]       s_axi_araddr;
+reg  [2:0]        s_axi_arprot;
+reg               s_axi_arvalid;
+wire              s_axi_arready;
+wire [@DW@-1:0]   s_axi_rdata;
+wire [1:0]        s_axi_rresp;
+wire              s_axi_rvalid;
+reg               s_axi_rready;
+reg  [255:0]      pad_in;
+wire [255:0]      pad_ie;
+wire [255:0]      pad_ov;
+wire [255:0]      pad_oe;
+reg  [@DW@-1:0]   word;
+reg  [@DW@-1:0]   chunk;
+reg  [7:0]        sinks_seen;
+integer           p, k, r, w, l;
+integer           failures;
+@SINKS@
+iomux0 dut (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .s_axi_awaddr(s_axi_awaddr),
+    .s_axi_awprot(s_axi_awprot),
+    .s_axi_awvalid(s_axi_awvalid),
+    .s_axi_awready(s_axi_awready),
+    .s_axi_wdata(s_axi_wdata),
+    .s_axi_wstrb(s_axi_wstrb),
+    .s_axi_wvalid(s_axi_wvalid),
+    .s_axi_wready(s_axi_wready),
+    .s_axi_bresp(s_axi_bresp),
+    .s_axi_bvalid(s_axi_bvalid),
+    .s_axi_bready(s_axi_bready),
+    .s_axi_araddr(s_axi_araddr),
+    .s_axi_arprot(s_axi_arprot),
+    .s_axi_arvalid(s_axi_arvalid),
+    .s_axi_arready(s_axi_arready),
+    .s_axi_rdata(s_axi_rdata),
+    .s_axi_rresp(s_axi_rresp),
+    .s_axi_rvalid(s_axi_rvalid),
+    .s_axi_rready(s_axi_rready),
+    .pad_input_value_i(pad_in),
+    .pad_input_enable_o(pad_ie),
+    .pad_output_value_o(pad_ov),
+    .pad_output_enable_o(pad_oe)@PORTS@
+);
+
+always #5 clk_i = ~clk_i;
+
+task axi_write;
+    input [13:0] address;
+    input [@DW@-1:0] data;
+    begin
+        @(negedge clk_i);
+        s_axi_awaddr  = address;
+        s_axi_awvalid = 1'b1;
+        while (s_axi_awready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_awvalid = 1'b0;
+        @(negedge clk_i);
+        s_axi_wdata  = data;
+        s_axi_wstrb  = {@SW@{1'b1}};
+        s_axi_wvalid = 1'b1;
+        while (s_axi_wready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_wvalid = 1'b0;
+        s_axi_bready = 1'b1;
+        while (s_axi_bvalid !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_bready = 1'b0;
+        @(negedge clk_i);
+    end
+endtask
+
+/* The bundle a pin shows names the slot or channel it follows. */
+task expect_pin;
+    input integer pin;
+    input [2:0]   code;
+    input [8*64-1:0] label;
+    begin
+        if (pad_ie[pin] !== code[2] || pad_ov[pin] !== code[1] || pad_oe[pin] !== code[0]) begin
+            failures = failures + 1;
+            $display("TEST_FAIL %0s: pin %0d wanted %b saw %b%b%b", label, pin, code,
+                     pad_ie[pin], pad_ov[pin], pad_oe[pin]);
+        end
+    end
+endtask
+
+initial begin
+    failures      = 0;
+    clk_i         = 1'b0;
+    rst_ni        = 1'b0;
+    pad_in        = 256'd0;
+    s_axi_awaddr  = 14'd0;
+    s_axi_awprot  = 3'b000;
+    s_axi_awvalid = 1'b0;
+    s_axi_wdata   = {@DW@{1'b0}};
+    s_axi_wstrb   = {@SW@{1'b0}};
+    s_axi_wvalid  = 1'b0;
+    s_axi_bready  = 1'b0;
+    s_axi_araddr  = 14'd0;
+    s_axi_arprot  = 3'b000;
+    s_axi_arvalid = 1'b0;
+    s_axi_rready  = 1'b0;
+    repeat (4) @(negedge clk_i);
+    rst_ni = 1'b1;
+    repeat (2) @(negedge clk_i);
+    for (p = 0; p < 256; p = p + 1)
+        expect_pin(p, 0, "reset");
+@BODY@
+    if (failures == 0)
+        $display("TEST_PASS");
+    $finish;
+end
+endmodule
+)VERILOG";
+    bench.replace("@SINKS@", withLs ? sinks : QString());
+    bench.replace("@PORTS@", withLs ? sinkPorts : QString());
+    bench.replace("@BODY@", withLs ? poolBody : fastBody);
+    return bench;
+}
+
 QString axiTestbench()
 {
     return QString(R"VERILOG(`timescale 1ns/1ps
@@ -2649,6 +2931,8 @@ private slots:
     void integrationNetlistLinksTheInterruptLines();
     void routingSimulationWhenIverilogIsAvailable();
     void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
+    void everyPinAndSlotAnswersThroughTheRegisters_data();
+    void everyPinAndSlotAnswersThroughTheRegisters();
     void lsPoolPlanFollowsTheSource();
     void lsPoolLanesFollowTheDataWidth();
     void lsPoolPinsNeedTheirReceiverEnabled();
@@ -3538,6 +3822,77 @@ void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable()
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::everyPinAndSlotAnswersThroughTheRegisters_data()
+{
+    QTest::addColumn<quint32>("dataWidth");
+    QTest::addColumn<bool>("withLs");
+    QTest::newRow("fast 32-bit") << 32U << false;
+    QTest::newRow("fast 64-bit") << 64U << false;
+    QTest::newRow("pool 32-bit") << 32U << true;
+    QTest::newRow("pool 64-bit") << 64U << true;
+}
+
+void Test::everyPinAndSlotAnswersThroughTheRegisters()
+{
+    /* The register file drives every pin through every slot, and every slow
+     * input through every pad, from the bus: the lanes, their packing, and
+     * the wiring from the field to the mux, for each of the 256 pins and not
+     * only the tail one. Slot signatures sit on every lane at once, so a
+     * pad that mixed two sources would show a code no slot carries. */
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QFETCH(quint32, dataWidth);
+    QFETCH(bool, withLs);
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(sweepSource(dataWidth, withLs)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.routes.size(), withLs ? 256 * 7 : 256 * 8);
+    QString bench = sweepTestbench(withLs);
+    bench.replace("@DW@", QString::number(dataWidth));
+    bench.replace("@SW@", QString::number(dataWidth / 8));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(benchPath, bench);
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(300000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(600000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.left(2000).constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.left(2000).constData());
 }
 
 void Test::lsPoolPlanFollowsTheSource()
