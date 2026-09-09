@@ -406,6 +406,7 @@ QString lsSource(quint32 dataWidth, const QString &ls = lsPoolBlock())
     option: {rx_override: true, invert: true}
 %2    route:
       - {pin: 0, slot: 1, function: uart0, signal: tx, output_value: {link: uart0_tx}, output_enable: 1}
+      - {pin: 1, slot: 1, function: cap0, signal: in, input_value: {link: cap0_in}, input_enable: 1}
       - {pin: 2, slot: 0, function: gpio0, signal: d2, input_value: {link: gpio_in, bit: 2}, input_enable: 1, output_value: {link: gpio_out, bit: 2}, output_enable: {link: gpio_oe, bit: 2}}
 %3)")
         .arg(dataWidth)
@@ -445,6 +446,7 @@ reg               uart_ov;
 reg               g_ov;
 reg               g_oe;
 wire              g_in;
+wire              cap_in;
 reg               c0_ov;
 wire              c1_in;
 wire              c3_in;
@@ -480,6 +482,7 @@ iomux0 dut (
     .pad_output_value_o(pad_ov),
     .pad_output_enable_o(pad_oe),
     .hs_p0_s1_output_value_i(uart_ov),
+    .hs_p1_s1_input_value_o(cap_in),
     .hs_p2_s0_input_value_o(g_in),
     .hs_p2_s0_output_value_i(g_ov),
     .hs_p2_s0_output_enable_i(g_oe),
@@ -647,6 +650,31 @@ initial begin
     #1 check_value(c1_in === 1'b1, "unselected channel 1 ignores every pad");
     check_value(c3_in === 1'b0 && g_in === 1'b0, "other sinks follow their pads");
     check_value(pad_oe[0] === 1'b1 && pad_oe[2] === 1'b1, "pad outputs untouched");
+
+    /* Three sinks on pin 1: two slow inputs and the fast sink of slot 1
+     * follow the pad together, and each can be pinned without the others. */
+    axi_write(14'he00, {@DW@{1'b0}});
+    axi_write(14'he20, {@DW@{1'b0}});
+    axi_write(14'hd00, {@DW@{1'b0}} | (32'h01 << 24) | (32'h01 << 8));
+    pad_in[1] = 1'b1;
+    #1 check_value(c1_in === 1'b1 && c3_in === 1'b1 && cap_in === 1'b1, "three sinks rise together");
+    pad_in[1] = 1'b0;
+    #1 check_value(c1_in === 1'b0 && c3_in === 1'b0 && cap_in === 1'b0, "three sinks fall together");
+    axi_write(14'he00, {@DW@{1'b0}} | 32'h08);
+    axi_write(14'he20, {@DW@{1'b0}} | 32'h08);
+    pad_in[1] = 1'b1;
+    #1 check_value(c3_in === 1'b1 && c1_in === 1'b1 && cap_in === 1'b1, "channel 3 pinned high while pad high");
+    pad_in[1] = 1'b0;
+    #1 check_value(c3_in === 1'b1 && c1_in === 1'b0 && cap_in === 1'b0, "channel 3 stays high, the others fall");
+    axi_write(14'h1000 + @SW@, {@DW@{1'b0}} | (32'h1 << 9));
+    axi_write(14'h300 + @SW@, {@DW@{1'b0}} | 32'h02);
+    #1 check_value(cap_in === 1'b1 && c1_in === 1'b0, "fast sink pinned high while pad low");
+    pad_in[1] = 1'b1;
+    #1 check_value(cap_in === 1'b1 && c1_in === 1'b1 && c3_in === 1'b1, "channel 1 alone still follows");
+    axi_write(14'he00, {@DW@{1'b0}});
+    axi_write(14'h1000 + @SW@, {@DW@{1'b0}});
+    pad_in[1] = 1'b0;
+    #1 check_value(c1_in === 1'b0 && c3_in === 1'b0 && cap_in === 1'b0, "unpinned sinks follow again");
 
     if (failures == 0)
         $display("TEST_PASS");
@@ -3681,7 +3709,7 @@ void Test::lsPoolRejectsBadSources_data()
         << "      - {pin: 2, slot: 0, function: gpio0"
         << "      - {pin: 1, slot: 0, function: x, signal: y, output_enable: 1}\n      - {pin: 2, "
            "slot: 0, function: gpio0"
-        << "IOMUX_LS generator.route[1]: pin 1 is bound to ls.pool_a, slot 0 is the pool";
+        << "IOMUX_LS generator.route[2]: pin 1 is bound to ls.pool_a, slot 0 is the pool";
     QTest::newRow("channel declared twice")
         << "{channel: 2, function: pwm" << "{channel: 0, function: pwm"
         << "IOMUX_DUPLICATE generator.ls.pool_b.channel[0].channel: channel 0 is already declared";
