@@ -585,7 +585,20 @@ initial begin
     check_value(pad_oe[1] === 1'b1 && pad_ov[1] === 1'b1, "pin 1 reset channel 0 fans out");
     check_value(pad_oe[3] === 1'b0 && pad_ov[3] === 1'b0, "pin 3 has no channel 0");
     c0_ov = 1'b0;
-    #1 check_value(pad_ov[0] === 1'b0, "pin 0 follows channel 0");
+    #1 check_value(pad_ov[0] === 1'b0 && pad_ov[1] === 1'b0, "both pins follow channel 0 down");
+    c0_ov = 1'b1;
+    #1 check_value(pad_ov[0] === 1'b1 && pad_ov[1] === 1'b1, "both pins follow channel 0 up");
+    c0_ov = 1'b0;
+    /* pin 1 moves to channel 3: channel 0 toggles reach pin 0 alone, and a
+     * channel 3 toggle reaches pin 1 alone. */
+    axi_write(14'hc00, {@DW@{1'b0}} | (32'h03 << 8));
+    c0_ov = 1'b1;
+    #1 check_value(pad_ov[0] === 1'b1 && pad_ov[1] === 1'b0, "channel 0 no longer reaches pin 1");
+    c3_oe = 1'b1;
+    #1 check_value(pad_oe[1] === 1'b0 && pad_oe[0] === 1'b1, "channel 3 reaches pin 1 alone");
+    c3_oe = 1'b0;
+    c0_ov = 1'b0;
+    axi_write(14'hc00, {@DW@{1'b0}});
 
     axi_read(14'h10);
     check_value(rdata[31:0] === 32'h00020004, "ls capability");
