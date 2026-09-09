@@ -105,6 +105,59 @@ drive its pads before firmware runs takes that guarantee from the pad cell
 power-on state or from isolation outside this module; the generator emits
 neither.
 
+== Slow-Bus Pools
+<iomux-ls-pools>
+The slots of a pin are its fast group: a few peripherals bonded to that pin
+at generation time, one small mux, no latency to speak of. `generator.ls`
+adds the other tier, slow buses that reach any pin of a pool through one
+larger mux. A pool names the pins it binds and the channels it carries; a
+channel is a route without a pin, one number, the same four roles, the same
+`link`, `bit`, `invert`, and `open_drain`. A channel with output roles is a
+slow bus any pin of the pool can select; a channel with `input_value` is a
+slow input that reads any pad of the pool.
+
+```yaml
+ls:
+  spi_pool:
+    pins: ["0-7", 12]
+    channel:
+      - channel: 0
+        function: spi4
+        signal: sclk
+        output_value: {link: spi4_sclk}
+        output_enable: 1
+      - channel: 1
+        function: spi4
+        signal: miso
+        input_value: {link: spi4_miso}
+  uart_pool:
+    pins: ["16-23"]
+    channel:
+      - {channel: 2, function: uart5, signal: tx, output_value: {link: uart5_tx}, output_enable: 1}
+      - {channel: 3, function: uart5, signal: rx, input_value: {link: uart5_rx}}
+```
+
+Channel numbers are one space across every pool, 0 to 255, and a pin belongs
+to at most one pool. One pool over every pin is the plain crossbar; several
+pools cut it into blocks, and a pool of eight pins pays for eight. Slot 0 of
+every pool pin is the pool, so a route may not claim it; slot 0 of any other
+pin stays an ordinary route. A pool name is a label for the report, the
+wrapper ports are `ls_c<k>_<role>_i` and `ls_c<k>_input_value_o`.
+
+Each pool pin owns an 8-bit `ls_select` lane holding a channel number. Its
+slot 0 bundle is that channel's roles when the number is one of its pool's
+channels, and all zero otherwise, exactly like an unrouted slot. The gpio
+sources, inversion, and the safe row layer on top as on every slot. Each slow
+input owns an 8-bit `ls_rx_pin` lane holding a pin number: it reads that pad
+when the pin is in its pool and zero otherwise, then `ls_rx_src` and
+`ls_rx_value` substitute under `option.rx_override` and `ls_rx_inv` inverts
+under `option.invert`, as the fast sinks do. Every lane resets to 0, so a
+pool pin leaves reset on channel 0, or on nothing when its pool has no channel
+0, and a slow input on pin 0. Nothing on the slow path is synchronised; only
+the gpio `input_value` bank and the interrupt detectors sample through two
+flip-flops. A channel carries the four roles only: the pull and the controls
+of a pool pin come from `option.pad_control`.
+
 == Pad Cell
 <iomux-pad-cell>
 `generator.pad_cell` names the pad cell the design uses and the generator
@@ -435,7 +488,8 @@ are read-only and ignore writes.
     [0x0], [`version`], [layout contract: major `[31:24]`, minor `[23:16]`, patch `[15:8]`; the design's `build` `[7:0]`],
     [0x4], [`type`], [0x494F4D58, the letters IOMX read as one hex value],
     [0x8], [`capability`], [`pin_count` `[15:0]`, `hs_slots` `[23:16]`],
-    [0xC], [`feature`], [one bit per option: 0 gpio, 1 interrupt, 2 pad_control, 3 invert, 4 rx_override],
+    [0xC], [`feature`], [one bit per option: 0 gpio, 1 interrupt, 2 pad_control, 3 invert, 4 rx_override, 5 ls],
+    [0x10], [`ls_capability`], [with `ls` only: channel count `[15:0]`, one past the highest number, and pool count `[23:16]`],
   )],
   caption: [IOMUX IDENTITY WORDS],
 )
@@ -443,7 +497,7 @@ are read-only and ignore writes.
 Software reads `version` first, because that is where a driver written for
 another instance of this type looks, then `type` to confirm the block, then
 `capability` and `feature` to compute the rest of the map. The layout
-contract is 2.0.0. The number steps against a layout that has shipped in
+contract is 2.1.0, which appended the slow-bus blocks to 2.0.0. The number steps against a layout that has shipped in
 silicon or that firmware depends on. Until then fields may move under it.
 After that, a block appended after the existing ones steps the minor number
 and any existing offset that moves steps the major number. With
@@ -469,6 +523,9 @@ value is rejected.
     [0x0300], [`rx_value_sk` banks, one per slot], [at most 0x100],
     [0x0400], [interrupt banks, four enable then four pending], [at most 0x100],
     [0x0800], [inversion banks], [at most 0x400, 32 banks],
+    [0x0C00], [`ls_select` lanes, 8 bits per pool pin], [at most 0x100],
+    [0x0D00], [`ls_rx_pin` lanes, 8 bits per slow input], [at most 0x100],
+    [0x0E00, 0x0E20, 0x0E40], [`ls_rx_src`, `ls_rx_value`, `ls_rx_inv` banks, one bit per slow input], [0x20 each],
     [0x1000], [`pin_src_ctrl`, one word per pin], [at most 0x800],
     [0x1800], [`pin_pad_ctrl`, one word per pin], [at most 0x800],
     [0x2000 + k × 0x800], [`pin_ctl_k`, one word per pin], [0x800 each],
@@ -492,6 +549,10 @@ field crosses a byte, one write strobe never splits a selector, and a hex
 dump shows one pin per digit. The lane idles 2 bits per pin at the default 4
 slots, 48 bytes on a 185-pin instance; that is the price of a selector
 offset that depends on `pin_count` and `data_width` alone.
+
+The slow lanes hold 4 pins or channels per 32-bit word and 8 per 64-bit
+word; a word with no pool pin or no slow input behind it reads zero and
+takes no write, as does the lane of a pin outside every pool.
 
 `pin_src_ctrl` exists when any option owns a field in it, and every field
 keeps a fixed position whatever else is on, so software reads the same word
@@ -650,7 +711,8 @@ qsoc generate verilog --merge <base.soc_net> <module>_integration.soc_net
 
 The fragment instantiates the public wrapper once and connects the clock, the
 reset, the pad bus, the control bus, the interrupt lines when
-`option.interrupt` is on, and every non-constant endpoint exactly once. With a pad cell it also instantiates the shell as `<instance>_io`,
+`option.interrupt` is on, and every non-constant endpoint of every route and
+slow channel exactly once. With a pad cell it also instantiates the shell as `<instance>_io`,
 links the bus between the two on nets named `<instance>_pad_<signal>`,
 uplinks `pad_io` and every `inout` net of a direct cell, and links the other
 direct nets. The merge flow derives `<module>_io` from the source and the
@@ -673,7 +735,9 @@ every option register free and asserts, per slot and for invalid codes, the
 pad bundle after source selection, inversion, and the safe row under
 `pad_force_i`, the pull mode, strength selects, and every control row after
 their source bits and the same force, and every receive sink after
-substitution and inversion. A pad cell with constraints adds the pad proof
+substitution and inversion. With pools it also leaves every slow lane free
+and asserts slot 0 of each pool pin over its channels and every slow input
+over its pool's pads. A pad cell with constraints adds the pad proof
 described above. `<module>_formal.fl` lists the design files the proofs
 read followed by the harnesses, so another engine can take the whole set
 in one go.

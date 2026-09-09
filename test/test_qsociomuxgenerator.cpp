@@ -376,6 +376,278 @@ QSocModuleDefinition makeTailDefinition(
                               .arg(hsSlots - 1));
 }
 
+/* Two slow-bus pools over a four-pin design: pins 0 and 1 share three
+ * channels, pin 3 has one of its own, pin 2 keeps a fast route in slot 0. */
+QString lsPoolBlock()
+{
+    return QStringLiteral(R"(    ls:
+      pool_a:
+        pins: ["0-1"]
+        channel:
+          - {channel: 0, function: spi4, signal: sclk, output_value: {link: spi4_sclk}, output_enable: 1}
+          - {channel: 1, function: spi4, signal: miso, input_value: {link: spi4_miso}}
+          - {channel: 3, function: i2c2, signal: sda, input_value: {link: i2c2_sda_in}, input_enable: 1, output_value: {link: i2c2_sda_o, open_drain: true}}
+      pool_b:
+        pins: [3]
+        channel:
+          - {channel: 2, function: pwm, signal: out, output_value: {link: pwm_out, invert: true}, output_enable: 1}
+)");
+}
+
+QString lsSource(quint32 dataWidth, const QString &ls = lsPoolBlock())
+{
+    return QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: %1
+    address_width: 14
+    pin_count: 4
+    hs_slots: 2
+    option: {rx_override: true, invert: true}
+%2    route:
+      - {pin: 0, slot: 1, function: uart0, signal: tx, output_value: {link: uart0_tx}, output_enable: 1}
+      - {pin: 2, slot: 0, function: gpio0, signal: d2, input_value: {link: gpio_in, bit: 2}, input_enable: 1, output_value: {link: gpio_out, bit: 2}, output_enable: {link: gpio_oe, bit: 2}}
+%3)")
+        .arg(dataWidth)
+        .arg(integrationBlock(), ls);
+}
+
+QString lsTestbench()
+{
+    return QString(R"VERILOG(`timescale 1ns/1ps
+module tb;
+reg               clk_i;
+reg               rst_ni;
+reg  [13:0]       s_axi_awaddr;
+reg  [2:0]        s_axi_awprot;
+reg               s_axi_awvalid;
+wire              s_axi_awready;
+reg  [@DW@-1:0]   s_axi_wdata;
+reg  [@SW@-1:0]   s_axi_wstrb;
+reg               s_axi_wvalid;
+wire              s_axi_wready;
+wire [1:0]        s_axi_bresp;
+wire              s_axi_bvalid;
+reg               s_axi_bready;
+reg  [13:0]       s_axi_araddr;
+reg  [2:0]        s_axi_arprot;
+reg               s_axi_arvalid;
+wire              s_axi_arready;
+wire [@DW@-1:0]   s_axi_rdata;
+wire [1:0]        s_axi_rresp;
+wire              s_axi_rvalid;
+reg               s_axi_rready;
+reg  [3:0]        pad_in;
+wire [3:0]        pad_ie;
+wire [3:0]        pad_ov;
+wire [3:0]        pad_oe;
+reg               uart_ov;
+reg               g_ov;
+reg               g_oe;
+wire              g_in;
+reg               c0_ov;
+wire              c1_in;
+wire              c3_in;
+reg               c3_oe;
+reg               c2_ov;
+reg  [@DW@-1:0]   rdata;
+integer           failures;
+
+iomux0 dut (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+    .s_axi_awaddr(s_axi_awaddr),
+    .s_axi_awprot(s_axi_awprot),
+    .s_axi_awvalid(s_axi_awvalid),
+    .s_axi_awready(s_axi_awready),
+    .s_axi_wdata(s_axi_wdata),
+    .s_axi_wstrb(s_axi_wstrb),
+    .s_axi_wvalid(s_axi_wvalid),
+    .s_axi_wready(s_axi_wready),
+    .s_axi_bresp(s_axi_bresp),
+    .s_axi_bvalid(s_axi_bvalid),
+    .s_axi_bready(s_axi_bready),
+    .s_axi_araddr(s_axi_araddr),
+    .s_axi_arprot(s_axi_arprot),
+    .s_axi_arvalid(s_axi_arvalid),
+    .s_axi_arready(s_axi_arready),
+    .s_axi_rdata(s_axi_rdata),
+    .s_axi_rresp(s_axi_rresp),
+    .s_axi_rvalid(s_axi_rvalid),
+    .s_axi_rready(s_axi_rready),
+    .pad_input_value_i(pad_in),
+    .pad_input_enable_o(pad_ie),
+    .pad_output_value_o(pad_ov),
+    .pad_output_enable_o(pad_oe),
+    .hs_p0_s1_output_value_i(uart_ov),
+    .hs_p2_s0_input_value_o(g_in),
+    .hs_p2_s0_output_value_i(g_ov),
+    .hs_p2_s0_output_enable_i(g_oe),
+    .ls_c0_output_value_i(c0_ov),
+    .ls_c1_input_value_o(c1_in),
+    .ls_c3_input_value_o(c3_in),
+    .ls_c3_output_enable_i(c3_oe),
+    .ls_c2_output_value_i(c2_ov)
+);
+
+always #5 clk_i = ~clk_i;
+
+task check_value;
+    input condition;
+    input [8*64-1:0] label;
+    begin
+        if (condition !== 1'b1) begin
+            failures = failures + 1;
+            $display("TEST_FAIL %0s", label);
+        end
+    end
+endtask
+
+task axi_write;
+    input [13:0] address;
+    input [@DW@-1:0] data;
+    begin
+        @(negedge clk_i);
+        s_axi_awaddr  = address;
+        s_axi_awvalid = 1'b1;
+        while (s_axi_awready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_awvalid = 1'b0;
+        @(negedge clk_i);
+        s_axi_wdata  = data;
+        s_axi_wstrb  = {@SW@{1'b1}};
+        s_axi_wvalid = 1'b1;
+        while (s_axi_wready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_wvalid = 1'b0;
+        s_axi_bready = 1'b1;
+        while (s_axi_bvalid !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_bready = 1'b0;
+        @(negedge clk_i);
+    end
+endtask
+
+task axi_read;
+    input [13:0] address;
+    begin
+        @(negedge clk_i);
+        s_axi_araddr  = address;
+        s_axi_arvalid = 1'b1;
+        while (s_axi_arready !== 1'b1)
+            @(negedge clk_i);
+        @(posedge clk_i);
+        #1 s_axi_arvalid = 1'b0;
+        while (s_axi_rvalid !== 1'b1)
+            @(negedge clk_i);
+        rdata = s_axi_rdata;
+        s_axi_rready = 1'b1;
+        @(posedge clk_i);
+        #1 s_axi_rready = 1'b0;
+    end
+endtask
+
+initial begin
+    failures      = 0;
+    clk_i         = 1'b0;
+    rst_ni        = 1'b0;
+    pad_in        = 4'b0000;
+    uart_ov       = 1'b0;
+    g_ov          = 1'b0;
+    g_oe          = 1'b0;
+    c0_ov         = 1'b1;
+    c3_oe         = 1'b0;
+    c2_ov         = 1'b0;
+    s_axi_awaddr  = 14'd0;
+    s_axi_awprot  = 3'b000;
+    s_axi_awvalid = 1'b0;
+    s_axi_wdata   = {@DW@{1'b0}};
+    s_axi_wstrb   = {@SW@{1'b0}};
+    s_axi_wvalid  = 1'b0;
+    s_axi_bready  = 1'b0;
+    s_axi_araddr  = 14'd0;
+    s_axi_arprot  = 3'b000;
+    s_axi_arvalid = 1'b0;
+    s_axi_rready  = 1'b0;
+    repeat (4) @(negedge clk_i);
+    rst_ni = 1'b1;
+    repeat (2) @(negedge clk_i);
+
+    /* Reset: every select is 0, so pool_a pins carry channel 0 and pool_b's
+     * pin, whose pool has no channel 0, drives nothing. */
+    check_value(pad_oe[0] === 1'b1 && pad_ov[0] === 1'b1 && pad_ie[0] === 1'b0, "pin 0 reset channel 0");
+    check_value(pad_oe[1] === 1'b1 && pad_ov[1] === 1'b1, "pin 1 reset channel 0 fans out");
+    check_value(pad_oe[3] === 1'b0 && pad_ov[3] === 1'b0, "pin 3 has no channel 0");
+    c0_ov = 1'b0;
+    #1 check_value(pad_ov[0] === 1'b0, "pin 0 follows channel 0");
+
+    axi_read(14'h10);
+    check_value(rdata[31:0] === 32'h00020004, "ls capability");
+
+    /* pin 3 takes channel 2: inverted link, enable 1 */
+    axi_write(14'hc00, {@DW@{1'b0}} | (32'h02 << 24));
+    check_value(pad_oe[3] === 1'b1 && pad_ov[3] === 1'b1, "pin 3 channel 2 inverted low");
+    c2_ov = 1'b1;
+    #1 check_value(pad_ov[3] === 1'b0, "pin 3 channel 2 inverted high");
+
+    /* pin 1 takes channel 3: open drain, ie 1 */
+    axi_write(14'hc00, {@DW@{1'b0}} | (32'h02 << 24) | (32'h03 << 8));
+    check_value(pad_ie[1] === 1'b1 && pad_ov[1] === 1'b0 && pad_oe[1] === 1'b1, "pin 1 channel 3 drives low");
+    c3_oe = 1'b1;
+    #1 check_value(pad_oe[1] === 1'b0, "pin 1 channel 3 releases");
+    check_value(pad_oe[0] === 1'b1, "pin 0 still channel 0");
+
+    /* a number outside the pool is an empty slot */
+    axi_write(14'hc00, {@DW@{1'b0}} | (32'h02 << 24) | (32'h03 << 8) | 32'h05);
+    check_value(pad_oe[0] === 1'b0 && pad_ov[0] === 1'b0 && pad_ie[0] === 1'b0, "pin 0 code 5 is empty");
+    axi_read(14'hc00);
+    check_value(rdata[7:0] === 8'h05 && rdata[15:8] === 8'h03 && rdata[31:24] === 8'h02, "ls select reads back");
+    check_value(rdata[23:16] === 8'h00, "pin 2 has no ls lane");
+
+    /* the fast slot of a pool pin still works */
+    uart_ov = 1'b1;
+    axi_write(14'h100, {@DW@{1'b0}} | 32'h01);
+    check_value(pad_oe[0] === 1'b1 && pad_ov[0] === 1'b1, "pin 0 slot 1 uart");
+
+    /* a pin outside every pool keeps its slot 0 route */
+    g_ov = 1'b1; g_oe = 1'b1; pad_in[2] = 1'b1;
+    #1 check_value(pad_ov[2] === 1'b1 && pad_oe[2] === 1'b1 && g_in === 1'b1, "pin 2 route slot 0");
+
+    /* slow input 1 selects a pool pad by number; a number outside reads zero */
+    pad_in[1] = 1'b1;
+    axi_write(14'hd00, {@DW@{1'b0}} | (32'h01 << 8));
+    check_value(c1_in === 1'b1, "channel 1 reads pin 1");
+    pad_in[1] = 1'b0;
+    #1 check_value(c1_in === 1'b0, "channel 1 follows pin 1");
+    axi_write(14'hd00, {@DW@{1'b0}} | (32'h02 << 8));
+    check_value(c1_in === 1'b0, "channel 1 cannot read pin 2");
+    pad_in[0] = 1'b1;
+    axi_write(14'hd00, {@DW@{1'b0}});
+    check_value(c1_in === 1'b1, "channel 1 reads pin 0");
+    check_value(c3_in === 1'b1, "channel 3 reads pin 0 too");
+
+    /* override then inversion, as on the fast path */
+    axi_write(14'he00, {@DW@{1'b0}} | 32'h02);
+    check_value(c1_in === 1'b0, "channel 1 override value 0");
+    axi_write(14'he20, {@DW@{1'b0}} | 32'h02);
+    check_value(c1_in === 1'b1, "channel 1 override value 1");
+    axi_write(14'he40, {@DW@{1'b0}} | 32'h02);
+    check_value(c1_in === 1'b0, "channel 1 inverted");
+    check_value(c3_in === 1'b1, "channel 3 untouched");
+
+    if (failures == 0)
+        $display("TEST_PASS");
+    $finish;
+end
+endmodule
+)VERILOG");
+}
+
+const QSocMmioRegisterPlan *findRegister(const QSocMmioPlan &mmio, const QString &name);
+
 QString axiTestbench()
 {
     return QString(R"VERILOG(`timescale 1ns/1ps
@@ -741,7 +1013,7 @@ function [31:0] read_register;
             14'h0000: begin
                 read_register[7:0] = 8'h0;
                 read_register[15:8] = 8'h0;
-                read_register[23:16] = 8'h0;
+                read_register[23:16] = 8'h1;
                 read_register[31:24] = 8'h2;
             end
             14'h0004: begin
@@ -757,6 +1029,7 @@ function [31:0] read_register;
                 read_register[2] = 1'h0;
                 read_register[3] = 1'h0;
                 read_register[4] = 1'h0;
+                read_register[5] = 1'h0;
             end
             14'h0100: begin
                 read_register[1:0] = mmio_field_0_q;
@@ -1283,7 +1556,7 @@ hs_slots: 3
 data_width: 32
 address_width: 14
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 2 at offset 0x100 to 0x104
 registers total: 6
 aperture: 16384 bytes
@@ -1448,7 +1721,7 @@ function [63:0] read_register;
             14'h0000: begin
                 read_register[7:0] = 8'h0;
                 read_register[15:8] = 8'h0;
-                read_register[23:16] = 8'h0;
+                read_register[23:16] = 8'h1;
                 read_register[31:24] = 8'h2;
                 read_register[63:32] = 32'h494f4d58;
             end
@@ -1460,6 +1733,7 @@ function [63:0] read_register;
                 read_register[34] = 1'h0;
                 read_register[35] = 1'h0;
                 read_register[36] = 1'h0;
+                read_register[37] = 1'h0;
             end
             14'h0100: begin
                 read_register[1:0] = mmio_field_0_q;
@@ -1641,7 +1915,7 @@ hs_slots: 4
 data_width: 64
 address_width: 14
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 2 at offset 0x100 to 0x108
 registers total: 4
 aperture: 16384 bytes
@@ -1735,7 +2009,7 @@ hs_slots: 8
 data_width: 64
 address_width: 16
 selector: 3-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 2 at offset 0x100 to 0x108
 registers total: 4
 aperture: 16384 bytes
@@ -1921,7 +2195,7 @@ function [31:0] read_register;
             14'h0000: begin
                 read_register[7:0] = 8'h0;
                 read_register[15:8] = 8'h0;
-                read_register[23:16] = 8'h0;
+                read_register[23:16] = 8'h1;
                 read_register[31:24] = 8'h2;
             end
             14'h0004: begin
@@ -1937,6 +2211,7 @@ function [31:0] read_register;
                 read_register[2] = 1'h0;
                 read_register[3] = 1'h0;
                 read_register[4] = 1'h0;
+                read_register[5] = 1'h0;
             end
             14'h0100: begin
                 read_register[0] = mmio_field_0_q;
@@ -2214,7 +2489,7 @@ hs_slots: 2
 data_width: 32
 address_width: 14
 selector: 1-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x100 to 0x100
 registers total: 5
 aperture: 16384 bytes
@@ -2315,6 +2590,12 @@ private slots:
     void integrationNetlistLinksTheInterruptLines();
     void routingSimulationWhenIverilogIsAvailable();
     void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
+    void lsPoolPlanFollowsTheSource();
+    void lsPoolLanesFollowTheDataWidth();
+    void lsPoolRejectsBadSources_data();
+    void lsPoolRejectsBadSources();
+    void lsPoolRoutingSimulationWhenIverilogIsAvailable_data();
+    void lsPoolRoutingSimulationWhenIverilogIsAvailable();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
     void registerTakeoverDrivesPadWhenIverilogIsAvailable();
@@ -3196,6 +3477,247 @@ void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable()
     QCOMPARE(simulation.exitCode(), 0);
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::lsPoolPlanFollowsTheSource()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(lsSource(32)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.lsPools.size(), 2);
+    QCOMPARE(plan.lsPools.at(0).pins, (QList<quint32>{0, 1}));
+    QCOMPARE(plan.lsPoolOf(0), 0);
+    QCOMPARE(plan.lsPoolOf(2), -1);
+    QCOMPARE(plan.lsPoolOf(3), 1);
+    QCOMPARE(plan.lsChannelCount(), 4U);
+    /* Open drain expands on a channel as on a route. */
+    const QSocIomuxLsChannelPlan *sda = plan.lsChannel(3);
+    QVERIFY(sda != nullptr);
+    QCOMPARE(sda->outputValue.constant, std::optional<quint8>(0));
+    QCOMPARE(sda->outputEnable.link, QStringLiteral("i2c2_sda_o"));
+    QVERIFY(sda->outputEnable.invert);
+
+    /* The capability word, then only the lanes that have something behind them. */
+    const QSocMmioRegisterPlan *capability = findRegister(plan.mmio, "ls_capability");
+    QVERIFY(capability != nullptr);
+    QCOMPARE(capability->byteOffset, QSocIomuxGenerator::kLsCapabilityOffset);
+    QCOMPARE(
+        findField(plan.mmio, "ls_capability", "channel_count")->constantValue,
+        std::optional<quint64>(4));
+    QCOMPARE(
+        findField(plan.mmio, "ls_capability", "pool_count")->constantValue,
+        std::optional<quint64>(2));
+    const QSocMmioRegisterPlan *select = findRegister(plan.mmio, "ls_select_0");
+    QVERIFY(select != nullptr);
+    QCOMPARE(select->byteOffset, QSocIomuxGenerator::kBaseLsSelect);
+    QCOMPARE(select->fields.size(), 3);
+    QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_0_ls_select")->lsb, 0U);
+    QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_1_ls_select")->lsb, 8U);
+    QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_3_ls_select")->lsb, 24U);
+    QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_3_ls_select")->width, 8U);
+    QVERIFY(findField(plan.mmio, "ls_select_0", "pin_2_ls_select") == nullptr);
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_pin_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxPin);
+    QCOMPARE(findField(plan.mmio, "ls_rx_pin_0", "ls_c1_pin")->lsb, 8U);
+    QCOMPARE(findField(plan.mmio, "ls_rx_pin_0", "ls_c3_pin")->lsb, 24U);
+    QVERIFY(findField(plan.mmio, "ls_rx_pin_0", "ls_c0_pin") == nullptr);
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_src_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxSrc);
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_value_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxValue);
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_inv_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxInv);
+    QCOMPARE(findField(plan.mmio, "ls_rx_inv_0", "ls_c3_rx_inv")->lsb, 3U);
+
+    const QString report = QSocIomuxGenerator::generateReport(plan);
+    QVERIFY2(report.contains("feature: 0x00000038 at offset 0xc"), qPrintable(report));
+    QVERIFY2(
+        report.contains(
+            "ls: 2 pools, 4 channels, capability 0x00020004 at offset 0x10, slot 0 of "
+            "a bound pin is its pool"),
+        qPrintable(report));
+    QVERIFY2(
+        report.contains("pool pool_a: pins 0, 1\n  channel 0 function spi4 signal sclk"),
+        qPrintable(report));
+    QVERIFY2(report.contains("    rx pin select word 0 lsb 24 offset 0xd00"), qPrintable(report));
+    QVERIFY2(
+        report.contains(
+            "pin 3 selector word 0 lsb 12 offset 0x100\n  ls select word 0 lsb 24 offset 0xc00\n  "
+            "slot 0 ls pool pool_b\n"),
+        qPrintable(report));
+    QVERIFY2(report.contains("ls registers: 5 at offset 0xc00 to 0xe40"), qPrintable(report));
+
+    /* The public interface carries the channel roles and nothing of the pool. */
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY2(top.contains("    input  wire ls_c0_output_value_i, /* spi4.sclk */"), qPrintable(top));
+    QVERIFY2(top.contains("    output wire ls_c1_input_value_o, /* spi4.miso */"), qPrintable(top));
+    QVERIFY2(!top.contains("pool_a"), qPrintable(top));
+    const YAML::Node projection = QSocIomuxGenerator::describeModuleYaml(plan);
+    QVERIFY(projection["port"]["ls_c2_output_value_i"].IsDefined());
+    QVERIFY(projection["port"]["ls_c3_input_value_o"].IsDefined());
+    const QString fragment = QSocIomuxGenerator::generateIntegrationNetlist(plan);
+    QVERIFY2(
+        fragment.contains("      ls_c0_output_value_i:\n        link: spi4_sclk"),
+        qPrintable(fragment));
+}
+
+void Test::lsPoolLanesFollowTheDataWidth()
+{
+    /* Pin 9 in a 12-pin design: four lanes to a 32-bit word, eight to a 64-bit one. */
+    const QString pool = QStringLiteral(R"(    ls:
+      p:
+        pins: [9]
+        channel:
+          - {channel: 17, function: f, signal: s, output_value: {link: f_s}, input_value: {link: f_in}}
+)");
+    for (const quint32 dataWidth : {32U, 64U}) {
+        QString source = lsSource(dataWidth, pool);
+        source.replace("    pin_count: 4\n", "    pin_count: 12\n");
+        QSocIomuxPlan plan;
+        QStringList   errors;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+            qPrintable(errors.join('\n')));
+        const quint32 lanes = dataWidth / 8;
+        const QString word  = QString("ls_select_%1").arg(9 / lanes);
+        QCOMPARE(
+            findRegister(plan.mmio, word)->byteOffset,
+            QSocIomuxGenerator::kBaseLsSelect + (9 / lanes) * (dataWidth / 8));
+        QCOMPARE(findField(plan.mmio, word, "pin_9_ls_select")->lsb, (9 % lanes) * 8);
+        QVERIFY(findRegister(plan.mmio, "ls_select_0") == nullptr || dataWidth == 64);
+        const QString rxWord = QString("ls_rx_pin_%1").arg(17 / lanes);
+        QCOMPARE(findField(plan.mmio, rxWord, "ls_c17_pin")->lsb, (17 % lanes) * 8);
+        QCOMPARE(findField(plan.mmio, "ls_rx_inv_0", "ls_c17_rx_inv")->lsb, 17U);
+        QCOMPARE(
+            findField(plan.mmio, "ls_capability", "channel_count")->constantValue,
+            std::optional<quint64>(18));
+        QVERIFY(!QSocIomuxGenerator::generateReport(plan).isEmpty());
+    }
+}
+
+void Test::lsPoolRejectsBadSources_data()
+{
+    QTest::addColumn<QString>("edit");
+    QTest::addColumn<QString>("replacement");
+    QTest::addColumn<QString>("message");
+
+    QTest::newRow("pin in two pools")
+        << "        pins: [3]\n"
+        << "        pins: [1, 3]\n"
+        << "IOMUX_DUPLICATE generator.ls.pool_b.pins: pin 1 is already bound to a pool";
+    QTest::newRow("member route in slot 0")
+        << "      - {pin: 2, slot: 0, function: gpio0"
+        << "      - {pin: 1, slot: 0, function: x, signal: y, output_enable: 1}\n      - {pin: 2, "
+           "slot: 0, function: gpio0"
+        << "IOMUX_LS generator.route[1]: pin 1 is bound to ls.pool_a, slot 0 is the pool";
+    QTest::newRow("channel declared twice")
+        << "{channel: 2, function: pwm" << "{channel: 0, function: pwm"
+        << "IOMUX_DUPLICATE generator.ls.pool_b.channel[0].channel: channel 0 is already declared";
+    QTest::newRow("channel past 255")
+        << "{channel: 2, function: pwm" << "{channel: 256, function: pwm"
+        << "IOMUX_RANGE generator.ls.pool_b.channel[0].channel: must be between 0 and 255";
+    QTest::newRow("empty pins")
+        << "        pins: [3]\n"
+        << "        pins: []\n"
+        << "IOMUX_REQUIRED generator.ls.pool_b.pins: must be a non-empty sequence";
+    QTest::newRow("pin past pin_count")
+        << "        pins: [3]\n"
+        << "        pins: [\"3-9\"]\n"
+        << "IOMUX_RANGE generator.ls.pool_b.pins: 3-9 must lie below pin_count 4, low end first";
+    QTest::newRow("channel without a role")
+        << "{channel: 2, function: pwm, signal: out, output_value: {link: pwm_out, invert: true}, "
+           "output_enable: 1}"
+        << "{channel: 2, function: pwm, signal: out}"
+        << "IOMUX_ROLE generator.ls.pool_b.channel[0]: at least one role is required";
+    QTest::newRow("sink shared with a route")
+        << "input_value: {link: spi4_miso}" << "input_value: {link: gpio_in, bit: 2}"
+        << "IOMUX_DUPLICATE generator.ls.pool_a.channel[1].input_value: sink gpio_in[2] is already "
+           "driven";
+    QTest::newRow("constant sink")
+        << "input_value: {link: spi4_miso}" << "input_value: 1"
+        << "IOMUX_TYPE generator.ls.pool_a.channel[1].input_value: must be an endpoint map";
+    QTest::newRow("unknown pool key")
+        << "        pins: [3]\n"
+        << "        pins: [3]\n        slot: 0\n"
+        << "IOMUX_UNSUPPORTED generator.ls.pool_b.slot: unsupported property";
+    QTest::newRow("pool name is not an identifier")
+        << "      pool_b:\n"
+        << "      pool-b:\n"
+        << "IOMUX_IDENTIFIER generator.ls: must be a Verilog identifier";
+}
+
+void Test::lsPoolRejectsBadSources()
+{
+    QFETCH(QString, edit);
+    QFETCH(QString, replacement);
+    QFETCH(QString, message);
+
+    QString source = lsSource(32);
+    QVERIFY2(source.contains(edit), qPrintable("fixture lost the anchor: " + edit));
+    source.replace(edit, replacement);
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors));
+    QVERIFY2(errors.contains(message), qPrintable(errors.join('\n')));
+}
+
+void Test::lsPoolRoutingSimulationWhenIverilogIsAvailable_data()
+{
+    QTest::addColumn<quint32>("dataWidth");
+    QTest::newRow("32-bit") << 32U;
+    QTest::newRow("64-bit") << 64U;
+}
+
+void Test::lsPoolRoutingSimulationWhenIverilogIsAvailable()
+{
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QFETCH(quint32, dataWidth);
+
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(lsSource(dataWidth)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QString bench = lsTestbench();
+    bench.replace("@DW@", QString::number(dataWidth));
+    bench.replace("@SW@", QString::number(dataWidth / 8));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(benchPath, bench);
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
@@ -4090,7 +4612,7 @@ hs_slots: 3
 data_width: 32
 address_width: 14
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x100 to 0x100
 registers total: 5
 aperture: 16384 bytes
@@ -4144,7 +4666,7 @@ hs_slots: 2
 data_width: 32
 address_width: 14
 selector: 1-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x100 to 0x100
 gpio registers: 4 at offset 0x200 to 0x20c
 interrupt registers: 8 at offset 0x400 to 0x41c
@@ -4442,7 +4964,7 @@ hs_slots: 3
 data_width: 32
 address_width: 14
 selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.0.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
+identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
 selector registers: 1 at offset 0x100 to 0x100
 gpio registers: 4 at offset 0x200 to 0x20c
 rx override registers: 3 at offset 0x300 to 0x308
@@ -5432,7 +5954,7 @@ void Test::layoutVersionTracksTheRegisterMap()
      * change under the same number. */
     const QSocIomuxLayoutVersion layout = QSocIomuxGenerator::layoutVersion();
     QCOMPARE(layout.major, 2U);
-    QCOMPARE(layout.minor, 0U);
+    QCOMPARE(layout.minor, 1U);
     QCOMPARE(layout.patch, 0U);
 
     QSocIomuxPlan plan;
@@ -5454,7 +5976,7 @@ void Test::layoutVersionTracksTheRegisterMap()
         "0x00 version: build@0 patch@8 minor@16 major@24",
         "0x04 type: type_id@0",
         "0x08 capability: pin_count@0 hs_slots@16",
-        "0x0c feature: gpio@0 interrupt@1 pad_control@2 invert@3 rx_override@4",
+        "0x0c feature: gpio@0 interrupt@1 pad_control@2 invert@3 rx_override@4 ls@5",
         "0x100 hs_select_0: pin_0_select@0 pin_1_select@4",
         "0x200 input_value_0: pin_0_input_value@0 pin_1_input_value@1",
         "0x204 input_enable_0: pin_0_input_enable@0 pin_1_input_enable@1",
@@ -6259,7 +6781,7 @@ void Test::buildNumberReadsBackInTheVersionWord()
     QCOMPARE(build->lsb, 0U);
     QCOMPARE(build->width, 8U);
     QCOMPARE(build->constantValue.value(), quint64(7));
-    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("identity: version 2.0.0 build 7,"));
+    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("identity: version 2.1.0 build 7,"));
 
     /* Absent means 0, and the word stays the same as before the field existed. */
     QVERIFY(QSocIomuxGenerator::buildPlan(source(QString()), &plan, &errors));

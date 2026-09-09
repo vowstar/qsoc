@@ -250,6 +250,42 @@ struct QSocPadCellPlan
     bool operator==(const QSocPadCellPlan &) const = default;
 };
 
+/**
+ * @brief One slow channel: a route without a pin.
+ *
+ * A channel with transmit roles is a slow bus the pool's pins can select;
+ * a channel with `input_value` is a slow input that selects one of the
+ * pool's pads. Channel numbers are one space across every pool.
+ */
+struct QSocIomuxLsChannelPlan
+{
+    quint32               channel = 0;
+    QString               function;
+    QString               signal;
+    QSocIomuxEndpointPlan inputValue;
+    QSocIomuxEndpointPlan inputEnable;
+    QSocIomuxEndpointPlan outputValue;
+    QSocIomuxEndpointPlan outputEnable;
+
+    bool hasSink() const { return !inputValue.link.isEmpty(); }
+    bool operator==(const QSocIomuxLsChannelPlan &) const = default;
+};
+
+/**
+ * @brief A slow-bus pool: the channels and the pins bound to them.
+ *
+ * Slot 0 of every member pin is the pool. One pool over every pin is the
+ * plain crossbar; several pools cut it into blocks.
+ */
+struct QSocIomuxLsPoolPlan
+{
+    QString                       name;
+    QList<quint32>                pins;     /**< Ascending, no pin in two pools */
+    QList<QSocIomuxLsChannelPlan> channels; /**< Ascending by channel */
+
+    bool operator==(const QSocIomuxLsPoolPlan &) const = default;
+};
+
 struct QSocIomuxIntegrationPlan
 {
     QString instance;
@@ -544,9 +580,17 @@ struct QSocIomuxPlan
     QSocPadModel                 padModel;        /**< The union the registers and core follow */
     QMap<QString, QSocIoLibCell> ioLib;
     QSocIoRingPlan               ioRing;
+    QList<QSocIomuxLsPoolPlan>   lsPools; /**< Declaration order */
     QSocMmioPlan                 mmio;
 
     bool hasPadCell() const { return !padCells.isEmpty(); }
+    bool hasLs() const { return !lsPools.isEmpty(); }
+    /** The pool a pin is bound to, or -1. */
+    int lsPoolOf(quint32 pin) const;
+    /** The channel a number names, or null. */
+    const QSocIomuxLsChannelPlan *lsChannel(quint32 channel) const;
+    /** One past the highest channel number, the width of the slow buses. */
+    quint32 lsChannelCount() const;
     /** The class a pin instantiates, or an undeclared cell when there is none. */
     const QSocPadCellPlan &padClass(quint32 pin) const;
     /** The side the ring puts a pin on, empty when the ring does not place it. */
@@ -580,7 +624,7 @@ struct QSocIomuxCorePort
 struct QSocIomuxLayoutVersion
 {
     quint32 major = 2;
-    quint32 minor = 0;
+    quint32 minor = 1;
     quint32 patch = 0;
 };
 
@@ -599,6 +643,8 @@ public:
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStringList *errors = nullptr);
     static QString endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role);
+    /** Wrapper port of one slow channel role: `ls_c<k>_<role>_i`, the sink `_o`. */
+    static QString lsPortName(quint32 channel, QSocIomuxRole role);
     /** Wrapper input that selects a pull or control row for one slot. */
     static QString selectPortName(quint32 pin, quint32 slot, const QString &group);
     /** The layout contract the identity word reports. */
@@ -611,11 +657,22 @@ public:
      * Byte base of every register block. A block whose option is off leaves
      * its region empty, so an offset means the same thing on every design.
      */
-    static constexpr quint64 kBaseSelector      = 0x100;
-    static constexpr quint64 kBaseGpio          = 0x200;
-    static constexpr quint64 kBaseRxOverride    = 0x300;
-    static constexpr quint64 kBaseInterrupt     = 0x400;
-    static constexpr quint64 kBaseInvert        = 0x800;
+    static constexpr quint64 kBaseSelector   = 0x100;
+    static constexpr quint64 kBaseGpio       = 0x200;
+    static constexpr quint64 kBaseRxOverride = 0x300;
+    static constexpr quint64 kBaseInterrupt  = 0x400;
+    static constexpr quint64 kBaseInvert     = 0x800;
+    /** The slow-bus blocks: per-pin channel select, per-channel pin select, and its bits. */
+    static constexpr quint64 kBaseLsSelect  = 0xC00;
+    static constexpr quint64 kBaseLsRxPin   = 0xD00;
+    static constexpr quint64 kBaseLsRxSrc   = 0xE00;
+    static constexpr quint64 kBaseLsRxValue = 0xE20;
+    static constexpr quint64 kBaseLsRxInv   = 0xE40;
+    /** Byte offset of the slow-bus capability word. */
+    static constexpr quint64 kLsCapabilityOffset = 0x10;
+    /** Bits of a slow select lane, one per pin or per channel. */
+    static constexpr quint32 kLsLane            = 8;
+    static constexpr quint32 kMaximumLsChannels = 256;
     static constexpr quint64 kBaseSourceControl = 0x1000;
     static constexpr quint64 kBasePadControl    = 0x1800;
     static constexpr quint64 kBaseControlWords  = 0x2000;
@@ -657,6 +714,10 @@ public:
     static QList<QSocIomuxCorePort> corePinOptionPorts(const QSocIomuxPlan &plan, quint32 pin);
     /** The pad selector vectors the core drives when a pad cell is declared. */
     static QList<QSocIomuxCorePort> corePadSelectPorts(const QSocIomuxPlan &plan);
+    /** The slow channel select a pool member adds to the core; empty for other pins. */
+    static QList<QSocIomuxCorePort> coreLsPinPorts(const QSocIomuxPlan &plan, quint32 pin);
+    /** The pin select and option inputs one slow input channel adds to the core. */
+    static QList<QSocIomuxCorePort> coreLsChannelPorts(const QSocIomuxPlan &plan, quint32 channel);
     /**
      * @brief Check every port a class declares against the library.
      *

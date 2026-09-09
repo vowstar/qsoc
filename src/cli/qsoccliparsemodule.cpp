@@ -304,7 +304,7 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
             0,
             QCoreApplication::translate(
                 "main",
-                "IOMUX source is valid: %1/%2. Pins: %3, HS slots: %4%5, routes: %6, "
+                "IOMUX source is valid: %1/%2. Pins: %3, HS slots: %4%5, routes: %6%9, "
                 "selector registers: %7, registers total: %8. Reset selects slot 0, RX broadcasts. "
                 "Integration pending merge.")
                 .arg(libraryName, moduleName)
@@ -319,7 +319,12 @@ bool QSocCliWorker::parseModuleValidate(const QStringList &appArguments)
                         [](const QSocMmioRegisterPlan &reg) {
                             return reg.name.startsWith(QStringLiteral("hs_select_"));
                         }))
-                .arg(plan.mmio.registers.size()));
+                .arg(plan.mmio.registers.size())
+                .arg(
+                    plan.hasLs() ? QString(", slow pools: %1 with %2 channels")
+                                       .arg(plan.lsPools.size())
+                                       .arg(plan.lsChannelCount())
+                                 : QString()));
     }
 
     const QStringList errors = QSocMmioGenerator::validate(definition);

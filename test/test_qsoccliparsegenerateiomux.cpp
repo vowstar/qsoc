@@ -485,6 +485,7 @@ private slots:
     void cleanupTestCase();
     void mergedTopInstantiatesWrapperAndElaborates();
     void mergedTopLinksTheInterruptLines();
+    void mergedTopLinksSlowChannels();
     void mergedTopAxiWriteChangesPadWhenIverilogIsAvailable();
     void sparseVectorCarrierMerges();
     void combinationalVectorCarrierMerges();
@@ -584,6 +585,64 @@ void Test::mergedTopLinksTheInterruptLines()
     const QString topPath = QDir(directory.path()).filePath("output/iomux_soc_top.v");
     const QString top     = readTextFile(topPath);
     QVERIFY2(top.contains(".irq_o(iomux_irq)"), qPrintable(top));
+    QVERIFY2(!top.contains("FIXME"), qPrintable(top));
+
+    const QString moduleOutput   = QDir(directory.path()).filePath("output/peripheral/iomux0");
+    const QString peripheralPath = QDir(directory.path()).filePath("periph_stub.v");
+    writeTextFile(peripheralPath, peripheralVerilog());
+    QSlangDriver driver;
+    const QString files = QStringList{
+        topPath,
+        QDir(moduleOutput).filePath("iomux0.v"),
+        QDir(moduleOutput).filePath("iomux0_regs.v"),
+        QDir(moduleOutput).filePath("iomux0_conn.v"),
+        peripheralPath}
+                              .join(' ');
+    QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(files)));
+}
+
+void Test::mergedTopLinksSlowChannels()
+{
+    /* Pin 1 leaves the gpio route and joins a pool whose channels reuse the
+     * stub's uart_tx and gpio_in[1], so nothing else in the base changes. */
+    QTemporaryDir directory;
+    QString       moduleText = moduleLibrary;
+    const QString pin1       = R"(      - pin: 1
+        slot: 0
+        function: gpio0
+        signal: data1
+        input_value: {link: gpio0_in, bit: 1}
+        input_enable: 1
+        output_value: {link: gpio0_out, bit: 1}
+        output_enable: {link: gpio0_oe, bit: 1}
+)";
+    QVERIFY(moduleText.contains(pin1));
+    moduleText.replace(pin1, "");
+    moduleText += R"(    ls:
+      slow:
+        pins: [1]
+        channel:
+          - {channel: 0, function: uart0, signal: tx, output_value: {link: uart0_tx}, output_enable: 1}
+          - {channel: 1, function: gpio0, signal: in1, input_value: {link: gpio0_in, bit: 1}}
+)";
+    createProject(directory, moduleText);
+
+    const CommandResult generated = generateModule(directory);
+    QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
+    const QString fragment = readTextFile(
+        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net"));
+    QVERIFY2(fragment.contains("ls_c0_output_value_i:\n        link: uart0_tx"), qPrintable(fragment));
+    QVERIFY2(
+        fragment.contains("ls_c1_input_value_o:\n        link: gpio0_in\n        bits: \"[1]\""),
+        qPrintable(fragment));
+
+    writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), baseNetlist);
+    const CommandResult merged = mergeTop(directory);
+    QVERIFY2(merged.exitCode == 0, qPrintable(merged.output));
+    const QString topPath = QDir(directory.path()).filePath("output/iomux_soc_top.v");
+    const QString top     = readTextFile(topPath);
+    QVERIFY2(top.contains(".ls_c0_output_value_i(uart0_tx)"), qPrintable(top));
+    QVERIFY2(top.contains(".ls_c1_input_value_o(gpio0_in[1])"), qPrintable(top));
     QVERIFY2(!top.contains("FIXME"), qPrintable(top));
 
     const QString moduleOutput   = QDir(directory.path()).filePath("output/peripheral/iomux0");

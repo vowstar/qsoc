@@ -32,7 +32,8 @@ const QSet<QString> kGeneratorKeys
        "io_lib",
        "io_ring",
        "integration",
-       "route"};
+       "route",
+       "ls"};
 const QSet<QString> kOptionKeys = {"gpio", "interrupt", "pad_control", "invert", "rx_override"};
 const QSet<QString> kIntegrationKeys
     = {"instance", "clock", "reset", "control", "pad", "force", "interrupt"};
@@ -83,24 +84,36 @@ QString roleKey(QSocIomuxRole role)
     return QString();
 }
 
-QSocIomuxEndpointPlan &routeRole(QSocIomuxRoutePlan &route, QSocIomuxRole role)
+/* The endpoint of one role on a route or a slow channel, which carry the same four. */
+template<class T>
+QSocIomuxEndpointPlan &roleOf(T &item, QSocIomuxRole role)
 {
     switch (role) {
     case QSocIomuxRole::InputValue:
-        return route.inputValue;
+        return item.inputValue;
     case QSocIomuxRole::InputEnable:
-        return route.inputEnable;
+        return item.inputEnable;
     case QSocIomuxRole::OutputValue:
-        return route.outputValue;
+        return item.outputValue;
     case QSocIomuxRole::OutputEnable:
         break;
     }
-    return route.outputEnable;
+    return item.outputEnable;
+}
+
+QSocIomuxEndpointPlan &routeRole(QSocIomuxRoutePlan &route, QSocIomuxRole role)
+{
+    return roleOf(route, role);
 }
 
 const QSocIomuxEndpointPlan &routeRole(const QSocIomuxRoutePlan &route, QSocIomuxRole role)
 {
-    return routeRole(const_cast<QSocIomuxRoutePlan &>(route), role);
+    return roleOf(const_cast<QSocIomuxRoutePlan &>(route), role);
+}
+
+const QSocIomuxEndpointPlan &channelRole(const QSocIomuxLsChannelPlan &channel, QSocIomuxRole role)
+{
+    return roleOf(const_cast<QSocIomuxLsChannelPlan &>(channel), role);
 }
 
 void appendError(
@@ -1792,6 +1805,58 @@ bool parsePullRequest(
     return valid;
 }
 
+/**
+ * @brief Read the four roles of a route or a slow channel.
+ * @return how many roles the entry declares
+ */
+template<class T>
+int parseRoleSet(
+    const YAML::Node &node, const QString &path, T *item, bool *valid, QStringList *errors)
+{
+    int  declaredRoles = 0;
+    bool openDrain     = false;
+    for (const QSocIomuxRole role : kRoles) {
+        const QString    key      = roleKey(role);
+        const YAML::Node roleNode = node[key.toStdString()];
+        if (!roleNode) {
+            continue;
+        }
+        ++declaredRoles;
+        const bool allowConstant = role != QSocIomuxRole::InputValue;
+        *valid                   = parseEndpoint(
+                                       roleNode,
+                                       path + "." + key,
+                                       allowConstant,
+                                       &roleOf(*item, role),
+                                       role == QSocIomuxRole::OutputValue ? &openDrain : nullptr,
+                                       errors)
+                                   && *valid;
+    }
+    if (openDrain) {
+        /* Open drain is a wiring, not a new role: the value is a constant zero
+         * and the enable follows the inverted link. */
+        if (node["output_enable"]) {
+            appendError(
+                errors,
+                "ROLE",
+                path + ".output_enable",
+                "is derived from an open_drain output_value, drop it");
+            *valid = false;
+        }
+        if (item->outputValue.link.isEmpty()) {
+            appendError(errors, "ROLE", path + ".output_value", "open_drain needs a link");
+            *valid = false;
+        }
+        if (*valid) {
+            item->outputEnable         = item->outputValue;
+            item->outputEnable.invert  = !item->outputValue.invert;
+            item->outputValue          = QSocIomuxEndpointPlan();
+            item->outputValue.constant = 0;
+        }
+    }
+    return declaredRoles;
+}
+
 bool parseRoute(
     const YAML::Node   &node,
     const QString      &path,
@@ -1862,47 +1927,7 @@ bool parseRoute(
         valid = parseLabel(node["signal"], path + ".signal", &route->signal, errors) && valid;
     }
 
-    int  declaredRoles = 0;
-    bool openDrain     = false;
-    for (const QSocIomuxRole role : kRoles) {
-        const QString    key      = roleKey(role);
-        const YAML::Node roleNode = node[key.toStdString()];
-        if (!roleNode) {
-            continue;
-        }
-        ++declaredRoles;
-        const bool allowConstant = role != QSocIomuxRole::InputValue;
-        valid                    = parseEndpoint(
-                                       roleNode,
-                                       path + "." + key,
-                                       allowConstant,
-                                       &routeRole(*route, role),
-                                       role == QSocIomuxRole::OutputValue ? &openDrain : nullptr,
-                                       errors)
-                                   && valid;
-    }
-    if (openDrain) {
-        /* Open drain is a wiring, not a new role: the value is a constant zero
-         * and the enable follows the inverted link. */
-        if (node["output_enable"]) {
-            appendError(
-                errors,
-                "ROLE",
-                path + ".output_enable",
-                "is derived from an open_drain output_value, drop it");
-            valid = false;
-        }
-        if (route->outputValue.link.isEmpty()) {
-            appendError(errors, "ROLE", path + ".output_value", "open_drain needs a link");
-            valid = false;
-        }
-        if (valid) {
-            route->outputEnable         = route->outputValue;
-            route->outputEnable.invert  = !route->outputValue.invert;
-            route->outputValue          = QSocIomuxEndpointPlan();
-            route->outputValue.constant = 0;
-        }
-    }
+    int declaredRoles = parseRoleSet(node, path, route, &valid, errors);
     if (node["pull"]) {
         const YAML::Node pull     = node["pull"];
         const QString    pullPath = path + ".pull";
@@ -2061,6 +2086,197 @@ bool parseRoutes(
             sinks.insert(key);
         }
         plan->routes.append(route);
+    }
+    return valid;
+}
+
+const QSet<QString> kLsPoolKeys = {"pins", "channel"};
+const QSet<QString> kLsChannelKeys
+    = {"channel",
+       "function",
+       "signal",
+       "input_value",
+       "input_enable",
+       "output_value",
+       "output_enable"};
+
+/**
+ * @brief Read the slow-bus pools: which pins each binds and which channels it carries.
+ *
+ * Runs after the routes, because a member pin's slot 0 is the pool and a
+ * slow sink shares the sink space with the routes.
+ */
+bool parseLs(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *errors)
+{
+    const QString path = "generator.ls";
+    if (!node.IsMap()) {
+        appendError(errors, "TYPE", path, "must be a map of pool name to pool");
+        return false;
+    }
+    bool          valid = true;
+    QSet<quint32> boundPins;
+    QSet<quint32> channels;
+    QSet<QString> sinks;
+    for (const QSocIomuxRoutePlan &route : plan->routes) {
+        if (!route.inputValue.link.isEmpty()) {
+            sinks.insert(sinkKey(route.inputValue));
+        }
+    }
+    static const QRegularExpression rangeKey("^(\\d+)(?:-(\\d+))?$");
+    for (const auto &entry : node) {
+        QSocIomuxLsPoolPlan pool;
+        if (!entry.first.IsScalar() || !parseIdentifier(entry.first, path, &pool.name, errors)) {
+            valid = false;
+            continue;
+        }
+        const QString poolPath = path + "." + pool.name;
+        if (!validateMap(entry.second, kLsPoolKeys, poolPath, errors)) {
+            valid = false;
+            continue;
+        }
+        const YAML::Node pins = entry.second["pins"];
+        if (!pins || !pins.IsSequence() || pins.size() == 0) {
+            appendError(errors, "REQUIRED", poolPath + ".pins", "must be a non-empty sequence");
+            valid = false;
+        } else {
+            for (const YAML::Node &item : pins) {
+                const QString text = item.IsScalar() ? QString::fromStdString(item.Scalar())
+                                                     : QString();
+                const QRegularExpressionMatch match = rangeKey.match(text);
+                if (!match.hasMatch()) {
+                    appendError(
+                        errors,
+                        "VALUE",
+                        poolPath + ".pins",
+                        "each entry is a pin number or a range a-b");
+                    valid = false;
+                    continue;
+                }
+                const quint64 first = match.captured(1).toULongLong();
+                const quint64 last  = match.captured(2).isEmpty() ? first
+                                                                  : match.captured(2).toULongLong();
+                if (last >= plan->pinCount || first > last) {
+                    appendError(
+                        errors,
+                        "RANGE",
+                        poolPath + ".pins",
+                        QString("%1 must lie below pin_count %2, low end first")
+                            .arg(text)
+                            .arg(plan->pinCount));
+                    valid = false;
+                    continue;
+                }
+                for (quint64 pin = first; pin <= last; ++pin) {
+                    if (boundPins.contains(quint32(pin))) {
+                        appendError(
+                            errors,
+                            "DUPLICATE",
+                            poolPath + ".pins",
+                            QString("pin %1 is already bound to a pool").arg(pin));
+                        valid = false;
+                        continue;
+                    }
+                    boundPins.insert(quint32(pin));
+                    pool.pins.append(quint32(pin));
+                }
+            }
+        }
+        const YAML::Node list = entry.second["channel"];
+        if (!list || !list.IsSequence() || list.size() == 0) {
+            appendError(errors, "REQUIRED", poolPath + ".channel", "must be a non-empty sequence");
+            valid = false;
+        } else {
+            for (qsizetype index = 0; index < qsizetype(list.size()); ++index) {
+                const QString itemPath = QString("%1.channel[%2]").arg(poolPath).arg(index);
+                QSocIomuxLsChannelPlan channel;
+                if (!validateMap(list[index], kLsChannelKeys, itemPath, errors)) {
+                    valid = false;
+                    continue;
+                }
+                bool    ok     = true;
+                quint64 number = 0;
+                if (!list[index]["channel"]) {
+                    appendError(errors, "REQUIRED", itemPath + ".channel", "property is required");
+                    ok = false;
+                } else if (
+                    parseStrictUnsigned(
+                        list[index]["channel"],
+                        itemPath + ".channel",
+                        0,
+                        QSocIomuxGenerator::kMaximumLsChannels - 1,
+                        &number,
+                        errors)) {
+                    channel.channel = quint32(number);
+                    if (channels.contains(channel.channel)) {
+                        appendError(
+                            errors,
+                            "DUPLICATE",
+                            itemPath + ".channel",
+                            QString("channel %1 is already declared").arg(channel.channel));
+                        ok = false;
+                    }
+                } else {
+                    ok = false;
+                }
+                for (const char *key : {"function", "signal"}) {
+                    if (!list[index][key]) {
+                        appendError(errors, "REQUIRED", itemPath + "." + key, "property is required");
+                        ok = false;
+                        continue;
+                    }
+                    ok = parseLabel(
+                             list[index][key],
+                             itemPath + "." + key,
+                             QString(key) == "function" ? &channel.function : &channel.signal,
+                             errors)
+                         && ok;
+                }
+                if (parseRoleSet(list[index], itemPath, &channel, &ok, errors) == 0) {
+                    appendError(errors, "ROLE", itemPath, "at least one role is required");
+                    ok = false;
+                }
+                if (ok && channel.hasSink()) {
+                    const QString key = sinkKey(channel.inputValue);
+                    if (sinks.contains(key)) {
+                        appendError(
+                            errors,
+                            "DUPLICATE",
+                            itemPath + ".input_value",
+                            QString("sink %1 is already driven").arg(key));
+                        ok = false;
+                    }
+                    sinks.insert(key);
+                }
+                if (!ok) {
+                    valid = false;
+                    continue;
+                }
+                channels.insert(channel.channel);
+                pool.channels.append(channel);
+            }
+        }
+        std::sort(pool.pins.begin(), pool.pins.end());
+        std::sort(
+            pool.channels.begin(),
+            pool.channels.end(),
+            [](const QSocIomuxLsChannelPlan &left, const QSocIomuxLsChannelPlan &right) {
+                return left.channel < right.channel;
+            });
+        plan->lsPools.append(pool);
+    }
+    /* Slot 0 of a member pin is the pool, so no route may claim it. */
+    for (qsizetype index = 0; index < plan->routes.size(); ++index) {
+        const QSocIomuxRoutePlan &route = plan->routes.at(index);
+        if (route.slot == 0 && boundPins.contains(route.pin)) {
+            appendError(
+                errors,
+                "LS",
+                QString("generator.route[%1]").arg(index),
+                QString("pin %1 is bound to ls.%2, slot 0 is the pool")
+                    .arg(route.pin)
+                    .arg(plan->lsPools.at(plan->lsPoolOf(route.pin)).name));
+            valid = false;
+        }
     }
     return valid;
 }
@@ -3032,7 +3248,8 @@ void composeIdentity(QSocIomuxPlan *plan)
            {"interrupt", plan->option.interrupt},
            {"pad_control", plan->option.padControl},
            {"invert", plan->option.invert},
-           {"rx_override", plan->option.rxOverride}};
+           {"rx_override", plan->option.rxOverride},
+           {"ls", plan->hasLs()}};
     QList<QSocMmioFieldPlan> featureFields;
     for (qsizetype index = 0; index < qsizetype(std::size(flags)); ++index) {
         featureFields.append(
@@ -3058,6 +3275,119 @@ void composeIdentity(QSocIomuxPlan *plan)
     plan->mmio.registers.append(feature);
 }
 
+quint32 lsLanesPerWord(quint32 dataWidth)
+{
+    return dataWidth / QSocIomuxGenerator::kLsLane;
+}
+
+/**
+ * @brief The slow-bus capability word, right after the identity words.
+ */
+void composeLsCapability(QSocIomuxPlan *plan)
+{
+    QSocMmioRegisterPlan capability;
+    capability.name       = QStringLiteral("ls_capability");
+    capability.byteOffset = QSocIomuxGenerator::kLsCapabilityOffset;
+    capability.fields.append(
+        constantField(QStringLiteral("channel_count"), 0, 16, plan->lsChannelCount()));
+    capability.fields.append(
+        constantField(QStringLiteral("pool_count"), 16, 8, quint64(plan->lsPools.size())));
+    plan->mmio.registers.append(capability);
+}
+
+/**
+ * @brief The slow-bus blocks: a channel select lane per member pin, a pin
+ * select lane per slow input, and the input's override and inversion bits
+ * under the same options as the fast path.
+ *
+ * A word that would hold no field is left out, so its offset reads zero.
+ */
+void composeLs(QSocIomuxPlan *plan)
+{
+    const quint32 dataWidth = plan->mmio.dataWidth;
+    const quint32 byteCount = dataWidth / 8;
+    const quint32 lanes     = lsLanesPerWord(dataWidth);
+    const quint32 channels  = plan->lsChannelCount();
+
+    for (quint32 word = 0; word * lanes < plan->pinCount; ++word) {
+        QSocMmioRegisterPlan select;
+        select.name        = QString("ls_select_%1").arg(word);
+        select.byteOffset  = QSocIomuxGenerator::kBaseLsSelect + quint64(word) * byteCount;
+        const quint32 last = std::min(plan->pinCount, (word + 1) * lanes);
+        for (quint32 pin = word * lanes; pin < last; ++pin) {
+            if (plan->lsPoolOf(pin) < 0) {
+                continue;
+            }
+            QSocMmioFieldPlan field;
+            field.name       = QString("pin_%1_ls_select").arg(pin);
+            field.lsb        = (pin % lanes) * QSocIomuxGenerator::kLsLane;
+            field.width      = QSocIomuxGenerator::kLsLane;
+            field.access     = QSocMmioAccess::ReadWrite;
+            field.resetValue = 0;
+            field.outputPort = QString("pin_%1_ls_select_o").arg(pin);
+            select.fields.append(field);
+        }
+        if (!select.fields.isEmpty()) {
+            plan->mmio.registers.append(select);
+        }
+    }
+    for (quint32 word = 0; word * lanes < channels; ++word) {
+        QSocMmioRegisterPlan select;
+        select.name        = QString("ls_rx_pin_%1").arg(word);
+        select.byteOffset  = QSocIomuxGenerator::kBaseLsRxPin + quint64(word) * byteCount;
+        const quint32 last = std::min(channels, (word + 1) * lanes);
+        for (quint32 channel = word * lanes; channel < last; ++channel) {
+            const QSocIomuxLsChannelPlan *item = plan->lsChannel(channel);
+            if (item == nullptr || !item->hasSink()) {
+                continue;
+            }
+            QSocMmioFieldPlan field;
+            field.name       = QString("ls_c%1_pin").arg(channel);
+            field.lsb        = (channel % lanes) * QSocIomuxGenerator::kLsLane;
+            field.width      = QSocIomuxGenerator::kLsLane;
+            field.access     = QSocMmioAccess::ReadWrite;
+            field.resetValue = 0;
+            field.outputPort = QString("ls_c%1_pin_o").arg(channel);
+            select.fields.append(field);
+        }
+        if (!select.fields.isEmpty()) {
+            plan->mmio.registers.append(select);
+        }
+    }
+    const auto bank = [&](const QString &family, quint64 base) {
+        for (quint32 word = 0; word * dataWidth < channels; ++word) {
+            QSocMmioRegisterPlan bits;
+            bits.name          = QString("ls_%1_%2").arg(family).arg(word);
+            bits.byteOffset    = base + quint64(word) * byteCount;
+            const quint32 last = std::min(channels, (word + 1) * dataWidth);
+            for (quint32 channel = word * dataWidth; channel < last; ++channel) {
+                const QSocIomuxLsChannelPlan *item = plan->lsChannel(channel);
+                if (item == nullptr || !item->hasSink()) {
+                    continue;
+                }
+                QSocMmioFieldPlan field;
+                field.name       = QString("ls_c%1_%2").arg(channel).arg(family);
+                field.lsb        = channel % dataWidth;
+                field.width      = 1;
+                field.access     = QSocMmioAccess::ReadWrite;
+                field.resetValue = 0;
+                field.outputPort = QString("ls_c%1_%2_o").arg(channel).arg(family);
+                bits.fields.append(field);
+            }
+            if (!bits.fields.isEmpty()) {
+                plan->mmio.registers.append(bits);
+            }
+        }
+    };
+    if (plan->option.rxOverride) {
+        bank(QStringLiteral("rx_src"), QSocIomuxGenerator::kBaseLsRxSrc);
+        bank(QStringLiteral("rx_value"), QSocIomuxGenerator::kBaseLsRxValue);
+    }
+    if (plan->option.invert) {
+        bank(QStringLiteral("rx_inv"), QSocIomuxGenerator::kBaseLsRxInv);
+    }
+}
+
 bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 {
     const quint32 dataWidth = plan->mmio.dataWidth;
@@ -3067,6 +3397,9 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     const quint32 width     = selectorWidth(plan->hsSlots);
 
     composeIdentity(plan);
+    if (plan->hasLs()) {
+        composeLsCapability(plan);
+    }
 
     for (quint32 word = 0; word < words; ++word) {
         QSocMmioRegisterPlan selector;
@@ -3113,6 +3446,9 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
                     .arg(QSocIomuxGenerator::kInvertBytes / (byteCount * bankWordCount(*plan))));
             return false;
         }
+    }
+    if (plan->hasLs()) {
+        composeLs(plan);
     }
     if (plan->option.sourceControl()) {
         composeSourceControl(plan);
@@ -3307,7 +3643,11 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         appendError(errors, "REQUIRED", "generator.route", "property is required");
         return false;
     }
-    return parseRoutes(generator["route"], pinCountValid, hsSlotsValid, plan, errors) && valid;
+    valid = parseRoutes(generator["route"], pinCountValid, hsSlotsValid, plan, errors) && valid;
+    if (generator["ls"] && pinCountValid) {
+        valid = parseLs(generator["ls"], plan, errors) && valid;
+    }
+    return valid;
 }
 
 void sortPlan(QSocIomuxPlan *plan)
@@ -3322,18 +3662,23 @@ void sortPlan(QSocIomuxPlan *plan)
 
 struct EndpointPort
 {
-    quint32                      pin  = 0;
-    quint32                      slot = 0;
-    QSocIomuxRole                role = QSocIomuxRole::InputValue;
-    const QSocIomuxRoutePlan    *route;
-    const QSocIomuxEndpointPlan *endpoint;
-    QString                      select; /**< "pull" or a control name for a row select net */
+    quint32                       pin  = 0;
+    quint32                       slot = 0;
+    QSocIomuxRole                 role = QSocIomuxRole::InputValue;
+    const QSocIomuxRoutePlan     *route;
+    const QSocIomuxEndpointPlan  *endpoint;
+    QString                       select; /**< "pull" or a control name for a row select net */
+    const QSocIomuxLsChannelPlan *channel = nullptr; /**< Set for a slow channel role */
 
     bool isSelect() const { return !select.isEmpty(); }
+    bool isLs() const { return channel != nullptr; }
 };
 
 QString endpointName(const EndpointPort &port)
 {
+    if (port.isLs()) {
+        return QSocIomuxGenerator::lsPortName(port.channel->channel, port.role);
+    }
     if (port.isSelect()) {
         return QSocIomuxGenerator::selectPortName(port.pin, port.slot, port.select);
     }
@@ -3351,7 +3696,8 @@ QString selectNet(const EndpointPort &port)
 
 QString endpointComment(const EndpointPort &port)
 {
-    QString                         label = port.route->function + "." + port.route->signal;
+    QString label = port.isLs() ? port.channel->function + "." + port.channel->signal
+                                : port.route->function + "." + port.route->signal;
     static const QRegularExpression unsafePattern(QStringLiteral("[^A-Za-z0-9_.:\\[\\]-]"));
     label.replace(unsafePattern, QStringLiteral("_"));
     return QString(" /* %1 */").arg(label);
@@ -3389,7 +3735,39 @@ QList<EndpointPort> endpointPorts(const QSocIomuxPlan &plan)
             }
         }
     }
+    /* Slow channels follow, by channel number, so the header reads pool by pool. */
+    for (const QSocIomuxLsPoolPlan &pool : plan.lsPools) {
+        for (const QSocIomuxLsChannelPlan &channel : pool.channels) {
+            for (const QSocIomuxRole role : kRoles) {
+                const QSocIomuxEndpointPlan &endpoint = channelRole(channel, role);
+                if (endpoint.link.isEmpty()) {
+                    continue;
+                }
+                ports.append({0, 0, role, nullptr, &endpoint, QString(), &channel});
+            }
+        }
+    }
     return ports;
+}
+
+/**
+ * @brief The lane one slow channel drives on one transmit bus.
+ */
+QString lsLaneExpression(const QSocIomuxPlan &plan, quint32 channel, QSocIomuxRole role)
+{
+    const QSocIomuxLsChannelPlan *item = plan.lsChannel(channel);
+    if (item == nullptr) {
+        return QStringLiteral("1'b0");
+    }
+    const QSocIomuxEndpointPlan &endpoint = channelRole(*item, role);
+    if (!endpoint.link.isEmpty()) {
+        const QString name = QSocIomuxGenerator::lsPortName(channel, role);
+        return endpoint.invert ? name + " ^ 1'b1" : name;
+    }
+    if (endpoint.constant.has_value() && *endpoint.constant == 1) {
+        return QStringLiteral("1'b1");
+    }
+    return QStringLiteral("1'b0");
 }
 
 /**
@@ -4178,6 +4556,46 @@ QString QSocIomuxGenerator::selectPortName(quint32 pin, quint32 slot, const QStr
     return QString("hs_p%1_s%2_%3_select_i").arg(pin).arg(slot).arg(group);
 }
 
+int QSocIomuxPlan::lsPoolOf(quint32 pin) const
+{
+    for (qsizetype index = 0; index < lsPools.size(); ++index) {
+        if (lsPools.at(index).pins.contains(pin)) {
+            return int(index);
+        }
+    }
+    return -1;
+}
+
+const QSocIomuxLsChannelPlan *QSocIomuxPlan::lsChannel(quint32 channel) const
+{
+    for (const QSocIomuxLsPoolPlan &pool : lsPools) {
+        for (const QSocIomuxLsChannelPlan &item : pool.channels) {
+            if (item.channel == channel) {
+                return &item;
+            }
+        }
+    }
+    return nullptr;
+}
+
+quint32 QSocIomuxPlan::lsChannelCount() const
+{
+    quint32 count = 0;
+    for (const QSocIomuxLsPoolPlan &pool : lsPools) {
+        for (const QSocIomuxLsChannelPlan &item : pool.channels) {
+            count = std::max(count, item.channel + 1);
+        }
+    }
+    return count;
+}
+
+QString QSocIomuxGenerator::lsPortName(quint32 channel, QSocIomuxRole role)
+{
+    return QString("ls_c%1_%2_%3")
+        .arg(channel)
+        .arg(roleKey(role), role == QSocIomuxRole::InputValue ? "o" : "i");
+}
+
 QString QSocIomuxGenerator::endpointPortName(quint32 pin, quint32 slot, QSocIomuxRole role)
 {
     const QString suffix = role == QSocIomuxRole::InputValue ? QStringLiteral("o")
@@ -4254,6 +4672,34 @@ bool QSocIomuxGenerator::buildPlan(
         *plan = localPlan;
     }
     return true;
+}
+
+QList<QSocIomuxCorePort> QSocIomuxGenerator::coreLsPinPorts(const QSocIomuxPlan &plan, quint32 pin)
+{
+    QList<QSocIomuxCorePort> ports;
+    if (plan.lsPoolOf(pin) >= 0) {
+        ports.append({QString("pin_%1_ls_select").arg(pin), kLsLane});
+    }
+    return ports;
+}
+
+QList<QSocIomuxCorePort> QSocIomuxGenerator::coreLsChannelPorts(
+    const QSocIomuxPlan &plan, quint32 channel)
+{
+    QList<QSocIomuxCorePort>      ports;
+    const QSocIomuxLsChannelPlan *item = plan.lsChannel(channel);
+    if (item == nullptr || !item->hasSink()) {
+        return ports;
+    }
+    ports.append({QString("ls_c%1_pin").arg(channel), kLsLane});
+    if (plan.option.rxOverride) {
+        ports.append({QString("ls_c%1_rx_src").arg(channel), 1});
+        ports.append({QString("ls_c%1_rx_value").arg(channel), 1});
+    }
+    if (plan.option.invert) {
+        ports.append({QString("ls_c%1_rx_inv").arg(channel), 1});
+    }
+    return ports;
 }
 
 QList<QSocIomuxCorePort> QSocIomuxGenerator::corePinOptionPorts(
@@ -4356,12 +4802,30 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
     ports.append(QString("    input  wire %1 tx_output_value_i").arg(vectorRange(dense)));
     ports.append(QString("    input  wire %1 tx_output_enable_i").arg(vectorRange(dense)));
     ports.append(QString("    output wire %1 rx_input_value_o").arg(vectorRange(dense)));
+    const quint32 lsChannels = plan.lsChannelCount();
+    if (plan.hasLs()) {
+        ports.append(
+            QString("    input  wire %1 ls_tx_input_enable_i").arg(vectorRange(lsChannels)));
+        ports.append(
+            QString("    input  wire %1 ls_tx_output_value_i").arg(vectorRange(lsChannels)));
+        ports.append(
+            QString("    input  wire %1 ls_tx_output_enable_i").arg(vectorRange(lsChannels)));
+        ports.append(QString("    output wire %1 ls_rx_input_value_o").arg(vectorRange(lsChannels)));
+    }
     for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
         ports.append(QString("    output wire %1 %2_o").arg(vectorRange(port.width), port.name));
     }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         ports.append(QString("    input  wire %1 pin_%2_select_i").arg(vectorRange(width)).arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsPinPorts(plan, pin)) {
+            ports.append(portDeclaration(port, QStringLiteral("_i")));
+        }
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            ports.append(portDeclaration(port, QStringLiteral("_i")));
+        }
+    }
+    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsChannelPorts(plan, channel)) {
             ports.append(portDeclaration(port, QStringLiteral("_i")));
         }
     }
@@ -4392,11 +4856,35 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
         const QString          safeIe   = QString("1'b%1").arg(safe.inputEnable);
         const QString          safeOv   = QString("1'b%1").arg(safe.outputValue);
         const QString          safeOe   = QString("1'b%1").arg(safe.outputEnable);
+        const int              pool     = plan.lsPoolOf(pin);
+        if (pool >= 0) {
+            /* Slot 0 of a pool member is the slow bus its channel select names;
+             * a number outside the pool, like an unrouted slot, is all zero. */
+            lines.append(QString("reg [2:0] ls_bundle_%1;").arg(pin));
+            lines.append("always @(*) begin");
+            lines.append(QString("    case (pin_%1_ls_select_i)").arg(pin));
+            for (const QSocIomuxLsChannelPlan &channel : plan.lsPools.at(pool).channels) {
+                lines.append(QString(
+                                 "        %1'd%2: ls_bundle_%3 = {ls_tx_input_enable_i[%2], "
+                                 "ls_tx_output_value_i[%2], ls_tx_output_enable_i[%2]};")
+                                 .arg(kLsLane)
+                                 .arg(channel.channel)
+                                 .arg(pin));
+            }
+            lines.append(QString("        default: ls_bundle_%1 = 3'b000;").arg(pin));
+            lines.append("    endcase");
+            lines.append("end");
+        }
         lines.append(QString("reg [2:0] tx_bundle_%1;").arg(pin));
         lines.append("always @(*) begin");
         lines.append(QString("    case (pin_%1_select_i)").arg(pin));
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
             const quint64 index = denseIndex(plan, slot, pin);
+            if (slot == 0 && pool >= 0) {
+                lines.append(
+                    QString("        %1'd0: tx_bundle_%2 = ls_bundle_%2;").arg(width).arg(pin));
+                continue;
+            }
             lines.append(QString(
                              "        %1'd%2: tx_bundle_%3 = {tx_input_enable_i[%4], "
                              "tx_output_value_i[%4], tx_output_enable_i[%4]};")
@@ -4618,6 +5106,42 @@ QString QSocIomuxGenerator::generateCoreVerilog(const QSocIomuxPlan &plan)
                                  plan, value, QString("pin_%1_rx_inv_s%2_i").arg(pin).arg(slot))));
         }
     }
+    /* A slow input selects one pad of its pool by pin number; any other
+     * number, like an unrouted slot, reads zero. */
+    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+        const QSocIomuxLsChannelPlan *item = plan.lsChannel(channel);
+        if (item == nullptr || !item->hasSink()) {
+            lines.append(QString("assign ls_rx_input_value_o[%1] = 1'b0;").arg(channel));
+        }
+    }
+    for (const QSocIomuxLsPoolPlan &pool : plan.lsPools) {
+        for (const QSocIomuxLsChannelPlan &item : pool.channels) {
+            if (!item.hasSink()) {
+                continue;
+            }
+            const quint32 channel = item.channel;
+            lines.append(QString("reg ls_rx_raw_%1;").arg(channel));
+            lines.append("always @(*) begin");
+            lines.append(QString("    case (ls_c%1_pin_i)").arg(channel));
+            for (quint32 pin : pool.pins) {
+                lines.append(QString("        %1'd%2: ls_rx_raw_%3 = pad_input_value_i[%2];")
+                                 .arg(kLsLane)
+                                 .arg(pin)
+                                 .arg(channel));
+            }
+            lines.append(QString("        default: ls_rx_raw_%1 = 1'b0;").arg(channel));
+            lines.append("    endcase");
+            lines.append("end");
+            QString value = QString("ls_rx_raw_%1").arg(channel);
+            if (plan.option.rxOverride) {
+                value = QString("ls_c%1_rx_src_i ? ls_c%1_rx_value_i : %2").arg(channel).arg(value);
+            }
+            lines.append(
+                QString("assign ls_rx_input_value_o[%1] = %2;")
+                    .arg(channel)
+                    .arg(withInversion(plan, value, QString("ls_c%1_rx_inv_i").arg(channel))));
+        }
+    }
     lines.append(QString());
     lines.append("endmodule");
     lines.append(QString());
@@ -4640,7 +5164,19 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
     declarations.append(QString("    output wire %1 tx_output_value_o").arg(vectorRange(dense)));
     declarations.append(QString("    output wire %1 tx_output_enable_o").arg(vectorRange(dense)));
     declarations.append(QString("    input  wire %1 rx_input_value_i").arg(vectorRange(dense)));
-    QStringList comments = {QString(), QString(), QString(), QString()};
+    QStringList   comments   = {QString(), QString(), QString(), QString()};
+    const quint32 lsChannels = plan.lsChannelCount();
+    if (plan.hasLs()) {
+        declarations.append(
+            QString("    output wire %1 ls_tx_input_enable_o").arg(vectorRange(lsChannels)));
+        declarations.append(
+            QString("    output wire %1 ls_tx_output_value_o").arg(vectorRange(lsChannels)));
+        declarations.append(
+            QString("    output wire %1 ls_tx_output_enable_o").arg(vectorRange(lsChannels)));
+        declarations.append(
+            QString("    input  wire %1 ls_rx_input_value_i").arg(vectorRange(lsChannels)));
+        comments.append({QString(), QString(), QString(), QString()});
+    }
     for (const EndpointPort &port : ports) {
         if (port.isSelect()) {
             continue;
@@ -4672,15 +5208,30 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
         }
     }
     lines.append(QString());
+    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+        lines.append(QString("assign ls_tx_input_enable_o[%1] = %2;")
+                         .arg(channel)
+                         .arg(lsLaneExpression(plan, channel, QSocIomuxRole::InputEnable)));
+        lines.append(QString("assign ls_tx_output_value_o[%1] = %2;")
+                         .arg(channel)
+                         .arg(lsLaneExpression(plan, channel, QSocIomuxRole::OutputValue)));
+        lines.append(QString("assign ls_tx_output_enable_o[%1] = %2;")
+                         .arg(channel)
+                         .arg(lsLaneExpression(plan, channel, QSocIomuxRole::OutputEnable)));
+    }
+    if (plan.hasLs()) {
+        lines.append(QString());
+    }
 
     for (const EndpointPort &port : ports) {
         if (port.isSelect() || port.role != QSocIomuxRole::InputValue) {
             continue;
         }
-        const quint64 index      = denseIndex(plan, port.slot, port.pin);
-        const QString expression = port.endpoint->invert
-                                       ? QString("rx_input_value_i[%1] ^ 1'b1").arg(index)
-                                       : QString("rx_input_value_i[%1]").arg(index);
+        const QString source
+            = port.isLs()
+                  ? QString("ls_rx_input_value_i[%1]").arg(port.channel->channel)
+                  : QString("rx_input_value_i[%1]").arg(denseIndex(plan, port.slot, port.pin));
+        const QString expression = port.endpoint->invert ? source + " ^ 1'b1" : source;
         lines.append(QString("assign %1 = %2;").arg(endpointName(port), expression));
     }
     lines.append(QString());
@@ -4740,13 +5291,30 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     lines.append(QString("wire %1 tx_output_value_w;").arg(vectorRange(dense)));
     lines.append(QString("wire %1 tx_output_enable_w;").arg(vectorRange(dense)));
     lines.append(QString("wire %1 rx_input_value_w;").arg(vectorRange(dense)));
-    const QSocPadModel &model = plan.padModel;
+    const quint32 lsChannels = plan.lsChannelCount();
+    if (plan.hasLs()) {
+        lines.append(QString("wire %1 ls_tx_input_enable_w;").arg(vectorRange(lsChannels)));
+        lines.append(QString("wire %1 ls_tx_output_value_w;").arg(vectorRange(lsChannels)));
+        lines.append(QString("wire %1 ls_tx_output_enable_w;").arg(vectorRange(lsChannels)));
+        lines.append(QString("wire %1 ls_rx_input_value_w;").arg(vectorRange(lsChannels)));
+    }
+    const QSocPadModel &model    = plan.padModel;
+    const auto          wireLine = [](const QSocIomuxCorePort &port) {
+        return port.width == 1 ? QString("wire       %1_w;").arg(port.name)
+                               : QString("wire [%1:0] %2_w;").arg(port.width - 1).arg(port.name);
+    };
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         lines.append(QString("wire %1 pin_%2_select_w;").arg(vectorRange(width)).arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsPinPorts(plan, pin)) {
+            lines.append(wireLine(port));
+        }
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
-            lines.append(
-                port.width == 1 ? QString("wire       %1_w;").arg(port.name)
-                                : QString("wire [%1:0] %2_w;").arg(port.width - 1).arg(port.name));
+            lines.append(wireLine(port));
+        }
+    }
+    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsChannelPorts(plan, channel)) {
+            lines.append(wireLine(port));
         }
     }
     lines.append(QString());
@@ -4806,11 +5374,19 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         regsConnections.append(QString("    .pin_%1_select_o(pin_%1_select_w)").arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsPinPorts(plan, pin)) {
+            regsConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
+        }
         if (plan.option.gpio) {
             regsConnections.append(
                 QString("    .pin_%1_input_value_i(pad_input_sync_q[%1])").arg(pin));
         }
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            regsConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
+        }
+    }
+    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsChannelPorts(plan, channel)) {
             regsConnections.append(QString("    .%1_o(%1_w)").arg(port.name));
         }
     }
@@ -4840,6 +5416,12 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_value_o(tx_output_value_w)",
            "    .tx_output_enable_o(tx_output_enable_w)",
            "    .rx_input_value_i(rx_input_value_w)"};
+    if (plan.hasLs()) {
+        connConnections.append(QStringLiteral("    .ls_tx_input_enable_o(ls_tx_input_enable_w)"));
+        connConnections.append(QStringLiteral("    .ls_tx_output_value_o(ls_tx_output_value_w)"));
+        connConnections.append(QStringLiteral("    .ls_tx_output_enable_o(ls_tx_output_enable_w)"));
+        connConnections.append(QStringLiteral("    .ls_rx_input_value_i(ls_rx_input_value_w)"));
+    }
     for (const EndpointPort &port : endpoints) {
         if (!port.isSelect()) {
             connConnections.append(QString("    .%1(%1)").arg(endpointName(port)));
@@ -4862,12 +5444,26 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
            "    .tx_output_value_i(tx_output_value_w)",
            "    .tx_output_enable_i(tx_output_enable_w)",
            "    .rx_input_value_o(rx_input_value_w)"};
+    if (plan.hasLs()) {
+        coreConnections.append(QStringLiteral("    .ls_tx_input_enable_i(ls_tx_input_enable_w)"));
+        coreConnections.append(QStringLiteral("    .ls_tx_output_value_i(ls_tx_output_value_w)"));
+        coreConnections.append(QStringLiteral("    .ls_tx_output_enable_i(ls_tx_output_enable_w)"));
+        coreConnections.append(QStringLiteral("    .ls_rx_input_value_o(ls_rx_input_value_w)"));
+    }
     for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePadSelectPorts(plan)) {
         coreConnections.append(QString("    .%1_o(%1_o)").arg(port.name));
     }
     for (quint32 pin = 0; pin < plan.pinCount; ++pin) {
         coreConnections.append(QString("    .pin_%1_select_i(pin_%1_select_w)").arg(pin));
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsPinPorts(plan, pin)) {
+            coreConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
+        }
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::corePinOptionPorts(plan, pin)) {
+            coreConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
+        }
+    }
+    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+        for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsChannelPorts(plan, channel)) {
             coreConnections.append(QString("    .%1_i(%1_w)").arg(port.name));
         }
     }
@@ -5715,6 +6311,39 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         }
         blocks.append({"invert", (qsizetype(3 + plan.hsSlots) + nets) * bankWords});
     }
+    if (plan.hasLs()) {
+        /* Counted the way composeLs emits them: only words that hold a field. */
+        const quint32 lsLanes     = lsLanesPerWord(dataWidth);
+        const quint32 lsChannels  = plan.lsChannelCount();
+        qsizetype     selectWords = 0;
+        for (quint32 word = 0; word * lsLanes < plan.pinCount; ++word) {
+            bool any = false;
+            for (quint32 pin = word * lsLanes; pin < std::min(plan.pinCount, (word + 1) * lsLanes);
+                 ++pin) {
+                any = any || plan.lsPoolOf(pin) >= 0;
+            }
+            selectWords += any ? 1 : 0;
+        }
+        const auto channelWords = [&](quint32 perWord) {
+            qsizetype words = 0;
+            for (quint32 word = 0; word * perWord < lsChannels; ++word) {
+                bool any = false;
+                for (quint32 channel = word * perWord;
+                     channel < std::min(lsChannels, (word + 1) * perWord);
+                     ++channel) {
+                    const QSocIomuxLsChannelPlan *item = plan.lsChannel(channel);
+                    any = any || (item != nullptr && item->hasSink());
+                }
+                words += any ? 1 : 0;
+            }
+            return words;
+        };
+        const qsizetype rxWords  = channelWords(lsLanes);
+        const qsizetype bitWords = channelWords(dataWidth)
+                                   * ((plan.option.rxOverride ? 2 : 0)
+                                      + (plan.option.invert ? 1 : 0));
+        blocks.append({"ls", selectWords + rxWords + bitWords});
+    }
     if (plan.option.sourceControl()) {
         blocks.append({"source control", qsizetype(plan.pinCount)});
     }
@@ -5738,7 +6367,7 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         }
         blocks.append({"pad control", words * qsizetype(plan.pinCount)});
     }
-    const qsizetype identityCount = identityRegisterCount(dataWidth);
+    const qsizetype identityCount = identityRegisterCount(dataWidth) + (plan.hasLs() ? 1 : 0);
     qsizetype       expected      = identityCount + selectorWordCount(plan.pinCount, dataWidth);
     for (const Block &block : blocks) {
         expected += block.count;
@@ -5820,6 +6449,57 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     lines.append(QString("feature: 0x%1 at offset 0xc").arg(wordAt(12), 8, 16, QLatin1Char('0')));
     lines.append("reset: every selector resets to 0 and selects slot 0");
     lines.append("rx: pad input broadcasts to every declared sink regardless of the selector");
+    if (plan.hasLs()) {
+        const quint32 lsLanes = lsLanesPerWord(dataWidth);
+        lines.append(QString(
+                         "ls: %1 pools, %2 channels, capability 0x%3 at offset 0x%4, slot 0 "
+                         "of a bound pin is its pool")
+                         .arg(plan.lsPools.size())
+                         .arg(plan.lsChannelCount())
+                         .arg(wordAt(kLsCapabilityOffset), 8, 16, QLatin1Char('0'))
+                         .arg(QString::number(kLsCapabilityOffset, 16)));
+        for (const QSocIomuxLsPoolPlan &pool : plan.lsPools) {
+            QStringList pins;
+            for (quint32 pin : pool.pins) {
+                pins.append(QString::number(pin));
+            }
+            lines.append(QString("pool %1: pins %2").arg(pool.name, pins.join(", ")));
+            for (const QSocIomuxLsChannelPlan &channel : pool.channels) {
+                lines.append(QString("  channel %1 function %2 signal %3")
+                                 .arg(channel.channel)
+                                 .arg(channel.function, channel.signal));
+                for (const QSocIomuxRole role : kRoles) {
+                    const QSocIomuxEndpointPlan &endpoint = channelRole(channel, role);
+                    QString                      value;
+                    if (!endpoint.link.isEmpty()) {
+                        value = QString("link %1").arg(endpoint.link);
+                        if (endpoint.bit.has_value()) {
+                            value += QString(" bit %1").arg(*endpoint.bit);
+                        }
+                        if (endpoint.invert) {
+                            value += " invert";
+                        }
+                    } else if (endpoint.constant.has_value()) {
+                        value = QString("constant %1").arg(*endpoint.constant);
+                    } else if (role == QSocIomuxRole::InputValue) {
+                        continue;
+                    } else {
+                        value = QStringLiteral("constant 0");
+                    }
+                    lines.append(QString("    %1: %2").arg(roleKey(role), value));
+                }
+                if (channel.hasSink()) {
+                    lines.append(
+                        QString("    rx pin select word %1 lsb %2 offset 0x%3")
+                            .arg(channel.channel / lsLanes)
+                            .arg((channel.channel % lsLanes) * kLsLane)
+                            .arg(
+                                QString::number(
+                                    kBaseLsRxPin + (channel.channel / lsLanes) * byteCount, 16)));
+                }
+            }
+        }
+    }
     for (const QSocPadCellPlan &cell : plan.padCells) {
         const QString label = plan.padCells.size() == 1 ? QStringLiteral("pad cell")
                                                         : QString("pad cell %1").arg(cell.name);
@@ -5888,7 +6568,19 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
             + (plan.padCells.size() > 1 ? QString(" cell %1").arg(plan.padClass(pin).name)
                                         : QString()));
         QStringList unusedSlots;
+        const int   pool = plan.lsPoolOf(pin);
+        if (pool >= 0) {
+            const quint32 lsLanes = lsLanesPerWord(dataWidth);
+            lines.append(QString("  ls select word %1 lsb %2 offset 0x%3")
+                             .arg(pin / lsLanes)
+                             .arg((pin % lsLanes) * kLsLane)
+                             .arg(QString::number(kBaseLsSelect + (pin / lsLanes) * byteCount, 16)));
+        }
         for (quint32 slot = 0; slot < plan.hsSlots; ++slot) {
+            if (slot == 0 && pool >= 0) {
+                lines.append(QString("  slot 0 ls pool %1").arg(plan.lsPools.at(pool).name));
+                continue;
+            }
             const bool hasRoute = routeIndex < plan.routes.size()
                                   && plan.routes.at(routeIndex).pin == pin
                                   && plan.routes.at(routeIndex).slot == slot;

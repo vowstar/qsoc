@@ -218,6 +218,8 @@ private slots:
     void optionMutationsFailBmcWhenAvailable();
     void selectNetsAreFreeInputsOfTheProof();
     void selectNetMutationFailsBmcWhenAvailable();
+    void lsPoolCollateralAssertsEveryChannel();
+    void lsPoolMutationsFailBmcWhenAvailable();
     void selectInversionIsProvenWhenAvailable();
     void unroutedSlotsLandOnTheDefaultRowWhenAvailable();
     void forceIsProvenAboveEverySourceWhenAvailable();
@@ -820,6 +822,42 @@ void Test::optionMutationsFailBmcWhenAvailable()
 
 namespace {
 
+/* Two slow-bus pools: pins 0 and 1 share channels 0, 1 and 3, pin 3 owns
+ * channel 2, pin 2 keeps a fast route in slot 0. */
+QSocIomuxPlan lsPlan()
+{
+    QSocIomuxPlan              plan;
+    QStringList                errors;
+    const QSocModuleDefinition definition = makeDefinition(QString(R"yaml(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 14
+    pin_count: 4
+    hs_slots: 2
+    option: {rx_override: true, invert: true}
+%1    route:
+      - {pin: 0, slot: 1, function: uart0, signal: tx, output_value: {link: uart0_tx}, output_enable: 1}
+      - {pin: 2, slot: 0, function: gpio0, signal: d2, input_value: {link: gpio_in, bit: 2}, input_enable: 1, output_value: {link: gpio_out, bit: 2}, output_enable: {link: gpio_oe, bit: 2}}
+    ls:
+      pool_a:
+        pins: ["0-1"]
+        channel:
+          - {channel: 0, function: spi4, signal: sclk, output_value: {link: spi4_sclk}, output_enable: 1}
+          - {channel: 1, function: spi4, signal: miso, input_value: {link: spi4_miso}}
+          - {channel: 3, function: i2c2, signal: sda, input_value: {link: i2c2_sda_in}, input_enable: 1, output_value: {link: i2c2_sda_o, open_drain: true}}
+      pool_b:
+        pins: [3]
+        channel:
+          - {channel: 2, function: pwm, signal: out, output_value: {link: pwm_out, invert: true}, output_enable: 1}
+)yaml")
+                                                               .arg(integrationBlock()));
+    if (!QSocIomuxGenerator::buildPlan(definition, &plan, &errors)) {
+        qWarning() << errors;
+    }
+    return plan;
+}
+
 QSocIomuxPlan linkedPlan(bool invert = false)
 {
     QSocIomuxPlan              plan;
@@ -940,6 +978,85 @@ void Test::selectNetMutationFailsBmcWhenAvailable()
     QVERIFY2(result.exitCode != 0, result.output.constData());
     QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
     QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+}
+
+void Test::lsPoolCollateralAssertsEveryChannel()
+{
+    const QSocIomuxPlan plan = lsPlan();
+    QVERIFY(plan.hasLs());
+    const QString sv = QSocIomuxFormal::generate(plan).systemVerilog;
+    QVERIFY2(sv.contains("    input logic [7:0] pin_0_ls_select_i,"), qPrintable(sv));
+    QVERIFY2(sv.contains("    input logic [7:0] ls_c1_pin_i,"), qPrintable(sv));
+    QVERIFY2(!sv.contains("pin_2_ls_select_i"), qPrintable(sv));
+    /* Slot 0 of a pool pin follows its channel select over the pool's channels. */
+    QVERIFY2(
+        sv.contains(
+            "assert (pad_output_value_w[3] == (((pin_3_ls_select_i == 8'd2) ? "
+            "(ls_c2_output_value_i ^ 1'b1) : 1'b0) ^ pin_3_output_value_inv_i));"),
+        qPrintable(sv));
+    QVERIFY2(
+        sv.contains(
+            "assert (pad_output_enable_w[1] == (((pin_1_ls_select_i == 8'd0) ? (1'b1) : "
+            "(pin_1_ls_select_i == 8'd1) ? (1'b0) : (pin_1_ls_select_i == 8'd3) ? "
+            "(ls_c3_output_enable_i ^ 1'b1) : 1'b0) ^ pin_1_output_enable_inv_i));"),
+        qPrintable(sv));
+    /* A slow input reads the member it names, after override and inversion. */
+    QVERIFY2(
+        sv.contains(
+            "assert (ls_c1_input_value_o == ((ls_c1_rx_src_i ? ls_c1_rx_value_i : "
+            "((ls_c1_pin_i == 8'd0) ? pad_input_value_i[0] : (ls_c1_pin_i == 8'd1) ? "
+            "pad_input_value_i[1] : 1'b0)) ^ ls_c1_rx_inv_i));"),
+        qPrintable(sv));
+
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, QSocIomuxGenerator::generateTopVerilog(plan));
+    for (const QString &task : {QStringLiteral("prove"), QStringLiteral("bmc")}) {
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), task});
+        QVERIFY2(result.exitCode == 0, result.output.constData());
+    }
+}
+
+void Test::lsPoolMutationsFailBmcWhenAvailable()
+{
+    const QString sby   = QStandardPaths::findExecutable(QStringLiteral("sby"));
+    const QString yosys = QStandardPaths::findExecutable(QStringLiteral("yosys"));
+    const QString z3    = QStandardPaths::findExecutable(QStringLiteral("z3"));
+    if (sby.isEmpty() || yosys.isEmpty() || z3.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    const QSocIomuxPlan plan = lsPlan();
+    QVERIFY(plan.hasLs());
+    /* The last channel of a pool dropped from the bundle, and the last
+     * member dropped from a slow input: the two ends of each table. */
+    for (const QString &line :
+         {QStringLiteral(
+              "        8'd3: ls_bundle_1 = {ls_tx_input_enable_i[3], ls_tx_output_value_i[3], "
+              "ls_tx_output_enable_i[3]};\n"),
+          QStringLiteral("        8'd1: ls_rx_raw_3 = pad_input_value_i[1];\n")}) {
+        QString mutated = QSocIomuxGenerator::generateTopVerilog(plan);
+        QVERIFY2(mutated.contains(line), qPrintable(line));
+        mutated.remove(line);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        writeCollateral(directory, plan, mutated);
+        const CommandResult result = runCommand(
+            directory.path(),
+            sby,
+            {QStringLiteral("-f"), QStringLiteral("iomux0_hs_formal.sby"), QStringLiteral("bmc")});
+        QVERIFY2(result.exitCode != 0, result.output.constData());
+        QVERIFY2(result.output.contains("DONE (FAIL, rc=2)"), result.output.constData());
+        QVERIFY2(!result.output.contains("DONE (ERROR"), result.output.constData());
+    }
 }
 
 void Test::selectInversionIsProvenWhenAvailable()
