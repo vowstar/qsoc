@@ -594,7 +594,8 @@ at a known level. Substitution happens before inversion.
 `generator.option.interrupt` appends four enable banks and four pending
 banks, one bit per pin in each, for the high level, the low level, the
 rising edge, and the falling edge. It also adds an `irq_o` output that
-carries one line per `data_width` pins.
+carries one line per `data_width` pins, which the fragment links to the net
+`integration.interrupt` names.
 
 A pending bit records its event whether or not the matching enable is set,
 so a pin that reaches no interrupt line can still be polled. The enable
@@ -647,8 +648,8 @@ qsoc generate verilog --merge <base.soc_net> <module>_integration.soc_net
 ```
 
 The fragment instantiates the public wrapper once and connects the clock, the
-reset, the pad bus, the control bus, and every non-constant endpoint exactly
-once. With a pad cell it also instantiates the shell as `<instance>_io`,
+reset, the pad bus, the control bus, the interrupt lines when
+`option.interrupt` is on, and every non-constant endpoint exactly once. With a pad cell it also instantiates the shell as `<instance>_io`,
 links the bus between the two on nets named `<instance>_pad_<signal>`,
 uplinks `pad_io` and every `inout` net of a direct cell, and links the other
 direct nets. The merge flow knows `<module>_io` from the source alone, so

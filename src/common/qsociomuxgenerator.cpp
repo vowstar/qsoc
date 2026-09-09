@@ -34,7 +34,8 @@ const QSet<QString> kGeneratorKeys
        "integration",
        "route"};
 const QSet<QString> kOptionKeys = {"gpio", "interrupt", "pad_control", "invert", "rx_override"};
-const QSet<QString> kIntegrationKeys = {"instance", "clock", "reset", "control", "pad", "force"};
+const QSet<QString> kIntegrationKeys
+    = {"instance", "clock", "reset", "control", "pad", "force", "interrupt"};
 /** Widest bit index a route may name; the netlist parser holds an int. */
 constexpr quint64   kMaximumBit = 65535;
 const QSet<QString> kPadKeys
@@ -290,6 +291,7 @@ bool parseIntegration(
     const YAML::Node         &node,
     bool                      hasPadCell,
     bool                      hasSafe,
+    bool                      hasInterrupt,
     QSocIomuxIntegrationPlan *integration,
     QStringList              *errors)
 {
@@ -299,6 +301,18 @@ bool parseIntegration(
     }
 
     bool valid = true;
+    if (hasInterrupt && !node["interrupt"]) {
+        appendError(
+            errors, "REQUIRED", path + ".interrupt", "property is required with option.interrupt");
+        valid = false;
+    } else if (!hasInterrupt && node["interrupt"]) {
+        appendError(errors, "CONFLICT", path + ".interrupt", "needs option.interrupt to be on");
+        valid = false;
+    } else if (node["interrupt"]) {
+        valid
+            = parseIdentifier(node["interrupt"], path + ".interrupt", &integration->interrupt, errors)
+              && valid;
+    }
     if (hasSafe && !node["force"]) {
         appendError(errors, "REQUIRED", path + ".force", "property is required with pad_cell.safe");
         valid = false;
@@ -3282,6 +3296,7 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
                     generator["integration"],
                     plan->hasPadCell(),
                     plan->padModel.safe,
+                    plan->option.interrupt,
                     &plan->integration,
                     errors)
                 && valid;
@@ -5537,6 +5552,10 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
     if (plan.padModel.safe) {
         lines.append("      pad_force_i:");
         lines.append(QString("        link: %1").arg(integration.force));
+    }
+    if (plan.option.interrupt) {
+        lines.append("      irq_o:");
+        lines.append(QString("        link: %1").arg(integration.interrupt));
     }
     for (const EndpointPort &port : endpointPorts(plan)) {
         lines.append(QString("      %1:").arg(endpointName(port)));

@@ -484,6 +484,7 @@ private slots:
     void initTestCase();
     void cleanupTestCase();
     void mergedTopInstantiatesWrapperAndElaborates();
+    void mergedTopLinksTheInterruptLines();
     void mergedTopAxiWriteChangesPadWhenIverilogIsAvailable();
     void sparseVectorCarrierMerges();
     void combinationalVectorCarrierMerges();
@@ -544,6 +545,50 @@ void Test::mergedTopInstantiatesWrapperAndElaborates()
     const QString peripheralPath = QDir(directory.path()).filePath("periph_stub.v");
     writeTextFile(peripheralPath, peripheralVerilog());
 
+    QSlangDriver driver;
+    const QString files = QStringList{
+        topPath,
+        QDir(moduleOutput).filePath("iomux0.v"),
+        QDir(moduleOutput).filePath("iomux0_regs.v"),
+        QDir(moduleOutput).filePath("iomux0_conn.v"),
+        peripheralPath}
+                              .join(' ');
+    QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(files)));
+}
+
+void Test::mergedTopLinksTheInterruptLines()
+{
+    QTemporaryDir directory;
+    QString       moduleText = moduleLibrary;
+    moduleText.replace("    pin_count: 4\n", "    pin_count: 4\n    option: {interrupt: true}\n");
+    moduleText.replace(
+        "      control: iomux_control\n",
+        "      control: iomux_control\n      interrupt: iomux_irq\n");
+    createProject(directory, moduleText);
+
+    const CommandResult generated = generateModule(directory);
+    QCOMPARE(generated.exitCode, 0);
+    const QString fragment = readTextFile(
+        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net"));
+    QVERIFY2(fragment.contains("irq_o:\n        link: iomux_irq"), qPrintable(fragment));
+
+    QString base = baseNetlist;
+    base.replace(
+        "instance:\n  u_periph:",
+        "  iomux_irq:\n    direction: output\n    type: logic\n    connect: iomux_irq\n"
+        "instance:\n  u_periph:");
+    writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), base);
+    const CommandResult merged = mergeTop(directory);
+    QVERIFY2(merged.exitCode == 0, qPrintable(merged.output));
+
+    const QString topPath = QDir(directory.path()).filePath("output/iomux_soc_top.v");
+    const QString top     = readTextFile(topPath);
+    QVERIFY2(top.contains(".irq_o(iomux_irq)"), qPrintable(top));
+    QVERIFY2(!top.contains("FIXME"), qPrintable(top));
+
+    const QString moduleOutput   = QDir(directory.path()).filePath("output/peripheral/iomux0");
+    const QString peripheralPath = QDir(directory.path()).filePath("periph_stub.v");
+    writeTextFile(peripheralPath, peripheralVerilog());
     QSlangDriver driver;
     const QString files = QStringList{
         topPath,

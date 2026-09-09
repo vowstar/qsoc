@@ -38,6 +38,15 @@ QString integrationBlock()
 )");
 }
 
+/* The same block with the net irq_o links to, for a source that turns interrupts on. */
+QString withInterruptLink(QString block)
+{
+    block.replace(
+        "      control: iomux_control\n",
+        "      control: iomux_control\n      interrupt: iomux_irq\n");
+    return block;
+}
+
 QString sourceForConfig(quint32 pinCount, quint32 hsSlots, quint32 dataWidth, quint32 addressWidth)
 {
     return QString(R"(generator:
@@ -2303,6 +2312,7 @@ private slots:
     void regsAndTopEmittersComposePlan();
     void projectionMatchesWrapperHeader();
     void integrationNetlistConnectsEverythingOnce();
+    void integrationNetlistLinksTheInterruptLines();
     void routingSimulationWhenIverilogIsAvailable();
     void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
     void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
@@ -2836,6 +2846,19 @@ void Test::invalidSource_data()
         output_enable: 1
 )");
 
+    QTest::newRow("interrupt-without-link")
+        << QString(basePrefix)
+                   .replace("    hs_slots: 2\n", "    hs_slots: 2\n    option: {interrupt: true}\n")
+               + "    route: []\n"
+        << "IOMUX_REQUIRED generator.integration.interrupt: property is required with "
+           "option.interrupt";
+    QTest::newRow("interrupt-link-without-option")
+        << QString(basePrefix)
+                   .replace(
+                       "      control: iomux_control\n",
+                       "      control: iomux_control\n      interrupt: iomux_irq\n")
+               + "    route: []\n"
+        << "IOMUX_CONFLICT generator.integration.interrupt: needs option.interrupt to be on";
     QTest::newRow("bit-over-max")
         << withRoute(QString(minimalRoute)
                          .replace("output_enable: 1", "output_enable: {link: oe, bit: 65536}"))
@@ -3050,6 +3073,36 @@ void Test::integrationNetlistConnectsEverythingOnce()
     const YAML::Node parsed = YAML::Load(fragment.toStdString());
     QVERIFY(parsed["instance"]["u_iomux0"]["module"].IsScalar());
     QCOMPARE(int(parsed["bus"]["iomux_control"].size()), 1);
+}
+
+void Test::integrationNetlistLinksTheInterruptLines()
+{
+    QString source = sourceForConfig(4, 2, 32, 14);
+    source.replace("    hs_slots: 2\n", "    hs_slots: 2\n    option: {interrupt: true}\n");
+    source.replace(
+        "      control: iomux_control\n",
+        "      control: iomux_control\n      interrupt: iomux_irq\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const QString fragment = QSocIomuxGenerator::generateIntegrationNetlist(plan);
+    QCOMPARE(fragment.count("irq_o:"), 1);
+    QCOMPARE(fragment.count("link: iomux_irq"), 1);
+
+    /* Every public port of the wrapper is connected by the fragment. */
+    const YAML::Node parsed = YAML::Load(fragment.toStdString());
+    const YAML::Node ports  = QSocIomuxGenerator::describeModuleYaml(plan)["port"];
+    for (const auto &port : ports) {
+        const std::string name = port.first.Scalar();
+        if (name.rfind("s_axi_", 0) == 0) {
+            continue; /* the bus section carries these */
+        }
+        QVERIFY2(
+            parsed["instance"]["u_iomux0"]["port"][name].IsDefined(),
+            qPrintable(QString::fromStdString(name)));
+    }
 }
 
 void Test::routingSimulationWhenIverilogIsAvailable()
@@ -3297,7 +3350,7 @@ QSocModuleDefinition makeInterruptDefinition()
         output_value: {link: uart0_tx}
         output_enable: 1
 )")
-                              .arg(integrationBlock()));
+                              .arg(withInterruptLink(integrationBlock())));
 }
 
 QString interruptTestbench()
@@ -4156,7 +4209,7 @@ void Test::interruptAloneNeedsNoGpioRegisters()
         output_value: {link: uart0_tx}
         output_enable: 1
 )")
-                               .arg(integrationBlock())),
+                               .arg(withInterruptLink(integrationBlock()))),
             &plan,
             &errors),
         qPrintable(errors.join('\n')));
@@ -4326,7 +4379,8 @@ QString allOptionBlock()
  * makePadCellDefinition so the per-pin layout can be checked by hand. */
 QSocModuleDefinition makeAllOptionDefinition()
 {
-    return makeDefinition(QString(R"(generator:
+    return makeDefinition(
+        QString(R"(generator:
     kind: iomux
     bus: axi4_lite
     data_width: 32
@@ -4358,7 +4412,7 @@ QSocModuleDefinition makeAllOptionDefinition()
         input_enable: 1
         pull: keeper
 )")
-                              .arg(allOptionBlock(), padCellBlock(), padIntegrationBlock()));
+            .arg(allOptionBlock(), padCellBlock(), withInterruptLink(padIntegrationBlock())));
 }
 
 const QSocMmioRegisterPlan *findRegister(const QSocMmioPlan &mmio, const QString &name)
@@ -4696,7 +4750,11 @@ void Test::composedRegistersAreAlreadyCanonical()
 %2%3    route: []
 )")
                                        .arg(dataWidth)
-                                       .arg(options, integrationBlock());
+                                       .arg(
+                                           options,
+                                           options.contains("interrupt")
+                                               ? withInterruptLink(integrationBlock())
+                                               : integrationBlock());
             QSocIomuxPlan plan;
             QStringList   errors;
             QVERIFY2(
@@ -6214,7 +6272,8 @@ void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
         QSocIomuxPlan plan;
         QStringList   errors;
         const bool    ok = QSocIomuxGenerator::buildPlan(
-            makeDefinition(QString(R"(generator:
+            makeDefinition(
+                QString(R"(generator:
     kind: iomux
     bus: axi4_lite
     data_width: 32
@@ -6229,7 +6288,7 @@ void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
         output_value: {link: uart0_tx}
         pull: up
 )")
-                               .arg(options, padCellBlock(), padIntegrationBlock())),
+                    .arg(options, padCellBlock(), withInterruptLink(padIntegrationBlock()))),
             &plan,
             &errors);
         if (!ok) {

@@ -234,8 +234,9 @@ struct QSocIomuxIntegrationPlan
     QString padInputEnable;
     QString padOutputValue;
     QString padOutputEnable;
-    QString padIo; /**< Top-level pad net, used when a pad cell is declared */
-    QString force; /**< Net that drives pad_force_i, used when safe is declared */
+    QString padIo;     /**< Top-level pad net, used when a pad cell is declared */
+    QString force;     /**< Net that drives pad_force_i, used when safe is declared */
+    QString interrupt; /**< Net irq_o drives, used when option.interrupt is on */
 
     bool operator==(const QSocIomuxIntegrationPlan &) const = default;
 };
