@@ -638,6 +638,16 @@ initial begin
     check_value(c1_in === 1'b0, "channel 1 inverted");
     check_value(c3_in === 1'b1, "channel 3 untouched");
 
+    /* A slow input no pad is selected for still holds the level its
+     * registers name, and the pads and their other sinks never notice. */
+    axi_write(14'he40, {@DW@{1'b0}});
+    axi_write(14'hd00, {@DW@{1'b0}} | (32'h02 << 8));
+    check_value(c1_in === 1'b1, "unselected channel 1 held high by its register");
+    pad_in = 4'b0000;
+    #1 check_value(c1_in === 1'b1, "unselected channel 1 ignores every pad");
+    check_value(c3_in === 1'b0 && g_in === 1'b0, "other sinks follow their pads");
+    check_value(pad_oe[0] === 1'b1 && pad_oe[2] === 1'b1, "pad outputs untouched");
+
     if (failures == 0)
         $display("TEST_PASS");
     $finish;

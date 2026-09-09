@@ -151,7 +151,9 @@ sources, inversion, and the safe row layer on top as on every slot. Each slow
 input owns an 8-bit `ls_rx_pin` lane holding a pin number: it reads that pad
 when the pin is in its pool and zero otherwise, then `ls_rx_src` and
 `ls_rx_value` substitute under `option.rx_override` and `ls_rx_inv` inverts
-under `option.invert`, as the fast sinks do. Every lane resets to 0, so a
+under `option.invert`, as the fast sinks do. The substitution is per slow
+input, so a channel no pad is selected for can be held at a level its
+peripheral needs while every pad and every other sink stays as it is. Every lane resets to 0, so a
 pool pin leaves reset on channel 0, or on nothing when its pool has no channel
 0, and a slow input on pin 0. Nothing on the slow path is synchronised; only
 the gpio `input_value` bank and the interrupt detectors sample through two
