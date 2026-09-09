@@ -2325,6 +2325,7 @@ private slots:
     void registerPadControlReachesThePadWhenIverilogIsAvailable();
     void inversionAndOverrideReachThePinsWhenIverilogIsAvailable();
     void wovenKeeperCarriesItsStrength();
+    void strengthPastTheTableLandsOnTheFirstRow();
     void padTablesAreBoundedToEightBitCodes();
     void unreachableModeLandsOnNone();
     void nativeKeeperRowIsSelectedNotWoven();
@@ -5109,6 +5110,59 @@ void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
+void Test::strengthPastTheTableLandsOnTheFirstRow()
+{
+    /* Three up rows take a 2-bit select, so software can write 3. */
+    QString       padCell = padCellBlock();
+    const QString single  = "          up: [\"1\", \"1\"]\n";
+    QVERIFY(padCell.contains(single));
+    padCell.replace(
+        single,
+        "          up: {weak: [\"1\", \"1\"], mid: [\"1\", \"1\"], strong: [\"1\", \"1\"]}\n");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 14
+    pin_count: 1
+    hs_slots: 2
+    option:
+      pad_control: true
+%1%2    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+        pull: {mode: up, strength: strong}
+)")
+                               .arg(padCell, padIntegrationBlock())),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
+    const QSocPadEncoding encoding
+        = QSocIomuxGenerator::padEncoding(plan.padClass(0), plan.padModel);
+    QCOMPARE(encoding.upSelWidth, 2U);
+    QCOMPARE(encoding.row(QSocPadEncoding::Up, 3, 0).label, QStringLiteral("weak"));
+    QCOMPARE(encoding.row(QSocPadEncoding::Up, 2, 0).label, QStringLiteral("strong"));
+    /* The pad expression tries the three rows, then the first row for any
+     * other select, and reaches none only when the mode is not up. */
+    const QString pad = QSocIomuxGenerator::generateIoVerilog(plan);
+    QVERIFY2(
+        pad.contains(
+            "wire PE_0_w = (pad_mode_eff_0 == 4'd1 && pad_up_sel_i[3:0] == 4'd0) ? 1'b1 : "
+            "(pad_mode_eff_0 == 4'd1 && pad_up_sel_i[3:0] == 4'd1) ? 1'b1 : "
+            "(pad_mode_eff_0 == 4'd1 && pad_up_sel_i[3:0] == 4'd2) ? 1'b1 : "
+            "(pad_mode_eff_0 == 4'd1) ? 1'b1 : "
+            "(pad_mode_eff_0 == 4'd2) ? 1'b1 : (pad_mode_eff_0 == 4'd5) ? 1'b1 : 1'b0;"),
+        qPrintable(pad));
+}
+
 void Test::wovenKeeperCarriesItsStrength()
 {
     QString       padCell = padCellBlock();
@@ -5162,6 +5216,7 @@ void Test::wovenKeeperCarriesItsStrength()
     QVERIFY(pad.contains(
         "wire PE_1_w = (pad_mode_eff_1 == 4'd1 && pad_up_sel_i[7:4] == 4'd0) ? 1'b1 : "
         "(pad_mode_eff_1 == 4'd1 && pad_up_sel_i[7:4] == 4'd1) ? 1'b1 : "
+        "(pad_mode_eff_1 == 4'd1) ? 1'b1 : "
         "(pad_mode_eff_1 == 4'd2) ? 1'b1 : (pad_mode_eff_1 == 4'd5) ? 1'b1 : 1'b0;"));
     /* The keeper route carries strong into the up select; the down side has
      * a single row and no select. */

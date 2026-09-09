@@ -2358,6 +2358,11 @@ void appendPadPullPorts(
                 }
                 arms.append({condition, &rows.at(index)});
             }
+            /* A select past the table still pulls: it lands on the first row,
+             * so a register mistake never leaves the pad floating. */
+            if (selWidth > 0) {
+                arms.append({modeIs + QString::number(modeCode), &rows.first()});
+            }
         };
     graded(QSocPadEncoding::Up, encoding.upRows, upSel, encoding.upSelWidth);
     graded(QSocPadEncoding::Down, encoding.downRows, downSel, encoding.downSelWidth);
@@ -3739,15 +3744,15 @@ const QSocPadTableRow &QSocPadEncoding::row(int mode, int upIndex, int downIndex
 {
     switch (mode) {
     case Up:
-        if (upIndex >= 0 && upIndex < upRows.size()) {
-            return upRows.at(upIndex);
+        if (upRows.isEmpty()) {
+            return noneRow;
         }
-        return noneRow;
+        return upRows.at(upIndex >= 0 && upIndex < upRows.size() ? upIndex : 0);
     case Down:
-        if (downIndex >= 0 && downIndex < downRows.size()) {
-            return downRows.at(downIndex);
+        if (downRows.isEmpty()) {
+            return noneRow;
         }
-        return noneRow;
+        return downRows.at(downIndex >= 0 && downIndex < downRows.size() ? downIndex : 0);
     case Keeper:
         return keeperRow ? *keeperRow : noneRow;
     case Oscillator:
