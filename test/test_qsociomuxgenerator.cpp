@@ -2835,6 +2835,10 @@ void Test::invalidSource_data()
         output_enable: 1
 )");
 
+    QTest::newRow("bit-over-max")
+        << withRoute(QString(minimalRoute)
+                         .replace("output_enable: 1", "output_enable: {link: oe, bit: 65536}"))
+        << "IOMUX_RANGE generator.route[0].output_enable.bit: must be between 0 and 65535";
     QTest::newRow("missing-pin-count")
         << QString("generator:\n    kind: iomux\n    bus: axi4_lite\n%1    route: []\n")
                .arg(integrationBlock())

@@ -1579,8 +1579,17 @@ bool QSocGenerateManager::processLinkConnection(
 
         /* Parse the link value to extract net name and bit selection */
         auto [cleanNetName, bitSelection] = parseLinkValue(netName);
+        const std::string rawBitSelection = bitSelection;
         bitSelection = QSocVerilogUtils::normalizeBitSelect(QString::fromStdString(bitSelection))
                            .toStdString();
+        /* A slice the normalizer cannot hold would otherwise connect the whole
+           net and elaborate. */
+        if (!rawBitSelection.empty() && bitSelection.empty()) {
+            QSocConsole::error() << "Link bit select" << rawBitSelection.c_str() << "on"
+                                 << instanceName.c_str() << "." << portName.c_str()
+                                 << "is not an index the netlist can hold";
+            return false;
+        }
 
         /* An empty link target used to synthesise a `wire ;` declaration
            and a connection to a nameless net. Reject upfront. */
@@ -1712,9 +1721,18 @@ bool QSocGenerateManager::processUplinkConnection(
                     << "." << portName.c_str() << "must be numeric to size the top-level port";
                 return false;
             }
-            const int first  = match.captured(1).toInt();
-            const int second = match.capturedLength(2) > 0 ? match.captured(2).toInt() : first;
-            sliceMsb         = qMax(first, second);
+            bool      firstOk  = false;
+            bool      secondOk = true;
+            const int first    = match.captured(1).toInt(&firstOk);
+            const int second   = match.capturedLength(2) > 0 ? match.captured(2).toInt(&secondOk)
+                                                             : first;
+            if (!firstOk || !secondOk) {
+                QSocConsole::error()
+                    << "Uplink bit select" << bitSelection.c_str() << "on" << instanceName.c_str()
+                    << "." << portName.c_str() << "is not an index the netlist can hold";
+                return false;
+            }
+            sliceMsb = qMax(first, second);
         }
 
         QSocConsole::info() << "Processing uplink connection:" << instanceName.c_str() << "."

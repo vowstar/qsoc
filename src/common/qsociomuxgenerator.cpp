@@ -35,6 +35,8 @@ const QSet<QString> kGeneratorKeys
        "route"};
 const QSet<QString> kOptionKeys = {"gpio", "interrupt", "pad_control", "invert", "rx_override"};
 const QSet<QString> kIntegrationKeys = {"instance", "clock", "reset", "control", "pad", "force"};
+/** Widest bit index a route may name; the netlist parser holds an int. */
+constexpr quint64   kMaximumBit = 65535;
 const QSet<QString> kPadKeys
     = {"io", "input_value", "input_enable", "output_value", "output_enable"};
 const QSet<QString> kRouteKeys
@@ -1695,13 +1697,7 @@ bool parseEndpoint(
         }
         if (node["bit"]) {
             quint64 bit = 0;
-            if (parseStrictUnsigned(
-                    node["bit"],
-                    path + ".bit",
-                    0,
-                    std::numeric_limits<quint32>::max(),
-                    &bit,
-                    errors)) {
+            if (parseStrictUnsigned(node["bit"], path + ".bit", 0, kMaximumBit, &bit, errors)) {
                 endpoint->bit = static_cast<quint32>(bit);
             } else {
                 valid = false;
@@ -1738,8 +1734,7 @@ bool parseSelectLink(
     bool valid = parseIdentifier(node["link"], path + ".link", &link->link, errors);
     if (node["bit"]) {
         quint64 bit = 0;
-        if (parseStrictUnsigned(
-                node["bit"], path + ".bit", 0, std::numeric_limits<quint32>::max(), &bit, errors)) {
+        if (parseStrictUnsigned(node["bit"], path + ".bit", 0, kMaximumBit, &bit, errors)) {
             link->bit = static_cast<quint32>(bit);
         } else {
             valid = false;

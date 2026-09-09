@@ -2238,6 +2238,86 @@ instance:
         verifyGenerationRefused("test_link_bits_overlap", "vout_bus takes multiple output drivers");
     }
 
+    /* An index past what the parser holds used to drop the slice and connect
+       the whole net. */
+    void testLinkBitSelectPastIntIsRejected()
+    {
+        messageList.clear();
+
+        const QString content       = R"(
+instance:
+  u_nibble_east0:
+    module: nibble_drv
+    port:
+      dout:
+        link: vout_bus[2147483648]
+)";
+        const QString nibbleContent = R"(
+nibble_drv:
+  port:
+    dout:
+      type: logic[3:0]
+      direction: output
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString nibblePath = moduleDir.filePath("nibble_drv.soc_mod");
+        QFile         nibbleFile(nibblePath);
+        if (nibbleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&nibbleFile);
+            stream << nibbleContent;
+            nibbleFile.close();
+        }
+
+        const QString filePath = createTempFile("test_link_bits_overflow.soc_net", content);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        verifyGenerationRefused("test_link_bits_overflow", "is not an index the netlist can hold");
+    }
+
+    void testUplinkBitSelectPastIntIsRejected()
+    {
+        messageList.clear();
+
+        const QString content       = R"(
+instance:
+  u_nibble_east0:
+    module: nibble_drv
+    port:
+      dout:
+        uplink: vout_bus[2147483648]
+)";
+        const QString nibbleContent = R"(
+nibble_drv:
+  port:
+    dout:
+      type: logic[3:0]
+      direction: output
+)";
+        const QDir    moduleDir(projectManager.getModulePath());
+        const QString nibblePath = moduleDir.filePath("nibble_drv.soc_mod");
+        QFile         nibbleFile(nibblePath);
+        if (nibbleFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream stream(&nibbleFile);
+            stream << nibbleContent;
+            nibbleFile.close();
+        }
+
+        const QString filePath = createTempFile("test_uplink_bits_overflow.soc_net", content);
+
+        QSocCliWorker     socCliWorker;
+        const QStringList appArguments
+            = {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath};
+        socCliWorker.setup(appArguments, false);
+        socCliWorker.run();
+
+        verifyGenerationRefused("test_uplink_bits_overflow", "is not an index the netlist can hold");
+    }
+
     /* Four outputs of one instance on a single net are four drivers; the
        netlist is refused instead of collapsing them. */
     void testGenerateRejectsSameInstanceMultiplePortsToSameNet()

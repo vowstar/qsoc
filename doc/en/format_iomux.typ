@@ -76,7 +76,7 @@ Each route names a `pin` below `pin_count`, a `slot` below `hs_slots`, and
 non-empty `function` and `signal` labels used only for reports. A `(pin,
 slot)` pair appears at most once, and an `input_value` sink (`link` plus
 `bit`) is driven by at most one route. Role values are an endpoint map with
-`link`, an optional `bit`, and an optional boolean `invert`, or for every role
+`link`, an optional `bit` up to 65535, and an optional boolean `invert`, or for every role
 but `input_value` the integer `0` or `1`. An omitted output role drives `0`;
 an omitted `input_value` declares no sink. HDL expressions, slices, and concatenations
 are rejected.
