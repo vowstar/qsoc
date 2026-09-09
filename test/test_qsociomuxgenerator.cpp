@@ -707,6 +707,256 @@ const QSocMmioRegisterPlan *findRegister(const QSocMmioPlan &mmio, const QString
 QString                     padCellBlock();
 QString                     padIntegrationBlock();
 
+/* Three pools with disjoint pins and sparse, disjoint channel numbers, so a
+ * pool that reached another pool's channel or pad would show it. Channel k
+ * drives the signature {ie, ov, oe} = code, one code per channel. */
+QString poolsSource()
+{
+    return QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 14
+    pin_count: 12
+    hs_slots: 2
+%1    ls:
+      pool_a:
+        pins: ["0-3"]
+        channel:
+          - {channel: 0, function: a, signal: t0, input_enable: 0, output_value: 0, output_enable: 1}
+          - {channel: 1, function: a, signal: t1, input_enable: 0, output_value: 1, output_enable: 0}
+          - {channel: 10, function: a, signal: rx, input_value: {link: a_rx}}
+      pool_b:
+        pins: ["4-7"]
+        channel:
+          - {channel: 2, function: b, signal: t0, input_enable: 0, output_value: 1, output_enable: 1}
+          - {channel: 3, function: b, signal: t1, input_enable: 1, output_value: 0, output_enable: 0}
+          - {channel: 11, function: b, signal: rx, input_value: {link: b_rx}}
+      pool_c:
+        pins: ["8-11"]
+        reset: 20
+        channel:
+          - {channel: 20, function: c, signal: t0, input_enable: 1, output_value: 0, output_enable: 1}
+          - {channel: 21, function: c, signal: t1, input_enable: 1, output_value: 1, output_enable: 0}
+          - {channel: 30, function: c, signal: rx, input_value: {link: c_rx}}
+    route:
+      - {pin: 0, slot: 1, function: spare, signal: s, output_enable: {link: spare_oe}}
+)")
+        .arg(integrationBlock());
+}
+
+QString poolsTestbench()
+{
+    return QString(R"VERILOG(`timescale 1ns/1ps
+module tb;
+localparam LANES = 4;
+reg               clk_i;
+reg               rst_ni;
+reg  [13:0]       s_axi_awaddr;
+reg  [2:0]        s_axi_awprot;
+reg               s_axi_awvalid;
+wire              s_axi_awready;
+reg  [31:0]       s_axi_wdata;
+reg  [3:0]        s_axi_wstrb;
+reg               s_axi_wvalid;
+wire              s_axi_wready;
+wire [1:0]        s_axi_bresp;
+wire              s_axi_bvalid;
+reg               s_axi_bready;
+reg  [13:0]       s_axi_araddr;
+reg  [2:0]        s_axi_arprot;
+reg               s_axi_arvalid;
+wire              s_axi_arready;
+wire [31:0]       s_axi_rdata;
+wire [1:0]        s_axi_rresp;
+wire              s_axi_rvalid;
+reg               s_axi_rready;
+reg  [11:0]       pad_in;
+wire [11:0]       pad_ie, pad_ov, pad_oe;
+wire              a_rx, b_rx, c_rx;
+reg               spare_oe;
+reg  [31:0]       word;
+reg  [31:0]       chunk;
+reg  [7:0]        sel  [0:11];
+reg  [7:0]        rxpin[0:31];
+integer           p, w, l, failures;
+
+iomux0 dut (
+    .clk_i(clk_i), .rst_ni(rst_ni),
+    .s_axi_awaddr(s_axi_awaddr), .s_axi_awprot(s_axi_awprot), .s_axi_awvalid(s_axi_awvalid),
+    .s_axi_awready(s_axi_awready), .s_axi_wdata(s_axi_wdata), .s_axi_wstrb(s_axi_wstrb),
+    .s_axi_wvalid(s_axi_wvalid), .s_axi_wready(s_axi_wready), .s_axi_bresp(s_axi_bresp),
+    .s_axi_bvalid(s_axi_bvalid), .s_axi_bready(s_axi_bready), .s_axi_araddr(s_axi_araddr),
+    .s_axi_arprot(s_axi_arprot), .s_axi_arvalid(s_axi_arvalid), .s_axi_arready(s_axi_arready),
+    .s_axi_rdata(s_axi_rdata), .s_axi_rresp(s_axi_rresp), .s_axi_rvalid(s_axi_rvalid),
+    .s_axi_rready(s_axi_rready),
+    .pad_input_value_i(pad_in), .pad_input_enable_o(pad_ie),
+    .pad_output_value_o(pad_ov), .pad_output_enable_o(pad_oe),
+    .hs_p0_s1_output_enable_i(spare_oe),
+    .ls_c10_input_value_o(a_rx), .ls_c11_input_value_o(b_rx), .ls_c30_input_value_o(c_rx)
+);
+
+always #5 clk_i = ~clk_i;
+
+task axi_write;
+    input [13:0] address;
+    input [31:0] data;
+    begin
+        @(negedge clk_i);
+        s_axi_awaddr = address; s_axi_awvalid = 1'b1;
+        while (s_axi_awready !== 1'b1) @(negedge clk_i);
+        @(posedge clk_i); #1 s_axi_awvalid = 1'b0;
+        @(negedge clk_i);
+        s_axi_wdata = data; s_axi_wstrb = 4'hf; s_axi_wvalid = 1'b1;
+        while (s_axi_wready !== 1'b1) @(negedge clk_i);
+        @(posedge clk_i); #1 s_axi_wvalid = 1'b0; s_axi_bready = 1'b1;
+        while (s_axi_bvalid !== 1'b1) @(negedge clk_i);
+        @(posedge clk_i); #1 s_axi_bready = 1'b0;
+        @(negedge clk_i);
+    end
+endtask
+
+/* Push the whole model of the channel selects, so pools that share a word
+ * are written together. */
+task push_sel;
+    begin
+        for (w = 0; w * LANES < 12; w = w + 1) begin
+            word = 32'd0;
+            for (l = 0; l < LANES; l = l + 1) begin
+                chunk = sel[w * LANES + l];
+                word  = word | (chunk << (l * 8));
+            end
+            axi_write(14'hc00 + w * 4, word);
+        end
+    end
+endtask
+
+/* Only the words that hold a sink are mapped: 10 and 11 share one, 30 has
+ * its own. */
+task push_rxpin;
+    begin
+        for (w = 0; w < 8; w = w + 1) begin
+            if (w == 10 / LANES || w == 11 / LANES || w == 30 / LANES) begin
+                word = 32'd0;
+                for (l = 0; l < LANES; l = l + 1) begin
+                    chunk = rxpin[w * LANES + l];
+                    word  = word | (chunk << (l * 8));
+                end
+                axi_write(14'hd00 + w * 4, word);
+            end
+        end
+    end
+endtask
+
+task expect_pin;
+    input integer pin;
+    input [2:0]   code;
+    input [8*64-1:0] label;
+    begin
+        if (pad_ie[pin] !== code[2] || pad_ov[pin] !== code[1] || pad_oe[pin] !== code[0]) begin
+            failures = failures + 1;
+            $display("TEST_FAIL %0s: pin %0d wanted %b saw %b%b%b", label, pin, code,
+                     pad_ie[pin], pad_ov[pin], pad_oe[pin]);
+        end
+    end
+endtask
+
+/* Every pin of one pool takes code, every pin of the others takes zero. */
+task expect_only;
+    input integer lo;
+    input integer hi;
+    input [2:0]   code;
+    input [8*64-1:0] label;
+    begin
+        for (p = 0; p < 12; p = p + 1)
+            expect_pin(p, (p >= lo && p <= hi) ? code : 3'd0, label);
+    end
+endtask
+
+task expect_sinks;
+    input a; input b; input c;
+    input [8*64-1:0] label;
+    begin
+        if (a_rx !== a || b_rx !== b || c_rx !== c) begin
+            failures = failures + 1;
+            $display("TEST_FAIL %0s: wanted %b%b%b saw %b%b%b", label, a, b, c, a_rx, b_rx, c_rx);
+        end
+    end
+endtask
+
+task set_all_sel;
+    input [7:0] value;
+    begin
+        for (p = 0; p < 12; p = p + 1) sel[p] = value;
+        push_sel;
+    end
+endtask
+
+initial begin
+    failures = 0; clk_i = 1'b0; rst_ni = 1'b0; pad_in = 12'd0; spare_oe = 1'b0;
+    s_axi_awaddr = 14'd0; s_axi_awprot = 3'b000; s_axi_awvalid = 1'b0;
+    s_axi_wdata = 32'd0; s_axi_wstrb = 4'd0; s_axi_wvalid = 1'b0; s_axi_bready = 1'b0;
+    s_axi_araddr = 14'd0; s_axi_arprot = 3'b000; s_axi_arvalid = 1'b0; s_axi_rready = 1'b0;
+    for (p = 0; p < 32; p = p + 1) rxpin[p] = 8'd0;
+    repeat (4) @(negedge clk_i); rst_ni = 1'b1; repeat (2) @(negedge clk_i);
+
+    /* Reset: pool_a on channel 0, pool_c on its own reset channel 20, and
+     * pool_b on channel 0, which is not its own, so it drives nothing. */
+    for (p = 0; p < 4;  p = p + 1) expect_pin(p, 3'b001, "pool_a resets to channel 0");
+    for (p = 4; p < 8;  p = p + 1) expect_pin(p, 3'b000, "pool_b has no channel 0");
+    for (p = 8; p < 12; p = p + 1) expect_pin(p, 3'b101, "pool_c resets to channel 20");
+
+    /* Each channel reaches its own pool and no other. */
+    set_all_sel(8'd0);  expect_only(0, 3,  3'b001, "channel 0 is pool_a alone");
+    set_all_sel(8'd1);  expect_only(0, 3,  3'b010, "channel 1 is pool_a alone");
+    set_all_sel(8'd2);  expect_only(4, 7,  3'b011, "channel 2 is pool_b alone");
+    set_all_sel(8'd3);  expect_only(4, 7,  3'b100, "channel 3 is pool_b alone");
+    set_all_sel(8'd20); expect_only(8, 11, 3'b101, "channel 20 is pool_c alone");
+    set_all_sel(8'd21); expect_only(8, 11, 3'b110, "channel 21 is pool_c alone");
+    set_all_sel(8'd200); expect_only(0, -1, 3'd0, "a number no pool holds is empty");
+
+    /* One pin per pool on its own channel while the rest sit on a foreign
+     * one: the pools do not lean on each other. */
+    for (p = 0; p < 12; p = p + 1) sel[p] = 8'd200;
+    sel[1] = 8'd1; sel[5] = 8'd3; sel[9] = 8'd21;
+    push_sel;
+    for (p = 0; p < 12; p = p + 1)
+        expect_pin(p, (p == 1) ? 3'b010 : (p == 5) ? 3'b100 : (p == 9) ? 3'b110 : 3'd0,
+                   "one pin per pool at a time");
+
+    /* A slow input reads its own pool's pads only. */
+    pad_in = 12'd0;
+    rxpin[10] = 8'd2; rxpin[11] = 8'd5; rxpin[30] = 8'd9; push_rxpin;
+    pad_in[2] = 1'b1; pad_in[5] = 1'b1; pad_in[9] = 1'b1;
+    #1 expect_sinks(1'b1, 1'b1, 1'b1, "each sink follows its own pad");
+    pad_in = 12'd0;
+    #1 expect_sinks(1'b0, 1'b0, 1'b0, "each sink follows its own pad down");
+
+    rxpin[10] = 8'd5; rxpin[11] = 8'd9; rxpin[30] = 8'd2; push_rxpin;
+    pad_in[2] = 1'b1; pad_in[5] = 1'b1; pad_in[9] = 1'b1;
+    #1 expect_sinks(1'b0, 1'b0, 1'b0, "a pad of another pool reads zero");
+
+    rxpin[10] = 8'd3; rxpin[11] = 8'd5; rxpin[30] = 8'd11; push_rxpin;
+    pad_in = 12'd0; pad_in[3] = 1'b1;
+    #1 expect_sinks(1'b1, 1'b0, 1'b0, "pool_a alone sees its pad");
+    pad_in = 12'd0; pad_in[5] = 1'b1;
+    #1 expect_sinks(1'b0, 1'b1, 1'b0, "pool_b alone sees its pad");
+    pad_in = 12'd0; pad_in[11] = 1'b1;
+    #1 expect_sinks(1'b0, 1'b0, 1'b1, "pool_c alone sees its pad");
+
+    /* The fast slot of a pool pin is untouched by any of it. */
+    set_all_sel(8'd200);
+    spare_oe = 1'b1;
+    axi_write(14'h100, 32'h1);
+    #1 expect_pin(0, 3'b001, "pin 0 slot 1 still routes");
+
+    if (failures == 0) $display("TEST_PASS");
+    $finish;
+end
+endmodule
+)VERILOG");
+}
+
 /* Every pin carries every slot, and slot k drives the constant signature
  * {ie, ov, oe} = k, so a pad tells which slot it follows. With a pool the
  * same signatures sit on channels 0 to 7 and channels 8 to 15 are sinks. */
@@ -2931,6 +3181,7 @@ private slots:
     void integrationNetlistLinksTheInterruptLines();
     void routingSimulationWhenIverilogIsAvailable();
     void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
+    void lsPoolsDoNotReachEachOtherWhenIverilogIsAvailable();
     void everyPinAndSlotAnswersThroughTheRegisters_data();
     void everyPinAndSlotAnswersThroughTheRegisters();
     void lsPoolPlanFollowsTheSource();
@@ -3822,6 +4073,96 @@ void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable()
     QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
     QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
     QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+}
+
+void Test::lsPoolsDoNotReachEachOtherWhenIverilogIsAvailable()
+{
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(poolsSource()), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.lsPools.size(), 3);
+    /* Numbering is one space, so the buses are as wide as the highest number
+     * and a pool holds only the numbers it declares. */
+    QCOMPARE(plan.lsChannelCount(), 31U);
+    QCOMPARE(
+        findField(plan.mmio, "ls_capability", "channel_count")->constantValue,
+        std::optional<quint64>(31));
+    QCOMPARE(
+        findField(plan.mmio, "ls_capability", "pool_count")->constantValue,
+        std::optional<quint64>(3));
+    QCOMPARE(
+        findField(plan.mmio, "ls_select_0", "pin_0_ls_select")->resetValue,
+        std::optional<quint64>(0));
+    QCOMPARE(
+        findField(plan.mmio, "ls_select_1", "pin_4_ls_select")->resetValue,
+        std::optional<quint64>(0));
+    QCOMPARE(
+        findField(plan.mmio, "ls_select_2", "pin_8_ls_select")->resetValue,
+        std::optional<quint64>(20));
+    /* A pin's slot 0 case holds its own pool's channels and nothing else. */
+    const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
+    QVERIFY2(
+        top.contains(
+            "    case (pin_5_ls_select_i)\n"
+            "        8'd2: ls_bundle_5 = {ls_tx_input_enable_i[2], "
+            "ls_tx_output_value_i[2], ls_tx_output_enable_i[2]};\n"
+            "        8'd3: ls_bundle_5 = {ls_tx_input_enable_i[3], "
+            "ls_tx_output_value_i[3], ls_tx_output_enable_i[3]};\n"
+            "        8'd11: ls_bundle_5 = {ls_tx_input_enable_i[11], "
+            "ls_tx_output_value_i[11], ls_tx_output_enable_i[11]};\n"
+            "        default: ls_bundle_5 = 3'b000;"),
+        qPrintable(top));
+    QVERIFY2(
+        top.contains(
+            "    case (ls_c30_pin_i)\n"
+            "        8'd8: ls_rx_raw_30 = pad_input_value_i[8];\n"
+            "        8'd9: ls_rx_raw_30 = pad_input_value_i[9];\n"
+            "        8'd10: ls_rx_raw_30 = pad_input_value_i[10];\n"
+            "        8'd11: ls_rx_raw_30 = pad_input_value_i[11];\n"
+            "        default: ls_rx_raw_30 = 1'b0;"),
+        qPrintable(top));
+
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
+    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(topPath, top);
+    writeTextFile(benchPath, poolsTestbench());
+
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(
+        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(120000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray compilerOutput = process.readAll();
+    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+
+    QProcess simulation;
+    simulation.setWorkingDirectory(directory.path());
+    simulation.setProcessChannelMode(QProcess::MergedChannels);
+    simulation.start(runtime, {outputPath});
+    QVERIFY(simulation.waitForStarted());
+    QVERIFY(simulation.waitForFinished(120000));
+    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
+    const QByteArray simulationOutput = simulation.readAll();
+    QCOMPARE(simulation.exitCode(), 0);
+    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.left(2000).constData());
+    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.left(2000).constData());
 }
 
 void Test::everyPinAndSlotAnswersThroughTheRegisters_data()
