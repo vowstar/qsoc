@@ -1347,13 +1347,14 @@ bool parseIoRing(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *error
                                 valid = false;
                                 continue;
                             }
-                            const bool constant = net == "1'b0" || net == "1'b1";
+                            const bool constant = QSocIomuxGenerator::isCellConstant(net);
                             if (!constant && !QSocVerilogUtils::isValidVerilogIdentifier(net)) {
                                 appendError(
                                     errors,
                                     "IDENTIFIER",
                                     itemPath + ".port." + name,
-                                    "must be a Verilog identifier, 1'b0, or 1'b1");
+                                    "must be a Verilog identifier or a sized binary constant "
+                                    "such as 1'b0");
                                 valid = false;
                                 continue;
                             }
@@ -1661,7 +1662,7 @@ bool parseIoRing(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *error
     QSet<QString> nets;
     for (const QSocIoRingDirect &direct : ring.direct) {
         for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-            if (it.value().startsWith("1'b")) {
+            if (QSocIomuxGenerator::isCellConstant(it.value())) {
                 continue;
             }
             if (nets.contains(it.value())) {
@@ -3493,16 +3494,16 @@ QList<QSocMmioPortDescription> shellPortDescriptions(const QSocIomuxPlan &plan)
     ports.append(padBusPorts(plan, false));
     for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
         for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-            if (it.value().startsWith("1'b")) {
+            if (QSocIomuxGenerator::isCellConstant(it.value())) {
                 continue;
             }
-            const QString direction = direct.cellPorts.value(it.key());
+            const QSocCellPort port = direct.cellPorts.value(it.key());
             ports.append(
                 {it.value(),
-                 direction == "out"     ? QStringLiteral("output")
-                 : direction == "inout" ? QStringLiteral("inout")
-                                        : QStringLiteral("input"),
-                 1});
+                 port.direction == "out"     ? QStringLiteral("output")
+                 : port.direction == "inout" ? QStringLiteral("inout")
+                                             : QStringLiteral("input"),
+                 port.width});
         }
     }
     return ports;
@@ -4044,7 +4045,7 @@ QSocPadEncoding QSocIomuxGenerator::padEncoding(
 }
 
 bool QSocIomuxGenerator::checkPadCellPorts(
-    const QSocPadCellPlan &cell, const QMap<QString, QString> &cellPorts, QStringList *errors)
+    const QSocPadCellPlan &cell, const QSocCellPorts &cellPorts, QStringList *errors)
 {
     if (!cell.declared()) {
         return true;
@@ -4059,10 +4060,16 @@ bool QSocIomuxGenerator::checkPadCellPorts(
                 QString("IOMUX_PAD %1.%2: %3 has no port %4").arg(cell.path, what, cell.cell, port));
             return;
         }
-        const QString have = cellPorts.value(port);
-        if (have != want && have != "inout") {
+        const QSocCellPort have = cellPorts.value(port);
+        if (have.direction != want && have.direction != "inout") {
             local.append(QString("IOMUX_PAD %1.%2: %3 port %4 is %5, expected %6")
-                             .arg(cell.path, what, cell.cell, port, have, want));
+                             .arg(cell.path, what, cell.cell, port, have.direction, want));
+        }
+        /* The generator drives one net into every pin it names. */
+        if (have.width != 1) {
+            local.append(QString("IOMUX_PAD %1.%2: %3 port %4 is %5 bits wide, expected 1")
+                             .arg(cell.path, what, cell.cell, port)
+                             .arg(have.width));
         }
     };
 
@@ -4094,7 +4101,8 @@ bool QSocIomuxGenerator::checkPadCellPorts(
     }
     QStringList undriven;
     for (auto it = cellPorts.cbegin(); it != cellPorts.cend(); ++it) {
-        if ((it.value() == "in" || it.value() == "inout") && !driven.contains(it.key())) {
+        const QString direction = it.value().direction;
+        if ((direction == "in" || direction == "inout") && !driven.contains(it.key())) {
             undriven.append(it.key());
         }
     }
@@ -4112,22 +4120,44 @@ bool QSocIomuxGenerator::checkPadCellPorts(
     return local.isEmpty();
 }
 
+bool QSocIomuxGenerator::isCellConstant(const QString &value)
+{
+    static const QRegularExpression pattern(R"(^[1-9][0-9]*'b[01]+$)");
+    return pattern.match(value).hasMatch();
+}
+
 bool QSocIomuxGenerator::checkDirectPorts(
-    const QSocIoRingDirect &direct, const QMap<QString, QString> &cellPorts, QStringList *errors)
+    const QSocIoRingDirect &direct, const QSocCellPorts &cellPorts, QStringList *errors)
 {
     QStringList   local;
     const QString where = "IOMUX_RING generator.io_ring.direct." + direct.key;
     for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
         if (!cellPorts.contains(it.key())) {
             local.append(QString("%1: %2 has no port %3").arg(where, direct.cell, it.key()));
-        } else if (it.value().startsWith("1'b") && cellPorts.value(it.key()) != "in") {
+            continue;
+        }
+        if (!isCellConstant(it.value())) {
+            continue;
+        }
+        const QSocCellPort port = cellPorts.value(it.key());
+        if (port.direction != "in") {
             local.append(QString("%1: port %2 of %3 is not an input, a constant cannot drive it")
                              .arg(where, it.key(), direct.cell));
+            continue;
+        }
+        const quint32 bits = it.value().section('\'', 0, 0).toUInt();
+        if (bits != port.width) {
+            local.append(QString("%1: port %2 of %3 is %4 bits wide, constant %5 is %6")
+                             .arg(where, it.key(), direct.cell)
+                             .arg(port.width)
+                             .arg(it.value())
+                             .arg(bits));
         }
     }
     QStringList undriven;
     for (auto it = cellPorts.cbegin(); it != cellPorts.cend(); ++it) {
-        if ((it.value() == "in" || it.value() == "inout") && !direct.port.contains(it.key())) {
+        const QString direction = it.value().direction;
+        if ((direction == "in" || direction == "inout") && !direct.port.contains(it.key())) {
             undriven.append(it.key());
         }
     }
@@ -5576,13 +5606,13 @@ QString QSocIomuxGenerator::generateIntegrationNetlist(const QSocIomuxPlan &plan
         }
         for (const QSocIoRingDirect &direct : plan.ioRing.direct) {
             for (auto it = direct.port.cbegin(); it != direct.port.cend(); ++it) {
-                if (it.value().startsWith("1'b")) {
+                if (QSocIomuxGenerator::isCellConstant(it.value())) {
                     continue;
                 }
                 lines.append(QString("      %1:").arg(it.value()));
                 lines.append(QString("        %1: %2")
                                  .arg(
-                                     direct.cellPorts.value(it.key()) == "inout"
+                                     direct.cellPorts.value(it.key()).direction == "inout"
                                          ? QStringLiteral("uplink")
                                          : QStringLiteral("link"),
                                      it.value()));

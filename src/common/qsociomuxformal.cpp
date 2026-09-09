@@ -656,7 +656,7 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
      * the declarations named real ports. Physical cells have no ports. */
     struct Stub
     {
-        QMap<QString, QString> ports;
+        QSocCellPorts          ports;
         const QSocPadCellPlan *cell = nullptr; /**< The class whose constraints it carries */
     };
     /* Only what the shell instantiates: a library entry drawn once per axis
@@ -724,10 +724,13 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
         const Stub &stub = it.value();
         QStringList stubPorts;
         for (auto port = stub.ports.cbegin(); port != stub.ports.cend(); ++port) {
-            const QString dir = port.value() == "out"     ? QStringLiteral("output")
-                                : port.value() == "inout" ? QStringLiteral("inout")
-                                                          : QStringLiteral("input");
-            stubPorts.append(QString("    %1 wire %2").arg(dir, port.key()));
+            const QString dir   = port.value().direction == "out"     ? QStringLiteral("output")
+                                  : port.value().direction == "inout" ? QStringLiteral("inout")
+                                                                      : QStringLiteral("input");
+            const QString range = port.value().width > 1
+                                      ? QString("[%1:0] ").arg(port.value().width - 1)
+                                      : QString();
+            stubPorts.append(QString("    %1 wire %2%3").arg(dir, range, port.key()));
         }
         sv.append(QString("module %1 (").arg(it.key()));
         sv.append(stubPorts.join(",\n"));
@@ -736,8 +739,11 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
          * output takes a free value instead, which is the honest model of a
          * receiver the proof knows nothing about. */
         for (auto port = stub.ports.cbegin(); port != stub.ports.cend(); ++port) {
-            if (port.value() == "out") {
-                sv.append(QString("(* anyseq *) reg %1_any;").arg(port.key()));
+            if (port.value().direction == "out") {
+                const QString range = port.value().width > 1
+                                          ? QString("[%1:0] ").arg(port.value().width - 1)
+                                          : QString();
+                sv.append(QString("(* anyseq *) reg %1%2_any;").arg(range, port.key()));
                 sv.append(QString("assign %1 = %1_any;").arg(port.key()));
             }
         }

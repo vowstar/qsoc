@@ -147,7 +147,7 @@ pad_cell:
 ```
 
 Every port named here must exist on the cell in the module library with a
-matching direction, and every input of the cell must be named here, or
+matching direction and one bit wide, and every input of the cell must be named here, or
 generation stops before it writes a file: an input the declaration forgets
 would be left floating in a netlist that elaborates. A role that is absent
 from `port` is a role the cell lacks, and a route that asks for it is an
@@ -365,7 +365,8 @@ applies to every kind that sits on a side, so a supply, a breaker, or a fill
 that comes in two forms takes the right one on each side. A fill reaches
 every side it can, so it counts as sitting on both axes. A corner sits on
 neither, and declaring an axis map on one is refused. A direct cell maps each of its
-ports to a wrapper net or to `1'b0` or `1'b1`; the nets become ports of the
+ports to a wrapper net or to a sized binary constant as wide as the port,
+`1'b0` or `2'b10`; the nets become ports of the
 wrapper with the direction of the cell port, an `inout` uplinks and the rest
 link in the integration fragment, and every input of the cell must be
 named.
@@ -652,8 +653,8 @@ reset, the pad bus, the control bus, the interrupt lines when
 `option.interrupt` is on, and every non-constant endpoint exactly once. With a pad cell it also instantiates the shell as `<instance>_io`,
 links the bus between the two on nets named `<instance>_pad_<signal>`,
 uplinks `pad_io` and every `inout` net of a direct cell, and links the other
-direct nets. The merge flow knows `<module>_io` from the source alone, so
-nothing has to be imported. The control link must carry exactly one master before the merge
+direct nets. The merge flow derives `<module>_io` from the source and the
+cells it names in the module library, so nothing has to be imported. The control link must carry exactly one master before the merge
 and exactly one master and one slave after it. An invalid generator source
 blocks the whole netlist instead of falling back to a stale module view. A
 generated IOMUX instance name may not already exist in another merged input.

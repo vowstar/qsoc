@@ -242,30 +242,6 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             return showError(1, messages.join('\n'));
         }
 
-        /* Port name to direction of a library module, both spellings accepted. */
-        const auto libraryPorts = [&](const QString &cellName, QMap<QString, QString> *ports) {
-            if (!moduleManager->load(QRegularExpression(".*"))
-                || !moduleManager->isModuleExist(cellName)) {
-                return false;
-            }
-            const YAML::Node cellPortNode = moduleManager->getModuleYaml(cellName)["port"];
-            if (cellPortNode && cellPortNode.IsMap()) {
-                for (const auto &entry : cellPortNode) {
-                    const QString name = QString::fromStdString(entry.first.Scalar());
-                    QString       direction;
-                    if (entry.second["direction"]) {
-                        direction = QString::fromStdString(entry.second["direction"].Scalar());
-                    }
-                    if (direction == "input") {
-                        direction = "in";
-                    } else if (direction == "output") {
-                        direction = "out";
-                    }
-                    ports->insert(name, direction);
-                }
-            }
-            return true;
-        };
         const auto reportPadErrors = [&](const QStringList &padErrors) {
             QStringList messages;
             messages.reserve(padErrors.size());
@@ -274,63 +250,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             }
             return showError(1, messages.join('\n'));
         };
-        for (QSocPadCellPlan &padCell : plan.padCells) {
-            /* The class's cell and every side variant the library gives it
-             * must exist and take the same ports. */
-            QStringList modules = {padCell.cell};
-            if (plan.ioRing.declared && plan.ioLib.contains(padCell.cell)) {
-                for (const QSocIoLibVariant &variant : plan.ioLib.value(padCell.cell).axis) {
-                    if (!modules.contains(variant.cell)) {
-                        modules.append(variant.cell);
-                    }
-                }
-            }
-            for (const QString &cellName : modules) {
-                QMap<QString, QString> cellPorts;
-                if (!libraryPorts(cellName, &cellPorts)) {
-                    return showError(
-                        1,
-                        QCoreApplication::translate(
-                            "main", "Error: pad cell %1 is not in any module library.")
-                            .arg(cellName));
-                }
-                if (cellName == padCell.cell) {
-                    padCell.cellPorts = cellPorts;
-                }
-                QSocPadCellPlan checked = padCell;
-                checked.cell            = cellName;
-                QStringList padErrors;
-                if (!QSocIomuxGenerator::checkPadCellPorts(checked, cellPorts, &padErrors)) {
-                    return reportPadErrors(padErrors);
-                }
-            }
-        }
-        for (QSocIoRingDirect &direct : plan.ioRing.direct) {
-            QStringList modules = {direct.cell};
-            if (plan.ioLib.contains(direct.cell)) {
-                for (const QSocIoLibVariant &variant : plan.ioLib.value(direct.cell).axis) {
-                    if (!modules.contains(variant.cell)) {
-                        modules.append(variant.cell);
-                    }
-                }
-            }
-            for (const QString &cellName : modules) {
-                QMap<QString, QString> cellPorts;
-                if (!libraryPorts(cellName, &cellPorts)) {
-                    return showError(
-                        1,
-                        QCoreApplication::translate(
-                            "main", "Error: ring cell %1 is not in any module library.")
-                            .arg(cellName));
-                }
-                if (cellName == direct.cell) {
-                    direct.cellPorts = cellPorts;
-                }
-                QStringList ringErrors;
-                if (!QSocIomuxGenerator::checkDirectPorts(direct, cellPorts, &ringErrors)) {
-                    return reportPadErrors(ringErrors);
-                }
-            }
+        QStringList cellErrors;
+        if (!moduleManager->resolveIomuxCells(&plan, &cellErrors)) {
+            return reportPadErrors(cellErrors);
         }
 
         const QStringList libraryModules = moduleManager->listModulesInLibrary(libraryName);

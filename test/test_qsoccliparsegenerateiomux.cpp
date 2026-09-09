@@ -306,7 +306,7 @@ endmodule
 )VERILOG");
 }
 
-QString mergedTopTestbench()
+QString topTestbench()
 {
     return QString(R"VERILOG(`timescale 1ns/1ps
 module tb;
@@ -624,7 +624,7 @@ void Test::mergedTopAxiWriteChangesPadWhenIverilogIsAvailable()
     const QString benchPath      = QDir(directory.path()).filePath("tb.v");
     const QString executablePath = QDir(directory.path()).filePath("iomux_soc_top.out");
     writeTextFile(peripheralPath, peripheralVerilog());
-    writeTextFile(benchPath, mergedTopTestbench());
+    writeTextFile(benchPath, topTestbench());
 
     QProcess process;
     process.setWorkingDirectory(directory.path());
@@ -1016,6 +1016,7 @@ rst_pad:
     PAD: {type: logic, direction: inout}
     C: {type: logic, direction: output}
     IE: {type: logic, direction: input}
+    TRIM: {type: "logic[1:0]", direction: input}
     SMT: {type: logic, direction: input}
 pvss:
   port: {}
@@ -1052,7 +1053,7 @@ pvss:
     io_ring:
       power: {VSS: pvss}
       direct:
-        rst: {cell: rst_pad, port: {PAD: pad_rst_n, C: rst_n, IE: "1'b1"}}
+        rst: {cell: rst_pad, port: {PAD: pad_rst_n, C: rst_n, IE: "1'b1", TRIM: rst_trim}}
       sides:
         west:  [{power: VSS}, {pin: 0}, {pin: 1}]
         south: [{direct: rst}, {pin: 2}]
@@ -1093,20 +1094,50 @@ pvss:
     QVERIFY2(ring.contains("module iomux0_io ("), qPrintable(ring));
     QVERIFY2(ring.contains("pvss u_VSS_1 ();"), qPrintable(ring));
     QVERIFY2(
-        ring.contains("rst_pad u_rst (\n    .C(rst_n),\n    .IE(1'b1),\n    .PAD(pad_rst_n)\n);"),
+        ring.contains(
+            "rst_pad u_rst (\n    .C(rst_n),\n    .IE(1'b1),\n    .PAD(pad_rst_n),\n"
+            "    .TRIM(rst_trim)\n);"),
         qPrintable(ring));
-    QVERIFY2(ring.contains("    inout  wire pad_rst_n\n"), qPrintable(ring));
+    QVERIFY2(ring.contains("    inout  wire pad_rst_n,\n"), qPrintable(ring));
+    QVERIFY2(ring.contains("    output wire rst_n"), qPrintable(ring));
+    QVERIFY2(ring.contains("    input  wire [1:0] rst_trim"), qPrintable(ring));
     const QString pad = readTextFile(out.filePath("iomux0_io.v"));
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_0 ("), qPrintable(pad));
     QVERIFY2(pad.contains("gpio_pad_ps_v u_pad_3 ("), qPrintable(pad));
-    const QString top = readTextFile(out.filePath("iomux0.v"));
-    QVERIFY2(!top.contains("u_pad") && !top.contains("pad_rst_n"), qPrintable(top));
+    const QString wrapper = readTextFile(out.filePath("iomux0.v"));
+    QVERIFY2(!wrapper.contains("u_pad") && !wrapper.contains("pad_rst_n"), qPrintable(wrapper));
     QVERIFY2(pad.contains("pvss u_VSS_0 ();"), qPrintable(pad));
     const QString report = readTextFile(out.filePath("iomux0.ring.rpt"));
     QVERIFY2(
         report.contains("north: 2 items\n  0 u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
         qPrintable(report));
     QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_io.v\n"), qPrintable(report));
+
+    /* The merge flow sees the shell the way _io.v declares it: the direct
+     * output drives the top, the trim keeps its width. */
+    QString       base = baseNetlist;
+    const QString padPorts
+        = base.mid(base.indexOf("port:\n"), base.indexOf("  clk_iomux:") - base.indexOf("port:\n"));
+    QVERIFY(padPorts.contains("pad_output_enable"));
+    base.replace(
+        padPorts,
+        "port:\n"
+        "  chip_gpio:\n    direction: inout\n    type: \"logic[3:0]\"\n    connect: chip_gpio\n"
+        "  pad_rst_n:\n    direction: inout\n    type: logic\n    connect: pad_rst_n\n"
+        "  rst_n:\n    direction: output\n    type: logic\n    connect: rst_n\n"
+        "  rst_trim:\n    direction: input\n    type: \"logic[1:0]\"\n    connect: rst_trim\n");
+    writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), base);
+    const CommandResult merged = mergeTop(directory);
+    QVERIFY2(merged.exitCode == 0, qPrintable(merged.output));
+    const QString top = readTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.v"));
+    QVERIFY2(top.contains("iomux0_io u_iomux0_io"), qPrintable(top));
+    QVERIFY2(top.contains(".rst_n(rst_n)"), qPrintable(top));
+    QVERIFY2(top.contains(".rst_trim(rst_trim)"), qPrintable(top));
+    QVERIFY2(top.contains("output wire rst_n"), qPrintable(top));
+    QVERIFY2(
+        top.contains("input  wire [1:0] rst_trim") || top.contains("input wire [1:0] rst_trim"),
+        qPrintable(top));
+    QVERIFY2(!top.contains("FIXME"), qPrintable(top));
 }
 
 } // namespace

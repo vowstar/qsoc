@@ -19,6 +19,8 @@
 #include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
 
+struct QSocIomuxPlan;
+
 using json = nlohmann::json;
 
 struct QSocModulePort
@@ -286,6 +288,21 @@ public slots:
      * @return the source module name, or empty when the name is not a shell
      */
     QString iomuxShellBase(const QString &moduleName);
+
+    /**
+     * @brief Fill and check every pad and ring cell of an IOMUX plan against
+     *        the module library.
+     * @details Loads every library when a cell is not yet known. Every class
+     *          cell, its side variants, and every direct cell must exist and
+     *          take the ports the source names; the plan then carries their
+     *          port tables, which the shell, the fragment, and the proofs
+     *          read. The generate command and the merge flow both go
+     *          through here, so they see the same shell.
+     * @param[in,out] plan the built plan
+     * @param[out] errors one message per rejected cell or port
+     * @return true when every cell resolved
+     */
+    bool resolveIomuxCells(QSocIomuxPlan *plan, QStringList *errors = nullptr);
 
     /**
      * @brief Save the library YAML object to library file.

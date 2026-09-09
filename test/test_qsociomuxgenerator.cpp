@@ -3522,7 +3522,7 @@ QString padCellBlock()
 )yaml");
 }
 
-QMap<QString, QString> padCellPorts()
+QSocCellPorts padCellPorts()
 {
     return {
         {"PAD", "inout"},
@@ -3648,21 +3648,21 @@ void Test::padCellPortsAreCheckedAgainstTheLibrary()
     QVERIFY(QSocIomuxGenerator::checkPadCellPorts(cell, padCellPorts(), &errors));
     QVERIFY(errors.isEmpty());
 
-    QMap<QString, QString> missing = padCellPorts();
+    QSocCellPorts missing = padCellPorts();
     missing.remove("OE");
     QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(cell, missing, &errors));
     QCOMPARE(errors.size(), 1);
     QVERIFY(errors.first().contains("gpio_pad_ps has no port OE"));
 
-    QMap<QString, QString> wrongWay = padCellPorts();
-    wrongWay["C"]                   = "in";
+    QSocCellPorts wrongWay = padCellPorts();
+    wrongWay["C"]          = "in";
     QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(cell, wrongWay, &errors));
     QCOMPARE(errors.size(), 2);
     QVERIFY(errors.first().contains("port C is in, expected out"));
     QVERIFY(errors.last().contains("input pins C are not named"));
 
     /* A cell input the declaration never names would be left floating. */
-    QMap<QString, QString> extra = padCellPorts();
+    QSocCellPorts extra = padCellPorts();
     extra.insert("SL", "in");
     extra.insert("ANE", "in");
     extra.insert("VDDIO", "inout");
@@ -3672,6 +3672,15 @@ void Test::padCellPortsAreCheckedAgainstTheLibrary()
         errors,
         QStringList{"IOMUX_PAD generator.pad_cell: gpio_pad_ps input pins ANE, SL, VDDIO are not "
                     "named by any role, pull, or control"});
+
+    /* One net drives every named pin, so a wide pin cannot be a role. */
+    QSocCellPorts wide = padCellPorts();
+    wide["IE"]         = QSocCellPort("in", 2);
+    QVERIFY(!QSocIomuxGenerator::checkPadCellPorts(cell, wide, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_PAD generator.pad_cell.port.input_enable: gpio_pad_ps port IE is 2 "
+                    "bits wide, expected 1"});
 }
 
 void Test::padCellRejectsWhatItLacks_data()
@@ -7098,6 +7107,23 @@ void Test::directRingCellPortsAreChecked()
     QVERIFY(
         !QSocIomuxGenerator::checkDirectPorts(direct, {{"PAD", "inout"}, {"C", "out"}}, &errors));
     QVERIFY2(errors.join('\n').contains("rst_pad has no port IE"), qPrintable(errors.join('\n')));
+
+    /* A constant is as wide as the pin it drives, and a net keeps the pin's width. */
+    QSocIoRingDirect osc;
+    osc.key  = "osc";
+    osc.cell = "osc_pad";
+    osc.port = {{"PAD", "pad_xin"}, {"C", "clk_osc"}, {"TRIM", "1'b0"}};
+    const QSocCellPorts oscPorts = {{"PAD", "inout"}, {"C", "out"}, {"TRIM", QSocCellPort("in", 2)}};
+    QVERIFY(!QSocIomuxGenerator::checkDirectPorts(osc, oscPorts, &errors));
+    QCOMPARE(
+        errors,
+        QStringList{"IOMUX_RING generator.io_ring.direct.osc: port TRIM of osc_pad is 2 bits "
+                    "wide, constant 1'b0 is 1"});
+    osc.port["TRIM"] = "2'b10";
+    QVERIFY2(
+        QSocIomuxGenerator::checkDirectPorts(osc, oscPorts, &errors), qPrintable(errors.join('\n')));
+    osc.port["TRIM"] = "osc_trim";
+    QVERIFY(QSocIomuxGenerator::checkDirectPorts(osc, oscPorts, &errors));
 }
 
 void Test::padModelPinsTheLaneOrder()

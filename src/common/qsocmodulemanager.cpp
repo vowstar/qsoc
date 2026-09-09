@@ -16,6 +16,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 
@@ -1345,6 +1346,108 @@ QString QSocModuleManager::iomuxShellBase(const QString &moduleName)
     return generator["pad_cell"] || generator["pad_cells"] ? base : QString();
 }
 
+/* Bits of a library port type such as `logic[7:0]` or `logic[1:0][3:0]`. */
+quint32 cellPortWidth(const QString &type)
+{
+    static const QRegularExpression range(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
+    quint32                         width = 0;
+    QRegularExpressionMatchIterator it    = range.globalMatch(type);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match     = it.next();
+        const int                     msb       = match.captured(1).toInt();
+        const int                     lsb       = match.captured(2).toInt();
+        const quint32                 dimension = quint32(qAbs(msb - lsb)) + 1;
+        width                                   = width == 0 ? dimension : width * dimension;
+    }
+    return width == 0 ? 1 : width;
+}
+
+bool QSocModuleManager::resolveIomuxCells(QSocIomuxPlan *plan, QStringList *errors)
+{
+    QStringList local;
+    const auto  libraryPorts = [&](const QString &cellName, QSocCellPorts *ports) {
+        if (!isModuleExist(cellName)
+            && (!load(QRegularExpression(".*")) || !isModuleExist(cellName))) {
+            return false;
+        }
+        const YAML::Node cellPortNode = getModuleYaml(cellName)["port"];
+        if (cellPortNode && cellPortNode.IsMap()) {
+            for (const auto &entry : cellPortNode) {
+                const QString name = QString::fromStdString(entry.first.Scalar());
+                QString       direction;
+                QString       type;
+                if (entry.second["direction"]) {
+                    direction = QString::fromStdString(entry.second["direction"].Scalar());
+                }
+                if (entry.second["type"]) {
+                    type = QString::fromStdString(entry.second["type"].Scalar());
+                }
+                if (direction == "input") {
+                    direction = "in";
+                } else if (direction == "output") {
+                    direction = "out";
+                }
+                ports->insert(name, QSocCellPort(direction, cellPortWidth(type)));
+            }
+        }
+        return true;
+    };
+    /* A cell drawn once per axis lends its name to two modules. */
+    const auto variants = [&](const QString &cell, bool onlyWithRing) {
+        QStringList modules = {cell};
+        if ((!onlyWithRing || plan->ioRing.declared) && plan->ioLib.contains(cell)) {
+            for (const QSocIoLibVariant &variant : plan->ioLib.value(cell).axis) {
+                if (!modules.contains(variant.cell)) {
+                    modules.append(variant.cell);
+                }
+            }
+        }
+        return modules;
+    };
+    for (QSocPadCellPlan &padCell : plan->padCells) {
+        for (const QString &cellName : variants(padCell.cell, true)) {
+            QSocCellPorts cellPorts;
+            if (!libraryPorts(cellName, &cellPorts)) {
+                local.append(QString("IOMUX_PAD %1: pad cell %2 is not in any module library")
+                                 .arg(padCell.path, cellName));
+                continue;
+            }
+            if (cellName == padCell.cell) {
+                padCell.cellPorts = cellPorts;
+            }
+            QSocPadCellPlan checked = padCell;
+            checked.cell            = cellName;
+            QStringList padErrors;
+            if (!QSocIomuxGenerator::checkPadCellPorts(checked, cellPorts, &padErrors)) {
+                local.append(padErrors);
+            }
+        }
+    }
+    for (QSocIoRingDirect &direct : plan->ioRing.direct) {
+        for (const QString &cellName : variants(direct.cell, false)) {
+            QSocCellPorts cellPorts;
+            if (!libraryPorts(cellName, &cellPorts)) {
+                local.append(QString(
+                                 "IOMUX_RING generator.io_ring.direct.%1: ring cell %2 is "
+                                 "not in any module library")
+                                 .arg(direct.key, cellName));
+                continue;
+            }
+            if (cellName == direct.cell) {
+                direct.cellPorts = cellPorts;
+            }
+            QStringList ringErrors;
+            if (!QSocIomuxGenerator::checkDirectPorts(direct, cellPorts, &ringErrors)) {
+                local.append(ringErrors);
+            }
+        }
+    }
+    if (errors) {
+        *errors = local;
+    }
+    return local.isEmpty();
+}
+
 YAML::Node QSocModuleManager::getResolvedModuleYaml(const QString &moduleName, QStringList *errors)
 {
     if (errors) {
@@ -1356,7 +1459,8 @@ YAML::Node QSocModuleManager::getResolvedModuleYaml(const QString &moduleName, Q
             = moduleYamlToDefinition(QString(), shellBase, moduleData[shellBase.toStdString()]);
         QSocIomuxPlan plan;
         QStringList   localErrors;
-        if (QSocIomuxGenerator::buildPlan(definition, &plan, &localErrors)) {
+        if (QSocIomuxGenerator::buildPlan(definition, &plan, &localErrors)
+            && resolveIomuxCells(&plan, &localErrors)) {
             return QSocIomuxGenerator::describeIoModuleYaml(plan);
         }
         if (errors) {
@@ -1373,7 +1477,8 @@ YAML::Node QSocModuleManager::getResolvedModuleYaml(const QString &moduleName, Q
     QStringList                localErrors;
     if (QSocIomuxGenerator::isIomux(definition)) {
         QSocIomuxPlan plan;
-        if (QSocIomuxGenerator::buildPlan(definition, &plan, &localErrors)) {
+        if (QSocIomuxGenerator::buildPlan(definition, &plan, &localErrors)
+            && resolveIomuxCells(&plan, &localErrors)) {
             return QSocIomuxGenerator::describeModuleYaml(plan);
         }
     } else if (QSocMmioGenerator::isMmio(definition)) {

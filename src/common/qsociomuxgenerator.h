@@ -177,6 +177,32 @@ struct QSocPadSafePlan
 };
 
 /**
+ * @brief One port of a library cell, as the module library declares it.
+ */
+struct QSocCellPort
+{
+    QString direction; /**< "in", "out" or "inout" */
+    quint32 width = 1;
+
+    QSocCellPort() = default;
+    /* Implicit on purpose: a port table reads `{"PAD", "inout"}`. */
+    // cppcheck-suppress noExplicitConstructor
+    QSocCellPort(const char *dir)
+        : direction(QString::fromUtf8(dir))
+    {}
+    // cppcheck-suppress noExplicitConstructor
+    QSocCellPort(const QString &dir, quint32 bits = 1)
+        : direction(dir)
+        , width(bits)
+    {}
+
+    bool operator==(const QSocCellPort &) const = default;
+};
+
+/** Port name to its declaration, from the module library. */
+using QSocCellPorts = QMap<QString, QSocCellPort>;
+
+/**
  * @brief The pad cell this design instantiates.
  *
  * The generator owns every connection to the cell, so a source that names the
@@ -197,8 +223,8 @@ struct QSocPadCellPlan
     QList<QSocPadControlPlan> control; /**< Declaration order, which fixes field positions */
     QSocPadSafePlan           safe;
     QList<QSocPadConstraint>  constraint;
-    /** Port name to direction of the cell, filled from the module library. */
-    QMap<QString, QString> cellPorts;
+    /** The cell's ports, filled from the module library. */
+    QSocCellPorts cellPorts;
 
     bool declared() const { return !cell.isEmpty(); }
     bool canPullUp() const { return pull.has(QStringLiteral("up")); }
@@ -423,7 +449,7 @@ struct QSocIoRingDirect
     QString                key;
     QString                cell;
     QMap<QString, QString> port;      /**< Cell port to wrapper net, or a constant */
-    QMap<QString, QString> cellPorts; /**< Port to direction, from the module library */
+    QSocCellPorts          cellPorts; /**< The cell's ports, from the module library */
 
     bool operator==(const QSocIoRingDirect &) const = default;
 };
@@ -635,28 +661,30 @@ public:
      * @brief Check every port a class declares against the library.
      *
      * The caller supplies the port table of the cell named by the class, so a
-     * port that does not exist, or exists with the wrong direction, fails
-     * before any Verilog is written.
+     * port that does not exist, exists with the wrong direction, or is wider
+     * than the one net the generator drives, fails before any Verilog is
+     * written.
      *
      * @param cell      the class
-     * @param cellPorts port name to direction, "in", "out" or "inout"
+     * @param cellPorts the cell's ports from the module library
      * @param errors    receives one message per rejected port
      * @return true when the declaration matches the cell
      */
     static bool checkPadCellPorts(
-        const QSocPadCellPlan        &cell,
-        const QMap<QString, QString> &cellPorts,
-        QStringList                  *errors = nullptr);
+        const QSocPadCellPlan &cell, const QSocCellPorts &cellPorts, QStringList *errors = nullptr);
     /**
      * @brief Check the port map of a direct ring cell against the library.
      *
      * Every input of the cell must be named, or the instance would leave it
-     * floating; every named port must exist.
+     * floating; every named port must exist; a constant must be as wide as
+     * the port it drives.
      */
     static bool checkDirectPorts(
-        const QSocIoRingDirect       &direct,
-        const QMap<QString, QString> &cellPorts,
-        QStringList                  *errors = nullptr);
+        const QSocIoRingDirect &direct,
+        const QSocCellPorts    &cellPorts,
+        QStringList            *errors = nullptr);
+    /** Whether a direct port value is a sized binary constant such as `1'b0` or `2'b10`. */
+    static bool isCellConstant(const QString &value);
     /** The sides in placement order: west, south, east, north. */
     static const QStringList &ringSides();
     /** The axis a side belongs to, `west_east` or `north_south`; empty for a corner. */
