@@ -657,6 +657,8 @@ endmodule
 }
 
 const QSocMmioRegisterPlan *findRegister(const QSocMmioPlan &mmio, const QString &name);
+QString                     padCellBlock();
+QString                     padIntegrationBlock();
 
 QString axiTestbench()
 {
@@ -2602,6 +2604,7 @@ private slots:
     void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
     void lsPoolPlanFollowsTheSource();
     void lsPoolLanesFollowTheDataWidth();
+    void lsPoolPinsNeedTheirReceiverEnabled();
     void lsPoolRejectsBadSources_data();
     void lsPoolRejectsBadSources();
     void lsPoolRoutingSimulationWhenIverilogIsAvailable_data();
@@ -3602,6 +3605,66 @@ void Test::lsPoolLanesFollowTheDataWidth()
             std::optional<quint64>(18));
         QVERIFY(!QSocIomuxGenerator::generateReport(plan).isEmpty());
     }
+}
+
+void Test::lsPoolPinsNeedTheirReceiverEnabled()
+{
+    /* A cell that gates its receiver: a pool whose slow inputs read pin 2
+     * needs some channel to raise the enable, and a fast route on that pin
+     * cannot, because slot 0 is the pool. */
+    const auto source = [](const QString &channels) {
+        return QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 32
+    address_width: 14
+    pin_count: 3
+    hs_slots: 3
+%1%2    ls:
+      p:
+        pins: [2]
+        channel:
+%3    route:
+      - pin: 0
+        slot: 0
+        function: uart0
+        signal: tx
+        output_value: {link: uart0_tx}
+        output_enable: 1
+      - pin: 2
+        slot: 1
+        function: gpio0
+        signal: in2
+        input_value: {link: gpio0_in2}
+)")
+            .arg(padCellBlock(), padIntegrationBlock(), channels);
+    };
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY(!QSocIomuxGenerator::buildPlan(
+        makeDefinition(source(
+            "          - {channel: 0, function: uart1, signal: rx, input_value: {link: uart1_rx}}\n"
+            "          - {channel: 1, function: timer0, signal: in, input_value: {link: "
+            "timer0_in}}\n")),
+        &plan,
+        &errors));
+    QVERIFY2(
+        errors.contains(
+            "IOMUX_CAPABILITY generator.route.pin 2: has input_value sinks but no slot "
+            "enables the input buffer"),
+        qPrintable(errors.join('\n')));
+    /* One channel that enables the receiver is enough: software selects it
+     * on the pin and every slow input of the pool can read the pad. */
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(
+            makeDefinition(source(
+                "          - {channel: 0, function: uart1, signal: rx, input_value: {link: "
+                "uart1_rx}, input_enable: 1}\n"
+                "          - {channel: 1, function: timer0, signal: in, input_value: {link: "
+                "timer0_in}}\n")),
+            &plan,
+            &errors),
+        qPrintable(errors.join('\n')));
 }
 
 void Test::lsPoolRejectsBadSources_data()

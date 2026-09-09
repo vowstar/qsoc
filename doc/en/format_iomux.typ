@@ -301,7 +301,9 @@ mode change or gives it a delay.
 A cell that gates its receiver on `input_enable` reads zero on any pin whose
 sinks listen while no slot raises that enable. Generation refuses such a pin
 unless `option.gpio` or `option.invert` is on, because either register path
-can then raise it.
+can then raise it. A pool pin is read by every slow input of its pool, so the
+pool needs a channel that raises the enable, which software selects on the
+pin while the slow inputs point at it.
 
 `constraint` lists properties over the cell ports, one per pin. `expr` is
 combinational and `property` is sampled on the formal global clock, where

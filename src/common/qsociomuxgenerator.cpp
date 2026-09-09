@@ -3173,6 +3173,29 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
                     enabling.insert(route.pin);
                 }
             }
+            /* A pool pin is read by every slow input of its pool and raises
+             * the enable through whichever channel it selects. */
+            for (const QSocIomuxLsPoolPlan &pool : plan.lsPools) {
+                bool sinks   = false;
+                bool enables = false;
+                for (const QSocIomuxLsChannelPlan &channel : pool.channels) {
+                    sinks                           = sinks || channel.hasSink();
+                    const QSocIomuxEndpointPlan &ie = channel.inputEnable;
+                    enables = enables || !ie.link.isEmpty()
+                              || (ie.constant.has_value() && *ie.constant == 1);
+                }
+                for (quint32 pin : pool.pins) {
+                    if (!ownsPin(pin)) {
+                        continue;
+                    }
+                    if (sinks) {
+                        listening.insert(pin);
+                    }
+                    if (enables) {
+                        enabling.insert(pin);
+                    }
+                }
+            }
             QList<quint32> dead = (listening - enabling).values();
             std::sort(dead.begin(), dead.end());
             for (quint32 pin : dead) {
