@@ -52,7 +52,7 @@ const QSet<QString> kRouteKeys
        "output_enable",
        "pull",
        "control"};
-const QSet<QString> kEndpointKeys    = {"link", "bit", "invert", "open_drain"};
+const QSet<QString> kEndpointKeys    = {"link", "bit", "invert", "open_drain", "tie"};
 const QSet<QString> kRoutePullKeys   = {"mode", "strength", "link", "bit", "invert", "on", "off"};
 const QSet<QString> kRouteSelectKeys = {"link", "bit", "invert", "on", "off"};
 
@@ -1735,6 +1735,17 @@ bool parseEndpoint(
             valid = parseStrictBool(node["invert"], path + ".invert", &endpoint->invert, errors)
                     && valid;
         }
+        if (node["tie"]) {
+            quint64 tie = 0;
+            if (allowConstant) {
+                appendError(errors, "ROLE", path + ".tie", "applies to input_value only");
+                valid = false;
+            } else if (parseStrictUnsigned(node["tie"], path + ".tie", 0, 1, &tie, errors)) {
+                endpoint->tie = static_cast<quint8>(tie);
+            } else {
+                valid = false;
+            }
+        }
         return valid;
     }
 
@@ -2072,6 +2083,10 @@ bool parseRoutes(
             continue;
         }
         pinSlots.insert(pinSlot);
+        if (route.inputValue.tie.has_value() && !plan->option.rxOverride) {
+            appendError(errors, "OPTION", routePath + ".input_value.tie", "needs option.rx_override");
+            valid = false;
+        }
         if (!route.inputValue.link.isEmpty()) {
             const QString key = sinkKey(route.inputValue);
             if (sinks.contains(key)) {
@@ -2090,7 +2105,7 @@ bool parseRoutes(
     return valid;
 }
 
-const QSet<QString> kLsPoolKeys = {"pins", "channel"};
+const QSet<QString> kLsPoolKeys = {"pins", "channel", "reset"};
 const QSet<QString> kLsChannelKeys
     = {"channel",
        "function",
@@ -2235,6 +2250,11 @@ bool parseLs(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *errors)
                     appendError(errors, "ROLE", itemPath, "at least one role is required");
                     ok = false;
                 }
+                if (channel.inputValue.tie.has_value() && !plan->option.rxOverride) {
+                    appendError(
+                        errors, "OPTION", itemPath + ".input_value.tie", "needs option.rx_override");
+                    ok = false;
+                }
                 if (ok && channel.hasSink()) {
                     const QString key = sinkKey(channel.inputValue);
                     if (sinks.contains(key)) {
@@ -2262,6 +2282,32 @@ bool parseLs(const YAML::Node &node, QSocIomuxPlan *plan, QStringList *errors)
             [](const QSocIomuxLsChannelPlan &left, const QSocIomuxLsChannelPlan &right) {
                 return left.channel < right.channel;
             });
+        if (entry.second["reset"]) {
+            quint64 reset = 0;
+            if (!parseStrictUnsigned(
+                    entry.second["reset"],
+                    poolPath + ".reset",
+                    0,
+                    QSocIomuxGenerator::kMaximumLsChannels - 1,
+                    &reset,
+                    errors)) {
+                valid = false;
+            } else {
+                pool.reset  = quint32(reset);
+                bool inPool = false;
+                for (const QSocIomuxLsChannelPlan &channel : pool.channels) {
+                    inPool = inPool || channel.channel == pool.reset;
+                }
+                if (!inPool) {
+                    appendError(
+                        errors,
+                        "LS",
+                        poolPath + ".reset",
+                        QString("channel %1 is not in the pool").arg(pool.reset));
+                    valid = false;
+                }
+            }
+        }
         plan->lsPools.append(pool);
     }
     /* Slot 0 of a member pin is the pool, so no route may claim it. */
@@ -3346,7 +3392,7 @@ void composeLs(QSocIomuxPlan *plan)
             field.lsb        = (pin % lanes) * QSocIomuxGenerator::kLsLane;
             field.width      = QSocIomuxGenerator::kLsLane;
             field.access     = QSocMmioAccess::ReadWrite;
-            field.resetValue = 0;
+            field.resetValue = plan->lsPools.at(plan->lsPoolOf(pin)).reset;
             field.outputPort = QString("pin_%1_ls_select_o").arg(pin);
             select.fields.append(field);
         }
@@ -3408,6 +3454,71 @@ void composeLs(QSocIomuxPlan *plan)
     }
     if (plan->option.invert) {
         bank(QStringLiteral("rx_inv"), QSocIomuxGenerator::kBaseLsRxInv);
+    }
+}
+
+/**
+ * @brief Set the reset value of one composed field.
+ * @return false when the register or the field is not there
+ */
+bool setResetValue(
+    QSocIomuxPlan *plan, const QString &registerName, const QString &fieldName, quint64 value)
+{
+    for (QSocMmioRegisterPlan &reg : plan->mmio.registers) {
+        if (reg.name != registerName) {
+            continue;
+        }
+        for (QSocMmioFieldPlan &field : reg.fields) {
+            if (field.name == fieldName) {
+                field.resetValue = value;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief A tied sink leaves reset on its override, at the level it names.
+ *
+ * The bits are the ordinary rx_override bits; only their reset differs, so
+ * software can still release the sink to the pad.
+ */
+void applyTies(QSocIomuxPlan *plan)
+{
+    const quint32 dataWidth = plan->mmio.dataWidth;
+    for (const QSocIomuxRoutePlan &route : plan->routes) {
+        if (!route.inputValue.tie.has_value()) {
+            continue;
+        }
+        setResetValue(
+            plan,
+            QString("pin_src_ctrl_%1").arg(route.pin),
+            QString("rx_src_s%1").arg(route.slot),
+            1);
+        setResetValue(
+            plan,
+            QString("rx_value_s%1_%2").arg(route.slot).arg(route.pin / dataWidth),
+            QString("pin_%1_rx_value_s%2").arg(route.pin).arg(route.slot),
+            *route.inputValue.tie);
+    }
+    for (const QSocIomuxLsPoolPlan &pool : plan->lsPools) {
+        for (const QSocIomuxLsChannelPlan &channel : pool.channels) {
+            if (!channel.inputValue.tie.has_value()) {
+                continue;
+            }
+            const quint32 word = channel.channel / dataWidth;
+            setResetValue(
+                plan,
+                QString("ls_rx_src_%1").arg(word),
+                QString("ls_c%1_rx_src").arg(channel.channel),
+                1);
+            setResetValue(
+                plan,
+                QString("ls_rx_value_%1").arg(word),
+                QString("ls_c%1_rx_value").arg(channel.channel),
+                *channel.inputValue.tie);
+        }
     }
 }
 
@@ -3479,6 +3590,7 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     if (plan->option.padControl) {
         composePadControl(plan);
     }
+    applyTies(plan);
 
     const quint64 aperture = std::max(
         QSocIomuxGenerator::kApertureBytes, plan->mmio.registers.constLast().byteOffset + byteCount);
@@ -6486,7 +6598,9 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
             for (quint32 pin : pool.pins) {
                 pins.append(QString::number(pin));
             }
-            lines.append(QString("pool %1: pins %2").arg(pool.name, pins.join(", ")));
+            lines.append(QString("pool %1: pins %2, reset channel %3")
+                             .arg(pool.name, pins.join(", "))
+                             .arg(pool.reset));
             for (const QSocIomuxLsChannelPlan &channel : pool.channels) {
                 lines.append(QString("  channel %1 function %2 signal %3")
                                  .arg(channel.channel)
@@ -6501,6 +6615,9 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                         }
                         if (endpoint.invert) {
                             value += " invert";
+                        }
+                        if (endpoint.tie.has_value()) {
+                            value += QString(" tie %1").arg(*endpoint.tie);
                         }
                     } else if (endpoint.constant.has_value()) {
                         value = QString("constant %1").arg(*endpoint.constant);
@@ -6626,6 +6743,9 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
                     }
                     if (endpoint.invert) {
                         value += " invert";
+                    }
+                    if (endpoint.tie.has_value()) {
+                        value += QString(" tie %1").arg(*endpoint.tie);
                     }
                 } else if (endpoint.constant.has_value()) {
                     value = QString("constant %1").arg(*endpoint.constant);

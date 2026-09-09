@@ -25,6 +25,8 @@ struct QSocIomuxEndpointPlan
     std::optional<quint32> bit;
     bool                   invert = false;
     std::optional<quint8>  constant;
+    /** Level the sink's override holds at reset; `input_value` only. */
+    std::optional<quint8> tie;
 
     bool operator==(const QSocIomuxEndpointPlan &) const = default;
 };
@@ -280,8 +282,9 @@ struct QSocIomuxLsChannelPlan
 struct QSocIomuxLsPoolPlan
 {
     QString                       name;
-    QList<quint32>                pins;     /**< Ascending, no pin in two pools */
-    QList<QSocIomuxLsChannelPlan> channels; /**< Ascending by channel */
+    QList<quint32>                pins;      /**< Ascending, no pin in two pools */
+    QList<QSocIomuxLsChannelPlan> channels;  /**< Ascending by channel */
+    quint32                       reset = 0; /**< Channel every member pin selects at reset */
 
     bool operator==(const QSocIomuxLsPoolPlan &) const = default;
 };

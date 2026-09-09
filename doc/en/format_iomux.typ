@@ -78,7 +78,11 @@ slot)` pair appears at most once, and an `input_value` sink (`link` plus
 `bit`) is driven by at most one route. Role values are an endpoint map with
 `link`, an optional `bit` up to 65535, and an optional boolean `invert`, or for every role
 but `input_value` the integer `0` or `1`. An omitted output role drives `0`;
-an omitted `input_value` declares no sink. HDL expressions, slices, and concatenations
+an omitted `input_value` declares no sink. An `input_value` endpoint may add
+`tie: 0` or `tie: 1` under `option.rx_override`: the sink then leaves reset on
+its override at that level, the way a bus arbitration input is held released
+until firmware routes it, and the ordinary override bits hand it to the pad.
+HDL expressions, slices, and concatenations
 are rejected.
 
 An `output_value` endpoint may add `open_drain: true`. It then stands for
@@ -120,6 +124,7 @@ slow input that reads any pad of the pool.
 ls:
   spi_pool:
     pins: ["0-7", 12]
+    reset: 1
     channel:
       - channel: 0
         function: spi4
@@ -130,6 +135,10 @@ ls:
         function: spi4
         signal: miso
         input_value: {link: spi4_miso}
+      - channel: 4
+        function: spi4
+        signal: arb
+        input_value: {link: spi4_arb, tie: 1}
   uart_pool:
     pins: ["16-23"]
     channel:
@@ -153,9 +162,11 @@ when the pin is in its pool and zero otherwise, then `ls_rx_src` and
 `ls_rx_value` substitute under `option.rx_override` and `ls_rx_inv` inverts
 under `option.invert`, as the fast sinks do. The substitution is per slow
 input, so a channel no pad is selected for can be held at a level its
-peripheral needs while every pad and every other sink stays as it is. Every lane resets to 0, so a
-pool pin leaves reset on channel 0, or on nothing when its pool has no channel
-0, and a slow input on pin 0. Nothing on the slow path is synchronised; only
+peripheral needs while every pad and every other sink stays as it is, and a
+channel with `tie` starts that way. Every lane resets to 0, so a slow input
+starts on pin 0 and a pool pin on channel 0, or on nothing when its pool has
+no channel 0; a pool's `reset` names one of its channels instead, so each
+pool can bring its pins up on the function the board expects. Nothing on the slow path is synchronised; only
 the gpio `input_value` bank and the interrupt detectors sample through two
 flip-flops. A channel carries the four roles only: the pull and the controls
 of a pool pin come from `option.pad_control`.

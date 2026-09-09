@@ -386,9 +386,10 @@ QString lsPoolBlock()
         channel:
           - {channel: 0, function: spi4, signal: sclk, output_value: {link: spi4_sclk}, output_enable: 1}
           - {channel: 1, function: spi4, signal: miso, input_value: {link: spi4_miso}}
-          - {channel: 3, function: i2c2, signal: sda, input_value: {link: i2c2_sda_in}, input_enable: 1, output_value: {link: i2c2_sda_o, open_drain: true}}
+          - {channel: 3, function: i2c2, signal: sda, input_value: {link: i2c2_sda_in, tie: 1}, input_enable: 1, output_value: {link: i2c2_sda_o, open_drain: true}}
       pool_b:
         pins: [3]
+        reset: 2
         channel:
           - {channel: 2, function: pwm, signal: out, output_value: {link: pwm_out, invert: true}, output_enable: 1}
 )");
@@ -406,7 +407,7 @@ QString lsSource(quint32 dataWidth, const QString &ls = lsPoolBlock())
     option: {rx_override: true, invert: true}
 %2    route:
       - {pin: 0, slot: 1, function: uart0, signal: tx, output_value: {link: uart0_tx}, output_enable: 1}
-      - {pin: 1, slot: 1, function: cap0, signal: in, input_value: {link: cap0_in}, input_enable: 1}
+      - {pin: 1, slot: 1, function: cap0, signal: in, input_value: {link: cap0_in, tie: 1}, input_enable: 1}
       - {pin: 2, slot: 0, function: gpio0, signal: d2, input_value: {link: gpio_in, bit: 2}, input_enable: 1, output_value: {link: gpio_out, bit: 2}, output_enable: {link: gpio_oe, bit: 2}}
 %3)")
         .arg(dataWidth)
@@ -583,7 +584,12 @@ initial begin
      * pin, whose pool has no channel 0, drives nothing. */
     check_value(pad_oe[0] === 1'b1 && pad_ov[0] === 1'b1 && pad_ie[0] === 1'b0, "pin 0 reset channel 0");
     check_value(pad_oe[1] === 1'b1 && pad_ov[1] === 1'b1, "pin 1 reset channel 0 fans out");
-    check_value(pad_oe[3] === 1'b0 && pad_ov[3] === 1'b0, "pin 3 has no channel 0");
+    check_value(pad_oe[3] === 1'b1 && pad_ov[3] === 1'b1, "pin 3 resets to channel 2");
+    /* Tied sinks leave reset on their override and can be released. */
+    check_value(c3_in === 1'b1 && cap_in === 1'b1, "tied sinks read their level at reset");
+    axi_write(14'he00, {@DW@{1'b0}});
+    axi_write(14'h1000 + @SW@, {@DW@{1'b0}});
+    #1 check_value(c3_in === 1'b0 && cap_in === 1'b0, "released sinks follow the pads");
     c0_ov = 1'b0;
     #1 check_value(pad_ov[0] === 1'b0 && pad_ov[1] === 1'b0, "both pins follow channel 0 down");
     c0_ov = 1'b1;
@@ -3590,8 +3596,33 @@ void Test::lsPoolPlanFollowsTheSource()
             "a bound pin is its pool"),
         qPrintable(report));
     QVERIFY2(
-        report.contains("pool pool_a: pins 0, 1\n  channel 0 function spi4 signal sclk"),
+        report.contains(
+            "pool pool_a: pins 0, 1, reset channel 0\n  channel 0 function spi4 signal sclk"),
         qPrintable(report));
+    QVERIFY2(report.contains("pool pool_b: pins 3, reset channel 2\n"), qPrintable(report));
+    QVERIFY2(report.contains("    input_value: link i2c2_sda_in tie 1\n"), qPrintable(report));
+    QVERIFY2(report.contains("    input_value: link cap0_in tie 1\n"), qPrintable(report));
+    /* The reset channel and the ties live in the reset values of the ordinary fields. */
+    QCOMPARE(
+        findField(plan.mmio, "ls_select_0", "pin_3_ls_select")->resetValue,
+        std::optional<quint64>(2));
+    QCOMPARE(
+        findField(plan.mmio, "ls_select_0", "pin_0_ls_select")->resetValue,
+        std::optional<quint64>(0));
+    QCOMPARE(
+        findField(plan.mmio, "ls_rx_src_0", "ls_c3_rx_src")->resetValue, std::optional<quint64>(1));
+    QCOMPARE(
+        findField(plan.mmio, "ls_rx_value_0", "ls_c3_rx_value")->resetValue,
+        std::optional<quint64>(1));
+    QCOMPARE(
+        findField(plan.mmio, "ls_rx_src_0", "ls_c1_rx_src")->resetValue, std::optional<quint64>(0));
+    QCOMPARE(
+        findField(plan.mmio, "pin_src_ctrl_1", "rx_src_s1")->resetValue, std::optional<quint64>(1));
+    QCOMPARE(
+        findField(plan.mmio, "rx_value_s1_0", "pin_1_rx_value_s1")->resetValue,
+        std::optional<quint64>(1));
+    QCOMPARE(
+        findField(plan.mmio, "pin_src_ctrl_2", "rx_src_s0")->resetValue, std::optional<quint64>(0));
     QVERIFY2(report.contains("    rx pin select word 0 lsb 24 offset 0xd00"), qPrintable(report));
     QVERIFY2(
         report.contains(
@@ -3753,6 +3784,21 @@ void Test::lsPoolRejectsBadSources_data()
         << "        pins: [3]\n"
         << "        pins: [3]\n        slot: 0\n"
         << "IOMUX_UNSUPPORTED generator.ls.pool_b.slot: unsupported property";
+    QTest::newRow("reset outside the pool")
+        << "        pins: [3]\n"
+        << "        pins: [3]\n        reset: 5\n"
+        << "IOMUX_LS generator.ls.pool_b.reset: channel 5 is not in the pool";
+    QTest::newRow("tie on an output")
+        << "output_value: {link: pwm_out, invert: true}" << "output_value: {link: pwm_out, tie: 1}"
+        << "IOMUX_ROLE generator.ls.pool_b.channel[0].output_value.tie: applies to input_value "
+           "only";
+    QTest::newRow("tie without rx_override")
+        << "    option: {rx_override: true, invert: true}\n"
+        << "    option: {invert: true}\n"
+        << "IOMUX_OPTION generator.route[1].input_value.tie: needs option.rx_override";
+    QTest::newRow("tie past one")
+        << "input_value: {link: cap0_in, tie: 1}" << "input_value: {link: cap0_in, tie: 2}"
+        << "IOMUX_RANGE generator.route[1].input_value.tie: must be between 0 and 1";
     QTest::newRow("pool name is not an identifier")
         << "      pool_b:\n"
         << "      pool-b:\n"
