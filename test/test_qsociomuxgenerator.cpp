@@ -3659,6 +3659,16 @@ void Test::padCellRejectsWhatItLacks_data()
         << "            low: [\"0\"]\n"
         << "            low: [\"0\"]\n            low: [\"1\"]\n"
         << "IOMUX_DUPLICATE generator.pad_cell.control.drive.table.low: row label is duplicated";
+    QTest::newRow("keeper without the receiver enabled")
+        << "        input_enable: 1\n        pull: keeper\n"
+        << "        input_enable: 0\n        pull: keeper\n"
+        << "pin 1 slot 1.pull.mode: keeper reads the receiver, so the route must raise "
+           "input_enable";
+    QTest::newRow("keeper woven without a receiver")
+        << "        input_value: C\n"
+        << ""
+        << "pin 1 slot 1.pull.mode: pad cell gpio_pad_ps has no receiver, so keeper cannot be "
+           "woven";
     QTest::newRow("keeper woven from a driver")
         << "        port: [PE, PS]\n"
         << "        port: [PE, PS]\n        kind: driver\n"
@@ -3767,8 +3777,10 @@ void Test::padModuleDrivesPinsFromTheTable()
         "(pad_mode_eff_0 == 4'd2) ? 1'b0 : (pad_mode_eff_0 == 4'd5) ? 1'b1 : 1'b0;"));
     /* One lane per pin, whatever the table needs. */
     QVERIFY(pad.contains(
-        "wire [3:0] pad_mode_eff_1 = (pad_pull_mode_i[7:4] == 4'd3) ? (pad_io[1] ? 4'd1 : 4'd2) : "
-        "(pad_pull_mode_i[7:4] == 4'd4) ? (pad_io[1] ? 4'd2 : 4'd1) : pad_pull_mode_i[7:4];"));
+        "wire [3:0] pad_mode_eff_1 = (pad_pull_mode_i[7:4] == 4'd3) ? (pad_input_value_o[1] ? 4'd1 "
+        ": 4'd2) : "
+        "(pad_pull_mode_i[7:4] == 4'd4) ? (pad_input_value_o[1] ? 4'd2 : 4'd1) : "
+        "pad_pull_mode_i[7:4];"));
     QVERIFY(pad.contains("gpio_pad_ps u_pad_1 ("));
     QVERIFY(pad.contains("    .PE(PE_1_w),"));
     /* The design file carries no verification code; the harness reaches the
@@ -3974,7 +3986,7 @@ module iomux0_io (
     input  wire [7:0] pad_drive_select_i
 );
 
-wire [3:0] pad_mode_eff_0 = (pad_pull_mode_i[3:0] == 4'd3) ? (pad_io[0] ? 4'd1 : 4'd2) : (pad_pull_mode_i[3:0] == 4'd4) ? (pad_io[0] ? 4'd2 : 4'd1) : pad_pull_mode_i[3:0];
+wire [3:0] pad_mode_eff_0 = (pad_pull_mode_i[3:0] == 4'd3) ? (pad_input_value_o[0] ? 4'd1 : 4'd2) : (pad_pull_mode_i[3:0] == 4'd4) ? (pad_input_value_o[0] ? 4'd2 : 4'd1) : pad_pull_mode_i[3:0];
 wire PE_0_w = (pad_mode_eff_0 == 4'd1) ? 1'b1 : (pad_mode_eff_0 == 4'd2) ? 1'b1 : (pad_mode_eff_0 == 4'd5) ? 1'b1 : 1'b0;
 wire PS_0_w = (pad_mode_eff_0 == 4'd1) ? 1'b1 : (pad_mode_eff_0 == 4'd2) ? 1'b0 : (pad_mode_eff_0 == 4'd5) ? 1'b1 : 1'b0;
 wire DS_0_w = (pad_drive_select_i[3:0] == 4'd1) ? 1'b1 : 1'b0;
@@ -3989,7 +4001,7 @@ gpio_pad_ps u_pad_0 (
     .DS(DS_0_w)
 );
 
-wire [3:0] pad_mode_eff_1 = (pad_pull_mode_i[7:4] == 4'd3) ? (pad_io[1] ? 4'd1 : 4'd2) : (pad_pull_mode_i[7:4] == 4'd4) ? (pad_io[1] ? 4'd2 : 4'd1) : pad_pull_mode_i[7:4];
+wire [3:0] pad_mode_eff_1 = (pad_pull_mode_i[7:4] == 4'd3) ? (pad_input_value_o[1] ? 4'd1 : 4'd2) : (pad_pull_mode_i[7:4] == 4'd4) ? (pad_input_value_o[1] ? 4'd2 : 4'd1) : pad_pull_mode_i[7:4];
 wire PE_1_w = (pad_mode_eff_1 == 4'd1) ? 1'b1 : (pad_mode_eff_1 == 4'd2) ? 1'b1 : (pad_mode_eff_1 == 4'd5) ? 1'b1 : 1'b0;
 wire PS_1_w = (pad_mode_eff_1 == 4'd1) ? 1'b1 : (pad_mode_eff_1 == 4'd2) ? 1'b0 : (pad_mode_eff_1 == 4'd5) ? 1'b1 : 1'b0;
 wire DS_1_w = (pad_drive_select_i[7:4] == 4'd1) ? 1'b1 : 1'b0;

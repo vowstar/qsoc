@@ -227,9 +227,13 @@ unchanged. The fixed names and the names a control may not take:
 
 Only `up` and `down` carry strength rows. Every other mode is one row. A
 route may ask for `keeper` or `oscillator` when the cell has no row of that
-name. The generator then weaves the mode from `up` and `down`: the keeper
-follows the pad and the oscillator opposes it, and both read the pad itself
-rather than the receiver, so the loop closes inside the pad module. A woven
+name and the cell has neither. The generator then weaves the mode from `up`
+and `down`: the keeper follows the pad and the oscillator opposes it, both
+read the receiver, and the loop closes inside the pad module. The receiver
+has to be on for the loop to run, so a cell without an `input_value` port
+weaves nothing, a route that asks for a woven mode must raise
+`input_enable`, and a woven mode written into the pad control word needs
+the enable from the selected slot or the gpio register. A woven
 mode keeps its strength: `pull: {mode: keeper, strength: "47k"}` selects that
 row on each graded direction, and an absent strength selects the first row.
 `pull.kind` is `resistor`, the default, or `driver`, which marks a cell whose

@@ -207,7 +207,7 @@ struct QSocPadCellPlan
     bool canKeep() const
     {
         return pull.has(QStringLiteral("keeper"))
-               || (canPullUp() && canPullDown() && !pull.isDriver);
+               || (canPullUp() && canPullDown() && !pull.isDriver && !portInputValue.isEmpty());
     }
     bool keeperIsNative() const { return pull.has(QStringLiteral("keeper")); }
     /** Whether some control drives this cell pin. */

@@ -2703,6 +2703,9 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
                                  "pad cell %1 names its own keeper or oscillator row, so %2 "
                                  "is not woven")
                                  .arg(cell.cell, request.mode);
+                } else if (feedback && cell.portInputValue.isEmpty()) {
+                    reason = QString("pad cell %1 has no receiver, so %2 cannot be woven")
+                                 .arg(cell.cell, request.mode);
                 } else if (feedback) {
                     reason = QString("pad cell %1 needs both up and down rows to weave %2")
                                  .arg(cell.cell, request.mode);
@@ -2843,6 +2846,29 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             }
             const QString routePath
                 = QString("generator.route.pin %1 slot %2").arg(route.pin).arg(route.slot);
+            /* A woven mode reads the receiver, which the cell gates on the
+             * input enable, so the route has to raise it. */
+            const auto wovenMode = [&](const QString &mode) {
+                return encoding.weaves
+                       && (mode == QStringLiteral("keeper") || mode == QStringLiteral("oscillator"));
+            };
+            const QSocIomuxEndpointPlan &ie = route.inputEnable;
+            if (!cell.portInputEnable.isEmpty() && ie.link.isEmpty()
+                && !(ie.constant.has_value() && *ie.constant == 1)) {
+                for (const QString &mode :
+                     {route.pullMode, route.pullSelect.on.mode, route.pullSelect.off.mode}) {
+                    if (wovenMode(mode)) {
+                        appendError(
+                            errors,
+                            "CAPABILITY",
+                            routePath + ".pull.mode",
+                            QString("%1 reads the receiver, so the route must raise input_enable")
+                                .arg(mode));
+                        valid = false;
+                        break;
+                    }
+                }
+            }
             if (!route.pullMode.isEmpty()) {
                 if (!checkPull({route.pullMode, route.pullStrength}, routePath + ".pull")) {
                     valid = false;
@@ -3988,8 +4014,10 @@ QSocPadEncoding QSocIomuxGenerator::padEncoding(
     for (const QString &name : model.namedMode) {
         encoding.namedRow.append(single(name));
     }
+    /* The woven loop reads the receiver, so a cell without one has no loop. */
     encoding.weaves    = !encoding.keeperRow && !encoding.oscillatorRow && encoding.hasUp()
-                         && encoding.hasDown() && !cell.pull.isDriver;
+                         && encoding.hasDown() && !cell.pull.isDriver
+                         && !cell.portInputValue.isEmpty();
     encoding.modeWidth = model.modeWidth;
     if (encoding.upRows.size() > 1) {
         encoding.upSelWidth = encodingWidth(encoding.upRows.size());
@@ -4960,14 +4988,13 @@ QString QSocIomuxGenerator::generateIoVerilog(const QSocIomuxPlan &plan)
         if (encoding.hasPull()) {
             QString mode = slice("pull_mode", pin);
             if (encoding.weaves) {
-                /* The keeper follows the pad and the oscillator opposes it. The
-                 * feedback reads the pad itself, not the receiver output, so an
-                 * input enable of zero does not silently turn either into a
-                 * pull-down. The loop closes here, inside the pad module. */
+                /* The keeper follows the pad and the oscillator opposes it,
+                 * both through the receiver: a core gate never touches the
+                 * pad net itself. The loop closes here, inside the pad module. */
                 lines.append(QString(
                                  "wire %1 pad_mode_eff_%2 = (%3 == %4'd%5) ? "
-                                 "(pad_io[%2] ? %4'd%6 : %4'd%7) : (%3 == %4'd%8) ? "
-                                 "(pad_io[%2] ? %4'd%7 : %4'd%6) : %3;")
+                                 "(pad_input_value_o[%2] ? %4'd%6 : %4'd%7) : (%3 == %4'd%8) ? "
+                                 "(pad_input_value_o[%2] ? %4'd%7 : %4'd%6) : %3;")
                                  .arg(vectorRange(kPadLane))
                                  .arg(pin)
                                  .arg(mode)
