@@ -37,6 +37,7 @@
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctoolagent.h"
+#include "agent/tool/qsoctoolagentmessage.h"
 #include "agent/tool/qsoctoolagentresume.h"
 #include "agent/tool/qsoctoolagentstatus.h"
 #include "agent/tool/qsoctoolaskuser.h"
@@ -1378,6 +1379,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Create agent */
     auto *agent = new QSocAgent(this, llmService, toolRegistry, config);
+    subAgentTaskSource->enableMessaging(agent);
     agent->setRequestBoundaryHandler([] { QSocInterrupt::clearRequest(); });
     agent->setMemoryManager(memoryManager);
     agent->setLoopScheduler(loopScheduler);
@@ -1477,6 +1479,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
      * async sub-agent without waiting for completion. */
     auto *sendMessageTool = new QSocToolSendMessage(this, subAgentTaskSource);
     toolRegistry->registerTool(sendMessageTool);
+    for (const auto *name :
+         {"agent_list", "agent_inbox", "wait_agent", "followup_task", "interrupt_agent"}) {
+        toolRegistry->registerTool(
+            new QSocToolAgentMessage(this, subAgentTaskSource->mailbox(), QString::fromLatin1(name)));
+    }
 
     /* Host catalog LLM tools: register / update / remove named SSH
      * targets in `<project>/.qsoc/host.yml`. No network I/O at write
@@ -7611,6 +7618,11 @@ bool QSocCliWorker::runAgentLoop(
             }
             if (auto *sendTool = localRegistry->getTool(QStringLiteral("send_message"))) {
                 remoteRegistry->registerTool(sendTool);
+            }
+            for (const auto *name :
+                 {"agent_list", "agent_inbox", "wait_agent", "followup_task", "interrupt_agent"}) {
+                if (auto *tool = localRegistry->getTool(QString::fromLatin1(name)))
+                    remoteRegistry->registerTool(tool);
             }
             if (auto *resumeT = localRegistry->getTool(QStringLiteral("agent_resume"))) {
                 remoteRegistry->registerTool(resumeT);

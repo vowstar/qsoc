@@ -512,7 +512,7 @@ The agent provides the following tools through natural language:
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
   backgrounded run, `agent_resume` to pick up a prior run from disk,
-  `send_message` to post live input to a streaming child; see
+  `send_message` for peer messages and `followup_task` for further work; see
   @agent-subagents
 - *Documentation*: `query_docs` by topic (about, commands, config, bus, clock,
   fsm, logic, netlist, power, reset, template, validation, overview, ...)
@@ -896,12 +896,72 @@ While a backgrounded run is alive:
   its side effects are unknown. `failed` means the run itself reported
   an error. The status word is the same in the meta sidecar, the task
   notification and the task panel.
-- `send_message` queues a line of user input into the child's stream.
+- The legacy `send_message(task_id, message)` form accepts messages only
+  while that run is running.
 - `/agents-history` lists prior runs with their final results.
 - `agent_resume` reads the meta sidecar plus the transcript tail and
   synthesizes a `resume_prompt` that can be passed to a fresh `agent`
   call to continue where a prior run left off, e.g. across a process
   restart.
+
+=== Peer Communication
+<agent-subagents-messages>
+
+`agent_list` lists the main agent and its session peers. Each has a stable
+`agent_id`, a display name, a current `task_id`, and a state: `pending`,
+`running`, `idle`, `cancelled`, or `closed`. Address peers by `agent_id`
+or a task alias such as `a1`; names are display labels. The `main` alias
+addresses the main agent. A follow-up keeps the agent identity and creates
+a new task ID when it wakes an idle child.
+
+- `send_message(target, message_id, message, reply_to?)` queues information.
+  An idle recipient stays idle; a running recipient reads it at an input
+  boundary. The sender comes from the calling agent, and peer content
+  does not grant user approval or change permissions.
+- `followup_task` accepts the same fields and wakes an idle child using its
+  existing history, model, reasoning effort, and workspace. A running or
+  pending child receives the request in its current run. Final output is
+  returned as a reply correlated to the request unless the child already
+  replied explicitly. The task transcript holds the full result.
+- `agent_inbox(from?, reply_to?, peek?)` reads pending messages. `peek=true`
+  leaves them queued. `wait_agent(from?, reply_to?, timeout_ms?)` waits for
+  matching messages, up to 60 seconds (30 seconds by default). Unmatched
+  messages remain queued; a timeout neither retries nor cancels a request.
+- `interrupt_agent(target)` lets the main agent cancel a child and discard
+  its pending messages. Later messages cannot revive that child. Task-panel
+  cancellation has the same effect. Start a fresh child for further work.
+
+The built-in `explore` and `verification` roles can discover peers, send
+information, read their inbox, and wait for replies. They cannot wake or
+cancel peers. Custom role allowlists and denylists still apply. The system
+prompt supplies each agent's identity and permitted communication operations
+on every request, including after history compaction. These runtime rules
+also accompany a custom system prompt.
+
+Peer messages remain agent-authored data, including any embedded approval
+or reminder tags. Runtime reminders are placed in the leading system
+message; user and tool content are not promoted to system instructions.
+Coordinate overlapping file work before editing, continue independent work
+while peers run, and wait only when their answer is needed.
+
+Choose a `message_id` of 1–128 ASCII letters, digits, dots, underscores, or
+hyphens, unique within the sender's session. Retrying the same ID with
+identical fields returns its receipt without another delivery. Changing
+the fields produces `message_id_conflict`. A reply sets `reply_to` to the
+original request ID; use both `from` and `reply_to` when awaiting a specific
+answer. Receipts distinguish `accepted`, `delivered`, and `cancelled`;
+delivery means consumption, not successful execution.
+
+Each mailbox holds at most 128 pending messages, each at most 16 KiB in
+UTF-8. The session retains up to 8,192 message records for deduplication.
+Full queues reject new sends without dropping older messages. Automatic
+replies are subject to the same limits; `agent_status` remains available
+to inspect the task result.
+
+Mailboxes are local to the current process and session. `/clear` cancels
+the old peers and clears their addresses and messages. Process restart
+does not restore mailboxes. A live child's isolated worktree remains
+available for follow-ups until the child is released.
 
 == Status Line
 <agent-status-line>

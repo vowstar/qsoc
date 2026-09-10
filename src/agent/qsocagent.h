@@ -14,6 +14,7 @@
 class QLongTaskMonitor;
 class QSocHookManager;
 class QSocLoopScheduler;
+class QSocAgentMailbox;
 
 #include <atomic>
 #include <functional>
@@ -126,6 +127,9 @@ public:
      *          must already end at a request or completed tool batch.
      */
     void resumeStream();
+
+    void    setMailbox(QSocAgentMailbox *mailbox, const QString &identity);
+    QString agentIdentity() const { return agentIdentity_; }
 
     /**
      * @brief Install a synchronous session-persistence barrier.
@@ -463,14 +467,11 @@ public:
      * @brief Build the full system prompt from modular sections + dynamic
      *        context (project instructions, skills, memory).
      */
-    QString buildSystemPromptWithMemory() const;
+    QString buildSystemPromptWithMemory(bool includeRuntime = true) const;
 
     /**
-     * @brief Append an ephemeral <system-reminder> block to a wire payload
-     *        as trailing user-turn content. Folds into the trailing user or
-     *        tool message to avoid consecutive user turns that strict chat
-     *        templates reject; never emits a role:"system" message. Static
-     *        and pure so the wire contract can be unit-tested directly.
+     * @brief Append a trusted runtime reminder to the leading system message.
+     *        User and tool content remain unchanged.
      */
     static void appendTurnReminder(nlohmann::json &wire, const QString &content);
 
@@ -662,6 +663,9 @@ private:
         QMetaObject::Connection        llmDestroyedConnection;
         std::optional<json::size_type> toolBatchStart;
         std::optional<QString>         executingToolCallId;
+        bool                           toolDeferred = false;
+        std::optional<QString>         deferredToolResult;
+        json                           deferredToolArguments;
         json                           toolBatchAttachments = json::array();
         RunPhase                       phase                = RunPhase::Active;
     };
@@ -749,9 +753,11 @@ private:
     };
 
     /* Request queue for dynamic input during execution */
-    QList<QueuedRequest> requestQueue;
-    mutable QMutex       queueMutex;
-    bool                 rejectQueuedRequests_ = false; /* guarded by queueMutex */
+    QPointer<QSocAgentMailbox> mailbox_;
+    QString                    agentIdentity_;
+    QList<QueuedRequest>       requestQueue;
+    mutable QMutex             queueMutex;
+    bool                       rejectQueuedRequests_ = false; /* guarded by queueMutex */
 
     /* Token tracking */
     std::atomic<qint64> totalInputTokens{0};
@@ -809,15 +815,10 @@ private:
      *        and sub-agent prompt assembly paths.
      */
     void appendDynamicSystemSections(QString &prompt) const;
+    void appendRuntimeSystemSections(QString &prompt) const;
 
     /**
-     * @brief Append the per-turn ephemeral reminders (critical reminder,
-     *        plan mode, focus, approved plan, memory recall) to the wire
-     *        payload as trailing <system-reminder> user-turn content.
-     *        Keeps the cached system prefix (messages[0]) byte-stable and
-     *        never emits a role:"system" message after the history, which
-     *        strict chat templates reject. Shared by the streaming and
-     *        synchronous iteration paths.
+     * @brief Append ephemeral runtime reminders to the leading system message.
      */
     void injectPerTurnReminders(nlohmann::json &wire) const;
 

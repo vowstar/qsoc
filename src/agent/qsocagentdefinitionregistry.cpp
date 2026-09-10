@@ -58,6 +58,10 @@ void QSocAgentDefinitionRegistry::registerBuiltins()
         "Returns a concise markdown report with file:line citations.");
     explore.scope      = QStringLiteral("builtin");
     explore.toolsAllow = QStringList{
+        QStringLiteral("agent_list"),
+        QStringLiteral("send_message"),
+        QStringLiteral("agent_inbox"),
+        QStringLiteral("wait_agent"),
         QStringLiteral("read_file"),
         QStringLiteral("list_files"),
         QStringLiteral("path_context"),
@@ -111,6 +115,10 @@ void QSocAgentDefinitionRegistry::registerBuiltins()
         "Reports pass/fail with the smallest evidence; never modifies code.");
     verification.scope      = QStringLiteral("builtin");
     verification.toolsAllow = QStringList{
+        QStringLiteral("agent_list"),
+        QStringLiteral("send_message"),
+        QStringLiteral("agent_inbox"),
+        QStringLiteral("wait_agent"),
         QStringLiteral("bash"),
         QStringLiteral("bash_manage"),
         QStringLiteral("read_file"),

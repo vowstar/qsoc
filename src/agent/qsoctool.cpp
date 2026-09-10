@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <QScopeGuard>
+#include <QTimer>
 
 /* QSocToolCallContext Implementation */
 
@@ -30,6 +31,14 @@ void QSocToolCallContext::requestCancellation()
     }
     cancellationRequested_ = true;
     emit cancellationRequested();
+}
+
+void QSocToolCallContext::completeDeferred(const QString &result)
+{
+    if (!deferred_ || completed_)
+        return;
+    completed_ = true;
+    emit deferredCompleted(result);
 }
 
 /* QSocTool Implementation */
@@ -215,6 +224,59 @@ QString QSocToolRegistry::executeTool(const QString &name, const json &arguments
         }
     });
     return tool->execute(arguments);
+}
+
+std::optional<QString> QSocToolRegistry::executeToolDeferred(
+    const QString                       &name,
+    const json                          &arguments,
+    QObject                             *owner,
+    std::function<void(const QString &)> completed)
+{
+    const QPointer<QSocTool> tool = getTool(name);
+    if (!tool)
+        return QString("Error: Tool '%1' not found").arg(name);
+    if (!tool->supportsDeferred())
+        return executeTool(name, arguments, owner);
+    auto *call = new ActiveCall(tool, owner, this);
+    call->setParent(this);
+    call->context.canDefer_ = true;
+    activeCalls_.insert(call);
+    tool->callContexts_.append(&call->context);
+    const QPointer<QSocToolRegistry> registry(this);
+    const QPointer<QObject>          receiver(owner);
+    const QPointer<ActiveCall>       guardedCall(call);
+    connect(
+        &call->context,
+        &QSocToolCallContext::deferredCompleted,
+        call,
+        [registry, receiver, call, completed = std::move(completed)](const QString &result) {
+            if (registry)
+                registry->activeCalls_.remove(call);
+            if (receiver)
+                QTimer::singleShot(0, receiver, [completed, result]() { completed(result); });
+            call->deleteLater();
+        });
+    const auto cancel = [call]() {
+        call->context.requestCancellation();
+        call->context.completeDeferred(QStringLiteral("Error: Tool invocation cancelled"));
+    };
+    connect(tool, &QObject::destroyed, call, cancel);
+    connect(this, &QObject::destroyed, call, cancel);
+    if (owner)
+        connect(owner, &QObject::destroyed, call, cancel);
+    /* execute() may destroy its tool before returning. */
+    // cppcheck-suppress nullPointerRedundantCheck
+    const QString result = tool->execute(arguments);
+    if (tool && guardedCall)
+        tool->callContexts_.removeOne(&call->context);
+    if (!guardedCall)
+        return QStringLiteral("Error: Tool registry destroyed");
+    if (call->context.deferred_)
+        return std::nullopt;
+    if (registry)
+        registry->activeCalls_.remove(call);
+    delete call;
+    return result;
 }
 
 int QSocToolRegistry::count() const

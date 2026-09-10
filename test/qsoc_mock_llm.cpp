@@ -53,6 +53,7 @@ struct MockConfig
     int         toolMax = 1;
     QString     toolGate;
     QString     requestLog;
+    QJsonArray  script;
     QString     failMode = QStringLiteral("none");
 };
 
@@ -69,8 +70,9 @@ QHash<QByteArray, int> hits{
     {"alpn_none", 0},
 };
 
-int           emitted = 0;
-QElapsedTimer firstRequest;
+int             emitted = 0;
+QHash<int, int> scriptSteps;
+QElapsedTimer   firstRequest;
 
 QByteArray envBytes(const char *name, const QByteArray &fallback)
 {
@@ -114,6 +116,20 @@ bool loadConfig(QString *error)
     config.toolMax           = envInt("MOCK_TOOL_MAX", 1);
     config.toolGate          = QString::fromLocal8Bit(qgetenv("MOCK_TOOL_GATE"));
     config.requestLog        = QString::fromLocal8Bit(qgetenv("MOCK_REQUEST_LOG"));
+    const QString scriptPath = QString::fromLocal8Bit(qgetenv("MOCK_SCRIPT"));
+    if (!scriptPath.isEmpty()) {
+        QFile file(scriptPath);
+        if (!file.open(QIODevice::ReadOnly)) {
+            *error = QStringLiteral("Cannot read MOCK_SCRIPT");
+            return false;
+        }
+        const auto document = QJsonDocument::fromJson(file.readAll());
+        if (!document.isArray()) {
+            *error = QStringLiteral("MOCK_SCRIPT must contain a JSON array");
+            return false;
+        }
+        config.script = document.array();
+    }
 
     const QByteArray args = qgetenv("MOCK_TOOL_ARGS");
     if (!args.isEmpty()) {
@@ -207,6 +223,49 @@ QJsonArray buildToolCalls()
         call["type"]     = QStringLiteral("function");
         call["function"] = function;
         calls.append(call);
+    }
+    return calls;
+}
+
+QJsonObject scriptedReply(const QJsonObject &request)
+{
+    QString firstUser;
+    for (const auto &value : request.value(QStringLiteral("messages")).toArray()) {
+        const auto message = value.toObject();
+        if (message.value(QStringLiteral("role")).toString() == QStringLiteral("user")) {
+            firstUser = message.value(QStringLiteral("content")).toString();
+            break;
+        }
+    }
+    for (int i = 0; i < config.script.size(); ++i) {
+        const auto    route     = config.script.at(i).toObject();
+        const QString match     = route.value(QStringLiteral("contains")).toString();
+        const auto    responses = route.value(QStringLiteral("responses")).toArray();
+        if (match.isEmpty() || !firstUser.contains(match) || responses.isEmpty())
+            continue;
+        const int step                                             = scriptSteps[i]++;
+        hits[QByteArrayLiteral("script_") + QByteArray::number(i)] = step + 1;
+        return responses.at(qMin(step, int(responses.size()) - 1)).toObject();
+    }
+    return {};
+}
+
+QJsonArray scriptedToolCalls(const QJsonObject &response)
+{
+    QJsonArray calls;
+    for (const auto &value : response.value(QStringLiteral("tools")).toArray()) {
+        const auto        tool = value.toObject();
+        const QJsonObject function{
+            {QStringLiteral("name"), tool.value(QStringLiteral("name"))},
+            {QStringLiteral("arguments"),
+             QString::fromUtf8(compactJson(tool.value(QStringLiteral("arguments")).toObject()))}};
+        const int index = calls.size();
+        calls.append(
+            QJsonObject{
+                {QStringLiteral("index"), index},
+                {QStringLiteral("id"), QStringLiteral("script_%1_%2").arg(emitted).arg(index)},
+                {QStringLiteral("type"), QStringLiteral("function")},
+                {QStringLiteral("function"), function}});
     }
     return calls;
 }
@@ -331,7 +390,10 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
     } else {
         allowed = config.toolMax <= 0 || emitted < config.toolMax;
     }
-    const bool emitTools = wantsTools && allowed;
+    const QJsonObject scripted = streaming ? scriptedReply(request) : QJsonObject();
+    const bool emitTools       = scripted.isEmpty()
+                                     ? wantsTools && allowed
+                                     : !scripted.value(QStringLiteral("tools")).toArray().isEmpty();
     if (emitTools) {
         ++emitted;
         if (!config.toolGate.isEmpty()) {
@@ -343,9 +405,14 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
         ++hits["200_sync"];
     }
 
-    const QJsonArray toolCalls = emitTools ? buildToolCalls() : QJsonArray();
+    const QJsonArray toolCalls = scripted.isEmpty() ? (emitTools ? buildToolCalls() : QJsonArray())
+                                                    : scriptedToolCalls(scripted);
+    const QString    reply
+        = scripted.value(QStringLiteral("content")).toString(QString::fromUtf8(config.reply));
+    const int delayMs = scripted.value(QStringLiteral("delay_ms"))
+                            .toInt(static_cast<int>(config.delaySeconds * 1000));
 
-    auto send = [socket, streaming, emitTools, toolCalls]() {
+    auto send = [socket, streaming, emitTools, toolCalls, reply]() {
         if (socket->state() != QAbstractSocket::ConnectedState) {
             return;
         }
@@ -358,7 +425,7 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
                 message["tool_calls"] = toolCalls;
                 finishReason          = QStringLiteral("tool_calls");
             } else {
-                message["content"] = QString::fromUtf8(config.reply);
+                message["content"] = reply;
             }
             QJsonObject choice;
             choice["index"]         = 0;
@@ -385,15 +452,15 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
                 {deltaChunk(delta, QString()),
                  deltaChunk(QJsonObject(), QStringLiteral("tool_calls"))});
         } else {
-            delta["content"] = QString::fromUtf8(config.reply);
+            delta["content"] = reply;
             writeSse(
                 socket,
                 {deltaChunk(delta, QString()), deltaChunk(QJsonObject(), QStringLiteral("stop"))});
         }
     };
 
-    if (config.delaySeconds > 0) {
-        QTimer::singleShot(static_cast<int>(config.delaySeconds * 1000), socket, send);
+    if (delayMs > 0) {
+        QTimer::singleShot(delayMs, socket, send);
     } else {
         send();
     }

@@ -3,10 +3,14 @@
 
 #include "agent/tool/qsoctoolsendmessage.h"
 
+#include "agent/qsocagent.h"
+#include "agent/qsocagentmailbox.h"
 #include "agent/qsocsubagenttasksource.h"
+#include <QUuid>
 
 QSocToolSendMessage::QSocToolSendMessage(QObject *parent, QSocSubAgentTaskSource *taskSource)
-    : QSocTool(parent)
+    : QSocToolAgentMessage(
+          parent, taskSource ? taskSource->mailbox() : nullptr, QStringLiteral("send_message"))
     , taskSource_(taskSource)
 {}
 
@@ -17,35 +21,40 @@ QString QSocToolSendMessage::getName() const
 
 QString QSocToolSendMessage::getDescription() const
 {
-    return QStringLiteral(
-        "Push an additional user message into the input queue of an async sub-agent "
-        "started with the `agent` tool in `run_in_background=true` mode. The child "
-        "consumes the queued message at its next iteration boundary. Useful when the "
-        "parent realises mid-flight that the child needs more context, a corrected "
-        "scope, or a follow-up task.\n"
-        "\nFails when the task_id is unknown or the child has already finished. "
-        "Single-recipient: there is no broadcast or team form.");
+    return QSocToolAgentMessage::getDescription()
+           + QStringLiteral(" The legacy task_id/message form only accepts running children.");
 }
 
 json QSocToolSendMessage::getParametersSchema() const
 {
-    return json{
-        {"type", "object"},
-        {"properties",
-         {{"task_id",
-           {{"type", "string"},
-            {"description",
-             "task_id returned from a prior `agent` call with run_in_background=true."}}},
-          {"message",
-           {{"type", "string"},
-            {"description",
-             "Text to enqueue as a new user-role message inside the child's "
-             "conversation."}}}}},
-        {"required", json::array({"task_id", "message"})}};
+    json schema                     = QSocToolAgentMessage::getParametersSchema();
+    schema["properties"]["task_id"] = {{"type", "string"}};
+    const json peer                 = schema;
+    const json legacy
+        = {{"type", "object"},
+           {"properties", {{"task_id", {{"type", "string"}}}, {"message", {{"type", "string"}}}}},
+           {"required", {"task_id", "message"}},
+           {"additionalProperties", false}};
+    schema["required"] = json::array({"message"});
+    json peerBranch    = peer;
+    peerBranch["properties"].erase("task_id");
+    schema["oneOf"] = json::array({peerBranch, legacy});
+    return schema;
 }
 
 QString QSocToolSendMessage::execute(const json &arguments)
 {
+    if (!arguments.is_object())
+        return QStringLiteral(R"({"status":"error","error":"invalid_arguments"})");
+    if (arguments.contains("target")) {
+        if (arguments.contains("task_id"))
+            return QStringLiteral(R"({"status":"error","error":"ambiguous_target"})");
+        return QSocToolAgentMessage::execute(arguments);
+    }
+    for (auto it = arguments.begin(); it != arguments.end(); ++it) {
+        if (it.key() != "task_id" && it.key() != "message")
+            return QStringLiteral(R"({"status":"error","error":"unknown_argument"})");
+    }
     if (taskSource_ == nullptr) {
         return QStringLiteral(R"({"status":"error","error":"task source not configured"})");
     }
@@ -61,6 +70,32 @@ QString QSocToolSendMessage::execute(const json &arguments)
         return QStringLiteral(R"({"status":"error","error":"message must not be empty"})");
     }
 
+    if (taskSource_->mailbox() != nullptr) {
+        const auto *context = currentCallContext();
+        auto *caller = context ? qobject_cast<QSocAgent *>(context->executionScope()) : nullptr;
+        QSocTask::Row row;
+        if (caller == nullptr || !taskSource_->findRow(taskId, &row)
+            || row.status != QSocTask::Status::Running) {
+            return QStringLiteral(
+                R"({"status":"error","error":"unknown id or run is not Running"})");
+        }
+        const auto *target = taskSource_->mailbox()->agentFor(
+            taskSource_->mailbox()->resolve(taskId));
+        if (context->isCancellationRequested())
+            return QStringLiteral(R"({"status":"error","error":"cancelled"})");
+        if (caller->getConfig().planMode && target && !target->getConfig().planMode)
+            return QStringLiteral(R"({"status":"error","error":"target_not_in_plan_mode"})");
+        json result = taskSource_->mailbox()->send(
+            taskSource_->mailbox()->idFor(caller),
+            taskId,
+            QUuid::createUuid().toString(QUuid::WithoutBraces),
+            message,
+            {},
+            false);
+        result["task_id"]      = taskId.toStdString();
+        result["queued_bytes"] = message.toUtf8().size();
+        return QString::fromStdString(result.dump());
+    }
     if (!taskSource_->queueRequestFor(taskId, message)) {
         return QString::fromUtf8(
             json{

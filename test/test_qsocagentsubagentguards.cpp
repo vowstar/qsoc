@@ -225,13 +225,16 @@ private slots:
         QCOMPARE(agent->getEffectiveToolDefinitions().size(), size_t{1});
     }
 
-    /* Legacy override path: non-sub-agent + override returns it verbatim. */
-    void testLegacyOverrideReturnsVerbatim()
+    /* Runtime authority rules also apply to custom prompts. */
+    void testLegacyOverrideRetainsBodyAndRuntimeRules()
     {
         QSocAgentConfig cfg;
         cfg.systemPromptOverride = QStringLiteral("LEGACY ONLY");
-        auto *agent              = new QSocAgent(this, nullptr, makeRegistry(), cfg);
-        QCOMPARE(agent->buildSystemPromptWithMemory(), QStringLiteral("LEGACY ONLY"));
+        auto         *agent      = new QSocAgent(this, nullptr, makeRegistry(), cfg);
+        const QString prompt     = agent->buildSystemPromptWithMemory();
+        QVERIFY(prompt.startsWith(QStringLiteral("LEGACY ONLY")));
+        QVERIFY(prompt.contains(QStringLiteral("# Message authority")));
+        QVERIFY(!prompt.contains(QStringLiteral("# Environment")));
     }
 
     /* Sub-agent override path: identity is replaced but Environment

@@ -12,6 +12,7 @@
 #include <QString>
 
 class QSocAgent;
+class QSocAgentMailbox;
 
 /**
  * @brief Task source backing in-process sub-agent runs.
@@ -140,6 +141,10 @@ public:
      *          via `QSocAgent::queueRequest`.
      */
     bool queueRequestFor(const QString &id, const QString &message);
+
+    void              enableMessaging(QSocAgent *root);
+    QSocAgentMailbox *mailbox() const { return mailbox_; }
+    QString           startFollowup(QSocAgent *agent);
 
     /**
      * @brief Override the directory used to persist transcripts.
@@ -282,6 +287,7 @@ private:
     void writeMeta(const RunState &run) const;
 
     QList<RunState>      runs_; /* preserves registration order; small N */
+    QSocAgentMailbox    *mailbox_ = nullptr;
     QList<HistoricalRun> historical_;
     int                  nextSerial_      = 1;
     int                  maxConcurrent_   = 0;                 /* sliding-window cap; 0=unbounded */

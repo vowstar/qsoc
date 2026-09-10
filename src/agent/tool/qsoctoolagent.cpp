@@ -726,7 +726,7 @@ QString QSocToolAgent::execute(const json &arguments)
     QSocAgentConfig childCfg = effectiveConfig;
     childCfg.isSubAgent      = true;
     if (isFork) {
-        childCfg.systemPromptOverride = parentAgent_->buildSystemPromptWithMemory();
+        childCfg.systemPromptOverride = parentAgent_->buildSystemPromptWithMemory(false);
         childCfg.toolsAllow.clear();
         childCfg.toolsDeny.clear();
         childCfg.maxTurnsOverride = 0;
@@ -761,6 +761,18 @@ QString QSocToolAgent::execute(const json &arguments)
     auto *childLlm = effectiveLlm->clone(nullptr);
     if (!childModel.isEmpty()) {
         childLlm->setCurrentModel(childModel);
+    }
+    if (taskSource_->mailbox() != nullptr && parentAgent_ != nullptr) {
+        for (const auto *name :
+             {"send_message",
+              "agent_list",
+              "agent_inbox",
+              "wait_agent",
+              "followup_task",
+              "interrupt_agent"}) {
+            if (auto *tool = parentAgent_->getToolRegistry()->getTool(QString::fromLatin1(name)))
+                effectiveRegistry->registerTool(tool);
+        }
     }
     auto *child = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */
@@ -873,9 +885,16 @@ QString QSocToolAgent::execute(const json &arguments)
      * real time. Routes only the DELTA on each emission to avoid
      * double counting. */
     if (parentAgent_ != nullptr) {
-        auto *parent  = parentAgent_;
-        auto  prevIn  = std::make_shared<qint64>(0);
-        auto  prevOut = std::make_shared<qint64>(0);
+        auto      *parent     = parentAgent_;
+        auto       prevIn     = std::make_shared<qint64>(0);
+        auto       prevOut    = std::make_shared<qint64>(0);
+        const auto resetUsage = [prevIn, prevOut](const QString &) {
+            *prevIn  = 0;
+            *prevOut = 0;
+        };
+        QObject::connect(child, &QSocAgent::runComplete, parent, resetUsage);
+        QObject::connect(child, &QSocAgent::runError, parent, resetUsage);
+        QObject::connect(child, &QSocAgent::runAborted, parent, resetUsage);
         QObject::connect(
             child,
             &QSocAgent::tokenUsage,
@@ -927,6 +946,10 @@ QString QSocToolAgent::execute(const json &arguments)
     auto wtCleanup = [parentRepoRoot, worktreePath]() {
         removeWorktreeAt(parentRepoRoot, worktreePath);
     };
+    const bool retainWorkspace = taskSource_->mailbox() != nullptr;
+    if (retainWorkspace && !worktreePath.isEmpty()) {
+        QObject::connect(child, &QObject::destroyed, [wtCleanup]() { wtCleanup(); });
+    }
     auto cancelTask = [srcGuard, taskId, wtCleanup]() {
         if (srcGuard.isNull()) {
             return false;
@@ -985,12 +1008,15 @@ QString QSocToolAgent::execute(const json &arguments)
      * request. takeStopNotice() is destructive, so exactly one reader:
      * the persistent runAborted handler, which Qt invokes before the
      * foreground one because it was connected first. */
-    auto abortReason  = std::make_shared<QString>();
-    auto deliverAsync = [srcGuard, parentGuard, taskId, effectiveType, delivery]() {
+    auto          abortReason    = std::make_shared<QString>();
+    const QString parentIdentity = parentAgent_ ? parentAgent_->agentIdentity() : QString();
+    auto deliverAsync = [srcGuard, parentGuard, parentIdentity, taskId, effectiveType, delivery]() {
         if (delivery->notified || !delivery->haveTerminal || parentGuard.isNull()) {
             return;
         }
-        delivery->notified           = true;
+        delivery->notified = true;
+        if (parentGuard->agentIdentity() != parentIdentity)
+            return;
         const QString transcriptPath = srcGuard.isNull() ? QString()
                                                          : srcGuard->transcriptPathFor(taskId);
         parentGuard->queueTaskNotification(buildTaskNotification(
@@ -1036,6 +1062,7 @@ QString QSocToolAgent::execute(const json &arguments)
         [taskId,
          delivery,
          deliverAsync,
+         retainWorkspace,
          wtCleanup](const QString &id, QSocTask::Status state, const QString &text) {
             if (id != taskId) {
                 return;
@@ -1048,11 +1075,13 @@ QString QSocToolAgent::execute(const json &arguments)
             if (delivery->mode == Delivery::Async) {
                 deliverAsync();
             }
-            wtCleanup();
+            if (!retainWorkspace || state == QSocTask::Status::Aborted)
+                wtCleanup();
         });
 
     const json launchedResponse = json{
         {"status", "async_launched"},
+        {"agent_id", child->agentIdentity().toStdString()},
         {"task_id", taskId.toStdString()},
         {"subagent_type", effectiveType.toStdString()},
         {"description", label.toStdString()},
@@ -1245,6 +1274,7 @@ QString QSocToolAgent::execute(const json &arguments)
         return QString::fromUtf8(
             json{
                 {"status", resultStatusWord(fgStatus)},
+                {"agent_id", child->agentIdentity().toStdString()},
                 {"task_id", taskId.toStdString()},
                 {"subagent_type", effectiveType.toStdString()},
                 {"result", fgBody.toStdString()},

@@ -4,6 +4,7 @@
 #include "agent/qsocsubagenttasksource.h"
 
 #include "agent/qsocagent.h"
+#include "agent/qsocagentmailbox.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -37,6 +38,88 @@ QString terminalEventKind(QSocTask::Status state)
 QSocSubAgentTaskSource::QSocSubAgentTaskSource(QObject *parent)
     : QSocTaskSource(parent)
 {}
+
+void QSocSubAgentTaskSource::enableMessaging(QSocAgent *root)
+{
+    if (mailbox_ != nullptr)
+        return;
+    mailbox_ = new QSocAgentMailbox(this);
+    mailbox_->registerAgent(root, QStringLiteral("main"));
+    connect(root, &QSocAgent::runComplete, mailbox_, [this, root](const QString &) {
+        mailbox_->setState(root->agentIdentity(), QStringLiteral("idle"));
+    });
+    connect(root, &QSocAgent::runError, mailbox_, [this, root](const QString &) {
+        mailbox_->setState(root->agentIdentity(), QStringLiteral("idle"));
+    });
+    connect(root, &QSocAgent::runAborted, mailbox_, [this, root](const QString &) {
+        mailbox_->cancel(root->agentIdentity());
+    });
+    connect(mailbox_, &QSocAgentMailbox::changed, this, [this]() {
+        QStringList cancelled;
+        for (const auto &run : std::as_const(runs_)) {
+            if (!QSocTask::isTerminal(run.status) && run.agent
+                && mailbox_->stateFor(run.agent->agentIdentity()) == QStringLiteral("cancelled"))
+                cancelled.append(run.id);
+        }
+        for (const auto &id : cancelled)
+            killTask(id);
+    });
+    mailbox_->setWakeHandler([this](QSocAgent *agent) { return startFollowup(agent); });
+}
+
+QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
+{
+    if (agent == nullptr || mailbox_ == nullptr || agent->isRunning())
+        return {};
+    const QString identity = mailbox_->idFor(agent);
+    if (mailbox_->stateFor(identity) != QStringLiteral("idle"))
+        return {};
+    QString isolation;
+    QString worktreePath;
+    for (const auto &run : std::as_const(runs_)) {
+        if (run.agent == agent) {
+            isolation    = run.isolation;
+            worktreePath = run.worktreePath;
+        }
+    }
+    const QString id
+        = registerRun(QStringLiteral("Follow-up"), QStringLiteral("continuation"), agent);
+    setIsolationMetadata(id, isolation, worktreePath);
+    const auto connections = std::make_shared<QList<QMetaObject::Connection>>();
+    *connections << connect(agent, &QSocAgent::contentChunk, this, [this, id](const QString &text) {
+        appendTranscript(id, text);
+    });
+    *connections << connect(
+        agent, &QSocAgent::toolCalled, this, [this, id](const QString &name, const QString &args) {
+            appendTranscript(id, QStringLiteral("\n[tool] %1 %2\n").arg(name, args.left(200)));
+        });
+    *connections << connect(
+        agent, &QSocAgent::toolResult, this, [this, id](const QString &name, const QString &result) {
+            appendTranscript(id, QStringLiteral("[result %1] %2\n").arg(name, result.left(400)));
+        });
+    *connections << connect(agent, &QSocAgent::runComplete, this, [this, id](const QString &text) {
+        markCompleted(id, text);
+    });
+    *connections << connect(agent, &QSocAgent::runError, this, [this, id](const QString &text) {
+        markFailed(id, text);
+    });
+    *connections << connect(agent, &QSocAgent::runAborted, this, [this, id](const QString &text) {
+        markAborted(id, text);
+    });
+    *connections << connect(
+        this,
+        &QSocTaskSource::taskTerminal,
+        agent,
+        [id, connections](const QString &taskId, QSocTask::Status, const QString &) {
+            if (id != taskId)
+                return;
+            for (const auto &connection : std::as_const(*connections))
+                QObject::disconnect(connection);
+            connections->clear();
+        });
+    start(id, [agent]() { agent->resumeStream(); });
+    return id;
+}
 
 QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
 {
@@ -176,6 +259,8 @@ QString QSocSubAgentTaskSource::registerRun(
     run.lastActivityMs = run.queuedAtMs;
     if (agent != nullptr) {
         agent->setParent(this);
+        if (mailbox_ != nullptr)
+            mailbox_->registerAgent(agent, label, run.id);
     }
     runs_.append(run);
     writeMeta(run);
@@ -285,6 +370,8 @@ void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &
         if (run.id != id) {
             continue;
         }
+        if (QSocTask::isTerminal(run.status))
+            return;
         run.transcript += chunk;
         if (transcriptCap_ > 0 && run.transcript.size() > transcriptCap_) {
             run.transcript = run.transcript.right(transcriptCap_);
@@ -318,8 +405,29 @@ void QSocSubAgentTaskSource::markTerminal(
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
         appendDiskEvent(id, terminalEventKind(state), text);
         writeMeta(run);
+        if (mailbox_ != nullptr && run.agent != nullptr) {
+            const QString identity = mailbox_->idFor(run.agent);
+            if (state == QSocTask::Status::Aborted)
+                mailbox_->cancel(identity);
+            else
+                mailbox_->finish(
+                    identity,
+                    QString::fromStdString(
+                        nlohmann::json{
+                            {"task_id", id.toStdString()},
+                            {"status", QSocTask::statusWord(state).toStdString()},
+                            {"result", text.left(2500).toStdString()}}
+                            .dump()));
+        }
+        if (owner.isNull())
+            return;
         emit tasksChanged();
+        /* Signal handlers may release the task source. */
+        // cppcheck-suppress identicalConditionAfterEarlyExit
+        if (owner.isNull())
+            return;
         emit taskTerminal(id, state, text);
+        // cppcheck-suppress identicalConditionAfterEarlyExit
         if (owner.isNull()) {
             return;
         }
@@ -658,7 +766,7 @@ void QSocSubAgentTaskSource::evictStaleCompleted()
         if (nowMs - run.lastActivityMs < completionTtlMs_) {
             continue;
         }
-        if (run.agent != nullptr) {
+        if (run.agent != nullptr && mailbox_ == nullptr) {
             run.agent->deleteLater();
         }
         runs_.removeAt(i);

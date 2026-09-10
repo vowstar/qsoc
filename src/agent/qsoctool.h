@@ -4,7 +4,9 @@
 #ifndef QSOCTOOL_H
 #define QSOCTOOL_H
 
+#include <functional>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <QMap>
 #include <QObject>
 #include <QPointer>
@@ -26,9 +28,14 @@ public:
     bool isCancellationRequested() const;
     /** @brief Scope shared by tool calls from the same execution owner. */
     QObject *executionScope() const { return scope_.data(); }
+    bool     canDefer() const { return canDefer_; }
+    bool     isDeferredPending() const { return deferred_ && !completed_; }
+    void     defer() { deferred_ = canDefer_; }
+    void     completeDeferred(const QString &result);
 
 signals:
     void cancellationRequested();
+    void deferredCompleted(const QString &result);
 
 private:
     QSocToolCallContext(QObject *owner, QObject *fallbackScope);
@@ -37,6 +44,9 @@ private:
     QPointer<QObject> owner_;
     QPointer<QObject> scope_;
     bool              cancellationRequested_ = false;
+    bool              canDefer_              = false;
+    bool              deferred_              = false;
+    bool              completed_             = false;
 
     friend class QSocToolRegistry;
 };
@@ -86,6 +96,7 @@ public:
      * @return Result of the tool execution as a string
      */
     virtual QString execute(const json &arguments) = 0;
+    virtual bool    supportsDeferred() const { return false; }
 
     /** @brief How a tool call ended, as far as the caller can tell. */
     enum class ResultStatus {
@@ -209,6 +220,11 @@ public:
      * @return Result of the tool execution
      */
     QString executeTool(const QString &name, const json &arguments, QObject *owner = nullptr);
+    std::optional<QString> executeToolDeferred(
+        const QString                       &name,
+        const json                          &arguments,
+        QObject                             *owner,
+        std::function<void(const QString &)> completed);
 
     /**
      * @brief Get the number of registered tools
@@ -235,7 +251,7 @@ public:
     void abortCalls(QObject *owner);
 
 private:
-    struct ActiveCall
+    struct ActiveCall : QObject
     {
         ActiveCall(QSocTool *tool, QObject *owner, QObject *fallbackScope)
             : tool(tool)
