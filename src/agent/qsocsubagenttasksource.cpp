@@ -96,6 +96,7 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
     *connections << connect(
         agent, &QSocAgent::toolResult, this, [this, id](const QString &name, const QString &result) {
             appendTranscript(id, QStringLiteral("[result %1] %2\n").arg(name, result.left(400)));
+            emit taskEvidenceChanged(id);
         });
     *connections << connect(agent, &QSocAgent::runComplete, this, [this, id](const QString &text) {
         markCompleted(id, text);
@@ -129,6 +130,7 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
         QSocTask::Row row;
         row.id          = run.id;
         row.label       = run.label;
+        row.objective   = run.objective;
         row.kind        = QSocTask::Kind::SubAgent;
         row.status      = run.status;
         row.startedAtMs = run.startedAtMs;
@@ -245,11 +247,12 @@ bool QSocSubAgentTaskSource::killTask(const QString &id)
 }
 
 QString QSocSubAgentTaskSource::registerRun(
-    const QString &label, const QString &subagentType, QSocAgent *agent)
+    const QString &label, const QString &subagentType, QSocAgent *agent, const QString &objective)
 {
     evictStaleCompleted();
 
     RunState run;
+    run.objective      = objective;
     run.id             = QStringLiteral("a") + QString::number(nextSerial_++);
     run.label          = label;
     run.subagentType   = subagentType;

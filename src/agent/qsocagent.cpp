@@ -3097,6 +3097,7 @@ void QSocAgent::setEffortLevel(const QString &level)
 void QSocAgent::setConfig(const QSocAgentConfig &config)
 {
     agentConfig = config;
+    emit configurationChanged();
 }
 
 QSocAgentConfig QSocAgent::getConfig() const

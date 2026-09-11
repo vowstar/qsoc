@@ -45,7 +45,11 @@ public:
      * @return Stable rolling id ("a1", "a2", ...) used by the spawn
      *         tool to feed progress.
      */
-    QString registerRun(const QString &label, const QString &subagentType, QSocAgent *agent);
+    QString registerRun(
+        const QString &label,
+        const QString &subagentType,
+        QSocAgent     *agent,
+        const QString &objective = {});
 
     /**
      * @brief Attach the launcher that actually starts a registered
@@ -249,6 +253,7 @@ public:
 private:
     struct RunState
     {
+        QString               objective;
         QString               id;
         QString               label;
         QString               subagentType;

@@ -7,6 +7,7 @@
 #include "agent/qsoctasksource.h"
 
 #include <QList>
+#include <QMap>
 #include <QObject>
 #include <QString>
 
@@ -30,8 +31,9 @@ public:
     /** @brief A row plus the source tag it came from. */
     struct TaggedRow
     {
-        QString       sourceTag;
-        QSocTask::Row row;
+        QString            sourceTag;
+        QSocTask::Row      row;
+        QSocTask::Estimate estimate;
     };
 
     explicit QSocTaskRegistry(QObject *parent = nullptr);
@@ -61,13 +63,22 @@ public:
 
     /** @brief Kill the (tag, id) task. False if tag unknown or kill failed. */
     bool killTask(const QString &tag, const QString &id);
+    void setEstimate(const QString &tag, const QString &id, const QSocTask::Estimate &estimate);
+    void clearEstimates();
+    QSocTask::Estimate estimateFor(const QString &tag, const QString &id) const;
 
 signals:
     /** @brief Any underlying source emitted tasksChanged. */
     void anySourceChanged();
+    void evidenceChanged(const QString &tag, const QString &id);
+    void estimatesChanged();
+    void estimateRefreshRequested();
 
 private:
-    QList<QSocTaskSource *> sources_;
+    QList<QSocTaskSource *>                           sources_;
+    QMap<QPair<QString, QString>, QSocTask::Estimate> estimates_;
+    bool                                              estimateNotificationPending_ = false;
+    void                                              notifyEstimatesChanged();
 };
 
 #endif /* QSOCTASKREGISTRY_H */

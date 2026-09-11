@@ -7,6 +7,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 /**
  * @brief Polymorphic background-task model for the task overlay.
@@ -84,6 +85,21 @@ struct Row
     Status  status;
     qint64  startedAtMs; /* 0 = never started */
     bool    canKill;
+    QString objective;
+};
+
+struct Estimate
+{
+    QString     summary;
+    QStringList remaining;
+    QStringList evidence;
+    QStringList unknowns;
+    QString     reason;
+    int         progressLow  = -1;
+    int         progressHigh = -1;
+    int         secondsLow   = -1;
+    int         secondsHigh  = -1;
+    qint64      updatedAtMs  = 0;
 };
 
 } /* namespace QSocTask */
@@ -134,6 +150,7 @@ public:
 signals:
     /** @brief Shape of listTasks() may have changed; consumers should refresh. */
     void tasksChanged();
+    void taskEvidenceChanged(const QString &id);
 
     /**
      * @brief A task reached a terminal state, emitted exactly once per task.

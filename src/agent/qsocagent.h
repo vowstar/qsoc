@@ -537,6 +537,7 @@ public:
     static int backoffDelayMs(int attempt, bool rateLimit);
 
 signals:
+    void configurationChanged();
     /**
      * @brief Signal emitted when a tool is called
      * @param toolName Name of the tool being called

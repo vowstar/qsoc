@@ -25,6 +25,7 @@
 #include "agent/qsocsessiontitle.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskeventqueue.h"
+#include "agent/qsoctaskforecast.h"
 #include "agent/qsoctaskregistry.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
@@ -2025,6 +2026,9 @@ bool QSocCliWorker::runAgentLoop(
                 .arg(MIN_ROWS));
     }
 
+    QSocTaskForecast taskForecast(taskRegistry, agent);
+    taskForecast.setEnabled(
+        !socConfig || socConfig->getValue("agent.task_estimates", "true") != "false");
     QTextStream &qout = QSocConsole::out();
 
     /* Remote workspace state. A single session at a time; created by
@@ -4746,39 +4750,9 @@ bool QSocCliWorker::runAgentLoop(
          * before they touch the input buffer. ESC + arrows go through
          * their own signal paths and check focus explicitly. */
         inputMonitor.setExternalKeyConsumer([&compositor](unsigned char byte) {
-            int qtKey = 0;
-            switch (byte) {
-            case 0x0D:
-            case 0x0A:
-                qtKey = Qt::Key_Return;
-                break;
-            case 'x':
-            case 'X':
-                qtKey = Qt::Key_X;
-                break;
-            case 'v':
-            case 'V':
-                qtKey = Qt::Key_V;
-                break;
-            case 'm':
-            case 'M':
-                qtKey = Qt::Key_M;
-                break;
-            case 'q':
-            case 'Q':
-                qtKey = Qt::Key_Q;
-                break;
-            case 'j':
-            case 'J':
-                qtKey = Qt::Key_J;
-                break;
-            case 'k':
-            case 'K':
-                qtKey = Qt::Key_K;
-                break;
-            default:
-                return true;
-            }
+            const int qtKey = byte == '\r' || byte == '\n'
+                                  ? Qt::Key_Return
+                                  : QChar::fromLatin1(char(byte)).toUpper().unicode();
             compositor.taskOverlay().handleKey(qtKey, false);
             return true;
         });

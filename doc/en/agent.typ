@@ -1085,6 +1085,9 @@ disappears, select another row before requesting a stop.
     [`Left`/`Right`], [Move between grid columns],
     [`v`], [Switch grid and table],
     [`m`], [Toggle task animation],
+    [`e`], [Show or hide estimates],
+    [`r`], [Refresh estimates],
+    [`p` in details], [Show provisional numeric ranges],
     [`Enter`], [Open the task's detail tail],
     [`x`],
     [Request stop or removal for the highlighted task],
@@ -1099,6 +1102,23 @@ stops monitors, and removes a `/loop` job from the schedule. Cancelling a
 sub-agent discards its queued input and leaves other sub-agents running.
 Completed rows linger for a short window so their tail can still be
 inspected before being evicted.
+
+=== Task Estimates
+
+In the interactive interface, active sub-agents receive asynchronous estimates after state changes and tool results.
+The evaluator inherits the selected model and reasoning effort. It has no tools.
+Requests share one stream and combine up to eight task snapshots.
+Each task keeps only its latest pending snapshot.
+
+The overview labels estimated phases with `est`. Details show remaining work, unknowns, evidence references, and update age.
+Runtime states and completed counts remain independent of these estimates.
+Cancelled tasks and results from previous model settings cannot receive late estimates.
+Unavailable estimates leave the actual task state visible.
+
+Numeric ranges are hidden by default. Press `p` in details to inspect provisional progress and remaining time.
+These ranges have no measured accuracy guarantee. Unknown values remain unknown.
+The progress range estimates work completed, not confidence or acceptance.
+Set `agent.task_estimates: false` to disable evaluation. The `e` key only changes visibility.
 
 === Output Monitors
 <agent-task-monitors>

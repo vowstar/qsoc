@@ -4,6 +4,7 @@
 #include "agent/qsoctaskregistry.h"
 
 #include <algorithm>
+#include <QTimer>
 
 namespace {
 
@@ -40,6 +41,13 @@ void QSocTaskRegistry::registerSource(QSocTaskSource *src)
         return;
     sources_.append(src);
     connect(src, &QSocTaskSource::tasksChanged, this, &QSocTaskRegistry::anySourceChanged);
+    connect(src, &QSocTaskSource::taskEvidenceChanged, this, [this, src](const QString &id) {
+        emit evidenceChanged(src->sourceTag(), id);
+    });
+    connect(src, &QObject::destroyed, this, [this, src]() {
+        sources_.removeAll(src);
+        emit anySourceChanged();
+    });
 }
 
 QList<QSocTaskRegistry::TaggedRow> QSocTaskRegistry::listAll() const
@@ -48,7 +56,7 @@ QList<QSocTaskRegistry::TaggedRow> QSocTaskRegistry::listAll() const
     for (auto *src : sources_) {
         const QString tag = src->sourceTag();
         for (const auto &row : src->listTasks()) {
-            out.append({tag, row});
+            out.append({tag, row, estimateFor(tag, row.id)});
         }
     }
     std::sort(out.begin(), out.end(), [](const TaggedRow &a, const TaggedRow &b) {
@@ -89,4 +97,37 @@ bool QSocTaskRegistry::killTask(const QString &tag, const QString &id)
             return src->killTask(id);
     }
     return false;
+}
+
+void QSocTaskRegistry::setEstimate(
+    const QString &tag, const QString &id, const QSocTask::Estimate &estimate)
+{
+    const auto key = qMakePair(tag, id);
+    if (estimate.summary.isEmpty())
+        estimates_.remove(key);
+    else
+        estimates_[key] = estimate;
+    notifyEstimatesChanged();
+}
+
+void QSocTaskRegistry::clearEstimates()
+{
+    estimates_.clear();
+    notifyEstimatesChanged();
+}
+
+void QSocTaskRegistry::notifyEstimatesChanged()
+{
+    if (estimateNotificationPending_)
+        return;
+    estimateNotificationPending_ = true;
+    QTimer::singleShot(0, this, [this]() {
+        estimateNotificationPending_ = false;
+        emit estimatesChanged();
+    });
+}
+
+QSocTask::Estimate QSocTaskRegistry::estimateFor(const QString &tag, const QString &id) const
+{
+    return estimates_.value(qMakePair(tag, id));
 }

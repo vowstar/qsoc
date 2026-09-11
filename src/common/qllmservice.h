@@ -173,9 +173,7 @@ public slots:
 
     /**
      * @brief Get the full config of the currently active model.
-     * @details Convenience wrapper around getModelConfig(getCurrentModelId())
-     *          for callers that need modality / context / effort info on
-     *          the live endpoint without two round-trips through the map.
+     * @details Includes direct setModel overrides. Empty when no model is active.
      */
     LLMModelConfig getCurrentModelConfig() const;
 
@@ -282,6 +280,7 @@ public slots:
     void abortStream();
 
 signals:
+    void modelConfigurationChanged();
     /**
      * @brief Signal emitted when a text chunk is received during streaming
      * @param chunk The text content chunk

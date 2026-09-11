@@ -295,11 +295,13 @@ QSocConfig *QLLMService::getConfig()
 void QLLMService::setModel(const LLMModelConfig &model)
 {
     active = model;
+    emit modelConfigurationChanged();
 }
 
 void QLLMService::clearModel()
 {
     active.reset();
+    emit modelConfigurationChanged();
 }
 
 bool QLLMService::hasEndpoint() const
@@ -324,7 +326,7 @@ QString QLLMService::getCurrentModelId() const
 
 LLMModelConfig QLLMService::getCurrentModelConfig() const
 {
-    return modelConfigs.value(currentModelId, LLMModelConfig());
+    return active.value_or(LLMModelConfig());
 }
 
 bool QLLMService::currentSupportsImage() const
@@ -340,6 +342,7 @@ bool QLLMService::setCurrentModel(const QString &modelId)
 
     currentModelId = modelId;
     active         = modelConfigs[modelId];
+    emit modelConfigurationChanged();
     return true;
 }
 

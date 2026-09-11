@@ -876,7 +876,7 @@ QString QSocToolAgent::execute(const json &arguments)
 
     const QString effectiveType = isFork ? QStringLiteral("fork") : subagentType;
     const QString label         = description.isEmpty() ? effectiveType : description;
-    const QString taskId        = taskSource_->registerRun(label, effectiveType, child);
+    const QString taskId        = taskSource_->registerRun(label, effectiveType, child, prompt);
     /* Stash isolation + worktree on the run so the meta sidecar
      * captures them; mirrors what the response JSON reports. */
     taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
@@ -939,6 +939,7 @@ QString QSocToolAgent::execute(const json &arguments)
                     taskId,
                     QStringLiteral("[result ") + name + QStringLiteral("] ") + result.left(400)
                         + QStringLiteral("\n"));
+                emit srcGuard->taskEvidenceChanged(taskId);
             }
         });
 

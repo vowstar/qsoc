@@ -95,8 +95,11 @@ private:
     int                                frame_            = 0;
     int                                terminalWidth_    = 80;
     enum class Layout { Automatic, Grid, Table };
-    Layout layout_           = Layout::Automatic;
-    bool   animationEnabled_ = true;
+    Layout  layout_           = Layout::Automatic;
+    bool    animationEnabled_ = true;
+    bool    estimatesVisible_ = true;
+    bool    rangesVisible_    = false;
+    QString summary_;
 
     void    refreshRows();
     void    clampSelection();

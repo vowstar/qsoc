@@ -77,6 +77,11 @@ void QTuiTaskOverlay::setRegistry(QSocTaskRegistry *registry)
             &QSocTaskRegistry::anySourceChanged,
             this,
             &QTuiTaskOverlay::handleRegistryChanged);
+        connect(
+            registry_,
+            &QSocTaskRegistry::estimatesChanged,
+            this,
+            &QTuiTaskOverlay::handleRegistryChanged);
     }
     cachedRows_.clear();
     refreshRows();
@@ -141,6 +146,7 @@ void QTuiTaskOverlay::refreshRows()
 {
     if (registry_ == nullptr) {
         cachedRows_.clear();
+        summary_.clear();
         return;
     }
     QString tag;
@@ -169,7 +175,9 @@ void QTuiTaskOverlay::refreshRows()
             ordered.append(row);
     }
     cachedRows_ = ordered;
-    selected_   = -1;
+    summary_.clear();
+    summary_  = summary();
+    selected_ = -1;
     for (int i = 0; i < cachedRows_.size(); ++i) {
         if (cachedRows_.at(i).sourceTag == tag && cachedRows_.at(i).row.id == id) {
             selected_ = i;
@@ -196,6 +204,22 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
 
     if (key == Qt::Key_M) {
         setAnimationEnabled(!animationEnabled_);
+        return true;
+    }
+    if (key == Qt::Key_E) {
+        estimatesVisible_ = !estimatesVisible_;
+        reloadDetailContent();
+        emit invalidated();
+        return true;
+    }
+    if (key == Qt::Key_R && registry_) {
+        emit registry_->estimateRefreshRequested();
+        return true;
+    }
+    if (key == Qt::Key_P && mode_ == Mode::Detail) {
+        rangesVisible_ = !rangesVisible_;
+        reloadDetailContent();
+        emit invalidated();
         return true;
     }
     if (key == Qt::Key_Escape || key == Qt::Key_Q) {
@@ -288,8 +312,43 @@ void QTuiTaskOverlay::reloadDetailContent()
         detailContent_.clear();
         return;
     }
-    const QString tail = registry_->tailFor(detailSourceTag_, detailId_, kDetailTailBytes);
-    detailContent_     = tail.isEmpty() ? QStringLiteral("(no output yet)\n") : tail;
+    const QString tail  = registry_->tailFor(detailSourceTag_, detailId_, kDetailTailBytes);
+    detailContent_      = tail.isEmpty() ? QStringLiteral("(no output yet)\n") : tail;
+    const auto estimate = registry_->estimateFor(detailSourceTag_, detailId_);
+    if (!estimatesVisible_ || estimate.summary.isEmpty())
+        return;
+    QStringList lines;
+    lines << QStringLiteral("Estimate: ") + estimate.summary;
+    if (estimate.updatedAtMs > 0)
+        lines << QStringLiteral("Updated %1 ago; execution state is shown in the overview.")
+                     .arg(
+                         QTuiText::formatDuration(
+                             qMax(qint64(0), QDateTime::currentMSecsSinceEpoch() - estimate.updatedAtMs)
+                             / 1000));
+    for (const auto &item : estimate.remaining)
+        lines << QStringLiteral("Remaining: ") + item;
+    for (const auto &item : estimate.unknowns)
+        lines << QStringLiteral("Unknown: ") + item;
+    if (!estimate.reason.isEmpty())
+        lines << QStringLiteral("Revision: ") + estimate.reason;
+    if (!estimate.evidence.isEmpty())
+        lines << QStringLiteral("Evidence: ") + estimate.evidence.join(QStringLiteral(", "))
+                     + QStringLiteral(" (partial observations)");
+    if (rangesVisible_) {
+        lines << QStringLiteral("Provisional ranges, accuracy not calibrated:");
+        lines
+            << (estimate.progressLow < 0
+                    ? QStringLiteral("Progress: unknown")
+                    : QStringLiteral("Progress: %1-%2% (estimated work, not confidence)")
+                          .arg((estimate.progressLow / 5) * 5)
+                          .arg(qMin(99, ((estimate.progressHigh + 4) / 5) * 5)));
+        lines
+            << (estimate.secondsLow < 0 ? QStringLiteral("Remaining time: unknown")
+                                        : QStringLiteral("Remaining time: %1-%2s (estimate)")
+                                              .arg(estimate.secondsLow)
+                                              .arg(estimate.secondsHigh));
+    }
+    detailContent_ += QLatin1Char('\n') + lines.join(QLatin1Char('\n'));
 }
 
 void QTuiTaskOverlay::killSelected()
@@ -428,6 +487,8 @@ QString QTuiTaskOverlay::marker(QSocTask::Status status) const
 
 QString QTuiTaskOverlay::summary() const
 {
+    if (!summary_.isEmpty())
+        return summary_;
     int active  = 0;
     int done    = 0;
     int failed  = 0;
@@ -505,6 +566,8 @@ void QTuiTaskOverlay::renderCells(QTuiScreen &screen, int startY, int width, int
                 QTuiText::formatDuration(qMax(qint64(0), now - row.startedAtMs) / 1000));
         if (QSocTask::isTerminal(row.status))
             detail = statusLabel(row.status);
+        else if (estimatesVisible_ && !entry.estimate.summary.isEmpty())
+            detail += QStringLiteral(" | est: ") + entry.estimate.summary;
         if (y + 1 < startY + height)
             screen.putString(
                 x, y + 1, fitToWidth(QStringLiteral("    ") + detail, cellWidth - 1), false, true);
@@ -568,13 +631,17 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
             const auto &entry    = cachedRows_.at(first + i);
             const auto &row      = entry.row;
             const bool  selected = first + i == selected_;
+            QString     title    = row.label;
+            if (estimatesVisible_ && !entry.estimate.summary.isEmpty())
+                title = fitToWidth(title, qMax(8, innerW / 3)) + QStringLiteral(" | est: ")
+                        + entry.estimate.summary;
             const QString line = QStringLiteral("%1 [%2] %3 %4 %5")
                                      .arg(
                                          selected ? QStringLiteral(">") : QStringLiteral(" "),
                                          marker(row.status),
                                          fitToWidth(entry.sourceTag + QLatin1Char('/') + row.id, 14),
                                          fitToWidth(statusLabel(row.status), 8),
-                                         row.label);
+                                         title);
             screen.putString(
                 1,
                 startY + 2 + i,
@@ -592,17 +659,26 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
     const QString footer = footerFlash_.isEmpty()
                                ? range
                                      + QStringLiteral(
-                                         "v view  m motion  Enter details  x stop  Esc back")
+                                         "v view  m motion  e est  Enter detail  x stop  Esc back")
                                : footerFlash_;
     screen.putString(1, startY + height - 2, fitToWidth(footer, innerW), false, true);
 }
 
 void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
 {
-    const int     height   = lineCount();
-    const int     contentH = height - 2;
-    const int     innerW   = width - 2;
-    const QString title    = QStringLiteral("%1 / %2").arg(detailSourceTag_, detailId_);
+    const int height   = lineCount();
+    const int contentH = height - 2;
+    const int innerW   = width - 2;
+    QString   title    = QStringLiteral("%1 / %2").arg(detailSourceTag_, detailId_);
+    for (const auto &entry : cachedRows_) {
+        if (entry.sourceTag == detailSourceTag_ && entry.row.id == detailId_) {
+            title += QStringLiteral(" | ") + statusLabel(entry.row.status);
+            break;
+        }
+    }
+    if (registry_ && estimatesVisible_
+        && !registry_->estimateFor(detailSourceTag_, detailId_).summary.isEmpty())
+        title += QStringLiteral(" | estimate");
     renderBorder(screen, startY, height, width, title);
 
     if (detailContent_.isEmpty()) {
@@ -620,7 +696,7 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
     /* Footer */
     const QString footer = footerFlash_.isEmpty()
                                    && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
-                               ? QStringLiteral("ESC back  x kill")
+                               ? QStringLiteral("Esc back  x stop  e estimates  r refresh  p ranges")
                                : footerFlash_;
     screen.putString(2, startY + height - 2, fitToWidth(footer, innerW - 2), false, true);
 }
