@@ -64,8 +64,12 @@ QList<QSocTaskRegistry::TaggedRow> QSocTaskRegistry::listAll() const
 int QSocTaskRegistry::activeCount() const
 {
     int total = 0;
-    for (auto *src : sources_)
-        total += src->listTasks().size();
+    for (auto *src : sources_) {
+        for (const auto &row : src->listTasks()) {
+            if (!QSocTask::isTerminal(row.status))
+                ++total;
+        }
+    }
     return total;
 }
 

@@ -30,13 +30,17 @@ QList<QSocTask::Row> QSocBashTaskSource::listTasks() const
     QList<QSocTask::Row> out;
     for (const auto &snap : QSocToolShellBash::snapshotActive()) {
         QSocTask::Row row;
-        row.id          = QString::number(snap.id);
-        row.label       = snap.command;
-        row.summary     = snap.outputPath;
-        row.kind        = QSocTask::Kind::BackgroundBash;
-        row.status      = snap.isStuck     ? QSocTask::Status::Stuck
-                          : snap.isRunning ? QSocTask::Status::Running
-                                           : QSocTask::Status::Completed;
+        row.id      = QString::number(snap.id);
+        row.label   = snap.command;
+        row.summary = snap.outputPath;
+        row.kind    = QSocTask::Kind::BackgroundBash;
+        if (snap.isRunning)
+            row.status = snap.isStuck ? QSocTask::Status::Stuck : QSocTask::Status::Running;
+        else if (snap.stopRequested)
+            row.status = QSocTask::Status::Aborted;
+        else
+            row.status = snap.crashed || snap.exitCode != 0 ? QSocTask::Status::Failed
+                                                            : QSocTask::Status::Completed;
         row.startedAtMs = snap.startedAtMs;
         row.canKill     = snap.isRunning;
         out.append(row);

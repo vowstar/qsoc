@@ -4403,7 +4403,7 @@ bool QSocCliWorker::runAgentLoop(
          * focus on the task pill. Skip when history navigation is active
          * (historyPos>=0) so the existing Down=history-step path keeps
          * working. */
-        if (key == 'B' && taskRegistry != nullptr && taskRegistry->activeCount() > 0
+        if (key == 'B' && taskRegistry != nullptr && !taskRegistry->listAll().isEmpty()
             && historyPos < 0 && inputMonitor.getInputBuffer().isEmpty()) {
             /* Drop the ghost before the pill grabs the consumer slot, so we
              * never leave a visible-but-unacceptable suggestion behind. */

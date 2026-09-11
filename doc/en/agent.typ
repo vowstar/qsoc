@@ -1033,8 +1033,9 @@ prompt's first row parks focus on the pill; *Enter* opens the overlay;
 === Overlay
 <agent-tasks-overlay>
 
-The overlay is two columns: a list on the left, the highlighted task's
-tail on the right.
+The overlay opens a task list. Enter opens the selected task's output.
+Selection follows the task identity when rows reorder. If that task
+disappears, select another row before requesting a stop.
 
 #figure(
   align(center)[#table(

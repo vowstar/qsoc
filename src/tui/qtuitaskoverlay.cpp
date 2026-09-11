@@ -138,7 +138,20 @@ void QTuiTaskOverlay::refreshRows()
         cachedRows_.clear();
         return;
     }
+    QString tag;
+    QString id;
+    if (selected_ >= 0 && selected_ < cachedRows_.size()) {
+        tag = cachedRows_.at(selected_).sourceTag;
+        id  = cachedRows_.at(selected_).row.id;
+    }
     cachedRows_ = registry_->listAll();
+    selected_   = -1;
+    for (int i = 0; i < cachedRows_.size(); ++i) {
+        if (cachedRows_.at(i).sourceTag == tag && cachedRows_.at(i).row.id == id) {
+            selected_ = i;
+            break;
+        }
+    }
 }
 
 void QTuiTaskOverlay::clampSelection()
@@ -147,8 +160,6 @@ void QTuiTaskOverlay::clampSelection()
         selected_ = 0;
         return;
     }
-    if (selected_ < 0)
-        selected_ = 0;
     if (selected_ >= cachedRows_.size())
         selected_ = cachedRows_.size() - 1;
 }
@@ -173,7 +184,9 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
         switch (key) {
         case Qt::Key_Up:
         case Qt::Key_K:
-            if (selected_ > 0)
+            if (selected_ < 0 && !cachedRows_.isEmpty())
+                selected_ = 0;
+            else if (selected_ > 0)
                 --selected_;
             emit invalidated();
             return true;
@@ -207,7 +220,7 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
 
 void QTuiTaskOverlay::enterDetail()
 {
-    if (cachedRows_.isEmpty())
+    if (selected_ < 0 || selected_ >= cachedRows_.size())
         return;
     const auto &row  = cachedRows_.at(selected_);
     detailSourceTag_ = row.sourceTag;
@@ -248,6 +261,8 @@ void QTuiTaskOverlay::killSelected()
         tag = detailSourceTag_;
         id  = detailId_;
     } else {
+        if (selected_ < 0 || selected_ >= cachedRows_.size())
+            return;
         const auto &row = cachedRows_.at(selected_);
         tag             = row.sourceTag;
         id              = row.row.id;

@@ -425,6 +425,10 @@ QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive()
         snap.outputPath  = info.outputPath;
         snap.isStuck     = !info.stuckReason.isEmpty();
         snap.isRunning   = trackedProcessRunning(info);
+        snap.exitCode    = info.process != nullptr ? info.process->exitCode() : -1;
+        snap.crashed = info.process == nullptr || info.process->exitStatus() == QProcess::CrashExit;
+        snap.stopRequested = info.groupStopState
+                             != QSocBashProcessInfo::GroupStopState::NotRequested;
         out.append(snap);
     }
     std::sort(out.begin(), out.end(), [](const BackgroundSnapshot &a, const BackgroundSnapshot &b) {

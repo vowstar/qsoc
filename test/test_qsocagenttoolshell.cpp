@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/qsocbashtasksource.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "qsoc_test.h"
 
@@ -82,6 +83,22 @@ class Test : public QObject
 
 private slots:
     void cleanup() { QSocToolShellBash::killAllActive(); }
+
+    void backgroundFailureIsNotCompleted()
+    {
+        QSocToolShellBash  bash;
+        QSocBashTaskSource source(&bash);
+        const QString      reply = bash.execute({{"command", "exit 7"}, {"background", true}});
+        QVERIFY2(backgroundProcessId(reply) >= 0, qPrintable(reply));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !source.listTasks().isEmpty() && QSocTask::isTerminal(source.listTasks().first().status),
+            5000);
+        QCOMPARE(source.listTasks().first().status, QSocTask::Status::Failed);
+        const auto snapshot = QSocToolShellBash::snapshotActive().first();
+        QCOMPARE(snapshot.exitCode, 7);
+        QVERIFY(!snapshot.crashed);
+        QVERIFY(!snapshot.stopRequested);
+    }
 
     void prompt_ynVariants()
     {

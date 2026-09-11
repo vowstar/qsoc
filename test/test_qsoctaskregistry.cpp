@@ -8,24 +8,13 @@
 #include "agent/qsoctasksource.h"
 #include "cli/qsocloopscheduler.h"
 #include "qsoc_test.h"
+#include "tui/qtuitaskoverlay.h"
 
 #include <QObject>
 #include <QSignalSpy>
 #include <QtTest>
 
 namespace {
-
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
 
 /* Minimal in-memory source for registry-aggregation tests so the cases
  * do not depend on scheduler or bash tool wiring. */
@@ -85,9 +74,68 @@ class TestQSocTaskRegistry : public QObject
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     /* ---- registry merging ---- */
+
+    void activeCountExcludesTerminalRows()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   src;
+        src.tag = "fake";
+        for (const auto status :
+             {QSocTask::Status::Running,
+              QSocTask::Status::Pending,
+              QSocTask::Status::Idle,
+              QSocTask::Status::Stuck,
+              QSocTask::Status::Completed,
+              QSocTask::Status::Failed,
+              QSocTask::Status::Aborted})
+            src.rows.append(makeRow(QSocTask::statusWord(status), status));
+        registry.registerSource(&src);
+        QCOMPARE(registry.activeCount(), 4);
+        QCOMPARE(registry.listAll().size(), 7);
+    }
+
+    void selectionSurvivesStatusReordering()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   one;
+        FakeTaskSource   two;
+        one.tag = "one";
+        two.tag = "two";
+        one.rows.append(makeRow("same", QSocTask::Status::Running, 200));
+        two.rows.append(makeRow("same", QSocTask::Status::Running, 100));
+        registry.registerSource(&one);
+        registry.registerSource(&two);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.open();
+        one.rows[0].status = QSocTask::Status::Completed;
+        one.notifyChanged();
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(one.lastKilledId, QString("same"));
+        QVERIFY(two.lastKilledId.isEmpty());
+    }
+
+    void vanishedSelectionDoesNotStopItsReplacement()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   src;
+        src.tag = "fake";
+        src.rows
+            = {makeRow("first", QSocTask::Status::Running, 200),
+               makeRow("second", QSocTask::Status::Running, 100)};
+        registry.registerSource(&src);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.open();
+        src.rows.removeFirst();
+        src.notifyChanged();
+        overlay.handleKey(Qt::Key_X, false);
+        QVERIFY(src.lastKilledId.isEmpty());
+        overlay.handleKey(Qt::Key_Down, false);
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(src.lastKilledId, QString("second"));
+    }
 
     void singleSourceListsAllRows()
     {

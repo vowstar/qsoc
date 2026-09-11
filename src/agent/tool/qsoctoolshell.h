@@ -104,6 +104,9 @@ public:
         QString outputPath;
         bool    isStuck;
         bool    isRunning;
+        int     exitCode;
+        bool    crashed;
+        bool    stopRequested;
     };
     static QList<BackgroundSnapshot> snapshotActive();
     static int                       activeProcessCount();
