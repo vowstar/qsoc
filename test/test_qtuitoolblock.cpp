@@ -47,6 +47,15 @@ void Test::finishedFailureAddsCrossFooter()
     block.finish(QTuiToolBlock::Status::Failure, QStringLiteral("exit 1"));
     block.layout(40);
     QCOMPARE(block.rowCount(), 2); /* header + footer */
+    block.finish(QTuiToolBlock::Status::Failure, {});
+    block.layout(40);
+    QTuiScreen screen(40, 1);
+    block.paintRow(screen, 0, 1, 0, 40, false, false);
+    QString line;
+    for (int col = 0; col < 40; ++col)
+        line += screen.at(col, 0).character;
+    QVERIFY(line.contains(QStringLiteral("failed")));
+    QVERIFY(!line.contains(QStringLiteral("done")));
 }
 
 void Test::recoveryStatesUseDistinctFooters()

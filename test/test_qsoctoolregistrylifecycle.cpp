@@ -49,11 +49,46 @@ private:
     mutable std::function<void()> callback_;
 };
 
+class OutputTool : public QSocTool
+{
+public:
+    QString getName() const override { return QStringLiteral("output_probe"); }
+    QString getDescription() const override { return QStringLiteral("Output probe"); }
+    json    getParametersSchema() const override { return {{"type", "object"}}; }
+    QString execute(const json &) override
+    {
+        QPointer<QSocToolCallContext> context(currentCallContext());
+        context->reportOutput(QStringLiteral("first"));
+        if (!context.isNull())
+            context->reportOutput(QStringLiteral("second"));
+        return QStringLiteral("executed");
+    }
+};
+
 class TestToolRegistryLifecycle : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void nestedOutputKeepsItsOwnerAndStopsAfterCancellation()
+    {
+        QSocToolRegistry registry;
+        registry.registerTool(new OutputTool);
+        QObject     outer;
+        QObject     inner;
+        QStringList outerOutput;
+        QStringList innerOutput;
+        registry.executeTool("output_probe", {}, &outer, [&](const QString &text) {
+            outerOutput.append(text);
+            registry.executeTool("output_probe", {}, &inner, [&](const QString &part) {
+                innerOutput.append(part);
+            });
+            registry.abortCalls(&outer);
+        });
+        QCOMPARE(outerOutput, QStringList({"first"}));
+        QCOMPARE(innerOutput, QStringList({"first", "second"}));
+    }
+
     void toolNameCallbackDeletion_data()
     {
         QTest::addColumn<bool>("deleteRegistry");

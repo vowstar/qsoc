@@ -1829,12 +1829,30 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         const QString argumentsStr = QString::fromStdString(
             toolCall["function"]["arguments"].get<std::string>());
 
+        const QString displayId = agentIdentity() + QLatin1Char('/') + QString::number(run->epoch)
+                                  + QLatin1Char('/') + toolCallId;
+        const auto    publishResult = [owner, run, displayId, functionName](const QString &value) {
+            const auto status = run->executingToolStatus.value_or(QSocTool::classifyResult(value));
+            emit       owner->toolResult(functionName, value);
+            if (!owner.isNull() && owner->isCurrentRun(run))
+                emit owner->toolCallFinished(displayId, functionName, value, status);
+        };
+        const auto publishOutput = [owner, run, displayId, toolCallId](const QString &text) {
+            if (owner && owner->isCurrentRun(run) && run->stop.load() == StopMode::None
+                && run->executingToolCallId == toolCallId)
+                emit owner->toolCallOutput(displayId, text);
+        };
+        const auto recordOutcome = [owner, run](QSocToolResultStatus status) {
+            if (owner && owner->isCurrentRun(run))
+                run->executingToolStatus = status;
+        };
         json    arguments;
         QString rawResult;
         if (run->deferredToolResult) {
             rawResult = *std::exchange(run->deferredToolResult, std::nullopt);
             arguments = std::move(run->deferredToolArguments);
         } else {
+            run->executingToolStatus.reset();
             if (agentConfig.verbose) {
                 emit verboseOutput(QString("  -> Calling tool: %1").arg(functionName));
                 if (stopBatch()) {
@@ -1850,6 +1868,9 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             if (stopBatch()) {
                 return false;
             }
+            emit owner->toolCallStarted(displayId, functionName, argumentsStr);
+            if (stopBatch())
+                return false;
             if (run->tools.isNull()) {
                 dependencyFailed();
                 return false;
@@ -1865,7 +1886,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 const QString denied = QStringLiteral("Error: tool \"%1\" is not available: %2")
                                            .arg(functionName, denyReason);
                 owner->addToolMessage(toolCallId, denied);
-                emit owner->toolResult(functionName, denied);
+                publishResult(denied);
                 if (stopBatch()) {
                     return false;
                 }
@@ -1878,7 +1899,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 const QString errorResult
                     = QString("Error: Invalid JSON arguments - %1").arg(e.what());
                 owner->addToolMessage(toolCallId, errorResult);
-                emit owner->toolResult(functionName, errorResult);
+                publishResult(errorResult);
                 if (stopBatch()) {
                     return false;
                 }
@@ -1948,7 +1969,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                               "Use read-only inspection. %2")
                               .arg(reason, nextStep);
                     owner->addToolMessage(toolCallId, denied);
-                    emit owner->toolResult(functionName, denied);
+                    publishResult(denied);
                     if (stopBatch()) {
                         return false;
                     }
@@ -1973,7 +1994,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                     const QString blocked
                         = QStringLiteral("Tool blocked by pre_tool_use hook: %1").arg(reason);
                     owner->addToolMessage(toolCallId, blocked);
-                    emit owner->toolResult(functionName, blocked);
+                    publishResult(blocked);
                     if (stopBatch()) {
                         return false;
                     }
@@ -2005,7 +2026,10 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             if (run->mode == RunMode::Streaming) {
                 const json remaining(toolCalls.begin() + toolIndex, toolCalls.end());
                 const auto result = run->tools->executeToolDeferred(
-                    functionName, arguments, this, [owner, run, remaining](const QString &value) {
+                    functionName,
+                    arguments,
+                    this,
+                    [owner, run, remaining](const QString &value) {
                         if (!owner || !owner->isCurrentRun(run))
                             return;
                         run->toolDeferred       = false;
@@ -2017,7 +2041,9 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                             return;
                         if (owner->checkpointRun(run) != CheckpointAction::Terminal)
                             owner->processStreamIteration();
-                    });
+                    },
+                    publishOutput,
+                    recordOutcome);
                 if (!current())
                     return false;
                 if (!result) {
@@ -2027,7 +2053,8 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 }
                 rawResult = *result;
             } else {
-                rawResult = run->tools->executeTool(functionName, arguments, this);
+                rawResult = run->tools->executeTool(
+                    functionName, arguments, this, publishOutput, recordOutcome);
             }
         }
         if (!current()) {
@@ -2070,7 +2097,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             }
         }
 
-        emit owner->toolResult(functionName, result);
+        publishResult(result);
         if (stopBatch()) {
             return false;
         }

@@ -15,6 +15,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QScopeGuard>
+#include <QStringDecoder>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QThread>
@@ -767,6 +768,8 @@ QString QSocToolShellBash::execute(const json &arguments)
                 notifyBackgroundFinished(processId, exitCode, command);
             },
             Qt::QueuedConnection);
+        if (callContext)
+            callContext->setResultStatus(ResultStatus::Dispatched);
         return QString(
                    "Started in background.\n"
                    "Process ID: %1\n"
@@ -782,6 +785,23 @@ QString QSocToolShellBash::execute(const json &arguments)
     QEventLoop                  loop;
     bool                        finished = false;
     ForegroundWaitContext       wait{processGuard, &loop, processGroup, false};
+    qint64                      outputOffset = 0;
+    const qint64   outputLimit = maxOutputBytes > 0 ? maxOutputBytes : kDefaultMaxOutputBytes;
+    QStringDecoder decoder(QStringDecoder::Utf8);
+    QTimer         outputTimer;
+    const auto     publishOutput = [&]() {
+        if (!callContext || callContext->isCancellationRequested() || outputOffset >= outputLimit)
+            return;
+        QFile outputFile(outputPath);
+        if (!outputFile.open(QIODevice::ReadOnly) || !outputFile.seek(outputOffset))
+            return;
+        const QByteArray bytes = outputFile.read(qMin(qint64(65536), outputLimit - outputOffset));
+        outputOffset += bytes.size();
+        callContext->reportOutput(decoder(bytes));
+    };
+    QObject::connect(&outputTimer, &QTimer::timeout, &loop, publishOutput);
+    if (callContext)
+        outputTimer.start(100);
 
     QObject::connect(
         process,
@@ -808,12 +828,16 @@ QString QSocToolShellBash::execute(const json &arguments)
     if (!wait.aborted) {
         loop.exec();
     }
+    outputTimer.stop();
+    publishOutput();
     const bool aborted = wait.aborted;
     if (!owner.isNull()) {
         owner->foregroundWaits_.remove(&wait);
     }
 
     if (aborted && forceStopProcess(processGuard, processGroup, wait.stopRequested)) {
+        if (callContext)
+            callContext->setResultStatus(ResultStatus::Uncertain);
         delete processGuard.data();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
         return QStringLiteral("Command aborted.");
@@ -831,7 +855,11 @@ QString QSocToolShellBash::execute(const json &arguments)
             readFile.close();
         }
 
-        const int exitCode = processGuard->exitCode();
+        const int  exitCode = processGuard->exitCode();
+        const bool crashed  = processGuard->exitStatus() == QProcess::CrashExit;
+        if (callContext)
+            callContext->setResultStatus(
+                exitCode != 0 || crashed ? ResultStatus::Failed : ResultStatus::Ok);
         delete processGuard.data();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
 
@@ -844,11 +872,15 @@ QString QSocToolShellBash::execute(const json &arguments)
         if (exitCode != 0) {
             return QString("Command exited with code %1:\n%2").arg(exitCode).arg(output);
         }
+        if (crashed)
+            return QStringLiteral("Command crashed:\n") + output;
 
         return output.isEmpty() ? "(no output)" : output;
     }
 
     /* Timeout: process still running, store it */
+    if (callContext)
+        callContext->setResultStatus(aborted ? ResultStatus::Uncertain : ResultStatus::Dispatched);
     int processId = nextProcessId++;
 
     QSocBashProcessInfo info;

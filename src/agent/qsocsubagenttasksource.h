@@ -36,6 +36,7 @@ public:
     QList<QSocTask::Row> listTasks() const override;
     QString              tailFor(const QString &id, int maxBytes) const override;
     bool                 killTask(const QString &id) override;
+    void                 setWaitingForPeer(const QString &id, bool waiting);
 
     /**
      * @brief Register a new sub-agent run. The source takes ownership
@@ -253,6 +254,7 @@ public:
 private:
     struct RunState
     {
+        bool                  waitingForPeer = false;
         QString               objective;
         QString               id;
         QString               label;

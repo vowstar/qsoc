@@ -84,6 +84,56 @@ class Test : public QObject
 private slots:
     void cleanup() { QSocToolShellBash::killAllActive(); }
 
+    void foregroundOutputArrivesBeforeTheCommandCanFinish()
+    {
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_live_XXXXXX");
+        QVERIFY(directory.isValid());
+        QSocToolRegistry registry;
+        registry.registerTool(new QSocToolShellBash);
+        QObject       owner;
+        QString       output;
+        const QString result = registry.executeTool(
+            "bash",
+            {{"command",
+              "printf 'first\\n'; i=0; while [ ! -f release ] && [ \"$i\" -lt 100 ]; "
+              "do i=$((i+1)); sleep 0.02; done; test -f release || exit 9; printf 'second\\n'"},
+             {"working_directory", directory.path().toStdString()},
+             {"timeout", 5000}},
+            &owner,
+            [&](const QString &chunk) {
+                output += chunk;
+                if (output.contains("first")) {
+                    QFile release(directory.filePath("release"));
+                    QVERIFY(release.open(QIODevice::WriteOnly));
+                }
+            });
+        QVERIFY2(result.contains("second"), qPrintable(result));
+        QVERIFY(output.contains("first\n"));
+        QVERIFY(output.contains("second\n"));
+    }
+
+    void processOutcomeIsIndependentOfOutputText()
+    {
+        QSocToolRegistry registry;
+        registry.registerTool(new QSocToolShellBash);
+        QObject    owner;
+        auto       outcome = QSocToolResultStatus::Uncertain;
+        const auto record  = [&](QSocToolResultStatus value) { outcome = value; };
+        const auto text    = registry.executeTool(
+            "bash",
+            {{"command", "printf 'Error: ordinary output\\nCommand exited with code 7:\\n'"}},
+            &owner,
+            {},
+            record);
+        QVERIFY(text.startsWith("Error:"));
+        QCOMPARE(outcome, QSocToolResultStatus::Ok);
+        registry.executeTool("bash", {{"command", "exit 7"}}, &owner, {}, record);
+        QCOMPARE(outcome, QSocToolResultStatus::Failed);
+        registry
+            .executeTool("bash", {{"command", "sleep 5"}, {"background", true}}, &owner, {}, record);
+        QCOMPARE(outcome, QSocToolResultStatus::Dispatched);
+    }
+
     void backgroundFailureIsNotCompleted()
     {
         QSocToolShellBash  bash;

@@ -147,6 +147,20 @@ private slots:
         next.clear();
         overlay.renderPreview(next, 0, 80, 4);
         QCOMPARE(next.at(1, 1).character, QChar('*'));
+        source.rows[0].waitingForPeer = true;
+        source.notifyChanged();
+        overlay.setAnimationEnabled(true);
+        for (int i = 0; i < 8; ++i) {
+            overlay.tick();
+            next.clear();
+            overlay.renderPreview(next, 0, 80, 4);
+            QCOMPARE(next.at(1, 1).character, QChar('.'));
+        }
+        QString summary;
+        for (int col = 0; col < 80; ++col)
+            summary += next.at(col, 0).character;
+        QVERIFY(summary.contains("1 waiting"));
+        QVERIFY(summary.contains("1 queued"));
     }
 
     void matrixNavigationStopsTheSelectedPageMember()

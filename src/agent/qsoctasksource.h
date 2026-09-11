@@ -86,6 +86,7 @@ struct Row
     qint64  startedAtMs; /* 0 = never started */
     bool    canKill;
     QString objective;
+    bool    waitingForPeer = false;
 };
 
 struct Estimate

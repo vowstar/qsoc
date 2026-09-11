@@ -15,6 +15,9 @@
 
 using json = nlohmann::json;
 
+enum class QSocToolResultStatus { Ok, Failed, Uncertain, Dispatched };
+Q_DECLARE_METATYPE(QSocToolResultStatus)
+
 /**
  * @brief Cancellation state for one tool invocation
  */
@@ -32,21 +35,29 @@ public:
     bool     isDeferredPending() const { return deferred_ && !completed_; }
     void     defer() { deferred_ = canDefer_; }
     void     completeDeferred(const QString &result);
+    void     reportOutput(const QString &text);
+    void     setResultStatus(QSocToolResultStatus status)
+    {
+        if (!isCancellationRequested())
+            resultStatus_ = status;
+    }
 
 signals:
     void cancellationRequested();
     void deferredCompleted(const QString &result);
+    void outputReady(const QString &text);
 
 private:
     QSocToolCallContext(QObject *owner, QObject *fallbackScope);
     void requestCancellation();
 
-    QPointer<QObject> owner_;
-    QPointer<QObject> scope_;
-    bool              cancellationRequested_ = false;
-    bool              canDefer_              = false;
-    bool              deferred_              = false;
-    bool              completed_             = false;
+    QPointer<QObject>                   owner_;
+    QPointer<QObject>                   scope_;
+    bool                                cancellationRequested_ = false;
+    bool                                canDefer_              = false;
+    bool                                deferred_              = false;
+    bool                                completed_             = false;
+    std::optional<QSocToolResultStatus> resultStatus_;
 
     friend class QSocToolRegistry;
 };
@@ -99,11 +110,7 @@ public:
     virtual bool    supportsDeferred() const { return false; }
 
     /** @brief How a tool call ended, as far as the caller can tell. */
-    enum class ResultStatus {
-        Ok,        /**< The call did what it said. */
-        Failed,    /**< The call did not happen. Nothing changed. */
-        Uncertain, /**< It may or may not have happened; do not retry blind. */
-    };
+    using ResultStatus = QSocToolResultStatus;
 
     /**
      * @brief Classify a tool result string.
@@ -219,12 +226,19 @@ public:
      * @param arguments JSON object containing tool arguments
      * @return Result of the tool execution
      */
-    QString executeTool(const QString &name, const json &arguments, QObject *owner = nullptr);
+    QString executeTool(
+        const QString                            &name,
+        const json                               &arguments,
+        QObject                                  *owner   = nullptr,
+        std::function<void(const QString &)>      output  = {},
+        std::function<void(QSocToolResultStatus)> outcome = {});
     std::optional<QString> executeToolDeferred(
-        const QString                       &name,
-        const json                          &arguments,
-        QObject                             *owner,
-        std::function<void(const QString &)> completed);
+        const QString                            &name,
+        const json                               &arguments,
+        QObject                                  *owner,
+        std::function<void(const QString &)>      completed,
+        std::function<void(const QString &)>      output  = {},
+        std::function<void(QSocToolResultStatus)> outcome = {});
 
     /**
      * @brief Get the number of registered tools

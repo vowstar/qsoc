@@ -155,12 +155,14 @@ void QSocTaskForecast::refresh()
         active.insert(key);
         const auto previous = latest_.constFind(key);
         if (previous != latest_.cend() && previous->startedAt == row.startedAtMs
+            && previous->evidence["state"]["waiting"] == row.waitingForPeer
             && !dirty_.contains(key))
             continue;
         const json evidence
             = {{"state",
                 {{"label", row.label.toStdString()},
                  {"status", "running"},
+                 {"waiting", row.waitingForPeer},
                  {"started_at_ms", row.startedAtMs},
                  {"objective", row.objective.left(4096).toStdString()},
                  {"objective_is_partial", row.objective.size() > 4096},
@@ -257,7 +259,7 @@ void QSocTaskForecast::dispatch()
             agent_->addExternalTokenUsage(
                 usageCount(response["usage"], "prompt_tokens"),
                 usageCount(response["usage"], "completion_tokens"));
-        if (owner)
+        if (!owner.isNull())
             finish(true);
     });
     connect(llm_, &QLLMService::streamError, this, [this]() { finish(false); });

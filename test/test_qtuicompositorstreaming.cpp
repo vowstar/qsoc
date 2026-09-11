@@ -16,6 +16,8 @@ private slots:
     void interveningPrintContentSealsAssistantBlock();
     void finishStreamSealsCurrentBlock();
     void reasoningChunksLandOnSeparateBlock();
+    void toolOutputStaysWithItsCallAcrossMessages();
+    void removedToolBlocksRejectLateOutput();
 };
 
 void Test::chunksAccumulateInSingleAssistantBlock()
@@ -65,6 +67,49 @@ void Test::reasoningChunksLandOnSeparateBlock()
     QCOMPARE(compositor.contentView().totalLines(), 2);
     const QString flat = compositor.contentView().toPlainText();
     QVERIFY(flat.indexOf(QStringLiteral("thinking")) < flat.indexOf(QStringLiteral("answer")));
+}
+
+void Test::toolOutputStaysWithItsCallAcrossMessages()
+{
+    QTuiCompositor compositor;
+    compositor.beginToolUse("bash", "first command", "run/first");
+    compositor.appendToolUseBody("first line\n", "run/first");
+    compositor.printContent("peer notification\n");
+    compositor.beginToolUse("bash", "second command", "run/second");
+    compositor.appendToolUseBody("second output\n", "run/second");
+    compositor.appendToolUseBody("first tail\n", "run/first");
+    compositor.finishToolUse(QTuiToolBlock::Status::Failure, {}, "run/first");
+    compositor.replaceToolUseBody("second final\n", "run/second");
+    compositor.finishToolUse(QTuiToolBlock::Status::Success, {}, "run/second");
+    const auto text = compositor.contentView().toPlainText();
+    QVERIFY(text.contains("first line\nfirst tail\n"));
+    QVERIFY(text.indexOf("first tail") < text.indexOf("peer notification"));
+    QVERIFY(text.indexOf("peer notification") < text.indexOf("second command"));
+    QVERIFY(text.contains("second final"));
+    QVERIFY(!text.contains("second output"));
+}
+
+void Test::removedToolBlocksRejectLateOutput()
+{
+    QTuiCompositor compositor;
+    compositor.beginToolUse("bash", "old", "old");
+    compositor.contentView().clear();
+    compositor.beginToolUse("bash", "current", "new");
+    compositor.appendToolUseBody("late", "old");
+    compositor.finishToolUse(QTuiToolBlock::Status::Success, {}, "old");
+    compositor.appendToolUseBody("current output", "new");
+    compositor.finishStream();
+    QVERIFY(!compositor.contentView().toPlainText().contains("late"));
+    QVERIFY(compositor.contentView().toPlainText().contains("current output"));
+    auto *block = dynamic_cast<QTuiToolBlock *>(compositor.contentView().lastBlock());
+    QVERIFY(block);
+    block->layout(80);
+    QTuiScreen screen(80, 1);
+    block->paintRow(screen, 0, block->rowCount() - 1, 0, 80, false, false);
+    QString footer;
+    for (int col = 0; col < 80; ++col)
+        footer += screen.at(col, 0).character;
+    QVERIFY(footer.contains("uncertain"));
 }
 
 QSOC_TEST_MAIN(Test)

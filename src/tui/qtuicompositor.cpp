@@ -164,6 +164,15 @@ void QTuiCompositor::appendReasoningChunk(const QString &chunk)
 
 void QTuiCompositor::finishStream()
 {
+    for (const auto &block : std::as_const(toolBlocks)) {
+        if (block)
+            block->finish(QTuiToolBlock::Status::Uncertain, {});
+    }
+    toolBlocks.clear();
+    if (activeTool)
+        activeTool->finish(QTuiToolBlock::Status::Uncertain, {});
+    activeTool = nullptr;
+
     sealStream(StreamMode::Assistant);
     sealStream(StreamMode::Reasoning);
 }
@@ -350,38 +359,42 @@ void QTuiCompositor::sealStream(StreamMode mode)
     currentGroup = 0;
 }
 
-void QTuiCompositor::beginToolUse(const QString &toolName, const QString &detail)
+void QTuiCompositor::beginToolUse(
+    const QString &toolName, const QString &detail, const QString &callId)
 {
-    /* A new tool call seals both streaming runs so the box lands after
-     * any in-flight prose / code, not retroactively before it. */
     sealStream(StreamMode::Assistant);
     sealStream(StreamMode::Reasoning);
+    if (!callId.isEmpty() && toolBlocks.value(callId))
+        toolBlocks.value(callId)->finish(QTuiToolBlock::Status::Uncertain, {});
     auto block = std::make_unique<QTuiToolBlock>(toolName, detail);
     activeTool = block.get();
+    if (!callId.isEmpty())
+        toolBlocks.insert(callId, activeTool);
     scrollView.appendBlock(std::move(block));
 }
 
-void QTuiCompositor::appendToolUseBody(const QString &chunk)
+void QTuiCompositor::appendToolUseBody(const QString &chunk, const QString &callId)
 {
-    if (activeTool == nullptr) {
-        return;
-    }
-    if (scrollView.lastBlock() != activeTool) {
-        /* Something else landed on top of the active tool block; abort
-         * the cursor rather than silently inject mid-history. */
-        activeTool = nullptr;
-        return;
-    }
-    activeTool->appendBody(chunk);
+    auto block = callId.isEmpty() ? activeTool : toolBlocks.value(callId);
+    if (block)
+        block->appendBody(chunk);
 }
 
-void QTuiCompositor::finishToolUse(QTuiToolBlock::Status status, const QString &summary)
+void QTuiCompositor::replaceToolUseBody(const QString &text, const QString &callId)
 {
-    if (activeTool == nullptr) {
-        return;
-    }
-    activeTool->finish(status, summary);
-    activeTool = nullptr;
+    auto block = callId.isEmpty() ? activeTool : toolBlocks.value(callId);
+    if (block)
+        block->setBody(text);
+}
+
+void QTuiCompositor::finishToolUse(
+    QTuiToolBlock::Status status, const QString &summary, const QString &callId)
+{
+    auto block = callId.isEmpty() ? activeTool : toolBlocks.take(callId);
+    if (block)
+        block->finish(status, summary);
+    if (activeTool == block)
+        activeTool = nullptr;
 }
 
 void QTuiCompositor::appendUserMessage(const QString &text)

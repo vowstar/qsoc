@@ -92,15 +92,30 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
     *connections << connect(
         agent, &QSocAgent::toolCalled, this, [this, id](const QString &name, const QString &args) {
             appendTranscript(id, QStringLiteral("\n[tool] %1 %2\n").arg(name, args.left(200)));
+            setWaitingForPeer(id, name == QStringLiteral("wait_agent"));
         });
     *connections << connect(
         agent, &QSocAgent::toolResult, this, [this, id](const QString &name, const QString &result) {
             appendTranscript(id, QStringLiteral("[result %1] %2\n").arg(name, result.left(400)));
+            setWaitingForPeer(id, false);
+        });
+    *connections << connect(
+        agent,
+        &QSocAgent::toolCallFinished,
+        this,
+        [this,
+         id](const QString &, const QString &name, const QString &, QSocToolResultStatus status) {
+            appendTranscript(
+                id, QStringLiteral("[outcome %1] %2").arg(name, QSocTool::statusLine(status)));
             emit taskEvidenceChanged(id);
         });
     *connections << connect(agent, &QSocAgent::runComplete, this, [this, id](const QString &text) {
         markCompleted(id, text);
     });
+    *connections << connect(
+        agent, &QSocAgent::toolCallOutput, this, [this, id](const QString &, const QString &text) {
+            appendTranscript(id, text);
+        });
     *connections << connect(agent, &QSocAgent::runError, this, [this, id](const QString &text) {
         markFailed(id, text);
     });
@@ -122,18 +137,32 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
     return id;
 }
 
+void QSocSubAgentTaskSource::setWaitingForPeer(const QString &id, bool waiting)
+{
+    for (auto &run : runs_) {
+        if (run.id != id || run.status != QSocTask::Status::Running)
+            continue;
+        if (run.waitingForPeer != waiting) {
+            run.waitingForPeer = waiting;
+            emit tasksChanged();
+        }
+        return;
+    }
+}
+
 QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
 {
     QList<QSocTask::Row> rows;
     rows.reserve(runs_.size());
     for (const RunState &run : runs_) {
         QSocTask::Row row;
-        row.id          = run.id;
-        row.label       = run.label;
-        row.objective   = run.objective;
-        row.kind        = QSocTask::Kind::SubAgent;
-        row.status      = run.status;
-        row.startedAtMs = run.startedAtMs;
+        row.id             = run.id;
+        row.label          = run.label;
+        row.objective      = run.objective;
+        row.waitingForPeer = run.status == QSocTask::Status::Running && run.waitingForPeer;
+        row.kind           = QSocTask::Kind::SubAgent;
+        row.status         = run.status;
+        row.startedAtMs    = run.startedAtMs;
         row.canKill
             = (run.status == QSocTask::Status::Running || run.status == QSocTask::Status::Pending);
         QString summary = run.subagentType;

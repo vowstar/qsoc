@@ -47,23 +47,24 @@ void QTuiToolBlock::appendBody(const QString &chunk)
     if (chunk.isEmpty()) {
         return;
     }
-    /* Re-split the existing tail with the new chunk so a partial line
-     * carrying over from a previous append finishes correctly. The
-     * trailing empty entry produced by a chunk ending in \n is the
-     * "next line is empty so far" placeholder; we keep it so a
-     * subsequent appendBody can extend it, and any caller-visible
-     * extra row is removed at finalise time. */
-    QString carry = body.isEmpty() ? QString() : body.takeLast();
+    QString carry = body.isEmpty() || bodyEndsLine ? QString() : body.takeLast();
     carry.append(chunk);
+    bodyEndsLine            = chunk.endsWith(QLatin1Char('\n'));
     const QStringList parts = carry.split(QLatin1Char('\n'));
     for (int idx = 0; idx < parts.size(); ++idx) {
         body.append(parts[idx]);
     }
-    /* Drop a trailing empty if the chunk landed cleanly on a newline
-     * boundary. Keeps "alpha\n" from rendering as two rows. */
     if (body.size() > 1 && body.last().isEmpty()) {
         body.removeLast();
     }
+    invalidate();
+}
+
+void QTuiToolBlock::setBody(const QString &text)
+{
+    body.clear();
+    bodyEndsLine = false;
+    appendBody(text);
     invalidate();
 }
 
@@ -154,6 +155,8 @@ void QTuiToolBlock::layout(int width)
         QTuiStyledRun summaryRun;
         if (!summary.isEmpty()) {
             summaryRun.text = summary;
+        } else if (status == Status::Failure) {
+            summaryRun.text = QStringLiteral("failed");
         } else if (status == Status::Uncertain) {
             summaryRun.text = QStringLiteral("completion uncertain");
         } else if (status == Status::Skipped) {

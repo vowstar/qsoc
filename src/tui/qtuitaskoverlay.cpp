@@ -58,6 +58,12 @@ QString fitToWidth(const QString &text, int width)
     return plain + QString(qMax(0, width - QTuiText::visualWidth(plain)), QLatin1Char(' '));
 }
 
+QString statusLabel(const QSocTask::Row &row)
+{
+    return row.status == QSocTask::Status::Running && row.waitingForPeer ? QStringLiteral("waiting")
+                                                                         : statusLabel(row.status);
+}
+
 } /* namespace */
 
 QTuiTaskOverlay::QTuiTaskOverlay(QObject *parent)
@@ -320,7 +326,7 @@ void QTuiTaskOverlay::reloadDetailContent()
     QStringList lines;
     lines << QStringLiteral("Estimate: ") + estimate.summary;
     if (estimate.updatedAtMs > 0)
-        lines << QStringLiteral("Updated %1 ago; execution state is shown in the overview.")
+        lines << QStringLiteral("Updated %1 ago")
                      .arg(
                          QTuiText::formatDuration(
                              qMax(qint64(0), QDateTime::currentMSecsSinceEpoch() - estimate.updatedAtMs)
@@ -472,8 +478,11 @@ int QTuiTaskOverlay::columns(int width) const
     return cols;
 }
 
-QString QTuiTaskOverlay::marker(QSocTask::Status status) const
+QString QTuiTaskOverlay::marker(const QSocTask::Row &row) const
 {
+    const auto status = row.status;
+    if (status == QSocTask::Status::Running && row.waitingForPeer)
+        return QStringLiteral(".");
     if (status == QSocTask::Status::Running)
         return animationEnabled_ ? QString(QLatin1Char("-\\|/"[frame_])) : QStringLiteral("*");
     if (status == QSocTask::Status::Failed || status == QSocTask::Status::Stuck)
@@ -489,25 +498,28 @@ QString QTuiTaskOverlay::summary() const
 {
     if (!summary_.isEmpty())
         return summary_;
-    int active  = 0;
-    int done    = 0;
-    int failed  = 0;
-    int stopped = 0;
-    for (const auto &entry : cachedRows_) {
-        if (entry.row.status == QSocTask::Status::Completed)
-            ++done;
-        else if (entry.row.status == QSocTask::Status::Failed)
-            ++failed;
-        else if (entry.row.status == QSocTask::Status::Aborted)
-            ++stopped;
-        else
-            ++active;
+    QMap<QString, int> counts;
+    for (const auto &entry : cachedRows_)
+        ++counts[statusLabel(entry.row)];
+    QStringList parts;
+    for (const auto &state :
+         {QStringLiteral("failed"),
+          QStringLiteral("stuck"),
+          QStringLiteral("aborted"),
+          QStringLiteral("running"),
+          QStringLiteral("waiting"),
+          QStringLiteral("pending"),
+          QStringLiteral("idle"),
+          QStringLiteral("done")}) {
+        const int count = counts.value(state);
+        if (count == 0 && state != QStringLiteral("running") && state != QStringLiteral("done"))
+            continue;
+        const QString label = state == QStringLiteral("pending")   ? QStringLiteral("queued")
+                              : state == QStringLiteral("aborted") ? QStringLiteral("stopped")
+                                                                   : state;
+        parts << QStringLiteral("%1 %2").arg(count).arg(label);
     }
-    return QStringLiteral("%1 active | %2 done | %3 failed | %4 stopped")
-        .arg(active)
-        .arg(done)
-        .arg(failed)
-        .arg(stopped);
+    return parts.join(QStringLiteral(" | "));
 }
 
 int QTuiTaskOverlay::previewHeight(int width, int availableHeight) const
@@ -557,15 +569,15 @@ void QTuiTaskOverlay::renderCells(QTuiScreen &screen, int startY, int width, int
         const auto    color    = row.status == QSocTask::Status::Failed  ? QTuiFgColor::Red
                                  : row.status == QSocTask::Status::Stuck ? QTuiFgColor::Yellow
                                                                          : QTuiFgColor::Default;
-        const QString heading  = QStringLiteral("[%1] %2/%3 %4")
-                                     .arg(marker(row.status), entry.sourceTag, row.id, row.label);
+        const QString heading
+            = QStringLiteral("[%1] %2/%3 %4").arg(marker(row), entry.sourceTag, row.id, row.label);
         screen.putString(x, y, fitToWidth(heading, cellWidth - 1), selected, false, selected, color);
-        QString detail = statusLabel(row.status);
+        QString detail = statusLabel(row);
         if (row.startedAtMs > 0)
             detail += QStringLiteral(" | %1").arg(
                 QTuiText::formatDuration(qMax(qint64(0), now - row.startedAtMs) / 1000));
         if (QSocTask::isTerminal(row.status))
-            detail = statusLabel(row.status);
+            detail = statusLabel(row);
         else if (estimatesVisible_ && !entry.estimate.summary.isEmpty())
             detail += QStringLiteral(" | est: ") + entry.estimate.summary;
         if (y + 1 < startY + height)
@@ -628,20 +640,20 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
         renderCells(screen, startY + 2, innerW, bodyHeight, false);
     } else {
         for (int i = 0; i < bodyHeight && first + i < cachedRows_.size(); ++i) {
-            const auto &entry    = cachedRows_.at(first + i);
-            const auto &row      = entry.row;
-            const bool  selected = first + i == selected_;
-            QString     title    = row.label;
+            const auto &entry     = cachedRows_.at(first + i);
+            const auto &row       = entry.row;
+            const bool  selected  = first + i == selected_;
+            QString     taskLabel = row.label;
             if (estimatesVisible_ && !entry.estimate.summary.isEmpty())
-                title = fitToWidth(title, qMax(8, innerW / 3)) + QStringLiteral(" | est: ")
-                        + entry.estimate.summary;
+                taskLabel = fitToWidth(taskLabel, qMax(8, innerW / 3)) + QStringLiteral(" | est: ")
+                            + entry.estimate.summary;
             const QString line = QStringLiteral("%1 [%2] %3 %4 %5")
                                      .arg(
                                          selected ? QStringLiteral(">") : QStringLiteral(" "),
-                                         marker(row.status),
+                                         marker(row),
                                          fitToWidth(entry.sourceTag + QLatin1Char('/') + row.id, 14),
-                                         fitToWidth(statusLabel(row.status), 8),
-                                         title);
+                                         fitToWidth(statusLabel(row), 8),
+                                         taskLabel);
             screen.putString(
                 1,
                 startY + 2 + i,
@@ -672,7 +684,8 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
     QString   title    = QStringLiteral("%1 / %2").arg(detailSourceTag_, detailId_);
     for (const auto &entry : cachedRows_) {
         if (entry.sourceTag == detailSourceTag_ && entry.row.id == detailId_) {
-            title += QStringLiteral(" | ") + statusLabel(entry.row.status);
+            title += QStringLiteral(" | ") + statusLabel(entry.row) + QStringLiteral(" | ")
+                     + entry.row.label;
             break;
         }
     }

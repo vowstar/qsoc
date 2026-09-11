@@ -30,6 +30,7 @@ void QSocToolCallContext::requestCancellation()
         return;
     }
     cancellationRequested_ = true;
+    resultStatus_          = QSocToolResultStatus::Uncertain;
     emit cancellationRequested();
 }
 
@@ -56,6 +57,8 @@ QString QSocTool::statusLine(ResultStatus status)
         return QStringLiteral("status: failed\n");
     case ResultStatus::Uncertain:
         return QStringLiteral("status: uncertain\n");
+    case ResultStatus::Dispatched:
+        return QStringLiteral("status: dispatched\n");
     }
     return QStringLiteral("status: uncertain\n");
 }
@@ -74,6 +77,8 @@ QSocTool::ResultStatus QSocTool::classifyResult(const QString &result)
     if (first == QStringLiteral("status: uncertain")) {
         return ResultStatus::Uncertain;
     }
+    if (first == QStringLiteral("status: dispatched"))
+        return ResultStatus::Dispatched;
     if (result.trimmed().startsWith(QStringLiteral("Error:"))) {
         return ResultStatus::Failed;
     }
@@ -203,7 +208,18 @@ json QSocToolRegistry::getToolDefinitions() const
     return definitions;
 }
 
-QString QSocToolRegistry::executeTool(const QString &name, const json &arguments, QObject *owner)
+void QSocToolCallContext::reportOutput(const QString &text)
+{
+    if (!text.isEmpty() && !isCancellationRequested() && !completed_)
+        emit outputReady(text);
+}
+
+QString QSocToolRegistry::executeTool(
+    const QString                            &name,
+    const json                               &arguments,
+    QObject                                  *owner,
+    std::function<void(const QString &)>      output,
+    std::function<void(QSocToolResultStatus)> outcome)
 {
     QPointer<QSocTool> tool = getTool(name);
     if (tool.isNull()) {
@@ -211,6 +227,8 @@ QString QSocToolRegistry::executeTool(const QString &name, const json &arguments
     }
 
     ActiveCall call(tool, owner, this);
+    if (output)
+        connect(&call.context, &QSocToolCallContext::outputReady, &call.context, std::move(output));
     // cppcheck-suppress danglingLifetime
     activeCalls_.insert(&call);
     tool->callContexts_.append(&call.context);
@@ -223,23 +241,30 @@ QString QSocToolRegistry::executeTool(const QString &name, const json &arguments
             registry->activeCalls_.remove(&call);
         }
     });
-    return tool->execute(arguments);
+    const QString              result     = tool->execute(arguments);
+    if (outcome)
+        outcome(call.context.resultStatus_.value_or(QSocTool::classifyResult(result)));
+    return result;
 }
 
 std::optional<QString> QSocToolRegistry::executeToolDeferred(
-    const QString                       &name,
-    const json                          &arguments,
-    QObject                             *owner,
-    std::function<void(const QString &)> completed)
+    const QString                            &name,
+    const json                               &arguments,
+    QObject                                  *owner,
+    std::function<void(const QString &)>      completed,
+    std::function<void(const QString &)>      output,
+    std::function<void(QSocToolResultStatus)> outcome)
 {
     const QPointer<QSocTool> tool = getTool(name);
     if (!tool)
         return QString("Error: Tool '%1' not found").arg(name);
     if (!tool->supportsDeferred())
-        return executeTool(name, arguments, owner);
+        return executeTool(name, arguments, owner, std::move(output), std::move(outcome));
     auto *call = new ActiveCall(tool, owner, this);
     call->setParent(this);
     call->context.canDefer_ = true;
+    if (output)
+        connect(&call->context, &QSocToolCallContext::outputReady, call, std::move(output));
     activeCalls_.insert(call);
     tool->callContexts_.append(&call->context);
     const QPointer<QSocToolRegistry> registry(this);
@@ -249,11 +274,19 @@ std::optional<QString> QSocToolRegistry::executeToolDeferred(
         &call->context,
         &QSocToolCallContext::deferredCompleted,
         call,
-        [registry, receiver, call, completed = std::move(completed)](const QString &result) {
+        [registry, receiver, call, outcome, completed = std::move(completed)](
+            const QString &result) {
+            const auto status = call->context.resultStatus_.value_or(
+                QSocTool::classifyResult(result));
             if (registry)
                 registry->activeCalls_.remove(call);
             if (receiver)
-                QTimer::singleShot(0, receiver, [completed, result]() { completed(result); });
+                QTimer::singleShot(0, receiver, [completed, outcome, status, result, receiver]() {
+                    if (outcome)
+                        outcome(status);
+                    if (receiver)
+                        completed(result);
+                });
             call->deleteLater();
         });
     const auto cancel = [call]() {
@@ -275,7 +308,10 @@ std::optional<QString> QSocToolRegistry::executeToolDeferred(
         return std::nullopt;
     if (registry)
         registry->activeCalls_.remove(call);
+    const auto status = call->context.resultStatus_.value_or(QSocTool::classifyResult(result));
     delete call;
+    if (outcome)
+        outcome(status);
     return result;
 }
 

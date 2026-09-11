@@ -7,6 +7,7 @@
 #include "tui/qtuiblock.h"
 
 #include <QList>
+#include <QObject>
 #include <QString>
 
 /**
@@ -28,7 +29,7 @@
  *          - toMarkdown wraps the body in a fenced ```text``` block
  *            so structure round-trips cleanly through markdown.
  */
-class QTuiToolBlock : public QTuiBlock
+class QTuiToolBlock : public QObject, public QTuiBlock
 {
 public:
     enum class Status : std::uint8_t {
@@ -46,6 +47,7 @@ public:
     /* Append a fresh chunk of body output. Multi-line input is split
      * on `\n` so the layout produces one row per source line. */
     void appendBody(const QString &chunk);
+    void setBody(const QString &text);
 
     /* Mark the call as finished. The footer distinguishes success,
      * failure, uncertain completion, and skipped execution. */
@@ -70,7 +72,8 @@ private:
     QString                     toolName;
     QString                     detail;
     QStringList                 body;
-    Status                      status = Status::Running;
+    bool                        bodyEndsLine = false;
+    Status                      status       = Status::Running;
     QString                     summary;
     bool                        finished = false;
     QList<QList<QTuiStyledRun>> rows;

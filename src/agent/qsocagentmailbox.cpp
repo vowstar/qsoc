@@ -87,7 +87,7 @@ void QSocAgentMailbox::publish(const QStringList &recipients)
     for (const auto &recipient : recipients) {
         if (auto *inbox = inboxFor(recipient))
             emit inbox->changed();
-        if (!owner || owner->generation_ != generation)
+        if (owner.isNull() || owner->generation_ != generation)
             return;
     }
     emit changed();
@@ -403,7 +403,7 @@ QSocAgentMailbox::json QSocAgentMailbox::sendSelected(
     if (wake && stateFor(recipients.first()) == QStringLiteral("idle")) {
         const QString taskId = wakeHandler_ ? wakeHandler_(agentFor(recipients.first()))
                                             : QString();
-        if (!owner || owner->generation_ != generation)
+        if (owner.isNull() || owner->generation_ != generation)
             return error("session_reset");
         if (taskId.isEmpty()) {
             agents_[recipients.first()].pending.removeAll(key);
@@ -415,7 +415,7 @@ QSocAgentMailbox::json QSocAgentMailbox::sendSelected(
     if (!replyTo.isEmpty())
         messages_[keyFor(recipients.first(), replyTo)].deliveries[sender].replied = true;
     publish(accepted);
-    if (!owner || owner->generation_ != generation)
+    if (owner.isNull() || owner->generation_ != generation)
         return error("session_reset");
     return receipt(messages_[key], false);
 }

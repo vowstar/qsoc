@@ -15,7 +15,9 @@
 #include "tui/qtuitodolist.h"
 #include "tui/qtuitoolblock.h"
 
+#include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 
 /**
@@ -85,15 +87,11 @@ public:
     void appendReasoningChunk(const QString &chunk);
     void finishStream();
 
-    /* Tool-call lifecycle hooks. beginToolUse pushes a bordered
-     * QTuiToolBlock onto the scrollback and remembers it; appendBody
-     * streams output into the active block; finishToolUse stamps the
-     * footer status. Each turn may have multiple tool calls in flight
-     * conceptually but only one active block at a time, since tool
-     * output never interleaves. */
-    void beginToolUse(const QString &toolName, const QString &detail);
-    void appendToolUseBody(const QString &chunk);
-    void finishToolUse(QTuiToolBlock::Status status, const QString &summary = QString());
+    void beginToolUse(const QString &toolName, const QString &detail, const QString &callId = {});
+    void appendToolUseBody(const QString &chunk, const QString &callId = {});
+    void replaceToolUseBody(const QString &text, const QString &callId = {});
+    void finishToolUse(
+        QTuiToolBlock::Status status, const QString &summary = {}, const QString &callId = {});
 
     /* Push the user's input as a distinct scrollback block. Replaces
      * the prior `compositor.printContent("qsoc> " + input + "\n")`
@@ -188,10 +186,8 @@ private:
     };
     std::vector<ReasoningGroup> reasoningHistory;
 
-    /* Active tool-call cursor. Cleared by finishToolUse() and any
-     * intervening printContent / streaming chunk so the next tool
-     * call lands on a fresh block. */
-    class QTuiToolBlock *activeTool = nullptr;
+    QPointer<QTuiToolBlock>                 activeTool;
+    QHash<QString, QPointer<QTuiToolBlock>> toolBlocks;
 
     enum class StreamMode : std::uint8_t {
         Assistant,

@@ -110,7 +110,7 @@ private:
     void    flashFooter(const QString &message);
     int     columns(int width) const;
     QString summary() const;
-    QString marker(QSocTask::Status status) const;
+    QString marker(const QSocTask::Row &row) const;
     void    renderCells(QTuiScreen &screen, int startY, int width, int height, bool preview);
 
     void renderList(QTuiScreen &screen, int startY, int width);

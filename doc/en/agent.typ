@@ -1067,7 +1067,8 @@ prompt's first row parks focus on the pill; *Enter* opens the overlay;
 
 A compact activity grid appears above the prompt while tasks are active.
 Its summary covers all tasks, including members outside the visible range.
-Running tasks share an ASCII spinner. Queued and terminal tasks stay still.
+Running tasks share an ASCII spinner. Queued tasks, peers waiting for messages, and terminal tasks stay still.
+The summary separates running, waiting, queued, failed, stopped, and completed work.
 
 The overlay selects a grid for a large task set on a wide terminal.
 Press `v` to switch between the grid and table. Enter opens the selected
@@ -1119,6 +1120,10 @@ Numeric ranges are hidden by default. Press `p` in details to inspect provisiona
 These ranges have no measured accuracy guarantee. Unknown values remain unknown.
 The progress range estimates work completed, not confidence or acceptance.
 Set `agent.task_estimates: false` to disable evaluation. The `e` key only changes visibility.
+
+Tool output stays attached to its invocation when messages arrive between output chunks.
+Local foreground bash output appears while the command runs. Its exit status controls the result marker, independently of printed text.
+Background launches show a dispatched marker. Check their task rows for execution results.
 
 === Output Monitors
 <agent-task-monitors>

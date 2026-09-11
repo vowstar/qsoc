@@ -538,6 +538,13 @@ public:
 
 signals:
     void configurationChanged();
+    void toolCallStarted(const QString &callId, const QString &name, const QString &arguments);
+    void toolCallFinished(
+        const QString       &callId,
+        const QString       &name,
+        const QString       &result,
+        QSocToolResultStatus status);
+    void toolCallOutput(const QString &callId, const QString &text);
     /**
      * @brief Signal emitted when a tool is called
      * @param toolName Name of the tool being called
@@ -655,20 +662,21 @@ private:
 
     struct ActiveRun
     {
-        quint64                        epoch = 0;
-        RunMode                        mode  = RunMode::Synchronous;
-        std::atomic<StopMode>          stop{StopMode::None};
-        std::stop_source               stopSource;
-        QPointer<QLLMService>          llm;
-        QPointer<QSocToolRegistry>     tools;
-        QMetaObject::Connection        llmDestroyedConnection;
-        std::optional<json::size_type> toolBatchStart;
-        std::optional<QString>         executingToolCallId;
-        bool                           toolDeferred = false;
-        std::optional<QString>         deferredToolResult;
-        json                           deferredToolArguments;
-        json                           toolBatchAttachments = json::array();
-        RunPhase                       phase                = RunPhase::Active;
+        quint64                             epoch = 0;
+        RunMode                             mode  = RunMode::Synchronous;
+        std::atomic<StopMode>               stop{StopMode::None};
+        std::stop_source                    stopSource;
+        QPointer<QLLMService>               llm;
+        QPointer<QSocToolRegistry>          tools;
+        QMetaObject::Connection             llmDestroyedConnection;
+        std::optional<json::size_type>      toolBatchStart;
+        std::optional<QString>              executingToolCallId;
+        std::optional<QSocToolResultStatus> executingToolStatus;
+        bool                                toolDeferred = false;
+        std::optional<QString>              deferredToolResult;
+        json                                deferredToolArguments;
+        json                                toolBatchAttachments = json::array();
+        RunPhase                            phase                = RunPhase::Active;
     };
 
     using ActiveRunPtr = std::shared_ptr<ActiveRun>;

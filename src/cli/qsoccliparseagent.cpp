@@ -133,10 +133,57 @@
 
 namespace {
 
+QString toolStatusText(const QString &name, QTuiToolBlock::Status status)
+{
+    QString state;
+    switch (status) {
+    case QTuiToolBlock::Status::Background:
+        state = QStringLiteral("dispatched");
+        break;
+    case QTuiToolBlock::Status::Partial:
+        state = QStringLiteral("partially delivered");
+        break;
+    case QTuiToolBlock::Status::Failure:
+        state = QStringLiteral("failed");
+        break;
+    case QTuiToolBlock::Status::Uncertain:
+        state = QStringLiteral("uncertain, check effects");
+        break;
+    case QTuiToolBlock::Status::Skipped:
+        state = QStringLiteral("skipped");
+        break;
+    case QTuiToolBlock::Status::Running:
+        state = QStringLiteral("running");
+        break;
+    case QTuiToolBlock::Status::Success:
+        state = QStringLiteral("done");
+        break;
+    }
+    return name + QLatin1Char(' ') + state + QStringLiteral(", reasoning");
+}
+
+QString toolBodyText(const QString &name, const QString &result)
+{
+    if (name != QStringLiteral("agent"))
+        return result;
+    const auto value = json::parse(result.toStdString(), nullptr, false);
+    if (!value.is_object())
+        return result;
+    for (const auto *field : {"task_id", "description", "status"}) {
+        if (!value.contains(field) || !value[field].is_string())
+            return result;
+    }
+    if (value["status"] != "async_launched" && value["status"] != "queued")
+        return result;
+    return QString::fromStdString(value["task_id"].get<std::string>()) + QStringLiteral(": ")
+           + QString::fromStdString(value["description"].get<std::string>());
+}
+
 /* Map a tool result onto the block footer. Uncertain gets its own mark:
  * painting an interrupted call green claims something we do not know, and
  * painting it red invites a retry that may double-apply. */
-QTuiToolBlock::Status toolBlockStatus(const QString &toolName, const QString &result)
+QTuiToolBlock::Status toolBlockStatus(
+    const QString &toolName, const QString &result, QSocToolResultStatus outcome)
 {
     if (toolName == QStringLiteral("agent") || toolName == QStringLiteral("send_message")) {
         const auto response = json::parse(result.toStdString(), nullptr, false);
@@ -149,9 +196,11 @@ QTuiToolBlock::Status toolBlockStatus(const QString &toolName, const QString &re
                 return QTuiToolBlock::Status::Background;
         }
     }
-    switch (QSocTool::classifyResult(result)) {
+    switch (outcome) {
     case QSocTool::ResultStatus::Ok:
         return QTuiToolBlock::Status::Success;
+    case QSocTool::ResultStatus::Dispatched:
+        return QTuiToolBlock::Status::Background;
     case QSocTool::ResultStatus::Failed:
         return QTuiToolBlock::Status::Failure;
     case QSocTool::ResultStatus::Uncertain:
@@ -2056,9 +2105,17 @@ bool QSocCliWorker::runAgentLoop(
 
     /* Create TUI compositor — enters alt screen immediately */
     QTuiCompositor compositor(this);
-    auto          &todoWidget      = compositor.todoList();
-    auto          &queueWidget     = compositor.queuedList();
-    auto          &statusBarWidget = compositor.statusBar();
+    connect(
+        agent,
+        &QSocAgent::toolCallOutput,
+        &compositor,
+        [&compositor](const QString &callId, const QString &text) {
+            compositor.appendToolUseBody(text, callId);
+            compositor.render();
+        });
+    auto &todoWidget      = compositor.todoList();
+    auto &queueWidget     = compositor.queuedList();
+    auto &statusBarWidget = compositor.statusBar();
     /* Replace the launch-time probe with one that also keeps the chip
      * truthful, now that the status bar exists. */
     if (remoteConn->session() != nullptr) {
@@ -2444,19 +2501,20 @@ bool QSocCliWorker::runAgentLoop(
     static constexpr int PASTE_CHIP_CHAR_MIN = 500;
     static constexpr int PASTE_CHIP_LINE_MIN = 4;
 
-    /* Per-edit_file diff capture: when the agent calls edit_file, the
-     * toolCalled hook stashes the path + old/new strings here so the
-     * toolResult hook can render a unified-style colored diff to the
-     * scroll view on success. Reset after each render so a follow-up
-     * tool call doesn't accidentally re-emit the same diff. */
-    QString pendingDiffPath;
-    QString pendingDiffOldString;
-    QString pendingDiffNewString;
-    /* read_file path captured at toolCalled and consumed by the
-     * matching toolResult to push an image preview block when the
-     * file body is a recognised image. Distinct from pendingDiffPath
-     * which clears on non-edit/write tool calls. */
-    QString pendingReadPath;
+    struct ToolDisplay
+    {
+        QString diffPath;
+        QString oldText;
+        QString newText;
+        QString readPath;
+    };
+    QHash<QString, ToolDisplay> pendingToolDisplays;
+    const auto                  clearToolDisplays = [&pendingToolDisplays](const QString &) {
+        pendingToolDisplays.clear();
+    };
+    connect(agent, &QSocAgent::runComplete, &compositor, clearToolDisplays);
+    connect(agent, &QSocAgent::runError, &compositor, clearToolDisplays);
+    connect(agent, &QSocAgent::runAborted, &compositor, clearToolDisplays);
 
     /* Helper: render a unified diff to the scroll view with the diff line
      * styles defined on QTuiScrollView (Hunk = yellow bold, Add = green,
@@ -8301,17 +8359,20 @@ bool QSocCliWorker::runAgentLoop(
             /* Connect status line to agent signals (use QueuedConnection for thread safety) */
             auto connToolCalled = QObject::connect(
                 agent,
-                &QSocAgent::toolCalled,
+                &QSocAgent::toolCallStarted,
                 &compositor,
                 [&compositor,
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &pendingDiffPath,
-                 &pendingDiffOldString,
-                 &pendingDiffNewString,
-                 &pendingReadPath](const QString &toolName, const QString &arguments) {
+                 &pendingToolDisplays](
+                    const QString &callId, const QString &toolName, const QString &arguments) {
+                    auto &display              = pendingToolDisplays[callId];
+                    auto &pendingDiffPath      = display.diffPath;
+                    auto &pendingDiffOldString = display.oldText;
+                    auto &pendingDiffNewString = display.newText;
+                    auto &pendingReadPath      = display.readPath;
                     Q_UNUSED(compositor)
                     /* Extract detail from arguments for better UX */
                     QString detail;
@@ -8389,37 +8450,40 @@ bool QSocCliWorker::runAgentLoop(
                         statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                     } else {
                         statusBarWidget.toolCalled(toolName, detail);
-                        compositor.beginToolUse(toolName, detail);
+                        compositor.beginToolUse(toolName, detail, callId);
                     }
                 });
 
             auto connToolResult = QObject::connect(
                 agent,
-                &QSocAgent::toolResult,
+                &QSocAgent::toolCallFinished,
                 &compositor,
                 [&compositor,
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &pendingDiffPath,
-                 &pendingDiffOldString,
-                 &pendingDiffNewString,
-                 &pendingReadPath,
-                 &renderDiffToScrollView](const QString &toolName, const QString &result) {
+                 &pendingToolDisplays,
+                 &renderDiffToScrollView](
+                    const QString       &callId,
+                    const QString       &toolName,
+                    const QString       &result,
+                    QSocToolResultStatus outcome) {
+                    auto  display              = pendingToolDisplays.take(callId);
+                    auto &pendingDiffPath      = display.diffPath;
+                    auto &pendingDiffOldString = display.oldText;
+                    auto &pendingDiffNewString = display.newText;
+                    auto &pendingReadPath      = display.readPath;
                     statusBarWidget.resetProgress();
-                    const auto toolStatus = toolBlockStatus(toolName, result);
-                    statusBarWidget.setStatus(
-                        toolStatus == QTuiToolBlock::Status::Background
-                            ? QStringLiteral("Task dispatched, reasoning")
-                            : QString("%1 done, reasoning").arg(toolName));
+                    const auto toolStatus = toolBlockStatus(toolName, result, outcome);
+                    statusBarWidget.setStatus(toolStatusText(toolName, toolStatus));
 
                     /* Stream the result body into the active tool block
                      * and stamp the footer status. Todo tools never opened
                      * a block so the call is a no-op there. */
                     if (!toolName.startsWith("todo_")) {
-                        compositor.appendToolUseBody(result);
-                        compositor.finishToolUse(toolStatus);
+                        compositor.replaceToolUseBody(toolBodyText(toolName, result), callId);
+                        compositor.finishToolUse(toolStatus, {}, callId);
                     }
 
                     /* read_file image branch: when the tool returned an
@@ -8683,9 +8747,25 @@ bool QSocCliWorker::runAgentLoop(
 
             /* Use existing inputMonitor for ESC/Ctrl+C during execution */
             auto &escMonitor = inputMonitor;
-            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, &loop, [agent]() {
-                agent->abort();
-            });
+            QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::escPressed,
+                &loop,
+                [agent, &compositor, &escMonitor]() {
+                    if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskOverlay) {
+                        compositor.taskOverlay().handleKey(Qt::Key_Escape, false);
+                        return;
+                    }
+                    if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskPill) {
+                        compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+                        compositor.statusBar().setTaskPillFocused(false);
+                        escMonitor.setExternalKeyConsumer({});
+                        compositor.invalidate();
+                        compositor.render();
+                        return;
+                    }
+                    agent->abort();
+                });
             auto execCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
@@ -9003,17 +9083,20 @@ bool QSocCliWorker::runAgentLoop(
             /* Connect tool signals for status updates */
             auto connToolCalled = QObject::connect(
                 agent,
-                &QSocAgent::toolCalled,
+                &QSocAgent::toolCallStarted,
                 &compositor,
                 [&compositor,
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &pendingDiffPath,
-                 &pendingDiffOldString,
-                 &pendingDiffNewString,
-                 &pendingReadPath](const QString &toolName, const QString &arguments) {
+                 &pendingToolDisplays](
+                    const QString &callId, const QString &toolName, const QString &arguments) {
+                    auto &display              = pendingToolDisplays[callId];
+                    auto &pendingDiffPath      = display.diffPath;
+                    auto &pendingDiffOldString = display.oldText;
+                    auto &pendingDiffNewString = display.newText;
+                    auto &pendingReadPath      = display.readPath;
                     Q_UNUSED(compositor)
                     /* Extract detail from arguments for better UX */
                     QString detail;
@@ -9091,37 +9174,40 @@ bool QSocCliWorker::runAgentLoop(
                         statusBarWidget.setStatus(QString("Running %1...").arg(toolName));
                     } else {
                         statusBarWidget.toolCalled(toolName, detail);
-                        compositor.beginToolUse(toolName, detail);
+                        compositor.beginToolUse(toolName, detail, callId);
                     }
                 });
 
             auto connToolResult = QObject::connect(
                 agent,
-                &QSocAgent::toolResult,
+                &QSocAgent::toolCallFinished,
                 &compositor,
                 [&compositor,
                  &statusBarWidget,
                  &todoWidget,
                  &queueWidget,
                  &inputWidget,
-                 &pendingDiffPath,
-                 &pendingDiffOldString,
-                 &pendingDiffNewString,
-                 &pendingReadPath,
-                 &renderDiffToScrollView](const QString &toolName, const QString &result) {
+                 &pendingToolDisplays,
+                 &renderDiffToScrollView](
+                    const QString       &callId,
+                    const QString       &toolName,
+                    const QString       &result,
+                    QSocToolResultStatus outcome) {
+                    auto  display              = pendingToolDisplays.take(callId);
+                    auto &pendingDiffPath      = display.diffPath;
+                    auto &pendingDiffOldString = display.oldText;
+                    auto &pendingDiffNewString = display.newText;
+                    auto &pendingReadPath      = display.readPath;
                     statusBarWidget.resetProgress();
-                    const auto toolStatus = toolBlockStatus(toolName, result);
-                    statusBarWidget.setStatus(
-                        toolStatus == QTuiToolBlock::Status::Background
-                            ? QStringLiteral("Task dispatched, reasoning")
-                            : QString("%1 done, reasoning").arg(toolName));
+                    const auto toolStatus = toolBlockStatus(toolName, result, outcome);
+                    statusBarWidget.setStatus(toolStatusText(toolName, toolStatus));
 
                     /* Stream the result body into the active tool block
                      * and stamp the footer status. Todo tools never opened
                      * a block so the call is a no-op there. */
                     if (!toolName.startsWith("todo_")) {
-                        compositor.appendToolUseBody(result);
-                        compositor.finishToolUse(toolStatus);
+                        compositor.replaceToolUseBody(toolBodyText(toolName, result), callId);
+                        compositor.finishToolUse(toolStatus, {}, callId);
                     }
 
                     /* read_file image branch: when the tool returned an
@@ -9378,9 +9464,25 @@ bool QSocCliWorker::runAgentLoop(
 
             /* Use existing inputMonitor for ESC/Ctrl+C during execution */
             auto &escMonitor = inputMonitor;
-            QObject::connect(&escMonitor, &QAgentInputMonitor::escPressed, &loop, [agent]() {
-                agent->abort();
-            });
+            QObject::connect(
+                &escMonitor,
+                &QAgentInputMonitor::escPressed,
+                &loop,
+                [agent, &compositor, &escMonitor]() {
+                    if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskOverlay) {
+                        compositor.taskOverlay().handleKey(Qt::Key_Escape, false);
+                        return;
+                    }
+                    if (compositor.currentFocus() == QTuiCompositor::FocusOwner::TaskPill) {
+                        compositor.setFocusOwner(QTuiCompositor::FocusOwner::Input);
+                        compositor.statusBar().setTaskPillFocused(false);
+                        escMonitor.setExternalKeyConsumer({});
+                        compositor.invalidate();
+                        compositor.render();
+                        return;
+                    }
+                    agent->abort();
+                });
             auto execCtrlC = QObject::connect(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,

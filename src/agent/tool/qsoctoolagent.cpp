@@ -494,6 +494,8 @@ const char *resultStatusWord(QSocTool::ResultStatus status)
         return "error";
     case QSocTool::ResultStatus::Uncertain:
         return "uncertain";
+    case QSocTool::ResultStatus::Dispatched:
+        return "async_launched";
     }
     return "uncertain";
 }
@@ -927,6 +929,7 @@ QString QSocToolAgent::execute(const json &arguments)
                     taskId,
                     QStringLiteral("\n[tool] ") + name + QStringLiteral(" ") + args.left(200)
                         + QStringLiteral("\n"));
+                srcGuard->setWaitingForPeer(taskId, name == QStringLiteral("wait_agent"));
             }
         });
     QObject::connect(
@@ -939,8 +942,29 @@ QString QSocToolAgent::execute(const json &arguments)
                     taskId,
                     QStringLiteral("[result ") + name + QStringLiteral("] ") + result.left(400)
                         + QStringLiteral("\n"));
-                emit srcGuard->taskEvidenceChanged(taskId);
+                srcGuard->setWaitingForPeer(taskId, false);
             }
+        });
+    QObject::connect(
+        child,
+        &QSocAgent::toolCallFinished,
+        taskSource_,
+        [srcGuard,
+         taskId](const QString &, const QString &name, const QString &, QSocToolResultStatus status) {
+            if (!srcGuard)
+                return;
+            srcGuard->appendTranscript(
+                taskId, QStringLiteral("[outcome %1] %2").arg(name, QSocTool::statusLine(status)));
+            emit srcGuard->taskEvidenceChanged(taskId);
+        });
+
+    QObject::connect(
+        child,
+        &QSocAgent::toolCallOutput,
+        taskSource_,
+        [srcGuard, taskId](const QString &, const QString &text) {
+            if (srcGuard)
+                srcGuard->appendTranscript(taskId, text);
         });
 
     /* Worktree cleanup hook captured by lambdas below. Empty path
