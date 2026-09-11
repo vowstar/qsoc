@@ -274,7 +274,8 @@ QString QSocToolAgent::getDescription() const
 {
     QString desc = QStringLiteral(
         "Spawn a child sub-agent to handle a self-contained task. The child runs in a "
-        "fresh conversation with a focused tool set and returns a single concise result. "
+        "conversation that inherits parent history in fork mode, or uses the selected role's "
+        "focused context. It returns a concise result. "
         "Use for exploration, summarization, focused multi-step work that should not "
         "pollute the main context. Set run_in_background=true to keep working while the "
         "child runs; the active child surfaces in the Ctrl+B task overlay.\n"
@@ -326,7 +327,7 @@ json QSocToolAgent::getParametersSchema() const
             {"enum", enumValues},
             {"description",
              "Sub-agent type. Use 'fork' to inherit the parent's full message "
-             "history (cache-cheap delegation that continues the existing thread). "
+             "history and continue the existing thread. "
              "When omitted, fork mode is also assumed."}}},
           {"description",
            {{"type", "string"},

@@ -137,12 +137,14 @@ namespace {
  * painting it red invites a retry that may double-apply. */
 QTuiToolBlock::Status toolBlockStatus(const QString &toolName, const QString &result)
 {
-    if (toolName == QStringLiteral("agent")) {
+    if (toolName == QStringLiteral("agent") || toolName == QStringLiteral("send_message")) {
         const auto response = json::parse(result.toStdString(), nullptr, false);
-        if (response.is_object() && response.contains("task_id") && response.contains("status")
-            && response["status"].is_string()) {
+        if (response.is_object() && response.contains("status") && response["status"].is_string()) {
             const auto state = response["status"].get<std::string>();
-            if (state == "async_launched" || state == "queued")
+            if (toolName == QStringLiteral("send_message") && state == "partial")
+                return QTuiToolBlock::Status::Partial;
+            if (toolName == QStringLiteral("agent") && response.contains("task_id")
+                && (state == "async_launched" || state == "queued"))
                 return QTuiToolBlock::Status::Background;
         }
     }

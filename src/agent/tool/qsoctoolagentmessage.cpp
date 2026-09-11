@@ -45,8 +45,9 @@ QString QSocToolAgentMessage::getDescription() const
             "that agent. Only the main agent can cancel peers.");
     if (operation_ == QStringLiteral("agent_list"))
         return QStringLiteral(
-            "List session peers, stable agent_id addresses, task aliases and state. Names are "
-            "display labels.");
+            "List session peers, stable agent_id addresses, task aliases, runtime groups and "
+            "state. "
+            "Names are display labels.");
     if (operation_ == QStringLiteral("agent_inbox"))
         return QStringLiteral(
             "Read pending peer messages. peek=true leaves messages available for later delivery. "
@@ -66,8 +67,14 @@ QString QSocToolAgentMessage::getDescription() const
                         "Its final output is returned as a correlated reply. Cannot wake main or a "
                         "cancelled agent.")
                   : QStringLiteral(
-                        "Queue information without waking an idle agent. Use followup_task when an "
-                        "idle child must work."));
+                        "Queue information without waking idle agents. target accepts one address, "
+                        "{agents:[addresses]}, {group:group_id}, or {broadcast:session}. Use the "
+                        "smallest audience. Group retries keep the original recipients, including "
+                        "rejections. Read per-recipient results. Retry rejected recipients with a "
+                        "new message_id. receipt_offset reads the next receipt page on an "
+                        "identical "
+                        "retry. Reply to the sender, not the group. Informational messages need no "
+                        "acknowledgement. Use followup_task when an idle child must work."));
 }
 
 json QSocToolAgentMessage::getParametersSchema() const
@@ -86,6 +93,29 @@ json QSocToolAgentMessage::getParametersSchema() const
                   "retry."}}},
                {"reply_to", {{"type", "string"}}}};
         required = {"target", "message", "message_id"};
+        if (operation_ == QStringLiteral("send_message")) {
+            const auto selector = [](const char *name, const json &value) {
+                return json{
+                    {"type", "object"},
+                    {"properties", {{name, value}}},
+                    {"required", {name}},
+                    {"additionalProperties", false}};
+            };
+            properties["target"] = {
+                {"oneOf",
+                 json::array(
+                     {{{"type", "string"}},
+                      selector(
+                          "agents",
+                          {{"type", "array"},
+                           {"items", {{"type", "string"}}},
+                           {"minItems", 1},
+                           {"maxItems", 8192}}),
+                      selector("group", {{"type", "string"}}),
+                      selector("broadcast", {{"type", "string"}, {"enum", {"session"}}})})}};
+            properties["receipt_offset"] = {{"type", "integer"}, {"minimum", 0}, {"maximum", 8192}};
+        }
+
     } else if (operation_ == QStringLiteral("interrupt_agent")) {
         properties = {{"target", {{"type", "string"}}}};
         required   = {"target"};
@@ -125,6 +155,11 @@ QString QSocToolAgentMessage::execute(const json &arguments)
     for (auto it = arguments.begin(); it != arguments.end(); ++it) {
         if (!schema["properties"].contains(it.key()))
             return failure("unknown_argument");
+        if (it.key() == "target" && operation_ == QStringLiteral("send_message")) {
+            if (!it->is_string() && !it->is_object())
+                return failure("invalid_argument_type");
+            continue;
+        }
         const std::string type = schema["properties"][it.key()]["type"];
         if ((type == "string" && !it->is_string()) || (type == "boolean" && !it->is_boolean())
             || (type == "integer" && !it->is_number_integer()))
@@ -145,17 +180,18 @@ QString QSocToolAgentMessage::execute(const json &arguments)
     }
     if (operation_ == QStringLiteral("send_message")
         || operation_ == QStringLiteral("followup_task")) {
-        const bool  wake   = operation_ == QStringLiteral("followup_task");
-        const auto *target = mailbox->agentFor(mailbox->resolve(field(arguments, "target")));
-        if (caller->getConfig().planMode && target && !target->getConfig().planMode)
-            return failure("target_not_in_plan_mode");
-        return encoded(mailbox->send(
+        const bool wake   = operation_ == QStringLiteral("followup_task");
+        const auto offset = arguments.value("receipt_offset", json(0));
+        if (offset < 0 || offset > 8192)
+            return failure("invalid_receipt_offset");
+        return encoded(mailbox->sendSelected(
             sender,
-            field(arguments, "target"),
+            arguments["target"],
             field(arguments, "message_id"),
             field(arguments, "message"),
             field(arguments, "reply_to"),
-            wake));
+            wake,
+            offset.get<int>()));
     }
     const QString fromArg = field(arguments, "from");
     const QString from    = mailbox->resolve(fromArg);
@@ -202,20 +238,30 @@ QString QSocToolAgentMessage::execute(const json &arguments)
                 if (context && context->isDeferredPending())
                     context->completeDeferred(read());
             };
-            QObject::connect(mailbox, &QSocAgentMailbox::changed, context, [ready, complete]() {
-                if (ready())
-                    complete();
-            });
+            for (const auto &id : QStringList{sender, from}) {
+                if (auto *inbox = mailbox->inboxFor(id)) {
+                    QObject::connect(inbox, &QSocAgentInbox::changed, context, [ready, complete]() {
+                        if (ready())
+                            complete();
+                    });
+                    QObject::connect(inbox, &QObject::destroyed, context, complete);
+                }
+            }
             QObject::connect(mailbox, &QObject::destroyed, context, complete);
             QObject::connect(context, &QSocToolCallContext::cancellationRequested, context, complete);
             QObject::connect(deadline, &QTimer::timeout, context, complete);
             deadline->start(timeoutMs);
             return {};
         }
-        QObject::connect(mailbox, &QSocAgentMailbox::changed, &loop, [&]() {
-            if (ready())
-                loop.quit();
-        });
+        for (const auto &id : QStringList{sender, from}) {
+            if (auto *inbox = mailbox->inboxFor(id)) {
+                QObject::connect(inbox, &QSocAgentInbox::changed, &loop, [&]() {
+                    if (ready())
+                        loop.quit();
+                });
+                QObject::connect(inbox, &QObject::destroyed, &loop, &QEventLoop::quit);
+            }
+        }
         QObject::connect(mailbox, &QObject::destroyed, &loop, &QEventLoop::quit);
         QObject::connect(
             context, &QSocToolCallContext::cancellationRequested, &loop, &QEventLoop::quit);

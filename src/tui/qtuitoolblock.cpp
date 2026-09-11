@@ -140,6 +140,9 @@ void QTuiToolBlock::layout(int width)
         case Status::Skipped:
             footer.append(dimRun(QStringLiteral("· ")));
             break;
+        case Status::Partial:
+            footer.append(colored(QStringLiteral("[!] "), QTuiFgColor::Yellow, true));
+            break;
         case Status::Background:
             footer.append(dimRun(QStringLiteral("[.] ")));
             break;
@@ -155,6 +158,8 @@ void QTuiToolBlock::layout(int width)
             summaryRun.text = QStringLiteral("completion uncertain");
         } else if (status == Status::Skipped) {
             summaryRun.text = QStringLiteral("not executed");
+        } else if (status == Status::Partial) {
+            summaryRun.text = QStringLiteral("partial delivery, inspect recipient results");
         } else if (status == Status::Background) {
             summaryRun.text = QStringLiteral("dispatched, check task status");
         } else {

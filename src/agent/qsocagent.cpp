@@ -2477,7 +2477,13 @@ void QSocAgent::appendRuntimeSystemSections(QString &prompt) const
             "Use send_message to share findings, ask a peer for missing information, or "
             "coordinate ownership before overlapping file edits. Queueing information does not "
             "wake an idle peer or prove execution. Choose a unique message_id; reuse it only "
-            "for an identical retry. Set reply_to to the received message_id when answering.\n");
+            "for an identical retry. Set reply_to to the received message_id when answering.\n"
+            "Choose the smallest audience: one address, an agents array, a runtime group, or "
+            "session broadcast. Discover groups through agent_list. Group sends freeze recipients "
+            "and never wake idle members. Check partial failures and receipt pages. Resend only "
+            "rejected recipients with a new message_id. Reply to the original sender, not the "
+            "group. Do not acknowledge information unless a reply is requested or you find a "
+            "problem. Broadcast does not assign ownership or change permissions.\n");
     if (available("followup_task"))
         prompt += QStringLiteral(
             "Use followup_task when an idle child must perform more work "

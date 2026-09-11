@@ -17,6 +17,7 @@ private slots:
     void finishedFailureAddsCrossFooter();
     void recoveryStatesUseDistinctFooters();
     void backgroundDispatchDoesNotClaimCompletion();
+    void partialDeliveryHasAWarningFooter();
     void foldingCollapsesToHeaderSummary();
     void plainTextLooksLikeShellHistory();
     void markdownWrapsBodyInFencedBlock();
@@ -81,6 +82,20 @@ void Test::backgroundDispatchDoesNotClaimCompletion()
     }
     QVERIFY(line.contains(QStringLiteral("dispatched")));
     QVERIFY(!line.contains(QStringLiteral("done")));
+}
+
+void Test::partialDeliveryHasAWarningFooter()
+{
+    QTuiToolBlock block(QStringLiteral("send_message"), QStringLiteral("workers"));
+    block.finish(QTuiToolBlock::Status::Partial, {});
+    block.layout(80);
+    QTuiScreen screen(80, 1);
+    block.paintRow(screen, 0, 1, 0, 80, false, false);
+    QString line;
+    for (int col = 0; col < 80; ++col)
+        line += screen.at(col, 0).character;
+    QVERIFY(line.contains(QStringLiteral("partial delivery")));
+    QCOMPARE(screen.at(2, 0).fgColor, QTuiFgColor::Yellow);
 }
 
 void Test::foldingCollapsesToHeaderSummary()

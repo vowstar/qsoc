@@ -931,6 +931,37 @@ a new task ID when it wakes an idle child.
   its pending messages. Later messages cannot revive that child. Task-panel
   cancellation has the same effect. Start a fresh child for further work.
 
+`send_message` accepts four target forms:
+
+```json
+{"target":"a1","message_id":"note-1","message":"Review the interface."}
+{"target":{"agents":["a1","a2"]},"message_id":"note-2","message":"The schema changed."}
+{"target":{"group":"workers"},"message_id":"note-3","message":"Review the shared schema."}
+{"target":{"broadcast":"session"},"message_id":"note-4","message":"The workspace is unavailable."}
+```
+
+`agent_list` reports runtime groups. The `workers` group contains the
+session's children. Group sends exclude the sender and closed members.
+Broadcast reaches permitted peers in this session. Explicit address sets
+reject unknown or unauthorized targets before sending anything. Group
+messages do not wake idle members or assign task ownership.
+
+The first accepted request freezes its recipients. New members do not
+receive an old broadcast when the sender retries it. Full individual
+mailboxes can produce partial delivery. The receipt reports `accepted`,
+`rejected`, `delivered`, `replied`, and `cancelled` counts with recipient
+details. Replies are counted separately for each recipient.
+
+Receipt details have 64 entries per page. Repeat the identical send with
+`receipt_offset` set to `next_offset` to read another page. This does not
+send again. Rejected recipients stay rejected on that message ID, even
+if their mailbox later has room. Use a new ID to resend only to rejected
+recipients. Reply to the original sender with `reply_to`. Informational
+messages require no acknowledgement unless requested.
+
+`followup_task` and `interrupt_agent` accept one target address. They do
+not accept group or broadcast selectors.
+
 The built-in `explore` and `verification` roles can discover peers, send
 information, read their inbox, and wait for replies. They cannot wake or
 cancel peers. Custom role allowlists and denylists still apply. The system
@@ -953,7 +984,8 @@ answer. Receipts distinguish `accepted`, `delivered`, and `cancelled`;
 delivery means consumption, not successful execution.
 
 Each mailbox holds at most 128 pending messages, each at most 16 KiB in
-UTF-8. The session retains up to 8,192 message records for deduplication.
+UTF-8. The session retains up to 8,192 recipient records for deduplication.
+Group delivery, rejection, and exclusion records each consume one slot.
 Full queues reject new sends without dropping older messages. Automatic
 replies are subject to the same limits; `agent_status` remains available
 to inspect the task result.

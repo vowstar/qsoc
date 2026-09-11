@@ -45,6 +45,13 @@ struct Fixture
         }
         registry.registerTool(new QSocToolSendMessage(&registry, &source));
     }
+    QSocAgent *addPeer(const QString &name)
+    {
+        auto      *peer = new QSocAgent(nullptr, nullptr, &registry);
+        const auto id   = source.registerRun(name, QStringLiteral("general-purpose"), peer);
+        source.markCompleted(id, QStringLiteral("ready"));
+        return peer;
+    }
     json call(const QString &name, const json &arguments, QSocAgent *caller = nullptr)
     {
         return json::parse(
@@ -117,6 +124,235 @@ private slots:
         for (const auto *name :
              {"agent_list", "send_message", "agent_inbox", "wait_agent", "followup_task"})
             QVERIFY(!custom.contains(QString::fromLatin1(name)));
+    }
+
+    void multicastFreezesPartialDeliveryAndReplies()
+    {
+        Fixture    f;
+        auto      *peer   = f.addPeer(QStringLiteral("peer"));
+        const auto peerId = peer->agentIdentity();
+        for (int i = 0; i < 128; ++i)
+            f.send(QStringLiteral("fill-%1").arg(i));
+        const json args
+            = {{"target", {{"agents", {f.workerId.toStdString(), peerId.toStdString()}}}},
+               {"message_id", "batch"},
+               {"message", "shared finding"}};
+        const auto first = f.call(QStringLiteral("send_message"), args);
+        QCOMPARE(first["status"], json("partial"));
+        QCOMPARE(first["accepted"], json(1));
+        QCOMPARE(first["rejected"], json(1));
+        f.mailbox->take(f.workerId);
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["rejected"], json(1));
+        QCOMPARE(f.mailbox->pendingCount(f.workerId), 0);
+        QCOMPARE(f.mailbox->pendingCount(peerId), 1);
+        QCOMPARE(
+            f.mailbox->send(
+                f.workerId,
+                f.rootId,
+                QStringLiteral("invalid-reply"),
+                QStringLiteral("answer"),
+                QStringLiteral("batch"),
+                false)["error"],
+            json("unknown_request"));
+        f.mailbox->take(peerId);
+        QCOMPARE(
+            f.mailbox->send(
+                peerId,
+                f.rootId,
+                QStringLiteral("reply"),
+                QStringLiteral("answer"),
+                QStringLiteral("batch"),
+                false)["status"],
+            json("ok"));
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["replied"], json(1));
+        QCOMPARE(f.send(QStringLiteral("repair"))["status"], json("ok"));
+        QCOMPARE(f.mailbox->pendingCount(peerId), 0);
+    }
+
+    void eachGroupRecipientHasItsOwnReplyState()
+    {
+        Fixture       f;
+        auto         *peer   = f.addPeer(QStringLiteral("peer"));
+        const QString peerId = peer->agentIdentity();
+        const json    args
+            = {{"target", {{"group", "workers"}}},
+               {"message_id", "question"},
+               {"message", "report findings"}};
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["accepted"], json(2));
+        f.mailbox->take(f.workerId);
+        f.mailbox->take(peerId);
+        QCOMPARE(
+            f.mailbox->send(
+                peerId,
+                f.rootId,
+                QStringLiteral("answer-one"),
+                QStringLiteral("first finding"),
+                QStringLiteral("question"),
+                false)["status"],
+            json("ok"));
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["replied"], json(1));
+        QCOMPARE(
+            f.mailbox->send(
+                f.workerId,
+                f.rootId,
+                QStringLiteral("answer-two"),
+                QStringLiteral("second finding"),
+                QStringLiteral("question"),
+                false)["status"],
+            json("ok"));
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["replied"], json(2));
+        QCOMPARE(f.mailbox->take(f.rootId, {}, QStringLiteral("question")).size(), size_t(2));
+    }
+
+    void broadcastsDoNotIncludeLateJoinersOnRetry()
+    {
+        Fixture    f;
+        const json args
+            = {{"target", {{"broadcast", "session"}}},
+               {"message_id", "notice"},
+               {"message", "shared fact"}};
+        const auto first = f.call(QStringLiteral("send_message"), args);
+        QCOMPARE(first["accepted"], json(1));
+        QCOMPARE(f.mailbox->stateFor(f.workerId), QStringLiteral("idle"));
+        auto *late = f.addPeer(QStringLiteral("late"));
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["resolved"], json(1));
+        QCOMPARE(f.mailbox->pendingCount(late->agentIdentity()), 0);
+        QCOMPARE(f.mailbox->pendingCount(f.rootId), 0);
+        f.mailbox->cancel(f.workerId);
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["cancelled"], json(1));
+    }
+
+    void groupAliasesDeduplicateAndNotifyOnlyRecipients()
+    {
+        Fixture    f;
+        auto      *peer = f.addPeer(QStringLiteral("peer"));
+        QSignalSpy workerSpy(f.mailbox->inboxFor(f.workerId), &QSocAgentInbox::changed);
+        QSignalSpy peerSpy(f.mailbox->inboxFor(peer->agentIdentity()), &QSocAgentInbox::changed);
+        QSignalSpy globalSpy(f.mailbox, &QSocAgentMailbox::changed);
+        const json args
+            = {{"target", {{"agents", {f.workerId.toStdString(), f.taskId.toStdString()}}}},
+               {"message_id", "aliases"},
+               {"message", "one delivery"}};
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["accepted"], json(1));
+        QCOMPARE(workerSpy.size(), 1);
+        QCOMPARE(peerSpy.size(), 0);
+        QCOMPARE(globalSpy.size(), 1);
+        QCOMPARE(f.mailbox->pendingCount(f.workerId), 1);
+        json retry      = args;
+        retry["target"] = {{"agents", {f.workerId.toStdString()}}};
+        QCOMPARE(f.call(QStringLiteral("send_message"), retry)["duplicate"], json(true));
+        QCOMPARE(f.mailbox->pendingCount(f.workerId), 1);
+        const QString group = f.mailbox->createGroup({f.workerId, peer->agentIdentity()});
+        QVERIFY(!group.isEmpty());
+        const json grouped
+            = {{"target", {{"group", group.toStdString()}}},
+               {"message_id", "grouped"},
+               {"message", "group finding"}};
+        QCOMPARE(f.call(QStringLiteral("send_message"), grouped)["accepted"], json(2));
+        QCOMPARE(globalSpy.size(), 2);
+        QCOMPARE(f.call(QStringLiteral("agent_list"), json::object())["groups"].size(), size_t(2));
+    }
+
+    void allQueuesExistBeforeRecipientCallbacks()
+    {
+        Fixture    f;
+        auto      *peer  = f.addPeer(QStringLiteral("peer"));
+        const auto other = peer->agentIdentity();
+        QObject    observer;
+        connect(f.mailbox->inboxFor(f.workerId), &QSocAgentInbox::changed, &observer, [&]() {
+            QCOMPARE(f.mailbox->pendingCount(other), 1);
+            f.mailbox->take(other);
+        });
+        const json args
+            = {{"target", {{"agents", {f.workerId.toStdString(), other.toStdString()}}}},
+               {"message_id", "reentrant"},
+               {"message", "ready"}};
+        QCOMPARE(f.call(QStringLiteral("send_message"), args)["delivered"], json(1));
+    }
+
+    void resetDuringDeliveryDoesNotReadRemovedEnvelope()
+    {
+        Fixture                 f;
+        QMetaObject::Connection connection;
+        connection
+            = connect(f.mailbox->inboxFor(f.workerId), &QSocAgentInbox::changed, &f.root, [&]() {
+                  disconnect(connection);
+                  f.mailbox->reset(&f.root);
+              });
+        QCOMPARE(f.send(QStringLiteral("reset"))["error"], json("session_reset"));
+    }
+
+    void selectorsRejectMalformedAndUnauthorizedSetsBeforeSending()
+    {
+        Fixture f;
+        auto   *peer    = f.addPeer(QStringLiteral("plan peer"));
+        auto    config  = peer->getConfig();
+        config.planMode = true;
+        peer->setConfig(config);
+        f.root.setConfig(config);
+        const json mixed
+            = {{"target",
+                {{"agents", {peer->agentIdentity().toStdString(), f.workerId.toStdString()}}}},
+               {"message_id", "mixed"},
+               {"message", "scope"}};
+        QCOMPARE(
+            f.call(QStringLiteral("send_message"), mixed)["error"], json("target_not_in_plan_mode"));
+        QCOMPARE(f.mailbox->pendingCount(peer->agentIdentity()), 0);
+        for (const json &selector : json::array(
+                 {{{"agents", json::array()}},
+                  {{"agents", {7}}},
+                  {{"group", "missing"}},
+                  {{"agents", {peer->agentIdentity().toStdString(), "unknown"}}},
+                  {{"agents", {peer->agentIdentity().toStdString()}}, {"broadcast", "session"}},
+                  {{"broadcast", "global"}}})) {
+            json args      = mixed;
+            args["target"] = selector;
+            QCOMPARE(f.call(QStringLiteral("send_message"), args)["status"], json("error"));
+        }
+        json allowed      = mixed;
+        allowed["target"] = {{"broadcast", "session"}};
+        QCOMPARE(f.call(QStringLiteral("send_message"), allowed)["accepted"], json(1));
+        QCOMPARE(f.mailbox->pendingCount(f.workerId), 0);
+        QCOMPARE(f.call(QStringLiteral("followup_task"), allowed)["status"], json("error"));
+    }
+
+    void receiptPagesKeepTheSameEnvelope()
+    {
+        Fixture f;
+        for (int i = 0; i < 69; ++i)
+            f.addPeer(QStringLiteral("peer-%1").arg(i));
+        json args
+            = {{"target", {{"group", "workers"}}}, {"message_id", "pages"}, {"message", "notice"}};
+        const auto first = f.call(QStringLiteral("send_message"), args);
+        QCOMPARE(first["accepted"], json(70));
+        QCOMPARE(first["recipients"].size(), size_t(64));
+        QCOMPARE(first["next_offset"], json(64));
+        args["receipt_offset"] = 64;
+        const auto second      = f.call(QStringLiteral("send_message"), args);
+        QCOMPARE(second["recipients"].size(), size_t(6));
+        QVERIFY(second["next_offset"].is_null());
+        QCOMPARE(second["duplicate"], json(true));
+        QCOMPARE(f.mailbox->pendingCount(f.workerId), 1);
+        args["message_id"] = "unseen";
+        QCOMPARE(
+            f.call(QStringLiteral("send_message"), args)["error"],
+            json("receipt_offset_requires_existing_message"));
+    }
+
+    void fanoutConsumesPerRecipientSessionCapacity()
+    {
+        Fixture f;
+        for (int i = 0; i < 63; ++i)
+            f.addPeer(QStringLiteral("peer-%1").arg(i));
+        for (int i = 0; i < 128; ++i) {
+            const json args
+                = {{"target", {{"group", "workers"}}},
+                   {"message_id", QStringLiteral("quota-%1").arg(i).toStdString()},
+                   {"message", "notice"}};
+            QCOMPARE(f.call(QStringLiteral("send_message"), args)["accepted"], json(64));
+        }
+        f.mailbox->take(f.workerId);
+        QCOMPARE(f.send(QStringLiteral("over-limit"))["error"], json("session_message_limit"));
     }
 
     void malformedSendArgumentsCannotQueueMessages()

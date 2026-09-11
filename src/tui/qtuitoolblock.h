@@ -38,6 +38,7 @@ public:
         Uncertain,
         Skipped,
         Background,
+        Partial,
     };
 
     QTuiToolBlock(QString toolName, QString detail);
