@@ -37,6 +37,7 @@ public:
         Failure,
         Uncertain,
         Skipped,
+        Background,
     };
 
     QTuiToolBlock(QString toolName, QString detail);

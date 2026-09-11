@@ -1033,7 +1033,13 @@ prompt's first row parks focus on the pill; *Enter* opens the overlay;
 === Overlay
 <agent-tasks-overlay>
 
-The overlay opens a task list. Enter opens the selected task's output.
+A compact activity grid appears above the prompt while tasks are active.
+Its summary covers all tasks, including members outside the visible range.
+Running tasks share an ASCII spinner. Queued and terminal tasks stay still.
+
+The overlay selects a grid for a large task set on a wide terminal.
+Press `v` to switch between the grid and table. Enter opens the selected
+task's output. Task positions remain stable as statuses change.
 Selection follows the task identity when rows reorder. If that task
 disappears, select another row before requesting a stop.
 
@@ -1044,10 +1050,13 @@ disappears, select another row before requesting a stop.
     table.header([Key], [Action]),
     table.hline(),
     [`Up`/`Down`, `j`/`k`], [Move selection],
+    [`Left`/`Right`], [Move between grid columns],
+    [`v`], [Switch grid and table],
+    [`m`], [Toggle task animation],
     [`Enter`], [Open the task's detail tail],
     [`x`],
     [Request stop or removal for the highlighted task],
-    [`q`, `ESC`], [Close the overlay],
+    [`q`, `ESC`], [Return from details or close the overview],
   )],
   caption: [TASK OVERLAY KEYS],
   kind: table,

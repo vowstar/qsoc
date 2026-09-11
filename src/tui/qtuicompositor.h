@@ -242,17 +242,19 @@ private:
     /* Layout calculation */
     struct Layout
     {
-        int titleRow      = 0;
-        int topBannerRow  = 1;
-        int topBannerH    = 0;
-        int contentStart  = 1;
-        int contentHeight = 0;
-        int todoStart     = 0;
-        int queueStart    = 0;
-        int popupStart    = 0; /* Completion popup: above status bar when visible */
-        int statusRow     = 0;
-        int separatorRow  = 0;
-        int inputRow      = 0;
+        int titleRow       = 0;
+        int topBannerRow   = 1;
+        int topBannerH     = 0;
+        int contentStart   = 1;
+        int contentHeight  = 0;
+        int activityStart  = 0;
+        int activityHeight = 0;
+        int todoStart      = 0;
+        int queueStart     = 0;
+        int popupStart     = 0; /* Completion popup: above status bar when visible */
+        int statusRow      = 0;
+        int separatorRow   = 0;
+        int inputRow       = 0;
     } layout;
 
     void recalculateLayout();

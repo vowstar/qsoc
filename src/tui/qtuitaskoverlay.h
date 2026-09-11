@@ -40,6 +40,11 @@ public:
 
     void setRegistry(QSocTaskRegistry *registry);
     void setMaxHeight(int rows); /* default 14, capped to terminal/2 by compositor */
+    void setTerminalWidth(int width);
+    int  previewHeight(int width, int availableHeight) const;
+    void renderPreview(QTuiScreen &screen, int startY, int width, int height);
+    void setAnimationEnabled(bool enabled);
+    bool animationEnabled() const { return animationEnabled_; }
 
     /* Open the overlay in List mode at top selection. */
     void open();
@@ -87,14 +92,23 @@ private:
     QString                            footerFlash_;
     qint64                             footerFlashUntil_ = 0;
     int                                tickCounter_      = 0;
+    int                                frame_            = 0;
+    int                                terminalWidth_    = 80;
+    enum class Layout { Automatic, Grid, Table };
+    Layout layout_           = Layout::Automatic;
+    bool   animationEnabled_ = true;
 
-    void refreshRows();
-    void clampSelection();
-    void enterDetail();
-    void exitDetailToList();
-    void killSelected();
-    void reloadDetailContent();
-    void flashFooter(const QString &message);
+    void    refreshRows();
+    void    clampSelection();
+    void    enterDetail();
+    void    exitDetailToList();
+    void    killSelected();
+    void    reloadDetailContent();
+    void    flashFooter(const QString &message);
+    int     columns(int width) const;
+    QString summary() const;
+    QString marker(QSocTask::Status status) const;
+    void    renderCells(QTuiScreen &screen, int startY, int width, int height, bool preview);
 
     void renderList(QTuiScreen &screen, int startY, int width);
     void renderDetail(QTuiScreen &screen, int startY, int width);

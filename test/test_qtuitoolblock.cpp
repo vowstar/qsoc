@@ -16,6 +16,7 @@ private slots:
     void finishedSuccessAddsCheckmarkFooter();
     void finishedFailureAddsCrossFooter();
     void recoveryStatesUseDistinctFooters();
+    void backgroundDispatchDoesNotClaimCompletion();
     void foldingCollapsesToHeaderSummary();
     void plainTextLooksLikeShellHistory();
     void markdownWrapsBodyInFencedBlock();
@@ -64,6 +65,22 @@ void Test::recoveryStatesUseDistinctFooters()
     skipped.paintRow(skippedScreen, 0, 1, 0, 40, false, false);
     QCOMPARE(skippedScreen.at(2, 0).character, QChar(0x00B7));
     QVERIFY(skippedScreen.at(2, 0).dim);
+}
+
+void Test::backgroundDispatchDoesNotClaimCompletion()
+{
+    QTuiToolBlock block(QStringLiteral("agent"), QStringLiteral("check interfaces"));
+    block.finish(QTuiToolBlock::Status::Background, {});
+    block.layout(80);
+    QTuiScreen screen(80, 1);
+    block.paintRow(screen, 0, 1, 0, 80, false, false);
+    QString line;
+    for (int col = 0; col < 80; ++col) {
+        line += screen.at(col, 0).character;
+        QVERIFY(screen.at(col, 0).fgColor != QTuiFgColor::Green);
+    }
+    QVERIFY(line.contains(QStringLiteral("dispatched")));
+    QVERIFY(!line.contains(QStringLiteral("done")));
 }
 
 void Test::foldingCollapsesToHeaderSummary()

@@ -140,6 +140,9 @@ void QTuiToolBlock::layout(int width)
         case Status::Skipped:
             footer.append(dimRun(QStringLiteral("· ")));
             break;
+        case Status::Background:
+            footer.append(dimRun(QStringLiteral("[.] ")));
+            break;
         case Status::Running:
         default:
             footer.append(dimRun(QStringLiteral("· ")));
@@ -152,6 +155,8 @@ void QTuiToolBlock::layout(int width)
             summaryRun.text = QStringLiteral("completion uncertain");
         } else if (status == Status::Skipped) {
             summaryRun.text = QStringLiteral("not executed");
+        } else if (status == Status::Background) {
+            summaryRun.text = QStringLiteral("dispatched, check task status");
         } else {
             summaryRun.text = QStringLiteral("done, %1 line%2")
                                   .arg(body.size())

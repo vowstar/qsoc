@@ -649,7 +649,9 @@ void QTuiCompositor::recalculateLayout()
     layout.contentStart  = layout.topBannerRow + layout.topBannerH;
     layout.contentHeight = layout.todoStart - layout.contentStart;
 
-    layout.contentHeight = qMax(1, layout.contentHeight);
+    layout.activityHeight = taskOverlayWidget.previewHeight(totalW, layout.contentHeight);
+    layout.activityStart  = layout.todoStart - layout.activityHeight;
+    layout.contentHeight  = qMax(1, layout.contentHeight - layout.activityHeight);
 }
 
 void QTuiCompositor::renderTitle()
@@ -705,18 +707,13 @@ void QTuiCompositor::renderCompletionPopup()
 
 void QTuiCompositor::renderTaskOverlay()
 {
-    if (taskOverlayWidget.lineCount() == 0) {
+    if (taskOverlayWidget.mode() == QTuiTaskOverlay::Mode::Hidden) {
+        taskOverlayWidget
+            .renderPreview(screen, layout.activityStart, screen.width(), layout.activityHeight);
         return;
     }
-    /* Task overlay shares the content area with scrollView. Pass the
-     * full available height as the upper bound so lineCount() can grow
-     * up to it; otherwise a ratcheting setMaxHeight() (bumped up to
-     * kMinHeight on a previous frame) would lock the overlay at 6 rows
-     * even when there are more tasks than that. */
-    const int contentH = layout.contentHeight > 0 ? layout.contentHeight : 0;
-    if (contentH > 0) {
-        taskOverlayWidget.setMaxHeight(contentH);
-    }
+    taskOverlayWidget.setTerminalWidth(screen.width());
+    taskOverlayWidget.setMaxHeight(qMax(0, layout.contentHeight));
     taskOverlayWidget.render(screen, layout.contentStart, screen.width());
 }
 

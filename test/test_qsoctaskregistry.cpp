@@ -76,6 +76,100 @@ class TestQSocTaskRegistry : public QObject
 private slots:
     /* ---- registry merging ---- */
 
+    void matrixClipsWideTitlesAndPreservesBorders()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "agent";
+        for (int i = 0; i < 64; ++i) {
+            auto row  = makeRow(QStringLiteral("a%1").arg(i));
+            row.label = QStringLiteral("中文长标题接口兼容性检查与集成验证");
+            source.rows.append(row);
+        }
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.setMaxHeight(14);
+        overlay.setTerminalWidth(120);
+        overlay.open();
+        QTuiScreen screen(120, 24);
+        overlay.render(screen, 0, 120);
+        for (int y = 1; y < overlay.lineCount() - 1; ++y) {
+            QCOMPARE(screen.at(0, y).character, QChar('|'));
+            QCOMPARE(screen.at(119, y).character, QChar('|'));
+        }
+        for (int x = 0; x < 120; ++x)
+            QCOMPARE(screen.at(x, 14).character, QChar(' '));
+        overlay.handleKey(Qt::Key_V, false);
+        screen.clear();
+        overlay.render(screen, 0, 120);
+        QString title;
+        for (int x = 0; x < 120; ++x)
+            title += screen.at(x, 0).character;
+        QVERIFY(title.contains(QStringLiteral("Table")));
+
+        overlay.setMaxHeight(4);
+        QCOMPARE(overlay.lineCount(), 0);
+        overlay.setMaxHeight(14);
+        QVERIFY(overlay.lineCount() > 0);
+    }
+
+    void matrixAnimationStopsForTerminalTasks()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "agent";
+        source.rows
+            = {makeRow("run", QSocTask::Status::Running),
+               makeRow("queued", QSocTask::Status::Pending)};
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        QTuiScreen first(80, 12);
+        overlay.renderPreview(first, 0, 80, 4);
+        QCOMPARE(first.at(1, 1).character, QChar('-'));
+        QCOMPARE(first.at(41, 1).character, QChar('.'));
+        overlay.tick();
+        QTuiScreen next(80, 12);
+        overlay.renderPreview(next, 0, 80, 4);
+        QCOMPARE(next.at(1, 1).character, QChar('\\'));
+        QCOMPARE(next.at(41, 1).character, QChar('.'));
+        source.rows[0].status = QSocTask::Status::Failed;
+        source.notifyChanged();
+        overlay.tick();
+        next.clear();
+        overlay.renderPreview(next, 0, 80, 4);
+        QCOMPARE(next.at(1, 1).character, QChar('!'));
+        overlay.setAnimationEnabled(false);
+        source.rows[0].status = QSocTask::Status::Running;
+        source.notifyChanged();
+        overlay.tick();
+        next.clear();
+        overlay.renderPreview(next, 0, 80, 4);
+        QCOMPARE(next.at(1, 1).character, QChar('*'));
+    }
+
+    void matrixNavigationStopsTheSelectedPageMember()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "agent";
+        for (int i = 0; i < 1000; ++i)
+            source.rows.append(
+                makeRow(QStringLiteral("a%1").arg(i), QSocTask::Status::Running, 1000 - i));
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.setTerminalWidth(120);
+        overlay.setMaxHeight(14);
+        overlay.open();
+        for (int i = 0; i < 7; ++i)
+            overlay.handleKey(Qt::Key_Down, false);
+        overlay.handleKey(Qt::Key_Right, false);
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(source.lastKilledId, QStringLiteral("a22"));
+    }
+
     void activeCountExcludesTerminalRows()
     {
         QSocTaskRegistry registry;

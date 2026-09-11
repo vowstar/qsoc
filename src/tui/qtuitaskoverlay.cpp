@@ -4,9 +4,13 @@
 #include "tui/qtuitaskoverlay.h"
 
 #include "agent/qsoctasksource.h"
+#include "tui/qtuiansi.h"
+
+#include <algorithm>
 
 #include <QChar>
 #include <QDateTime>
+#include <QMap>
 #include <QString>
 
 namespace {
@@ -14,11 +18,6 @@ namespace {
 constexpr int kMinHeight       = 6;
 constexpr int kDetailTailBytes = 8 * 1024;
 constexpr int kFooterFlashMs   = 600;
-constexpr int kIdColWidth      = 8;
-constexpr int kSourceTagWidth  = 6;
-constexpr int kStatusWidth     = 8;
-constexpr int kSummaryColWidth = 18;
-constexpr int kPaddingChars    = 6; /* spaces between columns + leading marker */
 
 QString statusLabel(QSocTask::Status status)
 {
@@ -44,12 +43,19 @@ QString statusLabel(QSocTask::Status status)
 QString fitToWidth(const QString &text, int width)
 {
     if (width <= 0)
-        return QString();
-    if (text.size() == width)
-        return text;
-    if (text.size() < width)
-        return text + QString(width - text.size(), QLatin1Char(' '));
-    return text.left(width - 1) + QStringLiteral("…");
+        return {};
+    QString plain;
+    for (const auto &span : QTuiAnsi::parse(text)) {
+        for (const QChar ch : span.text) {
+            if (!ch.isPrint())
+                plain += QLatin1Char(' ');
+            else
+                plain += ch;
+        }
+    }
+    if (QTuiText::visualWidth(plain) > width)
+        plain = width <= 3 ? QString(width, QLatin1Char('.')) : QTuiText::truncate(plain, width);
+    return plain + QString(qMax(0, width - QTuiText::visualWidth(plain)), QLatin1Char(' '));
 }
 
 } /* namespace */
@@ -72,11 +78,13 @@ void QTuiTaskOverlay::setRegistry(QSocTaskRegistry *registry)
             this,
             &QTuiTaskOverlay::handleRegistryChanged);
     }
+    cachedRows_.clear();
+    refreshRows();
 }
 
 void QTuiTaskOverlay::setMaxHeight(int rows)
 {
-    maxHeight_ = rows < kMinHeight ? kMinHeight : rows;
+    maxHeight_ = qMax(0, rows);
 }
 
 void QTuiTaskOverlay::open()
@@ -99,7 +107,6 @@ void QTuiTaskOverlay::close()
     if (mode_ == Mode::Hidden)
         return;
     mode_ = Mode::Hidden;
-    cachedRows_.clear();
     detailSourceTag_.clear();
     detailId_.clear();
     detailContent_.clear();
@@ -110,8 +117,6 @@ void QTuiTaskOverlay::close()
 
 void QTuiTaskOverlay::handleRegistryChanged()
 {
-    if (mode_ == Mode::Hidden)
-        return;
     refreshRows();
     if (mode_ == Mode::Detail) {
         /* Detail target may have disappeared. */
@@ -144,7 +149,26 @@ void QTuiTaskOverlay::refreshRows()
         tag = cachedRows_.at(selected_).sourceTag;
         id  = cachedRows_.at(selected_).row.id;
     }
-    cachedRows_ = registry_->listAll();
+    const auto                                                 fresh = registry_->listAll();
+    QMap<QPair<QString, QString>, QSocTaskRegistry::TaggedRow> remaining;
+    for (const auto &row : fresh)
+        remaining.insert(qMakePair(row.sourceTag, row.row.id), row);
+    QList<QSocTaskRegistry::TaggedRow> ordered;
+    ordered.reserve(fresh.size());
+    for (const auto &previous : std::as_const(cachedRows_)) {
+        const auto key   = qMakePair(previous.sourceTag, previous.row.id);
+        const auto found = remaining.find(key);
+        if (found != remaining.end()) {
+            ordered.append(found.value());
+            remaining.erase(found);
+        }
+    }
+    for (const auto &row : fresh) {
+        const auto key = qMakePair(row.sourceTag, row.row.id);
+        if (remaining.remove(key) != 0)
+            ordered.append(row);
+    }
+    cachedRows_ = ordered;
     selected_   = -1;
     for (int i = 0; i < cachedRows_.size(); ++i) {
         if (cachedRows_.at(i).sourceTag == tag && cachedRows_.at(i).row.id == id) {
@@ -170,8 +194,11 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
     if (mode_ == Mode::Hidden)
         return false;
 
-    /* ESC always backs out: List -> close, Detail -> List. */
-    if (key == Qt::Key_Escape) {
+    if (key == Qt::Key_M) {
+        setAnimationEnabled(!animationEnabled_);
+        return true;
+    }
+    if (key == Qt::Key_Escape || key == Qt::Key_Q) {
         if (mode_ == Mode::Detail) {
             exitDetailToList();
         } else {
@@ -182,18 +209,32 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
 
     if (mode_ == Mode::List) {
         switch (key) {
+        case Qt::Key_V:
+            layout_ = columns(terminalWidth_) > 1 ? Layout::Table : Layout::Grid;
+            emit invalidated();
+            return true;
+        case Qt::Key_Left:
+            selected_ = qMax(0, selected_ - 1);
+            emit invalidated();
+            return true;
+        case Qt::Key_Right:
+            selected_ = qMin(static_cast<int>(cachedRows_.size()) - 1, selected_ + 1);
+            emit invalidated();
+            return true;
         case Qt::Key_Up:
         case Qt::Key_K:
             if (selected_ < 0 && !cachedRows_.isEmpty())
                 selected_ = 0;
             else if (selected_ > 0)
-                --selected_;
+                selected_ = qMax(0, selected_ - columns(terminalWidth_));
             emit invalidated();
             return true;
         case Qt::Key_Down:
         case Qt::Key_J:
             if (selected_ < cachedRows_.size() - 1)
-                ++selected_;
+                selected_ = qMin(
+                    static_cast<int>(cachedRows_.size()) - 1,
+                    selected_ < 0 ? 0 : selected_ + columns(terminalWidth_));
             emit invalidated();
             return true;
         case Qt::Key_Return:
@@ -302,7 +343,7 @@ void QTuiTaskOverlay::flashFooter(const QString &message)
 
 int QTuiTaskOverlay::lineCount() const
 {
-    if (mode_ == Mode::Hidden)
+    if (mode_ == Mode::Hidden || maxHeight_ < kMinHeight)
         return 0;
     /* Both modes have the same chrome: top border + footer + bottom border
      * (3 rows). The body is rows in List mode and detail-content lines in
@@ -311,7 +352,10 @@ int QTuiTaskOverlay::lineCount() const
      * exceeds the box. */
     int body = 1;
     if (mode_ == Mode::List) {
-        body = cachedRows_.isEmpty() ? 1 : static_cast<int>(cachedRows_.size());
+        const int count = static_cast<int>(cachedRows_.size());
+        const int cols  = columns(terminalWidth_);
+        body            = cols > 1 ? 1 + 2 * ((count + cols - 1) / cols) : 1 + count;
+        body            = qMax(2, body);
     } else {
         const int contentLines = static_cast<int>(detailContent_.count(QLatin1Char('\n'))) + 1;
         body                   = contentLines < 1 ? 1 : contentLines;
@@ -322,7 +366,8 @@ int QTuiTaskOverlay::lineCount() const
 
 void QTuiTaskOverlay::render(QTuiScreen &screen, int startY, int width)
 {
-    if (mode_ == Mode::Hidden)
+    setTerminalWidth(width);
+    if (lineCount() == 0)
         return;
     if (mode_ == Mode::Detail) {
         renderDetail(screen, startY, width);
@@ -333,25 +378,136 @@ void QTuiTaskOverlay::render(QTuiScreen &screen, int startY, int width)
 
 void QTuiTaskOverlay::tick()
 {
-    if (mode_ == Mode::Hidden)
-        return;
-    ++tickCounter_;
-    /* Detail mode: re-read tail once per ~10 ticks (compositor ticks at
-     * 100ms, so this samples roughly every second). List mode: still
-     * invalidate every 10 ticks so loop ETAs visibly tick down without
-     * waiting on registry change events. */
-    if (tickCounter_ % 10 == 0) {
-        if (mode_ == Mode::Detail) {
+    tickCounter_ = (tickCounter_ + 1) % 10;
+    if (animationEnabled_)
+        frame_ = (frame_ + 1) % 4;
+    if (tickCounter_ == 0) {
+        refreshRows();
+        if (mode_ == Mode::Detail)
             reloadDetailContent();
-        }
-        emit invalidated();
     }
-    /* Footer flash expiry triggers a redraw immediately, regardless of
-     * the 10-tick cadence. */
     if (footerFlashUntil_ > 0 && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_) {
         footerFlash_.clear();
         footerFlashUntil_ = 0;
-        emit invalidated();
+    }
+}
+
+void QTuiTaskOverlay::setTerminalWidth(int width)
+{
+    terminalWidth_ = qMax(1, width);
+}
+
+void QTuiTaskOverlay::setAnimationEnabled(bool enabled)
+{
+    animationEnabled_ = enabled;
+    emit invalidated();
+}
+
+int QTuiTaskOverlay::columns(int width) const
+{
+    if (layout_ == Layout::Table)
+        return 1;
+    const int cols = qMax(1, (width - 2) / 36);
+    if (layout_ == Layout::Automatic && cachedRows_.size() <= qMax(1, maxHeight_ - 4))
+        return 1;
+    return cols;
+}
+
+QString QTuiTaskOverlay::marker(QSocTask::Status status) const
+{
+    if (status == QSocTask::Status::Running)
+        return animationEnabled_ ? QString(QLatin1Char("-\\|/"[frame_])) : QStringLiteral("*");
+    if (status == QSocTask::Status::Failed || status == QSocTask::Status::Stuck)
+        return QStringLiteral("!");
+    if (status == QSocTask::Status::Completed)
+        return QStringLiteral("+");
+    if (status == QSocTask::Status::Aborted)
+        return QStringLiteral("x");
+    return QStringLiteral(".");
+}
+
+QString QTuiTaskOverlay::summary() const
+{
+    int active  = 0;
+    int done    = 0;
+    int failed  = 0;
+    int stopped = 0;
+    for (const auto &entry : cachedRows_) {
+        if (entry.row.status == QSocTask::Status::Completed)
+            ++done;
+        else if (entry.row.status == QSocTask::Status::Failed)
+            ++failed;
+        else if (entry.row.status == QSocTask::Status::Aborted)
+            ++stopped;
+        else
+            ++active;
+    }
+    return QStringLiteral("%1 active | %2 done | %3 failed | %4 stopped")
+        .arg(active)
+        .arg(done)
+        .arg(failed)
+        .arg(stopped);
+}
+
+int QTuiTaskOverlay::previewHeight(int width, int availableHeight) const
+{
+    if (mode_ != Mode::Hidden || availableHeight < 8)
+        return 0;
+    const bool active = std::any_of(cachedRows_.cbegin(), cachedRows_.cend(), [](const auto &entry) {
+        return !QSocTask::isTerminal(entry.row.status);
+    });
+    if (!active)
+        return 0;
+    const int cols = qMax(1, width / 36);
+    const int rows = (static_cast<int>(cachedRows_.size()) + cols - 1) / cols;
+    return qMin(qMax(4, availableHeight / 3), qMin(10, 2 + 2 * rows));
+}
+
+void QTuiTaskOverlay::renderPreview(QTuiScreen &screen, int startY, int width, int height)
+{
+    if (height < 4)
+        return;
+    screen.putString(
+        0,
+        startY,
+        fitToWidth(QStringLiteral("Tasks: ") + summary() + QStringLiteral(" | Ctrl+B"), width),
+        true);
+    renderCells(screen, startY + 1, width, height - 2, true);
+    const int shown
+        = qMin(static_cast<int>(cachedRows_.size()), ((height - 2) / 2) * qMax(1, width / 36));
+    const QString footer
+        = QStringLiteral("Showing %1/%2 | Ctrl+B details").arg(shown).arg(cachedRows_.size());
+    screen.putString(0, startY + height - 1, fitToWidth(footer, width), false, true);
+}
+
+void QTuiTaskOverlay::renderCells(QTuiScreen &screen, int startY, int width, int height, bool preview)
+{
+    const int    cols      = preview ? qMax(1, width / 36) : columns(width + 2);
+    const int    cellWidth = qMax(1, width / cols);
+    const int    capacity  = qMax(1, height / 2) * cols;
+    const int    first     = preview || selected_ < 0 ? 0 : (selected_ / capacity) * capacity;
+    const qint64 now       = QDateTime::currentMSecsSinceEpoch();
+    for (int i = 0; i < capacity && first + i < cachedRows_.size(); ++i) {
+        const auto   &entry    = cachedRows_.at(first + i);
+        const auto   &row      = entry.row;
+        const int     x        = (i % cols) * cellWidth + (preview ? 0 : 1);
+        const int     y        = startY + (i / cols) * 2;
+        const bool    selected = !preview && first + i == selected_;
+        const auto    color    = row.status == QSocTask::Status::Failed  ? QTuiFgColor::Red
+                                 : row.status == QSocTask::Status::Stuck ? QTuiFgColor::Yellow
+                                                                         : QTuiFgColor::Default;
+        const QString heading  = QStringLiteral("[%1] %2/%3 %4")
+                                     .arg(marker(row.status), entry.sourceTag, row.id, row.label);
+        screen.putString(x, y, fitToWidth(heading, cellWidth - 1), selected, false, selected, color);
+        QString detail = statusLabel(row.status);
+        if (row.startedAtMs > 0)
+            detail += QStringLiteral(" | %1").arg(
+                QTuiText::formatDuration(qMax(qint64(0), now - row.startedAtMs) / 1000));
+        if (QSocTask::isTerminal(row.status))
+            detail = statusLabel(row.status);
+        if (y + 1 < startY + height)
+            screen.putString(
+                x, y + 1, fitToWidth(QStringLiteral("    ") + detail, cellWidth - 1), false, true);
     }
 }
 
@@ -394,53 +550,51 @@ void QTuiTaskOverlay::renderBorder(
 
 void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
 {
-    const int     height   = lineCount();
-    const int     contentH = height - 2;
-    const int     innerW   = width - 2;
-    const QString title    = QStringLiteral("Tasks (%1)").arg(cachedRows_.size());
+    const int     height = lineCount();
+    const int     innerW = qMax(0, width - 2);
+    const bool    grid   = columns(width) > 1;
+    const QString title  = QStringLiteral("Tasks (%1) | %2")
+                               .arg(cachedRows_.size())
+                               .arg(grid ? QStringLiteral("Grid") : QStringLiteral("Table"));
     renderBorder(screen, startY, height, width, title);
-
-    if (cachedRows_.isEmpty()) {
-        const QString msg = QStringLiteral("No active tasks.");
-        screen.putString(2, startY + 1, msg.left(innerW - 2), false, true);
-        const QString footer = QStringLiteral("ESC close");
-        screen.putString(2, startY + height - 1 - 0, QString(), false);
-        screen.putString(2, startY + contentH, fitToWidth(footer, innerW - 2), false, true);
-        return;
+    screen.putString(1, startY + 1, fitToWidth(summary(), innerW), true);
+    const int bodyHeight = qMax(0, height - 4);
+    const int capacity   = grid ? qMax(1, bodyHeight / 2) * columns(width) : qMax(1, bodyHeight);
+    const int first      = selected_ < 0 ? 0 : (selected_ / capacity) * capacity;
+    if (grid) {
+        renderCells(screen, startY + 2, innerW, bodyHeight, false);
+    } else {
+        for (int i = 0; i < bodyHeight && first + i < cachedRows_.size(); ++i) {
+            const auto &entry    = cachedRows_.at(first + i);
+            const auto &row      = entry.row;
+            const bool  selected = first + i == selected_;
+            const QString line = QStringLiteral("%1 [%2] %3 %4 %5")
+                                     .arg(
+                                         selected ? QStringLiteral(">") : QStringLiteral(" "),
+                                         marker(row.status),
+                                         fitToWidth(entry.sourceTag + QLatin1Char('/') + row.id, 14),
+                                         fitToWidth(statusLabel(row.status), 8),
+                                         row.label);
+            screen.putString(
+                1,
+                startY + 2 + i,
+                fitToWidth(line, innerW),
+                selected,
+                false,
+                selected,
+                row.status == QSocTask::Status::Failed ? QTuiFgColor::Red : QTuiFgColor::Default);
+        }
     }
-
-    const int rowsAvail = contentH - 1; /* last interior row is footer */
-    const int firstIdx  = qMax(0, selected_ - rowsAvail + 1);
-    for (int i = 0; i < rowsAvail && firstIdx + i < cachedRows_.size(); ++i) {
-        const int   rowIdx   = firstIdx + i;
-        const auto &tagged   = cachedRows_.at(rowIdx);
-        const auto &row      = tagged.row;
-        const int   y        = startY + 1 + i;
-        const bool  selected = (rowIdx == selected_);
-
-        const QString marker = selected ? QStringLiteral("> ") : QStringLiteral("  ");
-        const QString tag
-            = fitToWidth(QStringLiteral("[%1]").arg(tagged.sourceTag), kSourceTagWidth);
-        const QString id      = fitToWidth(row.id.left(kIdColWidth), kIdColWidth);
-        const QString status  = fitToWidth(statusLabel(row.status), kStatusWidth);
-        const QString summary = fitToWidth(row.summary, kSummaryColWidth);
-        const int     used    = marker.size() + tag.size() + 1 + id.size() + 1 + status.size() + 1
-                                + summary.size() + 1;
-        const int     labelW  = qMax(0, innerW - used);
-        const QString label   = fitToWidth(row.label, labelW);
-        const QString line    = marker + tag + QChar::fromLatin1(' ') + id + QChar::fromLatin1(' ')
-                                + status + QChar::fromLatin1(' ') + summary + QChar::fromLatin1(' ')
-                                + label;
-        screen.putString(
-            1, y, line.left(innerW), /*bold*/ selected, /*dim*/ !selected, /*inverted*/ selected);
-    }
-
-    /* Footer */
+    const QString range  = QStringLiteral("%1-%2/%3 ")
+                               .arg(cachedRows_.isEmpty() ? 0 : first + 1)
+                               .arg(qMin(first + capacity, static_cast<int>(cachedRows_.size())))
+                               .arg(cachedRows_.size());
     const QString footer = footerFlash_.isEmpty()
-                                   && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
-                               ? QStringLiteral("↑↓ select  ↵ details  x kill  ESC close")
+                               ? range
+                                     + QStringLiteral(
+                                         "v view  m motion  Enter details  x stop  Esc back")
                                : footerFlash_;
-    screen.putString(2, startY + height - 2, fitToWidth(footer, innerW - 2), false, true);
+    screen.putString(1, startY + height - 2, fitToWidth(footer, innerW), false, true);
 }
 
 void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
@@ -460,7 +614,7 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
         const int         start     = qMax(0, total - rowsAvail);
         for (int i = 0; i < rowsAvail && start + i < total; ++i) {
             const QString &line = lines.at(start + i);
-            screen.putString(1, startY + 1 + i, line.left(innerW), false);
+            screen.putString(1, startY + 1 + i, fitToWidth(line, innerW), false);
         }
     }
     /* Footer */

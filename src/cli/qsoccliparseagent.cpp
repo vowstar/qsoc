@@ -135,8 +135,17 @@ namespace {
 /* Map a tool result onto the block footer. Uncertain gets its own mark:
  * painting an interrupted call green claims something we do not know, and
  * painting it red invites a retry that may double-apply. */
-QTuiToolBlock::Status toolBlockStatus(const QString &result)
+QTuiToolBlock::Status toolBlockStatus(const QString &toolName, const QString &result)
 {
+    if (toolName == QStringLiteral("agent")) {
+        const auto response = json::parse(result.toStdString(), nullptr, false);
+        if (response.is_object() && response.contains("task_id") && response.contains("status")
+            && response["status"].is_string()) {
+            const auto state = response["status"].get<std::string>();
+            if (state == "async_launched" || state == "queued")
+                return QTuiToolBlock::Status::Background;
+        }
+    }
     switch (QSocTool::classifyResult(result)) {
     case QSocTool::ResultStatus::Ok:
         return QTuiToolBlock::Status::Success;
@@ -4708,12 +4717,10 @@ bool QSocCliWorker::runAgentLoop(
             &compositor,
             [refreshTaskPill, &compositor]() {
                 refreshTaskPill();
-                compositor.invalidate();
                 compositor.render();
             });
     }
     connect(&taskOverlay, &QTuiTaskOverlay::invalidated, &compositor, [&compositor]() {
-        compositor.invalidate();
         compositor.render();
     });
     connect(&taskOverlay, &QTuiTaskOverlay::closed, &compositor, [&compositor]() {
@@ -4746,6 +4753,18 @@ bool QSocCliWorker::runAgentLoop(
             case 'x':
             case 'X':
                 qtKey = Qt::Key_X;
+                break;
+            case 'v':
+            case 'V':
+                qtKey = Qt::Key_V;
+                break;
+            case 'm':
+            case 'M':
+                qtKey = Qt::Key_M;
+                break;
+            case 'q':
+            case 'Q':
+                qtKey = Qt::Key_Q;
                 break;
             case 'j':
             case 'J':
@@ -8413,14 +8432,18 @@ bool QSocCliWorker::runAgentLoop(
                  &pendingReadPath,
                  &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
-                    statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
+                    const auto toolStatus = toolBlockStatus(toolName, result);
+                    statusBarWidget.setStatus(
+                        toolStatus == QTuiToolBlock::Status::Background
+                            ? QStringLiteral("Task dispatched, reasoning")
+                            : QString("%1 done, reasoning").arg(toolName));
 
                     /* Stream the result body into the active tool block
                      * and stamp the footer status. Todo tools never opened
                      * a block so the call is a no-op there. */
                     if (!toolName.startsWith("todo_")) {
                         compositor.appendToolUseBody(result);
-                        compositor.finishToolUse(toolBlockStatus(result));
+                        compositor.finishToolUse(toolStatus);
                     }
 
                     /* read_file image branch: when the tool returned an
@@ -9111,14 +9134,18 @@ bool QSocCliWorker::runAgentLoop(
                  &pendingReadPath,
                  &renderDiffToScrollView](const QString &toolName, const QString &result) {
                     statusBarWidget.resetProgress();
-                    statusBarWidget.setStatus(QString("%1 done, reasoning").arg(toolName));
+                    const auto toolStatus = toolBlockStatus(toolName, result);
+                    statusBarWidget.setStatus(
+                        toolStatus == QTuiToolBlock::Status::Background
+                            ? QStringLiteral("Task dispatched, reasoning")
+                            : QString("%1 done, reasoning").arg(toolName));
 
                     /* Stream the result body into the active tool block
                      * and stamp the footer status. Todo tools never opened
                      * a block so the call is a no-op there. */
                     if (!toolName.startsWith("todo_")) {
                         compositor.appendToolUseBody(result);
-                        compositor.finishToolUse(toolBlockStatus(result));
+                        compositor.finishToolUse(toolStatus);
                     }
 
                     /* read_file image branch: when the tool returned an
