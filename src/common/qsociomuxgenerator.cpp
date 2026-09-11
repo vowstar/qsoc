@@ -3594,9 +3594,10 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
 
     const quint64 aperture = std::max(
         QSocIomuxGenerator::kApertureBytes, plan->mmio.registers.constLast().byteOffset + byteCount);
-    const quint64 available = plan->mmio.addressWidth >= 64
-                                  ? std::numeric_limits<quint64>::max()
-                                  : (quint64(1) << plan->mmio.addressWidth);
+    plan->mmio.zeroFillBytes = aperture;
+    const quint64 available  = plan->mmio.addressWidth >= 64
+                                   ? std::numeric_limits<quint64>::max()
+                                   : (quint64(1) << plan->mmio.addressWidth);
     if (aperture > available) {
         quint32 minimumWidth = 2;
         while ((quint64(1) << minimumWidth) < aperture) {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsociomuxgenerator.h"
+#include "common/qsocmmioformal.h"
 #include "common/qsocmmiogenerator.h"
 #include "common/qsocmodulemanager.h"
 #include "qsoc_test.h"
@@ -234,6 +236,8 @@ enum FormalFixture {
     Boundary64Fixture,
     Known32Fixture,
     W1c32Fixture,
+    Iomux32Fixture,
+    Iomux64Fixture,
 };
 
 QSocModuleDefinition makeFormalFixture(int fixture)
@@ -247,6 +251,32 @@ QSocModuleDefinition makeFormalFixture(int fixture)
         return makeKnownAnswer32Definition();
     case W1c32Fixture:
         return makeW1c32Definition();
+    case Iomux32Fixture:
+    case Iomux64Fixture:
+        return makeDefinition(
+            QStringLiteral("iomux0"),
+            QString(R"(
+generator:
+  kind: iomux
+  bus: axi4_lite
+  data_width: %1
+  address_width: %2
+  pin_count: 1
+  hs_slots: 2
+  integration:
+    instance: u_iomux0
+    clock: clk
+    reset: rst_n
+    control: control
+    pad:
+      input_value: pad_iv
+      input_enable: pad_ie
+      output_value: pad_ov
+      output_enable: pad_oe
+  route: []
+)")
+                .arg(fixture == Iomux32Fixture ? 32 : 64)
+                .arg(fixture == Iomux32Fixture ? 14 : 16));
     }
     return {};
 }
@@ -504,6 +534,10 @@ void Test::generatedCollateralPassesSby_data()
     QTest::newRow("64-bit-boundary-lanes") << int(Boundary64Fixture) << QStringLiteral("wide_ctrl");
     QTest::newRow("32-bit-known-answer") << int(Known32Fixture) << QStringLiteral("known_ctrl");
     QTest::newRow("32-bit-w1c") << int(W1c32Fixture) << QStringLiteral("event_ctrl");
+    QTest::newRow("iomux-32-bit-full-window")
+        << int(Iomux32Fixture) << QStringLiteral("iomux0_regs");
+    QTest::newRow("iomux-64-bit-wider-address")
+        << int(Iomux64Fixture) << QStringLiteral("iomux0_regs");
 }
 
 void Test::generatedCollateralPassesSby()
@@ -522,10 +556,19 @@ void Test::generatedCollateralPassesSby()
     QString                    verilog;
     QSocMmioFormalCollateral   collateral;
     QStringList                errors;
-    QVERIFY(QSocMmioGenerator::generateVerilog(definition, &verilog, &errors));
-    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
-    QVERIFY(QSocMmioGenerator::generateFormalCollateral(definition, &collateral, &errors));
-    QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+    if (QSocIomuxGenerator::isIomux(definition)) {
+        QSocIomuxPlan plan;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(definition, &plan, &errors),
+            qPrintable(errors.join('\n')));
+        verilog    = QSocIomuxGenerator::generateRegsVerilog(plan);
+        collateral = QSocMmioFormal::generate(plan.mmio);
+    } else {
+        QVERIFY(QSocMmioGenerator::generateVerilog(definition, &verilog, &errors));
+        QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+        QVERIFY(QSocMmioGenerator::generateFormalCollateral(definition, &collateral, &errors));
+        QVERIFY2(errors.isEmpty(), qPrintable(errors.join('\n')));
+    }
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());

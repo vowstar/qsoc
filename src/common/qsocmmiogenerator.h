@@ -62,6 +62,8 @@ struct QSocMmioPlan
     quint32                     dataWidth    = 32;
     quint32                     addressWidth = 32;
     QList<QSocMmioRegisterPlan> registers;
+    /* Unlisted addresses below this byte limit read zero and ignore writes with OKAY. */
+    quint64 zeroFillBytes = 0;
 
     bool operator==(const QSocMmioPlan &) const = default;
 };

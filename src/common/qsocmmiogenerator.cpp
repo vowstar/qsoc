@@ -702,6 +702,16 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
         appendError(errors, "EMPTY", "generator.register", "must contain at least one register");
         return false;
     }
+    if (plan.zeroFillBytes != 0
+        && (plan.zeroFillBytes - 1 > maximumForWidth(plan.addressWidth)
+            || plan.zeroFillBytes % (plan.dataWidth / 8) != 0)) {
+        appendError(
+            errors,
+            "RANGE",
+            "plan.zero_fill_bytes",
+            "must fit the address width and align to a data word");
+        return false;
+    }
 
     QSet<QString>           registerNames;
     QHash<quint64, QString> offsets;
@@ -982,7 +992,11 @@ void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan)
         lines->append(QString("            %1: address_is_mapped = 1'b1;")
                           .arg(addressLiteral(plan, reg.byteOffset)));
     }
-    lines->append("            default: address_is_mapped = 1'b0;");
+    const QString fallback
+        = plan.zeroFillBytes == 0
+              ? QStringLiteral("1'b0")
+              : QString("%1 <= %2").arg(addressName, addressLiteral(plan, plan.zeroFillBytes - 1));
+    lines->append(QString("            default: address_is_mapped = %1;").arg(fallback));
     lines->append("        endcase");
     lines->append("    end");
     lines->append("endfunction");

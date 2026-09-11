@@ -569,7 +569,11 @@ void appendScoreboard(QStringList *lines, const QSocMmioPlan &plan)
         lines->append(QString("                %1: address_mapped = 1'b1;")
                           .arg(addressLiteral(plan, reg.byteOffset)));
     }
-    lines->append("                default: address_mapped = 1'b0;");
+    const QString fallback
+        = plan.zeroFillBytes == 0
+              ? QStringLiteral("1'b0")
+              : QString("address <= %1").arg(addressLiteral(plan, plan.zeroFillBytes - 1));
+    lines->append(QString("                default: address_mapped = %1;").arg(fallback));
     lines->append("            endcase");
     lines->append("        endfunction");
     lines->append(QString());
@@ -860,6 +864,17 @@ int appendSequence(QStringList *lines, const QSocMmioPlan &plan)
         lines->append(
             QString("            send_read(%1, 1'b0);").arg(addressLiteral(plan, *unmapped)));
         transactionCount += 2;
+    }
+    if (plan.zeroFillBytes != 0 && addressFits(plan, plan.zeroFillBytes)) {
+        for (quint64 address : {plan.zeroFillBytes - 1, plan.zeroFillBytes}) {
+            lines->append(QString("            send_write(%1, %2, '1, %3, 1'b1);")
+                              .arg(addressLiteral(plan, address))
+                              .arg(dataLiteral(plan, errorData))
+                              .arg(writeOrder++ % 3));
+            lines->append(
+                QString("            send_read(%1, 1'b1);").arg(addressLiteral(plan, address)));
+            transactionCount += 2;
+        }
     }
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         lines->append(

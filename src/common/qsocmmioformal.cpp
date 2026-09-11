@@ -303,7 +303,12 @@ void appendAddressFunction(QStringList *lines, const QSocMmioPlan &plan, const F
         lines->append(QString("            %1: %2 = 1'b1;")
                           .arg(addressLiteral(plan, reg.byteOffset), names.mappedFunction));
     }
-    lines->append(QString("            default: %1 = 1'b0;").arg(names.mappedFunction));
+    const QString fallback
+        = plan.zeroFillBytes == 0
+              ? QStringLiteral("1'b0")
+              : QString("%1 <= %2")
+                    .arg(names.mappedAddress, addressLiteral(plan, plan.zeroFillBytes - 1));
+    lines->append(QString("            default: %1 = %2;").arg(names.mappedFunction, fallback));
     lines->append("        endcase");
     lines->append("    end");
     lines->append("endfunction");
@@ -604,10 +609,12 @@ void appendCovers(QStringList *lines, const QSocMmioPlan &plan, const FormalName
                       .arg(names.writeFire, names.mappedFunction, names.writeAddress));
     lines->append(
         QString("        cover(%1 && %2(s_axi_araddr));").arg(names.arTake, names.mappedFunction));
-    lines->append(
-        QString("        cover(s_axi_bvalid && s_axi_bresp == %1);").arg(names.responseSlverr));
-    lines->append(
-        QString("        cover(s_axi_rvalid && s_axi_rresp == %1);").arg(names.responseSlverr));
+    if (plan.addressWidth == 64 || plan.zeroFillBytes < (quint64(1) << plan.addressWidth)) {
+        lines->append(
+            QString("        cover(s_axi_bvalid && s_axi_bresp == %1);").arg(names.responseSlverr));
+        lines->append(
+            QString("        cover(s_axi_rvalid && s_axi_rresp == %1);").arg(names.responseSlverr));
+    }
     lines->append("        cover(s_axi_bvalid && !s_axi_bready);");
     lines->append("        cover(s_axi_rvalid && !s_axi_rready);");
     lines->append(QString("        cover(%1 && %2 && s_axi_araddr == %3 && %4(%3));")

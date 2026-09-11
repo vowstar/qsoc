@@ -522,9 +522,9 @@ computable, and the report prints them.
 Every block has a fixed byte base, and a block whose option is off leaves
 its region empty: an offset means the same thing on every design, so a
 driver carries constants and reads `feature` only to learn which blocks
-answer. A read from an empty region returns 0 and a write to it returns
-SLVERR. The map spans 16 KB, so `address_width` is at least 14; a smaller
-value is rejected.
+are present. Within the IOMUX window, any byte offset without a generated register is reserved. These addresses include gaps between registers and regions for options disabled at generation. Reads return zero and writes are ignored. Both reads and writes return AXI OKAY, with no register side effects. OKAY confirms transaction completion, not feature availability. Drivers use `feature` and `capability` to discover functions and access only their documented registers. Reserved locations can acquire functions in later versions, so drivers must not use them as scratch storage or probe them with writes.
+
+The window spans at least 16 KB. Additional pad control words can extend it. The report gives its size as `aperture` bytes, covering local offsets zero through `aperture - 1`. `address_width` must cover the whole window and is at least 14. The interconnect must decode this window and return DECERR for addresses that reach no peripheral. With wider address ports, an out-of-window access delivered directly to IOMUX returns SLVERR without aliasing a register. This window policy does not change the generic MMIO generator's SLVERR response for unlisted addresses.
 
 #figure(
   align(center)[#table(

@@ -251,14 +251,16 @@ generator:
 )");
 }
 
-QSocModuleDefinition makeIomuxDefinition()
+QSocModuleDefinition makeIomuxDefinition(quint32 dataWidth, quint32 addressWidth)
 {
-    return makeDefinition(QStringLiteral("iomux0"), R"(
+    return makeDefinition(
+        QStringLiteral("iomux0"),
+        QString(R"(
 generator:
   kind: iomux
   bus: axi4_lite
-  data_width: 32
-  address_width: 14
+  data_width: %1
+  address_width: %2
   pin_count: 9
   hs_slots: 5
   integration:
@@ -272,7 +274,9 @@ generator:
       output_value: pad_output_value
       output_enable: pad_output_enable
   route: []
-)");
+)")
+            .arg(dataWidth)
+            .arg(addressWidth));
 }
 
 enum UvmFixture {
@@ -282,6 +286,7 @@ enum UvmFixture {
     AllRoFixture,
     W1cFixture,
     IomuxRegsFixture,
+    IomuxWideRegsFixture,
 };
 
 QSocModuleDefinition makeFixtureDefinition(int fixture)
@@ -531,6 +536,8 @@ void Test::generatedTestbenchPassesVerilator_data()
     QTest::newRow("all-ro-registers") << int(AllRoFixture) << QStringLiteral("read_only_ctrl");
     QTest::newRow("w1c-set-and-clear") << int(W1cFixture) << QStringLiteral("event_ctrl");
     QTest::newRow("iomux-registers") << int(IomuxRegsFixture) << QStringLiteral("iomux0_regs");
+    QTest::newRow("iomux-64-bit-wider-address")
+        << int(IomuxWideRegsFixture) << QStringLiteral("iomux0_regs");
 }
 
 void Test::generatedTestbenchPassesVerilator()
@@ -541,10 +548,12 @@ void Test::generatedTestbenchPassesVerilator()
     QString               verilog;
     QSocMmioUvmCollateral collateral;
     QStringList           errors;
-    if (fixture == IomuxRegsFixture) {
+    if (fixture == IomuxRegsFixture || fixture == IomuxWideRegsFixture) {
         QSocIomuxPlan plan;
+        const bool    wide = fixture == IomuxWideRegsFixture;
         QVERIFY2(
-            QSocIomuxGenerator::buildPlan(makeIomuxDefinition(), &plan, &errors),
+            QSocIomuxGenerator::buildPlan(
+                makeIomuxDefinition(wide ? 64 : 32, wide ? 16 : 14), &plan, &errors),
             qPrintable(errors.join('\n')));
         verilog    = QSocIomuxGenerator::generateRegsVerilog(plan);
         collateral = QSocMmioUvm::generate(plan.mmio);

@@ -1591,7 +1591,7 @@ function address_is_mapped;
             14'h000c: address_is_mapped = 1'b1;
             14'h0100: address_is_mapped = 1'b1;
             14'h0104: address_is_mapped = 1'b1;
-            default: address_is_mapped = 1'b0;
+            default: address_is_mapped = address <= 14'h3fff;
         endcase
     end
 endfunction
@@ -2299,7 +2299,7 @@ function address_is_mapped;
             14'h0008: address_is_mapped = 1'b1;
             14'h0100: address_is_mapped = 1'b1;
             14'h0108: address_is_mapped = 1'b1;
-            default: address_is_mapped = 1'b0;
+            default: address_is_mapped = address <= 14'h3fff;
         endcase
     end
 endfunction
@@ -2773,7 +2773,7 @@ function address_is_mapped;
             14'h0008: address_is_mapped = 1'b1;
             14'h000c: address_is_mapped = 1'b1;
             14'h0100: address_is_mapped = 1'b1;
-            default: address_is_mapped = 1'b0;
+            default: address_is_mapped = address <= 14'h3fff;
         endcase
     end
 endfunction
@@ -3223,6 +3223,8 @@ private slots:
     void padWordHoldsFourControlsAndSpillsTheFifth();
     void buildNumberReadsBackInTheVersionWord();
     void blockBasesDoNotMoveWhenOtherOptionsChange();
+    void reservedWindowAccesses_data();
+    void reservedWindowAccesses();
     void padClassesShareOneRegisterModel();
     void padClassesRejectBadAssignments_data();
     void padClassesRejectBadAssignments();
@@ -7650,6 +7652,249 @@ void Test::buildNumberReadsBackInTheVersionWord()
         qPrintable(errors.join('\n')));
 }
 
+void Test::reservedWindowAccesses_data()
+{
+    QTest::addColumn<int>("dataWidth");
+    QTest::addColumn<int>("addressWidth");
+    QTest::addColumn<bool>("gpio");
+    QTest::addColumn<bool>("extended");
+    for (int width : {32, 64}) {
+        for (int address : {14, 16}) {
+            for (bool enabled : {false, true}) {
+                const QByteArray name = QString("%1-bit-address-%2-gpio-%3")
+                                            .arg(width)
+                                            .arg(address)
+                                            .arg(enabled)
+                                            .toLatin1();
+                QTest::newRow(name.constData()) << width << address << enabled << false;
+            }
+        }
+    }
+    QTest::newRow("extended-pad-window") << 64 << 16 << false << true;
+}
+
+void Test::reservedWindowAccesses()
+{
+    QFETCH(int, dataWidth);
+    QFETCH(int, addressWidth);
+    QFETCH(bool, gpio);
+    QFETCH(bool, extended);
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    QString source = sourceForConfig(1, 2, dataWidth, addressWidth);
+    if (gpio) {
+        source.replace("    route: []", "    option: {gpio: true}\n    route: []");
+    }
+    if (extended) {
+        QStringList controls;
+        for (int index = 0; index < 44; ++index) {
+            controls.append(QString("reserved_%1").arg(index));
+        }
+        controls.append("drive");
+        source = QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    data_width: 64
+    address_width: 16
+    pin_count: 1
+    hs_slots: 2
+    option: {pad_control: true}
+    pad_model:
+      control: [%1]
+%2%3    route: []
+)")
+                     .arg(controls.join(", "), padCellBlock(), padIntegrationBlock());
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    const quint64 window = extended ? 0x4808 : 0x4000;
+    QCOMPARE(plan.mmio.zeroFillBytes, window);
+    if (extended) {
+        const auto *control = findRegister(plan.mmio, "pin_ctl_5_0");
+        QVERIFY(control != nullptr);
+        QCOMPARE(control->byteOffset, quint64(0x4800));
+        QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("aperture: 18440 bytes"));
+    }
+    QStringList mapped;
+    for (const auto &reg : plan.mmio.registers) {
+        mapped.append(QString("address == %1").arg(reg.byteOffset));
+    }
+    QString bench = QStringLiteral(R"verilog(
+module tb;
+localparam DW = @DW@;
+localparam AW = @AW@;
+localparam WINDOW = @WINDOW@;
+reg clk = 0;
+always #5 clk = !clk;
+reg rst = 0;
+reg [AW-1:0] awaddr = 0, araddr = 0;
+reg [DW-1:0] wdata = 0;
+reg [DW/8-1:0] wstrb = 0;
+reg awvalid = 0, wvalid = 0, bready = 0, arvalid = 0, rready = 0;
+wire awready, wready, bvalid, arready, rvalid;
+wire [1:0] bresp, rresp;
+wire [DW-1:0] rdata;
+wire selected;
+reg [DW-1:0] value, identity;
+integer address, background;
+iomux0_regs dut (
+    .clk_i(clk), .rst_ni(rst),
+    .s_axi_awaddr(awaddr), .s_axi_awprot(3'b0), .s_axi_awvalid(awvalid), .s_axi_awready(awready),
+    .s_axi_wdata(wdata), .s_axi_wstrb(wstrb), .s_axi_wvalid(wvalid), .s_axi_wready(wready),
+    .s_axi_bresp(bresp), .s_axi_bvalid(bvalid), .s_axi_bready(bready),
+    .s_axi_araddr(araddr), .s_axi_arprot(3'b0), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
+    .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid), .s_axi_rready(rready),
+    .pin_0_select_o(selected)
+);
+task send_aw;
+    input [AW-1:0] a;
+    input integer delay_cycles;
+    begin
+        repeat (delay_cycles) @(negedge clk);
+        @(negedge clk); awaddr = a; awvalid = 1;
+        @(posedge clk); while (!awready) @(posedge clk);
+        @(negedge clk); awvalid = 0; awaddr = '1;
+    end
+endtask
+task send_w;
+    input [DW-1:0] data;
+    input [DW/8-1:0] strb;
+    input integer delay_cycles;
+    begin
+        repeat (delay_cycles) @(negedge clk);
+        @(negedge clk); wdata = data; wstrb = strb; wvalid = 1;
+        @(posedge clk); while (!wready) @(posedge clk);
+        @(negedge clk); wvalid = 0; wdata = 0; wstrb = 0;
+    end
+endtask
+task write_word;
+    input [AW-1:0] a;
+    input [DW-1:0] data;
+    input [DW/8-1:0] strb;
+    input [1:0] response;
+    input integer order;
+    begin
+        fork
+            send_aw(a, order == 1 ? 2 : 0);
+            send_w(data, strb, order == 2 ? 2 : 0);
+        join
+        wait (bvalid);
+        repeat (3) begin
+            @(negedge clk);
+            if (bvalid !== 1'b1 || bresp !== response || awready || wready)
+                $fatal(1, "write response/backpressure at %h: %h", a, bresp);
+        end
+        bready = 1;
+        @(negedge clk); bready = 0;
+    end
+endtask
+task read_word;
+    input [AW-1:0] a;
+    input [1:0] response;
+    output [DW-1:0] data;
+    begin
+        @(negedge clk); araddr = a; arvalid = 1;
+        @(posedge clk); while (!arready) @(posedge clk);
+        @(negedge clk); arvalid = 0; araddr = '1;
+        wait (rvalid); data = rdata;
+        repeat (3) begin
+            @(negedge clk);
+            if (rvalid !== 1'b1 || rresp !== response || rdata !== data || arready)
+                $fatal(1, "read response/backpressure at %h: %h", a, rresp);
+        end
+        rready = 1;
+        @(negedge clk); rready = 0;
+    end
+endtask
+initial begin
+    #20000000; $fatal(1, "timeout");
+end
+initial begin
+    repeat (3) @(negedge clk);
+    rst = 1;
+    read_word(0, 0, identity);
+    for (background = 0; background < 2; background = background + 1) begin
+        write_word('h100, background, '1, 0, 0);
+        if (@GPIO@) write_word('h208, background, '1, 0, 0);
+        if (selected !== (background != 0)) $fatal(1, "selector setup");
+        for (address = 0; address < WINDOW; address = address + DW/8) begin
+            if (!(@MAPPED@)) begin
+                read_word(address, 0, value);
+                if (value !== 0) $fatal(1, "reserved read at %h", address);
+                write_word(address, background != 0 ? '0 : '1,
+                           address % 3 == 0 ? '0 : address % 3 == 1 ? '1 : 1,
+                           0, (address / (DW/8)) % 3);
+                read_word(address, 0, value);
+                if (value !== 0 || selected !== (background != 0))
+                    $fatal(1, "reserved write changed state at %h", address);
+                if (@GPIO@) begin
+                    read_word('h208, 0, value);
+                    if (value !== background) $fatal(1, "reserved write changed GPIO at %h", address);
+                end
+            end
+        end
+    end
+    write_word('h101, 0, '1, 0, 1);
+    read_word('h101, 0, value);
+    if (value !== 0 || selected !== 1'b1) $fatal(1, "unaligned address aliases selector");
+    write_word(WINDOW-1, 0, '1, 0, 2);
+    read_word(WINDOW-1, 0, value);
+    if (value !== 0 || selected !== 1'b1) $fatal(1, "last byte");
+    if (AW > 14) begin
+        write_word(WINDOW, '1, '1, 2, 0);
+        read_word(WINDOW, 2, value);
+        if (value !== 0) $fatal(1, "outside window read");
+        write_word(WINDOW+'h100, 0, '1, 2, 1);
+        read_word(WINDOW+'h100, 2, value);
+        if (value !== 0 || selected !== 1'b1) $fatal(1, "outside window alias");
+    end
+    write_word(0, '1, '1, 0, 0);
+    read_word(0, 0, value);
+    if (value !== identity) $fatal(1, "identity changed");
+    write_word('h100, 0, 0, 0, 2);
+    read_word('h100, 0, value);
+    if (value !== 1) $fatal(1, "zero strobe changed selector");
+    write_word('h100, 0, 1, 0, 1);
+    read_word('h100, 0, value);
+    if (value !== 0) $fatal(1, "mapped write after reserved accesses");
+    $display("TEST_PASS");
+    $finish;
+end
+endmodule
+)verilog");
+    bench.replace("@DW@", QString::number(dataWidth));
+    bench.replace("@AW@", QString::number(addressWidth));
+    bench.replace("@MAPPED@", mapped.join(" || "));
+    bench.replace("@WINDOW@", QString::number(window));
+    bench.replace("@GPIO@", gpio ? "1" : "0");
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir output(directory.path());
+    writeTextFile(output.filePath("regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(output.filePath("tb.v"), bench);
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(compiler, {"-g2012", "-s", "tb", "-o", "sim", "regs.v", "tb.v"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished());
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0, process.readAll().constData());
+    process.start(runtime, {"sim"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished());
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    const QByteArray result = process.readAll();
+    QVERIFY2(process.exitCode() == 0, result.constData());
+    QVERIFY2(result.contains("TEST_PASS"), result.constData());
+}
+
 void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
 {
     /* Interrupt alone, then every option: the interrupt banks and the
@@ -7701,9 +7946,10 @@ void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
     QCOMPARE(offsetOf(full, "rx_value_s2_0"), qint64(QSocIomuxGenerator::kBaseRxOverride + 8));
     QVERIFY(QSocIomuxGenerator::generateReport(sparse).contains("aperture: 16384 bytes"));
 
-    /* A hole reads as zero and refuses a write. */
+    /* The complete aperture accepts reads and writes. */
     const QString regs = QSocIomuxGenerator::generateRegsVerilog(sparse);
-    QVERIFY(regs.contains("? AXI_RESP_OKAY : AXI_RESP_SLVERR"));
+    QCOMPARE(sparse.mmio.zeroFillBytes, quint64(16384));
+    QVERIFY(regs.contains("default: address_is_mapped = address <= 14'h3fff;"));
 }
 
 } // namespace
