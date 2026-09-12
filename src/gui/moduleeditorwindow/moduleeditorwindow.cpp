@@ -83,7 +83,11 @@ ModuleEditorWindow::ModuleEditorWindow(QWidget *parent, QSocProjectManager *proj
     reloadProject();
 }
 
-ModuleEditorWindow::~ModuleEditorWindow() = default;
+ModuleEditorWindow::~ModuleEditorWindow()
+{
+    /* The undo stack emits cleanChanged after the preview members are destroyed. */
+    disconnect(&undoStack, nullptr, this, nullptr);
+}
 
 void ModuleEditorWindow::setupUi()
 {
