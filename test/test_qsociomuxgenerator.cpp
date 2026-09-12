@@ -587,8 +587,8 @@ initial begin
     check_value(pad_oe[3] === 1'b1 && pad_ov[3] === 1'b1, "pin 3 resets to channel 2");
     /* Tied sinks leave reset on their override and can be released. */
     check_value(c3_in === 1'b1 && cap_in === 1'b1, "tied sinks read their level at reset");
-    axi_write(14'he00, {@DW@{1'b0}});
-    axi_write(14'h1000 + @SW@, {@DW@{1'b0}});
+    axi_write(14'h150, {@DW@{1'b0}});
+    axi_write(14'h170, {@DW@{1'b0}});
     #1 check_value(c3_in === 1'b0 && cap_in === 1'b0, "released sinks follow the pads");
     c0_ov = 1'b0;
     #1 check_value(pad_ov[0] === 1'b0 && pad_ov[1] === 1'b0, "both pins follow channel 0 down");
@@ -597,35 +597,35 @@ initial begin
     c0_ov = 1'b0;
     /* pin 1 moves to channel 3: channel 0 toggles reach pin 0 alone, and a
      * channel 3 toggle reaches pin 1 alone. */
-    axi_write(14'hc00, {@DW@{1'b0}} | (32'h03 << 8));
+    axi_write(14'h140, {@DW@{1'b0}} | (32'h03 << 8));
     c0_ov = 1'b1;
     #1 check_value(pad_ov[0] === 1'b1 && pad_ov[1] === 1'b0, "channel 0 no longer reaches pin 1");
     c3_oe = 1'b1;
     #1 check_value(pad_oe[1] === 1'b0 && pad_oe[0] === 1'b1, "channel 3 reaches pin 1 alone");
     c3_oe = 1'b0;
     c0_ov = 1'b0;
-    axi_write(14'hc00, {@DW@{1'b0}});
+    axi_write(14'h140, {@DW@{1'b0}});
 
     axi_read(14'h10);
-    check_value(rdata[31:0] === 32'h00020004, "ls capability");
+    check_value(rdata[31:0] === 32'h00000000, "reserved identity address");
 
     /* pin 3 takes channel 2: inverted link, enable 1 */
-    axi_write(14'hc00, {@DW@{1'b0}} | (32'h02 << 24));
+    axi_write(14'h140, {@DW@{1'b0}} | (32'h02 << 24));
     check_value(pad_oe[3] === 1'b1 && pad_ov[3] === 1'b1, "pin 3 channel 2 inverted low");
     c2_ov = 1'b1;
     #1 check_value(pad_ov[3] === 1'b0, "pin 3 channel 2 inverted high");
 
     /* pin 1 takes channel 3: open drain, ie 1 */
-    axi_write(14'hc00, {@DW@{1'b0}} | (32'h02 << 24) | (32'h03 << 8));
+    axi_write(14'h140, {@DW@{1'b0}} | (32'h02 << 24) | (32'h03 << 8));
     check_value(pad_ie[1] === 1'b1 && pad_ov[1] === 1'b0 && pad_oe[1] === 1'b1, "pin 1 channel 3 drives low");
     c3_oe = 1'b1;
     #1 check_value(pad_oe[1] === 1'b0, "pin 1 channel 3 releases");
     check_value(pad_oe[0] === 1'b1, "pin 0 still channel 0");
 
     /* a number outside the pool is an empty slot */
-    axi_write(14'hc00, {@DW@{1'b0}} | (32'h02 << 24) | (32'h03 << 8) | 32'h05);
+    axi_write(14'h140, {@DW@{1'b0}} | (32'h02 << 24) | (32'h03 << 8) | 32'h05);
     check_value(pad_oe[0] === 1'b0 && pad_ov[0] === 1'b0 && pad_ie[0] === 1'b0, "pin 0 code 5 is empty");
-    axi_read(14'hc00);
+    axi_read(14'h140);
     check_value(rdata[7:0] === 8'h05 && rdata[15:8] === 8'h03 && rdata[31:24] === 8'h02, "ls select reads back");
     check_value(rdata[23:16] === 8'h00, "pin 2 has no ls lane");
 
@@ -640,30 +640,30 @@ initial begin
 
     /* slow input 1 selects a pool pad by number; a number outside reads zero */
     pad_in[1] = 1'b1;
-    axi_write(14'hd00, {@DW@{1'b0}} | (32'h01 << 8));
+    axi_write(14'h148, {@DW@{1'b0}} | (32'h01 << 8));
     check_value(c1_in === 1'b1, "channel 1 reads pin 1");
     pad_in[1] = 1'b0;
     #1 check_value(c1_in === 1'b0, "channel 1 follows pin 1");
-    axi_write(14'hd00, {@DW@{1'b0}} | (32'h02 << 8));
+    axi_write(14'h148, {@DW@{1'b0}} | (32'h02 << 8));
     check_value(c1_in === 1'b0, "channel 1 cannot read pin 2");
     pad_in[0] = 1'b1;
-    axi_write(14'hd00, {@DW@{1'b0}});
+    axi_write(14'h148, {@DW@{1'b0}});
     check_value(c1_in === 1'b1, "channel 1 reads pin 0");
     check_value(c3_in === 1'b1, "channel 3 reads pin 0 too");
 
     /* override then inversion, as on the fast path */
-    axi_write(14'he00, {@DW@{1'b0}} | 32'h02);
+    axi_write(14'h150, {@DW@{1'b0}} | 32'h02);
     check_value(c1_in === 1'b0, "channel 1 override value 0");
-    axi_write(14'he20, {@DW@{1'b0}} | 32'h02);
+    axi_write(14'h158, {@DW@{1'b0}} | 32'h02);
     check_value(c1_in === 1'b1, "channel 1 override value 1");
-    axi_write(14'he40, {@DW@{1'b0}} | 32'h02);
+    axi_write(14'h160, {@DW@{1'b0}} | 32'h02);
     check_value(c1_in === 1'b0, "channel 1 inverted");
     check_value(c3_in === 1'b1, "channel 3 untouched");
 
     /* A slow input no pad is selected for still holds the level its
      * registers name, and the pads and their other sinks never notice. */
-    axi_write(14'he40, {@DW@{1'b0}});
-    axi_write(14'hd00, {@DW@{1'b0}} | (32'h02 << 8));
+    axi_write(14'h160, {@DW@{1'b0}});
+    axi_write(14'h148, {@DW@{1'b0}} | (32'h02 << 8));
     check_value(c1_in === 1'b1, "unselected channel 1 held high by its register");
     pad_in = 4'b0000;
     #1 check_value(c1_in === 1'b1, "unselected channel 1 ignores every pad");
@@ -672,26 +672,26 @@ initial begin
 
     /* Three sinks on pin 1: two slow inputs and the fast sink of slot 1
      * follow the pad together, and each can be pinned without the others. */
-    axi_write(14'he00, {@DW@{1'b0}});
-    axi_write(14'he20, {@DW@{1'b0}});
-    axi_write(14'hd00, {@DW@{1'b0}} | (32'h01 << 24) | (32'h01 << 8));
+    axi_write(14'h150, {@DW@{1'b0}});
+    axi_write(14'h158, {@DW@{1'b0}});
+    axi_write(14'h148, {@DW@{1'b0}} | (32'h01 << 24) | (32'h01 << 8));
     pad_in[1] = 1'b1;
     #1 check_value(c1_in === 1'b1 && c3_in === 1'b1 && cap_in === 1'b1, "three sinks rise together");
     pad_in[1] = 1'b0;
     #1 check_value(c1_in === 1'b0 && c3_in === 1'b0 && cap_in === 1'b0, "three sinks fall together");
-    axi_write(14'he00, {@DW@{1'b0}} | 32'h08);
-    axi_write(14'he20, {@DW@{1'b0}} | 32'h08);
+    axi_write(14'h150, {@DW@{1'b0}} | 32'h08);
+    axi_write(14'h158, {@DW@{1'b0}} | 32'h08);
     pad_in[1] = 1'b1;
     #1 check_value(c3_in === 1'b1 && c1_in === 1'b1 && cap_in === 1'b1, "channel 3 pinned high while pad high");
     pad_in[1] = 1'b0;
     #1 check_value(c3_in === 1'b1 && c1_in === 1'b0 && cap_in === 1'b0, "channel 3 stays high, the others fall");
-    axi_write(14'h1000 + @SW@, {@DW@{1'b0}} | (32'h1 << 9));
-    axi_write(14'h300 + @SW@, {@DW@{1'b0}} | 32'h02);
+    axi_write(14'h170, {@DW@{1'b0}} | (32'h1 << 9));
+    axi_write(14'h110, {@DW@{1'b0}} | 32'h02);
     #1 check_value(cap_in === 1'b1 && c1_in === 1'b0, "fast sink pinned high while pad low");
     pad_in[1] = 1'b1;
     #1 check_value(cap_in === 1'b1 && c1_in === 1'b1 && c3_in === 1'b1, "channel 1 alone still follows");
-    axi_write(14'he00, {@DW@{1'b0}});
-    axi_write(14'h1000 + @SW@, {@DW@{1'b0}});
+    axi_write(14'h150, {@DW@{1'b0}});
+    axi_write(14'h170, {@DW@{1'b0}});
     pad_in[1] = 1'b0;
     #1 check_value(c1_in === 1'b0 && c3_in === 1'b0 && cap_in === 1'b0, "unpinned sinks follow again");
 
@@ -826,7 +826,7 @@ task push_sel;
                 chunk = sel[w * LANES + l];
                 word  = word | (chunk << (l * 8));
             end
-            axi_write(14'hc00 + w * 4, word);
+            axi_write(14'h108 + w * 4, word);
         end
     end
 endtask
@@ -842,7 +842,7 @@ task push_rxpin;
                     chunk = rxpin[w * LANES + l];
                     word  = word | (chunk << (l * 8));
                 end
-                axi_write(14'hd00 + w * 4, word);
+                axi_write(14'h118 + w * 4, word);
             end
         end
     end
@@ -1027,7 +1027,7 @@ QString sweepTestbench(bool withLs)
                 chunk = (w * LANES + l + r) % 8;
                 word  = word | (chunk << (l * 8));
             end
-            axi_write(14'hc00 + w * SW, word);
+            axi_write(14'h180 + w * SW, word);
         end
         for (p = 0; p < 256; p = p + 1)
             expect_pin(p, (p + r) % 8, "pool pin follows its channel");
@@ -1039,12 +1039,12 @@ QString sweepTestbench(bool withLs)
             chunk = 20;
             word  = word | (chunk << (l * 8));
         end
-        axi_write(14'hc00 + w * SW, word);
+        axi_write(14'h180 + w * SW, word);
     end
     for (p = 0; p < 256; p = p + 1)
         expect_pin(p, 0, "channel outside the pool is empty");
     for (w = 0; w * LANES < 256; w = w + 1)
-        axi_write(14'hc00 + w * SW, {@DW@{1'b0}});
+        axi_write(14'h180 + w * SW, {@DW@{1'b0}});
 
     /* Every pad reaches a slow input: eight sinks walk the 256 pads. */
     for (r = 0; r < 32; r = r + 1) begin
@@ -1057,7 +1057,7 @@ QString sweepTestbench(bool withLs)
                     word  = word | (chunk << (l * 8));
                 end
             end
-            axi_write(14'hd00 + w * SW, word);
+            axi_write(14'h280 + w * SW, word);
         end
         pad_in = 256'd0;
         for (k = 0; k < 8; k = k + 1)
@@ -1387,7 +1387,7 @@ initial begin
     check_value(pad_oe[0] === 1'b1, "reset pin 0 slot 0 oe");
 
     axi_read(@AW@'h8);
-    check_value(rdata[31:0] === 32'h@CAP@, "capability value");
+    check_value(rdata[31:0] === 32'h0, "reserved header reads zero");
 
     pad_in[@PIN@] = 1'b1;
     @(negedge clk_i);
@@ -1409,7 +1409,7 @@ initial begin
 
     axi_write(@AW@'h8, {@DW@{1'b1}}, {@SW@{1'b1}});
     axi_read(@AW@'h8);
-    check_value(rdata[31:0] === 32'h@CAP@, "capability write ignored");
+    check_value(rdata[31:0] === 32'h0, "reserved header write ignored");
 
     axi_write(@AW@'h@W0_OFFSET@, @DW@'h@CODE@, {@SW@{1'b1}});
     repeat (2) @(negedge clk_i);
@@ -1429,6 +1429,16 @@ initial begin
 end
 endmodule
 )VERILOG");
+}
+
+quint64 blockBase(const QSocIomuxPlan &plan, const QString &name)
+{
+    for (const auto &block : plan.registerBlocks) {
+        if (block.name == name) {
+            return block.byteOffset;
+        }
+    }
+    return 0;
 }
 
 const QSocMmioFieldPlan *findField(
@@ -1587,11 +1597,9 @@ function address_is_mapped;
         case (address)
             14'h0000: address_is_mapped = 1'b1;
             14'h0004: address_is_mapped = 1'b1;
-            14'h0008: address_is_mapped = 1'b1;
-            14'h000c: address_is_mapped = 1'b1;
             14'h0100: address_is_mapped = 1'b1;
             14'h0104: address_is_mapped = 1'b1;
-            default: address_is_mapped = address <= 14'h3fff;
+            default: address_is_mapped = address <= 14'h0107;
         endcase
     end
 endfunction
@@ -1602,25 +1610,10 @@ function [31:0] read_register;
         read_register = 32'b0;
         case (address)
             14'h0000: begin
-                read_register[7:0] = 8'h0;
-                read_register[15:8] = 8'h0;
-                read_register[23:16] = 8'h1;
-                read_register[31:24] = 8'h2;
+                read_register[31:0] = 32'h0;
             end
             14'h0004: begin
-                read_register[31:0] = 32'h494f4d58;
-            end
-            14'h0008: begin
-                read_register[15:0] = 16'h9;
-                read_register[23:16] = 8'h3;
-            end
-            14'h000c: begin
-                read_register[0] = 1'h0;
-                read_register[1] = 1'h0;
-                read_register[2] = 1'h0;
-                read_register[3] = 1'h0;
-                read_register[4] = 1'h0;
-                read_register[5] = 1'h0;
+                read_register[31:0] = 32'h0;
             end
             14'h0100: begin
                 read_register[1:0] = mmio_field_0_q;
@@ -2146,13 +2139,11 @@ pin_count: 9
 hs_slots: 3
 data_width: 32
 address_width: 14
-selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 2 at offset 0x100 to 0x104
-registers total: 6
-aperture: 16384 bytes
-capability: 0x00030009 at offset 0x8
-feature: 0x00000000 at offset 0xc
+selector: 2-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 8 bytes, stride 0
+registers total: 4
+aperture: 264 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -2296,10 +2287,9 @@ function address_is_mapped;
     begin
         case (address)
             14'h0000: address_is_mapped = 1'b1;
-            14'h0008: address_is_mapped = 1'b1;
             14'h0100: address_is_mapped = 1'b1;
             14'h0108: address_is_mapped = 1'b1;
-            default: address_is_mapped = address <= 14'h3fff;
+            default: address_is_mapped = address <= 14'h010f;
         endcase
     end
 endfunction
@@ -2310,21 +2300,7 @@ function [63:0] read_register;
         read_register = 64'b0;
         case (address)
             14'h0000: begin
-                read_register[7:0] = 8'h0;
-                read_register[15:8] = 8'h0;
-                read_register[23:16] = 8'h1;
-                read_register[31:24] = 8'h2;
-                read_register[63:32] = 32'h494f4d58;
-            end
-            14'h0008: begin
-                read_register[15:0] = 16'h11;
-                read_register[23:16] = 8'h4;
-                read_register[32] = 1'h0;
-                read_register[33] = 1'h0;
-                read_register[34] = 1'h0;
-                read_register[35] = 1'h0;
-                read_register[36] = 1'h0;
-                read_register[37] = 1'h0;
+                read_register[63:0] = 64'h0;
             end
             14'h0100: begin
                 read_register[1:0] = mmio_field_0_q;
@@ -2505,13 +2481,11 @@ pin_count: 17
 hs_slots: 4
 data_width: 64
 address_width: 14
-selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 2 at offset 0x100 to 0x108
-registers total: 4
-aperture: 16384 bytes
-capability: 0x00040011 at offset 0x8
-feature: 0x00000000 at offset 0xc
+selector: 2-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 16 bytes, stride 0
+registers total: 3
+aperture: 272 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -2599,13 +2573,11 @@ pin_count: 32
 hs_slots: 8
 data_width: 64
 address_width: 16
-selector: 3-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 2 at offset 0x100 to 0x108
-registers total: 4
-aperture: 16384 bytes
-capability: 0x00080020 at offset 0x8
-feature: 0x00000000 at offset 0xc
+selector: 3-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 16 bytes, stride 0
+registers total: 3
+aperture: 272 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -2770,10 +2742,8 @@ function address_is_mapped;
         case (address)
             14'h0000: address_is_mapped = 1'b1;
             14'h0004: address_is_mapped = 1'b1;
-            14'h0008: address_is_mapped = 1'b1;
-            14'h000c: address_is_mapped = 1'b1;
             14'h0100: address_is_mapped = 1'b1;
-            default: address_is_mapped = address <= 14'h3fff;
+            default: address_is_mapped = address <= 14'h0107;
         endcase
     end
 endfunction
@@ -2784,25 +2754,10 @@ function [31:0] read_register;
         read_register = 32'b0;
         case (address)
             14'h0000: begin
-                read_register[7:0] = 8'h0;
-                read_register[15:8] = 8'h0;
-                read_register[23:16] = 8'h1;
-                read_register[31:24] = 8'h2;
+                read_register[31:0] = 32'h0;
             end
             14'h0004: begin
-                read_register[31:0] = 32'h494f4d58;
-            end
-            14'h0008: begin
-                read_register[15:0] = 16'h2;
-                read_register[23:16] = 8'h2;
-            end
-            14'h000c: begin
-                read_register[0] = 1'h0;
-                read_register[1] = 1'h0;
-                read_register[2] = 1'h0;
-                read_register[3] = 1'h0;
-                read_register[4] = 1'h0;
-                read_register[5] = 1'h0;
+                read_register[31:0] = 32'h0;
             end
             14'h0100: begin
                 read_register[0] = mmio_field_0_q;
@@ -3079,13 +3034,11 @@ pin_count: 2
 hs_slots: 2
 data_width: 32
 address_width: 14
-selector: 1-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 1 at offset 0x100 to 0x100
-registers total: 5
-aperture: 16384 bytes
-capability: 0x00020002 at offset 0x8
-feature: 0x00000000 at offset 0xc
+selector: 1-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 8 bytes, stride 0
+registers total: 3
+aperture: 264 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -3157,6 +3110,13 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void expandedLayoutsMatchAcrossBusWidths();
+    void sparseChannelSpanKeepsOnlyDeclaredFields();
+    void softwareHeadersKeepDistinctIdentifiers();
+    void reportAcceptsSelectorNamedControl();
+    void sourceRecordsExtendPastTheBusWord();
+    void selectorBytesWriteIndependently_data();
+    void selectorBytesWriteIndependently();
     void draftIsRecognizedAndIncomplete();
     void planPreservesSemantics();
     void endpointPortNamesAreStable();
@@ -3164,7 +3124,7 @@ private slots:
     void sourceOrderDoesNotChangeGeneratedVerilog();
     void generatedArtifactsMatchFrozenBaseline();
     void reportRejectsPlanInconsistentWithPinCount();
-    void reportCapabilityFollowsComposedRegister();
+    void reportIdentityFollowsComposedRegister();
     void selectorLayoutMatchesFrozenKnownAnswer_data();
     void selectorLayoutMatchesFrozenKnownAnswer();
     void pinCountBoundaryFollowsLaneFormula_data();
@@ -3215,14 +3175,14 @@ private slots:
     void padTablesAreBoundedToEightBitCodes();
     void unreachableModeLandsOnNone();
     void nativeKeeperRowIsSelectedNotWoven();
-    void layoutVersionTracksTheRegisterMap();
+    void allOptionsFollowTheByteLayout();
     void netSelectedRowsFollowTheLink();
     void netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable();
     void unroutedSlotsTakeTheDeclaredDefaultRow();
     void controlNamesAndPinsAreRefusedWhenTaken();
-    void padWordHoldsFourControlsAndSpillsTheFifth();
-    void buildNumberReadsBackInTheVersionWord();
-    void blockBasesDoNotMoveWhenOtherOptionsChange();
+    void padRecordContinuesIntoTheNextWord();
+    void implementationIdIsAnUnsignedConstant();
+    void disabledBlocksDoNotReserveSpace();
     void reservedWindowAccesses_data();
     void reservedWindowAccesses();
     void padClassesShareOneRegisterModel();
@@ -3293,24 +3253,20 @@ void Test::planPreservesSemantics()
     QCOMPARE(plan.mmio.moduleName, QString("iomux0_regs"));
     QCOMPARE(plan.mmio.dataWidth, 32U);
     QCOMPARE(plan.mmio.addressWidth, 14U);
-    QCOMPARE(plan.mmio.registers.size(), 5);
-    QCOMPARE(plan.mmio.registers.at(0).name, QString("version"));
+    QCOMPARE(plan.mmio.registers.size(), 3);
+    QCOMPARE(plan.mmio.registers.at(0).name, QString("impid_lo"));
     QCOMPARE(plan.mmio.registers.at(0).byteOffset, quint64(0));
-    QCOMPARE(plan.mmio.registers.at(1).name, QString("type"));
-    QCOMPARE(plan.mmio.registers.at(2).name, QString("capability"));
-    QCOMPARE(plan.mmio.registers.at(3).name, QString("feature"));
-    QCOMPARE(plan.mmio.registers.at(4).name, QString("hs_select_0"));
-    QCOMPARE(plan.mmio.registers.at(4).byteOffset, QSocIomuxGenerator::kBaseSelector);
-    QCOMPARE(plan.mmio.registers.at(4).fields.size(), 2);
-    QCOMPARE(plan.mmio.registers.at(4).fields.at(0).name, QString("pin_0_select"));
-    QCOMPARE(plan.mmio.registers.at(4).fields.at(0).width, 1U);
-    QCOMPARE(plan.mmio.registers.at(4).fields.at(0).lsb, 0U);
-    QCOMPARE(plan.mmio.registers.at(4).fields.at(1).lsb, 4U);
-    QCOMPARE(plan.mmio.registers.at(4).fields.at(1).outputPort, QString("pin_1_select_o"));
+    QCOMPARE(plan.mmio.registers.at(1).name, QString("impid_hi"));
+    QCOMPARE(plan.mmio.registers.at(2).name, QString("hs_select_0"));
+    QCOMPARE(plan.mmio.registers.at(2).byteOffset, QSocIomuxGenerator::kBaseSelector);
+    QCOMPARE(plan.mmio.registers.at(2).fields.size(), 2);
+    QCOMPARE(plan.mmio.registers.at(2).fields.at(0).name, QString("pin_0_select"));
+    QCOMPARE(plan.mmio.registers.at(2).fields.at(0).width, 1U);
+    QCOMPARE(plan.mmio.registers.at(2).fields.at(0).lsb, 0U);
+    QCOMPARE(plan.mmio.registers.at(2).fields.at(1).lsb, 4U);
+    QCOMPARE(plan.mmio.registers.at(2).fields.at(1).outputPort, QString("pin_1_select_o"));
 
-    const QSocMmioFieldPlan *pinCountField = findField(plan.mmio, "capability", "pin_count");
-    QVERIFY(pinCountField != nullptr);
-    QCOMPARE(pinCountField->constantValue.value(), quint64(2));
+    QCOMPARE(plan.impid, quint64(0));
 }
 
 void Test::endpointPortNamesAreStable()
@@ -3411,10 +3367,10 @@ void Test::reportRejectsPlanInconsistentWithPinCount()
     QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &built));
     QVERIFY(!QSocIomuxGenerator::generateReport(built).isEmpty());
 
-    QSocIomuxPlan capabilityOnly = built;
-    capabilityOnly.mmio.registers.remove(1, capabilityOnly.mmio.registers.size() - 1);
-    QCOMPARE(capabilityOnly.mmio.registers.size(), 1);
-    QVERIFY(QSocIomuxGenerator::generateReport(capabilityOnly).isEmpty());
+    QSocIomuxPlan identityOnly = built;
+    identityOnly.mmio.registers.remove(1, identityOnly.mmio.registers.size() - 1);
+    QCOMPARE(identityOnly.mmio.registers.size(), 1);
+    QVERIFY(QSocIomuxGenerator::generateReport(identityOnly).isEmpty());
 
     QSocIomuxPlan pinCountOutrunsRegisters = built;
     pinCountOutrunsRegisters.pinCount      = 256;
@@ -3429,56 +3385,20 @@ void Test::reportRejectsPlanInconsistentWithPinCount()
     QVERIFY(QSocIomuxGenerator::generateReport(unsupportedWidth).isEmpty());
 }
 
-void Test::reportCapabilityFollowsComposedRegister()
+void Test::reportIdentityFollowsComposedRegister()
 {
-    /* A capability field the composer gains must reach the report on its own.
-     * A second encoder in generateReport would keep publishing the old value
-     * while the read function already returns the new one. */
-    QSocMmioFieldPlan spare;
-    spare.name          = QStringLiteral("spare");
-    spare.width         = 1;
-    spare.access        = QSocMmioAccess::ReadOnly;
-    spare.constantValue = 1;
-
     QSocIomuxPlan narrow;
     QVERIFY(QSocIomuxGenerator::buildPlan(makeValidDefinition(), &narrow));
-    spare.lsb = 24;
-    QCOMPARE(narrow.mmio.registers[2].name, QString("capability"));
-    narrow.mmio.registers[2].fields.append(spare);
-    QVERIFY(
-        QSocIomuxGenerator::generateReport(narrow).contains("capability: 0x01020002 at offset 0x8"));
+    narrow.mmio.registers[0].fields[0].constantValue = 0x76543210;
+    narrow.mmio.registers[1].fields[0].constantValue = 0xfedcba98;
+    QVERIFY(QSocIomuxGenerator::generateReport(narrow).contains("impid: 0xfedcba9876543210"));
 
-    /* A 64-bit beat holds capability and feature together. A field past bit
-     * 31 is the feature word, and the report must say so. */
     QSocIomuxPlan wide;
     QVERIFY(QSocIomuxGenerator::buildPlan(makeWide64Definition(), &wide));
-    spare.lsb = 37;
-    QCOMPARE(wide.mmio.registers[1].name, QString("capability"));
-    wide.mmio.registers[1].fields.append(spare);
-    const QString wideReport = QSocIomuxGenerator::generateReport(wide);
-    QVERIFY(wideReport.contains("capability: 0x00040011 at offset 0x8"));
-    QVERIFY(wideReport.contains("feature: 0x00000020 at offset 0xc"));
-
-    /* generateReport is public and accepts a register no composer builds. A
-     * full-width field must not shift the mask past the accumulator, and a
-     * field carrying no constant must not be dereferenced. */
-    QSocMmioFieldPlan full;
-    full.name          = QStringLiteral("full");
-    full.width         = 64;
-    full.access        = QSocMmioAccess::ReadOnly;
-    full.constantValue = ~quint64(0);
-
-    QSocMmioFieldPlan unset;
-    unset.name   = QStringLiteral("unset");
-    unset.width  = 1;
-    unset.access = QSocMmioAccess::ReadOnly;
-
-    QSocIomuxPlan hostile;
-    QVERIFY(QSocIomuxGenerator::buildPlan(makeWide64Definition(), &hostile));
-    hostile.mmio.registers[1].fields = {full, unset};
-    const QString hostileReport      = QSocIomuxGenerator::generateReport(hostile);
-    QVERIFY(hostileReport.contains("capability: 0xffffffff at offset 0x8"));
-    QVERIFY(hostileReport.contains("feature: 0xffffffff at offset 0xc"));
+    wide.mmio.registers[0].fields[0].constantValue = ~quint64(0);
+    QVERIFY(QSocIomuxGenerator::generateReport(wide).contains("impid: 0xffffffffffffffff"));
+    wide.mmio.registers[0].fields[0].constantValue.reset();
+    QVERIFY(QSocIomuxGenerator::generateReport(wide).contains("impid: 0x0000000000000000"));
 }
 
 void Test::sourceOrderDoesNotChangeGeneratedVerilog()
@@ -3537,12 +3457,11 @@ void Test::selectorLayoutMatchesFrozenKnownAnswer_data()
     QTest::addColumn<quint32>("dataWidth");
     QTest::addColumn<int>("registerCount");
     QTest::addColumn<quint64>("lastOffset");
-    QTest::addColumn<quint64>("capability");
 
-    QTest::newRow("185-4-32") << 185U << 4U << 32U << 28 << quint64(0x15c) << quint64(0x000400B9);
-    QTest::newRow("185-4-64") << 185U << 4U << 64U << 14 << quint64(0x158) << quint64(0x000400B9);
-    QTest::newRow("256-8-32") << 256U << 8U << 32U << 36 << quint64(0x17c) << quint64(0x00080100);
-    QTest::newRow("256-8-64") << 256U << 8U << 64U << 18 << quint64(0x178) << quint64(0x00080100);
+    QTest::newRow("185-4-32") << 185U << 4U << 32U << 26 << quint64(0x15c);
+    QTest::newRow("185-4-64") << 185U << 4U << 64U << 13 << quint64(0x158);
+    QTest::newRow("256-8-32") << 256U << 8U << 32U << 34 << quint64(0x17c);
+    QTest::newRow("256-8-64") << 256U << 8U << 64U << 17 << quint64(0x178);
 }
 
 void Test::selectorLayoutMatchesFrozenKnownAnswer()
@@ -3552,7 +3471,6 @@ void Test::selectorLayoutMatchesFrozenKnownAnswer()
     QFETCH(quint32, dataWidth);
     QFETCH(int, registerCount);
     QFETCH(quint64, lastOffset);
-    QFETCH(quint64, capability);
 
     QSocIomuxPlan plan;
     QStringList   errors;
@@ -3564,16 +3482,9 @@ void Test::selectorLayoutMatchesFrozenKnownAnswer()
     QCOMPARE(plan.mmio.registers.size(), registerCount);
     QCOMPARE(plan.mmio.registers.constFirst().byteOffset, quint64(0));
     QCOMPARE(
-        plan.mmio.registers.at(dataWidth == 64 ? 2 : 4).byteOffset,
+        plan.mmio.registers.at(dataWidth == 64 ? 1 : 2).byteOffset,
         QSocIomuxGenerator::kBaseSelector);
     QCOMPARE(plan.mmio.registers.constLast().byteOffset, lastOffset);
-
-    const QSocMmioFieldPlan *pinCountField = findField(plan.mmio, "capability", "pin_count");
-    const QSocMmioFieldPlan *hsSlotsField  = findField(plan.mmio, "capability", "hs_slots");
-    QVERIFY(pinCountField != nullptr && hsSlotsField != nullptr);
-    QCOMPARE(
-        pinCountField->constantValue.value() | (hsSlotsField->constantValue.value() << 16),
-        capability);
 
     const QString            lastSelector = QString("pin_%1_select").arg(pinCount - 1);
     const QSocMmioFieldPlan *lastField
@@ -3605,7 +3516,7 @@ void Test::pinCountBoundaryFollowsLaneFormula()
             qPrintable(errors.join('\n')));
         const quint32 lanes = dataWidth / 4;
         const quint32 words = (pinCount + lanes - 1) / lanes;
-        QCOMPARE(plan.mmio.registers.size(), int(words) + (dataWidth == 64 ? 2 : 4));
+        QCOMPARE(plan.mmio.registers.size(), int(words) + (dataWidth == 64 ? 1 : 2));
         QCOMPARE(
             plan.mmio.registers.constLast().byteOffset,
             QSocIomuxGenerator::kBaseSelector + quint64(words - 1) * (dataWidth / 8));
@@ -3643,40 +3554,24 @@ void Test::slotCountSetsSelectorFieldWidth()
     QCOMPARE(field->width, fieldWidth);
     QCOMPARE(field->lsb, 0U);
 
-    const QSocMmioFieldPlan *hsSlotsField = findField(plan.mmio, "capability", "hs_slots");
-    QVERIFY(hsSlotsField != nullptr);
-    QCOMPARE(hsSlotsField->constantValue.value(), quint64(hsSlots));
+    QCOMPARE(plan.hsSlots, hsSlots);
+    QVERIFY(findRegister(plan.mmio, "hs_slots") == nullptr);
 }
 
 void Test::apertureExceedingAddressWidthIsRejected()
 {
-    QSocIomuxPlan plan;
-    QStringList   errors;
-    QVERIFY(!QSocIomuxGenerator::buildPlan(
-        makeDefinition(sourceForConfig(256, 8, 32, 13)), &plan, &errors));
-    QCOMPARE(plan, QSocIomuxPlan());
-    QCOMPARE(errors.size(), 1);
-    QVERIFY(errors.constFirst().startsWith("IOMUX_RANGE generator.address_width"));
-    QVERIFY(errors.constFirst().contains("aperture needs 16384 bytes"));
-    QVERIFY(errors.constFirst().contains("minimum address_width is 14"));
-    QVERIFY(
-        QSocIomuxGenerator::generateCoreVerilog(plan).isEmpty()
-        && QSocIomuxGenerator::generateConnVerilog(plan).isEmpty()
-        && QSocIomuxGenerator::generateReport(plan).isEmpty());
-
-    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(256, 8, 32, 14)), &plan));
-
-    QVERIFY(!QSocIomuxGenerator::buildPlan(
-        makeDefinition(sourceForConfig(256, 8, 64, 13)), &plan, &errors));
-    QCOMPARE(errors.size(), 1);
-    QVERIFY(errors.constFirst().contains("aperture needs 16384 bytes"));
-    QVERIFY(errors.constFirst().contains("minimum address_width is 14"));
-    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(256, 8, 64, 14)), &plan));
-
-    QVERIFY(
-        !QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 2)), &plan, &errors));
-    QVERIFY(errors.constFirst().contains("minimum address_width is 14"));
-    QVERIFY(QSocIomuxGenerator::buildPlan(makeDefinition(sourceForConfig(1, 2, 32, 14)), &plan));
+    for (quint32 width : {32U, 64U}) {
+        QSocIomuxPlan plan;
+        QStringList   errors;
+        QVERIFY(!QSocIomuxGenerator::buildPlan(
+            makeDefinition(sourceForConfig(256, 8, width, 8)), &plan, &errors));
+        QCOMPARE(plan, QSocIomuxPlan());
+        QVERIFY(errors.join('\n').contains("aperture needs 384 bytes"));
+        QVERIFY(
+            QSocIomuxGenerator::buildPlan(
+                makeDefinition(sourceForConfig(256, 8, width, 9)), &plan, &errors));
+        QCOMPARE(plan.mmio.zeroFillBytes, quint64(384));
+    }
 }
 
 void Test::reportListsRoutesAndLayout()
@@ -3688,8 +3583,8 @@ void Test::reportListsRoutesAndLayout()
     QVERIFY(report.contains("IOMUX route report for iomux0"));
     QVERIFY(report.contains("pin_count: 2"));
     QVERIFY(report.contains("hs_slots: 2"));
-    QVERIFY(report.contains("selector: 1-bit field in a fixed 4-bit lane per pin"));
-    QVERIFY(report.contains("capability: 0x00020002 at offset 0x8"));
+    QVERIFY(report.contains("selector: 1-bit field in a 4-bit lane per pin"));
+    QVERIFY(report.contains("impid: 0x0000000000000000"));
     QVERIFY(report.contains("reset: every selector resets to 0 and selects slot 0"));
     QVERIFY(report.contains("pin 0 selector word 0 lsb 0 offset 0x10"));
     QVERIFY(report.contains("pin 1 selector word 0 lsb 4 offset 0x10"));
@@ -3748,7 +3643,7 @@ void Test::invalidSource_data()
     QTest::newRow("pin-count-zero")
         << sourceForConfig(0, 2, 32, 14) << "IOMUX_RANGE generator.pin_count";
     QTest::newRow("pin-count-over-max")
-        << sourceForConfig(257, 2, 32, 14) << "IOMUX_RANGE generator.pin_count";
+        << sourceForConfig(2147483647U, 2, 32, 14) << "IOMUX_RANGE generator.pin_count";
     QTest::newRow("pin-count-quoted-string")
         << QString(basePrefix).replace("pin_count: 2", "pin_count: \"2\"") + "    route: []\n"
         << "IOMUX_TYPE generator.pin_count";
@@ -3758,10 +3653,10 @@ void Test::invalidSource_data()
     QTest::newRow("pin-count-float")
         << QString(basePrefix).replace("pin_count: 2", "pin_count: 2.0") + "    route: []\n"
         << "IOMUX_TYPE generator.pin_count";
-    QTest::newRow("hs-slots-one") << sourceForConfig(2, 1, 32, 14)
-                                  << "IOMUX_RANGE generator.hs_slots";
-    QTest::newRow("hs-slots-nine")
-        << sourceForConfig(2, 9, 32, 14) << "IOMUX_RANGE generator.hs_slots";
+    QTest::newRow("hs-slots-zero")
+        << sourceForConfig(2, 0, 32, 14) << "IOMUX_RANGE generator.hs_slots";
+    QTest::newRow("hs-slots-overflow")
+        << sourceForConfig(2, 2147483647U, 32, 14) << "IOMUX_RANGE generator.hs_slots";
     QTest::newRow("wrong-kind") << QString(basePrefix).replace("kind: iomux", "kind: mmio")
                                        + "    route: []\n"
                                 << "IOMUX_KIND generator.kind";
@@ -4089,12 +3984,6 @@ void Test::lsPoolsDoNotReachEachOtherWhenIverilogIsAvailable()
      * and a pool holds only the numbers it declares. */
     QCOMPARE(plan.lsChannelCount(), 31U);
     QCOMPARE(
-        findField(plan.mmio, "ls_capability", "channel_count")->constantValue,
-        std::optional<quint64>(31));
-    QCOMPARE(
-        findField(plan.mmio, "ls_capability", "pool_count")->constantValue,
-        std::optional<quint64>(3));
-    QCOMPARE(
         findField(plan.mmio, "ls_select_0", "pin_0_ls_select")->resetValue,
         std::optional<quint64>(0));
     QCOMPARE(
@@ -4258,39 +4147,31 @@ void Test::lsPoolPlanFollowsTheSource()
     QCOMPARE(sda->outputEnable.link, QStringLiteral("i2c2_sda_o"));
     QVERIFY(sda->outputEnable.invert);
 
-    /* The capability word, then only the lanes that have something behind them. */
-    const QSocMmioRegisterPlan *capability = findRegister(plan.mmio, "ls_capability");
-    QVERIFY(capability != nullptr);
-    QCOMPARE(capability->byteOffset, QSocIomuxGenerator::kLsCapabilityOffset);
-    QCOMPARE(
-        findField(plan.mmio, "ls_capability", "channel_count")->constantValue,
-        std::optional<quint64>(4));
-    QCOMPARE(
-        findField(plan.mmio, "ls_capability", "pool_count")->constantValue,
-        std::optional<quint64>(2));
+    QVERIFY(findRegister(plan.mmio, "ls_channel_span") == nullptr);
+    QCOMPARE(plan.lsPools.size(), 2);
     const QSocMmioRegisterPlan *select = findRegister(plan.mmio, "ls_select_0");
     QVERIFY(select != nullptr);
-    QCOMPARE(select->byteOffset, QSocIomuxGenerator::kBaseLsSelect);
+    QCOMPARE(select->byteOffset, blockBase(plan, "ls_select"));
     QCOMPARE(select->fields.size(), 3);
     QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_0_ls_select")->lsb, 0U);
     QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_1_ls_select")->lsb, 8U);
     QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_3_ls_select")->lsb, 24U);
     QCOMPARE(findField(plan.mmio, "ls_select_0", "pin_3_ls_select")->width, 8U);
     QVERIFY(findField(plan.mmio, "ls_select_0", "pin_2_ls_select") == nullptr);
-    QCOMPARE(findRegister(plan.mmio, "ls_rx_pin_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxPin);
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_pin_0")->byteOffset, blockBase(plan, "ls_rx_pin"));
     QCOMPARE(findField(plan.mmio, "ls_rx_pin_0", "ls_c1_pin")->lsb, 8U);
     QCOMPARE(findField(plan.mmio, "ls_rx_pin_0", "ls_c3_pin")->lsb, 24U);
     QVERIFY(findField(plan.mmio, "ls_rx_pin_0", "ls_c0_pin") == nullptr);
-    QCOMPARE(findRegister(plan.mmio, "ls_rx_src_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxSrc);
-    QCOMPARE(findRegister(plan.mmio, "ls_rx_value_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxValue);
-    QCOMPARE(findRegister(plan.mmio, "ls_rx_inv_0")->byteOffset, QSocIomuxGenerator::kBaseLsRxInv);
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_src_0")->byteOffset, blockBase(plan, "ls_rx_src"));
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_value_0")->byteOffset, blockBase(plan, "ls_rx_value"));
+    QCOMPARE(findRegister(plan.mmio, "ls_rx_inv_0")->byteOffset, blockBase(plan, "ls_rx_inv"));
     QCOMPARE(findField(plan.mmio, "ls_rx_inv_0", "ls_c3_rx_inv")->lsb, 3U);
 
     const QString report = QSocIomuxGenerator::generateReport(plan);
-    QVERIFY2(report.contains("feature: 0x00000038 at offset 0xc"), qPrintable(report));
+    QVERIFY(findRegister(plan.mmio, "feature") == nullptr);
     QVERIFY2(
         report.contains(
-            "ls: 2 pools, 4 channels, capability 0x00020004 at offset 0x10, slot 0 of "
+            "ls: 2 pools, channel span 4, slot 0 of "
             "a bound pin is its pool"),
         qPrintable(report));
     QVERIFY2(
@@ -4321,13 +4202,13 @@ void Test::lsPoolPlanFollowsTheSource()
         std::optional<quint64>(1));
     QCOMPARE(
         findField(plan.mmio, "pin_src_ctrl_2", "rx_src_s0")->resetValue, std::optional<quint64>(0));
-    QVERIFY2(report.contains("    rx pin select word 0 lsb 24 offset 0xd00"), qPrintable(report));
+    QVERIFY2(report.contains("    rx pin select lsb 24 offset 0x148"), qPrintable(report));
     QVERIFY2(
         report.contains(
-            "pin 3 selector word 0 lsb 12 offset 0x100\n  ls select word 0 lsb 24 offset 0xc00\n  "
+            "pin 3 selector word 0 lsb 12 offset 0x100\n  ls select lsb 24 offset 0x140\n  "
             "slot 0 ls pool pool_b\n"),
         qPrintable(report));
-    QVERIFY2(report.contains("ls registers: 5 at offset 0xc00 to 0xe40"), qPrintable(report));
+    QVERIFY2(report.contains("ls_rx_inv: offset 0x160, size 8 bytes, stride 0"), qPrintable(report));
 
     /* The public interface carries the channel roles and nothing of the pool. */
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
@@ -4364,15 +4245,13 @@ void Test::lsPoolLanesFollowTheDataWidth()
         const QString word  = QString("ls_select_%1").arg(9 / lanes);
         QCOMPARE(
             findRegister(plan.mmio, word)->byteOffset,
-            QSocIomuxGenerator::kBaseLsSelect + (9 / lanes) * (dataWidth / 8));
+            blockBase(plan, "ls_select") + (9 / lanes) * (dataWidth / 8));
         QCOMPARE(findField(plan.mmio, word, "pin_9_ls_select")->lsb, (9 % lanes) * 8);
         QVERIFY(findRegister(plan.mmio, "ls_select_0") == nullptr || dataWidth == 64);
         const QString rxWord = QString("ls_rx_pin_%1").arg(17 / lanes);
         QCOMPARE(findField(plan.mmio, rxWord, "ls_c17_pin")->lsb, (17 % lanes) * 8);
         QCOMPARE(findField(plan.mmio, "ls_rx_inv_0", "ls_c17_rx_inv")->lsb, 17U);
-        QCOMPARE(
-            findField(plan.mmio, "ls_capability", "channel_count")->constantValue,
-            std::optional<quint64>(18));
+        QCOMPARE(plan.lsChannelCount(), 18U);
         QVERIFY(!QSocIomuxGenerator::generateReport(plan).isEmpty());
     }
 }
@@ -4455,9 +4334,9 @@ void Test::lsPoolRejectsBadSources_data()
     QTest::newRow("channel declared twice")
         << "{channel: 2, function: pwm" << "{channel: 0, function: pwm"
         << "IOMUX_DUPLICATE generator.ls.pool_b.channel[0].channel: channel 0 is already declared";
-    QTest::newRow("channel past 255")
-        << "{channel: 2, function: pwm" << "{channel: 256, function: pwm"
-        << "IOMUX_RANGE generator.ls.pool_b.channel[0].channel: must be between 0 and 255";
+    QTest::newRow("channel span overflow")
+        << "{channel: 2, function: pwm" << "{channel: 2147483647, function: pwm"
+        << "IOMUX_RANGE generator.ls.pool_b.channel[0].channel: must be between 0 and 2147483646";
     QTest::newRow("empty pins")
         << "        pins: [3]\n"
         << "        pins: []\n"
@@ -4466,6 +4345,15 @@ void Test::lsPoolRejectsBadSources_data()
         << "        pins: [3]\n"
         << "        pins: [\"3-9\"]\n"
         << "IOMUX_RANGE generator.ls.pool_b.pins: 3-9 must lie below pin_count 4, low end first";
+    for (const char *token :
+         {"18446744073709551616", "0-18446744073709551616", "18446744073709551616-1"}) {
+        QTest::newRow(token) << "        pins: [3]\n"
+                             << QString("        pins: [\"%1\"]\n").arg(token)
+                             << QString(
+                                    "IOMUX_RANGE generator.ls.pool_b.pins: %1 must lie below "
+                                    "pin_count 4, low end first")
+                                    .arg(token);
+    }
     QTest::newRow("channel without a role")
         << "{channel: 2, function: pwm, signal: out, output_value: {link: pwm_out, invert: true}, "
            "output_enable: 1}"
@@ -4672,35 +4560,35 @@ module tb;
 
     initial begin
         repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
-        rd(14'h008);
-        if (v !== 32'h00020002) begin
-            $display("TEST_FAIL capability %h", v); fails = fails + 1;
+        rd(14'h8);
+        if (v !== 32'h00000000) begin
+            $display("TEST_FAIL reserved header %h", v); fails = fails + 1;
         end
         uart0_tx = 1; repeat (2) @(posedge clk);
         chk("fast_ov", pad_ov[0], 1'b1);
         chk("fast_oe", pad_oe[0], 1'b1);
-        wr(14'h208, 32'h00000000);
-        wr(14'h20c, 32'h00000001);
-        wr(14'h1000, 32'h00000014);
+        wr(14'h118, 32'h00000000);
+        wr(14'h120, 32'h00000001);
+        wr(14'h128, 32'h00000014);
         repeat (2) @(posedge clk);
         chk("reg_ov_low", pad_ov[0], 1'b0);
         chk("reg_oe_high", pad_oe[0], 1'b1);
-        wr(14'h208, 32'h00000001);
+        wr(14'h118, 32'h00000001);
         repeat (2) @(posedge clk);
         chk("reg_ov_high", pad_ov[0], 1'b1);
         uart0_tx = 0; repeat (2) @(posedge clk);
         chk("fast_ignored", pad_ov[0], 1'b1);
         uart0_tx = 1;
-        wr(14'h1000, 32'h00000020);
+        wr(14'h128, 32'h00000020);
         repeat (2) @(posedge clk);
         chk("oe_from_slot_ov_high", pad_oe[0], 1'b1);
         uart0_tx = 0; repeat (2) @(posedge clk);
         chk("oe_from_slot_ov_low", pad_oe[0], 1'b0);
-        wr(14'h1000, 32'h00000030);
+        wr(14'h128, 32'h00000030);
         repeat (2) @(posedge clk);
         chk("oe_reserved", pad_oe[0], 1'b0);
         pad_in = 2'b10; repeat (4) @(posedge clk);
-        rd(14'h200);
+        rd(14'h108);
         chk("readback_pin1", v[1], 1'b1);
         chk("readback_pin0", v[0], 1'b0);
         if (fails == 0) $display("TEST_PASS");
@@ -4777,35 +4665,35 @@ module tb;
         repeat (4) @(posedge clk); rst_n = 1; repeat (6) @(posedge clk);
 
         /* fix 1: pending records the event with every enable still at zero */
-        rd(14'h414);
+        rd(14'h150);
         chk("low_pend_set_without_enable", v[0], 1'b1);
         chk("irq_quiet_without_enable", irq, 1'b0);
-        rd(14'h410);
+        rd(14'h148);
         chk("high_pend_clear", v[0], 1'b0);
 
         /* fix 2: a clear that lands while the source still fires keeps the bit */
-        wr(14'h414, 32'h00000001);
+        wr(14'h150, 32'h00000001);
         repeat (2) @(posedge clk);
-        rd(14'h414);
+        rd(14'h150);
         chk("set_beats_clear", v[0], 1'b1);
 
         /* once the source stops, the same write clears it */
         pad_in = 2'b01;
         repeat (4) @(posedge clk);
-        wr(14'h414, 32'h00000001);
+        wr(14'h150, 32'h00000001);
         repeat (2) @(posedge clk);
-        rd(14'h414);
+        rd(14'h150);
         chk("clear_when_idle", v[0], 1'b0);
 
         /* the rising edge was recorded on the way up */
-        rd(14'h418);
+        rd(14'h158);
         chk("rise_pend_set", v[0], 1'b1);
 
         /* enable gates the line, not the bit */
-        wr(14'h408, 32'h00000001);
+        wr(14'h138, 32'h00000001);
         repeat (2) @(posedge clk);
         chk("irq_after_enable", irq, 1'b1);
-        wr(14'h418, 32'h00000001);
+        wr(14'h158, 32'h00000001);
         repeat (2) @(posedge clk);
         chk("irq_after_ack", irq, 1'b0);
 
@@ -5469,13 +5357,11 @@ pin_count: 2
 hs_slots: 3
 data_width: 32
 address_width: 14
-selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 1 at offset 0x100 to 0x100
-registers total: 5
-aperture: 16384 bytes
-capability: 0x00030002 at offset 0x8
-feature: 0x00000000 at offset 0xc
+selector: 2-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 8 bytes, stride 0
+registers total: 3
+aperture: 264 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, controls 1, constraints 3
@@ -5523,17 +5409,25 @@ pin_count: 2
 hs_slots: 2
 data_width: 32
 address_width: 14
-selector: 1-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 1 at offset 0x100 to 0x100
-gpio registers: 4 at offset 0x200 to 0x20c
-interrupt registers: 8 at offset 0x400 to 0x41c
-source control registers: 2 at offset 0x1000 to 0x1004
+selector: 1-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 8 bytes, stride 0
+input_value: offset 0x108, size 8 bytes, stride 0
+input_enable: offset 0x110, size 8 bytes, stride 0
+output_value: offset 0x118, size 8 bytes, stride 0
+output_enable: offset 0x120, size 8 bytes, stride 0
+high_int_en: offset 0x128, size 8 bytes, stride 0
+low_int_en: offset 0x130, size 8 bytes, stride 0
+rise_int_en: offset 0x138, size 8 bytes, stride 0
+fall_int_en: offset 0x140, size 8 bytes, stride 0
+high_int_pend: offset 0x148, size 8 bytes, stride 0
+low_int_pend: offset 0x150, size 8 bytes, stride 0
+rise_int_pend: offset 0x158, size 8 bytes, stride 0
+fall_int_pend: offset 0x160, size 8 bytes, stride 0
+pin_src_ctrl: offset 0x168, size 16 bytes, stride 8
 interrupt lines: 1, one per 32 pins
-registers total: 19
-aperture: 16384 bytes
-capability: 0x00020002 at offset 0x8
-feature: 0x00000003 at offset 0xc
+registers total: 17
+aperture: 376 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 
@@ -5606,9 +5500,9 @@ void Test::interruptAloneNeedsNoGpioRegisters()
     QVERIFY(!plan.option.gpio);
 
     const QString report = QSocIomuxGenerator::generateReport(plan);
-    QVERIFY(report.contains("interrupt registers: 8 at offset 0x400 to 0x41c"));
+    QVERIFY(report.contains("high_int_en: offset 0x108"));
     QVERIFY(!report.contains("gpio registers"));
-    QVERIFY(report.contains("registers total: 13"));
+    QVERIFY(report.contains("registers total: 11"));
 
     const QString top = QSocIomuxGenerator::generateTopVerilog(plan);
     QVERIFY(top.contains("pad_input_sync_q <= pad_input_meta_q;"));
@@ -5699,7 +5593,6 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
     const quint32 code       = hsSlots - 1;
     const quint64 selOffset  = QSocIomuxGenerator::kBaseSelector + quint64(pin / lanes) * byteCount;
     const quint32 laneLsb    = (pin % lanes) * 4;
-    const quint32 capability = pinCount | (hsSlots << 16);
     const QString keepStrobe = QString("%1'h%2").arg(byteCount).arg(
         QString::number((quint64(1) << byteCount) - 2, 16));
 
@@ -5710,7 +5603,7 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
     bench.replace("@P@", QString::number(pinCount));
     bench.replace("@PIN@", QString::number(pin));
     bench.replace("@HISLOT@", QString::number(hsSlots - 1));
-    bench.replace("@CAP@", QString("%1").arg(capability, 8, 16, QLatin1Char('0')));
+
     bench.replace("@SEL_OFFSET@", QString::number(selOffset, 16));
     bench.replace("@W0_OFFSET@", QString::number(QSocIomuxGenerator::kBaseSelector, 16));
     bench.replace("@LANE_LSB@", QString::number(laneLsb));
@@ -5821,20 +5714,37 @@ pin_count: 2
 hs_slots: 3
 data_width: 32
 address_width: 14
-selector: 2-bit field in a fixed 4-bit lane per pin
-identity: version 2.1.0 build 0, type 0x494f4d58 at offset 0x0 to 0xc
-selector registers: 1 at offset 0x100 to 0x100
-gpio registers: 4 at offset 0x200 to 0x20c
-rx override registers: 3 at offset 0x300 to 0x308
-interrupt registers: 8 at offset 0x400 to 0x41c
-invert registers: 8 at offset 0x800 to 0x81c
-source control registers: 2 at offset 0x1000 to 0x1004
-pad control registers: 2 at offset 0x1800 to 0x1804
+selector: 2-bit field in a 4-bit lane per pin
+impid: 0x0000000000000000
+hs_select: offset 0x100, size 8 bytes, stride 0
+input_value: offset 0x108, size 8 bytes, stride 0
+input_enable: offset 0x110, size 8 bytes, stride 0
+output_value: offset 0x118, size 8 bytes, stride 0
+output_enable: offset 0x120, size 8 bytes, stride 0
+rx_value_s0: offset 0x128, size 8 bytes, stride 0
+rx_value_s1: offset 0x130, size 8 bytes, stride 0
+rx_value_s2: offset 0x138, size 8 bytes, stride 0
+high_int_en: offset 0x140, size 8 bytes, stride 0
+low_int_en: offset 0x148, size 8 bytes, stride 0
+rise_int_en: offset 0x150, size 8 bytes, stride 0
+fall_int_en: offset 0x158, size 8 bytes, stride 0
+high_int_pend: offset 0x160, size 8 bytes, stride 0
+low_int_pend: offset 0x168, size 8 bytes, stride 0
+rise_int_pend: offset 0x170, size 8 bytes, stride 0
+fall_int_pend: offset 0x178, size 8 bytes, stride 0
+input_enable_inv: offset 0x180, size 8 bytes, stride 0
+output_value_inv: offset 0x188, size 8 bytes, stride 0
+output_enable_inv: offset 0x190, size 8 bytes, stride 0
+rx_inv_s0: offset 0x198, size 8 bytes, stride 0
+rx_inv_s1: offset 0x1a0, size 8 bytes, stride 0
+rx_inv_s2: offset 0x1a8, size 8 bytes, stride 0
+pull_inv: offset 0x1b0, size 8 bytes, stride 0
+drive_inv: offset 0x1b8, size 8 bytes, stride 0
+pin_src_ctrl: offset 0x1c0, size 16 bytes, stride 8
+pin_pad_ctrl: offset 0x1d0, size 16 bytes, stride 8
 interrupt lines: 1, one per 32 pins
-registers total: 32
-aperture: 16384 bytes
-capability: 0x00030002 at offset 0x8
-feature: 0x0000001f at offset 0xc
+registers total: 30
+aperture: 480 bytes
 reset: every selector resets to 0 and selects slot 0
 rx: pad input broadcasts to every declared sink regardless of the selector
 pad cell: gpio_pad_ps, pull modes 4, controls 1, constraints 3
@@ -5878,41 +5788,18 @@ void Test::optionRegistersKeepFixedBitPositions()
         qPrintable(errors.join('\n')));
     QVERIFY(plan.option.padControl && plan.option.invert && plan.option.rxOverride);
 
-    /* Composition order: gpio banks, source words, pad words, inversion banks,
-     * receive override banks, interrupt banks. */
+    /* Physical register order follows the logical arrays. */
     const QStringList expectedNames
-        = {"version",
-           "type",
-           "capability",
-           "feature",
-           "hs_select_0",
-           "input_value_0",
-           "input_enable_0",
-           "output_value_0",
-           "output_enable_0",
-           "rx_value_s0_0",
-           "rx_value_s1_0",
-           "rx_value_s2_0",
-           "high_int_en_0",
-           "low_int_en_0",
-           "rise_int_en_0",
-           "fall_int_en_0",
-           "high_int_pend_0",
-           "low_int_pend_0",
-           "rise_int_pend_0",
-           "fall_int_pend_0",
-           "input_enable_inv_0",
-           "output_value_inv_0",
-           "output_enable_inv_0",
-           "rx_inv_s0_0",
-           "rx_inv_s1_0",
-           "rx_inv_s2_0",
-           "pull_inv_0",
-           "drive_inv_0",
-           "pin_src_ctrl_0",
-           "pin_src_ctrl_1",
-           "pin_pad_ctrl_0",
-           "pin_pad_ctrl_1"};
+        = {"impid_lo",           "impid_hi",           "hs_select_0",
+           "input_value_0",      "input_enable_0",     "output_value_0",
+           "output_enable_0",    "rx_value_s0_0",      "rx_value_s1_0",
+           "rx_value_s2_0",      "high_int_en_0",      "low_int_en_0",
+           "rise_int_en_0",      "fall_int_en_0",      "high_int_pend_0",
+           "low_int_pend_0",     "rise_int_pend_0",    "fall_int_pend_0",
+           "input_enable_inv_0", "output_value_inv_0", "output_enable_inv_0",
+           "rx_inv_s0_0",        "rx_inv_s1_0",        "rx_inv_s2_0",
+           "pull_inv_0",         "drive_inv_0",        "pin_src_ctrl_0",
+           "pin_src_ctrl_1",     "pin_pad_ctrl_0",     "pin_pad_ctrl_1"};
     QStringList names;
     for (const QSocMmioRegisterPlan &reg : plan.mmio.registers) {
         names.append(reg.name);
@@ -6220,37 +6107,37 @@ module tb;
         chk("slot_pull_up_PS", u_io.PS_0_w, 1'b1);
         chk("slot_drive_high", u_io.DS_0_w, 1'b1);
         /* the register alone changes nothing: mode 2 is down */
-        wr(14'h1800, 32'h0000_0002);
+        wr(14'h118, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("reg_idle_PS", u_io.PS_0_w, 1'b1);
         chk("reg_idle_DS", u_io.DS_0_w, 1'b1);
         /* each source bit hands over its own code and nothing else */
-        wr(14'h1000, 32'h0000_0040);
+        wr(14'h108, 32'h0000_0040);
         repeat (2) @(posedge clk);
         chk("reg_pull_down_PE", u_io.PE_0_w, 1'b1);
         chk("reg_pull_down_PS", u_io.PS_0_w, 1'b0);
         chk("drive_still_slot", u_io.DS_0_w, 1'b1);
-        wr(14'h1000, 32'h0001_0040);
+        wr(14'h108, 32'h0001_0040);
         repeat (2) @(posedge clk);
         chk("reg_drive_low", u_io.DS_0_w, 1'b0);
         /* mode 0 is none, and the drive lane at bit 16 holds row 1, high */
-        wr(14'h1800, 32'h0001_0000);
+        wr(14'h118, 32'h0001_0000);
         repeat (2) @(posedge clk);
         chk("reg_pull_none_PE", u_io.PE_0_w, 1'b0);
         chk("reg_drive_high", u_io.DS_0_w, 1'b1);
         /* releasing the source bits returns the slot request */
-        wr(14'h1000, 32'h0000_0000);
+        wr(14'h108, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("slot_again_PS", u_io.PS_0_w, 1'b1);
         /* mode 3 reaches the weave through the register too */
         drv_en = 1; drv_val = 1;
-        wr(14'h1804, 32'h0000_0003);
-        wr(14'h1004, 32'h0000_0040);
+        wr(14'h120, 32'h0000_0003);
+        wr(14'h110, 32'h0000_0040);
         repeat (2) @(posedge clk);
         drv_en = 0; #2 chk("reg_keeper_holds_high", pad[1], 1'b1);
         drv_en = 1; drv_val = 0; #2 drv_en = 0; #2 chk("reg_keeper_holds_low", pad[1], 1'b0);
         /* open drain from the route: sda_out low drives the pad low */
-        wr(14'h1004, 32'h0000_0000);
+        wr(14'h110, 32'h0000_0000);
         drv_en = 1; drv_val = 1; #2 drv_en = 0;
         sda_out = 0; #2 chk("open_drain_drives_low", pad[1], 1'b0);
         sda_out = 1; #2 chk("open_drain_releases", dut.pad_output_enable_o[1], 1'b0);
@@ -6314,9 +6201,9 @@ void Test::registerPadControlReachesThePadWhenIverilogIsAvailable()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x1000));
-    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x1800));
-    QCOMPARE(offsetOf("pin_pad_ctrl_1"), qint64(0x1804));
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x108));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x118));
+    QCOMPARE(offsetOf("pin_pad_ctrl_1"), qint64(0x120));
     QVERIFY(findRegister(plan.mmio, "pin_ctl_0_0") == nullptr);
 
     QTemporaryDir directory;
@@ -6455,52 +6342,52 @@ module tb;
         chk("plain_ov", pad_ov[0], 1'b1);
         chk("plain_oe", pad_oe[0], 1'b1);
         /* output value inversion flips the slot value */
-        wr(14'h804, 32'h0000_0001);
+        wr(14'h140, 32'h0000_0001);
         repeat (2) @(posedge clk);
         chk("inv_ov", pad_ov[0], 1'b0);
         uart0_tx = 0; #1 chk("inv_ov_low", pad_ov[0], 1'b1);
-        wr(14'h804, 32'h0000_0000);
+        wr(14'h140, 32'h0000_0000);
         /* open drain at run time: enable follows the inverted slot value */
-        wr(14'h1000, 32'h0000_0020);
-        wr(14'h808, 32'h0000_0001);
+        wr(14'h160, 32'h0000_0020);
+        wr(14'h148, 32'h0000_0001);
         repeat (2) @(posedge clk);
         uart0_tx = 0; #1;
         chk("od_low_drives", pad_oe[0], 1'b1);
         chk("od_low_value", pad_ov[0], 1'b0);
         uart0_tx = 1; #1 chk("od_high_releases", pad_oe[0], 1'b0);
         /* cross taps: value from the slot enable (1) and from the slot input enable (0) */
-        wr(14'h808, 32'h0000_0000);
-        wr(14'h1000, 32'h0000_000c);
+        wr(14'h148, 32'h0000_0000);
+        wr(14'h160, 32'h0000_000c);
         repeat (2) @(posedge clk);
         uart0_tx = 0; #1 chk("ov_from_slot_oe", pad_ov[0], 1'b1);
-        wr(14'h1000, 32'h0000_0008);
+        wr(14'h160, 32'h0000_0008);
         repeat (2) @(posedge clk);
         uart0_tx = 1; #1 chk("ov_from_slot_ie", pad_ov[0], 1'b0);
-        wr(14'h1000, 32'h0000_0000);
+        wr(14'h160, 32'h0000_0000);
         /* input enable inversion turns the constant zero of an idle pin on */
         chk("ie_pin0_off", pad_ie[0], 1'b0);
-        wr(14'h800, 32'h0000_0001);
+        wr(14'h138, 32'h0000_0001);
         repeat (2) @(posedge clk);
         chk("ie_pin0_inverted_on", pad_ie[0], 1'b1);
         /* receive: broadcast, then a per-slot override, then a per-slot invert */
         pad_in = 2'b10; #1;
         chk("rx_s0_broadcast", uart0_rx, 1'b1);
         chk("rx_s1_broadcast", spi0_miso, 1'b1);
-        wr(14'h304, 32'h0000_0000);
+        wr(14'h130, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("rx_value_idle_without_src", spi0_miso, 1'b1);
-        wr(14'h1004, 32'h0000_0200);
+        wr(14'h168, 32'h0000_0200);
         repeat (2) @(posedge clk);
         chk("rx_s1_overridden_low", spi0_miso, 1'b0);
         chk("rx_s0_untouched", uart0_rx, 1'b1);
-        wr(14'h304, 32'h0000_0002);
+        wr(14'h130, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("rx_s1_overridden_high", spi0_miso, 1'b1);
         pad_in = 2'b00; #1 chk("rx_s1_ignores_pad", spi0_miso, 1'b1);
-        wr(14'h80c, 32'h0000_0002);
+        wr(14'h150, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("rx_s0_inverted", uart0_rx, 1'b1);
-        wr(14'h810, 32'h0000_0002);
+        wr(14'h158, 32'h0000_0002);
         repeat (2) @(posedge clk);
         chk("rx_s1_override_then_invert", spi0_miso, 1'b0);
         if (fails == 0) $display("TEST_PASS");
@@ -6528,13 +6415,13 @@ void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x1000));
-    QCOMPARE(offsetOf("input_enable_inv_0"), qint64(0x800));
-    QCOMPARE(offsetOf("output_value_inv_0"), qint64(0x804));
-    QCOMPARE(offsetOf("output_enable_inv_0"), qint64(0x808));
-    QCOMPARE(offsetOf("rx_inv_s0_0"), qint64(0x80c));
-    QCOMPARE(offsetOf("rx_inv_s1_0"), qint64(0x810));
-    QCOMPARE(offsetOf("rx_value_s1_0"), qint64(0x304));
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x160));
+    QCOMPARE(offsetOf("input_enable_inv_0"), qint64(0x138));
+    QCOMPARE(offsetOf("output_value_inv_0"), qint64(0x140));
+    QCOMPARE(offsetOf("output_enable_inv_0"), qint64(0x148));
+    QCOMPARE(offsetOf("rx_inv_s0_0"), qint64(0x150));
+    QCOMPARE(offsetOf("rx_inv_s1_0"), qint64(0x158));
+    QCOMPARE(offsetOf("rx_value_s1_0"), qint64(0x130));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -6802,19 +6689,8 @@ void Test::nativeKeeperRowIsSelectedNotWoven()
                     "of gpio_pad_ps has a single row, drop strength"});
 }
 
-void Test::layoutVersionTracksTheRegisterMap()
+void Test::allOptionsFollowTheByteLayout()
 {
-    /* The version word is a promise about offsets. This list is that promise
-     * for the layout with every option on. Once a layout has shipped, a
-     * change here that moves an existing line is a major step and a new line
-     * at the end is a minor step, and either one changes
-     * QSocIomuxGenerator::layoutVersion() first. Before that the list may
-     * change under the same number. */
-    const QSocIomuxLayoutVersion layout = QSocIomuxGenerator::layoutVersion();
-    QCOMPARE(layout.major, 2U);
-    QCOMPARE(layout.minor, 1U);
-    QCOMPARE(layout.patch, 0U);
-
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -6831,40 +6707,38 @@ void Test::layoutVersionTracksTheRegisterMap()
                        .arg(reg.name, fields.join(' ')));
     }
     const QStringList frozen = {
-        "0x00 version: build@0 patch@8 minor@16 major@24",
-        "0x04 type: type_id@0",
-        "0x08 capability: pin_count@0 hs_slots@16",
-        "0x0c feature: gpio@0 interrupt@1 pad_control@2 invert@3 rx_override@4 ls@5",
+        "0x00 impid_lo: impid_lo@0",
+        "0x04 impid_hi: impid_hi@0",
         "0x100 hs_select_0: pin_0_select@0 pin_1_select@4",
-        "0x200 input_value_0: pin_0_input_value@0 pin_1_input_value@1",
-        "0x204 input_enable_0: pin_0_input_enable@0 pin_1_input_enable@1",
-        "0x208 output_value_0: pin_0_output_value@0 pin_1_output_value@1",
-        "0x20c output_enable_0: pin_0_output_enable@0 pin_1_output_enable@1",
-        "0x300 rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
-        "0x304 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
-        "0x308 rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
-        "0x400 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
-        "0x404 low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
-        "0x408 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
-        "0x40c fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
-        "0x410 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
-        "0x414 low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
-        "0x418 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
-        "0x41c fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
-        "0x800 input_enable_inv_0: pin_0_input_enable_inv@0 pin_1_input_enable_inv@1",
-        "0x804 output_value_inv_0: pin_0_output_value_inv@0 pin_1_output_value_inv@1",
-        "0x808 output_enable_inv_0: pin_0_output_enable_inv@0 pin_1_output_enable_inv@1",
-        "0x80c rx_inv_s0_0: pin_0_rx_inv_s0@0 pin_1_rx_inv_s0@1",
-        "0x810 rx_inv_s1_0: pin_0_rx_inv_s1@0 pin_1_rx_inv_s1@1",
-        "0x814 rx_inv_s2_0: pin_0_rx_inv_s2@0 pin_1_rx_inv_s2@1",
-        "0x818 pull_inv_0: pin_0_pull_inv@0 pin_1_pull_inv@1",
-        "0x81c drive_inv_0: pin_0_drive_inv@0 pin_1_drive_inv@1",
-        "0x1000 pin_src_ctrl_0: input_enable_src@0 output_value_src@2 output_enable_src@4 "
+        "0x108 input_value_0: pin_0_input_value@0 pin_1_input_value@1",
+        "0x110 input_enable_0: pin_0_input_enable@0 pin_1_input_enable@1",
+        "0x118 output_value_0: pin_0_output_value@0 pin_1_output_value@1",
+        "0x120 output_enable_0: pin_0_output_enable@0 pin_1_output_enable@1",
+        "0x128 rx_value_s0_0: pin_0_rx_value_s0@0 pin_1_rx_value_s0@1",
+        "0x130 rx_value_s1_0: pin_0_rx_value_s1@0 pin_1_rx_value_s1@1",
+        "0x138 rx_value_s2_0: pin_0_rx_value_s2@0 pin_1_rx_value_s2@1",
+        "0x140 high_int_en_0: pin_0_high_int_en@0 pin_1_high_int_en@1",
+        "0x148 low_int_en_0: pin_0_low_int_en@0 pin_1_low_int_en@1",
+        "0x150 rise_int_en_0: pin_0_rise_int_en@0 pin_1_rise_int_en@1",
+        "0x158 fall_int_en_0: pin_0_fall_int_en@0 pin_1_fall_int_en@1",
+        "0x160 high_int_pend_0: pin_0_high_int_pend@0 pin_1_high_int_pend@1",
+        "0x168 low_int_pend_0: pin_0_low_int_pend@0 pin_1_low_int_pend@1",
+        "0x170 rise_int_pend_0: pin_0_rise_int_pend@0 pin_1_rise_int_pend@1",
+        "0x178 fall_int_pend_0: pin_0_fall_int_pend@0 pin_1_fall_int_pend@1",
+        "0x180 input_enable_inv_0: pin_0_input_enable_inv@0 pin_1_input_enable_inv@1",
+        "0x188 output_value_inv_0: pin_0_output_value_inv@0 pin_1_output_value_inv@1",
+        "0x190 output_enable_inv_0: pin_0_output_enable_inv@0 pin_1_output_enable_inv@1",
+        "0x198 rx_inv_s0_0: pin_0_rx_inv_s0@0 pin_1_rx_inv_s0@1",
+        "0x1a0 rx_inv_s1_0: pin_0_rx_inv_s1@0 pin_1_rx_inv_s1@1",
+        "0x1a8 rx_inv_s2_0: pin_0_rx_inv_s2@0 pin_1_rx_inv_s2@1",
+        "0x1b0 pull_inv_0: pin_0_pull_inv@0 pin_1_pull_inv@1",
+        "0x1b8 drive_inv_0: pin_0_drive_inv@0 pin_1_drive_inv@1",
+        "0x1c0 pin_src_ctrl_0: input_enable_src@0 output_value_src@2 output_enable_src@4 "
         "pull_src@6 rx_src_s0@8 rx_src_s1@9 rx_src_s2@10 drive_src@16",
-        "0x1004 pin_src_ctrl_1: input_enable_src@0 output_value_src@2 output_enable_src@4 "
+        "0x1c8 pin_src_ctrl_1: input_enable_src@0 output_value_src@2 output_enable_src@4 "
         "pull_src@6 rx_src_s0@8 rx_src_s1@9 rx_src_s2@10 drive_src@16",
-        "0x1800 pin_pad_ctrl_0: pull_mode@0 drive@16",
-        "0x1804 pin_pad_ctrl_1: pull_mode@0 drive@16",
+        "0x1d0 pin_pad_ctrl_0: pull_mode@0 drive@16",
+        "0x1d8 pin_pad_ctrl_1: pull_mode@0 drive@16",
     };
     QCOMPARE(map, frozen);
 }
@@ -7036,8 +6910,8 @@ module tb;
         chk("asleep_pull_down_PE", u_io.PE_1_w, 1'b1);
         sleep_n = 1;
         /* the register source bit wins over the net */
-        wr(14'h1800, 32'h0000_0000);
-        wr(14'h1000, 32'h0001_0000);
+        wr(14'h118, 32'h0000_0000);
+        wr(14'h108, 32'h0001_0000);
         repeat (2) @(posedge clk);
         sda_oe = 1; #1 chk("register_overrides_net", u_io.DS_0_w, 1'b0);
         if (fails == 0) $display("TEST_PASS");
@@ -7063,8 +6937,8 @@ void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x1000));
-    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x1800));
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x108));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x118));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -7295,8 +7169,8 @@ module tb;
         chk("slot_pull_up_PS", u_io.PS_0_w, 1'b1);
         chk("slot_drive_low", u_io.DS_0_w, 1'b0);
         /* the register claims the pin, then force takes it away */
-        wr(14'h1800, 32'h0001_0000);
-        wr(14'h1000, 32'h0001_0040);
+        wr(14'h138, 32'h0001_0000);
+        wr(14'h128, 32'h0001_0040);
         repeat (2) @(posedge clk);
         chk("reg_drive_high", u_io.DS_0_w, 1'b1);
         force_n = 1; #1;
@@ -7306,7 +7180,7 @@ module tb;
         chk("forced_pull_down_PE", u_io.PE_0_w, 1'b1);
         chk("forced_drive_high", u_io.DS_0_w, 1'b1);
         /* a bus write during force changes nothing on the pad */
-        wr(14'h1000, 32'h0000_0000);
+        wr(14'h128, 32'h0000_0000);
         repeat (2) @(posedge clk);
         chk("forced_holds_through_write", u_io.PS_0_w, 1'b0);
         chk("forced_drive_high_over_slot_low", u_io.DS_0_w, 1'b1);
@@ -7336,8 +7210,8 @@ void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x1000));
-    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x1800));
+    QCOMPARE(offsetOf("pin_src_ctrl_0"), qint64(0x128));
+    QCOMPARE(offsetOf("pin_pad_ctrl_0"), qint64(0x138));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -7532,7 +7406,7 @@ void Test::linksNeedAPadCellAndRowsToChooseFrom()
     QCOMPARE(errors, QStringList{"IOMUX_ROLE generator.route[0].pull: on and off name the same row"});
 }
 
-void Test::padWordHoldsFourControlsAndSpillsTheFifth()
+void Test::padRecordContinuesIntoTheNextWord()
 {
     const auto cell = [](int controls, int rows) {
         QString text = QStringLiteral(R"yaml(    pad_cell:
@@ -7588,15 +7462,26 @@ void Test::padWordHoldsFourControlsAndSpillsTheFifth()
         const QSocMmioFieldPlan *found = findField(plan.mmio, reg, field);
         return found ? int(found->lsb) : -1;
     };
-    /* Pull fields at 0, 4, 8; controls 0 to 3 in 4-bit lanes from 16; the
-     * fifth opens pin_ctl_0 at lane 0. */
+    /* Control 4 starts the second 32-bit word of the same record. */
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "pull_mode"), 0);
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "c0"), 16);
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "c3"), 28);
     QCOMPARE(lsbOf("pin_pad_ctrl_0", "c4"), -1);
-    QCOMPARE(lsbOf("pin_ctl_0_0", "c4"), 0);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0_word_1", "c4"), 0);
     QCOMPARE(lsbOf("pin_src_ctrl_0", "c4_src"), 20);
-    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("pad control registers: 2 at offset"));
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "pin_pad_ctrl: offset 0x110, size 8 bytes, stride 8"));
+
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(source(cell(17, 2)), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.padCells.constFirst().control.size(), 17);
+    QCOMPARE(lsbOf("pin_pad_ctrl_0_word_2", "c16"), 16);
+    QCOMPARE(lsbOf("pin_src_ctrl_0_word_1", "c16_src"), 0);
+    QVERIFY(
+        QSocIomuxGenerator::generateReport(plan).contains(
+            "pin_pad_ctrl: offset 0x110, size 16 bytes, stride 16"));
 
     /* Sixteen rows fill a lane, seventeen do not fit. */
     QVERIFY2(
@@ -7609,47 +7494,68 @@ void Test::padWordHoldsFourControlsAndSpillsTheFifth()
         qPrintable(errors.join('\n')));
 }
 
-void Test::buildNumberReadsBackInTheVersionWord()
+void Test::implementationIdIsAnUnsignedConstant()
 {
-    const auto source = [](const QString &build) {
-        return makeDefinition(QString(R"(generator:
-    kind: iomux
-    bus: axi4_lite
-    data_width: 32
-    address_width: 14
-    pin_count: 1
-    hs_slots: 2
-%1%2    route:
-      - pin: 0
-        slot: 0
-        function: uart0
-        signal: tx
-        output_value: {link: uart0_tx}
-)")
-                                  .arg(build, integrationBlock()));
+    const auto source = [](const QString &value, quint32 width) {
+        QString text = sourceForConfig(1, 2, width, 14);
+        if (!value.isEmpty()) {
+            text.replace("    kind: iomux", "    impid: " + value + "\n    kind: iomux");
+        }
+        return makeDefinition(text);
     };
-    QSocIomuxPlan plan;
-    QStringList   errors;
-    QVERIFY2(
-        QSocIomuxGenerator::buildPlan(source("    build: 7\n"), &plan, &errors),
-        qPrintable(errors.join('\n')));
-    QCOMPARE(plan.build, 7U);
-    const QSocMmioFieldPlan *build = findField(plan.mmio, "version", "build");
-    QVERIFY(build != nullptr);
-    QCOMPARE(build->lsb, 0U);
-    QCOMPARE(build->width, 8U);
-    QCOMPARE(build->constantValue.value(), quint64(7));
-    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("identity: version 2.1.0 build 7,"));
-
-    /* Absent means 0, and the word stays the same as before the field existed. */
-    QVERIFY(QSocIomuxGenerator::buildPlan(source(QString()), &plan, &errors));
-    QCOMPARE(plan.build, 0U);
-    QCOMPARE(findField(plan.mmio, "version", "build")->constantValue.value(), quint64(0));
-
-    QVERIFY(!QSocIomuxGenerator::buildPlan(source("    build: 256\n"), &plan, &errors));
-    QVERIFY2(
-        errors.contains("IOMUX_RANGE generator.build: must be between 0 and 255"),
-        qPrintable(errors.join('\n')));
+    for (quint32 width : {32U, 64U}) {
+        QSocIomuxPlan plan;
+        QStringList   errors;
+        QVERIFY(QSocIomuxGenerator::buildPlan(source({}, width), &plan, &errors));
+        const QString defaults = QSocIomuxGenerator::generateRegsVerilog(plan);
+        QVERIFY(QSocIomuxGenerator::buildPlan(source("0", width), &plan, &errors));
+        QCOMPARE(QSocIomuxGenerator::generateRegsVerilog(plan), defaults);
+        for (const auto &value : {QString("18446744073709551615"), QString("0xffffffffffffffff")}) {
+            QVERIFY2(
+                QSocIomuxGenerator::buildPlan(source(value, width), &plan, &errors),
+                qPrintable(errors.join('\n')));
+            QCOMPARE(plan.impid, ~quint64(0));
+            for (const auto &reg : plan.mmio.registers) {
+                if (reg.byteOffset >= 8) {
+                    QVERIFY(reg.byteOffset >= 0x100);
+                    continue;
+                }
+                QCOMPARE(reg.fields.size(), 1);
+                const auto &field = reg.fields.constFirst();
+                QCOMPARE(field.access, QSocMmioAccess::ReadOnly);
+                QCOMPARE(field.width, width);
+                QCOMPARE(field.constantValue.value(), width == 64 ? ~quint64(0) : quint64(0xffffffff));
+                QVERIFY(field.inputPort.isEmpty() && field.outputPort.isEmpty());
+            }
+            const QString header = QSocIomuxGenerator::generateSoftwareHeader(plan);
+            QVERIFY(header.contains("_IMPID_VALUE UINT64_C(0xffffffffffffffff)"));
+            QVERIFY(header.contains("_IMPID_WIDTH UINT64_C(64)"));
+            QVERIFY(header.contains("_IMPID_OFFSET UINT64_C(0)"));
+            for (const auto *name :
+                 {"version",
+                  "type",
+                  "pin_count",
+                  "feature",
+                  "hs_slots",
+                  "ls_channel_span",
+                  "ls_pool_count"}) {
+                QVERIFY(findRegister(plan.mmio, name) == nullptr);
+            }
+        }
+        for (const auto &value :
+             {QString("-1"),
+              QString("true"),
+              QString("1.5"),
+              QString("\"1\""),
+              QString("18446744073709551616"),
+              QString("0x10000000000000000")}) {
+            QVERIFY(!QSocIomuxGenerator::buildPlan(source(value, width), &plan, &errors));
+            QVERIFY(errors.join('\n').contains("generator.impid"));
+        }
+        auto old                                    = source({}, width);
+        old.extraAttributes["generator"]["version"] = 1;
+        QVERIFY(!QSocIomuxGenerator::buildPlan(old, &plan, &errors));
+    }
 }
 
 void Test::reservedWindowAccesses_data()
@@ -7708,18 +7614,19 @@ void Test::reservedWindowAccesses()
 )")
                      .arg(controls.join(", "), padCellBlock(), padIntegrationBlock());
     }
+    source.replace("    kind: iomux", "    impid: 0xfedcba9876543210\n    kind: iomux");
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
         QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
         qPrintable(errors.join('\n')));
-    const quint64 window = extended ? 0x4808 : 0x4000;
+    const quint64 window = (extended || gpio) ? 0x130 : 0x108;
     QCOMPARE(plan.mmio.zeroFillBytes, window);
     if (extended) {
-        const auto *control = findRegister(plan.mmio, "pin_ctl_5_0");
+        const auto *control = findRegister(plan.mmio, "pin_pad_ctrl_0_word_3");
         QVERIFY(control != nullptr);
-        QCOMPARE(control->byteOffset, quint64(0x4800));
-        QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("aperture: 18440 bytes"));
+        QCOMPARE(control->byteOffset, quint64(0x128));
+        QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("aperture: 304 bytes"));
     }
     QStringList mapped;
     for (const auto &reg : plan.mmio.registers) {
@@ -7819,9 +7726,15 @@ initial begin
     repeat (3) @(negedge clk);
     rst = 1;
     read_word(0, 0, identity);
+    if (identity !== (DW == 64 ? 64'hfedcba9876543210 : 64'h76543210))
+        $fatal(1, "IMPID_READBACK low/full");
+    if (DW == 32) begin
+        read_word(4, 0, value);
+        if (value !== 32'hfedcba98) $fatal(1, "IMPID_READBACK high");
+    end
     for (background = 0; background < 2; background = background + 1) begin
         write_word('h100, background, '1, 0, 0);
-        if (@GPIO@) write_word('h208, background, '1, 0, 0);
+        if (@GPIO@) write_word('h118, background, '1, 0, 0);
         if (selected !== (background != 0)) $fatal(1, "selector setup");
         for (address = 0; address < WINDOW; address = address + DW/8) begin
             if (!(@MAPPED@)) begin
@@ -7834,7 +7747,7 @@ initial begin
                 if (value !== 0 || selected !== (background != 0))
                     $fatal(1, "reserved write changed state at %h", address);
                 if (@GPIO@) begin
-                    read_word('h208, 0, value);
+                    read_word('h118, 0, value);
                     if (value !== background) $fatal(1, "reserved write changed GPIO at %h", address);
                 end
             end
@@ -7846,7 +7759,7 @@ initial begin
     write_word(WINDOW-1, 0, '1, 0, 2);
     read_word(WINDOW-1, 0, value);
     if (value !== 0 || selected !== 1'b1) $fatal(1, "last byte");
-    if (AW > 14) begin
+    if (WINDOW + 'h100 < 2**AW) begin
         write_word(WINDOW, '1, '1, 2, 0);
         read_word(WINDOW, 2, value);
         if (value !== 0) $fatal(1, "outside window read");
@@ -7863,6 +7776,11 @@ initial begin
     write_word('h100, 0, 1, 0, 1);
     read_word('h100, 0, value);
     if (value !== 0) $fatal(1, "mapped write after reserved accesses");
+    if (DW == 32) begin
+        write_word(4, '0, '1, 0, 0);
+        read_word(4, 0, value);
+        if (value !== 32'hfedcba98) $fatal(1, "IMPID_READONLY high");
+    end
     $display("TEST_PASS");
     $finish;
 end
@@ -7895,11 +7813,8 @@ endmodule
     QVERIFY2(result.contains("TEST_PASS"), result.constData());
 }
 
-void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
+void Test::disabledBlocksDoNotReserveSpace()
 {
-    /* Interrupt alone, then every option: the interrupt banks and the
-     * selectors sit at the same offsets, and the pad words appear at their
-     * own base rather than after whatever came before. */
     const auto plan = [](const QString &options) {
         QSocIomuxPlan plan;
         QStringList   errors;
@@ -7934,22 +7849,321 @@ void Test::blockBasesDoNotMoveWhenOtherOptionsChange()
         const QSocMmioRegisterPlan *found = findRegister(plan.mmio, name);
         return found ? qint64(found->byteOffset) : -1;
     };
-    for (const char *name : {"hs_select_0", "high_int_en_0", "fall_int_pend_0"}) {
-        QCOMPARE(offsetOf(sparse, name), offsetOf(full, name));
-    }
-    QCOMPARE(offsetOf(sparse, "high_int_en_0"), qint64(QSocIomuxGenerator::kBaseInterrupt));
+    QCOMPARE(offsetOf(sparse, "hs_select_0"), qint64(0x100));
+    QCOMPARE(offsetOf(full, "hs_select_0"), qint64(0x100));
+    QCOMPARE(offsetOf(sparse, "high_int_en_0"), qint64(0x108));
     QCOMPARE(offsetOf(sparse, "input_value_0"), qint64(-1));
-    QCOMPARE(offsetOf(full, "input_value_0"), qint64(QSocIomuxGenerator::kBaseGpio));
-    QCOMPARE(offsetOf(full, "pin_src_ctrl_1"), qint64(QSocIomuxGenerator::kBaseSourceControl + 4));
-    QCOMPARE(offsetOf(full, "pin_pad_ctrl_0"), qint64(QSocIomuxGenerator::kBasePadControl));
-    QCOMPARE(offsetOf(full, "input_enable_inv_0"), qint64(QSocIomuxGenerator::kBaseInvert));
-    QCOMPARE(offsetOf(full, "rx_value_s2_0"), qint64(QSocIomuxGenerator::kBaseRxOverride + 8));
-    QVERIFY(QSocIomuxGenerator::generateReport(sparse).contains("aperture: 16384 bytes"));
+    QCOMPARE(offsetOf(full, "input_value_0"), qint64(0x108));
+    QCOMPARE(offsetOf(full, "high_int_en_0"), qint64(0x140));
+    QCOMPARE(offsetOf(full, "pin_src_ctrl_1"), qint64(0x1c8));
+    QCOMPARE(offsetOf(full, "pin_pad_ctrl_0"), qint64(0x1d0));
+    QCOMPARE(offsetOf(full, "input_enable_inv_0"), qint64(0x180));
+    QCOMPARE(offsetOf(full, "rx_value_s2_0"), qint64(0x138));
+}
 
-    /* The complete aperture accepts reads and writes. */
-    const QString regs = QSocIomuxGenerator::generateRegsVerilog(sparse);
-    QCOMPARE(sparse.mmio.zeroFillBytes, quint64(16384));
-    QVERIFY(regs.contains("default: address_is_mapped = address <= 14'h3fff;"));
+void Test::sparseChannelSpanKeepsOnlyDeclaredFields()
+{
+    QString source = sourceForConfig(1, 1, 32, 32);
+    source += QStringLiteral(R"(
+    ls:
+      pool:
+        pins: [0]
+        channel:
+          - {channel: 2147483646, function: tx, signal: out, output_enable: 1}
+)");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QCOMPARE(plan.mmio.zeroFillBytes, quint64(0x80000110));
+    QCOMPARE(plan.mmio.registers.size(), qsizetype(4));
+    QCOMPARE(plan.lsChannelIds(), QList<quint32>{2147483646U});
+    const QString core = QSocIomuxGenerator::generateCoreVerilog(plan);
+    const QString conn = QSocIomuxGenerator::generateConnVerilog(plan);
+    QVERIFY(core.contains("assign ls_rx_input_value_o[2147483646:0] = 2147483647'b0;"));
+    QVERIFY(conn.contains("assign ls_tx_output_enable_o[2147483645:0] = 2147483646'b0;"));
+    QVERIFY(conn.contains("assign ls_tx_output_enable_o[2147483646] = 1'b1;"));
+    QVERIFY(!QSocIomuxGenerator::generateTopVerilog(plan).isEmpty());
+    QVERIFY(!QSocIomuxFormal::generate(plan).systemVerilog.isEmpty());
+    source.replace("address_width: 32", "address_width: 9");
+    QVERIFY(!QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors));
+    QVERIFY(errors.join('\n').contains("aperture needs 2147483920 bytes"));
+}
+
+void Test::softwareHeadersKeepDistinctIdentifiers()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString           source;
+    const QStringList names = {"iomux", "IOMUX", "io$mux", "io_24mux"};
+    const QStringList prefixes
+        = {"QSOC_iomux_X", "QSOC_IOMUX_X", "QSOC_io_24mux_X", "QSOC_io_5f24mux_X"};
+    for (int i = 0; i < names.size(); ++i) {
+        QSocIomuxPlan plan;
+        QStringList   errors;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(
+                makeDefinition(sourceForConfig(i + 1, 1, 32, 14), names.at(i)), &plan, &errors),
+            qPrintable(errors.join('\n')));
+        plan.impid           = quint64(i + 1);
+        const QString header = QSocIomuxGenerator::generateSoftwareHeader(plan);
+        QVERIFY(!header.contains('$'));
+        const QString macro = prefixes.at(i) + "_IMPID_VALUE";
+        QVERIFY(header.contains("#define " + macro + " "));
+        const QString file = QString("regs%1.h").arg(i);
+        writeTextFile(QDir(directory.path()).filePath(file), header);
+        source += QString("#include \"%1\"\n_Static_assert(%2 == %3, \"impid\");\n")
+                      .arg(file, macro)
+                      .arg(i + 1);
+    }
+    const QString compiler = QStandardPaths::findExecutable("cc");
+    if (compiler.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("C compiler"));
+    }
+    writeTextFile(QDir(directory.path()).filePath("headers.c"), source);
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process
+        .start(compiler, {"-std=c11", "-pedantic-errors", "-Werror", "-fsyntax-only", "headers.c"});
+    QVERIFY(process.waitForFinished(30000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0, process.readAllStandardError().constData());
+}
+
+void Test::reportAcceptsSelectorNamedControl()
+{
+    auto definition                 = makeAllOptionDefinition();
+    auto cell                       = definition.extraAttributes["generator"]["pad_cell"];
+    cell["control"]["drive_select"] = YAML::Clone(cell["control"]["drive"]);
+    cell["control"].remove("drive");
+    definition.extraAttributes["generator"]["route"] = YAML::Load("[]");
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(QSocIomuxGenerator::buildPlan(definition, &plan, &errors), qPrintable(errors.join('\n')));
+    QVERIFY(!QSocIomuxGenerator::generateReport(plan).isEmpty());
+}
+
+void Test::expandedLayoutsMatchAcrossBusWidths()
+{
+    QList<QSocIomuxPlan> plans;
+    for (quint32 width : {32U, 64U}) {
+        QString source = sourceForConfig(257, 17, width, 16);
+        source += QStringLiteral(R"(
+    ls:
+      pool:
+        pins: [0, 256]
+        channel:
+          - {channel: 0, function: tx, signal: out, output_enable: 1}
+          - {channel: 256, function: rx, signal: in, input_value: {link: rx_in}}
+)");
+        QSocIomuxPlan plan;
+        QStringList   errors;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+            qPrintable(errors.join('\n')));
+        QCOMPARE(plan.mmio.zeroFillBytes, quint64(0x618));
+        QCOMPARE(blockBase(plan, "hs_select"), quint64(0x100));
+        QCOMPARE(blockBase(plan, "ls_select"), quint64(0x208));
+        QCOMPARE(blockBase(plan, "ls_rx_pin"), quint64(0x410));
+        const auto *tx = findField(plan.mmio, "ls_select_0", "pin_0_ls_select");
+        QVERIFY(tx);
+        QCOMPARE(tx->width, 9U);
+        const auto *rx
+            = findField(plan.mmio, width == 32 ? "ls_rx_pin_128" : "ls_rx_pin_64", "ls_c256_pin");
+        QVERIFY(rx);
+        QCOMPARE(rx->width, 9U);
+        QVERIFY(findRegister(plan.mmio, "ls_rx_pin_0") == nullptr);
+        plans.append(plan);
+        source.replace("input_value: {link: rx_in}", "output_enable: 1");
+        QSocIomuxPlan noRx;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(makeDefinition(source), &noRx, &errors),
+            qPrintable(errors.join('\n')));
+        QCOMPARE(noRx.registerBlocks, plan.registerBlocks);
+        for (const auto &reg : noRx.mmio.registers) {
+            QVERIFY(!reg.name.startsWith("ls_rx_pin_"));
+        }
+    }
+    QCOMPARE(plans.at(0).registerBlocks, plans.at(1).registerBlocks);
+    QCOMPARE(
+        QSocIomuxGenerator::generateSoftwareHeader(plans.at(0)),
+        QSocIomuxGenerator::generateSoftwareHeader(plans.at(1)));
+}
+
+void Test::sourceRecordsExtendPastTheBusWord()
+{
+    QString header;
+    for (quint32 width : {32U, 64U}) {
+        auto definition                             = makeAllOptionDefinition();
+        auto generator                              = definition.extraAttributes["generator"];
+        generator["hs_slots"]                       = 57;
+        generator["data_width"]                     = width;
+        generator["impid"]                          = quint64(0xfedcba9876543210ULL);
+        generator["route"][2]["slot"]               = 56;
+        generator["route"][2]["input_value"]["tie"] = 1;
+        QSocIomuxPlan plan;
+        QStringList   errors;
+        QVERIFY2(
+            QSocIomuxGenerator::buildPlan(definition, &plan, &errors),
+            qPrintable(errors.join('\n')));
+        QCOMPARE(blockBase(plan, "pin_src_ctrl"), quint64(0x520));
+        QCOMPARE(blockBase(plan, "pin_pad_ctrl"), quint64(0x540));
+        QCOMPARE(plan.mmio.zeroFillBytes, quint64(0x550));
+        const auto *word = findRegister(
+            plan.mmio, width == 32 ? "pin_src_ctrl_1_word_2" : "pin_src_ctrl_1_word_1");
+        QVERIFY(word);
+        QCOMPARE(word->byteOffset, quint64(0x538));
+        const auto *rx    = findField(plan.mmio, word->name, "rx_src_s56");
+        const auto *drive = findField(plan.mmio, word->name, "drive_src");
+        QVERIFY(rx && drive);
+        QCOMPARE(rx->lsb, 0U);
+        QCOMPARE(rx->resetValue.value(), quint64(1));
+        QCOMPARE(drive->lsb, 8U);
+        const auto generated = QSocIomuxGenerator::generateSoftwareHeader(plan);
+        if (width == 32) {
+            header = generated;
+        } else {
+            QCOMPARE(generated, header);
+            const auto *impid = findField(plan.mmio, "impid", "impid");
+            QVERIFY(impid);
+            QCOMPARE(impid->width, 64U);
+            QCOMPARE(impid->constantValue.value(), quint64(0xfedcba9876543210ULL));
+        }
+    }
+}
+
+void Test::selectorBytesWriteIndependently_data()
+{
+    QTest::addColumn<int>("dataWidth");
+    QTest::addColumn<int>("kind");
+    for (int width : {32, 64}) {
+        QTest::newRow(qPrintable(QString("hs9-%1").arg(width))) << width << 0;
+        QTest::newRow(qPrintable(QString("ls9-%1").arg(width))) << width << 1;
+        QTest::newRow(qPrintable(QString("ls8-%1").arg(width))) << width << 2;
+    }
+}
+
+void Test::selectorBytesWriteIndependently()
+{
+    QFETCH(int, dataWidth);
+    QFETCH(int, kind);
+    const QString compiler = QStandardPaths::findExecutable("iverilog");
+    const QString runtime  = QStandardPaths::findExecutable("vvp");
+    if (compiler.isEmpty() || runtime.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+    }
+    const bool ls     = kind != 0;
+    const bool wide   = kind != 2;
+    const int  pins   = kind == 1 ? 257 : 2;
+    const int  high   = wide ? 256 : 1;
+    QString    source = sourceForConfig(pins, ls ? 1 : 257, dataWidth, 16);
+    if (ls) {
+        source += QString(R"(
+    ls:
+      pool:
+        pins: [0, %1]
+        channel:
+          - {channel: 0, function: tx, signal: zero, output_enable: 1}
+          - {channel: %1, function: trx, signal: high, output_enable: 1, input_value: {link: rx_in}}
+)")
+                      .arg(high);
+    } else {
+        source.replace("    route: []", QStringLiteral(R"(    route:
+      - {pin: 0, slot: 0, function: tx, signal: zero, output_enable: 1}
+      - {pin: 0, slot: 256, function: tx, signal: high, output_enable: 1})"));
+    }
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(
+        QSocIomuxGenerator::buildPlan(makeDefinition(source), &plan, &errors),
+        qPrintable(errors.join('\n')));
+    QString bench = axiTestbench();
+    bench.replace(
+        "    .hs_p@PIN@_s@HISLOT@_input_value_o(tail_rx_w)",
+        ls ? QString("    .ls_c%1_input_value_o(tail_rx_w)").arg(high) : QString());
+    if (!ls) {
+        bench.replace(".pad_output_enable_o(pad_oe),", ".pad_output_enable_o(pad_oe)");
+    }
+    const qsizetype start = bench.indexOf("    check_value(pad_oe[@PIN@]");
+    const qsizetype end   = bench.indexOf("    if (failures == 0)", start);
+    QString         steps = QStringLiteral(R"(
+    axi_write(@TX@, 'hff, 1);
+    axi_read(@TX@);
+    check_value(rdata === 'hff, "invalid TX encoding remains readable");
+    check_value(pad_oe[0] === 0, "invalid TX selects zero");
+)");
+    if (wide) {
+        steps += QStringLiteral(R"(
+    axi_write(@TX@, 'hff00, 2);
+    axi_read(@TX@);
+    check_value(rdata === 'h1ff, "high byte merges, lane padding reads zero");
+    axi_write(@TX@, 0, 1);
+    axi_read(@TX@);
+    check_value(rdata === 'h100, "low byte preserves high selector bit");
+    check_value(pad_oe[0] === 1, "expanded channel or slot routes");
+    axi_write(@TX@, 0, 0);
+    axi_read(@TX@);
+    check_value(rdata === 'h100, "zero strobe preserves selector");
+    axi_write(@TX@, 0, 2);
+    axi_read(@TX@);
+    check_value(rdata === 0, "high byte clears independently");
+)");
+    }
+    if (ls) {
+        steps += QStringLiteral(R"(
+    pad_in[@HIGH@] = 1;
+    axi_write(@RX@, 'hff, 1);
+    axi_read(@RX@);
+    check_value(rdata === 'hff, "invalid RX encoding remains readable");
+    check_value(tail_rx_w === 0, "invalid RX selects zero");
+)");
+        steps += wide ? QStringLiteral(R"(
+    axi_write(@RX@, 'h100, 2);
+    axi_read(@RX@);
+    check_value(rdata === 'h1ff, "RX high byte preserves low byte");
+    axi_write(@RX@, 0, 1);
+    axi_read(@RX@);
+    check_value(rdata === 'h100, "RX low byte preserves high bit");
+)")
+                      : QStringLiteral("    axi_write(@RX@, 1, 1);\n");
+        steps += "    check_value(tail_rx_w === 1, \"RX selects the high pin\");\n";
+        const quint64 rx   = blockBase(plan, "ls_rx_pin") + (wide ? 512 : 1);
+        const quint64 word = rx / (dataWidth / 8) * (dataWidth / 8);
+        if (!wide) {
+            steps.replace("axi_write(@RX@, 'hff, 1)", "axi_write(@RX@, 'hff00, 2)");
+            steps.replace("rdata === 'hff, \"invalid RX", "rdata === 'hff00, \"invalid RX");
+            steps.replace("axi_write(@RX@, 1, 1)", "axi_write(@RX@, 'h100, 2)");
+        }
+        steps.replace("@RX@", QString::number(word));
+    }
+    steps.replace("@TX@", QString::number(blockBase(plan, ls ? "ls_select" : "hs_select")));
+    steps.replace("@HIGH@", QString::number(high));
+    bench.replace(start, end - start, steps);
+    bench.replace("@AW@", "16");
+    bench.replace("@DW@", QString::number(dataWidth));
+    bench.replace("@SW@", QString::number(dataWidth / 8));
+    bench.replace("@P@", QString::number(pins));
+    QVERIFY(!bench.contains("@TX@") && !bench.contains("@RX@") && !bench.contains("@P@"));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QDir dir(directory.path());
+    writeTextFile(dir.filePath("regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
+    writeTextFile(dir.filePath("conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
+    writeTextFile(dir.filePath("top.v"), QSocIomuxGenerator::generateTopVerilog(plan));
+    writeTextFile(dir.filePath("tb.v"), bench);
+    QProcess process;
+    process.setWorkingDirectory(directory.path());
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(compiler, {"-g2012", "-s", "tb", "-o", "sim", "regs.v", "conn.v", "top.v", "tb.v"});
+    QVERIFY(process.waitForFinished(120000));
+    QVERIFY2(process.exitCode() == 0, process.readAll().constData());
+    process.start(runtime, {"sim"});
+    QVERIFY(process.waitForFinished(120000));
+    const auto output = process.readAll();
+    QVERIFY2(
+        process.exitCode() == 0 && output.contains("TEST_PASS") && !output.contains("TEST_FAIL"),
+        output.constData());
 }
 
 } // namespace
@@ -8810,6 +9024,13 @@ void Test::padClassesRejectBadAssignments_data()
         << "must lie below pin_count 4, low end first";
     QTest::newRow("pin-beyond-count") << classes + pins("      default: ps\n      7: od\n")
                                       << routes << link << "must lie below pin_count 4";
+    for (const char *token :
+         {"18446744073709551616", "0-18446744073709551616", "18446744073709551616-1"}) {
+        QTest::newRow(token) << classes
+                                    + QString("    pin_cell:\n      default: ps\n      \"%1\": od\n")
+                                          .arg(token)
+                             << routes << link << "must lie below pin_count 4, low end first";
+    }
     QTest::newRow("pin-assigned-twice")
         << classes + pins("      default: ps\n      2: od\n      \"2-3\": od\n") << routes << link
         << "pin 2 is already assigned";

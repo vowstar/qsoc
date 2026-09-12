@@ -239,7 +239,7 @@ void Test::validateReportsSummaryWithDefaultMarker()
     QVERIFY2(
         result.output.contains(
             "Pins: 2, HS slots: 4 (default), routes: 1, selector registers: 1, "
-            "registers total: 5"),
+            "registers total: 3"),
         qPrintable(result.output));
     QVERIFY2(result.output.contains("Reset selects slot 0, RX broadcasts"), qPrintable(result.output));
     QVERIFY2(result.output.contains("Integration pending merge"), qPrintable(result.output));

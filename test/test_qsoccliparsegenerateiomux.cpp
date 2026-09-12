@@ -1046,7 +1046,7 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_3 ("), qPrintable(pad));
     const QString report = readTextFile(
         QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0.iomux.rpt"));
-    QVERIFY2(report.contains("pad control registers: 4"), qPrintable(report));
+    QVERIFY2(report.contains("pin_pad_ctrl:"), qPrintable(report));
 }
 
 void Test::ioRingCellsAreCheckedAndEmitted()

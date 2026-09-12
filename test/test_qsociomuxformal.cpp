@@ -206,6 +206,7 @@ private slots:
     void assertionCountCoversEverySlotOfEveryPin();
     void sourceOrderDoesNotChangeCollateral();
     void emptyPlanProducesNoCollateral();
+    void expandedSelectorsPassProofWhenAvailable();
     void generatedCollateralPassesSbyWhenAvailable();
     void tailPinSelectorDisconnectFailsBmcWhenAvailable();
     void bankedJobNamesOneTaskPerBank();
@@ -335,6 +336,40 @@ void Test::sourceOrderDoesNotChangeCollateral()
     const QSocIomuxFormalCollateral second = QSocIomuxFormal::generate(reorderedPlan);
     QCOMPARE(second.systemVerilog, first.systemVerilog);
     QCOMPARE(second.sby, first.sby);
+}
+
+void Test::expandedSelectorsPassProofWhenAvailable()
+{
+    const QString sby = QStandardPaths::findExecutable("sby");
+    if (sby.isEmpty() || QStandardPaths::findExecutable("yosys").isEmpty()
+        || QStandardPaths::findExecutable("z3").isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("sby, yosys, and z3"));
+    }
+    const auto    definition = makeDefinition(QString(R"(generator:
+    kind: iomux
+    bus: axi4_lite
+    pin_count: 2
+    hs_slots: 257
+%1    route:
+      - {pin: 0, slot: 256, function: fast, signal: tx, output_enable: 1}
+    ls:
+      pool:
+        pins: [0, 1]
+        channel:
+          - {channel: 0, function: slow, signal: zero, output_enable: 1}
+          - {channel: 256, function: slow, signal: high, input_value: {link: rx_in}, output_enable: 1}
+)")
+                                                  .arg(integrationBlock()));
+    QSocIomuxPlan plan;
+    QStringList   errors;
+    QVERIFY2(QSocIomuxGenerator::buildPlan(definition, &plan, &errors), qPrintable(errors.join('\n')));
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    writeCollateral(directory, plan, QSocIomuxGenerator::generateTopVerilog(plan));
+    const auto result = runCommand(directory.path(), sby, {"-f", "iomux0_hs_formal.sby", "prove"});
+    QVERIFY2(
+        result.finished && result.exitStatus == QProcess::NormalExit && result.exitCode == 0,
+        result.output.constData());
 }
 
 void Test::emptyPlanProducesNoCollateral()

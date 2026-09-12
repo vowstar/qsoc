@@ -297,6 +297,8 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                {topPath, QSocIomuxGenerator::generateTopVerilog(plan).toUtf8()},
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
                {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
+               {outputFilePath(moduleName + QStringLiteral("_regs.h")),
+                QSocIomuxGenerator::generateSoftwareHeader(plan).toUtf8()},
                {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
         const QString ioModule = QSocIomuxGenerator::ioModuleName(moduleName);
         if (plan.hasPadCell()) {
