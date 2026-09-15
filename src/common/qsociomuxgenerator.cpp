@@ -20,6 +20,7 @@ const QSet<QString> kGeneratorKeys
     = {"kind",
        "bus",
        "data_width",
+       "id_width",
        "address_width",
        "pin_count",
        "hs_slots",
@@ -265,18 +266,22 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *mmio, QStringList
 {
     bool       valid = true;
     const bool apb   = mmio->bus == QSocMmioBus::Apb4;
+    const bool axi   = mmio->bus == QSocMmioBus::Axi4;
     if (generator["data_width"]) {
         quint64    dataWidth = 0;
-        const bool parsed
-            = parseUnsigned(generator["data_width"], "generator.data_width", 64, &dataWidth, errors);
+        const bool parsed    = parseUnsigned(
+            generator["data_width"], "generator.data_width", 1024, &dataWidth, errors);
         if (parsed
-            && (apb ? (dataWidth != 8 && dataWidth != 16 && dataWidth != 32)
-                    : (dataWidth != 32 && dataWidth != 64))) {
+            && (axi   ? (dataWidth < 8 || (dataWidth & (dataWidth - 1)) != 0)
+                : apb ? (dataWidth != 8 && dataWidth != 16 && dataWidth != 32)
+                      : (dataWidth != 32 && dataWidth != 64))) {
             appendError(
                 errors,
                 "RANGE",
                 "generator.data_width",
-                apb ? "must be 8, 16, or 32" : "must be 32 or 64");
+                axi   ? "must be a power of two from 8 to 1024"
+                : apb ? "must be 8, 16, or 32"
+                      : "must be 32 or 64");
             valid = false;
         } else if (parsed) {
             mmio->dataWidth = static_cast<quint32>(dataWidth);
@@ -289,7 +294,11 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *mmio, QStringList
         quint64    addressWidth = 0;
         const bool parsed       = parseUnsigned(
             generator["address_width"], "generator.address_width", 64, &addressWidth, errors);
-        const quint32 minimum = mmio->dataWidth == 64 ? 3 : (mmio->dataWidth == 32 ? 2 : 1);
+        quint32 minimum = 0;
+        for (quint32 bytes = mmio->dataWidth / 8; bytes > 1; bytes >>= 1) {
+            ++minimum;
+        }
+        minimum               = qMax(quint32(1), minimum);
         const quint32 maximum = apb ? 32 : 64;
         if (parsed && (addressWidth < minimum || addressWidth > maximum)) {
             appendError(
@@ -3236,7 +3245,7 @@ QSocMmioFieldPlan constantField(const QString &name, quint32 lsb, quint32 width,
 
 void composeIdentity(QSocIomuxPlan *plan)
 {
-    const quint32 width = plan->mmio.dataWidth;
+    const quint32 width = qMin(quint32(64), plan->mmio.dataWidth);
     for (quint32 bit = 0; bit < 64; bit += width) {
         QSocMmioRegisterPlan word;
         word.name = width == 64
@@ -3444,6 +3453,22 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
         composePadControl(plan);
     }
     applyTies(plan);
+    if (dataWidth > 64) {
+        QMap<quint64, QSocMmioRegisterPlan> physicalWords;
+        for (const auto &reg : std::as_const(plan->mmio.registers)) {
+            for (auto field : reg.fields) {
+                const quint64 address = reg.byteOffset + field.lsb / 8;
+                const quint64 base    = address - address % byteCount;
+                auto         &word    = physicalWords[base];
+                word.name             = QString("word_%1").arg(base, 0, 16);
+                word.byteOffset       = base;
+                field.name            = reg.name + '_' + field.name;
+                field.lsb             = quint32(address - base) * 8 + field.lsb % 8;
+                word.fields.append(field);
+            }
+        }
+        plan->mmio.registers = physicalWords.values();
+    }
 
     const quint64 aperture = plan->mmio.zeroFillBytes;
     const quint64 maximum  = plan->mmio.addressWidth == 64
@@ -3505,16 +3530,29 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         valid = false;
     } else if (
         !parseScalar(generator["bus"], "generator.bus", &bus, errors)
-        || (bus != "axi4_lite" && bus != "apb4")) {
+        || (bus != "axi4_lite" && bus != "apb4" && bus != "axi4")) {
         if (!bus.isEmpty()) {
-            appendError(errors, "BUS", "generator.bus", "must be axi4_lite or apb4");
+            appendError(errors, "BUS", "generator.bus", "must be axi4_lite, apb4, or axi4");
         }
         valid = false;
     }
 
     // cppcheck-suppress knownConditionTrueFalse
-    plan->mmio.bus = bus == "apb4" ? QSocMmioBus::Apb4 : QSocMmioBus::Axi4Lite;
+    plan->mmio.bus = bus == "apb4" ? QSocMmioBus::Apb4 :
+                                   // cppcheck-suppress knownConditionTrueFalse
+                         (bus == "axi4" ? QSocMmioBus::Axi4 : QSocMmioBus::Axi4Lite);
     valid          = parseBusWidths(generator, &plan->mmio, errors) && valid;
+    if (generator["id_width"]) {
+        quint64 idWidth = 0;
+        if (plan->mmio.bus != QSocMmioBus::Axi4) {
+            appendError(errors, "BUS", "generator.id_width", "requires axi4");
+            valid = false;
+        } else if (parseUnsigned(generator["id_width"], "generator.id_width", 32, &idWidth, errors)) {
+            plan->mmio.idWidth = quint32(idWidth);
+        } else {
+            valid = false;
+        }
+    }
 
     if (definition.hasParameterSection || !definition.parameters.isEmpty()) {
         appendError(errors, "MANUAL_SECTION", "module.parameter", "is not allowed for IOMUX modules");
@@ -6316,7 +6354,9 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
         module["port"][port.name.toStdString()] = portNode;
     }
     YAML::Node control(YAML::NodeType::Map);
-    control["bus"]  = plan.mmio.bus == QSocMmioBus::Apb4 ? "apb4" : "axi4_lite";
+    control["bus"]  = plan.mmio.bus == QSocMmioBus::Apb4
+                          ? "apb4"
+                          : (plan.mmio.bus == QSocMmioBus::Axi4 ? "axi4" : "axi4_lite");
     control["mode"] = "slave";
     YAML::Node mapping(YAML::NodeType::Map);
     for (const QSocMmioPortDescription &port : ports) {
@@ -6334,7 +6374,7 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
 {
     const quint32 dataWidth = plan.mmio.dataWidth;
     if (plan.pinCount == 0 || plan.hsSlots == 0
-        || (dataWidth != 8 && dataWidth != 16 && dataWidth != 32 && dataWidth != 64)) {
+        || (dataWidth < 8 || dataWidth > 1024 || (dataWidth & (dataWidth - 1)) != 0)) {
         return QString();
     }
     const auto   &registers = plan.mmio.registers;
@@ -6343,8 +6383,13 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     const quint64 aperture  = plan.mmio.zeroFillBytes;
     quint32       selectors = 0;
     for (const auto &reg : registers) {
-        if (reg.name.startsWith("hs_select_")) {
+        if (dataWidth <= 64 && reg.name.startsWith("hs_select_")) {
             selectors += quint32(reg.fields.size());
+        } else if (dataWidth > 64) {
+            static const QRegularExpression selectorPort("^pin_[0-9]+_select_o$");
+            for (const auto &field : reg.fields) {
+                selectors += selectorPort.match(field.outputPort).hasMatch() ? 1U : 0U;
+            }
         }
     }
     if (selectors != plan.pinCount) {

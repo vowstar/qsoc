@@ -3,6 +3,7 @@
 
 #include "common/qsocmmiouvm.h"
 #include "common/qsocmmioapbverification.h"
+#include "qsocmmioaxiverification.h"
 
 #include "common/qsocmmiogenerator.h"
 
@@ -1137,6 +1138,9 @@ QSocMmioUvmCollateral QSocMmioUvm::generate(const QSocMmioPlan &plan)
 {
     if (plan.bus == QSocMmioBus::Apb4) {
         return QSocMmioApbVerification::uvm(plan);
+    }
+    if (plan.bus == QSocMmioBus::Axi4) {
+        return QSocMmioAxiVerification::uvm(plan);
     }
     QSocMmioUvmCollateral collateral;
     collateral.interfaceSource = buildInterface(plan);

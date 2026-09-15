@@ -1,7 +1,7 @@
 = MMIO Generator
 <mmio-generator>
 The MMIO generator turns one register map in a module library into one
-AXI4-Lite or APB4 slave. Its source stays in the module's `.soc_mod` entry.
+AXI4, AXI4-Lite, or APB4 slave. Its source stays in the module's `.soc_mod` entry.
 
 == Source Format
 <mmio-source-format>
@@ -21,11 +21,9 @@ characters from `!` to `~` packed with the first in the top byte, so `TMRC`
 reads as 0x544D5243 in a register view; a value that parses as a number is
 taken as the number. `version` is `major.minor.patch`, each part below 256.
 The generator places `version` at 0x0 with major `[31:24]`, minor `[23:16]`,
-patch `[15:8]`, and `type` at 0x4, both read-only. A 64-bit instance holds
-both in its first beat. A user register on offsets 0x0 to 0x7, or named
-`version` or `type`, is an error, so user registers start at 0x8. `validate`
-warns when `identity` is absent, because a block software cannot recognise is
-a block software cannot refuse.
+patch `[15:8]`, and `type` at 0x4, both read-only. Instances with at least 64 data bits hold both in their first word.
+Narrow interfaces split these eight bytes across successive words. A user register on offsets 0x0 to 0x7, or named
+`version` or `type`, is an error, so user registers start at 0x8. `validate` warns when `identity` is absent.
 
 ```yaml
 timer_ctrl:
@@ -58,6 +56,10 @@ timer_ctrl:
 32 or 64 and `address_width` ranges from `ceil(log2(data_width / 8))` to 64.
 With `bus: apb4`, data widths are 8, 16, or 32 and address widths range from
 `max(1, ceil(log2(data_width / 8)))` to 32.
+With `bus: axi4`, data widths are powers of two from 8 through 1024,
+and address widths range from `max(1, ceil(log2(data_width / 8)))` to 64.
+AXI4 accepts `id_width` from 1 through 32, defaulting to 4. Other buses
+reject this key.
 
 ```yaml
 wide_status:
@@ -77,8 +79,7 @@ wide_status:
             input: count_i
 ```
 
-Offsets are local byte offsets below `2^address_width`. Each register
-occupies one complete data beat, so offsets must be aligned to
+Offsets are local byte offsets below `2^address_width`. Register offsets must be aligned to
 `data_width / 8` bytes. A 64-bit register is therefore 8-byte aligned; the
 generator does not pack two independently addressed 32-bit registers into one
 beat. Numbers are unsigned decimal or `0x` hexadecimal.
@@ -111,7 +112,7 @@ A `w1c` field is one bit that hardware sets through `input` and software
 clears by writing one. A zero leaves it. A set that lands on the cycle of the
 clearing write wins, so an event cannot vanish into its own acknowledgement.
 
-Fields may not overlap. AXI4-Lite fields must fit in one bus word. APB4 fields
+Fields may not overlap. AXI4-Lite fields must fit in one bus word. APB4 and AXI4 fields
 start within the addressed word and may span subsequent words, up to 64 bits
 per field. Each byte strobe updates only its addressed field bits. Separate
 writes take effect separately, including intermediate field values. `reset` and `value` must
@@ -130,8 +131,8 @@ Generation writes
 `module validate` checks only the source structure and values. Generation
 writes RTL; neither command runs lint, simulation, synthesis, or formal proof.
 
-The generated module has `clk_i`, active-low asynchronous `rst_ni`, the five
-AXI4-Lite channels under the `s_axi_` prefix, and the sideband ports named by
+With `bus: axi4_lite`, the generated module has `clk_i`, active-low
+asynchronous `rst_ni`, the five AXI4-Lite channels under the `s_axi_` prefix, and the sideband ports named by
 field `input` and `output` bindings. `s_axi_awprot` and `s_axi_arprot` are
 present and ignored. Address ports use `address_width`; data and strobe ports
 use `data_width` and `data_width / 8`. Addresses remain local byte offsets.
@@ -151,6 +152,25 @@ effect on the ACCESS completion edge; SETUP does not change register state.
 Read data reflects the addressed fields during ACCESS. Unmapped or misaligned
 accesses complete with `PSLVERR`. Reserved bits read zero and ignore writes.
 Reset clears stored fields and suppresses completion.
+
+With `bus: axi4`, the five `s_axi_` channels include IDs, burst length,
+size, type, and LAST. The slave accepts one read burst and one write burst
+independently. Write data can arrive before its address. Responses retain
+IDs and remain stable until consumed.
+
+FIXED bursts accept 1 to 16 beats, INCR 1 to 256, and WRAP 2, 4, 8, or 16.
+Transfer sizes range from one byte to the bus width. Unaligned FIXED and
+INCR transfers use the addressed byte lanes; WRAP starts must align to the
+transfer size. Bursts cannot cross a 4 KiB boundary. Invalid descriptors
+and unmapped beats return `SLVERR`; valid mapped beats return `OKAY`.
+Write errors accumulate into the burst response. Earlier writes are not
+rolled back when a later beat fails. Each write beat takes effect separately.
+
+LOCK, CACHE, and PROT do not change access policy. Exclusive accesses use
+ordinary access behavior and never return `EXOKAY`. There is no exclusive
+monitor. Reads captured on a write edge see the old register value. Reset
+cancels buffered requests and responses. Logical fields remain limited to
+64 bits even when the physical bus word is wider.
 
 == Formal Collateral
 <mmio-formal-collateral>
@@ -195,7 +215,7 @@ selected target before writing; `--force` replaces only the selected set.
 
 == Current Limits
 <mmio-current-limits>
-Each module exposes one AXI4-Lite or APB4 slave and one local address port.
+Each module exposes one AXI4, AXI4-Lite, or APB4 slave and one local address port.
 Optional formal and UVM collateral target the selected interface. It does not allocate a system address, create a netlist
 instance, insert a bus bridge, cross clock domains, or generate register arrays
 and extended access types. Use a wrapper for those functions.

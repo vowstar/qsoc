@@ -1,7 +1,7 @@
 = IOMUX Generator
 <iomux-generator>
 The IOMUX generator turns one sparse route table into a high-speed pin
-multiplexer: an AXI4-Lite or APB4 selector slave, a per-pin mux core, a connection
+multiplexer: an AXI4, AXI4-Lite, or APB4 selector slave, a per-pin mux core, a connection
 fabric, and one public wrapper. Its source stays in the module's `.soc_mod`
 entry.
 
@@ -68,7 +68,9 @@ widths must fit the generator's index types. They are not Verilog parameters.
 `impid` is an unsigned 64-bit generation-time constant, defaulting to zero.
 The build system supplies it; generated RTL has no runtime input or update
 mechanism. `bus: axi4_lite` accepts 32- or 64-bit data. `bus: apb4` accepts
-8-, 16-, or 32-bit data.
+8-, 16-, or 32-bit data. `bus: axi4` accepts powers of two from 8 through
+1024 bits, with optional `id_width` from 1 through 32 (default 4).
+The byte layout remains the same across bus widths.
 `address_width` is the local byte address width. Data and address widths default to 32. An IOMUX entry
 may not also carry manual `parameter`, `port`, or `bus` sections.
 
@@ -491,7 +493,7 @@ corner already owns.
 == Register Layout
 <iomux-register-layout>
 The read-only `impid` occupies bytes 0x00 through 0x07. On a 32-bit bus,
-0x00 reads the low half and 0x04 reads the high half. Narrow APB4 interfaces
+0x00 reads the low half and 0x04 reads the high half. Narrow interfaces
 read consecutive little-endian portions of the same constant. On a 64-bit bus,
 0x00 reads the full value. Writes are ignored. Bytes 0x08 through 0xFF
 read zero and ignore writes. The generated header supplies `IMPID_OFFSET`,
@@ -543,16 +545,18 @@ field's end bit, or zero for an empty record. Its common stride is
 `A(E, 64) / 8`, and pin p starts at `base + p * stride`. Records retain model
 indices and fields that an individual pad class does not consume. A physical
 bus word starts at `floor(byte_address / data_bytes) * data_bytes`.
-Multiple writes to a record are not atomic. A selector can span APB words;
+Multiple writes to a record are not atomic. A selector can span bus words;
 each masked write immediately updates its bytes. Intermediate values follow
 the same routing rules as any other selector value.
 
 The report and generated C header give the actual offsets, strides, and
 aperture. The aperture ends at the final aligned cursor, with no fixed 16 KiB
 minimum or power-of-two rounding. `address_width` must cover it. Within the
-aperture, holes and unaligned accesses read zero and ignore writes without
-an error. Addresses outside the aperture return AXI SLVERR or APB PSLVERR
-without aliasing.
+aperture, holes read zero and ignore writes without an error. AXI4-Lite and
+APB4 also handle unaligned accesses this way. AXI4 uses the burst and byte-lane
+rules of the MMIO frontend. An AXI4 transfer whose byte span exceeds the
+aperture returns `SLVERR`, even if its first byte is inside. Addresses outside
+the aperture return AXI `SLVERR` or APB `PSLVERR` without aliasing.
 This does not change the generic MMIO generator's reserved-address policy.
 
 C macros use `QSOC_<module>_X_<name>` and preserve letter case. Each component

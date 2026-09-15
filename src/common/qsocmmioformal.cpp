@@ -3,6 +3,7 @@
 
 #include "common/qsocmmioformal.h"
 #include "common/qsocmmioapbverification.h"
+#include "qsocmmioaxiverification.h"
 
 #include "common/qsocmmiogenerator.h"
 
@@ -773,8 +774,8 @@ QString buildSby(const QSocMmioPlan &plan)
                "cover: depth 24\n"
                "\n"
                "[engines]\n"
-               "prove: abc pdr\n"
-               "bmc: smtbmc z3\n"
+               "prove: abc %2pdr\n"
+               "bmc: %3\n"
                "cover: smtbmc z3\n"
                "\n"
                "[script]\n"
@@ -784,7 +785,10 @@ QString buildSby(const QSocMmioPlan &plan)
                "[files]\n"
                "%1.v\n"
                "%1_formal.sv\n")
-        .arg(plan.moduleName);
+        .arg(
+            plan.moduleName,
+            plan.bus == QSocMmioBus::Axi4 ? "scorr; dc2; " : "",
+            plan.bus == QSocMmioBus::Axi4 ? "abc scorr; dc2; bmc3" : "smtbmc z3");
 }
 
 } // namespace
@@ -793,6 +797,9 @@ QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
     if (plan.bus == QSocMmioBus::Apb4) {
         return {QSocMmioApbVerification::formal(plan), buildSby(plan)};
+    }
+    if (plan.bus == QSocMmioBus::Axi4) {
+        return {QSocMmioAxiVerification::formal(plan), buildSby(plan)};
     }
     return {buildSystemVerilog(plan), buildSby(plan)};
 }
