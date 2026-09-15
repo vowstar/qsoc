@@ -14,6 +14,8 @@
 
 struct QSocModuleDefinition;
 
+enum class QSocMmioBus { Axi4Lite, Apb4 };
+
 /**
  * @brief How software reaches a field.
  *
@@ -59,6 +61,7 @@ struct QSocMmioRegisterPlan
 struct QSocMmioPlan
 {
     QString                     moduleName;
+    QSocMmioBus                 bus          = QSocMmioBus::Axi4Lite;
     quint32                     dataWidth    = 32;
     quint32                     addressWidth = 32;
     QList<QSocMmioRegisterPlan> registers;

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmmioformal.h"
+#include "common/qsocmmioapbverification.h"
 
 #include "common/qsocmmiogenerator.h"
 
@@ -790,5 +791,8 @@ QString buildSby(const QSocMmioPlan &plan)
 
 QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
+    if (plan.bus == QSocMmioBus::Apb4) {
+        return {QSocMmioApbVerification::formal(plan), buildSby(plan)};
+    }
     return {buildSystemVerilog(plan), buildSby(plan)};
 }

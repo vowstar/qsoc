@@ -3660,7 +3660,7 @@ void Test::invalidSource_data()
     QTest::newRow("wrong-kind") << QString(basePrefix).replace("kind: iomux", "kind: mmio")
                                        + "    route: []\n"
                                 << "IOMUX_KIND generator.kind";
-    QTest::newRow("wrong-bus") << QString(basePrefix).replace("bus: axi4_lite", "bus: apb4")
+    QTest::newRow("wrong-bus") << QString(basePrefix).replace("bus: axi4_lite", "bus: unsupported")
                                       + "    route: []\n"
                                << "IOMUX_BUS generator.bus";
     QTest::newRow("unknown-generator-key") << basePrefix + "    layout: compact\n    route: []\n"

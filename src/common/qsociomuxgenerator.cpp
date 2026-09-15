@@ -263,13 +263,20 @@ bool parseUnsigned(
 
 bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *mmio, QStringList *errors)
 {
-    bool valid = true;
+    bool       valid = true;
+    const bool apb   = mmio->bus == QSocMmioBus::Apb4;
     if (generator["data_width"]) {
         quint64    dataWidth = 0;
         const bool parsed
             = parseUnsigned(generator["data_width"], "generator.data_width", 64, &dataWidth, errors);
-        if (parsed && dataWidth != 32 && dataWidth != 64) {
-            appendError(errors, "RANGE", "generator.data_width", "must be 32 or 64");
+        if (parsed
+            && (apb ? (dataWidth != 8 && dataWidth != 16 && dataWidth != 32)
+                    : (dataWidth != 32 && dataWidth != 64))) {
+            appendError(
+                errors,
+                "RANGE",
+                "generator.data_width",
+                apb ? "must be 8, 16, or 32" : "must be 32 or 64");
             valid = false;
         } else if (parsed) {
             mmio->dataWidth = static_cast<quint32>(dataWidth);
@@ -282,13 +289,14 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *mmio, QStringList
         quint64    addressWidth = 0;
         const bool parsed       = parseUnsigned(
             generator["address_width"], "generator.address_width", 64, &addressWidth, errors);
-        const quint32 minimum = mmio->dataWidth == 64 ? 3 : 2;
-        if (parsed && addressWidth < minimum) {
+        const quint32 minimum = mmio->dataWidth == 64 ? 3 : (mmio->dataWidth == 32 ? 2 : 1);
+        const quint32 maximum = apb ? 32 : 64;
+        if (parsed && (addressWidth < minimum || addressWidth > maximum)) {
             appendError(
                 errors,
                 "RANGE",
                 "generator.address_width",
-                QString("must be between %1 and 64").arg(minimum));
+                QString("must be between %1 and %2").arg(minimum).arg(maximum));
             valid = false;
         } else if (parsed) {
             mmio->addressWidth = static_cast<quint32>(addressWidth);
@@ -3234,6 +3242,9 @@ void composeIdentity(QSocIomuxPlan *plan)
         word.name = width == 64
                         ? QStringLiteral("impid")
                         : (bit == 0 ? QStringLiteral("impid_lo") : QStringLiteral("impid_hi"));
+        if (width < 32) {
+            word.name = QString("impid_%1").arg(bit / width);
+        }
         word.byteOffset = bit / 8;
         word.fields.append(
             constantField(word.name, 0, width, (plan->impid >> bit) & maximumForWidth(width)));
@@ -3385,31 +3396,29 @@ bool composeMmio(QSocIomuxPlan *plan, QStringList *errors)
     const quint32 dataWidth = plan->mmio.dataWidth;
     const quint32 byteCount = dataWidth / 8;
     const quint32 lane      = QSocIomuxGenerator::selectorLane(plan->hsSlots, 4);
-    const quint32 lanes     = dataWidth / lane;
-    const quint32 words     = (quint64(plan->pinCount) + lanes - 1) / lanes;
     const quint32 width     = selectorWidth(plan->hsSlots);
 
     plan->mmio.zeroFillBytes = QSocIomuxGenerator::kBaseSelector;
     composeIdentity(plan);
     allocateBlock(plan, "hs_select", selectorBytes(plan->pinCount, lane));
-
-    for (quint32 word = 0; word < words; ++word) {
-        QSocMmioRegisterPlan selector;
-        selector.name       = QString("hs_select_%1").arg(word);
-        selector.byteOffset = QSocIomuxGenerator::kBaseSelector + quint64(word) * byteCount;
-        const quint32 first = word * lanes;
-        const quint32 last  = std::min(plan->pinCount, first + lanes);
-        for (quint32 pin = first; pin < last; ++pin) {
-            QSocMmioFieldPlan field;
-            field.name       = QString("pin_%1_select").arg(pin);
-            field.lsb        = (pin % lanes) * lane;
-            field.width      = width;
-            field.access     = QSocMmioAccess::ReadWrite;
-            field.resetValue = 0;
-            field.outputPort = QString("pin_%1_select_o").arg(pin);
-            selector.fields.append(field);
-        }
-        plan->mmio.registers.append(selector);
+    QMap<quint64, QSocMmioRegisterPlan> words;
+    for (quint32 pin = 0; pin < plan->pinCount; ++pin) {
+        const quint64 bit      = quint64(pin) * lane;
+        const quint64 index    = bit / dataWidth;
+        auto         &selector = words[index];
+        selector.name          = QString("hs_select_%1").arg(index);
+        selector.byteOffset    = QSocIomuxGenerator::kBaseSelector + index * byteCount;
+        QSocMmioFieldPlan field;
+        field.name       = QString("pin_%1_select").arg(pin);
+        field.lsb        = quint32(bit % dataWidth);
+        field.width      = width;
+        field.access     = QSocMmioAccess::ReadWrite;
+        field.resetValue = 0;
+        field.outputPort = QString("pin_%1_select_o").arg(pin);
+        selector.fields.append(field);
+    }
+    for (const auto &word : words) {
+        plan->mmio.registers.append(word);
     }
 
     /* Allocate optional arrays in their byte-layout order. */
@@ -3494,14 +3503,18 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
     if (!generator["bus"]) {
         appendError(errors, "REQUIRED", "generator.bus", "property is required");
         valid = false;
-    } else if (!parseScalar(generator["bus"], "generator.bus", &bus, errors) || bus != "axi4_lite") {
+    } else if (
+        !parseScalar(generator["bus"], "generator.bus", &bus, errors)
+        || (bus != "axi4_lite" && bus != "apb4")) {
         if (!bus.isEmpty()) {
-            appendError(errors, "BUS", "generator.bus", "must be axi4_lite");
+            appendError(errors, "BUS", "generator.bus", "must be axi4_lite or apb4");
         }
         valid = false;
     }
 
-    valid = parseBusWidths(generator, &plan->mmio, errors) && valid;
+    // cppcheck-suppress knownConditionTrueFalse
+    plan->mmio.bus = bus == "apb4" ? QSocMmioBus::Apb4 : QSocMmioBus::Axi4Lite;
+    valid          = parseBusWidths(generator, &plan->mmio, errors) && valid;
 
     if (definition.hasParameterSection || !definition.parameters.isEmpty()) {
         appendError(errors, "MANUAL_SECTION", "module.parameter", "is not allowed for IOMUX modules");
@@ -3779,7 +3792,8 @@ QMap<QString, EndpointPort> selectPorts(const QSocIomuxPlan &plan, const QSocIom
 
 bool isControlPort(const QSocMmioPortDescription &port)
 {
-    return port.name == "clk_i" || port.name == "rst_ni" || port.name.startsWith("s_axi_");
+    return port.name == "clk_i" || port.name == "rst_ni"
+           || (port.name.startsWith("s_axi_") || port.name.startsWith("s_apb_"));
 }
 
 quint32 interruptLineCount(const QSocIomuxPlan &plan)
@@ -6302,11 +6316,11 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
         module["port"][port.name.toStdString()] = portNode;
     }
     YAML::Node control(YAML::NodeType::Map);
-    control["bus"]  = "axi4_lite";
+    control["bus"]  = plan.mmio.bus == QSocMmioBus::Apb4 ? "apb4" : "axi4_lite";
     control["mode"] = "slave";
     YAML::Node mapping(YAML::NodeType::Map);
     for (const QSocMmioPortDescription &port : ports) {
-        if (!port.name.startsWith("s_axi_")) {
+        if (!port.name.startsWith(plan.mmio.bus == QSocMmioBus::Apb4 ? "s_apb_" : "s_axi_")) {
             continue;
         }
         mapping[port.name.mid(6).toStdString()] = port.name.toStdString();
@@ -6319,13 +6333,12 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
 QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
 {
     const quint32 dataWidth = plan.mmio.dataWidth;
-    if (plan.pinCount == 0 || plan.hsSlots == 0 || (dataWidth != 32 && dataWidth != 64)) {
+    if (plan.pinCount == 0 || plan.hsSlots == 0
+        || (dataWidth != 8 && dataWidth != 16 && dataWidth != 32 && dataWidth != 64)) {
         return QString();
     }
     const auto   &registers = plan.mmio.registers;
-    const quint32 byteCount = dataWidth / 8;
     const quint32 lane      = selectorLane(plan.hsSlots, 4);
-    const quint32 lanes     = dataWidth / lane;
     const quint32 width     = selectionWidth(plan.hsSlots);
     const quint64 aperture  = plan.mmio.zeroFillBytes;
     quint32       selectors = 0;
@@ -6349,26 +6362,22 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
     };
     const auto wordAt = [&](quint64 byteOffset) {
         quint64 value = 0;
-        for (const QSocMmioRegisterPlan &reg : registers) {
-            if (byteOffset < reg.byteOffset || byteOffset >= reg.byteOffset + byteCount) {
-                continue;
-            }
-            const quint32 shift = quint32(byteOffset - reg.byteOffset) * 8;
-            for (const QSocMmioFieldPlan &field : reg.fields) {
-                const quint32 low  = std::max(field.lsb, shift);
-                const quint32 high = std::min(field.lsb + field.width, shift + 32);
-                if (!field.constantValue.has_value() || low >= high) {
+        for (const auto &reg : registers) {
+            for (const auto &field : reg.fields) {
+                if (!field.constantValue.has_value()) {
                     continue;
                 }
-                /* The read function emits a width-sized literal, which Verilog
-                 * truncates, and a field may straddle the word boundary. */
-                const quint64 mask = field.width >= 64 ? ~quint64(0)
-                                                       : ((quint64(1) << field.width) - 1);
-                const quint64 bits = (*field.constantValue & mask) >> (low - field.lsb);
-                value |= (bits & ((quint64(1) << (high - low)) - 1)) << (low - shift);
+                for (quint32 bit = 0; bit < field.width; ++bit) {
+                    const quint64 address = reg.byteOffset + (field.lsb + bit) / 8;
+                    if (address >= byteOffset && address - byteOffset < 4) {
+                        const quint32 shift = quint32(address - byteOffset) * 8
+                                              + (field.lsb + bit) % 8;
+                        value |= ((*field.constantValue >> bit) & 1) << shift;
+                    }
+                }
             }
         }
-        return value & 0xffffffffULL;
+        return value;
     };
 
     QStringList lines;
@@ -6506,8 +6515,8 @@ QString QSocIomuxGenerator::generateReport(const QSocIomuxPlan &plan)
         lines.append(
             QString("pin %1 selector word %2 lsb %3 offset 0x%4")
                 .arg(pin)
-                .arg(pin / lanes)
-                .arg((pin % lanes) * lane)
+                .arg(quint64(pin) * lane / dataWidth)
+                .arg(quint64(pin) * lane % dataWidth)
                 .arg(QString::number(location(QString("pin_%1_select_o").arg(pin)).first, 16))
             + (plan.padCells.size() > 1 ? QString(" cell %1").arg(plan.padClass(pin).name)
                                         : QString()));

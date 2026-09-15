@@ -1,7 +1,7 @@
 = MMIO Generator
 <mmio-generator>
 The MMIO generator turns one register map in a module library into one
-AXI4-Lite slave. Its source stays in the module's `.soc_mod` entry.
+AXI4-Lite or APB4 slave. Its source stays in the module's `.soc_mod` entry.
 
 == Source Format
 <mmio-source-format>
@@ -54,8 +54,10 @@ timer_ctrl:
 ```
 
 `data_width` and `address_width` are optional generator entries alongside
-`bus`; both default to 32. `data_width` accepts 32 or 64. `address_width`
-accepts values from `ceil(log2(data_width / 8))` through 64.
+`bus`; both default to 32. With `bus: axi4_lite`, `data_width` accepts
+32 or 64 and `address_width` ranges from `ceil(log2(data_width / 8))` to 64.
+With `bus: apb4`, data widths are 8, 16, or 32 and address widths range from
+`max(1, ceil(log2(data_width / 8)))` to 32.
 
 ```yaml
 wide_status:
@@ -109,7 +111,10 @@ A `w1c` field is one bit that hardware sets through `input` and software
 clears by writing one. A zero leaves it. A set that lands on the cycle of the
 clearing write wins, so an event cannot vanish into its own acknowledgement.
 
-Fields may not overlap or cross bit `data_width - 1`. `reset` and `value` must
+Fields may not overlap. AXI4-Lite fields must fit in one bus word. APB4 fields
+start within the addressed word and may span subsequent words, up to 64 bits
+per field. Each byte strobe updates only its addressed field bits. Separate
+writes take effect separately, including intermediate field values. `reset` and `value` must
 fit their field width. Sideband signals must be unique and may not collide
 with fixed interface ports or with the generator's own names such as
 `write_fire`, `aw_take`, or `mmio_field_<n>_q`; the error names the clash. A
@@ -138,6 +143,15 @@ responses while backpressured. Unmapped or misaligned accesses return
 writes. A read and write to the same register on one clock edge returns the
 old value.
 
+With `bus: apb4`, the control ports are `s_apb_paddr`, `s_apb_pselx`,
+`s_apb_penable`, `s_apb_pwrite`, `s_apb_pwdata`, `s_apb_pstrb`, `s_apb_pprot`,
+`s_apb_prdata`, `s_apb_pready`, and `s_apb_pslverr`. Protection attributes are
+accepted without access filtering. The slave has no wait states. Writes take
+effect on the ACCESS completion edge; SETUP does not change register state.
+Read data reflects the addressed fields during ACCESS. Unmapped or misaligned
+accesses complete with `PSLVERR`. Reserved bits read zero and ignore writes.
+Reset clears stored fields and suppresses completion.
+
 == Formal Collateral
 <mmio-formal-collateral>
 Add `--with-formal` to generate a matching formal harness and SymbiYosys job:
@@ -154,33 +168,10 @@ all selected targets before opening or replacing a selected output file. If any
 target exists, the command fails without replacing any selected file unless
 `-f` or `--force` is present.
 
-Generation does not run the job. The job proves with `abc pdr` and runs
-`bmc` and `cover` with `smtbmc` on z3, all at depth 24, so `sby`, `yosys`,
-and `z3` must be installed. From `output/<library>/<module>/`, run the proof
-or cover task explicitly:
-
-```bash
-sby -f <module>_formal.sby prove
-sby -f <module>_formal.sby cover
-```
-
-The harness resets itself from an `initial` value and then lets a free
-input pull reset again at any time. A tool that ignores `initial` blocks
-compiles the harness with `FORMAL_EXTERNAL_RESET` defined, which adds a
-`formal_reset_ni` port for the tool's own reset handling; the free input
-still re-enters reset, so those properties stay under proof.
-
-The generated job also has a `bmc` task for bounded counterexamples; omit the
-task name to run `prove`, `bmc`, and `cover`. The harness follows the selected
-address width, data width, register layout, resets, sidebands, byte strobes,
-responses, and backpressure. It covers the generated AXI4-Lite slave only.
-A `w1c` set source is a free input of the harness, so the proof includes a
-set on the cycle of the clearing write, and a cover marks that cycle as
-reachable.
-The harness holds reset active for two clock steps, guarantees one active
-cycle, and then allows reset to reassert during traffic. It checks bus
-quiescence and register state during reset, and covers reset aborts with a
-pending write address, write data, write response, or read response.
+Generation does not run the job. The generated tasks are `prove`, `bmc`, and
+`cover`. Define `FORMAL_EXTERNAL_RESET` to expose `formal_reset_ni` for an
+external reset controller. The harness follows the selected bus, register
+layout, field access rules, and byte strobes.
 
 == UVM Testbench
 <mmio-uvm-testbench>
@@ -193,29 +184,10 @@ qsoc generate module --with-uvm -l <library> <module>
 The command selects `<module>.v`, `<module>_uvm_if.sv`,
 `<module>_uvm_pkg.sv`, `<module>_uvm_tb.sv`, and `<module>_uvm.fl`. The file
 list contains relative generated sources; the UVM library remains an external
-dependency. Set `UVM_HOME` to the UVM checkout root and run from the generated
-module directory. This is the invocation the test suite uses with Verilator:
-
-```bash
-verilator --binary --timing --threads 1 \
-  -Wno-fatal -Wno-TIMESCALEMOD -Wno-WIDTHTRUNC -Wno-WIDTHEXPAND \
-  +define+UVM_NO_DPI -I"$UVM_HOME/src" "$UVM_HOME/src/uvm_pkg.sv" \
-  --top-module <module>_uvm_tb -f <module>_uvm.fl
-./obj_dir/V<module>_uvm_tb
-```
-
-Generation does not compile or run the testbench. The directed sequence runs
-twice with a reset between runs. It checks reset reads, RW and RO fields,
-constants, reserved bits, byte strobes, all write-address and write-data
-orders, response causality and backpressure, error responses, and that illegal
-writes have no side effects. For each `w1c` field it pulses the set source
-while the bus is idle, reads the bit as one, writes the complement of the bit
-(a zero there, ones everywhere else) and reads it still set, then writes the
-bit and reads it clear. Each channel has a 64-cycle timeout, followed by a
-three-cycle final drain, and the whole run aborts after 1 ms of simulated
-time. It follows the generated widths and sideband bindings.
-This is a module-specific MMIO testbench, not reusable AXI verification IP. A
-UVM error or fatal report makes the simulation process fail.
+dependency. Compile the listed sources with a UVM library and select
+`<module>_uvm_tb` as the top module. Generation does not run the testbench.
+The testbench checks the selected register interface and reports mismatches
+as UVM errors. An error or fatal report makes the simulation fail.
 
 `--with-formal` and `--with-uvm` are independent and may be combined. The
 combined command selects eight files. Generation locks and checks every
@@ -223,8 +195,7 @@ selected target before writing; `--force` replaces only the selected set.
 
 == Current Limits
 <mmio-current-limits>
-This CLI slice supports one AXI4-Lite slave with a 32- or 64-bit data port and
-one configurable local address port. Optional formal and UVM collateral target
-that same slave. It does not allocate a system address, create a netlist
+Each module exposes one AXI4-Lite or APB4 slave and one local address port.
+Optional formal and UVM collateral target the selected interface. It does not allocate a system address, create a netlist
 instance, insert a bus bridge, cross clock domains, or generate register arrays
 and extended access types. Use a wrapper for those functions.
