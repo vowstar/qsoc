@@ -432,6 +432,13 @@ jobs:
     - name: Nix build (with submodules)
       run: nix build ".?submodules=1" --print-build-logs
 
+    - name: Nix shell from GitHub archive
+      run: |
+        QSOC_SMOKE_DIR="$(mktemp -d)"
+        trap 'rm -rf "$QSOC_SMOKE_DIR"' EXIT
+        cd "$QSOC_SMOKE_DIR"
+        nix shell "github:$GITHUB_REPOSITORY/$GITHUB_SHA#qsoc" --print-build-logs --command qsoc --version
+
     - name: Smoke Test
       run: |
         set -e

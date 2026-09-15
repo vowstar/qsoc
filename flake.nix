@@ -5,6 +5,7 @@
   description = "QSoC - Quick System on Chip Studio";
 
   inputs = {
+    self.submodules = true;
     nixpkgs.url = "nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -20,13 +21,19 @@
           # This is a placeholder that will be overridden
           version = "0.0.0";
 
-          # Submodules under external/ are required at configure time
-          # (slang, json, yaml, ...). Invoke this flake with
-          #   nix build ".?submodules=1"
-          # so the bundled submodules land in the build sandbox.
-          # A bare `nix build` skips them because flakes filter the
-          # source via the parent repo's git tree by default.
-          src = ./.;
+          # GitHub archives omit submodules, even with self.submodules.
+          src = if builtins.pathExists ./external/slang/CMakeLists.txt then
+            ./.
+          else if self ? rev then
+            builtins.fetchGit {
+              url = "https://github.com/vowstar/qsoc.git";
+              rev = self.rev;
+              shallow = true;
+              submodules = true;
+            }
+          else
+            throw
+            "QSoC requires submodules. Run git submodule update --init --recursive and use nix build '.?submodules=1'.";
 
           # Extract version from config.h and pin slang's FetchContent
           # to bundled external/fmt so the nix sandbox never reaches
@@ -140,7 +147,7 @@
             fi
 
             echo "Run 'cmake -B build -G Ninja' to configure"
-            echo "Run 'cmake --build build -j' to build"
+            echo "Run 'cmake --build build -j16' to build"
             echo "Run 'cmake --build build --target test' to test"
             echo "Run 'cmake --build build --target clang-format' to format code"
           '';

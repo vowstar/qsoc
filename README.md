@@ -12,6 +12,12 @@ operations.
 
 ## Quick start
 
+With Nix, enter a shell that provides QSoC:
+
+```bash
+nix shell github:vowstar/qsoc#qsoc
+```
+
 ```bash
 qsoc agent -q "list the modules in this project"        # one-shot query
 qsoc agent                                              # interactive REPL
@@ -50,7 +56,7 @@ all dependencies pinned:
 ```bash
 nix develop
 cmake -B build -G Ninja
-cmake --build build -j
+cmake --build build -j16
 cmake --build build --target test
 cmake --build build --target clang-format
 ```

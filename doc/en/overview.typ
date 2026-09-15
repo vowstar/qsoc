@@ -24,12 +24,18 @@ chmod +x QSoC-*.AppImage
 ./QSoC-*.AppImage --version
 ```
 
-To build from source instead:
+With Nix, enter a shell that provides QSoC:
+
+```bash
+nix shell github:vowstar/qsoc#qsoc
+```
+
+To build from a local checkout:
 
 ```bash
 nix develop
 cmake -B build -G Ninja
-cmake --build build -j
+cmake --build build -j16
 ```
 
 A first session runs the commands described in @cli-overview:
