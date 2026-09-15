@@ -426,6 +426,9 @@ External editor and search:
 - *Ctrl+X Ctrl+E* or *Ctrl+G*: Edit current input in `$EDITOR`
 - *Ctrl+R*: Reverse-i-search through prompt history (across all projects)
 
+Save and close the editor to return the edited text to the prompt.
+Press Enter in QSoC to submit it.
+
 View and selection:
 
 - *Ctrl+T*: Toggle TODO list visibility

@@ -61,10 +61,14 @@ bool QSocExternalEditor::editText(const QString &current, QString &result, QStri
     QStringList    args    = editorParts.mid(1);
     args.append(tempPath);
 
-    /* QProcess::execute is blocking and inherits the parent's stdin/stdout/stderr,
-     * which is exactly what we need so terminal editors can draw over our TUI
-     * after the compositor has paused the alt-screen. */
-    const int exitCode = QProcess::execute(program, args);
+    QProcess editor;
+    editor.setProcessChannelMode(QProcess::ForwardedChannels);
+    editor.setInputChannelMode(QProcess::ForwardedInputChannel);
+    editor.start(program, args);
+    int exitCode = -2;
+    if (editor.waitForFinished(-1)) {
+        exitCode = editor.exitStatus() == QProcess::NormalExit ? editor.exitCode() : -1;
+    }
     if (exitCode < 0) {
         error = QStringLiteral("Failed to launch editor '%1' (exit code %2)")
                     .arg(program)

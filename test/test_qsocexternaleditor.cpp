@@ -4,28 +4,23 @@
 #include "cli/qsocexternaleditor.h"
 #include "qsoc_test.h"
 
+#include <QScopeGuard>
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
+#ifdef Q_OS_UNIX
+#include <cstdlib>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+namespace {
 
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     void cleanup() { qunsetenv("EDITOR"); }
 
     void testResolveEditorDefault()
@@ -102,6 +97,48 @@ private slots:
         QVERIFY(!err.isEmpty());
     }
 
+#ifdef Q_OS_UNIX
+    void testEditorReadsTerminalInput()
+    {
+        const int master = ::posix_openpt(O_RDWR | O_NOCTTY);
+        QVERIFY(master >= 0);
+        const auto closeMaster = qScopeGuard([master] { ::close(master); });
+        QCOMPARE(::grantpt(master), 0);
+        QCOMPARE(::unlockpt(master), 0);
+        const char *slaveName = ::ptsname(master);
+        QVERIFY(slaveName != nullptr);
+        const int slave = ::open(slaveName, O_RDWR | O_NOCTTY);
+        QVERIFY(slave >= 0);
+        const auto closeSlave = qScopeGuard([slave] { ::close(slave); });
+
+        const int savedStdin = ::dup(STDIN_FILENO);
+        QVERIFY(savedStdin >= 0);
+        const auto restoreStdin = qScopeGuard([savedStdin] {
+            ::dup2(savedStdin, STDIN_FILENO);
+            ::close(savedStdin);
+        });
+        QVERIFY(::dup2(slave, STDIN_FILENO) >= 0);
+
+        const QString script       = makeShellScript(QStringLiteral(
+            "#!/bin/sh\n"
+            "test -t 0 || exit 42\n"
+            "IFS= read -r input || exit 43\n"
+            "printf '%s\\n' \"$input\" > \"$1\"\n"));
+        const auto    removeScript = qScopeGuard([script] { QFile::remove(script); });
+        qputenv("EDITOR", (QStringLiteral("sh ") + script).toLocal8Bit());
+
+        const QByteArray input("typed in terminal\n");
+        QCOMPARE(::write(master, input.constData(), input.size()), ssize_t(input.size()));
+        QString result;
+        QString error;
+        QVERIFY2(
+            QSocExternalEditor::editText(QStringLiteral("before"), result, error),
+            qPrintable(error));
+        QCOMPARE(result, QStringLiteral("typed in terminal"));
+        QVERIFY(error.isEmpty());
+    }
+#endif
+
     void testEditorMissingBinary()
     {
         qputenv("EDITOR", QByteArrayLiteral("/definitely/does/not/exist/editor"));
@@ -113,6 +150,8 @@ private slots:
         QVERIFY(!err.isEmpty());
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsocexternaleditor.moc"
