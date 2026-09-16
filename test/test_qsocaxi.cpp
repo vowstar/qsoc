@@ -6,6 +6,7 @@
 #include "common/qsocmmiogenerator.h"
 #include "common/qsocmmiouvm.h"
 #include "common/qsocmodulemanager.h"
+#include "qsoc_iomux_bus_cases.h"
 #include "qsoc_test.h"
 
 #include <algorithm>
@@ -566,11 +567,13 @@ void Test::collateral()
 void Test::iomux_data()
 {
     QTest::addColumn<int>("width");
+    QTest::addColumn<bool>("features");
     for (int width : {8, 16, 32, 64, 128, 256, 512, 1024})
-        QTest::newRow(qPrintable(QString::number(width))) << width;
+        QTest::newRow(qPrintable(QString::number(width))) << width << false;
+    QTest::newRow("features128") << 128 << true;
 }
 
-QString iomuxBench(int width, const QString &top)
+QString iomuxBench(int width, const QString &top, bool features)
 {
     QStringList              declarations;
     const QRegularExpression portPattern(
@@ -646,6 +649,8 @@ task read_byte(input integer address, input reg [7:0] expected, input bit error)
     transactions++;
 endtask
 
+)";
+    source += features ? iomuxBusFeatureOperations("IOMUX_AXI_PASS") : QStringLiteral(R"(
 initial begin
     repeat (3) @(negedge clk_i); rst_ni = 1;
     pad_input_value_i = 2;
@@ -691,6 +696,8 @@ initial begin
     $display("IOMUX_AXI_PASS width=%0d transactions=%0d", D, transactions);
     $finish;
 end
+)");
+    source += R"(
 initial begin #1000000; $fatal(1, "TIMEOUT"); end
 endmodule
 )";
@@ -702,7 +709,8 @@ endmodule
 void Test::iomux()
 {
     QFETCH(int, width);
-    const QString     source = QString(R"(generator:
+    QFETCH(bool, features);
+    QString source = QString(R"(generator:
   kind: iomux
   bus: axi4
   data_width: %1
@@ -722,7 +730,10 @@ void Test::iomux()
     - {pin: 0, slot: 256, function: serial, signal: tx, output_value: 1, output_enable: 1}
     - {pin: 1, slot: 1, function: gpio, signal: out, output_value: 1, output_enable: 1}
 )")
-                                   .arg(width);
+                         .arg(width);
+    if (features)
+        source
+            = iomuxBusFeatureSource("axi4").replace("  pin_count:", "  id_width: 7\n  pin_count:");
     QSocModuleManager manager;
     QSocIomuxPlan     plan;
     QStringList       errors;
@@ -735,7 +746,8 @@ void Test::iomux()
     QCOMPARE(plan.mmio.idWidth, quint32(7));
     const QString header = QSocIomuxGenerator::generateSoftwareHeader(plan);
     QVERIFY(header.contains("IMPID_VALUE"));
-    QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("impid: 0x8123456789abcdef"));
+    if (!features)
+        QVERIFY(QSocIomuxGenerator::generateReport(plan).contains("impid: 0x8123456789abcdef"));
     const auto ports = QSocMmioGenerator::describePorts(plan.mmio);
     QVERIFY(std::any_of(ports.cbegin(), ports.cend(), [](const auto &port) {
         return port.name == "s_axi_awid" && port.width == 7;
@@ -753,7 +765,7 @@ void Test::iomux()
             + QSocIomuxGenerator::generateConnVerilog(plan) + top));
     QVERIFY(save(directory.filePath("config.yaml"), source));
     QVERIFY(save(directory.filePath("regs.h"), header));
-    QVERIFY(save(directory.filePath("tb.sv"), iomuxBench(width, top)));
+    QVERIFY(save(directory.filePath("tb.sv"), iomuxBench(width, top, features)));
     const QString tool = QStandardPaths::findExecutable("verilator");
     if (tool.isEmpty())
         QSOC_TEST_MISSING_DEPENDENCY("verilator");
