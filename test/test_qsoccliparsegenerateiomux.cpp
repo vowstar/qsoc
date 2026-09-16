@@ -5,6 +5,7 @@
 #include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
+#include "qsoc_iomux_sim.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -489,7 +490,7 @@ private slots:
     void mergedTopInstantiatesWrapperAndElaborates();
     void mergedTopLinksTheInterruptLines();
     void mergedTopLinksSlowChannels();
-    void mergedTopAxiWriteChangesPadWhenIverilogIsAvailable();
+    void mergedTopAxiWriteChangesPadWhenVerilatorIsAvailable();
     void sparseVectorCarrierMerges();
     void combinationalVectorCarrierMerges();
     void invalidGeneratorBlocksNetlistGeneration();
@@ -673,14 +674,8 @@ void Test::mergedTopLinksSlowChannels()
     QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(files)));
 }
 
-void Test::mergedTopAxiWriteChangesPadWhenIverilogIsAvailable()
+void Test::mergedTopAxiWriteChangesPadWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY("iverilog and vvp");
-    }
-
     QTemporaryDir directory;
     createProject(directory);
 
@@ -695,42 +690,17 @@ void Test::mergedTopAxiWriteChangesPadWhenIverilogIsAvailable()
     const QString moduleOutput   = QDir(directory.path()).filePath("output/peripheral/iomux0");
     const QString peripheralPath = QDir(directory.path()).filePath("periph_stub.v");
     const QString benchPath      = QDir(directory.path()).filePath("tb.v");
-    const QString executablePath = QDir(directory.path()).filePath("iomux_soc_top.out");
     writeTextFile(peripheralPath, peripheralVerilog());
     writeTextFile(benchPath, topTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.start(
-        compiler,
-        {"-g2001",
-         "-s",
-         "tb",
-         "-o",
-         executablePath,
-         topPath,
+    runIomuxSimulation(
+        directory.path(),
+        {topPath,
          QDir(moduleOutput).filePath("rtl/iomux0.v"),
          QDir(moduleOutput).filePath("rtl/iomux0_regs.v"),
          QDir(moduleOutput).filePath("rtl/iomux0_conn.v"),
          peripheralPath,
          benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    const QByteArray compileOutput = process.readAllStandardOutput()
-                                     + process.readAllStandardError();
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    QVERIFY2(process.exitCode() == 0, compileOutput.constData());
-
-    process.start(runtime, {executablePath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    const QByteArray simulationOutput = process.readAllStandardOutput()
-                                        + process.readAllStandardError();
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    QCOMPARE(process.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
 void Test::sparseVectorCarrierMerges()

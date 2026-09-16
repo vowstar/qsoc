@@ -4,6 +4,7 @@
 #include "common/qsociomuxformal.h"
 #include "common/qsociomuxgenerator.h"
 #include "common/qsocmodulemanager.h"
+#include "qsoc_iomux_sim.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -3139,9 +3140,9 @@ private slots:
     void projectionMatchesWrapperHeader();
     void integrationNetlistConnectsEverythingOnce();
     void integrationNetlistLinksTheInterruptLines();
-    void routingSimulationWhenIverilogIsAvailable();
-    void fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable();
-    void lsPoolsDoNotReachEachOtherWhenIverilogIsAvailable();
+    void routingSimulationWhenVerilatorIsAvailable();
+    void fiveSlotInvalidSelectorCodesDriveZeroWhenVerilatorIsAvailable();
+    void lsPoolsDoNotReachEachOtherWhenVerilatorIsAvailable();
     void everyPinAndSlotAnswersThroughTheRegisters_data();
     void everyPinAndSlotAnswersThroughTheRegisters();
     void lsPoolPlanFollowsTheSource();
@@ -3149,12 +3150,12 @@ private slots:
     void lsPoolPinsNeedTheirReceiverEnabled();
     void lsPoolRejectsBadSources_data();
     void lsPoolRejectsBadSources();
-    void lsPoolRoutingSimulationWhenIverilogIsAvailable_data();
-    void lsPoolRoutingSimulationWhenIverilogIsAvailable();
-    void axiSelectorDrivesTailPinWhenIverilogIsAvailable_data();
-    void axiSelectorDrivesTailPinWhenIverilogIsAvailable();
-    void registerTakeoverDrivesPadWhenIverilogIsAvailable();
-    void interruptRecordsEventsWhenIverilogIsAvailable();
+    void lsPoolRoutingSimulationWhenVerilatorIsAvailable_data();
+    void lsPoolRoutingSimulationWhenVerilatorIsAvailable();
+    void axiSelectorDrivesTailPinWhenVerilatorIsAvailable_data();
+    void axiSelectorDrivesTailPinWhenVerilatorIsAvailable();
+    void registerTakeoverDrivesPadWhenVerilatorIsAvailable();
+    void interruptRecordsEventsWhenVerilatorIsAvailable();
     void padCellPortsAreCheckedAgainstTheLibrary();
     void padCellRejectsWhatItLacks_data();
     void padCellRejectsWhatItLacks();
@@ -3169,7 +3170,7 @@ private slots:
     void padControlNeedsAPadCellWithSomethingToControl();
     void composedRegistersAreAlreadyCanonical();
     void registerPadControlReachesThePadWhenIverilogIsAvailable();
-    void inversionAndOverrideReachThePinsWhenIverilogIsAvailable();
+    void inversionAndOverrideReachThePinsWhenVerilatorIsAvailable();
     void wovenKeeperCarriesItsStrength();
     void strengthPastTheTableLandsOnTheFirstRow();
     void padTablesAreBoundedToEightBitCodes();
@@ -3177,7 +3178,7 @@ private slots:
     void nativeKeeperRowIsSelectedNotWoven();
     void allOptionsFollowTheByteLayout();
     void netSelectedRowsFollowTheLink();
-    void netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable();
+    void netSelectedRowsSwitchInSimulationWhenVerilatorIsAvailable();
     void unroutedSlotsTakeTheDeclaredDefaultRow();
     void controlNamesAndPinsAreRefusedWhenTaken();
     void padRecordContinuesIntoTheNextWord();
@@ -3206,7 +3207,7 @@ private slots:
     void linksNeedAPadCellAndRowsToChooseFrom();
     void safeRowOutranksEveryOtherSource();
     void safeRowIsValidatedAgainstTheCell();
-    void forceHoldsThePadInSimulationWhenIverilogIsAvailable();
+    void forceHoldsThePadInSimulationWhenVerilatorIsAvailable();
 };
 
 void Test::draftIsRecognizedAndIncomplete()
@@ -3878,14 +3879,8 @@ void Test::integrationNetlistLinksTheInterruptLines()
     }
 }
 
-void Test::routingSimulationWhenIverilogIsAvailable()
+void Test::routingSimulationWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
-
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -3894,46 +3889,18 @@ void Test::routingSimulationWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString corePath   = QDir(directory.path()).filePath("iomux0_core.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString corePath  = QDir(directory.path()).filePath("iomux0_core.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(corePath, QSocIomuxGenerator::generateCoreVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(benchPath, routingTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(compiler, {"-g2001", "-s", "tb", "-o", outputPath, corePath, connPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished());
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished());
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {corePath, connPath, benchPath});
 }
 
-void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable()
+void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
-
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -3942,37 +3909,15 @@ void Test::fiveSlotInvalidSelectorCodesDriveZeroWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString corePath   = QDir(directory.path()).filePath("iomux0_core.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString corePath  = QDir(directory.path()).filePath("iomux0_core.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(corePath, QSocIomuxGenerator::generateCoreVerilog(plan));
     writeTextFile(benchPath, fiveSlotTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(compiler, {"-g2001", "-s", "tb", "-o", outputPath, corePath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished());
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished());
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {corePath, benchPath});
 }
 
-void Test::lsPoolsDoNotReachEachOtherWhenIverilogIsAvailable()
+void Test::lsPoolsDoNotReachEachOtherWhenVerilatorIsAvailable()
 {
     QSocIomuxPlan plan;
     QStringList   errors;
@@ -4015,45 +3960,18 @@ void Test::lsPoolsDoNotReachEachOtherWhenIverilogIsAvailable()
             "        default: ls_rx_raw_30 = 1'b0;"),
         qPrintable(top));
 
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString regsPath  = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath   = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(topPath, top);
     writeTextFile(benchPath, poolsTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.left(2000).constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.left(2000).constData());
+    runIomuxSimulation(directory.path(), {regsPath, connPath, topPath, benchPath});
 }
 
 void Test::everyPinAndSlotAnswersThroughTheRegisters_data()
@@ -4073,11 +3991,6 @@ void Test::everyPinAndSlotAnswersThroughTheRegisters()
      * the wiring from the field to the mux, for each of the 256 pins and not
      * only the tail one. Slot signatures sit on every lane at once, so a
      * pad that mixed two sources would show a code no slot carries. */
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
     QFETCH(quint32, dataWidth);
     QFETCH(bool, withLs);
 
@@ -4093,38 +4006,16 @@ void Test::everyPinAndSlotAnswersThroughTheRegisters()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString regsPath  = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath   = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(benchPath, bench);
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(300000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(600000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.left(2000).constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.left(2000).constData());
+    runIomuxSimulation(directory.path(), {regsPath, connPath, topPath, benchPath});
 }
 
 void Test::lsPoolPlanFollowsTheSource()
@@ -4406,20 +4297,15 @@ void Test::lsPoolRejectsBadSources()
     QVERIFY2(errors.contains(message), qPrintable(errors.join('\n')));
 }
 
-void Test::lsPoolRoutingSimulationWhenIverilogIsAvailable_data()
+void Test::lsPoolRoutingSimulationWhenVerilatorIsAvailable_data()
 {
     QTest::addColumn<quint32>("dataWidth");
     QTest::newRow("32-bit") << 32U;
     QTest::newRow("64-bit") << 64U;
 }
 
-void Test::lsPoolRoutingSimulationWhenIverilogIsAvailable()
+void Test::lsPoolRoutingSimulationWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
     QFETCH(quint32, dataWidth);
 
     QSocIomuxPlan plan;
@@ -4433,41 +4319,19 @@ void Test::lsPoolRoutingSimulationWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString regsPath  = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath   = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(benchPath, bench);
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {regsPath, connPath, topPath, benchPath});
 }
 
-void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable_data()
+void Test::axiSelectorDrivesTailPinWhenVerilatorIsAvailable_data()
 {
     QTest::addColumn<quint32>("pinCount");
     QTest::addColumn<quint32>("hsSlots");
@@ -4535,16 +4399,16 @@ module tb;
 
     task wr(input [13:0] a, input [31:0] d);
         begin
-            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
-            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            @(negedge clk); awaddr = a; wdata = d; awvalid = 1; wvalid = 1;
+            wait (awready && wready); @(posedge clk); #1 awvalid = 0; wvalid = 0;
             wait (bvalid); @(posedge clk);
         end
     endtask
 
     task rd(input [13:0] a);
         begin
-            @(posedge clk); araddr <= a; arvalid <= 1;
-            wait (arready); @(posedge clk); arvalid <= 0;
+            @(negedge clk); araddr = a; arvalid = 1;
+            wait (arready); @(posedge clk); #1 arvalid = 0;
             wait (rvalid); v = rdata; @(posedge clk);
         end
     endtask
@@ -4559,7 +4423,7 @@ module tb;
     endtask
 
     initial begin
-        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        repeat (4) @(negedge clk); rst_n = 1; repeat (2) @(posedge clk);
         rd(14'h8);
         if (v !== 32'h00000000) begin
             $display("TEST_FAIL reserved header %h", v); fails = fails + 1;
@@ -4649,20 +4513,20 @@ module tb;
         .irq_o(irq), .hs_p0_s0_output_value_i(uart0_tx));
 
     task wr(input [13:0] a, input [31:0] d);
-        begin @(posedge clk); awaddr<=a; wdata<=d; awvalid<=1; wvalid<=1;
-        wait(awready&&wready); @(posedge clk); awvalid<=0; wvalid<=0;
+        begin @(negedge clk); awaddr =a; wdata=d; awvalid=1; wvalid=1;
+        wait(awready&&wready); @(posedge clk); #1 awvalid =0; wvalid=0;
         wait(bvalid); @(posedge clk); end
     endtask
     task rd(input [13:0] a);
-        begin @(posedge clk); araddr<=a; arvalid<=1; wait(arready);
-        @(posedge clk); arvalid<=0; wait(rvalid); v=rdata; @(posedge clk); end
+        begin @(negedge clk); araddr =a; arvalid=1; wait(arready);
+        @(posedge clk); #1 arvalid =0; wait(rvalid); v=rdata; @(posedge clk); end
     endtask
     task chk(input [255:0] n, input g, input e);
         begin if (g!==e) begin $display("TEST_FAIL %0s got=%b exp=%b", n, g, e); fails=fails+1; end end
     endtask
 
     initial begin
-        repeat (4) @(posedge clk); rst_n = 1; repeat (6) @(posedge clk);
+        repeat (4) @(negedge clk); rst_n = 1; repeat (6) @(posedge clk);
 
         /* fix 1: pending records the event with every enable still at zero */
         rd(14'h150);
@@ -4704,14 +4568,8 @@ endmodule
 )");
 }
 
-void Test::interruptRecordsEventsWhenIverilogIsAvailable()
+void Test::interruptRecordsEventsWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
-
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -4721,38 +4579,16 @@ void Test::interruptRecordsEventsWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString regsPath  = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath   = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(benchPath, interruptTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler, {"-g2012", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {regsPath, connPath, topPath, benchPath});
 }
 
 /* A pad cell that takes a pull enable and a pull direction. The port table
@@ -4900,6 +4736,16 @@ QString padCellModel()
     bufif1 (PAD, I, OE);
     rnmos (PAD, 1'b1, PE & PS);
     rnmos (PAD, 1'b0, PE & ~PS);
+endmodule
+)");
+}
+
+QString padControlLogicModel()
+{
+    return QStringLiteral(R"(module gpio_pad_ps(PAD, I, OE, DS, IE, C, PE, PS);
+    inout PAD; input I, OE, DS, IE, PE, PS; output C;
+    assign PAD = OE ? I : (PE & PS);
+    assign C = IE & PAD;
 endmodule
 )");
 }
@@ -5516,14 +5362,8 @@ void Test::interruptAloneNeedsNoGpioRegisters()
     QVERIFY(!regs.contains("pin_0_output_enable_src_o"));
 }
 
-void Test::registerTakeoverDrivesPadWhenIverilogIsAvailable()
+void Test::registerTakeoverDrivesPadWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
-
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -5533,48 +5373,20 @@ void Test::registerTakeoverDrivesPadWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString regsPath  = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath   = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(benchPath, gpioTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {regsPath, connPath, topPath, benchPath});
 }
 
-void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
+void Test::axiSelectorDrivesTailPinWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
-
     QFETCH(quint32, pinCount);
     QFETCH(quint32, hsSlots);
     QFETCH(quint32, dataWidth);
@@ -5612,38 +5424,16 @@ void Test::axiSelectorDrivesTailPinWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString regsPath   = QDir(directory.path()).filePath("iomux0_regs.v");
-    const QString connPath   = QDir(directory.path()).filePath("iomux0_conn.v");
-    const QString topPath    = QDir(directory.path()).filePath("iomux0.v");
-    const QString benchPath  = QDir(directory.path()).filePath("tb.v");
-    const QString outputPath = QDir(directory.path()).filePath("iomux0.out");
+    const QString regsPath  = QDir(directory.path()).filePath("iomux0_regs.v");
+    const QString connPath  = QDir(directory.path()).filePath("iomux0_conn.v");
+    const QString topPath   = QDir(directory.path()).filePath("iomux0.v");
+    const QString benchPath = QDir(directory.path()).filePath("tb.v");
     writeTextFile(regsPath, QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(connPath, QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(topPath, QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(benchPath, bench);
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler, {"-g2001", "-s", "tb", "-o", outputPath, regsPath, connPath, topPath, benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QCOMPARE(simulation.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {regsPath, connPath, topPath, benchPath});
 }
 
 QString allOptionBlock()
@@ -6321,8 +6111,8 @@ module tb;
 
     task wr(input [13:0] a, input [31:0] d);
         begin
-            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
-            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            @(negedge clk); awaddr = a; wdata = d; awvalid = 1; wvalid = 1;
+            wait (awready && wready); @(posedge clk); #1 awvalid = 0; wvalid = 0;
             wait (bvalid); @(posedge clk);
         end
     endtask
@@ -6337,7 +6127,7 @@ module tb;
     endtask
 
     initial begin
-        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        repeat (4) @(negedge clk); rst_n = 1; repeat (2) @(posedge clk);
         uart0_tx = 1; #1;
         chk("plain_ov", pad_ov[0], 1'b1);
         chk("plain_oe", pad_oe[0], 1'b1);
@@ -6397,14 +6187,8 @@ endmodule
 )");
 }
 
-void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
+void Test::inversionAndOverrideReachThePinsWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
-
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -6425,35 +6209,13 @@ void Test::inversionAndOverrideReachThePinsWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QDir    dir(directory.path());
-    const QString outputPath = dir.filePath("iomux0.out");
+    const QDir dir(directory.path());
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(dir.filePath("tb.v"), invertOverrideTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler,
-        {"-g2001", "-s", "tb", "-o", outputPath, "iomux0_regs.v", "iomux0_conn.v", "iomux0.v", "tb.v"});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(directory.path(), {"iomux0_regs.v", "iomux0_conn.v", "iomux0.v", "tb.v"});
 }
 
 void Test::strengthPastTheTableLandsOnTheFirstRow()
@@ -6883,8 +6645,8 @@ module tb;
 
     task wr(input [13:0] a, input [31:0] d);
         begin
-            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
-            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            @(negedge clk); awaddr = a; wdata = d; awvalid = 1; wvalid = 1;
+            wait (awready && wready); @(posedge clk); #1 awvalid = 0; wvalid = 0;
             wait (bvalid); @(posedge clk);
         end
     endtask
@@ -6899,7 +6661,7 @@ module tb;
     endtask
 
     initial begin
-        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        repeat (4) @(negedge clk); rst_n = 1; repeat (2) @(posedge clk);
         /* the net moves the drive row without a bus write */
         chk("oe_low_is_low_drive", u_io.DS_0_w, 1'b0);
         sda_oe = 1; #1 chk("oe_high_is_high_drive", u_io.DS_0_w, 1'b1);
@@ -6921,13 +6683,8 @@ endmodule
 )");
 }
 
-void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
+void Test::netSelectedRowsSwitchInSimulationWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -6942,47 +6699,17 @@ void Test::netSelectedRowsSwitchInSimulationWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QDir    dir(directory.path());
-    const QString outputPath = dir.filePath("iomux0.out");
+    const QDir dir(directory.path());
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
-    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padControlLogicModel());
     writeTextFile(dir.filePath("tb.v"), withShell(linkedRowTestbench(), plan));
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler,
-        {"-g2012",
-         "-s",
-         "tb",
-         "-o",
-         outputPath,
-         "iomux0_regs.v",
-         "iomux0_conn.v",
-         "iomux0.v",
-         "iomux0_io.v",
-         "gpio_pad_ps.v",
-         "tb.v"});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(
+        directory.path(),
+        {"iomux0_regs.v", "iomux0_conn.v", "iomux0.v", "iomux0_io.v", "gpio_pad_ps.v", "tb.v"});
 }
 
 QSocModuleDefinition makeSafeRowDefinition(
@@ -7148,8 +6875,8 @@ module tb;
 
     task wr(input [13:0] a, input [31:0] d);
         begin
-            @(posedge clk); awaddr <= a; wdata <= d; awvalid <= 1; wvalid <= 1;
-            wait (awready && wready); @(posedge clk); awvalid <= 0; wvalid <= 0;
+            @(negedge clk); awaddr = a; wdata = d; awvalid = 1; wvalid = 1;
+            wait (awready && wready); @(posedge clk); #1 awvalid = 0; wvalid = 0;
             wait (bvalid); @(posedge clk);
         end
     endtask
@@ -7164,7 +6891,7 @@ module tb;
     endtask
 
     initial begin
-        repeat (4) @(posedge clk); rst_n = 1; repeat (2) @(posedge clk);
+        repeat (4) @(negedge clk); rst_n = 1; repeat (2) @(posedge clk);
         chk("slot_drives_oe", dut.pad_output_enable_o[0], 1'b1);
         chk("slot_pull_up_PS", u_io.PS_0_w, 1'b1);
         chk("slot_drive_low", u_io.DS_0_w, 1'b0);
@@ -7194,13 +6921,8 @@ endmodule
 )");
 }
 
-void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
+void Test::forceHoldsThePadInSimulationWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -7215,47 +6937,17 @@ void Test::forceHoldsThePadInSimulationWhenIverilogIsAvailable()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QDir    dir(directory.path());
-    const QString outputPath = dir.filePath("iomux0.out");
+    const QDir dir(directory.path());
     writeTextFile(dir.filePath("iomux0_regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(dir.filePath("iomux0_conn.v"), QSocIomuxGenerator::generateConnVerilog(plan));
     writeTextFile(dir.filePath("iomux0.v"), QSocIomuxGenerator::generateTopVerilog(plan));
     writeTextFile(dir.filePath("iomux0_io.v"), QSocIomuxGenerator::generateIoVerilog(plan));
-    writeTextFile(dir.filePath("gpio_pad_ps.v"), padCellModel());
+    writeTextFile(dir.filePath("gpio_pad_ps.v"), padControlLogicModel());
     writeTextFile(dir.filePath("tb.v"), withShell(safeRowTestbench(), plan));
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(
-        compiler,
-        {"-g2012",
-         "-s",
-         "tb",
-         "-o",
-         outputPath,
-         "iomux0_regs.v",
-         "iomux0_conn.v",
-         "iomux0.v",
-         "iomux0_io.v",
-         "gpio_pad_ps.v",
-         "tb.v"});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray compilerOutput = process.readAll();
-    QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
-
-    QProcess simulation;
-    simulation.setWorkingDirectory(directory.path());
-    simulation.setProcessChannelMode(QProcess::MergedChannels);
-    simulation.start(runtime, {outputPath});
-    QVERIFY(simulation.waitForStarted());
-    QVERIFY(simulation.waitForFinished(120000));
-    QCOMPARE(simulation.exitStatus(), QProcess::NormalExit);
-    const QByteArray simulationOutput = simulation.readAll();
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
+    runIomuxSimulation(
+        directory.path(),
+        {"iomux0_regs.v", "iomux0_conn.v", "iomux0.v", "iomux0_io.v", "gpio_pad_ps.v", "tb.v"});
 }
 
 void Test::unroutedSlotsTakeTheDeclaredDefaultRow()
@@ -7585,11 +7277,6 @@ void Test::reservedWindowAccesses()
     QFETCH(int, addressWidth);
     QFETCH(bool, gpio);
     QFETCH(bool, extended);
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
-    }
     QString source = sourceForConfig(1, 2, dataWidth, addressWidth);
     if (gpio) {
         source.replace("    route: []", "    option: {gpio: true}\n    route: []");
@@ -7796,21 +7483,7 @@ endmodule
     const QDir output(directory.path());
     writeTextFile(output.filePath("regs.v"), QSocIomuxGenerator::generateRegsVerilog(plan));
     writeTextFile(output.filePath("tb.v"), bench);
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start(compiler, {"-g2012", "-s", "tb", "-o", "sim", "regs.v", "tb.v"});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished());
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    QVERIFY2(process.exitCode() == 0, process.readAll().constData());
-    process.start(runtime, {"sim"});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished());
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    const QByteArray result = process.readAll();
-    QVERIFY2(process.exitCode() == 0, result.constData());
-    QVERIFY2(result.contains("TEST_PASS"), result.constData());
+    runIomuxSimulation(directory.path(), {"regs.v", "tb.v"});
 }
 
 void Test::disabledBlocksDoNotReserveSpace()

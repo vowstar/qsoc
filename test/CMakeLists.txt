@@ -170,6 +170,10 @@ set_tests_properties(test_qsocapb PROPERTIES TIMEOUT 3000 RUN_SERIAL TRUE
 qt_add_test_target("test_qsociomuxgenerator" LABELS "iomux")
 qt_add_test_target("test_qsoccliparseiomux" LABELS "iomux")
 qt_add_test_target("test_qsoccliparsegenerateiomux" LABELS "iomux")
+# Native simulator compilation uses 16 jobs and has its own per-run budget.
+set_tests_properties(
+    test_qsociomuxgenerator test_qsoccliparsegenerateiomux
+    PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=900000")
 qt_add_test_target("test_qsociomuxformal" LABELS "iomux")
 qt_add_test_target("test_qsocmmioformal" LABELS "mmio")
 # A row runs three 600s jobs; the function watchdog must allow all three.
