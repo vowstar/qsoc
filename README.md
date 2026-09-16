@@ -4,9 +4,7 @@
 
 QSoC is a Qt-based studio for SoC design. It bundles a conversational
 agent, schematic editor, RTL generation, and bus interface management
-behind one binary; the agent calls into the same tools you would invoke
-by hand, so a prompt is always equivalent to a sequence of explicit
-operations.
+in one application.
 
 ![QSoC GUI and agent mode](https://github.com/user-attachments/assets/18ce6680-d869-485f-9dff-a93f8afb51d6)
 
@@ -46,7 +44,7 @@ cd doc && nix build
 # result/qsoc_manual_<version>.pdf
 ```
 
-See [doc/README.md](doc/README.md) for the multi-language build targets.
+See [doc/README.md](doc/README.md) for build instructions.
 
 ## Development
 

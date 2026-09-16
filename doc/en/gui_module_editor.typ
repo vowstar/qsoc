@@ -69,7 +69,7 @@ first to undo the operation instead.
 
 == Preview and Save
 <gui-module-editor-preview-save>
-The preview pane renders the module with the schematic module item path. It is
-not the canonical editor; the tables are the source of truth. Saving validates
+The preview pane shows the module symbol; edit its definition in the tables.
+Saving validates
 the module definition, writes only the selected module library, and does not
 silently update already placed schematic instances.

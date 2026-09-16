@@ -1,6 +1,6 @@
 = Reset Controller Format
 <reset-format>
-The reset section defines reset controller primitives that generate proper reset signaling throughout the SoC. Reset primitives provide comprehensive reset management with support for multiple reset sources, component-based processing, signal polarity handling, and standardized module generation.
+The `reset` section defines reset sources, targets, polarity, and release processing.
 
 #block(
   fill: rgb("#fffce8"),
@@ -12,7 +12,7 @@ The reset section defines reset controller primitives that generate proper reset
   Verilog module named after `reset.name`. The generated module is NOT
   auto-instantiated by any parent netlist: the user instantiates it
   manually (or via `qsoc module import` followed by an `_inst.soc_net`
-  entry) at the top level. This is by design.
+  entry) at the top level.
 
   *Auto-input pattern:* a target's `link:` source that is neither a
   declared `source:` nor another target gets auto-promoted to a fresh
@@ -24,22 +24,15 @@ The reset section defines reset controller primitives that generate proper reset
 
 == Reset Overview
 <soc-net-reset-overview>
-Reset controllers are essential for proper SoC operation, ensuring that all logic blocks start in a known state and can be reset reliably. QSoC supports sophisticated reset topologies with multiple reset sources mapping to multiple reset targets through a clear source → target → link relationship structure.
-
-Key features include:
-- Component-based reset processing architecture
-- Signal polarity normalization (active high/low)
-- Multi-source to multi-target reset matrices
-- Structured YAML configuration without string parsing
-- Test mode bypass support
-- Standalone reset controller module generation
+Each target combines its linked reset sources. Polarity normalization and
+processing stages control assertion and release.
 
 == Reset Structure
 <soc-net-reset-structure>
-Reset controllers use a modern structured YAML format that eliminates complex string parsing and provides component-based processing:
+Reset sources and targets use the following structure:
 
 ```yaml
-# Modern component-based reset controller format
+# Reset controller
 reset:
   - name: main_reset_ctrl          # Reset controller instance name (required)
     test_enable: test_en           # Test enable bypass signal (optional)
@@ -329,7 +322,7 @@ Link-level processing uses key existence for component selection:
 
 == Reset Reason Recording
 <soc-net-reset-reason>
-Reset controllers can optionally record the source of the last reset using sync-clear async-capture sticky flags with bit vector output. This implementation provides reliable narrow pulse capture and flexible software decoding.
+Reset controllers can record reset sources as sticky flags in a bit vector. Sources set the flags asynchronously; software clears them synchronously.
 
 === Configuration
 <soc-net-reset-reason-config>
@@ -356,19 +349,14 @@ reset:
       root_reset: por_rst_n        # Root reset signal for async clear (explicitly specified)
 ```
 
-=== Implementation Details
+=== Reset Reason Behavior
 <soc-net-reset-reason-implementation>
-The reset reason recorder uses *sync-clear async-capture* sticky flags to avoid S+R register timing issues:
-- Each non-POR reset source gets a dedicated sticky flag (async-set on event, sync-clear during clear window)
-- Clean async-set + sync-clear architecture avoids problematic S+R registers that cause STA difficulties
-- Event normalization converts all sources to LOW-active format for consistent handling
-- 2-cycle clear window after POR release or software clear pulse ensures proper initialization
-- Output gating with valid signal prevents invalid data during initialization
-- Always-on clock ensures operation even when main clocks are stopped
-- Root reset signal explicitly specified in `reason.root_reset` field
-- *Generate statement optimization*: Uses Verilog `generate` blocks to reduce code duplication for multiple sticky flags
+Each non-POR source asynchronously sets its own sticky flag. Sources are
+normalized to active-low. POR release or a software clear pulse starts a
+two-cycle clear window; `valid` gates the output during initialization.
+Use an always-on `reason.clock` and specify `reason.root_reset` explicitly.
 
-Design cost of that structure, which the reset cells otherwise avoid:
+Integration constraints:
 
 - Each reset source becomes the asynchronous set pin of its own flag flop, so a
   design with N recorded sources gains N asynchronous set paths that need STA
@@ -578,27 +566,13 @@ Generates `.typ` circuit diagram alongside Verilog.
 
 *Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
 
-== Best Practices
-<soc-net-reset-practices>
-
-=== Processing Level Selection
+== Choosing the Processing Level
 <soc-net-reset-level-selection>
-Choose between target-level and link-level processing based on requirements:
-
-*Use Target-level Processing (Post-AND) when:*
-- All reset sources synchronize to the same clock domain
-- Area optimization is important (single synchronizer vs N synchronizers)
-- Simplified STA constraints are preferred (one async path instead of N)
-- Sources are functionally equivalent for reset behavior
-
-*Use Link-level Processing (Per-link) when:*
-- Different sources require different clock domains
-- Sources need different synchronizer stages
-- Mixed component types needed (e.g., some async, some count)
-- Independent timing control per source is required
+Target-level processing applies one stage after combining the sources.
+Link-level processing gives each source its own stage and parameters.
 
 ```yaml
-# Recommended: Target-level for same-clock-domain sources
+# Target-level processing
 rst_peripheral_n:
   active: low
   async:                        # Single Post-AND synchronizer
@@ -622,20 +596,3 @@ rst_mixed_n:
         clock: clk_sys
         cycle: 255
 ```
-
-=== Design Guidelines
-<soc-net-reset-design-guidelines>
-- Prefer target-level `async` for multi-source resets to reduce area
-- Use `async` component for most digital logic requiring synchronized reset release
-- Use direct assignment only for simple pass-through or clock-independent paths
-- Implement power-on-reset with `count` component for reliable startup timing
-- Group related resets in the same controller for better organization
-- Use descriptive reset source and target names
-
-=== YAML Structure Guidelines
-<soc-net-reset-yaml-guidelines>
-- Always use singular forms (`source`, `target`) instead of plurals
-- Specify clear type names instead of cryptic abbreviations
-- Use structured parameters instead of string parsing
-- Maintain consistent polarity naming (`low`/`high`)
-- Include test_enable bypass for DFT compliance
