@@ -465,7 +465,6 @@ jobs:
         sudo apt update &&
         sudo apt-get install -y
         '^libxcb.*-dev'
-        cppcheck
         libfmt-dev
         libgl-dev
         libglu1-mesa-dev
@@ -486,6 +485,21 @@ jobs:
         modules: 'qt5compat'
         cache: 'true'
         cache-key-prefix: 'install-qt-action'
+    - name: Install cppcheck
+      run: |
+        archive="$RUNNER_TEMP/cppcheck.tar.gz"
+        curl --fail --location --retry 3 \
+          https://github.com/cppcheck-opensource/cppcheck/archive/refs/tags/2.20.0.tar.gz \
+          --output "$archive"
+        echo "7be7992439339017edb551d8e7d2315f9bb57c402da50c2cee9cd0e2724600a1  $archive" | sha256sum --check
+        tar -xzf "$archive" -C "$RUNNER_TEMP"
+        cmake -S "$RUNNER_TEMP/cppcheck-2.20.0" -B "$RUNNER_TEMP/cppcheck-build" -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release -DUSE_MATCHCOMPILER=ON \
+          -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/cppcheck"
+        cmake --build "$RUNNER_TEMP/cppcheck-build" --parallel 2
+        cmake --install "$RUNNER_TEMP/cppcheck-build"
+        echo "$RUNNER_TEMP/cppcheck/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/cppcheck/bin/cppcheck" --version
     - name: Configure CMake
       run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_CLANG_TIDY=OFF -DENABLE_DOXYGEN=OFF -DENABLE_UNIT_TEST=OFF
 
