@@ -13,6 +13,8 @@ env:
 jobs:
   build-linux:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
     - uses: actions/checkout@v7
@@ -53,9 +55,15 @@ jobs:
         python3-py7zr
     - name: Install formal tools
       if: github.event_name == 'pull_request'
-      uses: YosysHQ/setup-oss-cad-suite@v4
-      with:
-        version: '2026-08-25'
+      run: |
+        archive="$RUNNER_TEMP/oss-cad-suite.tgz"
+        curl --fail --location --retry 3 \
+          https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-08-25/oss-cad-suite-linux-x64-20260825.tgz \
+          --output "$archive"
+        echo "9a971a52f71e32c69128ed32b63719ced482c6ed3b8728d4e109472b9a4cee21  $archive" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/oss-cad-suite"
+        tar -xzf "$archive" -C "$RUNNER_TEMP/oss-cad-suite" --strip-components=1
+        echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
