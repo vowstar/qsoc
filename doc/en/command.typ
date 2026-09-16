@@ -1,13 +1,7 @@
 = Command-line Overview
 <cli-overview>
-QSoC provides a comprehensive command-line interface for SoC development and management.
-The following sections describe the available commands and options.
-
 == Command Line Interface
 <cli>
-QSoC provides a comprehensive command-line interface for SoC development. The following
-commands and subcommands are available:
-
 #figure(
   align(center)[#table(
     columns: (0.25fr, 0.25fr, 1fr),
@@ -82,8 +76,6 @@ The following global options are available for all commands:
 
 == Project Command Options
 <project-options>
-The project command provides functionality for managing QSoC projects.
-
 === Project Creation Options
 <project-creation>
 The `project create` command creates a new QSoC project.
@@ -130,8 +122,6 @@ take only `-d, --directory` plus a project name or regex.
 
 == Module Command Options
 <module-options>
-The module command provides functionality for managing hardware modules.
-
 === MMIO Module Lifecycle
 <module-mmio>
 MMIO source management uses exact library and module names. `create` writes an
@@ -265,8 +255,6 @@ Both AI-assisted paths use the model selected per @llm-config. Without one,
 
 == Bus Command Options
 <bus-options>
-The bus command provides functionality for managing bus interfaces.
-
 === Bus Import Options
 <bus-import>
 The `bus import` command imports buses into bus libraries.
@@ -308,14 +296,17 @@ or regex) and take a bus name or regex.
 
 == Generate Command Options
 <generate-options>
-The generate command provides functionality for generating different types of outputs.
-
 === Generated Module Options
 <generated-module-options>
 `generate module` validates one generated module and writes its output under
-`output/<library>/<module>/`. MMIO writes `<module>.v`; IOMUX writes its wrapper,
-register block, software address constants, connection layer, file list, route report, and integration
-fragment as described in @iomux-generated-artifacts.
+`output/<library>/<module>/`. Synthesizable sources and their file list go
+in `rtl/`; optional verification suites go in `formal/` and `uvm/`. IOMUX
+software headers, reports, and integration artifacts use `include/`,
+`reports/`, and `integration/`,
+as described in @iomux-generated-artifacts.
+
+Existing flat output directories must be moved aside before regeneration,
+including with `--force`. Unselected verification directories remain untouched.
 
 #figure(
   align(center)[#table(
@@ -496,10 +487,7 @@ SystemRDL files generate simplified JSON format accessible in templates:
 ```
 
 ==== RCSV Processing
-RCSV files are processed through two-stage conversion:
-+ CSV to SystemRDL conversion using `csv_to_rdl()`
-+ SystemRDL elaboration to simplified JSON using `elaborate_simplified()`
-This ensures RCSV files follow the same template access patterns as RDL files.
+RCSV files expose the same template data structure as SystemRDL files.
 
 === Stub Generation Options
 <stub-generation>

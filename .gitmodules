@@ -43,3 +43,6 @@
 [submodule "external/lexbor"]
 	path = external/lexbor
 	url = https://github.com/lexbor/lexbor.git
+[submodule "external/uvm-core"]
+	path = external/uvm-core
+	url = https://github.com/accellera-official/uvm-core.git

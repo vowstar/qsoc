@@ -11,6 +11,7 @@
 #include "common/qsocmmiouvm.h"
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
+#include "common/qsocuvmresources.h"
 #include "common/qsocverilogutils.h"
 #include "common/qsocyamlutils.h"
 
@@ -34,17 +35,104 @@ struct GeneratedArtifact
     QByteArray contents;
 };
 
-QString writeGeneratedArtifacts(const std::vector<GeneratedArtifact> &artifacts, bool force)
+QString prepareGeneratedArtifacts(std::vector<GeneratedArtifact> *artifacts)
 {
-    std::vector<std::unique_ptr<QLockFile>> outputLocks;
-    outputLocks.reserve(artifacts.size());
-    for (const GeneratedArtifact &artifact : artifacts) {
-        auto outputLock = std::make_unique<QLockFile>(artifact.path + QStringLiteral(".lock"));
-        if (!outputLock->tryLock()) {
-            return QCoreApplication::translate("main", "Error: output file is locked: %1")
+    QMap<QString, QString> paths;
+    for (const auto &artifact : *artifacts) {
+        paths.insert(QFileInfo(artifact.path).fileName(), artifact.path);
+    }
+    std::vector<GeneratedArtifact> dependencies;
+    for (auto &artifact : *artifacts) {
+        const QFileInfo info(artifact.path);
+        const QDir      directory = info.dir();
+        const QString   legacy    = QDir::cleanPath(
+            directory.filePath(QStringLiteral("../") + info.fileName()));
+        if (QFileInfo::exists(legacy) || QFileInfo(legacy).isSymLink()) {
+            return QCoreApplication::translate(
+                       "main",
+                       "Error: legacy output exists: %1. Move the old module output directory "
+                       "before generating.")
+                .arg(QDir::cleanPath(legacy));
+        }
+        const bool fileList = artifact.path.endsWith(QStringLiteral(".fl"));
+        const bool sby      = artifact.path.endsWith(QStringLiteral(".sby"));
+        if (!fileList && !sby) {
+            continue;
+        }
+        QStringList lines = QString::fromUtf8(artifact.contents).split(QLatin1Char('\n'));
+        bool        files = fileList;
+        for (QString &line : lines) {
+            if (sby && line.startsWith(QLatin1Char('['))) {
+                files = line == QStringLiteral("[files]");
+            }
+            if (files && paths.contains(line)) {
+                line = directory.relativeFilePath(paths.value(line));
+            }
+        }
+        artifact.contents = lines.join(QLatin1Char('\n')).toUtf8();
+        if (directory.dirName() != QStringLiteral("uvm")
+            || !info.fileName().endsWith(QStringLiteral("_uvm.fl"))) {
+            continue;
+        }
+        const auto sources = QSocUvmResources::sources();
+        if (!sources.contains(QStringLiteral("src/uvm_pkg.sv"))) {
+            return QCoreApplication::translate("main", "Error: embedded UVM sources are missing.");
+        }
+        for (auto source = sources.cbegin(); source != sources.cend(); ++source) {
+            dependencies.push_back(
+                {directory.filePath(QStringLiteral("uvm-core/") + source.key()), source.value()});
+        }
+        QString standalone = info.fileName();
+        standalone.chop(3);
+        standalone += QStringLiteral("_standalone.fl");
+        dependencies.push_back(
+            {directory.filePath(standalone),
+             QByteArray("+incdir+uvm-core/src\nuvm-core/src/uvm_pkg.sv\n") + artifact.contents});
+    }
+    artifacts->insert(artifacts->end(), dependencies.begin(), dependencies.end());
+    return {};
+}
+
+QString writeGeneratedArtifacts(std::vector<GeneratedArtifact> artifacts, bool force)
+{
+    const QString preparationError = prepareGeneratedArtifacts(&artifacts);
+    if (!preparationError.isEmpty()) {
+        return preparationError;
+    }
+    const QString root = QFileInfo(QFileInfo(artifacts.front().path).absolutePath()).absolutePath();
+    for (const auto &artifact : artifacts) {
+        const QFileInfo target(artifact.path);
+        if (target.isSymLink() || (target.exists() && !target.isFile())) {
+            return QCoreApplication::translate("main", "Error: output is not a regular file: %1")
                 .arg(artifact.path);
         }
-        outputLocks.push_back(std::move(outputLock));
+        if (!force && target.exists()) {
+            return QCoreApplication::translate("main", "Error: output file already exists: %1")
+                .arg(artifact.path);
+        }
+        QString parent = target.absolutePath();
+        while (true) {
+            const QFileInfo entry(parent);
+            if (entry.isSymLink() || (entry.exists() && !entry.isDir())) {
+                return QCoreApplication::translate("main", "Error: invalid output directory: %1")
+                    .arg(parent);
+            }
+            if (parent == root) {
+                break;
+            }
+            parent = entry.absolutePath();
+        }
+    }
+    for (const auto &artifact : artifacts) {
+        const QFileInfo target(artifact.path);
+        if (!QDir().mkpath(target.absolutePath())) {
+            return QCoreApplication::translate("main", "Error: could not create output directory: %1")
+                .arg(target.absolutePath());
+        }
+    }
+    QLockFile outputLock(QDir(root).filePath(QStringLiteral(".generate.lock")));
+    if (!outputLock.tryLock()) {
+        return QCoreApplication::translate("main", "Error: module output is locked: %1").arg(root);
     }
     if (!force) {
         for (const GeneratedArtifact &artifact : artifacts) {
@@ -60,7 +148,7 @@ QString writeGeneratedArtifacts(const std::vector<GeneratedArtifact> &artifacts,
     for (const GeneratedArtifact &artifact : artifacts) {
         auto outputFile = std::make_unique<QSaveFile>(artifact.path);
         outputFile->setDirectWriteFallback(false);
-        if (!outputFile->open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (!outputFile->open(QIODevice::WriteOnly)) {
             return QCoreApplication::translate("main", "Error: could not open output file: %1")
                 .arg(outputFile->errorString());
         }
@@ -279,17 +367,19 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                 QCoreApplication::translate("main", "Error: could not create output directory: %1")
                     .arg(outputDirectory.filePath(relativeDirectory)));
         }
-        const auto outputFilePath = [&](const QString &fileName) {
-            return outputDirectory.filePath(
-                QStringLiteral("%1/%2").arg(relativeDirectory, fileName));
+        const auto outputFilePath = [&](const QString &fileName,
+                                        const QString &group = QStringLiteral("rtl")) {
+            return QDir(outputDirectory.filePath(relativeDirectory))
+                .filePath(group + QLatin1Char('/') + fileName);
         };
-        const QString regsPath        = outputFilePath(moduleName + QStringLiteral("_regs.v"));
-        const QString connPath        = outputFilePath(moduleName + QStringLiteral("_conn.v"));
-        const QString topPath         = outputFilePath(moduleName + QStringLiteral(".v"));
-        const QString listPath        = outputFilePath(moduleName + QStringLiteral(".fl"));
-        const QString reportPath      = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"));
+        const QString regsPath = outputFilePath(moduleName + QStringLiteral("_regs.v"));
+        const QString connPath = outputFilePath(moduleName + QStringLiteral("_conn.v"));
+        const QString topPath  = outputFilePath(moduleName + QStringLiteral(".v"));
+        const QString listPath = outputFilePath(moduleName + QStringLiteral(".fl"));
+        const QString reportPath
+            = outputFilePath(moduleName + QStringLiteral(".iomux.rpt"), QStringLiteral("reports"));
         const QString integrationPath = outputFilePath(
-            moduleName + QStringLiteral("_integration.soc_net"));
+            moduleName + QStringLiteral("_integration.soc_net"), QStringLiteral("integration"));
 
         std::vector<GeneratedArtifact> artifacts
             = {{regsPath, QSocIomuxGenerator::generateRegsVerilog(plan).toUtf8()},
@@ -297,7 +387,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                {topPath, QSocIomuxGenerator::generateTopVerilog(plan).toUtf8()},
                {listPath, QSocIomuxGenerator::generateFileList(plan).toUtf8()},
                {reportPath, QSocIomuxGenerator::generateReport(plan).toUtf8()},
-               {outputFilePath(moduleName + QStringLiteral("_regs.h")),
+               {outputFilePath(moduleName + QStringLiteral("_regs.h"), QStringLiteral("include")),
                 QSocIomuxGenerator::generateSoftwareHeader(plan).toUtf8()},
                {integrationPath, QSocIomuxGenerator::generateIntegrationNetlist(plan).toUtf8()}};
         const QString ioModule = QSocIomuxGenerator::ioModuleName(moduleName);
@@ -308,7 +398,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         }
         if (plan.ioRing.declared) {
             artifacts.push_back(
-                {outputFilePath(moduleName + QStringLiteral(".ring.rpt")),
+                {outputFilePath(moduleName + QStringLiteral(".ring.rpt"), QStringLiteral("reports")),
                  QSocIomuxGenerator::generateRingReport(plan).toUtf8()});
             const QSocIoRingGeometry geometry = QSocIomuxGenerator::ringGeometry(plan);
             if (!geometry.contradiction.isEmpty()) {
@@ -319,7 +409,7 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             }
             if (geometry.complete) {
                 artifacts.push_back(
-                    {outputFilePath(ioModule + QStringLiteral(".def")),
+                    {outputFilePath(ioModule + QStringLiteral(".def"), QStringLiteral("integration")),
                      QSocIomuxGenerator::generateRingDef(plan).toUtf8()});
             } else {
                 showInfo(
@@ -348,24 +438,31 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         }
         if (parser.isSet("with-formal")) {
             const QSocMmioFormalCollateral collateral = QSocMmioFormal::generate(plan.mmio);
-            formalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sv"));
-            formalSbyPath = outputFilePath(moduleName + QStringLiteral("_regs_formal.sby"));
+            formalSystemVerilogPath                   = outputFilePath(
+                moduleName + QStringLiteral("_regs_formal.sv"), QStringLiteral("formal"));
+            formalSbyPath = outputFilePath(
+                moduleName + QStringLiteral("_regs_formal.sby"), QStringLiteral("formal"));
             artifacts.push_back({formalSystemVerilogPath, collateral.systemVerilog.toUtf8()});
             artifacts.push_back({formalSbyPath, collateral.sby.toUtf8()});
             const QSocIomuxFormalCollateral hsCollateral = QSocIomuxFormal::generate(plan, bankPins);
-            hsFormalSystemVerilogPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sv"));
-            hsFormalSbyPath = outputFilePath(moduleName + QStringLiteral("_hs_formal.sby"));
+            hsFormalSystemVerilogPath = outputFilePath(
+                moduleName + QStringLiteral("_hs_formal.sv"), QStringLiteral("formal"));
+            hsFormalSbyPath = outputFilePath(
+                moduleName + QStringLiteral("_hs_formal.sby"), QStringLiteral("formal"));
             artifacts.push_back({hsFormalSystemVerilogPath, hsCollateral.systemVerilog.toUtf8()});
             artifacts.push_back({hsFormalSbyPath, hsCollateral.sby.toUtf8()});
             const QSocIomuxFormalCollateral padCollateral = QSocIomuxFormal::generatePad(plan);
             if (!padCollateral.systemVerilog.isEmpty()) {
-                padFormalSystemVerilogPath = outputFilePath(ioModule + QStringLiteral("_formal.sv"));
-                padFormalSbyPath = outputFilePath(ioModule + QStringLiteral("_formal.sby"));
+                padFormalSystemVerilogPath = outputFilePath(
+                    ioModule + QStringLiteral("_formal.sv"), QStringLiteral("formal"));
+                padFormalSbyPath = outputFilePath(
+                    ioModule + QStringLiteral("_formal.sby"), QStringLiteral("formal"));
                 artifacts.push_back(
                     {padFormalSystemVerilogPath, padCollateral.systemVerilog.toUtf8()});
                 artifacts.push_back({padFormalSbyPath, padCollateral.sby.toUtf8()});
             }
-            formalListPath = outputFilePath(moduleName + QStringLiteral("_formal.fl"));
+            formalListPath
+                = outputFilePath(moduleName + QStringLiteral("_formal.fl"), QStringLiteral("formal"));
             artifacts.push_back({formalListPath, QSocIomuxFormal::generateFileList(plan).toUtf8()});
         }
         QString uvmInterfacePath;
@@ -374,10 +471,14 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         QString uvmFileListPath;
         if (parser.isSet("with-uvm")) {
             const QSocMmioUvmCollateral collateral = QSocMmioUvm::generate(plan.mmio);
-            uvmInterfacePath = outputFilePath(moduleName + QStringLiteral("_regs_uvm_if.sv"));
-            uvmPackagePath   = outputFilePath(moduleName + QStringLiteral("_regs_uvm_pkg.sv"));
-            uvmTestbenchPath = outputFilePath(moduleName + QStringLiteral("_regs_uvm_tb.sv"));
-            uvmFileListPath  = outputFilePath(moduleName + QStringLiteral("_regs_uvm.fl"));
+            uvmInterfacePath                       = outputFilePath(
+                moduleName + QStringLiteral("_regs_uvm_if.sv"), QStringLiteral("uvm"));
+            uvmPackagePath = outputFilePath(
+                moduleName + QStringLiteral("_regs_uvm_pkg.sv"), QStringLiteral("uvm"));
+            uvmTestbenchPath = outputFilePath(
+                moduleName + QStringLiteral("_regs_uvm_tb.sv"), QStringLiteral("uvm"));
+            uvmFileListPath
+                = outputFilePath(moduleName + QStringLiteral("_regs_uvm.fl"), QStringLiteral("uvm"));
             artifacts.push_back({uvmInterfacePath, collateral.interfaceSource.toUtf8()});
             artifacts.push_back({uvmPackagePath, collateral.packageSource.toUtf8()});
             artifacts.push_back({uvmTestbenchPath, collateral.testbenchSource.toUtf8()});
@@ -434,6 +535,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                         uvmPackagePath,
                         uvmTestbenchPath,
                         uvmFileListPath));
+            messages.append(
+                QCoreApplication::translate("main", "Standalone UVM file list: %1")
+                    .arg(uvmFileListPath.chopped(3) + QStringLiteral("_standalone.fl")));
         }
         return showInfo(0, messages.join('\n'));
     }
@@ -496,19 +600,26 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
                 .arg(outputDirectory.filePath(relativeDirectory)));
     }
 
-    const QString outputPath = outputDirectory.filePath(
-        QStringLiteral("%1/%2.v").arg(relativeDirectory, moduleName));
-    std::vector<GeneratedArtifact> artifacts = {{outputPath, verilog.toUtf8()}};
-    QString                        formalSystemVerilogPath;
-    QString                        formalSbyPath;
-    QString                        formalListPath;
+    const auto outputFilePath = [&](const QString &name,
+                                    const QString &group = QStringLiteral("rtl")) {
+        return QDir(outputDirectory.filePath(relativeDirectory))
+            .filePath(group + QLatin1Char('/') + name);
+    };
+    const QString                  outputPath = outputFilePath(moduleName + QStringLiteral(".v"));
+    std::vector<GeneratedArtifact> artifacts
+        = {{outputPath, verilog.toUtf8()},
+           {outputFilePath(moduleName + QStringLiteral(".fl")),
+            (moduleName + QStringLiteral(".v\n")).toUtf8()}};
+    QString formalSystemVerilogPath;
+    QString formalSbyPath;
+    QString formalListPath;
     if (withFormal) {
-        formalSystemVerilogPath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_formal.sv").arg(relativeDirectory, moduleName));
-        formalSbyPath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_formal.sby").arg(relativeDirectory, moduleName));
-        formalListPath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_formal.fl").arg(relativeDirectory, moduleName));
+        formalSystemVerilogPath
+            = outputFilePath(moduleName + QStringLiteral("_formal.sv"), QStringLiteral("formal"));
+        formalSbyPath
+            = outputFilePath(moduleName + QStringLiteral("_formal.sby"), QStringLiteral("formal"));
+        formalListPath
+            = outputFilePath(moduleName + QStringLiteral("_formal.fl"), QStringLiteral("formal"));
         artifacts.push_back({formalSystemVerilogPath, formalCollateral.systemVerilog.toUtf8()});
         artifacts.push_back({formalSbyPath, formalCollateral.sby.toUtf8()});
         artifacts.push_back(
@@ -519,14 +630,14 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
     QString uvmTestbenchPath;
     QString uvmFileListPath;
     if (withUvm) {
-        uvmInterfacePath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_uvm_if.sv").arg(relativeDirectory, moduleName));
-        uvmPackagePath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_uvm_pkg.sv").arg(relativeDirectory, moduleName));
-        uvmTestbenchPath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_uvm_tb.sv").arg(relativeDirectory, moduleName));
-        uvmFileListPath = outputDirectory.filePath(
-            QStringLiteral("%1/%2_uvm.fl").arg(relativeDirectory, moduleName));
+        uvmInterfacePath
+            = outputFilePath(moduleName + QStringLiteral("_uvm_if.sv"), QStringLiteral("uvm"));
+        uvmPackagePath
+            = outputFilePath(moduleName + QStringLiteral("_uvm_pkg.sv"), QStringLiteral("uvm"));
+        uvmTestbenchPath
+            = outputFilePath(moduleName + QStringLiteral("_uvm_tb.sv"), QStringLiteral("uvm"));
+        uvmFileListPath
+            = outputFilePath(moduleName + QStringLiteral("_uvm.fl"), QStringLiteral("uvm"));
         artifacts.push_back({uvmInterfacePath, uvmCollateral.interfaceSource.toUtf8()});
         artifacts.push_back({uvmPackagePath, uvmCollateral.packageSource.toUtf8()});
         artifacts.push_back({uvmTestbenchPath, uvmCollateral.testbenchSource.toUtf8()});
@@ -550,6 +661,9 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         messages.append(
             QCoreApplication::translate("main", "Generated MMIO UVM testbench: %1, %2, %3, %4")
                 .arg(uvmInterfacePath, uvmPackagePath, uvmTestbenchPath, uvmFileListPath));
+        messages.append(
+            QCoreApplication::translate("main", "Standalone UVM file list: %1")
+                .arg(uvmFileListPath.chopped(3) + QStringLiteral("_standalone.fl")));
     }
     return showInfo(0, messages.join('\n'));
 }

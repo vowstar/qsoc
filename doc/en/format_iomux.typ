@@ -704,14 +704,15 @@ There is no startup event mask.
 
 == Generated Artifacts
 <iomux-generated-artifacts>
-Generation writes seven files under `output/<library>/<module>/`:
+Under `output/<library>/<module>/`, `rtl/` contains:
 `<module>_regs.v`, `<module>_conn.v`, `<module>.v` with the private core and
-the public wrapper, the `<module>.fl` file list, the `<module>.iomux.rpt`
-route report, the `<module>_regs.h` software address constants, and the
-`<module>_integration.soc_net` fragment, plus
+the public wrapper, the `<module>.fl` synthesis file list, plus
 `<module>_io.v`, the pad shell, when a pad cell is declared. Every `.v`
 is Verilog-2001 for synthesis and simulation and carries no verification
-code; verification lives in the `_formal.sv` files and their `.sby` jobs,
+code. `include/<module>_regs.h` contains the software address constants.
+`reports/` holds the route and ring reports. `integration/` holds
+`<module>_integration.soc_net` and any generated ring DEF. Verification
+lives in `formal/`, in the `_formal.sv` files and their `.sby` jobs,
 listed by `<module>_formal.fl`, and never enters `<module>.fl`. Selector
 sidebands stay inside the wrapper and never reach the public interface. Each
 endpoint port carries a `function.signal` comment in the wrapper header. The
@@ -726,7 +727,7 @@ directions, and drivers are checked when the fragment is merged. Assemble the
 final design with the existing merge flow:
 
 ```bash
-qsoc generate verilog --merge <base.soc_net> <module>_integration.soc_net
+qsoc generate verilog --merge <base.soc_net> integration/<module>_integration.soc_net
 ```
 
 The fragment instantiates the public wrapper once and connects the clock, the
@@ -759,12 +760,10 @@ substitution and inversion. With pools it also leaves every slow lane free
 and asserts slot 0 of each pool pin over its channels and every slow input
 over its pool's pads. A pad cell with constraints adds the pad proof
 described above. `<module>_formal.fl` lists the design files the proofs
-read followed by the harnesses, so another engine can take the whole set
-in one go.
+read, followed by the harnesses. Run the jobs from `formal/`; they reference
+the generated RTL in `../rtl/`.
 
-The routing proof is per pin, and one job over a whole design grows faster
-than the pin count, so the job file cuts the pins into banks of
-`--formal-bank` pins, 16 when not given. A design that fits one bank has the
+The job partitions pins into banks of `--formal-bank` pins, defaulting to 16. A design that fits one bank has the
 tasks `prove`, `bmc`, and `cover`. A larger one has `prove_bN` and `bmc_bN`
 per bank and `cover` on bank 0; each task sets the harness parameters
 `PIN_LO` and `PIN_HI` and the other pins fall out of the job.
@@ -781,7 +780,8 @@ change to their routes.
 <iomux-uvm-collateral>
 `--with-uvm` reuses the MMIO UVM testbench for `<module>_regs` only, writing
 `<module>_regs_uvm_if.sv`, `<module>_regs_uvm_pkg.sv`,
-`<module>_regs_uvm_tb.sv`, and `<module>_regs_uvm.fl`. It covers the
-register slave and does not cover routing, the connection fabric, or the
-pads; those are covered by the directed simulation and the formal routing
-proof.
+`<module>_regs_uvm_tb.sv`, and `<module>_regs_uvm.fl` under `uvm/`.
+`<module>_regs_uvm_standalone.fl` additionally includes the bundled UVM
+source in `uvm-core/`. Paths are relative to `uvm/`, with RTL in `../rtl/`.
+The library selection follows @mmio-uvm-testbench. It covers the
+register slave only; routing, the connection fabric, and pads are outside its scope.

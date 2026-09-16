@@ -7,13 +7,19 @@
 #include "qsoc_test.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QLockFile>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QtTest>
+
+#ifdef Q_OS_UNIX
+#include <sys/resource.h>
+#endif
 
 namespace {
 
@@ -90,6 +96,7 @@ private:
 
     static void writeTextFile(const QString &path, const QString &text)
     {
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
         QFile file(path);
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream(&file) << text;
@@ -111,20 +118,22 @@ private:
     static QStringList uvmArtifactPaths(const QString &outputDirectory)
     {
         return {
-            QDir(outputDirectory).filePath("timer_ctrl_uvm_if.sv"),
-            QDir(outputDirectory).filePath("timer_ctrl_uvm_pkg.sv"),
-            QDir(outputDirectory).filePath("timer_ctrl_uvm_tb.sv"),
-            QDir(outputDirectory).filePath("timer_ctrl_uvm.fl"),
+            QDir(outputDirectory).filePath("uvm/timer_ctrl_uvm_if.sv"),
+            QDir(outputDirectory).filePath("uvm/timer_ctrl_uvm_pkg.sv"),
+            QDir(outputDirectory).filePath("uvm/timer_ctrl_uvm_tb.sv"),
+            QDir(outputDirectory).filePath("uvm/timer_ctrl_uvm.fl"),
+            QDir(outputDirectory).filePath("uvm/timer_ctrl_uvm_standalone.fl"),
+            QDir(outputDirectory).filePath("uvm/uvm-core/src/uvm_pkg.sv"),
         };
     }
 
     static QStringList formalAndUvmArtifactPaths(const QString &outputDirectory)
     {
         QStringList paths = {
-            QDir(outputDirectory).filePath("timer_ctrl.v"),
-            QDir(outputDirectory).filePath("timer_ctrl_formal.sv"),
-            QDir(outputDirectory).filePath("timer_ctrl_formal.sby"),
-            QDir(outputDirectory).filePath("timer_ctrl_formal.fl"),
+            QDir(outputDirectory).filePath("rtl/timer_ctrl.v"),
+            QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sv"),
+            QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sby"),
+            QDir(outputDirectory).filePath("formal/timer_ctrl_formal.fl"),
         };
         paths.append(uvmArtifactPaths(outputDirectory));
         return paths;
@@ -147,6 +156,9 @@ private:
     }
 
 private slots:
+    void embeddedUvmMatchesSubmodule();
+    void legacyLayoutIsRejected();
+    void uvmDirectorySymlinkIsRejected();
     void generateRejectsFormalBankForMmio();
     void initTestCase();
     void cleanupTestCase();
@@ -352,7 +364,7 @@ void Test::malformedGeneratorKindReportsPath()
     QCOMPARE(generated.exitCode, 1);
     QVERIFY2(generated.output.contains("generator.kind"), qPrintable(generated.output));
     QVERIFY(!QFile::exists(
-        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl.v")));
+        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/rtl/timer_ctrl.v")));
 }
 
 void Test::validateAndGenerateRejectOrdinaryModule()
@@ -375,7 +387,7 @@ void Test::validateAndGenerateRejectOrdinaryModule()
     QCOMPARE(generated.exitCode, 1);
     QVERIFY2(generated.output.contains("does not declare a generator"), qPrintable(generated.output));
     QVERIFY(!QFile::exists(
-        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl.v")));
+        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/rtl/timer_ctrl.v")));
 }
 
 void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
@@ -389,7 +401,7 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
     arguments.append("timer_ctrl");
 
     const QString outputPath
-        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl.v");
+        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/rtl/timer_ctrl.v");
     const QString outputDirectory = QDir(directory.path()).filePath("output/peripheral/timer_ctrl");
     const QStringList   uvmPaths  = uvmArtifactPaths(outputDirectory);
     const CommandResult generated = runCommand(arguments);
@@ -397,9 +409,10 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
     QCOMPARE(generated.output, QStringLiteral("Generated MMIO Verilog: %1").arg(outputPath));
     QVERIFY2(QFile::exists(outputPath), qPrintable(generated.output));
     QVERIFY(!QFile::exists(
-        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sv")));
-    QVERIFY(!QFile::exists(
-        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sby")));
+        QDir(directory.path()).filePath("output/peripheral/timer_ctrl/formal/timer_ctrl_formal.sv")));
+    QVERIFY(
+        !QFile::exists(QDir(directory.path())
+                           .filePath("output/peripheral/timer_ctrl/formal/timer_ctrl_formal.sby")));
     for (const QString &path : uvmPaths) {
         QVERIFY(!QFile::exists(path));
     }
@@ -413,9 +426,10 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
     outputFile.close();
 
     const QString formalSystemVerilogPath
-        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sv");
+        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/formal/timer_ctrl_formal.sv");
     const QString formalSbyPath
-        = QDir(directory.path()).filePath("output/peripheral/timer_ctrl/timer_ctrl_formal.sby");
+        = QDir(directory.path())
+              .filePath("output/peripheral/timer_ctrl/formal/timer_ctrl_formal.sby");
     writeTextFile(formalSystemVerilogPath, "formal sentinel\n");
     writeTextFile(formalSbyPath, "runner sentinel\n");
     for (const QString &path : uvmPaths) {
@@ -442,6 +456,109 @@ void Test::generateUsesNestedPathAndRequiresForceToOverwrite()
     }
 }
 
+void Test::embeddedUvmMatchesSubmodule()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-uvm", "--with-formal", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+#ifdef Q_OS_UNIX
+    struct rlimit originalLimit{};
+    QVERIFY(::getrlimit(RLIMIT_NOFILE, &originalLimit) == 0);
+    auto limit     = originalLimit;
+    limit.rlim_cur = qMin(rlim_t(256), originalLimit.rlim_cur);
+    QVERIFY(::setrlimit(RLIMIT_NOFILE, &limit) == 0);
+    const auto restoreLimit = qScopeGuard(
+        [&]() { QVERIFY(::setrlimit(RLIMIT_NOFILE, &originalLimit) == 0); });
+#endif
+    const auto generated = runCommand(arguments);
+    QCOMPARE(generated.exitCode, 0);
+    const QDir    output(QDir(directory.path()).filePath("output/peripheral/timer_ctrl"));
+    const QString upstream = QFINDTESTDATA("../external/uvm-core");
+    QVERIFY(!upstream.isEmpty());
+    QStringList files = {"LICENSE.txt", "NOTICE.txt", "README.md", "DEVIATIONS.md"};
+    for (const QString &part : {QStringLiteral("src"), QStringLiteral("compat")}) {
+        QDirIterator
+            entries(QDir(upstream).filePath(part), QDir::Files, QDirIterator::Subdirectories);
+        while (entries.hasNext()) {
+            files.append(QDir(upstream).relativeFilePath(entries.next()));
+        }
+    }
+    for (const QString &path : files) {
+        QFile source(QDir(upstream).filePath(path));
+        QFile copy(output.filePath("uvm/uvm-core/" + path));
+        QVERIFY(source.open(QIODevice::ReadOnly));
+        QVERIFY2(copy.open(QIODevice::ReadOnly), qPrintable(copy.fileName()));
+        QCOMPARE(copy.readAll(), source.readAll());
+    }
+    QFile rtlList(output.filePath("rtl/timer_ctrl.fl"));
+    QVERIFY(rtlList.open(QIODevice::ReadOnly));
+    QCOMPARE(rtlList.readAll(), QByteArray("timer_ctrl.v\n"));
+    QFile formalList(output.filePath("formal/timer_ctrl_formal.fl"));
+    QVERIFY(formalList.open(QIODevice::ReadOnly));
+    QCOMPARE(formalList.readAll(), QByteArray("../rtl/timer_ctrl.v\ntimer_ctrl_formal.sv\n"));
+    QFile job(output.filePath("formal/timer_ctrl_formal.sby"));
+    QVERIFY(job.open(QIODevice::ReadOnly));
+    const auto text = job.readAll();
+    QVERIFY(text.contains("[files]\n../rtl/timer_ctrl.v\ntimer_ctrl_formal.sv\n"));
+    QVERIFY(text.contains("read -formal -sv timer_ctrl.v timer_ctrl_formal.sv"));
+    QFile list(output.filePath("uvm/timer_ctrl_uvm_standalone.fl"));
+    QVERIFY(list.open(QIODevice::ReadOnly));
+    QCOMPARE(
+        list.readAll(),
+        QByteArray(
+            "+incdir+uvm-core/src\nuvm-core/src/uvm_pkg.sv\n../rtl/"
+            "timer_ctrl.v\ntimer_ctrl_uvm_if.sv\ntimer_ctrl_uvm_pkg.sv\ntimer_ctrl_uvm_tb.sv\n"));
+}
+
+void Test::legacyLayoutIsRejected()
+{
+    QTemporaryDir directory;
+    createProject(directory);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+    const QDir output(QDir(directory.path()).filePath("output/peripheral/timer_ctrl"));
+    writeTextFile(output.filePath("timer_ctrl.v"), "legacy sentinel\n");
+    QStringList arguments = {"qsoc", "generate", "module", "--force", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+    const auto generated = runCommand(arguments);
+    QCOMPARE(generated.exitCode, 1);
+    QVERIFY(generated.output.contains("legacy output"));
+    QVERIFY(!QFile::exists(output.filePath("rtl/timer_ctrl.v")));
+    QFile previous(output.filePath("timer_ctrl.v"));
+    QVERIFY(previous.open(QIODevice::ReadOnly));
+    QCOMPARE(previous.readAll(), QByteArray("legacy sentinel\n"));
+}
+
+void Test::uvmDirectorySymlinkIsRejected()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Requires directory symlinks");
+#else
+    QTemporaryDir directory;
+    QTemporaryDir outside;
+    createProject(directory);
+    QVERIFY(outside.isValid());
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
+    const QDir output(QDir(directory.path()).filePath("output/peripheral/timer_ctrl"));
+    QVERIFY(QDir().mkpath(output.path()));
+    QVERIFY(QDir(outside.path()).mkpath("uvm-core/src"));
+    QVERIFY(QFile::link(outside.path(), output.filePath("uvm")));
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-uvm", "--force", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+    const auto generated = runCommand(arguments);
+    QCOMPARE(generated.exitCode, 1);
+    QVERIFY(generated.output.contains("invalid output directory"));
+    QVERIFY(!QFile::exists(output.filePath("rtl/timer_ctrl.v")));
+    QVERIFY(!QFile::exists(QDir(outside.path()).filePath("uvm-core/src/uvm_pkg.sv")));
+#endif
+}
+
 void Test::generateWithFormalWritesAndReplacesCollateral()
 {
     QTemporaryDir directory;
@@ -454,11 +571,12 @@ void Test::generateWithFormalWritesAndReplacesCollateral()
 
     const QDir    projectDirectory(directory.path());
     const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
-    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
-    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
-    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
-    const QString formalListPath          = QDir(outputDirectory).filePath("timer_ctrl_formal.fl");
-    const QStringList uvmPaths            = uvmArtifactPaths(outputDirectory);
+    const QString verilogPath     = QDir(outputDirectory).filePath("rtl/timer_ctrl.v");
+    const QString formalSystemVerilogPath
+        = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sv");
+    const QString formalSbyPath  = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sby");
+    const QString formalListPath = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.fl");
+    const QStringList uvmPaths   = uvmArtifactPaths(outputDirectory);
 
     const CommandResult generated = runCommand(arguments);
     QCOMPARE(generated.exitCode, 0);
@@ -508,17 +626,20 @@ void Test::generateWithUvmWritesAndReplacesCollateral()
     arguments.append("timer_ctrl");
 
     const QString outputDirectory = QDir(directory.path()).filePath("output/peripheral/timer_ctrl");
-    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
+    const QString verilogPath     = QDir(outputDirectory).filePath("rtl/timer_ctrl.v");
     const QStringList uvmPaths    = uvmArtifactPaths(outputDirectory);
-    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
-    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+    const QString     formalSystemVerilogPath
+        = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sv");
+    const QString formalSbyPath = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sby");
 
     const CommandResult generated = runCommand(arguments);
     QCOMPARE(generated.exitCode, 0);
     QVERIFY(QFile::exists(verilogPath));
     for (const QString &path : uvmPaths) {
         QVERIFY2(QFile::exists(path), qPrintable(generated.output));
-        QVERIFY2(generated.output.contains(path), qPrintable(generated.output));
+        if (!path.contains(QStringLiteral("/uvm-core/"))) {
+            QVERIFY2(generated.output.contains(path), qPrintable(generated.output));
+        }
     }
     QVERIFY(!QFile::exists(formalSystemVerilogPath));
     QVERIFY(!QFile::exists(formalSbyPath));
@@ -559,9 +680,10 @@ void Test::formalConflictLeavesAllArtifactsUntouched()
     QDir projectDirectory(directory.path());
     QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
     const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
-    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
-    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
-    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+    const QString verilogPath     = QDir(outputDirectory).filePath("rtl/timer_ctrl.v");
+    const QString formalSystemVerilogPath
+        = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sv");
+    const QString formalSbyPath = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sby");
     writeTextFile(formalSbyPath, "sentinel\n");
 
     QStringList arguments = {"qsoc", "generate", "module", "--with-formal", "-l", "peripheral"};
@@ -588,11 +710,13 @@ void Test::formalLockLeavesAllArtifactsUntouched()
     QDir projectDirectory(directory.path());
     QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
     const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
-    const QString verilogPath     = QDir(outputDirectory).filePath("timer_ctrl.v");
-    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
-    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
+    const QString verilogPath     = QDir(outputDirectory).filePath("rtl/timer_ctrl.v");
+    const QString formalSystemVerilogPath
+        = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sv");
+    const QString formalSbyPath = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sby");
 
-    QLockFile formalLock(formalSbyPath + QStringLiteral(".lock"));
+    QVERIFY(QDir().mkpath(QFileInfo(formalSbyPath).absolutePath()));
+    QLockFile formalLock(QDir(outputDirectory).filePath(".generate.lock"));
     QVERIFY(formalLock.tryLock());
 
     QStringList arguments
@@ -602,8 +726,8 @@ void Test::formalLockLeavesAllArtifactsUntouched()
     const CommandResult generated = runCommand(arguments);
 
     QCOMPARE(generated.exitCode, 1);
-    QVERIFY2(generated.output.contains(formalSbyPath), qPrintable(generated.output));
-    QVERIFY2(generated.output.contains("output file is locked"), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains(outputDirectory), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains("module output is locked"), qPrintable(generated.output));
     QVERIFY(!QFile::exists(verilogPath));
     QVERIFY(!QFile::exists(formalSystemVerilogPath));
     QVERIFY(!QFile::exists(formalSbyPath));
@@ -661,7 +785,7 @@ void Test::formalAndUvmLockLeavesAllArtifactsUntouched()
     }
 
     const QString lastArtifactPath = artifactPaths.constLast();
-    QLockFile     lastArtifactLock(lastArtifactPath + QStringLiteral(".lock"));
+    QLockFile     lastArtifactLock(QDir(outputDirectory).filePath(".generate.lock"));
     QVERIFY(lastArtifactLock.tryLock());
 
     QStringList arguments = {
@@ -679,8 +803,8 @@ void Test::formalAndUvmLockLeavesAllArtifactsUntouched()
     const CommandResult generated = runCommand(arguments);
 
     QCOMPARE(generated.exitCode, 1);
-    QVERIFY2(generated.output.contains(lastArtifactPath), qPrintable(generated.output));
-    QVERIFY2(generated.output.contains("output file is locked"), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains(outputDirectory), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains("module output is locked"), qPrintable(generated.output));
     for (const QString &path : artifactPaths) {
         QFile artifact(path);
         QVERIFY(artifact.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -697,10 +821,10 @@ void Test::generateRefusesLockedOutputWithoutChangingContent()
     QDir projectDirectory(directory.path());
     QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
     const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
-    const QString outputPath      = QDir(outputDirectory).filePath("timer_ctrl.v");
+    const QString outputPath      = QDir(outputDirectory).filePath("rtl/timer_ctrl.v");
     writeTextFile(outputPath, "sentinel\n");
 
-    QLockFile outputLock(outputPath + QStringLiteral(".lock"));
+    QLockFile outputLock(QDir(outputDirectory).filePath(".generate.lock"));
     QVERIFY(outputLock.tryLock());
     const QStringList entriesBefore
         = QDir(outputDirectory).entryList(QDir::Files | QDir::NoDotAndDotDot);
@@ -710,7 +834,7 @@ void Test::generateRefusesLockedOutputWithoutChangingContent()
     arguments.append("timer_ctrl");
     const CommandResult generated = runCommand(arguments);
     QCOMPARE(generated.exitCode, 1);
-    QVERIFY2(generated.output.contains("output file is locked"), qPrintable(generated.output));
+    QVERIFY2(generated.output.contains("module output is locked"), qPrintable(generated.output));
 
     QFile outputFile(outputPath);
     QVERIFY(outputFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -727,10 +851,11 @@ void Test::invalidGeneratorDoesNotReplaceOutput()
     QDir projectDirectory(directory.path());
     QVERIFY(projectDirectory.mkpath("output/peripheral/timer_ctrl"));
     const QString outputDirectory = projectDirectory.filePath("output/peripheral/timer_ctrl");
-    const QString outputPath      = QDir(outputDirectory).filePath("timer_ctrl.v");
-    const QString formalSystemVerilogPath = QDir(outputDirectory).filePath("timer_ctrl_formal.sv");
-    const QString formalSbyPath           = QDir(outputDirectory).filePath("timer_ctrl_formal.sby");
-    const QStringList uvmPaths            = uvmArtifactPaths(outputDirectory);
+    const QString outputPath      = QDir(outputDirectory).filePath("rtl/timer_ctrl.v");
+    const QString formalSystemVerilogPath
+        = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sv");
+    const QString formalSbyPath = QDir(outputDirectory).filePath("formal/timer_ctrl_formal.sby");
+    const QStringList uvmPaths  = uvmArtifactPaths(outputDirectory);
     writeTextFile(outputPath, "verilog sentinel\n");
     writeTextFile(formalSystemVerilogPath, "formal sentinel\n");
     writeTextFile(formalSbyPath, "runner sentinel\n");
@@ -788,7 +913,8 @@ void Test::generateRejectsFormalBankForMmio()
     QCOMPARE(generated.exitCode, 1);
     QVERIFY2(generated.output.contains("--formal-bank"), qPrintable(generated.output));
     const QDir projectDirectory(directory.path());
-    QVERIFY(!QFile::exists(projectDirectory.filePath("output/peripheral/timer_ctrl/timer_ctrl.v")));
+    QVERIFY(
+        !QFile::exists(projectDirectory.filePath("output/peripheral/timer_ctrl/rtl/timer_ctrl.v")));
 }
 
 QSOC_TEST_MAIN(Test)

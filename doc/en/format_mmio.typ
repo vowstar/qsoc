@@ -127,7 +127,7 @@ generated entry may not also contain manual
 == Generated Interface
 <mmio-generated-interface>
 Generation writes
-`output/<library>/<module>/<module>.v`. It refuses to replace the file unless
+`output/<library>/<module>/rtl/<module>.v`. It refuses to replace the file unless
 `-f` or `--force` is present.
 
 `module validate` checks only the source structure and values. Generation
@@ -202,10 +202,10 @@ Add `--with-formal` to generate a matching formal harness and SymbiYosys job:
 qsoc generate module --with-formal -l <library> <module>
 ```
 
-The command selects four files in the same output directory:
-`<module>.v`, `<module>_formal.sv`, `<module>_formal.sby`, and
-`<module>_formal.fl`, the list of what the proof reads. The design file
-carries no verification code. Generation checks
+Under `output/<library>/<module>/`, `rtl/` contains `<module>.v` and
+its synthesis file list `<module>.fl`. The `formal/` directory contains
+`<module>_formal.sv`, `<module>_formal.sby`, and `<module>_formal.fl`.
+The verification files reference the single RTL copy in `../rtl/`. Generation checks
 all selected targets before opening or replacing a selected output file. If any
 target exists, the command fails without replacing any selected file unless
 `-f` or `--force` is present.
@@ -223,17 +223,20 @@ Add `--with-uvm` to generate a deterministic, self-checking UVM testbench:
 qsoc generate module --with-uvm -l <library> <module>
 ```
 
-The command selects `<module>.v`, `<module>_uvm_if.sv`,
-`<module>_uvm_pkg.sv`, `<module>_uvm_tb.sv`, and `<module>_uvm.fl`. The file
-list contains relative generated sources; the UVM library remains an external
-dependency. Compile the listed sources with a UVM library and select
-`<module>_uvm_tb` as the top module. Generation does not run the testbench.
-The testbench checks the selected register interface and reports mismatches
+The `uvm/` directory contains `<module>_uvm_if.sv`, `<module>_uvm_pkg.sv`,
+`<module>_uvm_tb.sv`, and two file lists. `<module>_uvm.fl` uses an externally
+provided UVM library. `<module>_uvm_standalone.fl` includes the bundled
+source in `uvm-core/`, with its original license and notices. Both reference
+the RTL in `../rtl/`; source paths are relative to `uvm/`. Generation needs
+no external UVM installation or network access.
+
+Select `<module>_uvm_tb` as the top module. Generation does not run the
+testbench. It checks the selected register interface and reports mismatches
 as UVM errors. An error or fatal report makes the simulation fail.
 
-`--with-formal` and `--with-uvm` are independent and may be combined. The
-combined command selects eight files. Generation locks and checks every
-selected target before writing; `--force` replaces only the selected set.
+`--with-formal` and `--with-uvm` are independent and may be combined.
+Generation locks the module output directory and checks all selected targets
+before writing. `--force` replaces only the selected set.
 
 == Current Limits
 <mmio-current-limits>
