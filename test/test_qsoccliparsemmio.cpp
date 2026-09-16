@@ -521,6 +521,10 @@ void Test::legacyLayoutIsRejected()
     writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), validModule);
     const QDir output(QDir(directory.path()).filePath("output/peripheral/timer_ctrl"));
     writeTextFile(output.filePath("timer_ctrl.v"), "legacy sentinel\n");
+    QFile previous(output.filePath("timer_ctrl.v"));
+    QVERIFY(previous.open(QIODevice::ReadOnly));
+    const auto original = previous.readAll();
+    previous.close();
     QStringList arguments = {"qsoc", "generate", "module", "--force", "-l", "peripheral"};
     arguments.append(projectOptions(directory));
     arguments.append("timer_ctrl");
@@ -528,9 +532,8 @@ void Test::legacyLayoutIsRejected()
     QCOMPARE(generated.exitCode, 1);
     QVERIFY(generated.output.contains("legacy output"));
     QVERIFY(!QFile::exists(output.filePath("rtl/timer_ctrl.v")));
-    QFile previous(output.filePath("timer_ctrl.v"));
     QVERIFY(previous.open(QIODevice::ReadOnly));
-    QCOMPARE(previous.readAll(), QByteArray("legacy sentinel\n"));
+    QCOMPARE(previous.readAll(), original);
 }
 
 void Test::uvmDirectorySymlinkIsRejected()
