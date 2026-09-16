@@ -710,6 +710,7 @@ if(CPPCHECK_COMMAND)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/cppcheck
         COMMAND ${CPPCHECK_COMMAND}
             --enable=all
+            --error-exitcode=1
             --inconclusive
             --max-ctu-depth=0
             --check-level=exhaustive

@@ -567,24 +567,34 @@ struct QSocIoRingPlan
     bool operator==(const QSocIoRingPlan &) const = default;
 };
 
+struct QSocIomuxRegisterBlock
+{
+    QString name;
+    quint64 byteOffset                                       = 0;
+    quint64 byteSize                                         = 0;
+    quint64 stride                                           = 0;
+    bool    operator==(const QSocIomuxRegisterBlock &) const = default;
+};
+
 struct QSocIomuxPlan
 {
-    QString                      moduleName;
-    quint32                      pinCount = 0;
-    quint32                      hsSlots  = 0;
-    quint32                      build    = 0; /**< version[7:0], the design's own number */
-    QSocIomuxOptionPlan          option;
-    QList<QSocIomuxRoutePlan>    routes;
-    QSocIomuxIntegrationPlan     integration;
-    QList<QSocPadCellPlan>       padCells;        /**< Declaration order, indexed by pinClass */
-    QList<int>                   pinClass;        /**< The class each pin instantiates */
-    QStringList                  padModeOrder;    /**< `pad_model.mode`, names that lead */
-    QStringList                  padControlOrder; /**< `pad_model.control`, names that lead */
-    QSocPadModel                 padModel;        /**< The union the registers and core follow */
-    QMap<QString, QSocIoLibCell> ioLib;
-    QSocIoRingPlan               ioRing;
-    QList<QSocIomuxLsPoolPlan>   lsPools; /**< Declaration order */
-    QSocMmioPlan                 mmio;
+    QString                       moduleName;
+    quint32                       pinCount = 0;
+    quint32                       hsSlots  = 0;
+    quint64                       impid    = 0;
+    QSocIomuxOptionPlan           option;
+    QList<QSocIomuxRoutePlan>     routes;
+    QSocIomuxIntegrationPlan      integration;
+    QList<QSocPadCellPlan>        padCells;        /**< Declaration order, indexed by pinClass */
+    QList<int>                    pinClass;        /**< The class each pin instantiates */
+    QStringList                   padModeOrder;    /**< `pad_model.mode`, names that lead */
+    QStringList                   padControlOrder; /**< `pad_model.control`, names that lead */
+    QSocPadModel                  padModel;        /**< The union the registers and core follow */
+    QMap<QString, QSocIoLibCell>  ioLib;
+    QSocIoRingPlan                ioRing;
+    QList<QSocIomuxLsPoolPlan>    lsPools; /**< Declaration order */
+    QSocMmioPlan                  mmio;
+    QList<QSocIomuxRegisterBlock> registerBlocks;
 
     bool hasPadCell() const { return !padCells.isEmpty(); }
     bool hasLs() const { return !lsPools.isEmpty(); }
@@ -594,6 +604,8 @@ struct QSocIomuxPlan
     const QSocIomuxLsChannelPlan *lsChannel(quint32 channel) const;
     /** One past the highest channel number, the width of the slow buses. */
     quint32 lsChannelCount() const;
+    /** Declared channel IDs in numeric order, excluding holes. */
+    QList<quint32> lsChannelIds() const;
     /** The class a pin instantiates, or an undeclared cell when there is none. */
     const QSocPadCellPlan &padClass(quint32 pin) const;
     /** The side the ring puts a pin on, empty when the ring does not place it. */
@@ -617,20 +629,6 @@ struct QSocIomuxCorePort
     quint32 width = 1;
 };
 
-/**
- * @brief Version of the register layout this generator emits.
- *
- * Software reads it from the first word of every instance. A block appended
- * after the existing ones is a minor step. Any existing offset that moves is
- * a major step.
- */
-struct QSocIomuxLayoutVersion
-{
-    quint32 major = 2;
-    quint32 minor = 1;
-    quint32 patch = 0;
-};
-
 struct QSocIomuxFormalCollateral
 {
     QString systemVerilog;
@@ -649,42 +647,11 @@ public:
     /** Wrapper port of one slow channel role: `ls_c<k>_<role>_i`, the sink `_o`. */
     static QString lsPortName(quint32 channel, QSocIomuxRole role);
     /** Wrapper input that selects a pull or control row for one slot. */
-    static QString selectPortName(quint32 pin, quint32 slot, const QString &group);
-    /** The layout contract the identity word reports. */
-    static QSocIomuxLayoutVersion layoutVersion();
-    /** The type word every instance reports, "IOMX" read as a hex value. */
-    static constexpr quint32 kTypeId = 0x494F4D58;
-    /** Bytes the identity words occupy at offset 0. */
-    static constexpr quint32 kIdentityBytes = 16;
-    /**
-     * Byte base of every register block. A block whose option is off leaves
-     * its region empty, so an offset means the same thing on every design.
-     */
-    static constexpr quint64 kBaseSelector   = 0x100;
-    static constexpr quint64 kBaseGpio       = 0x200;
-    static constexpr quint64 kBaseRxOverride = 0x300;
-    static constexpr quint64 kBaseInterrupt  = 0x400;
-    static constexpr quint64 kBaseInvert     = 0x800;
-    /** The slow-bus blocks: per-pin channel select, per-channel pin select, and its bits. */
-    static constexpr quint64 kBaseLsSelect  = 0xC00;
-    static constexpr quint64 kBaseLsRxPin   = 0xD00;
-    static constexpr quint64 kBaseLsRxSrc   = 0xE00;
-    static constexpr quint64 kBaseLsRxValue = 0xE20;
-    static constexpr quint64 kBaseLsRxInv   = 0xE40;
-    /** Byte offset of the slow-bus capability word. */
-    static constexpr quint64 kLsCapabilityOffset = 0x10;
-    /** Bits of a slow select lane, one per pin or per channel. */
-    static constexpr quint32 kLsLane            = 8;
-    static constexpr quint32 kMaximumLsChannels = 256;
-    static constexpr quint64 kBaseSourceControl = 0x1000;
-    static constexpr quint64 kBasePadControl    = 0x1800;
-    static constexpr quint64 kBaseControlWords  = 0x2000;
-    /** Bytes between one `pin_ctl_k` block and the next. */
-    static constexpr quint64 kControlWordStride = 0x800;
-    /** Bytes the invert region holds: 32 banks of the widest instance. */
-    static constexpr quint64 kInvertBytes = 0x400;
-    /** Bytes the fixed map spans, so address_width is at least 14. */
-    static constexpr quint64 kApertureBytes = 0x4000;
+    static QString           selectPortName(quint32 pin, quint32 slot, const QString &group);
+    static quint32           selectionWidth(quint32 count);
+    static quint32           selectorLane(quint32 count, quint32 minimum);
+    static constexpr quint32 kIdentityBytes = 8;
+    static constexpr quint64 kBaseSelector  = 0x100;
     /**
      * Bits per pin of every pull and control select between the core and the
      * pad module. The lane is fixed, whatever the table needs, so the bus keeps
@@ -788,6 +755,7 @@ public:
     static QString    generateIntegrationNetlist(const QSocIomuxPlan &plan);
     static YAML::Node describeModuleYaml(const QSocIomuxPlan &plan);
     static QString    generateReport(const QSocIomuxPlan &plan);
+    static QString    generateSoftwareHeader(const QSocIomuxPlan &plan);
 };
 
 #endif // QSOCIOMUXGENERATOR_H

@@ -14,6 +14,8 @@
 
 struct QSocModuleDefinition;
 
+enum class QSocMmioBus { Axi4Lite, Apb4, Axi4, AhbLite, Ahb };
+
 /**
  * @brief How software reaches a field.
  *
@@ -59,8 +61,10 @@ struct QSocMmioRegisterPlan
 struct QSocMmioPlan
 {
     QString                     moduleName;
+    QSocMmioBus                 bus          = QSocMmioBus::Axi4Lite;
     quint32                     dataWidth    = 32;
     quint32                     addressWidth = 32;
+    quint32                     idWidth      = 4;
     QList<QSocMmioRegisterPlan> registers;
     /* Unlisted addresses below this byte limit read zero and ignore writes with OKAY. */
     quint64 zeroFillBytes = 0;
@@ -94,9 +98,12 @@ struct QSocMmioUvmCollateral
 class QSocMmioGenerator
 {
 public:
-    static bool        isMmio(const QSocModuleDefinition &definition);
-    static YAML::Node  createDraftGenerator();
-    static QStringList validate(const QSocModuleDefinition &definition);
+    static std::optional<QSocMmioBus> parseBus(const QString &name);
+    static QString                    busName(QSocMmioBus bus);
+    static QString                    busPrefix(QSocMmioBus bus);
+    static bool                       isMmio(const QSocModuleDefinition &definition);
+    static YAML::Node                 createDraftGenerator();
+    static QStringList                validate(const QSocModuleDefinition &definition);
     /** Non-blocking findings: what a valid source still lacks. */
     static QStringList advise(const QSocModuleDefinition &definition);
     static bool        buildPlan(

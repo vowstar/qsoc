@@ -314,7 +314,7 @@ The generate command provides functionality for generating different types of ou
 <generated-module-options>
 `generate module` validates one generated module and writes its output under
 `output/<library>/<module>/`. MMIO writes `<module>.v`; IOMUX writes its wrapper,
-register block, connection layer, file list, route report, and integration
+register block, software address constants, connection layer, file list, route report, and integration
 fragment as described in @iomux-generated-artifacts.
 
 #figure(

@@ -1308,7 +1308,8 @@ generator:
 
     QTest::newRow("wrong-kind") << QString(validGenerator).replace("kind: mmio", "kind: iomux")
                                 << QString("generator.kind") << QString("timer_ctrl");
-    QTest::newRow("wrong-bus") << QString(validGenerator).replace("bus: axi4_lite", "bus: apb4")
+    QTest::newRow("wrong-bus") << QString(validGenerator)
+                                      .replace("bus: axi4_lite", "bus: unsupported")
                                << QString("generator.bus") << QString("timer_ctrl");
     QTest::newRow("unknown-generator-key") << head + "  extra: true\n  register: {}\n"
                                            << QString("generator.extra") << QString("timer_ctrl");

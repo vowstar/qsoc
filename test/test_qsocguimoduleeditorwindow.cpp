@@ -6,6 +6,9 @@
 #include "gui/moduleeditorwindow/moduleeditorwindow.h"
 #include "gui/schematicwindow/schematicmodule.h"
 
+#include <qschematic/scene.hpp>
+
+#include <memory>
 #include <QAction>
 #include <QDir>
 #include <QFile>
@@ -423,7 +426,8 @@ uart:
         ready: uart_ready
 )");
 
-    ModuleEditorWindow window(nullptr, &projectManager);
+    auto  owner  = std::make_unique<ModuleEditorWindow>(nullptr, &projectManager);
+    auto &window = *owner;
     window.openFile(moduleFile);
 
     auto *tabs        = window.findChild<QTabWidget *>(QStringLiteral("moduleEditorTabs"));
@@ -454,6 +458,15 @@ uart:
     deleteRow->trigger();
     QCOMPARE(window.busMappingModelForTest()->rowCount(), 2);
     QVERIFY(window.busInterfaceModelForTest()->isDirty());
+
+    auto *scene = window.findChild<QSchematic::Scene *>();
+    QVERIFY(scene);
+    int addedDuringDestruction = 0;
+    connect(scene, &QSchematic::Scene::itemAdded, this, [&addedDuringDestruction] {
+        ++addedDuringDestruction;
+    });
+    owner.reset();
+    QCOMPARE(addedDuringDestruction, 0);
 }
 
 void Test::mappingToolsManageMissingRowsAndFilters()

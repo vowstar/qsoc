@@ -2,6 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmmiouvm.h"
+#include "common/qsocmmioapbverification.h"
+#include "qsocmmioahbverification.h"
+#include "qsocmmioaxiverification.h"
 
 #include "common/qsocmmiogenerator.h"
 
@@ -1134,6 +1137,15 @@ QString buildFileList(const QSocMmioPlan &plan)
 
 QSocMmioUvmCollateral QSocMmioUvm::generate(const QSocMmioPlan &plan)
 {
+    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        return QSocMmioAhbVerification::uvm(plan);
+    }
+    if (plan.bus == QSocMmioBus::Apb4) {
+        return QSocMmioApbVerification::uvm(plan);
+    }
+    if (plan.bus == QSocMmioBus::Axi4) {
+        return QSocMmioAxiVerification::uvm(plan);
+    }
     QSocMmioUvmCollateral collateral;
     collateral.interfaceSource = buildInterface(plan);
     collateral.packageSource   = buildPackage(plan);

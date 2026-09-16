@@ -449,7 +449,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.size(), 8, 1000);
 
         const QString terminalLatchStartResult = bash.execute(
-            {{"command", "(trap '' TERM; exec sleep 1) & child=$!; printf ready; wait \"$child\""},
+            {{"command", "(trap '' TERM; printf ready; exec sleep 1) & child=$!; wait \"$child\""},
              {"background", true}});
         QVERIFY2(!terminalLatchStartResult.startsWith("Error:"), qPrintable(terminalLatchStartResult));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 1);

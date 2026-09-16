@@ -13,15 +13,9 @@
 
 namespace {
 
-quint32 selectorWidth(quint32 hsSlots)
+quint32 selectorWidth(quint32 count)
 {
-    if (hsSlots <= 2) {
-        return 1;
-    }
-    if (hsSlots <= 4) {
-        return 2;
-    }
-    return 3;
+    return QSocIomuxGenerator::selectionWidth(count);
 }
 
 const QSocIomuxEndpointPlan &routeRole(const QSocIomuxRoutePlan &route, QSocIomuxRole role)
@@ -91,7 +85,7 @@ QString expectedRoleExpression(
         for (const QSocIomuxLsChannelPlan &channel : plan.lsPools.at(pool).channels) {
             expression += QString("(pin_%1_ls_select_i == %2'd%3) ? (%4) : ")
                               .arg(pin)
-                              .arg(QSocIomuxGenerator::kLsLane)
+                              .arg(std::max(8U, selectorWidth(plan.lsChannelCount())))
                               .arg(channel.channel)
                               .arg(lsRoleExpression(channel, role));
         }
@@ -421,7 +415,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
                     : QString("    input logic [%1:0] %2_i").arg(port.width - 1).arg(port.name));
         }
     }
-    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+    for (quint32 channel : plan.lsChannelIds()) {
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsChannelPorts(plan, channel)) {
             declarations.append(
                 port.width == 1
@@ -528,7 +522,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
             coreConnections.append(QString("    .%1_i(%1_i)").arg(port.name));
         }
     }
-    for (quint32 channel = 0; channel < lsChannels; ++channel) {
+    for (quint32 channel : plan.lsChannelIds()) {
         for (const QSocIomuxCorePort &port : QSocIomuxGenerator::coreLsChannelPorts(plan, channel)) {
             coreConnections.append(QString("    .%1_i(%1_i)").arg(port.name));
         }
@@ -577,7 +571,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
             appendPadCodeAssertions(&lines, plan, pin, findRoute(plan, pin, slot));
             lines.append("    end");
         }
-        if (plan.hsSlots < (quint32(1) << width)) {
+        if (plan.hsSlots < (quint64(1) << width)) {
             lines.append(QString("    if (pin_%1_select_i >= %2'd%3) begin")
                              .arg(pin)
                              .arg(width)
@@ -635,7 +629,7 @@ QString buildSystemVerilog(const QSocIomuxPlan &plan)
                 for (quint32 member : plan.lsPools.at(pool).pins) {
                     raw += QString("(ls_c%1_pin_i == %2'd%3) ? pad_input_value_i[%3] : ")
                                .arg(channel.channel)
-                               .arg(QSocIomuxGenerator::kLsLane)
+                               .arg(std::max(8U, selectorWidth(plan.pinCount)))
                                .arg(member);
                 }
                 QString expression = raw + "1'b0";

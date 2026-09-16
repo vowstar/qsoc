@@ -6,7 +6,9 @@
 
 #include <QBuffer>
 #include <QColor>
+#include <QDataStream>
 #include <QImage>
+#include <QImageReader>
 #include <QRegularExpression>
 #include <QtTest>
 
@@ -28,11 +30,6 @@ void clearGraphicsEnv()
     qunsetenv("QSOC_NO_IMAGE_GRAPHICS");
 }
 
-/* Build a real, decodable image buffer in the requested format.
- * Tests must never embed magic-byte stubs because the project rule
- * requires every test fixture (including images) to be generated
- * at runtime from code; the codec path runs through QImage either
- * way. */
 QByteArray makeRealImageBytes(const char *format)
 {
     QImage image(16, 16, QImage::Format_RGB32);
@@ -42,6 +39,39 @@ QByteArray makeRealImageBytes(const char *format)
     buffer.open(QIODevice::WriteOnly);
     image.save(&buffer, format);
     buffer.close();
+    return bytes;
+}
+
+QByteArray makeGifBytes()
+{
+    constexpr quint16 width = 3, height = 2;
+    QByteArray        bytes;
+    QDataStream       stream(&bytes, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream.writeRawData("GIF87a", 6);
+    stream << width << height << quint8(0x80) << quint8(0) << quint8(0);
+    for (const QColor color : {QColor(Qt::red), QColor(Qt::blue)}) {
+        stream << quint8(color.red()) << quint8(color.green()) << quint8(color.blue());
+    }
+    stream << quint8(0x2c) << quint16(0) << quint16(0) << width << height << quint8(0);
+
+    // Clear before each pixel keeps every LZW code at three bits.
+    quint64 packed = 0;
+    int     bits   = 0;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const quint64 pixel = (x + y) % 2;
+            packed |= (quint64(4) | (pixel << 3)) << bits;
+            bits += 6;
+        }
+    }
+    packed |= quint64(5) << bits;
+    bits += 3;
+    stream << quint8(2) << quint8((bits + 7) / 8);
+    for (int shift = 0; shift < bits; shift += 8) {
+        stream << quint8(packed >> shift);
+    }
+    stream << quint8(0) << quint8(0x3b);
     return bytes;
 }
 
@@ -318,15 +348,46 @@ void Test::kittyJpegIsReEncodedToPng()
 void Test::kittyGifIsReEncodedToPng()
 {
     qputenv("KITTY_WINDOW_ID", "1");
-    const QByteArray gifBytes = makeRealImageBytes("GIF");
-    if (gifBytes.isEmpty()) {
-        QSKIP("Qt build lacks GIF write support");
+    const QByteArray gifBytes = makeGifBytes();
+    const QImage     input    = QImage::fromData(gifBytes, "GIF");
+    QVERIFY2(!input.isNull(), "The generated GIF must decode; a GIF reader is required");
+    QCOMPARE(input.size(), QSize(3, 2));
+    const QList<QColor> expected = {Qt::red, Qt::blue, Qt::red, Qt::blue, Qt::red, Qt::blue};
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 3; ++x) {
+            QCOMPARE(input.pixelColor(x, y), expected[y * 3 + x]);
+        }
     }
 
     QTuiImagePreviewBlock
-        block(QStringLiteral("/tmp/x.gif"), QStringLiteral("image/gif"), 16, 16, gifBytes);
+                  block(QStringLiteral("/tmp/x.gif"), QStringLiteral("image/gif"), 3, 2, gifBytes);
     const QString out = block.toAnsi(60);
-    QVERIFY(out.contains(QLatin1String(kKittyEscapePrefix)));
+    const QRegularExpression packet(QStringLiteral("\x1b_G([^;]*);([A-Za-z0-9+/=]+)\x1b\\\\"));
+    auto                     matches = packet.globalMatch(out);
+    QVERIFY(matches.hasNext());
+    QByteArray payload;
+    bool       first = true;
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        if (first) {
+            QVERIFY(match.captured(1).split(',').contains(QStringLiteral("f=100")));
+            first = false;
+        }
+        payload += match.captured(2).toLatin1();
+    }
+    QByteArray pngBytes = QByteArray::fromBase64(payload);
+    QBuffer    buffer(&pngBytes);
+    QVERIFY(buffer.open(QIODevice::ReadOnly));
+    QImageReader reader(&buffer);
+    QCOMPARE(reader.format(), QByteArray("png"));
+    const QImage output = reader.read();
+    QVERIFY2(!output.isNull(), qPrintable(reader.errorString()));
+    QCOMPARE(output.size(), QSize(3, 2));
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 3; ++x) {
+            QCOMPARE(output.pixelColor(x, y), expected[y * 3 + x]);
+        }
+    }
 }
 
 void Test::kittyPngPassesThrough()

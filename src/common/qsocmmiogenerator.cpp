@@ -2,6 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmmiogenerator.h"
+#include "common/qsocmmioahb.h"
+#include "common/qsocmmioapb.h"
+#include "common/qsocmmioaxi.h"
 
 #include "common/qsocmmioformal.h"
 #include "common/qsocmmiouvm.h"
@@ -17,7 +20,7 @@
 namespace {
 
 const QSet<QString> kGeneratorKeys
-    = {"kind", "bus", "data_width", "address_width", "identity", "register"};
+    = {"kind", "bus", "data_width", "address_width", "id_width", "identity", "register"};
 const QSet<QString> kIdentityKeys = {"type", "version"};
 const QSet<QString> kRegisterKeys = {"offset", "field", "description"};
 const QSet<QString> kFieldKeys
@@ -175,6 +178,16 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *plan, QStringList
             plan->addressWidth = addressWidth;
         }
         valid = parsed && valid;
+    }
+    if (generator["id_width"]) {
+        if (plan->bus != QSocMmioBus::Axi4) {
+            appendError(errors, "BUS", "generator.id_width", "requires axi4");
+            valid = false;
+        } else {
+            valid = parseUnsigned32(
+                        generator["id_width"], "generator.id_width", 32, &plan->idWidth, errors)
+                    && valid;
+        }
     }
     return valid;
 }
@@ -494,7 +507,7 @@ bool parseIdentity(const YAML::Node &node, QSocMmioPlan *plan, QStringList *erro
     if (!valid) {
         return false;
     }
-    const bool wide = plan->dataWidth == 64;
+    const bool wide = plan->dataWidth >= 64;
     for (const QSocMmioRegisterPlan &reg : plan->registers) {
         if (reg.name == QStringLiteral("version") || reg.name == QStringLiteral("type")) {
             appendError(
@@ -515,6 +528,26 @@ bool parseIdentity(const YAML::Node &node, QSocMmioPlan *plan, QStringList *erro
     }
     if (!valid) {
         return false;
+    }
+    if (plan->dataWidth == 8 || plan->dataWidth == 16) {
+        const quint32               bytes = plan->dataWidth / 8;
+        const quint64               value = version | (typeId << 32);
+        QList<QSocMmioRegisterPlan> identity;
+        for (quint32 offset = 0; offset < 8; offset += bytes) {
+            QSocMmioRegisterPlan reg;
+            reg.name       = QString("identity_%1").arg(offset);
+            reg.byteOffset = offset;
+            for (quint32 lane = 0; lane < bytes; ++lane) {
+                reg.fields.append(identityField(
+                    QString("byte_%1").arg(lane),
+                    lane * 8,
+                    8,
+                    (value >> ((offset + lane) * 8)) & 0xff));
+            }
+            identity.append(reg);
+        }
+        plan->registers = identity + plan->registers;
+        return true;
     }
     QSocMmioRegisterPlan versionReg;
     versionReg.name        = QStringLiteral("version");
@@ -574,12 +607,13 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
         appendError(errors, "REQUIRED", "generator.bus", "property is required");
     } else {
         const bool busDecodable = parseScalar(generator["bus"], "generator.bus", &bus, errors);
-        // cppcheck-suppress knownConditionTrueFalse
-        if (busDecodable && bus != "axi4_lite") {
-            appendError(errors, "BUS", "generator.bus", "must be axi4_lite");
+        if (busDecodable && !QSocMmioGenerator::parseBus(bus)) {
+            appendError(
+                errors, "BUS", "generator.bus", "must be axi4_lite, apb4, axi4, ahb_lite, or ahb");
         }
     }
 
+    plan->bus                  = QSocMmioGenerator::parseBus(bus).value_or(QSocMmioBus::Axi4Lite);
     const bool widthsDecodable = parseBusWidths(generator, plan, errors);
 
     if (definition.hasParameterSection || !definition.parameters.isEmpty()) {
@@ -685,17 +719,43 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
         appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
         valid = false;
     }
-    if (plan.dataWidth != 32 && plan.dataWidth != 64) {
-        appendError(errors, "RANGE", "generator.data_width", "must be 32 or 64");
+    const bool apb = plan.bus == QSocMmioBus::Apb4;
+    const bool axi = plan.bus == QSocMmioBus::Axi4;
+    const bool ahb = plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb;
+    if (plan.bus != QSocMmioBus::Axi4Lite && !apb && !axi && !ahb) {
+        appendError(errors, "BUS", "generator.bus", "unsupported bus");
         return false;
     }
-    const quint32 minimumAddressWidth = plan.dataWidth == 64 ? 3 : 2;
-    if (plan.addressWidth < minimumAddressWidth || plan.addressWidth > 64) {
+    if ((axi || ahb) ? (plan.dataWidth < 8 || plan.dataWidth > 1024
+                        || (plan.dataWidth & (plan.dataWidth - 1)) != 0)
+        : apb        ? (plan.dataWidth != 8 && plan.dataWidth != 16 && plan.dataWidth != 32)
+                     : (plan.dataWidth != 32 && plan.dataWidth != 64)) {
+        appendError(
+            errors,
+            "RANGE",
+            "generator.data_width",
+            (axi || ahb) ? "must be a power of two from 8 to 1024"
+            : apb        ? "must be 8, 16, or 32"
+                         : "must be 32 or 64");
+        return false;
+    }
+    if (axi && (plan.idWidth < 1 || plan.idWidth > 32)) {
+        appendError(errors, "RANGE", "generator.id_width", "must be between 1 and 32");
+        return false;
+    }
+    quint32 minimumAddressWidth = 0;
+    for (quint32 bytes = plan.dataWidth / 8; bytes > 1; bytes >>= 1) {
+        ++minimumAddressWidth;
+    }
+    minimumAddressWidth               = qMax(quint32(1), minimumAddressWidth);
+    const quint32 maximumAddressWidth = (apb || ahb) ? 32 : 64;
+    const quint32 fieldLimit          = (apb || axi || ahb) ? 64 : plan.dataWidth;
+    if (plan.addressWidth < minimumAddressWidth || plan.addressWidth > maximumAddressWidth) {
         appendError(
             errors,
             "RANGE",
             "generator.address_width",
-            QString("must be between %1 and 64").arg(minimumAddressWidth));
+            QString("must be between %1 and %2").arg(minimumAddressWidth).arg(maximumAddressWidth));
         return false;
     }
     if (plan.registers.isEmpty()) {
@@ -704,12 +764,13 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     }
     if (plan.zeroFillBytes != 0
         && (plan.zeroFillBytes - 1 > maximumForWidth(plan.addressWidth)
-            || plan.zeroFillBytes % (plan.dataWidth / 8) != 0)) {
+            || (!axi && !ahb && plan.zeroFillBytes % (plan.dataWidth / 8) != 0))) {
         appendError(
             errors,
             "RANGE",
             "plan.zero_fill_bytes",
-            "must fit the address width and align to a data word");
+            (axi || ahb) ? "must fit the address width"
+                         : "must fit the address width and align to a data word");
         return false;
     }
 
@@ -717,6 +778,80 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     QHash<quint64, QString> offsets;
     QSet<QString>           ports     = kFixedPorts;
     const quint64           byteCount = plan.dataWidth / 8;
+    QHash<quint64, quint8>  occupiedBytes;
+    if (apb || axi || ahb) {
+        ports.clear();
+        for (const auto &port :
+             (ahb ? QSocMmioAhb::ports(plan)
+                  : (axi ? QSocMmioAxi::ports(plan) : QSocMmioApb::ports(plan)))) {
+            ports.insert(port.name);
+        }
+    }
+    if (ahb) {
+        ports.unite(
+            QSet<QString>{
+                "ahb_active_q",
+                "ahb_write_q",
+                "ahb_address_q",
+                "ahb_size_q",
+                "ahb_error_q",
+                "ahb_error_last_q",
+                "ahb_selected",
+                "access_is_invalid",
+                "byte_lanes",
+                "write_address",
+                "write_data",
+                "write_strobe",
+                "write_fire"});
+    }
+    if (axi) {
+        ports.unite(
+            QSet<QString>{
+                "ar_take",
+                "aw_take",
+                "axi_b_response_q",
+                "axi_b_valid_q",
+                "axi_r_data_q",
+                "axi_r_last_q",
+                "axi_r_response_q",
+                "axi_r_valid_q",
+                "axi_read_address_q",
+                "axi_read_burst_q",
+                "axi_read_busy_q",
+                "axi_read_error",
+                "axi_read_id_q",
+                "axi_read_invalid_q",
+                "axi_read_lanes",
+                "axi_read_len_q",
+                "axi_read_remaining_q",
+                "axi_read_size_q",
+                "axi_w_data_q",
+                "axi_w_last_q",
+                "axi_w_pending_q",
+                "axi_w_strobe_q",
+                "axi_write_address_q",
+                "axi_write_beat_error",
+                "axi_write_burst_q",
+                "axi_write_busy_q",
+                "axi_write_error_q",
+                "axi_write_id_q",
+                "axi_write_invalid_q",
+                "axi_write_lanes",
+                "axi_write_len_q",
+                "axi_write_remaining_q",
+                "axi_write_size_q",
+                "axi_write_step",
+                "burst_is_invalid",
+                "masked_read",
+                "next_address",
+                "read_address",
+                "transfer_lanes",
+                "w_take",
+                "write_address",
+                "write_data",
+                "write_fire",
+                "write_strobe"});
+    }
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         const QString registerPath = "generator.register." + reg.name;
         if (!QSocVerilogUtils::isValidVerilogIdentifier(reg.name)) {
@@ -762,7 +897,6 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
             continue;
         }
 
-        quint64       occupied = 0;
         QSet<QString> fieldNames;
         for (const QSocMmioFieldPlan &field : reg.fields) {
             const QString fieldPath = registerPath + ".field." + field.name;
@@ -782,12 +916,12 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                 appendError(errors, "RANGE", fieldPath + ".width", "must be at least 1");
                 valid           = false;
                 fieldShapeValid = false;
-            } else if (field.width > plan.dataWidth) {
+            } else if (field.width > fieldLimit) {
                 appendError(
                     errors,
                     "RANGE",
                     fieldPath + ".width",
-                    QString("must be at most %1").arg(plan.dataWidth));
+                    QString("must be at most %1").arg(fieldLimit));
                 valid           = false;
                 fieldShapeValid = false;
             }
@@ -799,7 +933,9 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                     QString("must be at most %1").arg(plan.dataWidth - 1));
                 valid           = false;
                 fieldShapeValid = false;
-            } else if (fieldShapeValid && quint64(field.lsb) + field.width > plan.dataWidth) {
+            } else if (
+                fieldShapeValid && !apb && !axi && !ahb
+                && quint64(field.lsb) + field.width > plan.dataWidth) {
                 appendError(
                     errors,
                     "RANGE",
@@ -809,12 +945,23 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                 fieldShapeValid = false;
             }
             if (fieldShapeValid) {
-                const quint64 mask = maximumForWidth(field.width) << field.lsb;
-                if ((occupied & mask) != 0) {
-                    appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
+                const quint64 lastByte = (quint64(field.lsb) + field.width - 1) / 8;
+                const quint64 maximum  = maximumForWidth(plan.addressWidth);
+                if (reg.byteOffset > maximum || lastByte > maximum - reg.byteOffset) {
+                    appendError(errors, "RANGE", fieldPath, "field exceeds the address space");
                     valid = false;
                 } else {
-                    occupied |= mask;
+                    bool overlap = false;
+                    for (quint32 bit = field.lsb; bit < field.lsb + field.width; ++bit) {
+                        auto        &occupied = occupiedBytes[reg.byteOffset + bit / 8];
+                        const quint8 mask     = quint8(1u << (bit % 8));
+                        overlap               = overlap || (occupied & mask) != 0;
+                        occupied |= mask;
+                    }
+                    if (overlap) {
+                        appendError(errors, "OVERLAP", fieldPath, "field overlaps another field");
+                        valid = false;
+                    }
                 }
             }
             if (!field.inputPort.isEmpty()
@@ -838,7 +985,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                         "property is required for rw and w1c fields");
                     valid = false;
                 } else if (
-                    field.width > 0 && field.width <= plan.dataWidth
+                    field.width > 0 && field.width <= fieldLimit
                     && !valueFitsWidth(*field.resetValue, field.width)) {
                     appendError(
                         errors, "RANGE", fieldPath + ".reset", "value does not fit field width");
@@ -879,8 +1026,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                         "ro fields require exactly one of input or value");
                     valid = false;
                 }
-                if (field.constantValue.has_value() && field.width > 0
-                    && field.width <= plan.dataWidth
+                if (field.constantValue.has_value() && field.width > 0 && field.width <= fieldLimit
                     && !valueFitsWidth(*field.constantValue, field.width)) {
                     appendError(
                         errors, "RANGE", fieldPath + ".value", "value does not fit field width");
@@ -1226,6 +1372,15 @@ void appendReadProcess(QStringList *lines, const QSocMmioPlan &plan)
 
 QString buildVerilog(const QSocMmioPlan &plan)
 {
+    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        return QSocMmioAhb::generate(plan);
+    }
+    if (plan.bus == QSocMmioBus::Apb4) {
+        return QSocMmioApb::generate(plan);
+    }
+    if (plan.bus == QSocMmioBus::Axi4) {
+        return QSocMmioAxi::generate(plan);
+    }
     QStringList lines;
     appendHeader(&lines, plan);
     appendStorage(&lines, plan);
@@ -1358,6 +1513,13 @@ QList<QSocMmioPortDescription> QSocMmioGenerator::describePorts(const QSocMmioPl
            {"s_axi_rresp", "output", 2},
            {"s_axi_rvalid", "output", 1},
            {"s_axi_rready", "input", 1}};
+    if (plan.bus == QSocMmioBus::Apb4) {
+        ports = QSocMmioApb::ports(plan);
+    } else if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        ports = QSocMmioAhb::ports(plan);
+    } else if (plan.bus == QSocMmioBus::Axi4) {
+        ports = QSocMmioAxi::ports(plan);
+    }
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
             if (!field.inputPort.isEmpty()) {
@@ -1384,11 +1546,11 @@ YAML::Node QSocMmioGenerator::describeModuleYaml(const QSocMmioPlan &plan)
         module["port"][port.name.toStdString()] = portNode;
     }
     YAML::Node control(YAML::NodeType::Map);
-    control["bus"]  = "axi4_lite";
+    control["bus"]  = busName(plan.bus).toStdString();
     control["mode"] = "slave";
     YAML::Node mapping(YAML::NodeType::Map);
     for (const QSocMmioPortDescription &port : ports) {
-        if (!port.name.startsWith("s_axi_")) {
+        if (!port.name.startsWith(busPrefix(plan.bus))) {
             continue;
         }
         mapping[port.name.mid(6).toStdString()] = port.name.toStdString();
@@ -1467,4 +1629,50 @@ bool QSocMmioGenerator::generateUvmCollateral(
         *collateral = QSocMmioUvm::generate(plan);
     }
     return true;
+}
+
+std::optional<QSocMmioBus> QSocMmioGenerator::parseBus(const QString &name)
+{
+    for (const auto bus :
+         {QSocMmioBus::Axi4Lite,
+          QSocMmioBus::Apb4,
+          QSocMmioBus::Axi4,
+          QSocMmioBus::AhbLite,
+          QSocMmioBus::Ahb}) {
+        if (name == busName(bus))
+            return bus;
+    }
+    return std::nullopt;
+}
+
+QString QSocMmioGenerator::busName(QSocMmioBus bus)
+{
+    switch (bus) {
+    case QSocMmioBus::Axi4Lite:
+        return "axi4_lite";
+    case QSocMmioBus::Apb4:
+        return "apb4";
+    case QSocMmioBus::Axi4:
+        return "axi4";
+    case QSocMmioBus::AhbLite:
+        return "ahb_lite";
+    case QSocMmioBus::Ahb:
+        return "ahb";
+    }
+    return {};
+}
+
+QString QSocMmioGenerator::busPrefix(QSocMmioBus bus)
+{
+    switch (bus) {
+    case QSocMmioBus::Apb4:
+        return "s_apb_";
+    case QSocMmioBus::AhbLite:
+    case QSocMmioBus::Ahb:
+        return "s_ahb_";
+    case QSocMmioBus::Axi4Lite:
+    case QSocMmioBus::Axi4:
+        return "s_axi_";
+    }
+    return {};
 }

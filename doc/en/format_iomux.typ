@@ -1,7 +1,7 @@
 = IOMUX Generator
 <iomux-generator>
 The IOMUX generator turns one sparse route table into a high-speed pin
-multiplexer: an AXI4-Lite selector slave, a per-pin mux core, a connection
+multiplexer: a register slave, a per-pin mux core, a connection
 fabric, and one public wrapper. Its source stays in the module's `.soc_mod`
 entry.
 
@@ -62,15 +62,19 @@ iomux0:
         output_enable: 1
 ```
 
-`pin_count` is required and ranges from 1 to 256. It is never inferred from
-the routes or the pad width. `hs_slots` ranges from 2 to 8 and defaults to 4
-when omitted; an explicit 4 and the default generate byte-identical files.
-Both are generation-time configuration, not Verilog parameters. `build` is a
-number from 0 to 255 the design chooses, 0 when omitted, and reads back in
-the low byte of the `version` word so firmware can tell one build of the
-same layout from another. `data_width` is 32 or 64 and `address_width` is
-the bus address width; both default to 32. An IOMUX entry may not also carry
-manual `parameter`, `port`, or `bus` sections.
+`pin_count` and `hs_slots` are positive generation-time integers. The pin
+count is required; the slot count defaults to 4. Counts and generated vector
+widths must fit the generator's index types. They are not Verilog parameters.
+`impid` is an unsigned 64-bit generation-time constant, defaulting to zero.
+The build system supplies it; generated RTL has no runtime input or update
+mechanism. `bus: axi4_lite` accepts 32- or 64-bit data. `bus: apb4` accepts
+8-, 16-, or 32-bit data. `bus: axi4` accepts powers of two from 8 through
+1024 bits, with optional `id_width` from 1 through 32 (default 4).
+`bus: ahb_lite` and `bus: ahb` accept powers of two from 8 through 1024 bits.
+Their address ports are at most 32 bits wide.
+The byte layout remains the same across bus widths.
+`address_width` is the local byte address width. Data and address widths default to 32. An IOMUX entry
+may not also carry manual `parameter`, `port`, or `bus` sections.
 
 Each route names a `pin` below `pin_count`, a `slot` below `hs_slots`, and
 non-empty `function` and `signal` labels used only for reports. A `(pin,
@@ -146,18 +150,19 @@ ls:
       - {channel: 3, function: uart5, signal: rx, input_value: {link: uart5_rx}}
 ```
 
-Channel numbers are one space across every pool, 0 to 255, and a pin belongs
+Channel numbers share one nonnegative ID space across every pool, and a pin belongs
 to at most one pool. One pool over every pin is the plain crossbar; several
 pools cut it into blocks, and a pool of eight pins pays for eight. Slot 0 of
 every pool pin is the pool, so a route may not claim it; slot 0 of any other
 pin stays an ordinary route. A pool name is a label for the report, the
 wrapper ports are `ls_c<k>_<role>_i` and `ls_c<k>_input_value_o`.
 
-Each pool pin owns an 8-bit `ls_select` lane holding a channel number. Its
+Each pool pin owns an `ls_select` field holding a global channel number.
+It stores at least eight bits and expands when the channel span needs more. Its
 slot 0 bundle is that channel's roles when the number is one of its pool's
 channels, and all zero otherwise, exactly like an unrouted slot. The gpio
 sources, inversion, and the safe row layer on top as on every slot. Each slow
-input owns an 8-bit `ls_rx_pin` lane holding a pin number: it reads that pad
+input owns an `ls_rx_pin` field holding a pin number, also at least eight bits: it reads that pad
 when the pin is in its pool and zero otherwise, then `ls_rx_src` and
 `ls_rx_value` substitute under `option.rx_override` and `ls_rx_inv` inverts
 under `option.invert`, as the fast sinks do. The substitution is per slow
@@ -240,8 +245,7 @@ labelled rows, and an optional `default` row, which is otherwise the first.
 The control name is yours. It must be a Verilog identifier, because it
 appears as is in ports, register fields, and the report, and it may not be
 one of the names in the table below. Every cell pin is named once, by a
-role, by `pull`, or by one control. A cell may declare up to 16 controls of
-up to 16 rows each. A route asks for a row by label under `control`, as in
+role, by `pull`, or by one control. Each control has up to 16 rows. A route asks for a row by label under `control`, as in
 `control: {drive: high, slew: fast}`. A slot that names none, an unrouted
 slot, and a selector value above the slot count all take the default. A
 control with one row has nothing to select: its pins take that row, it owns
@@ -490,88 +494,82 @@ corner already owns.
 
 == Register Layout
 <iomux-register-layout>
-The first 16 bytes identify the block. The byte map is the same for both
-data widths: a 64-bit instance packs each pair into one beat. All four words
-are read-only and ignore writes.
+The read-only `impid` occupies bytes 0x00 through 0x07. On a 32-bit bus,
+0x00 reads the low half and 0x04 reads the high half. Narrow interfaces
+read consecutive little-endian portions of the same constant. On a 64-bit bus,
+0x00 reads the full value. Writes are ignored. Bytes 0x08 through 0xFF
+read zero and ignore writes. The generated header supplies `IMPID_OFFSET`,
+`IMPID_VALUE`, and `IMPID_WIDTH`, each with the module prefix.
+
+Firmware and RTL must use matching generated address constants. Changing
+counts, options, or the pad model can move functional registers.
+
+The layout starts at 0x100 and accumulates enabled arrays in the order below.
+Each array is aligned to eight bytes, independently of bus width. Define
+`A(x, a) = a * ceil(x / a)`, `w(n) = max(1, bitLength(n - 1))`,
+`bank(N) = A(N, 64) / 8`, and `selectors(N, L) = A(N * L, 64) / 8`.
+HS lanes use `Lhs = max(4, nextPow2(w(H)))`; LS TX lanes use
+`Ltx = max(8, nextPow2(w(C)))`; LS RX lanes use
+`Lrx = max(8, nextPow2(w(P)))`. Lane widths are measured in bits.
 
 #figure(
   align(center)[#table(
-    columns: 3,
-    align: (left, left, left),
-    table.header([Offset], [Word], [Content]),
+    columns: 2,
+    align: (left, left),
+    table.header([Array order], [Size in bytes]),
     table.hline(),
-    [0x0], [`version`], [layout contract: major `[31:24]`, minor `[23:16]`, patch `[15:8]`; the design's `build` `[7:0]`],
-    [0x4], [`type`], [0x494F4D58, the letters IOMX read as one hex value],
-    [0x8], [`capability`], [`pin_count` `[15:0]`, `hs_slots` `[23:16]`],
-    [0xC], [`feature`], [one bit per option: 0 gpio, 1 interrupt, 2 pad_control, 3 invert, 4 rx_override, 5 ls],
-    [0x10], [`ls_capability`], [with `ls` only: channel count `[15:0]`, one past the highest number, and pool count `[23:16]`],
+    [`hs_select`], [`selectors(P, Lhs)`],
+    [GPIO: input value, input enable, output value, output enable], [`bank(P)` each],
+    [HS RX value, in slot order], [`bank(P)` per slot],
+    [IRQ: high, low, rise, fall enable, then pending], [`bank(P)` each],
+    [Inversion: IE, OV, OE, RX slots, pull, selectable controls], [`bank(P)` each],
+    [`ls_select`], [`selectors(P, Ltx)`],
+    [`ls_rx_pin`], [`selectors(C, Lrx)`],
+    [`ls_rx_src`, `ls_rx_value`, `ls_rx_inv`], [`bank(C)` each],
+    [`pin_src_ctrl` records], [`P * source_stride`],
+    [`pin_pad_ctrl` records], [`P * pad_stride`],
   )],
-  caption: [IOMUX IDENTITY WORDS],
+  caption: [IOMUX ARRAY ORDER],
 )
 
-Software reads `version` first, because that is where a driver written for
-another instance of this type looks, then `type` to confirm the block, then
-`capability` and `feature` to compute the rest of the map. The layout
-contract is 2.1.0, which appended the slow-bus blocks to 2.0.0. The number steps against a layout that has shipped in
-silicon or that firmware depends on. Until then fields may move under it.
-After that, a block appended after the existing ones steps the minor number
-and any existing offset that moves steps the major number. With
-`pin_count`, `hs_slots`, and `data_width` every offset below is
-computable, and the report prints them.
+Disabled arrays occupy no space. Enabled LS RX arrays reserve the full C
+span even when no channel has a receiver. Only actual receivers have fields;
+global ID holes and pins outside every pool have no storage in LS arrays.
 
-Every block has a fixed byte base, and a block whose option is off leaves
-its region empty: an offset means the same thing on every design, so a
-driver carries constants and reads `feature` only to learn which blocks
-are present. Within the IOMUX window, any byte offset without a generated register is reserved. These addresses include gaps between registers and regions for options disabled at generation. Reads return zero and writes are ignored. Both reads and writes return AXI OKAY, with no register side effects. OKAY confirms transaction completion, not feature availability. Drivers use `feature` and `capability` to discover functions and access only their documented registers. Reserved locations can acquire functions in later versions, so drivers must not use them as scratch storage or probe them with writes.
+A selector starts at bit `index * L` within its array. HS stores `w(H)` bits;
+LS TX stores `max(8, w(C))` and LS RX stores `max(8, w(P))` bits. Other lane
+bits read zero and ignore writes. Invalid codes remain readable and select
+the zero route. Byte strobes update each selected byte independently,
+including selectors wider than eight bits.
 
-The window spans at least 16 KB. Additional pad control words can extend it. The report gives its size as `aperture` bytes, covering local offsets zero through `aperture - 1`. `address_width` must cover the whole window and is at least 14. The interconnect must decode this window and return DECERR for addresses that reach no peripheral. With wider address ports, an out-of-window access delivered directly to IOMUX returns SLVERR without aliasing a register. This window policy does not change the generic MMIO generator's SLVERR response for unlisted addresses.
+Source and pad control use one record per pin. Let E be the last existing
+field's end bit, or zero for an empty record. Its common stride is
+`A(E, 64) / 8`, and pin p starts at `base + p * stride`. Records retain model
+indices and fields that an individual pad class does not consume. A physical
+bus word starts at `floor(byte_address / data_bytes) * data_bytes`.
+Multiple writes to a record are not atomic. A selector can span bus words;
+each masked write immediately updates its bytes. Intermediate values follow
+the same routing rules as any other selector value.
 
-#figure(
-  align(center)[#table(
-    columns: 3,
-    align: (left, left, left),
-    table.header([Base], [Block], [Size at 256 pins]),
-    table.hline(),
-    [0x0000], [identity words], [16 bytes],
-    [0x0100], [`hs_select` words], [`pin_count / 2` bytes, at most 0x80],
-    [0x0200], [gpio banks, four], [at most 0x80],
-    [0x0300], [`rx_value_sk` banks, one per slot], [at most 0x100],
-    [0x0400], [interrupt banks, four enable then four pending], [at most 0x100],
-    [0x0800], [inversion banks], [at most 0x400, 32 banks],
-    [0x0C00], [`ls_select` lanes, 8 bits per pool pin], [at most 0x100],
-    [0x0D00], [`ls_rx_pin` lanes, 8 bits per slow input], [at most 0x100],
-    [0x0E00, 0x0E20, 0x0E40], [`ls_rx_src`, `ls_rx_value`, `ls_rx_inv` banks, one bit per slow input], [0x20 each],
-    [0x1000], [`pin_src_ctrl`, one word per pin], [at most 0x800],
-    [0x1800], [`pin_pad_ctrl`, one word per pin], [at most 0x800],
-    [0x2000 + k × 0x800], [`pin_ctl_k`, one word per pin], [0x800 each],
-  )],
-  caption: [IOMUX REGISTER MAP],
-)
+The report and generated C header give the actual offsets, strides, and
+aperture. The aperture ends at the final aligned cursor, with no fixed 16 KiB
+minimum or power-of-two rounding. `address_width` must cover it. Within the
+aperture, holes read zero and ignore writes without an error. AXI4-Lite and
+APB4 also handle unaligned accesses this way. AXI4 uses the burst and byte-lane
+rules of the MMIO frontend. An AXI4 transfer whose byte span exceeds the
+aperture returns `SLVERR`, even if its first byte is inside. Addresses outside
+the aperture return AXI `SLVERR` or APB `PSLVERR` without aliasing.
+AHB-Lite and AHB use the MMIO transfer-size and alignment rules. Misaligned,
+oversized, or aperture-crossing transfers return two-cycle ERROR without writing.
+This does not change the generic MMIO generator's reserved-address policy.
 
-Within a block the stride is the only arithmetic. A bank holds one bit per
-pin, `data_width` pins per word, so bit `p` of a family sits at
-`base + (p / data_width) × (data_width / 8)`, and one store flips the same
-bit on a whole word of pins. A per-pin word sits at
-`base + p × (data_width / 8)` and holds that pin's whole configuration, so
-one store reconfigures a pin without a read-modify-write and without
-touching its neighbours. A name that starts with `pin_` is indexed by pin;
-any other suffix is a word index.
+C macros use `QSOC_<module>_X_<name>` and preserve letter case. Each component
+encodes `_` as `_5f` and `$` as `_24`, so distinct Verilog identifiers remain
+distinct portable C names. For example, `iomux0` uses
+`QSOC_iomux0_X_pin_5fcount_5fVALUE` for the pin count.
 
-Every pin owns a fixed 4-bit lane in the selector words; the field uses the
-low `ceil(log2(hs_slots))` bits and the remaining lane bits read zero and
-ignore writes. A 32-bit word holds 8 pins and a 64-bit word holds 16, so no
-field crosses a byte, one write strobe never splits a selector, and a hex
-dump shows one pin per digit. The lane idles 2 bits per pin at the default 4
-slots, 48 bytes on a 185-pin instance; that is the price of a selector
-offset that depends on `pin_count` and `data_width` alone.
-
-The slow lanes hold 4 pins or channels per 32-bit word and 8 per 64-bit
-word; a word with no pool pin or no slow input behind it reads zero and
-takes no write, as does the lane of a pin outside every pool.
-
-`pin_src_ctrl` exists when any option owns a field in it, and every field
-keeps a fixed position whatever else is on, so software reads the same word
-on every design. Absent fields read zero.
+For source records, let R be H with RX override or zero without it, and
+`T = A(max(16, 8 + R), 8)` in bits. Absent fields read zero.
 
 #figure(
   align(center)[#table(
@@ -584,7 +582,7 @@ on every design. Absent fields read zero.
     [5:4], [`output_enable_src`], [`gpio`],
     [6], [`pull_src`], [`pad_control`, when the cell has a pull table],
     [8 + k], [`rx_src_sk`], [`rx_override`, one bit per slot k],
-    [16 + i], [`<control>_src`], [`pad_control`, i is the control's index in the block's control order, the same order as its lane; a single-row control keeps its index and has no bit],
+    [T + i], [`<control>_src`], [`pad_control`, i is the control's index in the block's control order, the same order as its lane; a single-row control keeps its index and has no bit],
   )],
   caption: [PIN_SRC_CTRL LAYOUT],
 )
@@ -597,8 +595,9 @@ A source field selects where the pad signal comes from. `output_value_src`
 takes 0 for the selected slot, 1 for the register, 2 for the slot input
 enable, and 3 for the slot output enable. `output_enable_src` takes 0 for
 the selected slot, 1 for the register, 2 for the slot output value, and 3
-to stop driving. A cross tap reads the slot output and never the source mux
-output, so no combination of the two fields closes a loop. Setting
+for zero before output-enable inversion. With inversion set, code 3 drives
+one. A cross tap reads the slot output and never the source mux output, so
+no combination of the two fields closes a loop. Setting
 `output_enable_src` to 2 ties the drive enable to the slot output value, so
 the pad drives a one and releases a zero. That is open source, not open
 drain. Open drain needs the enable to follow the inverted value: at
@@ -611,13 +610,10 @@ the pad through two flip-flops in the bus clock domain, so a pad edge takes
 two bus cycles to become readable.
 
 `generator.option.pad_control` needs a `pad_cell` with a pull table or a
-control of more than one row. It appends one `pin_pad_ctrl` word per pin
-holding the pull fields and the first four controls, then one `pin_ctl_k`
-word per pin for each further group of eight controls, control `i` in the
-4-bit lane at bit `4 * ((i - 4) mod 8)` of `pin_ctl_k`, `k = (i - 4) div 8`,
-in the block's control order. A single-row control
-keeps its lane empty, so its neighbours never move, and a group whose
-controls are all single-row emits no word while `k` still counts it. The
+control of more than one row. Its per-pin record holds pull fields and
+control i at bit `16 + 4 * i`, using the block's model order. A single-row
+control keeps its lane empty. Fields continue into later bus words within
+the same record; they have no separate extension array. The
 fields below are present only when the cell has something for them to select
 and each is as wide as its table needs; a table has at most 16 rows. Between
 the core and `<module>_io` the same selects travel in one 4-bit lane per pin,
@@ -633,7 +629,7 @@ moves when a table grows.
     [from 0], [`pull_mode`], [0 none, 1 up, 2 down, 3 keeper, 4 oscillator, then the cell's other modes from 5 in name order],
     [from 4], [`up_sel`], [strength row of `up`, table order, only when `up` has several rows],
     [from 8], [`down_sel`], [strength row of `down`, likewise],
-    [from 16, 20, 24, 28], [control 0 to 3], [row of the control, table order, only when it has several rows],
+    [`16 + 4 * i`], [control i], [row of the control, table order, only when it has several rows],
   )],
   caption: [PIN_PAD_CTRL LAYOUT],
 )
@@ -652,6 +648,10 @@ selects to the word. Each `<control>_src` does the same for its control. All
 reset to 0, so the words are inert until software claims them. A
 register-driven keeper or oscillator is the same woven loop as a route request,
 with the same simulation caveat.
+
+A named pull row can encode a simultaneous static pad setting. One linked
+on/off request selects two rows. It cannot represent several pull requests
+that change independently.
 
 `generator.option.invert` appends the banks `input_enable_inv`,
 `output_value_inv`, `output_enable_inv`, one `rx_inv_sk` bank per slot k,
@@ -684,26 +684,31 @@ cannot vanish into its own acknowledgement. Edge detection compares the
 second synchronizer stage against a third, so the pad must hold a level for
 one bus cycle to register as an edge.
 
+The synchronizer and pending bits reset to zero. Low-level pending can set
+after reset before a high external pad level reaches the second stage.
+There is no startup event mask.
+
 #figure(
   align(center)[#table(
     columns: 4,
     align: (left, right, right, left),
     table.header([Pins, width], [Selector regs], [Total regs], [Selector offsets]),
     table.hline(),
-    [185, 32-bit], [24], [28], [0x100 to 0x15C],
-    [185, 64-bit], [12], [14], [0x100 to 0x158],
-    [256, 32-bit], [32], [36], [0x100 to 0x17C],
-    [256, 64-bit], [16], [18], [0x100 to 0x178],
+    [185, 32-bit], [24], [31], [0x100 to 0x15C],
+    [185, 64-bit], [12], [16], [0x100 to 0x158],
+    [256, 32-bit], [32], [39], [0x100 to 0x17C],
+    [256, 64-bit], [16], [20], [0x100 to 0x178],
   )],
   caption: [IOMUX SELECTOR LAYOUT],
 )
 
 == Generated Artifacts
 <iomux-generated-artifacts>
-Generation writes six files under `output/<library>/<module>/`:
+Generation writes seven files under `output/<library>/<module>/`:
 `<module>_regs.v`, `<module>_conn.v`, `<module>.v` with the private core and
 the public wrapper, the `<module>.fl` file list, the `<module>.iomux.rpt`
-route report, and the `<module>_integration.soc_net` fragment, plus
+route report, the `<module>_regs.h` software address constants, and the
+`<module>_integration.soc_net` fragment, plus
 `<module>_io.v`, the pad shell, when a pad cell is declared. Every `.v`
 is Verilog-2001 for synthesis and simulation and carries no verification
 code; verification lives in the `_formal.sv` files and their `.sby` jobs,
