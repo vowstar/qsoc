@@ -472,6 +472,8 @@ else()
     qt5_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 endif()
 
+include(cmake/UvmResources.cmake)
+
 target_include_directories(qsoc_core PUBLIC
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/src"

@@ -1,6 +1,6 @@
 = Logic Description Format
 <logic-description-format>
-The logic description format provides high-level behavioral modeling capabilities through combinational and sequential logic blocks, allowing designers to describe complex digital behavior using intuitive YAML syntax.
+The `comb` and `seq` sections define combinational and sequential logic in YAML.
 
 == Combinational Logic (Comb)
 <soc-net-comb>
@@ -194,7 +194,7 @@ comb:
 
 === Complex Control Unit Example
 <soc-net-comb-complex-example>
-A more sophisticated example demonstrates comprehensive instruction decoding with multiple nested levels:
+Example with nested instruction decoding:
 
 ```yaml
 comb:
@@ -221,22 +221,15 @@ comb:
     default: "8'b00000000"              # NOP control
 ```
 
-This generates a comprehensive control unit with nested decoding for different instruction types and their specific operations.
-
-=== Best Practices
-<soc-net-comb-best-practices>
-- Always provide `default` values for `if` and `case` logic to avoid latch inference
-- Use descriptive signal names that reflect their purpose
-- Keep expressions simple and readable
-- Prefer case statements over long if-else chains for discrete value switching
+Provide `default` values for `if` and `case` logic to avoid latch inference.
 
 == Sequential Logic (Seq)
 <soc-net-seq>
-The `seq` section defines sequential logic blocks that generate pure sequential Verilog code with proper clock and reset handling.
+The `seq` section defines sequential logic.
 
 === Overview
 <soc-net-seq-overview>
-The `seq` section supports various types of sequential logic with comprehensive control over clocking, reset, enable, and next-state logic:
+Each block specifies its clock, reset, enable, and next-state expression:
 
 #figure(
   align(center)[#table(
@@ -401,7 +394,7 @@ seq:
 
 === Complex Nested Sequential Logic
 <soc-net-seq-nested>
-More sophisticated sequential logic can include nested case statements within conditional logic:
+Sequential logic can nest case statements within conditional logic:
 
 ```yaml
 seq:
@@ -466,7 +459,7 @@ end
 
 == Mixed Combinational and Sequential Logic
 <soc-net-mixed-logic>
-Example showing comprehensive mixed logic with internal register pattern:
+Example combining combinational and sequential logic:
 
 ```yaml
 port:
@@ -584,19 +577,3 @@ module test_mixed_merge1 (
 
 endmodule
 ```
-
-=== Key Features Demonstrated
-<soc-net-mixed-logic-features>
-The generated examples showcase several important features:
-
-1. *Verilog 2001 Compliance*: All output signals use internal register pattern with `_reg` suffix and continuous assign statements to ensure compatibility.
-
-2. *FSM Naming Conventions*: FSM-generated signals use lowercase FSM names with underscores (e.g., `test_onehot_cur_state`), while state constants use uppercase (e.g., `TEST_ONEHOT_S0`).
-
-3. *Internal Register Pattern*: Both combinational and sequential logic outputs use internal registers followed by assign statements for proper wire/reg type separation.
-
-4. *Bit Width Inference*: The system automatically infers correct bit widths from port declarations and applies them to internal registers.
-
-5. *ROM Initialization*: Microcode FSMs properly initialize ROM contents with correct bit width padding (e.g., `{5'd1, 2'd0, 8'h55}` for 15-bit ROM words).
-
-6. *Expression Handling*: Sequential logic expressions correctly reference output ports (e.g., `shift_reg << 1` refers to the output port, not the internal register).

@@ -1,6 +1,6 @@
 = File Formats Overview
 <file-formats-overview>
-QSoC uses several YAML-based file formats to define modules, buses, and netlists. This document provides an overview of these file formats, with a focus on the SOC_NET format for netlist description.
+QSoC uses YAML files to define modules, buses, and netlists.
 
 == Generated RTL
 <soc-net-generated-rtl>
@@ -117,8 +117,6 @@ The QSoC netlist processor follows a multi-stage processing flow:
 + *Expand*: Process bus definitions into individual nets
 + *Connect*: Build connectivity graph from nets and instances
 + *Generate*: Create Verilog RTL output
-
-Each stage includes comprehensive validation and error checking to ensure design correctness.
 
 === Example File Structure
 <soc-net-example-structure>

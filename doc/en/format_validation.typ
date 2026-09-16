@@ -1,45 +1,14 @@
 = Validation Tools and Features
 <validation-format>
-QSoC includes comprehensive netlist validation capabilities to ensure design integrity and catch potential issues early in the design process.
-
-== Processing Flow
-<soc-net-processing>
-When QSoC processes a SOC_NET file, it follows this sequence:
-
-+ Parse all module definitions referenced in the instance section
-+ Validate port connections against module definitions
-+ Process `link` and `uplink` attributes to generate nets and top-level ports
-+ Expand bus connections into individual nets based on bus interface definitions
-+ Process and validate combinational logic (`comb`) section
-+ Process and validate sequential logic (`seq`) section
-+ Process and validate finite state machine (`fsm`) section
-+ Calculate effective widths for all connections, considering bit selections
-+ Check for width mismatches and generate appropriate warnings
-+ Generate Verilog output based on the processed netlist
-
-The Verilog generation follows this structure:
-+ Module declaration with ports and parameters
-+ Wire declarations (from processed nets)
-+ Module instantiations (from instance section)
-+ Combinational logic blocks (from comb section)
-+ Sequential logic blocks (from seq section)
-+ Finite state machine blocks (from fsm section)
-+ Module termination
+QSoC checks netlist connections during Verilog generation.
 
 == Verilog Port Widths
 <soc-net-verilog-widths>
-QSoC correctly handles Verilog port width declarations where LSB is not zero. For example, a port declared as `output [7:3] signal` in Verilog has a width of 5 bits. The SOC_NET format and processing logic properly calculates this width as `|7-3|+1 = 5`. This ensures accurate width checking even with non-zero-based bit ranges.
+Port width is `abs(msb - lsb) + 1`. For example, `output [7:3] signal` is 5 bits wide.
 
 == Port Direction Checking
 <soc-net-port-direction>
-The netlist processor performs sophisticated port direction validation to detect connectivity issues:
-
-=== Top-Level Port Handling
-<soc-net-port-direction-toplevel>
-- Correctly recognizes that top-level `input` ports should drive internal logic
-- Correctly recognizes that top-level `output` ports should be driven by internal logic
-- Prevents false warnings about top-level port direction conflicts
-- Properly handles bidirectional (`inout`) top-level ports
+Top-level inputs drive internal logic; top-level outputs receive it.
 
 === Multiple Driver Detection
 <soc-net-port-direction-drivers>
@@ -51,34 +20,9 @@ The netlist processor performs sophisticated port direction validation to detect
 
 ==== Macro Guard Exemption
 <soc-net-port-direction-drivers-macro>
-A common pattern in technology-portable RTL is two competing drivers selected
-by `ifdef`/`ifndef` of a tech-flag macro (FPGA buffer vs. ASIC buffer, sim
-shim vs. silicon cell, etc.). After preprocessing, only one driver is
-present per build configuration, so the net is single-driven; flagging it
-as a conflict produces a false positive.
-
-QSoC models each instance's `ifdef` / `ifndef` lists as a Boolean cube
-(conjunction of literals over macro symbols):
-
-$ C = (and.big_(m in "ifdef") +m) and (and.big_(m in "ifndef") not m) $
-
-Two drivers cannot be simultaneously active when their cubes are disjoint.
-For cubes built from `ifdef` / `ifndef` lists, this reduces to a
-constant-time test: cubes $C_1$ and $C_2$ are disjoint iff some macro
-appears positively in one driver and negatively in the other, that is
-
-$ exists m: (m in "ifdef"_1 and m in "ifndef"_2)
-            or (m in "ifndef"_1 and m in "ifdef"_2). $
-
-This is the standard cube-disjointness test from Boolean cube algebra (the
-same primitive used in classical logic minimization). It is decidable in
-$O(|C_1| + |C_2|)$ via hash-set lookup. No SAT/SMT solver is required, and
-no false positives arise from `defined(X)` versus `not "defined"(X)` of the
-same macro.
-
-Empty guards represent the universal cube (driver is always active) and
-are never disjoint with any other cube, so unguarded drivers continue to be
-checked unchanged.
+Drivers guarded by opposite polarities of the same macro cannot be active
+together. QSoC excludes these pairs from multiple-driver errors. Different
+macros do not establish mutual exclusion; unguarded drivers remain checked.
 
 ==== Example: Tech-Portable Buffer
 <soc-net-port-direction-drivers-tech-example>
@@ -98,25 +42,15 @@ net:
     - { instance: top,           port: jtag_tck }
 ```
 
-The two drivers carry the cubes $C_1 = +"TECH_FPGA"$ and
-$C_2 = not "TECH_FPGA"$. The polarity collision on `TECH_FPGA` proves them
-disjoint, so QSoC suppresses the multi-driver `FIXME` for `jtag_tck`.
-
-If both drivers were guarded by different macros (for example
-`ifdef HAS_FPGA_CLKBUF` and `ifdef HAS_ASIC_CLKBUF`), there is no polarity
-collision and both could be defined simultaneously; QSoC keeps the warning
-in this conservative case, as it should.
+The opposite `TECH_FPGA` guards exclude a driver conflict on `jtag_tck`.
+Using two unrelated macros does not exclude a conflict.
 
 === Undriven Net Detection
 <soc-net-port-direction-undriven>
-- Identifies nets that have no driving source (all input ports)
-- Helps catch incomplete connections and missing driver assignments
-- Provides clear error messages indicating which nets need attention
+A net with only input ports has no driver and is reported as undriven.
 
 == Bit-level Overlap Detection
 <soc-net-bit-overlap>
-Advanced bit-level analysis prevents conflicts in multi-driver scenarios:
-
 === Bit Range Analysis
 <soc-net-bit-overlap-analysis>
 - Analyzes bit selections like `[7:4]` and `[3:0]` for overlap detection
@@ -149,7 +83,7 @@ net:
 <soc-net-diagnostics>
 QSoC provides detailed diagnostic information for all validation issues:
 
-=== Comprehensive Error Reports
+=== Error Reports
 <soc-net-diagnostics-reports>
 - Exact instance and port names involved in conflicts
 - Bit range information for overlap detection
@@ -169,7 +103,6 @@ category of its own.
 <soc-net-diagnostics-integration>
 - Validation occurs during Verilog generation process
 - Issues are reported without preventing generation (when possible)
-- Allows iterative design refinement with immediate feedback
 
 == Width Checking
 <soc-net-width-checking>
@@ -179,24 +112,7 @@ QSoC performs automatic width checking for all connections:
 + It compares widths of all ports connected to the same net
 + It generates warnings for width mismatches, including detailed information about port widths and bit selections
 
-This automatic checking helps catch design errors early in the development process and ensures signal integrity across the design hierarchy.
-
-== Best Practices for Validation
-<soc-net-validation-practices>
-
-=== Design Guidelines
-<soc-net-validation-design-guidelines>
-- Always specify complete port connections to avoid undriven nets
-- Use bit selection carefully to prevent overlapping drivers
-- Verify port directions match the intended data flow
-- Check width compatibility between connected ports
-
-=== Debugging Tips
-<soc-net-validation-debugging>
-- Review validation warnings systematically
-- Use descriptive names for nets and instances to aid debugging
-- Test complex bit selection patterns incrementally
-- Verify module definitions match actual usage
+== Resolving Diagnostics
 
 === Common Issues and Solutions
 <soc-net-validation-issues>

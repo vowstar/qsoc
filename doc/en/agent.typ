@@ -118,7 +118,7 @@ hostList:
     target: alice@gpu01:22
     workspace: /home/alice/sim
     capability: |
-      large RTL simulation, CUDA-accelerated verilator
+      RTL simulation
 ```
 
 Two separate concerns share the file:
@@ -253,8 +253,7 @@ The status-line chip surfaces the live state at all times:
 
 ==== Audit
 
-Because everything is plain text the user can inspect the timeline
-without touching the agent:
+Inspect goal events with:
 
 ```bash
 tail -20 .qsoc/goal_log.jsonl | jq -c '{ts,event,goal_id}'

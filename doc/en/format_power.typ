@@ -1,6 +1,6 @@
 = Power Controller Format
 <power-format>
-The power section defines power controller primitives that manage voltage domain sequencing with dependency tracking and automatic fault recovery. Power primitives provide comprehensive power management with support for multiple domain types, hard/soft dependencies, and DFT override capabilities.
+The `power` section defines power domains, sequencing, and dependencies.
 
 #block(
   fill: rgb("#fffce8"),
@@ -12,7 +12,7 @@ The power section defines power controller primitives that manage voltage domain
   Verilog module named after `power.name`. The generated module is NOT
   auto-instantiated by any parent netlist: the user instantiates it
   manually (or via `qsoc module import` followed by an `_inst.soc_net`
-  entry) at the top level. This is by design.
+  entry) at the top level.
 
   Unlike clock/reset, the power controller's `depend:` field
   references *only* declared domain names (no auto-input pattern). A
@@ -24,7 +24,7 @@ The power section defines power controller primitives that manage voltage domain
 <soc-net-power-overview>
 Power controllers manage voltage domain sequencing through a three-domain architecture: AO (always-on), root (controllable without dependencies), and normal (controllable with dependencies). Each domain follows a strict power-up sequence: switch → pgood → clock enable → reset release, with configurable timing and automatic fault recovery.
 
-Key features include:
+Supported behavior:
 - Three domain types with automatic inference from dependency configuration
 - Hard dependencies (block on timeout) and soft dependencies (warn on timeout)
 - Automatic fault recovery with cooldown and retry mechanisms
@@ -34,7 +34,7 @@ Key features include:
 
 == Power Structure
 <soc-net-power-structure>
-Power controllers use domain-based configuration with automatic type inference based on dependency presence. Each domain specifies timing parameters and dependency relationships without complex type enumeration:
+Each domain specifies timing and dependencies. Dependency presence determines its type:
 
 ```yaml
 # Power controller with three domain types

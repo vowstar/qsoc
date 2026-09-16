@@ -1,6 +1,6 @@
 = Finite State Machine Format
 <fsm-format>
-The FSM format defines finite state machine blocks that generate structured Verilog FSM code. This section supports both Table-mode FSMs with Moore/Mealy outputs and Microcode-mode FSMs with ROM-based control, providing powerful tools for implementing complex control logic.
+FSM blocks support Table-mode with Moore/Mealy outputs and Microcode-mode with ROM-based control.
 
 == FSM Overview
 <soc-net-fsm-overview>
@@ -168,7 +168,7 @@ endmodule
 
 === Complete FSM Example with Multiple Encodings
 <soc-net-fsm-multiple-encodings>
-Here's a comprehensive example showing multiple FSMs with different state encodings operating together:
+Example with multiple FSMs and state encodings:
 
 ```yaml
 fsm:
@@ -403,7 +403,7 @@ fsm:
 
 == FSM Validation
 <soc-net-fsm-validation>
-The system performs comprehensive validation of FSM specifications:
+FSM definitions must satisfy the following rules:
 
 === Common Validation
 <soc-net-fsm-validation-common>
@@ -425,30 +425,13 @@ The system performs comprehensive validation of FSM specifications:
 - Field values must fit within their bit ranges
 - Branch decoding must reference valid condition signals
 
-== Best Practices
-<soc-net-fsm-practices>
-
-=== Naming Conventions
-<soc-net-fsm-naming>
-- Use descriptive FSM names: `cpu_ctrl`, `spi_master`, `dma_engine`
-- Use meaningful state names: `IDLE`, `FETCH`, `DECODE`, `EXECUTE`
-- Group related FSMs with consistent prefixes
-
-=== Design Guidelines
-<soc-net-fsm-design>
-- Use Table-mode for clear state-based control
-- Use Microcode-mode for complex instruction sequences
-- Choose appropriate encoding: binary (compact), onehot (fast), gray (low power)
-- Keep state count reasonable (< 16 states for table-mode)
-- Use meaningful condition expressions
-
 == Code Generation
 <soc-net-fsm-generation>
 Run the generator with `qsoc generate verilog` (@verilog-generation).
 Connectivity and width problems are reported as described in
 @validation-format.
 
-FSM controllers generate standalone modules that are placed at the beginning of the Verilog file, providing structured control flow implementation and module reusability.
+FSM controllers generate standalone modules at the beginning of the Verilog file.
 
 === Generated Code Structure
 <soc-net-fsm-code-structure>
@@ -468,14 +451,11 @@ All generated signals use the FSM name as prefix:
 
 === Verilog Generation Standards
 <soc-net-fsm-verilog-standards>
-1. *Verilog 2001 Compliance*: All output signals use internal register pattern with `_reg` suffix and continuous assign statements to ensure compatibility.
+Output ports use internal `_reg` registers and continuous assignments. Their
+widths follow the port declarations; expressions reference the public port
+names, such as `shift_reg << 1`.
 
-2. *FSM Naming Conventions*: FSM-generated signals use lowercase FSM names with underscores (e.g., `test_onehot_cur_state`), while state constants use uppercase (e.g., `TEST_ONEHOT_S0`).
-
-3. *Internal Register Pattern*: Both combinational and sequential logic outputs use internal registers followed by assign statements for proper wire/reg type separation.
-
-4. *Bit Width Inference*: The system automatically infers correct bit widths from port declarations and applies them to internal registers.
-
-5. *ROM Initialization*: Microcode FSMs properly initialize ROM contents with correct bit width padding (e.g., `{5'd1, 2'd0, 8'h55}` for 15-bit ROM words).
-
-6. *Expression Handling*: Sequential logic expressions correctly reference output ports (e.g., `shift_reg << 1` refers to the output port, not the internal register).
+FSM signal prefixes are lowercase, such as `test_onehot_cur_state`; state
+constants are uppercase, such as `TEST_ONEHOT_S0`. ROM initialization pads
+fields to their declared widths, for example `{5'd1, 2'd0, 8'h55}` for a
+15-bit word.

@@ -304,7 +304,7 @@ QSoC provides two primary connection attributes:
     table.header([Attribute], [Purpose], [Use Cases]),
     table.hline(),
     [`link`],
-    [Internal signal routing with flexible bit selection],
+    [Internal signal routing with bit selection],
     [Module-to-module connections, bus segmentation, signal distribution],
     [`uplink`],
     [Direct I/O port mapping],
@@ -348,7 +348,7 @@ net:
 
 ==== Bit Selection Support
 <soc-net-link-bits>
-The `link` attribute supports bit selection syntax for flexible signal routing:
+The `link` attribute accepts bit selections:
 
 ```yaml
 instance:
@@ -394,50 +394,9 @@ This automatically creates:
 + An internal net named `spi_clk`
 + A connection between the instance port and the net
 
-==== Design Philosophy
-<soc-net-uplink-philosophy>
-The `uplink` attribute is designed with a specific philosophy:
-
-*Direct I/O Mapping*: Uplink provides a one-to-one mapping between internal module ports and chip-level I/O pins. This design ensures:
-- *Simplicity*: No complex routing or bit manipulation
-- *Clarity*: Clear correspondence between internal signals and external pins
-- *Reliability*: Minimal opportunity for connection errors
-
-*Typical Applications*:
-- I/O pad connections (`PAD` ports to chip pins)
-- Power and ground distribution (`VDD`/`VSS` to power pins)
-- Global signals (clocks, resets) to chip-level ports
-- Test and debug interfaces
-
-==== Limitations and Rationale
+==== Bit Selection
 <soc-net-uplink-limitations>
-
-*Bit Selection Not Supported*
-
-The `uplink` attribute *intentionally does not support bit selection* for several important reasons:
-
-*1. Design Philosophy Conflict*
-```yaml
-# This creates semantic ambiguity - what should be created?
-instance:
-  io_pad:
-    port:
-      PAD:
-        uplink: data_bus[7:0]  # ✗ NOT SUPPORTED
-```
-- Should this create an 8-bit top-level port named `data_bus`?
-- Or a full-width port with only bits [7:0] connected?
-- The ambiguity violates uplink's principle of clear, direct mapping.
-
-*2. Technical Complexity*
-Supporting bit selection in uplink would require:
-- Complex port width inference algorithms
-- Handling of conflicting bit range specifications
-- Ambiguous semantics for top-level port generation
-- Additional error checking and validation logic
-
-*3. Alternative Solutions Available*
-For complex I/O scenarios requiring bit selection, use the `link` + explicit port definition approach:
+`uplink` does not accept bit selections. Use `link` with explicit top-level ports:
 
 ```yaml
 # ✓ CORRECT - Use link for bit selection
@@ -465,14 +424,6 @@ port:
     connect: internal_data[15:8]
 ```
 
-*4. Architectural Consistency*
-The QSoC connection system maintains clear separation of concerns:
-- `link`: Handles complex internal routing and bit manipulation
-- `uplink`: Handles simple I/O port mapping
-- `bus`: Handles protocol-level connections
-
-Adding bit selection to uplink would blur these boundaries and reduce system clarity.
-
 ==== Conflict Resolution
 <soc-net-uplink-conflicts>
 When using `uplink`, QSoC automatically handles conflicts:
@@ -480,52 +431,6 @@ When using `uplink`, QSoC automatically handles conflicts:
 - If a top-level port with the same name already exists and is compatible (same width, compatible direction), the connection is made
 - If the existing port is incompatible, an error is reported
 - Multiple `uplink` attributes with the same name are allowed as long as all connected ports are compatible
-
-=== Comparison and Usage Guidelines
-<soc-net-link-uplink-comparison-guidelines>
-
-==== When to Use Link
-Use `link` when you need:
-- *Internal signal routing* between modules
-- *Bit selection* or signal manipulation
-- *Complex connections* with width adaptation
-- *Bus segmentation* across multiple modules
-
-==== When to Use Uplink
-Use `uplink` when you need:
-- *Direct I/O port mapping* (chip pins)
-- *Simple, one-to-one connections* to top-level
-- *Automatic port generation* without manual definition
-- *Clear correspondence* between internal and external signals
-
-==== Best Practices
-*For Simple I/O*:
-```yaml
-# ✓ Good - Direct I/O mapping
-instance:
-  reset_pad:
-    module: io_cell
-    port:
-      PAD:
-        uplink: chip_rst_n
-```
-
-*For Complex I/O*:
-```yaml
-# ✓ Good - Use link + explicit ports for complex scenarios
-instance:
-  data_pads:
-    module: io_array
-    port:
-      DATA_OUT:
-        link: internal_data[31:0]
-
-port:
-  chip_data:
-    direction: output
-    type: logic[31:0]
-    connect: internal_data
-```
 
 == Example SOC_NET File
 <soc-net-example>

@@ -5,10 +5,12 @@
 #include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
+#include "qsoc_iomux_sim.h"
 #include "qsoc_test.h"
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -412,6 +414,7 @@ private:
 
     static void writeTextFile(const QString &path, const QString &text)
     {
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
         QFile file(path);
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream(&file) << text;
@@ -472,7 +475,8 @@ private:
     {
         const QString basePath = QDir(directory.path()).filePath("output/iomux_soc_top.soc_net");
         const QString fragmentPath
-            = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net");
+            = QDir(directory.path())
+                  .filePath("output/peripheral/iomux0/integration/iomux0_integration.soc_net");
         QStringList arguments = {"qsoc", "generate", "verilog", "--merge"};
         arguments.append(projectOptions(directory));
         arguments.append(basePath);
@@ -486,7 +490,7 @@ private slots:
     void mergedTopInstantiatesWrapperAndElaborates();
     void mergedTopLinksTheInterruptLines();
     void mergedTopLinksSlowChannels();
-    void mergedTopAxiWriteChangesPadWhenIverilogIsAvailable();
+    void mergedTopAxiWriteChangesPadWhenVerilatorIsAvailable();
     void sparseVectorCarrierMerges();
     void combinationalVectorCarrierMerges();
     void invalidGeneratorBlocksNetlistGeneration();
@@ -521,9 +525,18 @@ void Test::mergedTopInstantiatesWrapperAndElaborates()
 
     const CommandResult generated = generateModule(directory);
     QCOMPARE(generated.exitCode, 0);
+    const QDir    moduleDirectory(QDir(directory.path()).filePath("output/peripheral/iomux0"));
+    const QString header = readTextFile(moduleDirectory.filePath("include/iomux0_regs.h"));
+    QVERIFY(header.contains("IMPID_WIDTH"));
+    QVERIFY(!QFile::exists(moduleDirectory.filePath("rtl/iomux0_regs.h")));
+    QVERIFY(!QFile::exists(moduleDirectory.filePath("iomux0_regs.h")));
+    QCOMPARE(
+        readTextFile(moduleDirectory.filePath("rtl/iomux0.fl")),
+        QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
 
     const QString fragmentPath
-        = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net");
+        = QDir(directory.path())
+              .filePath("output/peripheral/iomux0/integration/iomux0_integration.soc_net");
     const QString fragment = readTextFile(fragmentPath);
     QVERIFY(fragment.contains("module: iomux0"));
     QVERIFY(fragment.contains("link: clk_iomux"));
@@ -549,9 +562,9 @@ void Test::mergedTopInstantiatesWrapperAndElaborates()
     QSlangDriver driver;
     const QString files = QStringList{
         topPath,
-        QDir(moduleOutput).filePath("iomux0.v"),
-        QDir(moduleOutput).filePath("iomux0_regs.v"),
-        QDir(moduleOutput).filePath("iomux0_conn.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0_regs.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0_conn.v"),
         peripheralPath}
                               .join(' ');
     QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(files)));
@@ -570,7 +583,8 @@ void Test::mergedTopLinksTheInterruptLines()
     const CommandResult generated = generateModule(directory);
     QCOMPARE(generated.exitCode, 0);
     const QString fragment = readTextFile(
-        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net"));
+        QDir(directory.path())
+            .filePath("output/peripheral/iomux0/integration/iomux0_integration.soc_net"));
     QVERIFY2(fragment.contains("irq_o:\n        link: iomux_irq"), qPrintable(fragment));
 
     QString base = baseNetlist;
@@ -593,9 +607,9 @@ void Test::mergedTopLinksTheInterruptLines()
     QSlangDriver driver;
     const QString files = QStringList{
         topPath,
-        QDir(moduleOutput).filePath("iomux0.v"),
-        QDir(moduleOutput).filePath("iomux0_regs.v"),
-        QDir(moduleOutput).filePath("iomux0_conn.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0_regs.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0_conn.v"),
         peripheralPath}
                               .join(' ');
     QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(files)));
@@ -630,7 +644,8 @@ void Test::mergedTopLinksSlowChannels()
     const CommandResult generated = generateModule(directory);
     QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
     const QString fragment = readTextFile(
-        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net"));
+        QDir(directory.path())
+            .filePath("output/peripheral/iomux0/integration/iomux0_integration.soc_net"));
     QVERIFY2(fragment.contains("ls_c0_output_value_i:\n        link: uart0_tx"), qPrintable(fragment));
     QVERIFY2(
         fragment.contains("ls_c1_input_value_o:\n        link: gpio0_in\n        bits: \"[1]\""),
@@ -651,22 +666,16 @@ void Test::mergedTopLinksSlowChannels()
     QSlangDriver driver;
     const QString files = QStringList{
         topPath,
-        QDir(moduleOutput).filePath("iomux0.v"),
-        QDir(moduleOutput).filePath("iomux0_regs.v"),
-        QDir(moduleOutput).filePath("iomux0_conn.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0_regs.v"),
+        QDir(moduleOutput).filePath("rtl/iomux0_conn.v"),
         peripheralPath}
                               .join(' ');
     QVERIFY(driver.parseArgs(QString("slang --single-unit %1").arg(files)));
 }
 
-void Test::mergedTopAxiWriteChangesPadWhenIverilogIsAvailable()
+void Test::mergedTopAxiWriteChangesPadWhenVerilatorIsAvailable()
 {
-    const QString compiler = QStandardPaths::findExecutable("iverilog");
-    const QString runtime  = QStandardPaths::findExecutable("vvp");
-    if (compiler.isEmpty() || runtime.isEmpty()) {
-        QSOC_TEST_MISSING_DEPENDENCY("iverilog and vvp");
-    }
-
     QTemporaryDir directory;
     createProject(directory);
 
@@ -681,42 +690,17 @@ void Test::mergedTopAxiWriteChangesPadWhenIverilogIsAvailable()
     const QString moduleOutput   = QDir(directory.path()).filePath("output/peripheral/iomux0");
     const QString peripheralPath = QDir(directory.path()).filePath("periph_stub.v");
     const QString benchPath      = QDir(directory.path()).filePath("tb.v");
-    const QString executablePath = QDir(directory.path()).filePath("iomux_soc_top.out");
     writeTextFile(peripheralPath, peripheralVerilog());
     writeTextFile(benchPath, topTestbench());
 
-    QProcess process;
-    process.setWorkingDirectory(directory.path());
-    process.start(
-        compiler,
-        {"-g2001",
-         "-s",
-         "tb",
-         "-o",
-         executablePath,
-         topPath,
-         QDir(moduleOutput).filePath("iomux0.v"),
-         QDir(moduleOutput).filePath("iomux0_regs.v"),
-         QDir(moduleOutput).filePath("iomux0_conn.v"),
+    runIomuxSimulation(
+        directory.path(),
+        {topPath,
+         QDir(moduleOutput).filePath("rtl/iomux0.v"),
+         QDir(moduleOutput).filePath("rtl/iomux0_regs.v"),
+         QDir(moduleOutput).filePath("rtl/iomux0_conn.v"),
          peripheralPath,
          benchPath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    const QByteArray compileOutput = process.readAllStandardOutput()
-                                     + process.readAllStandardError();
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    QVERIFY2(process.exitCode() == 0, compileOutput.constData());
-
-    process.start(runtime, {executablePath});
-    QVERIFY(process.waitForStarted());
-    QVERIFY(process.waitForFinished(120000));
-    const QByteArray simulationOutput = process.readAllStandardOutput()
-                                        + process.readAllStandardError();
-    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-    QCOMPARE(process.exitCode(), 0);
-    QVERIFY2(!simulationOutput.contains("CHECK_FAIL"), simulationOutput.constData());
-    QVERIFY2(!simulationOutput.contains("TEST_FAIL"), simulationOutput.constData());
-    QVERIFY2(simulationOutput.contains("TEST_PASS"), simulationOutput.constData());
 }
 
 void Test::sparseVectorCarrierMerges()
@@ -827,7 +811,8 @@ void Test::brokenSourceReportsItselfNotAMissingShell()
     const CommandResult generated = generateModule(directory);
     QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
     const QString fragment = readTextFile(
-        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_integration.soc_net"));
+        QDir(directory.path())
+            .filePath("output/peripheral/iomux0/integration/iomux0_integration.soc_net"));
     QVERIFY2(fragment.contains("module: iomux0_io"), qPrintable(fragment));
 
     /* Break the source after the fragment already names the shell. */
@@ -1041,11 +1026,12 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
     createProject(directory, moduleText);
     const CommandResult generated = generateModule(directory);
     QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
-    const QString padPath = QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0_io.v");
-    const QString pad     = readTextFile(padPath);
+    const QString padPath
+        = QDir(directory.path()).filePath("output/peripheral/iomux0/rtl/iomux0_io.v");
+    const QString pad = readTextFile(padPath);
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_3 ("), qPrintable(pad));
     const QString report = readTextFile(
-        QDir(directory.path()).filePath("output/peripheral/iomux0/iomux0.iomux.rpt"));
+        QDir(directory.path()).filePath("output/peripheral/iomux0/reports/iomux0.iomux.rpt"));
     QVERIFY2(report.contains("pin_pad_ctrl:"), qPrintable(report));
 }
 
@@ -1148,8 +1134,8 @@ pvss:
         generated.output.contains("Ring DEF not written, needs io_ring.die"),
         qPrintable(generated.output));
     const QDir out(QDir(directory.path()).filePath("output/peripheral/iomux0"));
-    QVERIFY(!QFile::exists(out.filePath("iomux0_io.def")));
-    const QString ring = readTextFile(out.filePath("iomux0_io.v"));
+    QVERIFY(!QFile::exists(out.filePath("integration/iomux0_io.def")));
+    const QString ring = readTextFile(out.filePath("rtl/iomux0_io.v"));
     QVERIFY2(ring.contains("module iomux0_io ("), qPrintable(ring));
     QVERIFY2(ring.contains("pvss u_VSS_1 ();"), qPrintable(ring));
     QVERIFY2(
@@ -1160,17 +1146,18 @@ pvss:
     QVERIFY2(ring.contains("    inout  wire pad_rst_n,\n"), qPrintable(ring));
     QVERIFY2(ring.contains("    output wire rst_n"), qPrintable(ring));
     QVERIFY2(ring.contains("    input  wire [1:0] rst_trim"), qPrintable(ring));
-    const QString pad = readTextFile(out.filePath("iomux0_io.v"));
+    const QString pad = readTextFile(out.filePath("rtl/iomux0_io.v"));
     QVERIFY2(pad.contains("gpio_pad_ps u_pad_0 ("), qPrintable(pad));
     QVERIFY2(pad.contains("gpio_pad_ps_v u_pad_3 ("), qPrintable(pad));
-    const QString wrapper = readTextFile(out.filePath("iomux0.v"));
+    const QString wrapper = readTextFile(out.filePath("rtl/iomux0.v"));
     QVERIFY2(!wrapper.contains("u_pad") && !wrapper.contains("pad_rst_n"), qPrintable(wrapper));
     QVERIFY2(pad.contains("pvss u_VSS_0 ();"), qPrintable(pad));
-    const QString report = readTextFile(out.filePath("iomux0.ring.rpt"));
+    const QString report = readTextFile(out.filePath("reports/iomux0.ring.rpt"));
     QVERIFY2(
         report.contains("north: 2 items\n  0 u_pad_3 gpio_pad_ps_v pin 3 class gpio_pad_ps\n"),
         qPrintable(report));
-    QVERIFY2(readTextFile(out.filePath("iomux0.fl")).contains("iomux0_io.v\n"), qPrintable(report));
+    QVERIFY2(
+        readTextFile(out.filePath("rtl/iomux0.fl")).contains("iomux0_io.v\n"), qPrintable(report));
 
     /* The merge flow sees the shell the way _io.v declares it: the direct
      * output drives the top, the trim keeps its width. */

@@ -1,11 +1,9 @@
 = Template Format
 <template-format>
-QSoC provides a powerful template system based on the Inja template engine for generating custom files from structured data sources including CSV, YAML, JSON, and SystemRDL files.
+QSoC generates files from Inja templates and structured data.
 
 == Overview
 <template-overview>
-The template system allows users to create dynamic output files by combining template files with data sources. Templates use Inja syntax for variable substitution, loops, conditions, and advanced text processing.
-
 === Supported Data Sources
 <template-data-sources>
 #figure(
@@ -53,7 +51,7 @@ string, including plain decimals, keeps string semantics.
 
 == Regex Filters
 <regex-filters>
-QSoC provides three powerful regex filters for text processing within templates. All filters support inline modifiers for pattern matching options.
+The three regex filters below support inline pattern modifiers.
 
 === regex_search
 <regex-search>
@@ -222,12 +220,3 @@ qsoc generate template template.j2 output.sv \
   --rdl registers.rdl \
   --rcsv register_defs.csv
 ```
-
-== Best Practices
-<best-practices>
-+ *Use inline modifiers* instead of separate parameters for regex operations
-+ *Validate regex patterns* during template development
-+ *Handle missing data* gracefully using default values in regex_search
-+ *Combine filters* for complex text transformations
-+ *Comment templates* using `{# ... #}` for maintainability
-+ *Test with sample data* before production use

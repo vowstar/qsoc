@@ -502,9 +502,10 @@ void Test::collateral()
     const QString tool = QStandardPaths::findExecutable(formal ? "sby" : "verilator");
     if (tool.isEmpty())
         QSOC_TEST_MISSING_DEPENDENCY("verification tool");
-    const QString uvmSource = qEnvironmentVariable("UVM_HOME") + "/src";
-    if (!formal && !QFile::exists(uvmSource + "/uvm_pkg.sv"))
-        QSOC_TEST_MISSING_DEPENDENCY("UVM_HOME/src/uvm_pkg.sv");
+    const QString uvmSource = formal ? QString() : QFINDTESTDATA("../external/uvm-core/src");
+    if (!formal) {
+        QVERIFY2(QFile::exists(uvmSource + "/uvm_pkg.sv"), "Bundled UVM sources are missing");
+    }
     QSocMmioPlan plan = smallPlan(width);
     QStringList  errors;
     QVERIFY2(QSocMmioGenerator::canonicalizePlan(&plan, &errors), qPrintable(errors.join('\n')));

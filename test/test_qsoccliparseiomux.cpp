@@ -8,6 +8,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -96,6 +97,7 @@ private:
 
     static void writeTextFile(const QString &path, const QString &text)
     {
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
         QFile file(path);
         QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
         QTextStream(&file) << text;
@@ -126,11 +128,11 @@ private:
     static QStringList artifactPaths(const QString &outputDirectory)
     {
         return {
-            QDir(outputDirectory).filePath("iomux0_regs.v"),
-            QDir(outputDirectory).filePath("iomux0_conn.v"),
-            QDir(outputDirectory).filePath("iomux0.v"),
-            QDir(outputDirectory).filePath("iomux0.fl"),
-            QDir(outputDirectory).filePath("iomux0.iomux.rpt"),
+            QDir(outputDirectory).filePath("rtl/iomux0_regs.v"),
+            QDir(outputDirectory).filePath("rtl/iomux0_conn.v"),
+            QDir(outputDirectory).filePath("rtl/iomux0.v"),
+            QDir(outputDirectory).filePath("rtl/iomux0.fl"),
+            QDir(outputDirectory).filePath("reports/iomux0.iomux.rpt"),
         };
     }
 
@@ -283,15 +285,15 @@ void Test::generateWritesArtifactsAndRequiresForce()
     for (const QString &path : artifactPaths(outputDirectory)) {
         QVERIFY2(QFile::exists(path), qPrintable(path));
     }
-    const QString regs = readTextFile(QDir(outputDirectory).filePath("iomux0_regs.v"));
+    const QString regs = readTextFile(QDir(outputDirectory).filePath("rtl/iomux0_regs.v"));
     QVERIFY(regs.contains("module iomux0_regs ("));
-    const QString top = readTextFile(QDir(outputDirectory).filePath("iomux0.v"));
+    const QString top = readTextFile(QDir(outputDirectory).filePath("rtl/iomux0.v"));
     QVERIFY(top.contains("module iomux0_core ("));
     QVERIFY(top.contains("module iomux0 ("));
     QVERIFY(top.contains("iomux0_regs u_regs ("));
-    const QString fileList = readTextFile(QDir(outputDirectory).filePath("iomux0.fl"));
+    const QString fileList = readTextFile(QDir(outputDirectory).filePath("rtl/iomux0.fl"));
     QCOMPARE(fileList, QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
-    const QString report = readTextFile(QDir(outputDirectory).filePath("iomux0.iomux.rpt"));
+    const QString report = readTextFile(QDir(outputDirectory).filePath("reports/iomux0.iomux.rpt"));
     QVERIFY(report.contains("IOMUX route report for iomux0"));
 
     const CommandResult refused = runCommand(arguments);
@@ -320,21 +322,23 @@ void Test::generateWithFormalAndUvmTargetsRegs()
 
     const QString outputDirectory = QDir(directory.path()).filePath("output/peripheral/iomux0");
     QStringList   paths           = artifactPaths(outputDirectory);
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_formal.sv"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_formal.sby"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_hs_formal.sv"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_hs_formal.sby"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_if.sv"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_pkg.sv"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm_tb.sv"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_regs_uvm.fl"));
-    paths.append(QDir(outputDirectory).filePath("iomux0_formal.fl"));
+    paths.append(QDir(outputDirectory).filePath("formal/iomux0_regs_formal.sv"));
+    paths.append(QDir(outputDirectory).filePath("formal/iomux0_regs_formal.sby"));
+    paths.append(QDir(outputDirectory).filePath("formal/iomux0_hs_formal.sv"));
+    paths.append(QDir(outputDirectory).filePath("formal/iomux0_hs_formal.sby"));
+    paths.append(QDir(outputDirectory).filePath("uvm/iomux0_regs_uvm_if.sv"));
+    paths.append(QDir(outputDirectory).filePath("uvm/iomux0_regs_uvm_pkg.sv"));
+    paths.append(QDir(outputDirectory).filePath("uvm/iomux0_regs_uvm_tb.sv"));
+    paths.append(QDir(outputDirectory).filePath("uvm/iomux0_regs_uvm.fl"));
+    paths.append(QDir(outputDirectory).filePath("formal/iomux0_formal.fl"));
     for (const QString &path : paths) {
         QVERIFY2(QFile::exists(path), qPrintable(path));
     }
-    const QString sby = readTextFile(QDir(outputDirectory).filePath("iomux0_regs_formal.sby"));
+    const QString sby = readTextFile(
+        QDir(outputDirectory).filePath("formal/iomux0_regs_formal.sby"));
     QVERIFY2(sby.contains("iomux0_regs.v"), qPrintable(sby));
-    const QString hsSby = readTextFile(QDir(outputDirectory).filePath("iomux0_hs_formal.sby"));
+    const QString hsSby = readTextFile(
+        QDir(outputDirectory).filePath("formal/iomux0_hs_formal.sby"));
     QVERIFY2(hsSby.contains("prep -top iomux0_hs_formal"), qPrintable(hsSby));
     QVERIFY2(
         generated.output.contains("covers iomux0_regs only, not routing"),
@@ -358,7 +362,8 @@ void Test::formalBankSplitsTheRoutingProof()
         generated.output.contains("HS routing proof: 2 banks, bank size 1"),
         qPrintable(generated.output));
     const QString outputDirectory = QDir(directory.path()).filePath("output/peripheral/iomux0");
-    const QString hsSby = readTextFile(QDir(outputDirectory).filePath("iomux0_hs_formal.sby"));
+    const QString hsSby           = readTextFile(
+        QDir(outputDirectory).filePath("formal/iomux0_hs_formal.sby"));
     QVERIFY2(hsSby.contains("bmc_b1 bmc b1\n"), qPrintable(hsSby));
     QVERIFY2(
         hsSby.contains("b1: chparam -set PIN_LO 1 -set PIN_HI 1 iomux0_hs_formal\n"),

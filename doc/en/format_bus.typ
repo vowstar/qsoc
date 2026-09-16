@@ -1,6 +1,6 @@
 = Bus Interface Format
 <bus-interface-format>
-The bus interface format provides high-level connectivity abstractions for protocol-based connections and advanced signal routing through bit selection capabilities.
+Bus definitions connect protocol signals. Bit selections connect individual port ranges.
 
 == Bus Definition Library
 <soc-bus-definition-library>
@@ -126,7 +126,7 @@ bus:
 ```
 
 ==== Complex Example
-Bus link works seamlessly with multiple buses and instances:
+A bus link can connect multiple buses and instances:
 
 ```yaml
 instance:
@@ -247,7 +247,7 @@ This automatically creates all necessary top-level ports for external memory and
 
 === Width Information Preservation
 <soc-net-bus-width-preservation>
-When QSoC expands bus connections into individual nets, it preserves the original port width specifications from module definitions. This ensures that signals with specific bit ranges (e.g., `logic[21:2]`) maintain their exact width in the generated Verilog, rather than being converted to a standard `[msb:0]` format.
+Bus expansion preserves declared port ranges, including non-zero lower bounds such as `logic[21:2]`.
 
 For example, if a module defines:
 ```yaml
@@ -257,12 +257,12 @@ port:
     direction: out
 ```
 
-The generated Verilog wire declaration will correctly preserve the range:
+The generated wire preserves the range:
 ```verilog
 wire [21:2] bus_addr_signal;  // Preserves [21:2] range
 ```
 
-Rather than incorrectly expanding to:
+It is not rewritten as:
 ```verilog
 wire [21:0] bus_addr_signal;  // Incorrect [21:0] format
 ```
@@ -286,7 +286,7 @@ Bus connection properties include:
 
 == Bit Selection
 <soc-net-bit-selection>
-Bit selection allows connecting specific bits of a port to a net, enabling flexible signal routing and bus segmentation. This feature is supported by the `link` attribute and explicit `net` definitions.
+Both `link` and explicit `net` definitions support bit selections.
 
 === Syntax and Formats
 <soc-net-bit-selection-syntax>
@@ -306,13 +306,13 @@ Bit selection allows connecting specific bits of a port to a net, enabling flexi
   kind: table,
 )
 
-=== Implementation Details
+=== Generated Connections
 <soc-net-bit-selection-details>
 The system follows these principles when processing bit selection:
 
 + *Wire Width Determination*: Generated wires use the *full width of the source port*, not the bit selection width
 + *Connection Generation*: Bit selection is applied at the *port connection level* in generated Verilog
-+ *Width Safety*: Automatic validation ensures bit selections don't exceed port width
++ *Range Checking*: Bit selections exceeding port width generate warnings
 
 Example processing:
 ```yaml
@@ -397,48 +397,6 @@ The system performs automatic validation:
 - Undriven nets (no source connections) are flagged
 - Width mismatches between connected ports are reported
 
-=== Best Practices
-<soc-net-bit-selection-best-practices>
-
-1. *Clear Naming*: Use descriptive names for bit-selected signals
-```yaml
-# ✓ Good
-link: addr_bus_high[31:16]
-link: ctrl_flags[7:4]
-
-# ✗ Avoid
-link: bus[31:16]
-link: sig[7:4]
-```
-
-2. *Logical Grouping*: Group related bits together
-```yaml
-# ✓ Good - logical bit grouping
-instance:
-  alu:
-    port:
-      FLAGS:
-        link: cpu_status[3:0]    # ALU flags: [3:0]
-  fpu:
-    port:
-      FLAGS:
-        link: cpu_status[7:4]    # FPU flags: [7:4]
-```
-
-3. *Avoid Overlapping Assignments*: Prevent multiple drivers
-```yaml
-# ✗ Avoid - overlapping bit assignments
-instance:
-  module_a:
-    port:
-      OUT:
-        link: shared_bus[7:4]
-  module_b:
-    port:
-      OUT:
-        link: shared_bus[6:3]    # Overlaps with [7:4]!
-```
-
 == Automatic Width Checking
 <soc-net-width-checking>
 QSoC performs automatic width checking for all connections:
@@ -446,5 +404,3 @@ QSoC performs automatic width checking for all connections:
 + It calculates the effective width of each port in a connection, considering bit selections
 + It compares widths of all ports connected to the same net
 + It generates warnings for width mismatches, including detailed information about port widths and bit selections
-
-This automatic checking helps catch design errors early in the development process and ensures signal integrity across the design hierarchy.

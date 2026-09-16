@@ -1,6 +1,6 @@
 = Clock Controller Format
 <clock-format>
-The clock section defines clock controller primitives using a simplified format that eliminates complex type configurations. Clock operations are specified through direct attributes, with automatic selection of mux types based on signal presence.
+The `clock` section defines clock sources, targets, and processing stages.
 
 #block(
   fill: rgb("#fffce8"),
@@ -12,7 +12,7 @@ The clock section defines clock controller primitives using a simplified format 
   Verilog module named after `clock.name`. The generated module is NOT
   auto-instantiated by any parent netlist: the user instantiates it
   manually (or via `qsoc module import` followed by an `_inst.soc_net`
-  entry) at the top level. This is by design.
+  entry) at the top level.
 
   *Auto-input pattern:* a target's `link:` source that is neither a
   declared input nor another target gets auto-promoted to a fresh
@@ -24,19 +24,14 @@ The clock section defines clock controller primitives using a simplified format 
 
 == Clock Overview
 <soc-net-clock-overview>
-Clock controllers manage clock distribution with two processing levels: link-level and target-level. Each level supports specific operations in a defined order, providing clear signal flow without explicit type enumeration.
+Clock processing has two levels: per-source links and shared targets.
 
-Key features include:
-- Two-level processing: link-level (icg→div→inv) and target-level (mux→icg→div→inv)
-- Automatic mux type selection based on reset signal presence
-- Direct attribute specification without complex type parsing
-- ETH Zurich glitch-free mux implementation with DFT support
-- Template RTL cells replaceable with foundry-specific IP
-- Complete processing chain from multiple sources to single target
+Links process ICG, divider, then inverter. Targets process mux, ICG, divider,
+then inverter. Reset signal presence selects the mux type.
 
 == Clock Structure
 <soc-net-clock-structure>
-Clock controllers use direct attribute specification without explicit type enumeration. Processing operations are determined by attribute presence rather than complex type parsing:
+Attributes select the processing stages:
 
 ```yaml
 # Clock controller with two-level processing
@@ -696,7 +691,7 @@ STA guide buffers serve several purposes in physical design flows:
 - Allow foundry-specific timing models to be applied at critical clock nodes
 - Enable better correlation between pre-layout and post-layout timing
 
-*Serial Implementation*: STA guide buffers are inserted *in-line* after each processing stage, becoming part of the main signal path. Each processing stage (MUX, ICG, DIV, INV) can independently include an STA guide buffer. This ensures signal flows through the STA buffer rather than observing it in parallel.
+Each MUX, ICG, DIV, or INV stage can insert an STA guide buffer in series with its output.
 
 === Configuration Parameters
 <soc-net-clock-sta-config>
@@ -818,13 +813,6 @@ FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
 );
 ```
 
-*Key Differences from Legacy Implementation*:
-- STA guide buffers are inserted *in the main signal path* (serial)
-- Processing stages output to `*_pre_sta` temporary signals when STA guide present
-- STA guide buffers output to the expected final signal name
-- Signal flow: `Processing → *_pre_sta → STA_Guide → *_out`
-- Downstream logic sees consistent signal names regardless of STA guide presence
-
 == Template RTL Cells
 <soc-net-clock-templates>
 QSoC generates these templates:
@@ -842,13 +830,6 @@ QSoC generates these templates:
 - `qsoc_clk_mux_gf` - Glitch-free clock multiplexer
 - `qsoc_clk_mux_raw` - Parameterized clock multiplexer
 
-Templates include:
-- Full FSM implementations, not toy assign statements
-- Parameter validation and error checking
-- Reset handling and test mode support
-- Dynamic configuration with handshaking
-- Cycle counters and status outputs
-
 `qsoc_clk_mux_raw.NUM_INPUTS` must be a power of two. Generated controllers
 pad unused high lanes with zero.
 
@@ -864,10 +845,6 @@ File generation behavior:
 - Creates a missing file atomically
 - Preserves any existing file byte-for-byte
 - Replaces an existing file only when `--force` is explicit
-
-*Important Notes:*
-+ Inspect the generated interfaces before integrating technology cells.
-+ Replace the templates with technology-specific implementations before production use.
 
 == Port Sharing
 <soc-net-clock-signal-dedup>
@@ -1001,29 +978,3 @@ Clock format supports two processing levels with distinct syntax patterns:
 A link accepts only `icg`, `div`, and `inv`, or the scalar `inv`. `inv: false`
 and `enabled: false` disable the inverter; a present inverter is one cell, so
 its `sta_guide` requires `cell`, `in`, and `out` together.
-
-== Best Practices
-<soc-net-clock-practices>
-
-=== Processing Strategy
-<soc-net-clock-processing-strategy>
-- Use link-level processing for per-source operations (individual clock conditioning)
-- Use target-level processing for final output operations (common to all sources)
-- Reset signal presence automatically selects mux type (GF_MUX vs STD_MUX)
-- Include DFT signals (test_enable, test_clock) for glitch-free mux when needed
-
-=== Syntax Guidelines
-<soc-net-clock-syntax-guidelines>
-- Always specify input frequencies for proper SDC generation
-- Use clear clock names indicating purpose and frequency
-- Specify attributes only when operations are needed
-- Group related clocks in the same controller
-- Reset signals default to active-low polarity
-- Include individual `test_enable` signals for comprehensive DFT support
-
-=== Design Guidelines
-<soc-net-clock-design-guidelines>
-- Ensure target frequencies match division ratios mathematically
-- Use proper SI units (Hz, kHz, MHz, GHz)
-- Consider clock domain crossing requirements for multi-clock systems
-- Replace template cells with foundry-specific implementations for production

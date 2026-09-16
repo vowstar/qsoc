@@ -440,9 +440,9 @@ void Test::collateral()
     if (tool.isEmpty()) {
         QSOC_TEST_MISSING_DEPENDENCY(formal ? "sby" : "verilator");
     }
-    const QString uvmSource = qEnvironmentVariable("UVM_HOME") + "/src";
-    if (!formal && !QFile::exists(uvmSource + "/uvm_pkg.sv")) {
-        QSOC_TEST_MISSING_DEPENDENCY("UVM_HOME/src/uvm_pkg.sv");
+    const QString uvmSource = formal ? QString() : QFINDTESTDATA("../external/uvm-core/src");
+    if (!formal) {
+        QVERIFY2(QFile::exists(uvmSource + "/uvm_pkg.sv"), "Bundled UVM sources are missing");
     }
     QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_apb_collateral_XXXXXX");
     QVERIFY(directory.isValid());

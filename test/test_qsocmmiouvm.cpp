@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "cli/qsoccliworker.h"
 #include "common/qsociomuxgenerator.h"
 #include "common/qsocmmiogenerator.h"
 #include "common/qsocmmiouvm.h"
 #include "common/qsocmodulemanager.h"
+#include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -12,6 +14,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -357,27 +360,6 @@ CommandResult runCommand(
     return result;
 }
 
-bool findUvmSources(QString *sourceDirectory, QString *packagePath)
-{
-    const QString home = qEnvironmentVariable("UVM_HOME");
-    if (home.isEmpty()) {
-        return false;
-    }
-
-    const QDir homeDirectory(home);
-    for (const QString &candidate :
-         {homeDirectory.filePath(QStringLiteral("src")), homeDirectory.absolutePath()}) {
-        const QString package = QDir(candidate).filePath(QStringLiteral("uvm_pkg.sv"));
-        const QString macros  = QDir(candidate).filePath(QStringLiteral("uvm_macros.svh"));
-        if (QFileInfo::exists(package) && QFileInfo::exists(macros)) {
-            *sourceDirectory = candidate;
-            *packagePath     = package;
-            return true;
-        }
-    }
-    return false;
-}
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -567,29 +549,61 @@ void Test::generatedTestbenchPassesVerilator()
 
     const QString verilator = QStandardPaths::findExecutable(QStringLiteral("verilator"));
     const QString make      = QStandardPaths::findExecutable(QStringLiteral("make"));
-    QString       uvmSourceDirectory;
-    QString       uvmPackagePath;
-    if (verilator.isEmpty() || make.isEmpty()
-        || !findUvmSources(&uvmSourceDirectory, &uvmPackagePath)) {
-        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("verilator, make, and UVM_HOME/src/uvm_pkg.sv"));
+    if (verilator.isEmpty() || make.isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("verilator and make"));
     }
+
+    QTemporaryDir projectDirectory;
+    QVERIFY(projectDirectory.isValid());
+    QSocProjectManager project;
+    project.setCurrentPath(projectDirectory.path());
+    QVERIFY(project.create(QStringLiteral("uvm_project")));
+    const bool iomux      = fixture == IomuxRegsFixture || fixture == IomuxWideRegsFixture;
+    const auto definition = iomux ? makeIomuxDefinition(
+                                        fixture == IomuxWideRegsFixture ? 64 : 32,
+                                        fixture == IomuxWideRegsFixture ? 16 : 14)
+                                  : makeFixtureDefinition(fixture);
+    YAML::Node library;
+    library[definition.moduleName.toStdString()] = definition.extraAttributes;
+    writeTextFile(
+        QDir(projectDirectory.path()).filePath(QStringLiteral("module/peripheral.soc_mod")),
+        QString::fromStdString(YAML::Dump(library)));
+    QSocCliWorker worker;
+    QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+    worker.setup(
+        {QStringLiteral("qsoc"),
+         QStringLiteral("generate"),
+         QStringLiteral("module"),
+         QStringLiteral("--with-uvm"),
+         QStringLiteral("-l"),
+         QStringLiteral("peripheral"),
+         QStringLiteral("-d"),
+         projectDirectory.path(),
+         QStringLiteral("-p"),
+         QStringLiteral("uvm_project"),
+         definition.moduleName},
+        false);
+    worker.run();
+    QCOMPARE(exitSpy.size(), 1);
+    QCOMPARE(exitSpy.first().first().toInt(), 0);
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QDir    outputDirectory(directory.path());
-    const QString verilogPath = outputDirectory.filePath(moduleName + QStringLiteral(".v"));
-    writeTextFile(verilogPath, verilog);
-    writeTextFile(
-        outputDirectory.filePath(moduleName + QStringLiteral("_uvm_if.sv")),
-        collateral.interfaceSource);
-    writeTextFile(
-        outputDirectory.filePath(moduleName + QStringLiteral("_uvm_pkg.sv")),
-        collateral.packageSource);
-    writeTextFile(
-        outputDirectory.filePath(moduleName + QStringLiteral("_uvm_tb.sv")),
-        collateral.testbenchSource);
-    const QString fileListName = moduleName + QStringLiteral("_uvm.fl");
-    writeTextFile(outputDirectory.filePath(fileListName), collateral.fileList);
+    const QString relocated = QDir(directory.path()).filePath(QStringLiteral("module"));
+    QVERIFY(
+        QDir().rename(
+            QDir(projectDirectory.path())
+                .filePath(QStringLiteral("output/peripheral/") + definition.moduleName),
+            relocated));
+    const QDir    outputDirectory(QDir(relocated).filePath(QStringLiteral("uvm")));
+    const QString workingDirectory = outputDirectory.absolutePath();
+    const QString verilogPath      = QDir(relocated).filePath(
+        QStringLiteral("rtl/") + moduleName + QStringLiteral(".v"));
+    QFile generatedRtl(verilogPath);
+    QVERIFY(generatedRtl.open(QIODevice::ReadOnly));
+    QCOMPARE(generatedRtl.readAll(), verilog.toUtf8());
+    generatedRtl.close();
+    const QString fileListName = moduleName + QStringLiteral("_uvm_standalone.fl");
 
     const QString     topName         = moduleName + QStringLiteral("_uvm_tb");
     const QString     objectDirectory = outputDirectory.filePath(QStringLiteral("obj_dir"));
@@ -609,11 +623,9 @@ void Test::generatedTestbenchPassesVerilator()
         QStringLiteral("-Wno-WIDTHTRUNC"),
         QStringLiteral("-Wno-WIDTHEXPAND"),
         QStringLiteral("+define+UVM_NO_DPI"),
-        QStringLiteral("-I") + uvmSourceDirectory,
-        uvmPackagePath,
         QStringLiteral("-f"),
         fileListName};
-    const CommandResult compileResult = runCommand(directory.path(), verilator, arguments, 300000);
+    const CommandResult compileResult = runCommand(workingDirectory, verilator, arguments, 300000);
     QVERIFY2(compileResult.started, compileResult.output.constData());
     QVERIFY2(compileResult.finished, compileResult.output.constData());
     QCOMPARE(compileResult.exitStatus, QProcess::NormalExit);
@@ -625,7 +637,7 @@ void Test::generatedTestbenchPassesVerilator()
 #endif
     const QString binary = QDir(objectDirectory).filePath(binaryName);
     QVERIFY2(QFileInfo::exists(binary), qPrintable(binary));
-    const CommandResult runResult = runCommand(directory.path(), binary, {}, 60000);
+    const CommandResult runResult = runCommand(workingDirectory, binary, {}, 60000);
     QVERIFY2(runResult.started, runResult.output.constData());
     QVERIFY2(runResult.finished, runResult.output.constData());
     QCOMPARE(runResult.exitStatus, QProcess::NormalExit);
@@ -640,7 +652,7 @@ void Test::generatedTestbenchPassesVerilator()
         runResult.output.constData());
 
     const CommandResult failureResult = runCommand(
-        directory.path(), binary, {QStringLiteral("+UVM_TESTNAME=qsoc_missing_test")}, 60000);
+        workingDirectory, binary, {QStringLiteral("+UVM_TESTNAME=qsoc_missing_test")}, 60000);
     QVERIFY2(failureResult.started, failureResult.output.constData());
     QVERIFY2(failureResult.finished, failureResult.output.constData());
     QVERIFY2(
@@ -664,7 +676,7 @@ void Test::generatedTestbenchPassesVerilator()
         QVERIFY(mdirIndex >= 0 && mdirIndex + 1 < mutatedArguments.size());
         mutatedArguments[mdirIndex + 1] = mutatedObjectDirectory;
         const CommandResult mutatedCompile
-            = runCommand(directory.path(), verilator, mutatedArguments, 300000);
+            = runCommand(workingDirectory, verilator, mutatedArguments, 300000);
         QVERIFY2(mutatedCompile.started, mutatedCompile.output.constData());
         QVERIFY2(mutatedCompile.finished, mutatedCompile.output.constData());
         QCOMPARE(mutatedCompile.exitStatus, QProcess::NormalExit);
@@ -672,7 +684,7 @@ void Test::generatedTestbenchPassesVerilator()
 
         const QString mutatedBinary = QDir(mutatedObjectDirectory).filePath(binaryName);
         QVERIFY2(QFileInfo::exists(mutatedBinary), qPrintable(mutatedBinary));
-        const CommandResult mutatedRun = runCommand(directory.path(), mutatedBinary, {}, 60000);
+        const CommandResult mutatedRun = runCommand(workingDirectory, mutatedBinary, {}, 60000);
         QVERIFY2(mutatedRun.started, mutatedRun.output.constData());
         QVERIFY2(mutatedRun.finished, mutatedRun.output.constData());
         QVERIFY2(
@@ -740,7 +752,7 @@ void Test::generatedTestbenchPassesVerilator()
         QVERIFY(mdirIndex >= 0 && mdirIndex + 1 < mutatedArguments.size());
         mutatedArguments[mdirIndex + 1] = mutatedObjectDirectory;
         const CommandResult mutatedCompile
-            = runCommand(directory.path(), verilator, mutatedArguments, 300000);
+            = runCommand(workingDirectory, verilator, mutatedArguments, 300000);
         QVERIFY2(mutatedCompile.started, mutatedCompile.output.constData());
         QVERIFY2(mutatedCompile.finished, mutatedCompile.output.constData());
         QCOMPARE(mutatedCompile.exitStatus, QProcess::NormalExit);
@@ -748,7 +760,7 @@ void Test::generatedTestbenchPassesVerilator()
 
         const QString mutatedBinary = QDir(mutatedObjectDirectory).filePath(binaryName);
         QVERIFY2(QFileInfo::exists(mutatedBinary), qPrintable(mutatedBinary));
-        const CommandResult mutatedRun = runCommand(directory.path(), mutatedBinary, {}, 60000);
+        const CommandResult mutatedRun = runCommand(workingDirectory, mutatedBinary, {}, 60000);
         QVERIFY2(mutatedRun.started, mutatedRun.output.constData());
         QVERIFY2(mutatedRun.finished, mutatedRun.output.constData());
         QVERIFY2(
@@ -763,7 +775,7 @@ void Test::generatedTestbenchPassesVerilator()
         };
         for (const auto &[plusArgument, expectedFailure] : protocolFaults) {
             const CommandResult protocolRun
-                = runCommand(directory.path(), mutatedBinary, {plusArgument}, 60000);
+                = runCommand(workingDirectory, mutatedBinary, {plusArgument}, 60000);
             QVERIFY2(protocolRun.started, protocolRun.output.constData());
             QVERIFY2(protocolRun.finished, protocolRun.output.constData());
             QVERIFY2(
