@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmmiogenerator.h"
+#include "common/qsocmmioahb.h"
 #include "common/qsocmmioapb.h"
 #include "common/qsocmmioaxi.h"
 
@@ -606,16 +607,13 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStri
         appendError(errors, "REQUIRED", "generator.bus", "property is required");
     } else {
         const bool busDecodable = parseScalar(generator["bus"], "generator.bus", &bus, errors);
-        // cppcheck-suppress knownConditionTrueFalse
-        if (busDecodable && bus != "axi4_lite" && bus != "apb4" && bus != "axi4") {
-            appendError(errors, "BUS", "generator.bus", "must be axi4_lite, apb4, or axi4");
+        if (busDecodable && !QSocMmioGenerator::parseBus(bus)) {
+            appendError(
+                errors, "BUS", "generator.bus", "must be axi4_lite, apb4, axi4, ahb_lite, or ahb");
         }
     }
 
-    // cppcheck-suppress knownConditionTrueFalse
-    plan->bus                  = bus == "apb4" ? QSocMmioBus::Apb4 :
-                                               // cppcheck-suppress knownConditionTrueFalse
-                                     (bus == "axi4" ? QSocMmioBus::Axi4 : QSocMmioBus::Axi4Lite);
+    plan->bus                  = QSocMmioGenerator::parseBus(bus).value_or(QSocMmioBus::Axi4Lite);
     const bool widthsDecodable = parseBusWidths(generator, plan, errors);
 
     if (definition.hasParameterSection || !definition.parameters.isEmpty()) {
@@ -723,21 +721,22 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     }
     const bool apb = plan.bus == QSocMmioBus::Apb4;
     const bool axi = plan.bus == QSocMmioBus::Axi4;
-    if (plan.bus != QSocMmioBus::Axi4Lite && !apb && !axi) {
+    const bool ahb = plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb;
+    if (plan.bus != QSocMmioBus::Axi4Lite && !apb && !axi && !ahb) {
         appendError(errors, "BUS", "generator.bus", "unsupported bus");
         return false;
     }
-    if (axi   ? (plan.dataWidth < 8 || plan.dataWidth > 1024
-                 || (plan.dataWidth & (plan.dataWidth - 1)) != 0)
-        : apb ? (plan.dataWidth != 8 && plan.dataWidth != 16 && plan.dataWidth != 32)
-              : (plan.dataWidth != 32 && plan.dataWidth != 64)) {
+    if ((axi || ahb) ? (plan.dataWidth < 8 || plan.dataWidth > 1024
+                        || (plan.dataWidth & (plan.dataWidth - 1)) != 0)
+        : apb        ? (plan.dataWidth != 8 && plan.dataWidth != 16 && plan.dataWidth != 32)
+                     : (plan.dataWidth != 32 && plan.dataWidth != 64)) {
         appendError(
             errors,
             "RANGE",
             "generator.data_width",
-            axi   ? "must be a power of two from 8 to 1024"
-            : apb ? "must be 8, 16, or 32"
-                  : "must be 32 or 64");
+            (axi || ahb) ? "must be a power of two from 8 to 1024"
+            : apb        ? "must be 8, 16, or 32"
+                         : "must be 32 or 64");
         return false;
     }
     if (axi && (plan.idWidth < 1 || plan.idWidth > 32)) {
@@ -749,8 +748,8 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
         ++minimumAddressWidth;
     }
     minimumAddressWidth               = qMax(quint32(1), minimumAddressWidth);
-    const quint32 maximumAddressWidth = apb ? 32 : 64;
-    const quint32 fieldLimit          = (apb || axi) ? 64 : plan.dataWidth;
+    const quint32 maximumAddressWidth = (apb || ahb) ? 32 : 64;
+    const quint32 fieldLimit          = (apb || axi || ahb) ? 64 : plan.dataWidth;
     if (plan.addressWidth < minimumAddressWidth || plan.addressWidth > maximumAddressWidth) {
         appendError(
             errors,
@@ -765,13 +764,13 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     }
     if (plan.zeroFillBytes != 0
         && (plan.zeroFillBytes - 1 > maximumForWidth(plan.addressWidth)
-            || (!axi && plan.zeroFillBytes % (plan.dataWidth / 8) != 0))) {
+            || (!axi && !ahb && plan.zeroFillBytes % (plan.dataWidth / 8) != 0))) {
         appendError(
             errors,
             "RANGE",
             "plan.zero_fill_bytes",
-            axi ? "must fit the address width"
-                : "must fit the address width and align to a data word");
+            (axi || ahb) ? "must fit the address width"
+                         : "must fit the address width and align to a data word");
         return false;
     }
 
@@ -780,11 +779,30 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     QSet<QString>           ports     = kFixedPorts;
     const quint64           byteCount = plan.dataWidth / 8;
     QHash<quint64, quint8>  occupiedBytes;
-    if (apb || axi) {
+    if (apb || axi || ahb) {
         ports.clear();
-        for (const auto &port : (axi ? QSocMmioAxi::ports(plan) : QSocMmioApb::ports(plan))) {
+        for (const auto &port :
+             (ahb ? QSocMmioAhb::ports(plan)
+                  : (axi ? QSocMmioAxi::ports(plan) : QSocMmioApb::ports(plan)))) {
             ports.insert(port.name);
         }
+    }
+    if (ahb) {
+        ports.unite(
+            QSet<QString>{
+                "ahb_active_q",
+                "ahb_write_q",
+                "ahb_address_q",
+                "ahb_size_q",
+                "ahb_error_q",
+                "ahb_error_last_q",
+                "ahb_selected",
+                "access_is_invalid",
+                "byte_lanes",
+                "write_address",
+                "write_data",
+                "write_strobe",
+                "write_fire"});
     }
     if (axi) {
         ports.unite(
@@ -916,7 +934,7 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                 valid           = false;
                 fieldShapeValid = false;
             } else if (
-                fieldShapeValid && !apb && !axi
+                fieldShapeValid && !apb && !axi && !ahb
                 && quint64(field.lsb) + field.width > plan.dataWidth) {
                 appendError(
                     errors,
@@ -1354,6 +1372,9 @@ void appendReadProcess(QStringList *lines, const QSocMmioPlan &plan)
 
 QString buildVerilog(const QSocMmioPlan &plan)
 {
+    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        return QSocMmioAhb::generate(plan);
+    }
     if (plan.bus == QSocMmioBus::Apb4) {
         return QSocMmioApb::generate(plan);
     }
@@ -1494,6 +1515,8 @@ QList<QSocMmioPortDescription> QSocMmioGenerator::describePorts(const QSocMmioPl
            {"s_axi_rready", "input", 1}};
     if (plan.bus == QSocMmioBus::Apb4) {
         ports = QSocMmioApb::ports(plan);
+    } else if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        ports = QSocMmioAhb::ports(plan);
     } else if (plan.bus == QSocMmioBus::Axi4) {
         ports = QSocMmioAxi::ports(plan);
     }
@@ -1523,13 +1546,11 @@ YAML::Node QSocMmioGenerator::describeModuleYaml(const QSocMmioPlan &plan)
         module["port"][port.name.toStdString()] = portNode;
     }
     YAML::Node control(YAML::NodeType::Map);
-    control["bus"]  = plan.bus == QSocMmioBus::Apb4
-                          ? "apb4"
-                          : (plan.bus == QSocMmioBus::Axi4 ? "axi4" : "axi4_lite");
+    control["bus"]  = busName(plan.bus).toStdString();
     control["mode"] = "slave";
     YAML::Node mapping(YAML::NodeType::Map);
     for (const QSocMmioPortDescription &port : ports) {
-        if (!port.name.startsWith(plan.bus == QSocMmioBus::Apb4 ? "s_apb_" : "s_axi_")) {
+        if (!port.name.startsWith(busPrefix(plan.bus))) {
             continue;
         }
         mapping[port.name.mid(6).toStdString()] = port.name.toStdString();
@@ -1608,4 +1629,50 @@ bool QSocMmioGenerator::generateUvmCollateral(
         *collateral = QSocMmioUvm::generate(plan);
     }
     return true;
+}
+
+std::optional<QSocMmioBus> QSocMmioGenerator::parseBus(const QString &name)
+{
+    for (const auto bus :
+         {QSocMmioBus::Axi4Lite,
+          QSocMmioBus::Apb4,
+          QSocMmioBus::Axi4,
+          QSocMmioBus::AhbLite,
+          QSocMmioBus::Ahb}) {
+        if (name == busName(bus))
+            return bus;
+    }
+    return std::nullopt;
+}
+
+QString QSocMmioGenerator::busName(QSocMmioBus bus)
+{
+    switch (bus) {
+    case QSocMmioBus::Axi4Lite:
+        return "axi4_lite";
+    case QSocMmioBus::Apb4:
+        return "apb4";
+    case QSocMmioBus::Axi4:
+        return "axi4";
+    case QSocMmioBus::AhbLite:
+        return "ahb_lite";
+    case QSocMmioBus::Ahb:
+        return "ahb";
+    }
+    return {};
+}
+
+QString QSocMmioGenerator::busPrefix(QSocMmioBus bus)
+{
+    switch (bus) {
+    case QSocMmioBus::Apb4:
+        return "s_apb_";
+    case QSocMmioBus::AhbLite:
+    case QSocMmioBus::Ahb:
+        return "s_ahb_";
+    case QSocMmioBus::Axi4Lite:
+    case QSocMmioBus::Axi4:
+        return "s_axi_";
+    }
+    return {};
 }

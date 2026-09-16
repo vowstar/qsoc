@@ -1,7 +1,7 @@
 = MMIO Generator
 <mmio-generator>
 The MMIO generator turns one register map in a module library into one
-AXI4, AXI4-Lite, or APB4 slave. Its source stays in the module's `.soc_mod` entry.
+AXI4, AXI4-Lite, APB4, AHB-Lite, or AHB slave. Its source stays in the module's `.soc_mod` entry.
 
 == Source Format
 <mmio-source-format>
@@ -60,6 +60,8 @@ With `bus: axi4`, data widths are powers of two from 8 through 1024,
 and address widths range from `max(1, ceil(log2(data_width / 8)))` to 64.
 AXI4 accepts `id_width` from 1 through 32, defaulting to 4. Other buses
 reject this key.
+With `bus: ahb_lite` or `bus: ahb`, data widths are powers of two from 8
+through 1024, and address widths range from `max(1, ceil(log2(data_width / 8)))` to 32.
 
 ```yaml
 wide_status:
@@ -112,7 +114,7 @@ A `w1c` field is one bit that hardware sets through `input` and software
 clears by writing one. A zero leaves it. A set that lands on the cycle of the
 clearing write wins, so an event cannot vanish into its own acknowledgement.
 
-Fields may not overlap. AXI4-Lite fields must fit in one bus word. APB4 and AXI4 fields
+Fields may not overlap. AXI4-Lite fields must fit in one bus word. Fields on other interfaces
 start within the addressed word and may span subsequent words, up to 64 bits
 per field. Each byte strobe updates only its addressed field bits. Separate
 writes take effect separately, including intermediate field values. `reset` and `value` must
@@ -172,6 +174,26 @@ monitor. Reads captured on a write edge see the old register value. Reset
 cancels buffered requests and responses. Logical fields remain limited to
 64 bits even when the physical bus word is wider.
 
+With `bus: ahb_lite` or `bus: ahb`, control ports use the `s_ahb_` prefix:
+`hsel`, `haddr`, `htrans`, `hwrite`, `hsize`, `hburst`, `hprot`,
+`hmastlock`, `hwdata`, `hready`, `hrdata`, `hreadyout`, and `hresp`.
+`hresp` is one bit for AHB-Lite and two bits for AHB.
+Both return only OKAY and ERROR. AHB does not generate RETRY or SPLIT.
+
+Connect `hready` to the interconnect's global completion signal and
+`hreadyout` to its slave-response multiplexer. Address and control are
+accepted only when HSEL, HTRANS[1], and HREADY are high. Write data belongs
+to the following data phase. Normal accesses complete without an extra
+wait cycle. ERROR lasts two cycles, with HREADYOUT low then high.
+
+Each transfer uses the master's byte address and HSIZE, including SINGLE,
+INCR, and wrapping bursts. Transfers must align to their size and fit the
+bus width. Invalid sizes, misalignment, and unmapped addresses return ERROR
+without writing fields. Writes update only the selected byte lanes on the
+completion edge. HPROT does not filter access. Arbitration and locked-sequence
+ownership belong to the interconnect. Reset cancels pending access and
+restores stored fields, with HREADYOUT high and HRESP OKAY.
+
 == Formal Collateral
 <mmio-formal-collateral>
 Add `--with-formal` to generate a matching formal harness and SymbiYosys job:
@@ -215,7 +237,7 @@ selected target before writing; `--force` replaces only the selected set.
 
 == Current Limits
 <mmio-current-limits>
-Each module exposes one AXI4, AXI4-Lite, or APB4 slave and one local address port.
+Each module exposes one slave interface and one local address port.
 Optional formal and UVM collateral target the selected interface. It does not allocate a system address, create a netlist
 instance, insert a bus bridge, cross clock domains, or generate register arrays
 and extended access types. Use a wrapper for those functions.

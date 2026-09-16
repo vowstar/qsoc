@@ -267,21 +267,22 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *mmio, QStringList
     bool       valid = true;
     const bool apb   = mmio->bus == QSocMmioBus::Apb4;
     const bool axi   = mmio->bus == QSocMmioBus::Axi4;
+    const bool ahb   = mmio->bus == QSocMmioBus::AhbLite || mmio->bus == QSocMmioBus::Ahb;
     if (generator["data_width"]) {
         quint64    dataWidth = 0;
         const bool parsed    = parseUnsigned(
             generator["data_width"], "generator.data_width", 1024, &dataWidth, errors);
         if (parsed
-            && (axi   ? (dataWidth < 8 || (dataWidth & (dataWidth - 1)) != 0)
-                : apb ? (dataWidth != 8 && dataWidth != 16 && dataWidth != 32)
-                      : (dataWidth != 32 && dataWidth != 64))) {
+            && ((axi || ahb) ? (dataWidth < 8 || (dataWidth & (dataWidth - 1)) != 0)
+                : apb        ? (dataWidth != 8 && dataWidth != 16 && dataWidth != 32)
+                             : (dataWidth != 32 && dataWidth != 64))) {
             appendError(
                 errors,
                 "RANGE",
                 "generator.data_width",
-                axi   ? "must be a power of two from 8 to 1024"
-                : apb ? "must be 8, 16, or 32"
-                      : "must be 32 or 64");
+                (axi || ahb) ? "must be a power of two from 8 to 1024"
+                : apb        ? "must be 8, 16, or 32"
+                             : "must be 32 or 64");
             valid = false;
         } else if (parsed) {
             mmio->dataWidth = static_cast<quint32>(dataWidth);
@@ -299,7 +300,7 @@ bool parseBusWidths(const YAML::Node &generator, QSocMmioPlan *mmio, QStringList
             ++minimum;
         }
         minimum               = qMax(quint32(1), minimum);
-        const quint32 maximum = apb ? 32 : 64;
+        const quint32 maximum = (apb || ahb) ? 32 : 64;
         if (parsed && (addressWidth < minimum || addressWidth > maximum)) {
             appendError(
                 errors,
@@ -3530,17 +3531,15 @@ bool parsePlan(const QSocModuleDefinition &definition, QSocIomuxPlan *plan, QStr
         valid = false;
     } else if (
         !parseScalar(generator["bus"], "generator.bus", &bus, errors)
-        || (bus != "axi4_lite" && bus != "apb4" && bus != "axi4")) {
+        || !QSocMmioGenerator::parseBus(bus)) {
         if (!bus.isEmpty()) {
-            appendError(errors, "BUS", "generator.bus", "must be axi4_lite, apb4, or axi4");
+            appendError(
+                errors, "BUS", "generator.bus", "must be axi4_lite, apb4, axi4, ahb_lite, or ahb");
         }
         valid = false;
     }
 
-    // cppcheck-suppress knownConditionTrueFalse
-    plan->mmio.bus = bus == "apb4" ? QSocMmioBus::Apb4 :
-                                   // cppcheck-suppress knownConditionTrueFalse
-                         (bus == "axi4" ? QSocMmioBus::Axi4 : QSocMmioBus::Axi4Lite);
+    plan->mmio.bus = QSocMmioGenerator::parseBus(bus).value_or(QSocMmioBus::Axi4Lite);
     valid          = parseBusWidths(generator, &plan->mmio, errors) && valid;
     if (generator["id_width"]) {
         quint64 idWidth = 0;
@@ -3828,10 +3827,10 @@ QMap<QString, EndpointPort> selectPorts(const QSocIomuxPlan &plan, const QSocIom
     return selects;
 }
 
-bool isControlPort(const QSocMmioPortDescription &port)
+bool isControlPort(const QSocMmioPortDescription &port, QSocMmioBus bus)
 {
     return port.name == "clk_i" || port.name == "rst_ni"
-           || (port.name.startsWith("s_axi_") || port.name.startsWith("s_apb_"));
+           || port.name.startsWith(QSocMmioGenerator::busPrefix(bus));
 }
 
 quint32 interruptLineCount(const QSocIomuxPlan &plan)
@@ -3883,7 +3882,7 @@ QList<QSocMmioPortDescription> publicPortDescriptions(const QSocIomuxPlan &plan)
 {
     QList<QSocMmioPortDescription> ports;
     for (const QSocMmioPortDescription &port : QSocMmioGenerator::describePorts(plan.mmio)) {
-        if (isControlPort(port)) {
+        if (isControlPort(port, plan.mmio.bus)) {
             ports.append(port);
         }
     }
@@ -5459,7 +5458,7 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
 
     QStringList regsConnections;
     for (const QSocMmioPortDescription &port : regsPorts) {
-        if (isControlPort(port)) {
+        if (isControlPort(port, plan.mmio.bus)) {
             regsConnections.append(QString("    .%1(%1)").arg(port.name));
         }
     }
@@ -6354,13 +6353,11 @@ YAML::Node QSocIomuxGenerator::describeModuleYaml(const QSocIomuxPlan &plan)
         module["port"][port.name.toStdString()] = portNode;
     }
     YAML::Node control(YAML::NodeType::Map);
-    control["bus"]  = plan.mmio.bus == QSocMmioBus::Apb4
-                          ? "apb4"
-                          : (plan.mmio.bus == QSocMmioBus::Axi4 ? "axi4" : "axi4_lite");
+    control["bus"]  = QSocMmioGenerator::busName(plan.mmio.bus).toStdString();
     control["mode"] = "slave";
     YAML::Node mapping(YAML::NodeType::Map);
     for (const QSocMmioPortDescription &port : ports) {
-        if (!port.name.startsWith(plan.mmio.bus == QSocMmioBus::Apb4 ? "s_apb_" : "s_axi_")) {
+        if (!port.name.startsWith(QSocMmioGenerator::busPrefix(plan.mmio.bus))) {
             continue;
         }
         mapping[port.name.mid(6).toStdString()] = port.name.toStdString();

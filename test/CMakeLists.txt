@@ -161,6 +161,9 @@ qt_add_test_target("test_qsocmmiogenerator" LABELS "mmio")
 qt_add_test_target("test_qsocaxi" LABELS "mmio;iomux")
 set_tests_properties(test_qsocaxi PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=3100000")
+qt_add_test_target("test_qsocahb" LABELS "mmio;iomux")
+set_tests_properties(test_qsocahb PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE
+    ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=3100000")
 qt_add_test_target("test_qsocapb" LABELS "mmio;iomux")
 set_tests_properties(test_qsocapb PROPERTIES TIMEOUT 3000 RUN_SERIAL TRUE
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")

@@ -1,7 +1,7 @@
 = IOMUX Generator
 <iomux-generator>
 The IOMUX generator turns one sparse route table into a high-speed pin
-multiplexer: an AXI4, AXI4-Lite, or APB4 selector slave, a per-pin mux core, a connection
+multiplexer: a register slave, a per-pin mux core, a connection
 fabric, and one public wrapper. Its source stays in the module's `.soc_mod`
 entry.
 
@@ -70,6 +70,8 @@ The build system supplies it; generated RTL has no runtime input or update
 mechanism. `bus: axi4_lite` accepts 32- or 64-bit data. `bus: apb4` accepts
 8-, 16-, or 32-bit data. `bus: axi4` accepts powers of two from 8 through
 1024 bits, with optional `id_width` from 1 through 32 (default 4).
+`bus: ahb_lite` and `bus: ahb` accept powers of two from 8 through 1024 bits.
+Their address ports are at most 32 bits wide.
 The byte layout remains the same across bus widths.
 `address_width` is the local byte address width. Data and address widths default to 32. An IOMUX entry
 may not also carry manual `parameter`, `port`, or `bus` sections.
@@ -557,6 +559,8 @@ APB4 also handle unaligned accesses this way. AXI4 uses the burst and byte-lane
 rules of the MMIO frontend. An AXI4 transfer whose byte span exceeds the
 aperture returns `SLVERR`, even if its first byte is inside. Addresses outside
 the aperture return AXI `SLVERR` or APB `PSLVERR` without aliasing.
+AHB-Lite and AHB use the MMIO transfer-size and alignment rules. Misaligned,
+oversized, or aperture-crossing transfers return two-cycle ERROR without writing.
 This does not change the generic MMIO generator's reserved-address policy.
 
 C macros use `QSOC_<module>_X_<name>` and preserve letter case. Each component

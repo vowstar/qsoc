@@ -3,6 +3,7 @@
 
 #include "common/qsocmmioformal.h"
 #include "common/qsocmmioapbverification.h"
+#include "qsocmmioahbverification.h"
 #include "qsocmmioaxiverification.h"
 
 #include "common/qsocmmiogenerator.h"
@@ -795,6 +796,9 @@ QString buildSby(const QSocMmioPlan &plan)
 
 QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
+    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        return {QSocMmioAhbVerification::formal(plan), buildSby(plan)};
+    }
     if (plan.bus == QSocMmioBus::Apb4) {
         return {QSocMmioApbVerification::formal(plan), buildSby(plan)};
     }
