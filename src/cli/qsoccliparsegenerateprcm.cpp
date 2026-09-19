@@ -152,10 +152,9 @@ QByteArray integrationReport(const QSocPrcmBindingPlan &plan, bool formal)
              "Clock gate and reset cell replacements must preserve the control contract.",
              "Held requests receive feedback. A stable target is required for progress.",
              "The sequence model excludes management reset and independent reset intervention.",
-             "The RTL checks cover power-off protection, work drain, bus response state, and "
-             "REQUEST "
-             "readback with delayed feedback and sampled power loss.",
-             "RTL checks do not cover STATUS completion flags or EVENT values.",
+             "The RTL checks cover power, isolation, and quiesce requests. Bus checks cover "
+             "response state and REQUEST, STATUS, and EVENT values with delayed feedback and "
+             "sampled power loss.",
              "Management reset preserves bus transactions. Cold reset cancels them."}}};
     return QJsonDocument(root).toJson();
 }

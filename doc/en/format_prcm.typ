@@ -136,9 +136,11 @@ Sequence checks cover the normal feedback model. Progress requires a stable targ
 #table(
   columns: (auto, 1fr),
   [Check], [Scope],
-  [Power], [Isolation, reset, and stopped clock before power removal. Work admission requires drain before removal within the same cold-reset interval.],
-  [Bus], [Accepted request and response state, address errors, byte-masked REQUEST updates, and REQUEST readback through management reset.],
+  [Power], [While the power request is off, reset stays active and the domain clock stops. Isolation and prior work drain complete before power removal within the same cold-reset interval.],
+  [Bus], [Accepted request and response state, address errors, byte-masked REQUEST updates, STATUS flags, and EVENT history through management reset.],
   [Reachability], [Work admission, power loss, shutdown, and bus traffic during management reset after operation starts.],
 )
 
-The safety environment permits arbitrary feedback delay, write data, byte masks, and sampled power loss. Reachability uses one cold start, a legal operating mode followed by OFF, full write strobes, one-cycle feedback, and a finite depth. It does not prove eventual completion. RUN and management-reset coverage only apply when the input declares them. STATUS completion flags, EVENT values, physical reset timing, and synchronization reliability are outside these RTL assertions.
+The RTL checks compare register values and power, isolation, and quiesce requests with an independent phase model. Hardware event set takes priority over software clear. Management reset retains event history.
+
+The safety environment permits arbitrary feedback delay, write data, byte masks, and sampled power loss. Reachability uses one cold start, a legal operating mode followed by OFF, full write strobes, one-cycle feedback, and a finite depth. It does not prove eventual completion. RUN and management-reset coverage only apply when the input declares them. Physical reset timing and synchronization reliability are outside these RTL assertions.

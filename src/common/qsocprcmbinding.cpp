@@ -428,27 +428,27 @@ private:
         if (clockTarget.member("link").table() != QStringList{plan.input.clockInput}) {
             unsupported(
                 clockTarget.member("link"),
-                "The controlled gate must use the management clock directly.");
+                "The controlled gate must use the controller clock input directly.");
         }
         if (gate.member("reset").name() != plan.input.resetSource) {
             gate.member("reset").fail(
-                "PRCM_RESOURCE_REFERENCE", "The controlled gate must use the management reset.");
+                "PRCM_RESOURCE_REFERENCE", "The controlled gate must use the cold reset source.");
         }
         if (reset.member("source").member(plan.input.resetSource).member("active").text() != "low") {
             unsupported(
                 reset.member("source").member(plan.input.resetSource),
-                "The gate reset port requires an active-low management reset.");
+                "The gate reset port requires an active-low cold reset source.");
         }
         if (domain.reset.source == plan.input.resetSource) {
             conflict(
                 field.member("reset").member("source"),
-                "A domain must not drive the management reset.",
+                "A domain must not drive the cold reset source.",
                 reset.member("source").member(plan.input.resetSource).position());
         }
         if (!resetLink.has(domain.reset.source) || !resetLink.has(plan.input.resetSource)) {
             resetLink.fail(
                 "PRCM_RESOURCE_REFERENCE",
-                "The reset target must include its domain request and management reset.");
+                "The reset target must include its domain request and cold reset source.");
         }
         if (resetTarget.member("async").member("clock").name() != domain.clock.target) {
             resetTarget.member("async").member("clock").fail(

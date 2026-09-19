@@ -52,9 +52,22 @@ private slots:
         node["prcm"]["mmio"]["data_width"]                      = width;
         node["prcm"]["mmio"]["address_width"]                   = 6;
         node["prcm"]["domain"]["periph"]["mode"]["RUN"]["code"] = quint64(1) << (width - 4);
-        node["prcm"]["controller"]["reset"]["target"]           = "management";
-        node["reset"][0]["source"]["warm_n"]["active"]          = "low";
-        node["reset"][0]["target"]["management"]                = YAML::Load(
+        if (width == 32) {
+            auto held         = YAML::Clone(node["prcm"]["domain"]["periph"]["mode"]["RUN"]);
+            held["code"]      = 1;
+            held["reset"]     = "asserted";
+            held["isolation"] = "enabled";
+            node["prcm"]["domain"]["periph"]["mode"]["RESET"] = held;
+            for (const auto &name : {"OFF", "RUN"}) {
+                node["prcm"]["domain"]["periph"]["transition"].push_back(
+                    YAML::Load(QString("{from: %1, to: RESET}").arg(name).toStdString()));
+                node["prcm"]["domain"]["periph"]["transition"].push_back(
+                    YAML::Load(QString("{from: RESET, to: %1}").arg(name).toStdString()));
+            }
+        }
+        node["prcm"]["controller"]["reset"]["target"]  = "management";
+        node["reset"][0]["source"]["warm_n"]["active"] = "low";
+        node["reset"][0]["target"]["management"]       = YAML::Load(
             "{active: low, async: {clock: aon_clk, stage: 2}, link: {por_n: {}, warm_n: {}}}");
         if (stage == 3) {
             node["prcm"]["supply"]["periph"]["request"]        = "CLOCK";
