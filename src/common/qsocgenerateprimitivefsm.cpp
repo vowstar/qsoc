@@ -191,7 +191,9 @@ void QSocFSMPrimitive::generateModuleHeader(const YAML::Node &fsmNode, QTextStre
 
         if (!inputSignals.isEmpty()) {
             out << "    /* Input signals */\n";
-            for (const QString &signal : inputSignals) {
+            auto inputOrder = inputSignals.values();
+            inputOrder.sort();
+            for (const QString &signal : inputOrder) {
                 // Check if it's a bus signal based on common patterns
                 if (signal.contains("cnt") || signal.contains("data") || signal.contains("addr")) {
                     out << "    input  [7:0] " << signal
@@ -400,21 +402,23 @@ void QSocFSMPrimitive::generateTableFSM(const YAML::Node &fsmItem, QTextStream &
             }
         }
 
+        auto outputOrder = allOutputs.values();
+        outputOrder.sort();
         /* Generate internal reg signals for Moore outputs (Verilog 2005 compatibility) */
-        for (const QString &output : allOutputs) {
+        for (const QString &output : outputOrder) {
             out << "    reg " << fsmNameLower << "_" << output << "_reg;\n";
         }
         out << "\n";
 
         /* Generate assigns from internal regs to output ports */
-        for (const QString &output : allOutputs) {
+        for (const QString &output : outputOrder) {
             out << "    assign " << output << " = " << fsmNameLower << "_" << output << "_reg;\n";
         }
         out << "\n";
 
         /* Generate always block with default values */
         out << "    always @(*) begin\n";
-        for (const QString &output : allOutputs) {
+        for (const QString &output : outputOrder) {
             out << "        " << fsmNameLower << "_" << output << "_reg = 1'b0;\n";
         }
 
@@ -444,7 +448,7 @@ void QSocFSMPrimitive::generateTableFSM(const YAML::Node &fsmItem, QTextStream &
             out << "                end\n";
         }
         out << "            default: begin\n";
-        for (const QString &output : allOutputs) {
+        for (const QString &output : outputOrder) {
             out << "                " << fsmNameLower << "_" << output << "_reg = 1'b0;\n";
         }
         out << "            end\n";
