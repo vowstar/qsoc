@@ -114,6 +114,14 @@ public:
         ResetReasonConfig  reason;                 /**< Reset reason recording */
     };
 
+    struct ResetPort
+    {
+        QString name;
+        bool    isInput = true;
+        int     width   = 1;
+        QString comment;
+    };
+
 public:
     /**
      * @brief Constructor
@@ -135,6 +143,8 @@ public:
      * @return Parsed configuration structure
      */
     ResetControllerConfig parseResetConfig(const YAML::Node &resetNode);
+
+    static QList<ResetPort> describePorts(const ResetControllerConfig &config);
 
     /**
      * @brief Parse reset configuration without guarding YAML conversions

@@ -414,14 +414,9 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
     return config;
 }
 
-void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &config, QTextStream &out)
+QList<QSocResetPrimitive::ResetPort> QSocResetPrimitive::describePorts(
+    const ResetControllerConfig &config)
 {
-    out << "\nmodule " << config.moduleName << " (\n";
-
-    // Initialize global port tracking at the beginning of the function
-    QSet<QString> addedSignals;
-
-    // Collect all unique clock signals
     QStringList clocks;
 
     for (const auto &target : config.targets) {
@@ -464,67 +459,56 @@ void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &confi
         }
     }
 
-    // Collect port declarations and comments separately for proper comma placement
-    QStringList portDecls;
-    QStringList portComments;
+    QList<ResetPort> ports;
 
     // Clock inputs
     for (const auto &clock : clocks) {
-        portDecls << QString("    input  wire %1").arg(clock);
-        portComments << "    /**< Clock inputs */";
-        addedSignals.insert(clock);
+        ports.append({clock, true, 1, "    /**< Clock inputs */"});
     }
 
     // Source inputs (excluding those that are also outputs)
     for (const auto &source : sources) {
-        portDecls << QString("    input  wire %1").arg(source);
-        portComments << "    /**< Reset sources */";
-        addedSignals.insert(source);
+        ports.append({source, true, 1, "    /**< Reset sources */"});
     }
 
     // Test enable input (if specified)
     if (!config.testEnable.isEmpty()) {
-        portDecls << QString("    input  wire %1").arg(config.testEnable);
-        portComments << "    /**< Test enable signal */";
-        addedSignals.insert(config.testEnable);
+        ports.append({config.testEnable, true, 1, "    /**< Test enable signal */"});
     }
 
     // Reset reason clear signal
     if (config.reason.enabled && !config.reason.clear.isEmpty()) {
-        portDecls << QString("    input  wire %1").arg(config.reason.clear);
-        portComments << "    /**< Reset reason clear */";
-        addedSignals.insert(config.reason.clear);
+        ports.append({config.reason.clear, true, 1, "    /**< Reset reason clear */"});
     }
 
     // Reset targets (outputs win over inputs)
     for (const auto &target : config.targets) {
-        portDecls << QString("    output wire %1").arg(target.name);
-        portComments << "    /**< Reset targets */";
-        addedSignals.insert(target.name);
+        ports.append({target.name, false, 1, "    /**< Reset targets */"});
     }
 
     // Reset reason outputs
     if (config.reason.enabled) {
-        if (config.reason.vectorWidth > 1) {
-            portDecls << QString("    output wire [%1:0] %2")
-                             .arg(config.reason.vectorWidth - 1)
-                             .arg(config.reason.output);
-        } else {
-            portDecls << QString("    output wire %1").arg(config.reason.output);
-        }
-        portComments << "    /**< Reset reason outputs */";
-        addedSignals.insert(config.reason.output);
-
-        portDecls << QString("    output wire %1").arg(config.reason.valid);
-        portComments << "    /**< Reset reason outputs */";
-        addedSignals.insert(config.reason.valid);
+        ports.append(
+            {config.reason.output,
+             false,
+             config.reason.vectorWidth > 1 ? config.reason.vectorWidth : 1,
+             "    /**< Reset reason outputs */"});
+        ports.append({config.reason.valid, false, 1, "    /**< Reset reason outputs */"});
     }
+    return ports;
+}
 
-    // Output all ports with unified boundary judgment
-    for (int i = 0; i < portDecls.size(); ++i) {
-        bool    isLast = (i == portDecls.size() - 1);
-        QString comma  = isLast ? "" : ",";
-        out << portDecls[i] << comma << portComments[i] << "\n";
+void QSocResetPrimitive::generateModuleHeader(const ResetControllerConfig &config, QTextStream &out)
+{
+    out << "\nmodule " << config.moduleName << " (\n";
+    const auto ports = describePorts(config);
+    for (qsizetype i = 0; i < ports.size(); ++i) {
+        const auto &port = ports[i];
+        out << (port.isInput ? "    input  wire " : "    output wire ");
+        if (port.width > 1) {
+            out << "[" << port.width - 1 << ":0] ";
+        }
+        out << port.name << (i + 1 == ports.size() ? "" : ",") << port.comment << "\n";
     }
 
     out << ");\n\n";

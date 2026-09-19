@@ -155,10 +155,13 @@ public:
     /**
      * @brief Clock controller configuration
      */
-    /* One declared module port: the exact header line and its comment. */
+    /* One declared module port. */
     struct ClockPort
     {
-        QString decl;
+        QString name;
+        bool    isInput = true;
+        int     width   = 1;
+        bool    packed  = false;
         QString comment;
     };
 
