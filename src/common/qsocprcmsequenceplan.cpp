@@ -87,6 +87,22 @@ QSocPrcmSequencePlanResult QSocPrcmSequencePlanner::build(const QSocPrcmInput &i
         const auto path   = "prcm.domain." + domain.key();
         if (!domain->service.isEmpty() || !domain->require.isEmpty())
             unsupported(input, path, "Service ownership needs a domain handshake action template.");
+        return buildDomain(input, domain.key());
+    } catch (const QSocPrcmDiagnostic &diagnostic) {
+        result.diagnostic.append(diagnostic);
+    }
+    return result;
+}
+
+QSocPrcmSequencePlanResult QSocPrcmSequencePlanner::buildDomain(
+    const QSocPrcmInput &input, const QString &name)
+{
+    QSocPrcmSequencePlanResult result;
+    try {
+        const auto path   = "prcm.domain." + name;
+        const auto domain = input.domain.constFind(name);
+        if (domain == input.domain.cend())
+            unsupported(input, path, "Unknown domain: " + name);
         const auto supply = input.supplyTable.constFind(domain->supply);
         if (supply == input.supplyTable.cend() || supply->alwaysOn)
             unsupported(input, path + ".supply", "This template needs a switched supply.");

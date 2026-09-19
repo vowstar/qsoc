@@ -94,6 +94,89 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void handshake()
+    {
+        const auto tool = QStandardPaths::findExecutable("verilator");
+        if (tool.isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY("verilator");
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_handshake-XXXXXX");
+        QVERIFY(directory.isValid());
+        const auto rtl = QSocPrcmSequenceRtl::generateHandshake();
+        QVERIFY(!rtl.isEmpty());
+        QVERIFY(save(directory.filePath("dut.v"), rtl));
+        const QString bench = R"(
+module tb;
+reg clk_i=0, rst_ni=1;
+reg need_i=0, grant_i=0, fault_i=0, release_i=0;
+wire request_o, hold_o;
+qsoc_prcm_service dut(.*);
+task tick(input [3:0] value, input [1:0] expected);
+    begin
+        clk_i=0;
+        {need_i,grant_i,fault_i,release_i}=value;
+        #5; clk_i=1; #5;
+        if ({request_o,hold_o} !== expected)
+            $fatal(1,"SERVICE_STEP phase=%0d input=%0h expected=%0b actual=%0b",
+                phase,value,expected,{request_o,hold_o});
+    end
+endtask
+task clear;
+    begin
+        clk_i=0; rst_ni=0; #5;
+        if ({request_o,hold_o} !== 2'b00) $fatal(1,"SERVICE_RESET");
+        rst_ni=1;
+    end
+endtask
+integer phase, value, next_phase;
+reg [1:0] expected;
+initial begin
+    for (phase=0; phase<4; phase=phase+1) begin
+        for (value=0; value<16; value=value+1) begin
+            clear;
+            if (phase>0) tick(4'b1000,2'b10);
+            if (phase>1) tick(4'b1100,2'b11);
+            if (phase>2) tick(4'b0101,2'b00);
+            case (phase)
+                0: next_phase=value[3] ? 1 : 0;
+                1: next_phase=value[1] ? 3 : (value[2] ? 2 : 1);
+                2: next_phase=(!value[3] || value[1]) && value[0] ? 3 : 2;
+                3: next_phase=value[2] ? 3 : 0;
+            endcase
+            case (next_phase)
+                1: expected=2'b10;
+                2: expected=2'b11;
+                default: expected=2'b00;
+            endcase
+            tick(value[3:0],expected);
+            if (next_phase==0) tick(4'b1100,2'b10);
+            if (next_phase==3) tick(4'b1100,2'b00);
+        end
+    end
+    clear;
+    $display("SERVICE_STEP_PASS 64");
+    $finish;
+end
+endmodule
+)";
+        QVERIFY(save(directory.filePath("tb.sv"), bench));
+        QProcess process;
+        process.setWorkingDirectory(directory.path());
+        process.setProcessChannelMode(QProcess::MergedChannels);
+        process.start(
+            tool,
+            {"--binary", "--timing", "--top-module", "tb", "-Wno-fatal", "-j", "16", "tb.sv", "dut.v"});
+        QVERIFY(process.waitForStarted());
+        QVERIFY(process.waitForFinished(180000));
+        const auto build = process.readAll();
+        QVERIFY2(process.exitCode() == 0, build.constData());
+        process.start(directory.filePath("obj_dir/Vtb"), QStringList{});
+        QVERIFY(process.waitForStarted());
+        QVERIFY(process.waitForFinished(30000));
+        const auto run = process.readAll();
+        QVERIFY2(process.exitCode() == 0, run.constData());
+        QVERIFY(run.contains("SERVICE_STEP_PASS 64"));
+    }
+
     void modelStep_data()
     {
         QTest::addColumn<bool>("service");

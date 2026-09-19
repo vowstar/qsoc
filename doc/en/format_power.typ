@@ -2,7 +2,7 @@
 <power-format>
 The `power` section defines power domains, sequencing, and dependencies.
 
-PRCM resource and mode checks use a separate interface, described in @prcm-check. PRCM RTL generation is not available.
+PRCM checks resource binding and stable modes and generates single-domain controllers. See @prcm-check.
 
 #block(
   fill: rgb("#fffce8"),

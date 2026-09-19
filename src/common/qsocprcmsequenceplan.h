@@ -25,6 +25,8 @@ class QSocPrcmSequencePlanner
 public:
     /* Select the single-domain template after resource and stable-mode checks. */
     static QSocPrcmSequencePlanResult build(const QSocPrcmInput &input);
+    /* Select local actions. The caller must validate service and chip composition. */
+    static QSocPrcmSequencePlanResult buildDomain(const QSocPrcmInput &input, const QString &name);
 };
 
 #endif // QSOCPRCMSEQUENCEPLAN_H

@@ -12,6 +12,7 @@ public:
     /* The caller supplies one decoded target and retains it for an invalid request. */
     static QString generate();
     static QString generateService();
+    static QString generateHandshake();
 };
 
 #endif // QSOCPRCMSEQUENCERTL_H

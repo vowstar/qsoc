@@ -144,3 +144,33 @@ QString QSocPrcmSequenceRtl::generateService()
 {
     return buildRtl(true);
 }
+
+QString QSocPrcmSequenceRtl::generateHandshake()
+{
+    YAML::Node node;
+    node["name"]      = "qsoc_prcm_service";
+    node["clk"]       = "clk_i";
+    node["rst"]       = "rst_ni";
+    node["rst_state"] = "IDLE";
+    auto edge         = [&node](const char *from, const char *condition, const char *to) {
+        YAML::Node transition;
+        transition["cond"] = condition;
+        transition["next"] = to;
+        node["trans"][from].push_back(transition);
+    };
+    edge("IDLE", "need_i", "WAIT");
+    edge("WAIT", "fault_i", "RETURN");
+    edge("WAIT", "!fault_i && grant_i", "HOLD");
+    edge("HOLD", "(!need_i || fault_i) && release_i", "RETURN");
+    edge("RETURN", "!grant_i", "IDLE");
+    for (const auto &state : {"IDLE", "WAIT", "HOLD", "RETURN"}) {
+        const QString name   = state;
+        auto          output = node["moore"][state];
+        output["request_o"]  = name == "WAIT" || name == "HOLD" ? "1" : "0";
+        output["hold_o"]     = name == "HOLD" ? "1" : "0";
+    }
+    QString          rtl;
+    QTextStream      stream(&rtl);
+    QSocFSMPrimitive generator;
+    return generator.generateFSMVerilog(node, stream) ? rtl : QString();
+}

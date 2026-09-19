@@ -17,6 +17,34 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void domainSelection()
+    {
+        auto parsed = QSocPrcmParser::parse(YAML::Load(qsocPrcmDeclaration()), "control.soc_net");
+        QVERIFY(parsed.input);
+        auto &input = *parsed.input;
+        input.domain.insert("other", input.domain["periph"]);
+        input.domain["other"].mode["RUN"].code = 7;
+        input.domain["other"].resetMode        = "RUN";
+        input.domain["other"].service.insert("access", "RUN");
+        input.domain["periph"].require.insert("access", {"other", "access", {"RUN"}});
+        input.chipMode.insert("normal", {});
+        const auto first  = QSocPrcmSequencePlanner::buildDomain(input, "periph");
+        const auto second = QSocPrcmSequencePlanner::buildDomain(input, "other");
+        QVERIFY(first.plan);
+        QVERIFY(second.plan);
+        QCOMPARE(first.plan->domain, QString("periph"));
+        QCOMPARE(second.plan->domain, QString("other"));
+        QCOMPARE(first.plan->resetCode, quint64(0));
+        QCOMPARE(second.plan->resetCode, quint64(7));
+        QCOMPARE(second.plan->mode.value(7), QSocPrcmTarget::Run);
+        QVERIFY(!first.plan->mode.contains(7));
+        QVERIFY(!QSocPrcmSequencePlanner::build(input).plan);
+        const auto absent = QSocPrcmSequencePlanner::buildDomain(input, "missing");
+        QVERIFY(!absent.plan);
+        QCOMPARE(absent.diagnostic.size(), 1);
+        QCOMPARE(absent.diagnostic[0].source[0].path, QString("prcm.domain.missing"));
+    }
+
     void progress()
     {
         for (unsigned choice = 0; choice < 4; ++choice) {
