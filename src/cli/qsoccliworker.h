@@ -358,6 +358,7 @@ private:
      * @retval false Parse failed.
      */
     bool parseGenerateVerilog(const QStringList &appArguments);
+    bool checkPrcmNetlists(const QStringList &filePathList);
 
     /**
      * @brief Process multiple netlist files by merging them.

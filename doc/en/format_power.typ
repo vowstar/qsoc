@@ -2,7 +2,7 @@
 <power-format>
 The `power` section defines power domains, sequencing, and dependencies.
 
-The generator does not support a `prcm` section.
+PRCM resource and mode checks use a separate interface, described in @prcm-check. PRCM RTL generation is not available.
 
 #block(
   fill: rgb("#fffce8"),

@@ -712,13 +712,8 @@ QString storageName(int index)
     return QString("mmio_field_%1_q").arg(index);
 }
 
-bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
+bool validateInterfaceShape(const QSocMmioPlan &plan, QStringList *errors)
 {
-    bool valid = true;
-    if (!QSocVerilogUtils::isValidVerilogIdentifier(plan.moduleName)) {
-        appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
-        valid = false;
-    }
     const bool apb = plan.bus == QSocMmioBus::Apb4;
     const bool axi = plan.bus == QSocMmioBus::Axi4;
     const bool ahb = plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb;
@@ -749,7 +744,6 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     }
     minimumAddressWidth               = qMax(quint32(1), minimumAddressWidth);
     const quint32 maximumAddressWidth = (apb || ahb) ? 32 : 64;
-    const quint32 fieldLimit          = (apb || axi || ahb) ? 64 : plan.dataWidth;
     if (plan.addressWidth < minimumAddressWidth || plan.addressWidth > maximumAddressWidth) {
         appendError(
             errors,
@@ -758,6 +752,23 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
             QString("must be between %1 and %2").arg(minimumAddressWidth).arg(maximumAddressWidth));
         return false;
     }
+    return true;
+}
+
+bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
+{
+    bool valid = true;
+    if (!QSocVerilogUtils::isValidVerilogIdentifier(plan.moduleName)) {
+        appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
+        valid = false;
+    }
+    if (!validateInterfaceShape(plan, errors)) {
+        return false;
+    }
+    const bool    apb        = plan.bus == QSocMmioBus::Apb4;
+    const bool    axi        = plan.bus == QSocMmioBus::Axi4;
+    const bool    ahb        = plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb;
+    const quint32 fieldLimit = (apb || axi || ahb) ? 64 : plan.dataWidth;
     if (plan.registers.isEmpty()) {
         appendError(errors, "EMPTY", "generator.register", "must contain at least one register");
         return false;
@@ -1464,6 +1475,11 @@ bool QSocMmioGenerator::buildPlan(
         *plan = localPlan;
     }
     return true;
+}
+
+bool QSocMmioGenerator::validateInterface(const QSocMmioPlan &plan, QStringList *errors)
+{
+    return validateInterfaceShape(plan, errors);
 }
 
 bool QSocMmioGenerator::canonicalizePlan(QSocMmioPlan *plan, QStringList *errors)

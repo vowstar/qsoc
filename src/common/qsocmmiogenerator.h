@@ -108,6 +108,7 @@ public:
     static QStringList advise(const QSocModuleDefinition &definition);
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors = nullptr);
+    static bool    validateInterface(const QSocMmioPlan &plan, QStringList *errors = nullptr);
     static bool    canonicalizePlan(QSocMmioPlan *plan, QStringList *errors = nullptr);
     static QString generateVerilog(const QSocMmioPlan &plan);
     static QList<QSocMmioPortDescription> describePorts(const QSocMmioPlan &plan);

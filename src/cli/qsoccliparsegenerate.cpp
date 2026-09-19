@@ -687,6 +687,9 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
          QCoreApplication::translate(
              "main",
              "Run verible-verilog-format from PATH on each generated top-level Verilog file.")},
+        {"check",
+         QCoreApplication::translate(
+             "main", "Check PRCM resource binding and stable modes without writing RTL.")},
     });
 
     parser.addPositionalArgument(
@@ -708,6 +711,16 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     if (filePathList.isEmpty()) {
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing netlist files."));
+    }
+
+    if (parser.isSet("check")) {
+        if (parser.isSet("merge") || parser.isSet("force") || parser.isSet("format")) {
+            return showError(
+                1,
+                QCoreApplication::translate(
+                    "main", "Error: --check does not support --merge, --force or --format."));
+        }
+        return checkPrcmNetlists(filePathList);
     }
 
     /* Setup project manager and project path  */
