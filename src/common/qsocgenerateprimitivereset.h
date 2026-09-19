@@ -137,6 +137,10 @@ public:
      */
     bool generateResetController(const YAML::Node &resetNode, QTextStream &out);
 
+    /* Emit parsed configuration without file output. */
+    QString generateControllerVerilog(const ResetControllerConfig &config);
+    QString generateCellVerilog();
+
     /**
      * @brief Parse reset configuration from YAML
      * @param resetNode YAML node containing reset configuration

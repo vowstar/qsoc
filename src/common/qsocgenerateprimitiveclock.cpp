@@ -508,14 +508,7 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
         }
     }
 
-    // Generate Verilog code (without template cells)
-    generateModuleHeader(config, out);
-    generateWireDeclarations(config, out);
-    generateClockLogic(config, out);
-    generateOutputAssignments(config, out);
-
-    // Close module
-    out << "\nendmodule\n\n";
+    out << generateControllerVerilog(config);
 
     // Generate Typst clock diagram (failure does not affect Verilog generation)
     if (m_parent && m_parent->getProjectManager()) {
@@ -531,6 +524,24 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
     }
 
     return true;
+}
+
+QString QSocClockPrimitive::generateControllerVerilog(const ClockControllerConfig &config)
+{
+    if (!config.valid || config.inputs.isEmpty() || config.targets.isEmpty()) {
+        return {};
+    }
+    QString     verilog;
+    QTextStream out(&verilog);
+    generateModuleHeader(config, out);
+    generateWireDeclarations(config, out);
+    generateClockLogic(config, out);
+    generateOutputAssignments(config, out);
+
+    out << "\nendmodule\n\n";
+
+    out.flush();
+    return verilog;
 }
 
 QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
@@ -1801,7 +1812,7 @@ QString QSocClockPrimitive::getInstanceName(
     return QString("u_%1_%2_%3").arg(targetName, sourceName).arg(linkIndex);
 }
 
-bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
+QString QSocClockPrimitive::generateCellVerilog()
 {
     QString     canonical;
     QTextStream out(&canonical);
@@ -1824,7 +1835,13 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
     }
     out.flush();
 
-    const QSocGenerateArtifact::PrimitiveCellSpec spec{"clock_cell.v", canonical.toUtf8()};
+    return canonical;
+}
+
+bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
+{
+    const QSocGenerateArtifact::PrimitiveCellSpec
+        spec{"clock_cell.v", generateCellVerilog().toUtf8()};
     const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
     if (!result.success) {
         QSocConsole::warn() << result.error;

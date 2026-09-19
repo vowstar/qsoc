@@ -62,19 +62,7 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
         }
     }
 
-    // Generate Verilog code
-    generateModuleHeader(config, out);
-    generateWireDeclarations(config, out);
-    generateResetLogic(config, out);
-
-    if (config.reason.enabled) {
-        generateResetReason(config, out);
-    }
-
-    generateOutputAssignments(config, out);
-
-    // Close module
-    out << "\nendmodule\n\n";
+    out << generateControllerVerilog(config);
 
     // Generate Typst reset diagram (failure does not affect Verilog generation)
     if (m_parent && m_parent->getProjectManager()) {
@@ -90,6 +78,29 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
     }
 
     return true;
+}
+
+QString QSocResetPrimitive::generateControllerVerilog(const ResetControllerConfig &config)
+{
+    if (!config.valid || config.sources.isEmpty() || config.targets.isEmpty()) {
+        return {};
+    }
+    QString     verilog;
+    QTextStream out(&verilog);
+    generateModuleHeader(config, out);
+    generateWireDeclarations(config, out);
+    generateResetLogic(config, out);
+
+    if (config.reason.enabled) {
+        generateResetReason(config, out);
+    }
+
+    generateOutputAssignments(config, out);
+
+    out << "\nendmodule\n\n";
+
+    out.flush();
+    return verilog;
 }
 
 QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfig(
@@ -918,14 +929,20 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "endmodule\n\n";
 }
 
-bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
+QString QSocResetPrimitive::generateCellVerilog()
 {
     QString     canonical;
     QTextStream out(&canonical);
     generateResetCellFile(out);
     out.flush();
 
-    const QSocGenerateArtifact::PrimitiveCellSpec spec{"reset_cell.v", canonical.toUtf8()};
+    return canonical;
+}
+
+bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
+{
+    const QSocGenerateArtifact::PrimitiveCellSpec
+        spec{"reset_cell.v", generateCellVerilog().toUtf8()};
     const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
     if (!result.success) {
         QSocConsole::warn() << result.error;

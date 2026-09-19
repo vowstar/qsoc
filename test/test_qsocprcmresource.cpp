@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivereset.h"
-#include "common/qsocprojectmanager.h"
 #include "qsoc_prcm_fixture.h"
 #include "qsoc_test.h"
 
@@ -96,16 +94,13 @@ private slots:
     {
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_gate-XXXXXX");
         QVERIFY(directory.isValid());
-        QSocProjectManager project;
-        project.setCurrentPath(directory.path());
-        project.setOutputPath(directory.path());
-        QSocGenerateManager manager(nullptr, &project);
-        QSocClockPrimitive  generator(&manager);
-        QString             rtl;
-        QTextStream         stream(&rtl);
-        QVERIFY(
-            generator.generateClockController(YAML::Load(qsocPrcmDeclaration())["clock"][0], stream));
+        QSocClockPrimitive generator;
+        const auto         config = generator.parseClockConfig(
+            YAML::Load(qsocPrcmDeclaration())["clock"][0]);
+        const auto rtl = generator.generateControllerVerilog(config);
+        QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
+        QVERIFY(save(directory.filePath("clock_cell.v"), generator.generateCellVerilog()));
         checkCell(
             directory.path(),
             "clock_cell.v",
@@ -140,15 +135,12 @@ endmodule
         QVERIFY(directory.isValid());
         auto node = YAML::Load(qsocPrcmDeclaration())["reset"][0];
         node["target"]["periph_n"]["async"]["stage"] = stage;
-        QSocProjectManager project;
-        project.setCurrentPath(directory.path());
-        project.setOutputPath(directory.path());
-        QSocGenerateManager manager(nullptr, &project);
-        QSocResetPrimitive  generator(&manager);
-        QString             rtl;
-        QTextStream         stream(&rtl);
-        QVERIFY(generator.generateResetController(node, stream));
+        QSocResetPrimitive generator;
+        const auto         config = generator.parseResetConfig(node);
+        const auto         rtl    = generator.generateControllerVerilog(config);
+        QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
+        QVERIFY(save(directory.filePath("reset_cell.v"), generator.generateCellVerilog()));
         checkCell(
             directory.path(),
             "reset_cell.v",

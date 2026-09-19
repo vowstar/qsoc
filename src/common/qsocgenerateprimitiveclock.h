@@ -192,6 +192,10 @@ public:
      */
     bool generateClockController(const YAML::Node &clockNode, QTextStream &out);
 
+    /* Emit parsed configuration without file output. */
+    QString generateControllerVerilog(const ClockControllerConfig &config);
+    QString generateCellVerilog();
+
     /**
      * @brief Parse clock configuration from YAML
      * @param clockNode YAML node containing clock configuration
