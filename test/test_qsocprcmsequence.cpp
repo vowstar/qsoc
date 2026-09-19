@@ -97,6 +97,26 @@ private slots:
         QVERIFY(domain.settle(Target::Off));
     }
 
+    void resetPending()
+    {
+        for (auto target : {Target::Off, Target::Reset}) {
+            Domain domain;
+            QVERIFY(domain.reach(Target::Run, Phase::Release));
+            QVERIFY(domain.observation.reset);
+            for (int cycle = 0; cycle < 8; ++cycle) {
+                domain.tick(target);
+                const auto control = Sequence::control(domain.state);
+                QVERIFY(control.power && control.clock && !control.reset);
+                QVERIFY(control.isolation && control.quiesce);
+                QVERIFY(!Sequence::complete(domain.state, target, domain.observation));
+            }
+            domain.observation.reset = false;
+            domain.tick(target);
+            QVERIFY(Sequence::control(domain.state).reset);
+            QVERIFY(domain.settle(target));
+        }
+    }
+
     void serviceFailure()
     {
         Domain domain;

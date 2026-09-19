@@ -54,8 +54,7 @@ always @* begin
                 1: next_phase = HELD;
                 2: next_phase = RELEASE;
             endcase
-        RELEASE: if (target != 2) next_phase = HELD;
-                 else if (!held_reset && @ISOLATED@) next_phase = CONNECT;
+        RELEASE: if (!held_reset && @ISOLATED@) next_phase = target == 2 ? CONNECT : HELD;
         CONNECT: if (!@ISOLATED@ && @IDLE@) next_phase = target == 2 ? RESUME : ISOLATE;
         RESUME: if (!@IDLE@) next_phase = target == 2 ? RUN : DRAIN;
         RUN: if (target != 2) next_phase = DRAIN;

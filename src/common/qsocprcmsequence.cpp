@@ -49,10 +49,8 @@ Phase advance(Phase phase, Target target, const QSocPrcmObservation &value)
         }
         break;
     case Phase::Release:
-        if (target != Target::Run)
-            return Phase::Reset;
         if (!value.reset && value.isolation)
-            return Phase::Connect;
+            return target == Target::Run ? Phase::Connect : Phase::Reset;
         break;
     case Phase::Connect:
         if (!value.isolation && value.idle)

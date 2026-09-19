@@ -129,6 +129,8 @@ REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains t
 
 Management reset clears the software request to reset_mode and retains action state, accepted transactions, pending responses, and event history. A pending write can complete after reset and change the target again. Cold reset cancels transactions. Multiple software users must serialize a complete mode operation through the platform's normal locking and MMIO ordering rules.
 
+A new mode request waits for an active reset release to complete before it can reassert reset. Fault protection remains immediate.
+
 Sequence checks cover normal feedback. Progress requires a stable target and eventual feedback. Customer logic and cell replacements need separate checks.
 
 `binding` records top-level instances and port connections. Receiver entries identify registers, inputs, clock edges, resets, and stage counts. Names are relative to the top module. Map them to the actual cell and netlist before applying physical constraints.

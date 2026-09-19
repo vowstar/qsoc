@@ -114,7 +114,7 @@ prcm:
     return node;
 }
 
-QString bench(const QSocPrcmCircuit &circuit, bool axi, bool shared)
+QString bench(const QSocPrcmCircuit &circuit, bool axi, bool shared, bool pending = false)
 {
     QString text = "module tb;\n";
     for (const auto &port : circuit.port) {
@@ -345,6 +345,30 @@ end
  write_reg(2,3);
 )");
     }
+    if (pending) {
+        operation = operation.left(operation.indexOf("initial begin")) + R"(
+initial begin
+ repeat(4)@(negedge aon_clk);por_n=1;
+ poll(1,7,3);
+ write_reg(0,0);write_reg(5,2);
+ wait(!dut.prcm_d1_reset_request);
+ write_reg(5,1);
+ if(!dut.prcm_d1_reset)$fatal(1,"RESET_WAIT_NOT_REACHED");
+ while(dut.prcm_d1_reset)begin
+  @(negedge aon_clk);#1;
+  if(dut.prcm_d1_reset && dut.prcm_d1_reset_request)
+   $fatal(1,"RESET_RELEASE_PENDING");
+ end
+ poll(6,31,5);
+ write_reg(2,2);poll(3,31,6);
+ repeat(20)@(negedge aon_clk);
+ if(dut.prcm_d0_fault || dut.prcm_d1_fault)$fatal(1,"NO_SERVICE_FAULT");
+ write_reg(0,1);poll(1,7,3);
+ $display("SHARED_CIRCUIT_PASS transactions=%0d observations=%0d",transactions,observed);$finish;
+end
+endmodule
+)";
+    }
     return text + operation;
 }
 
@@ -532,21 +556,26 @@ private slots:
     {
         QTest::addColumn<bool>("axi");
         QTest::addColumn<bool>("shared");
-        QTest::newRow("apb8") << false << false;
-        QTest::newRow("axi32") << true << false;
-        QTest::newRow("shared-apb8") << false << true;
+        QTest::addColumn<int>("stage");
+        QTest::newRow("apb8") << false << false << 2;
+        QTest::newRow("axi32") << true << false << 2;
+        QTest::newRow("shared-apb8") << false << true << 3;
+        QTest::newRow("reset-pending") << false << false << 8;
     }
 
     void behavior()
     {
         QFETCH(bool, axi);
         QFETCH(bool, shared);
+        QFETCH(int, stage);
         const auto tool = QStandardPaths::findExecutable("verilator");
         if (tool.isEmpty())
             QSOC_TEST_MISSING_DEPENDENCY("verilator");
-        const auto bound = QSocPrcmBinding::resolve(declaration(axi, shared), "controller.soc_net");
+        auto input                                    = declaration(axi, shared);
+        input["prcm"]["controller"]["reset"]["stage"] = stage;
+        const auto bound = QSocPrcmBinding::resolve(input, "controller.soc_net");
         QVERIFY(bound.plan);
-        const auto generated = QSocPrcmShared::generate(*bound.plan, "control", shared ? 3 : 2);
+        const auto generated = QSocPrcmShared::generate(*bound.plan, "control", stage);
         QVERIFY(generated.circuit);
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared-XXXXXX");
         QVERIFY(directory.isValid());
@@ -557,7 +586,8 @@ private slots:
                 "`default_nettype none\n" + it.value() + "\n`default_nettype wire\n"));
             file.append(it.key());
         }
-        QVERIFY(save(directory.filePath("tb.sv"), bench(*generated.circuit, axi, shared)));
+        QVERIFY(
+            save(directory.filePath("tb.sv"), bench(*generated.circuit, axi, shared, stage == 8)));
         QProcess process;
         process.setWorkingDirectory(directory.path());
         process.setProcessChannelMode(QProcess::MergedChannels);
