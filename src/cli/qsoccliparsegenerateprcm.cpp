@@ -5,6 +5,7 @@
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocprcmbinding.h"
 #include "common/qsocprcmdocument.h"
+#include "common/qsocprcmformal.h"
 #include "common/qsocprcmgenerator.h"
 #include "common/qsocprcmmode.h"
 #include "common/qsocprcmreader.h"
@@ -116,7 +117,7 @@ QString softwareHeader(
     return lines.join('\n') + '\n';
 }
 
-QByteArray integrationReport(const QSocPrcmBindingPlan &plan)
+QByteArray integrationReport(const QSocPrcmBindingPlan &plan, bool formal)
 {
     const auto &input  = plan.input;
     const auto &domain = *input.domain.cbegin();
@@ -140,6 +141,7 @@ QByteArray integrationReport(const QSocPrcmBindingPlan &plan)
              {"stable_mode", "pass"},
              {"sequence_model", "pass"},
              {"progress_model", "pass"},
+             {"rtl", formal ? "not_run" : "not_generated"},
              {"physical", "not_run"}}},
         {"condition",
          QJsonArray{
@@ -150,6 +152,10 @@ QByteArray integrationReport(const QSocPrcmBindingPlan &plan)
              "Clock gate and reset cell replacements must preserve the control contract.",
              "Held requests receive feedback. A stable target is required for progress.",
              "The sequence model excludes management reset and independent reset intervention.",
+             "The RTL checks cover power-off protection, work drain, bus response state, and "
+             "REQUEST "
+             "readback with delayed feedback and sampled power loss.",
+             "RTL checks do not cover STATUS completion flags or EVENT values.",
              "Management reset preserves bus transactions. Cold reset cancels them."}}};
     return QJsonDocument(root).toJson();
 }
@@ -203,8 +209,11 @@ bool QSocCliWorker::checkPrcmNetlists(const QStringList &filePathList)
 
 std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files)
 {
-    if (!containsPrcm(files))
+    if (!containsPrcm(files)) {
+        if (parser.isSet("with-formal"))
+            return showError(1, "PRCM_REQUIRED: --with-formal requires a PRCM declaration.");
         return std::nullopt;
+    }
     const auto loaded = QSocPrcmDocumentLoader::load(files);
     if (!loaded.document)
         return showError(1, describe(loaded.diagnostic));
@@ -293,7 +302,23 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
             {output.filePath("include/" + name + ".h"),
              softwareHeader(circuit, plan.input, name).toUtf8()});
         artifact.push_back(
-            {output.filePath("integration/" + name + ".json"), integrationReport(plan)});
+            {output.filePath("integration/" + name + ".json"),
+             integrationReport(plan, parser.isSet("with-formal"))});
+        if (parser.isSet("with-formal")) {
+            auto formal = QSocPrcmFormal::generate(plan, circuit, name, *plan.input.resetStage);
+            QStringList formalList;
+            for (const auto &file : circuit.rtl.keys()) {
+                formal.sby.replace('\n' + file + '\n', "\n../rtl/" + file + '\n');
+                formalList.append("../rtl/" + file);
+            }
+            artifact.push_back(
+                {output.filePath("formal/" + name + "_formal.sv"), formal.systemVerilog.toUtf8()});
+            artifact.push_back({output.filePath("formal/check.sby"), formal.sby.toUtf8()});
+            formalList.append(name + "_formal.sv");
+            artifact.push_back(
+                {output.filePath("formal/" + name + "_formal.fl"),
+                 (formalList.join('\n') + '\n').toUtf8()});
+        }
         const auto error = QSocGenerateArtifact::write(std::move(artifact), true);
         if (!error.isEmpty())
             return showError(1, error);

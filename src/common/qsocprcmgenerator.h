@@ -8,8 +8,9 @@
 
 struct QSocPrcmCircuit
 {
-    QSocMmioPlan           mmio;
-    QMap<QString, QString> rtl;
+    QSocMmioPlan                           mmio;
+    QMap<QString, QString>                 rtl;
+    QMap<QString, QSocMmioPortDescription> port;
 };
 
 struct QSocPrcmGenerateResult

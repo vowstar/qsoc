@@ -96,6 +96,7 @@ Generate a controller inside an existing project:
 ```sh
 qsoc generate verilog -d demo prcm.soc_net
 qsoc generate verilog -d demo --merge prcm.soc_net clock.soc_net reset.soc_net
+qsoc generate verilog -d demo --with-formal prcm.soc_net
 ```
 
 The first input basename selects the module name. Generation checks stable modes and the single-domain action model before writing files. Other circuit sections and additional clock or reset controllers require a later template and produce an error.
@@ -118,6 +119,8 @@ For `prcm.soc_net`, the project output contains:
   [`prcm/rtl/prcm.fl`], [RTL file list, relative to its directory],
   [`prcm/include/prcm.h`], [Register offsets, field masks, and mode codes],
   [`prcm/integration/prcm.json`], [Interface conditions and model check scope],
+  [`prcm/formal/prcm_formal.sv`], [Optional RTL assertions and environment],
+  [`prcm/formal/check.sby`, `prcm/formal/prcm_formal.fl`], [Optional proof job and file list],
 )
 
 Ordinary outputs are regenerated. Existing resource cells remain unchanged unless `--force` is set. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
@@ -126,4 +129,16 @@ REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains t
 
 Management reset clears the software request to reset_mode and retains action state, accepted transactions, pending responses, and event history. A pending write can complete after reset and change the target again. Cold reset cancels transactions. Multiple software users must serialize a complete mode operation through the platform's normal locking and MMIO ordering rules.
 
-Sequence checks cover the normal feedback model. Progress requires a stable target and eventual feedback. Runtime reset, customer logic, cell replacements, and physical timing need separate checks. The integration report leaves physical checks incomplete.
+Sequence checks cover the normal feedback model. Progress requires a stable target and eventual feedback. Customer logic, cell replacements, and physical timing need separate checks. The integration report leaves physical checks incomplete.
+
+`--with-formal` emits checks for the actual circuit in a separate directory. The RTL file list contains only synthesis input. File generation does not run the RTL checks. The integration report records not_run.
+
+#table(
+  columns: (auto, 1fr),
+  [Check], [Scope],
+  [Power], [Isolation, reset, and stopped clock before power removal. Work admission requires drain before removal within the same cold-reset interval.],
+  [Bus], [Accepted request and response state, address errors, byte-masked REQUEST updates, and REQUEST readback through management reset.],
+  [Reachability], [Work admission, power loss, shutdown, and bus traffic during management reset after operation starts.],
+)
+
+The safety environment permits arbitrary feedback delay, write data, byte masks, and sampled power loss. Reachability uses one cold start, a legal operating mode followed by OFF, full write strobes, one-cycle feedback, and a finite depth. It does not prove eventual completion. RUN and management-reset coverage only apply when the input declares them. STATUS completion flags, EVENT values, physical reset timing, and synchronization reliability are outside these RTL assertions.

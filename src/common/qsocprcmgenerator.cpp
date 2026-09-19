@@ -138,6 +138,8 @@ public:
         return text;
     }
 
+    QMap<QString, QSocMmioPortDescription> ports() const { return portTable; }
+
 private:
     void collectPort()
     {
@@ -388,8 +390,9 @@ QSocPrcmGenerateResult QSocPrcmGenerator::generate(
         add("reset_cell.v", resetGenerator.generateCellVerilog());
         add("qsoc_prcm_domain.v", QSocPrcmSequenceRtl::generate());
         add(circuit.mmio.moduleName + ".v", QSocMmioGenerator::generateVerilog(circuit.mmio));
-        add(moduleName + ".v",
-            Assembly(binding, *sequence.plan, circuit.mmio, moduleName, sampleStage).generate());
+        Assembly assembly(binding, *sequence.plan, circuit.mmio, moduleName, sampleStage);
+        add(moduleName + ".v", assembly.generate());
+        circuit.port   = assembly.ports();
         result.circuit = std::move(circuit);
     } catch (const QSocPrcmDiagnostic &diagnostic) {
         result.diagnostic.append(diagnostic);

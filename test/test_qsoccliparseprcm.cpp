@@ -141,6 +141,7 @@ private slots:
         const auto report
             = QJsonDocument::fromJson(read(output.filePath("integration/controller.json"))).object();
         QCOMPARE(report["check"].toObject()["physical"].toString(), "not_run");
+        QCOMPARE(report["check"].toObject()["rtl"].toString(), "not_generated");
         QCOMPARE(report["reset"].toObject()["stage"].toInt(), axi ? 3 : 2);
         const auto clockPath = output.filePath("rtl/clock_cell.v");
         const auto clock     = read(clockPath);
@@ -150,6 +151,19 @@ private slots:
         QCOMPARE(read(clockPath), custom);
         QCOMPARE(run({"--force"}), 0);
         QCOMPARE(read(clockPath), clock);
+        QCOMPARE(run({"--with-formal"}), 0);
+        const auto formalList = read(output.filePath("formal/controller_formal.fl")).split('\n');
+        QCOMPARE(formalList.size(), 9);
+        for (const auto &file : formalList) {
+            if (!file.isEmpty())
+                QVERIFY(QFile::exists(output.filePath("formal/" + QString::fromUtf8(file))));
+        }
+        QVERIFY(read(output.filePath("formal/check.sby")).contains("../rtl/clock_cell.v"));
+        QVERIFY(read(output.filePath("formal/controller_formal.sv")).contains("power_off: assert"));
+        const auto formalReport
+            = QJsonDocument::fromJson(read(output.filePath("integration/controller.json"))).object();
+        QCOMPARE(formalReport["check"].toObject()["rtl"].toString(), "not_run");
+        QCOMPARE(run(), 0);
 
         QMap<QString, QByteArray> before;
         QDirIterator              item(output.path(), QDir::Files, QDirIterator::Subdirectories);
@@ -216,6 +230,9 @@ private slots:
         }
         if (!QStandardPaths::findExecutable("verible-verilog-format").isEmpty())
             QCOMPARE(run({"--format"}), 0);
+        QVERIFY(save(path, "instance: {unused: {module: other}}\n"));
+        QCOMPARE(run({"--with-formal"}), 1);
+        QVERIFY(messages.join('\n').contains("PRCM_REQUIRED"));
     }
 
     void generateMerged()

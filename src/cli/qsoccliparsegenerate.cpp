@@ -553,6 +553,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         {"check",
          QCoreApplication::translate(
              "main", "Check PRCM resource binding and stable modes without writing RTL.")},
+        {"with-formal", QCoreApplication::translate("main", "Generate PRCM formal checks.")},
     });
 
     parser.addPositionalArgument(
@@ -577,11 +578,11 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     }
 
     if (parser.isSet("check")) {
-        if (parser.isSet("force") || parser.isSet("format")) {
+        if (parser.isSet("force") || parser.isSet("format") || parser.isSet("with-formal")) {
             return showError(
                 1,
                 QCoreApplication::translate(
-                    "main", "Error: --check does not support --force or --format."));
+                    "main", "Error: --check does not support --force, --format, or --with-formal."));
         }
         return checkPrcmNetlists(filePathList);
     }
