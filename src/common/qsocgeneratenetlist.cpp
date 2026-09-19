@@ -132,6 +132,10 @@ bool QSocGenerateManager::setNetlistData(const YAML::Node &netlistData)
 
 bool QSocGenerateManager::processNetlist()
 {
+    if (netlistData.IsMap() && netlistData["prcm"].IsDefined()) {
+        QSocConsole::error() << "PRCM_UNSUPPORTED: PRCM circuit generation is not available.";
+        return false;
+    }
     try {
         /* Check if netlistData is valid - allow missing instance if primitives exist */
         bool hasInstances  = netlistData["instance"] && netlistData["instance"].IsMap();

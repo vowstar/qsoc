@@ -114,6 +114,14 @@ public:
         ResetReasonConfig  reason;                 /**< Reset reason recording */
     };
 
+    struct ResetPort
+    {
+        QString name;
+        bool    isInput = true;
+        int     width   = 1;
+        QString comment;
+    };
+
 public:
     /**
      * @brief Constructor
@@ -129,12 +137,18 @@ public:
      */
     bool generateResetController(const YAML::Node &resetNode, QTextStream &out);
 
+    /* Emit parsed configuration without file output. */
+    QString generateControllerVerilog(const ResetControllerConfig &config);
+    QString generateCellVerilog();
+
     /**
      * @brief Parse reset configuration from YAML
      * @param resetNode YAML node containing reset configuration
      * @return Parsed configuration structure
      */
     ResetControllerConfig parseResetConfig(const YAML::Node &resetNode);
+
+    static QList<ResetPort> describePorts(const ResetControllerConfig &config);
 
     /**
      * @brief Parse reset configuration without guarding YAML conversions

@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/license">
+        <file alias="z3.txt">../external/z3/LICENSE.txt</file>
+    </qresource>
+</RCC>

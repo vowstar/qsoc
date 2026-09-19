@@ -405,6 +405,8 @@ set(LEXBOR_INCLUDE_DIRS
 set(LEXBOR_LIBRARIES lexbor_static)
 message(STATUS "Use local lexbor library: ${LEXBOR_LIBRARIES}")
 
+add_subdirectory(cmake/prcm EXCLUDE_FROM_ALL)
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -523,6 +525,8 @@ target_link_libraries(qsoc_core PUBLIC
     ${CMARK_GFM_LIBRARIES}
     ${LEXBOR_LIBRARIES}
 )
+
+target_link_libraries(qsoc_core PRIVATE libz3)
 
 target_compile_definitions(qsoc_core PUBLIC
     CMARK_GFM_STATIC_DEFINE
@@ -647,6 +651,10 @@ install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+
+install(FILES external/z3/LICENSE.txt
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc"
+    RENAME z3.txt)
 
 if(UNIX AND NOT APPLE)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.desktop"

@@ -9,6 +9,7 @@ struct QSocMmioUvmCollateral;
 
 namespace QSocMmioUvm {
 
+/* Empty for a synchronous clear plan, which needs controller-specific checks. */
 QSocMmioUvmCollateral generate(const QSocMmioPlan &plan);
 
 } // namespace QSocMmioUvm

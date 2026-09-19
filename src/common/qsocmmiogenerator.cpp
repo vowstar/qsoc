@@ -310,19 +310,23 @@ bool parseField(
 bool claimSideband(
     const QSocMmioFieldPlan &field, const QString &path, QSet<QString> *ports, QStringList *errors)
 {
-    const QString name = field.inputPort.isEmpty() ? field.outputPort : field.inputPort;
-    if (name.isEmpty()) {
-        return true;
-    }
     static const QRegularExpression storageNamePattern(QStringLiteral("^mmio_field_[0-9]+_q$"));
-    if (ports->contains(name) || kInternalNames.contains(name)
-        || storageNamePattern.match(name).hasMatch()) {
-        const QString key = field.inputPort.isEmpty() ? ".output" : ".input";
-        appendError(errors, "CONFLICT", path + key, "port name is already in use");
-        return false;
+    bool                            valid = true;
+    for (const auto &port :
+         {qMakePair(field.inputPort, QString(".input")),
+          qMakePair(field.outputPort, QString(".output"))}) {
+        const auto &name = port.first;
+        if (name.isEmpty())
+            continue;
+        if (ports->contains(name) || kInternalNames.contains(name)
+            || storageNamePattern.match(name).hasMatch()) {
+            appendError(errors, "CONFLICT", path + port.second, "port name is already in use");
+            valid = false;
+        } else {
+            ports->insert(name);
+        }
     }
-    ports->insert(name);
-    return true;
+    return valid;
 }
 
 bool parseFields(
@@ -712,18 +716,17 @@ QString storageName(int index)
     return QString("mmio_field_%1_q").arg(index);
 }
 
-bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
+bool validateInterfaceShape(const QSocMmioPlan &plan, QStringList *errors)
 {
-    bool valid = true;
-    if (!QSocVerilogUtils::isValidVerilogIdentifier(plan.moduleName)) {
-        appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
-        valid = false;
-    }
     const bool apb = plan.bus == QSocMmioBus::Apb4;
     const bool axi = plan.bus == QSocMmioBus::Axi4;
     const bool ahb = plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb;
     if (plan.bus != QSocMmioBus::Axi4Lite && !apb && !axi && !ahb) {
         appendError(errors, "BUS", "generator.bus", "unsupported bus");
+        return false;
+    }
+    if (!plan.clearPort.isEmpty() && !apb && plan.bus != QSocMmioBus::Axi4Lite) {
+        appendError(errors, "BUS", "plan.clear_port", "requires APB4 or AXI4-Lite");
         return false;
     }
     if ((axi || ahb) ? (plan.dataWidth < 8 || plan.dataWidth > 1024
@@ -749,7 +752,6 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
     }
     minimumAddressWidth               = qMax(quint32(1), minimumAddressWidth);
     const quint32 maximumAddressWidth = (apb || ahb) ? 32 : 64;
-    const quint32 fieldLimit          = (apb || axi || ahb) ? 64 : plan.dataWidth;
     if (plan.addressWidth < minimumAddressWidth || plan.addressWidth > maximumAddressWidth) {
         appendError(
             errors,
@@ -758,6 +760,23 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
             QString("must be between %1 and %2").arg(minimumAddressWidth).arg(maximumAddressWidth));
         return false;
     }
+    return true;
+}
+
+bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
+{
+    bool valid = true;
+    if (!QSocVerilogUtils::isValidVerilogIdentifier(plan.moduleName)) {
+        appendError(errors, "IDENTIFIER", "module.name", "must be a Verilog identifier");
+        valid = false;
+    }
+    if (!validateInterfaceShape(plan, errors)) {
+        return false;
+    }
+    const bool    apb        = plan.bus == QSocMmioBus::Apb4;
+    const bool    axi        = plan.bus == QSocMmioBus::Axi4;
+    const bool    ahb        = plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb;
+    const quint32 fieldLimit = (apb || axi || ahb) ? 64 : plan.dataWidth;
     if (plan.registers.isEmpty()) {
         appendError(errors, "EMPTY", "generator.register", "must contain at least one register");
         return false;
@@ -851,6 +870,19 @@ bool validatePlanInvariants(const QSocMmioPlan &plan, QStringList *errors)
                 "write_data",
                 "write_fire",
                 "write_strobe"});
+    }
+    if (!plan.clearPort.isEmpty()) {
+        if (!QSocVerilogUtils::isValidVerilogIdentifier(plan.clearPort)) {
+            appendError(errors, "IDENTIFIER", "plan.clear_port", "must be a Verilog identifier");
+            valid = false;
+        }
+        static const QRegularExpression storageNamePattern(QStringLiteral("^mmio_field_[0-9]+_q$"));
+        if (ports.contains(plan.clearPort) || kInternalNames.contains(plan.clearPort)
+            || storageNamePattern.match(plan.clearPort).hasMatch()) {
+            appendError(errors, "PORT", "plan.clear_port", "conflicts with an internal signal");
+            valid = false;
+        }
+        ports.insert(plan.clearPort);
     }
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         const QString registerPath = "generator.register." + reg.name;
@@ -1077,6 +1109,8 @@ QStringList modulePorts(const QSocMmioPlan &plan)
         "output reg         s_axi_rvalid",
         "input  wire        s_axi_rready",
     };
+    if (!plan.clearPort.isEmpty())
+        ports.append("input wire " + plan.clearPort);
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
             if (!field.inputPort.isEmpty()) {
@@ -1198,7 +1232,9 @@ void appendWriteWires(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(QString("wire [%1:0]  write_strobe  = w_pending_q ? wstrb_q : s_axi_wstrb;")
                       .arg(plan.dataWidth / 8 - 1));
     lines->append("wire write_fire = !s_axi_bvalid && (aw_pending_q || aw_take)");
-    lines->append("                  && (w_pending_q || w_take);");
+    lines->append(
+        "                  && (w_pending_q || w_take)"
+        + (plan.clearPort.isEmpty() ? QString() : " && !" + plan.clearPort) + ";");
     QStringList lanes;
     for (int lane = static_cast<int>(plan.dataWidth / 8) - 1; lane >= 0; --lane) {
         lanes.append(QString("{8{write_strobe[%1]}}").arg(lane));
@@ -1213,7 +1249,9 @@ void appendWriteWires(QStringList *lines, const QSocMmioPlan &plan)
     lines->append(QString());
     lines->append("assign s_axi_awready = rst_ni && !aw_pending_q && !s_axi_bvalid;");
     lines->append("assign s_axi_wready  = rst_ni && !w_pending_q && !s_axi_bvalid;");
-    lines->append("assign s_axi_arready = rst_ni && !s_axi_rvalid;");
+    lines->append(
+        "assign s_axi_arready = rst_ni && !s_axi_rvalid"
+        + (plan.clearPort.isEmpty() ? QString() : " && !" + plan.clearPort) + ";");
     lines->append(QString());
 }
 
@@ -1298,6 +1336,26 @@ void appendHardwareSet(QStringList *lines, const QSocMmioPlan &plan)
     }
 }
 
+void appendClear(QStringList *lines, const QSocMmioPlan &plan)
+{
+    if (plan.clearPort.isEmpty())
+        return;
+    lines->append("        if (" + plan.clearPort + ") begin");
+    int storageIndex = 0;
+    for (const auto &reg : plan.registers) {
+        for (const auto &field : reg.fields) {
+            if (field.access == QSocMmioAccess::ReadWrite)
+                lines->append(QString("            %1 <= %2;")
+                                  .arg(
+                                      storageName(storageIndex),
+                                      verilogLiteral(field.width, *field.resetValue)));
+            if (qsocMmioHasStorage(field.access))
+                ++storageIndex;
+        }
+    }
+    lines->append("        end");
+}
+
 void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
 {
     lines->append("always @(posedge clk_i or negedge rst_ni) begin");
@@ -1342,6 +1400,7 @@ void appendWriteProcess(QStringList *lines, const QSocMmioPlan &plan)
     appendWriteCase(lines, plan);
     lines->append("            end");
     lines->append("        end");
+    appendClear(lines, plan);
     appendHardwareSet(lines, plan);
     lines->append("    end");
     lines->append("end");
@@ -1466,6 +1525,11 @@ bool QSocMmioGenerator::buildPlan(
     return true;
 }
 
+bool QSocMmioGenerator::validateInterface(const QSocMmioPlan &plan, QStringList *errors)
+{
+    return validateInterfaceShape(plan, errors);
+}
+
 bool QSocMmioGenerator::canonicalizePlan(QSocMmioPlan *plan, QStringList *errors)
 {
     QStringList localErrors;
@@ -1486,6 +1550,11 @@ bool QSocMmioGenerator::canonicalizePlan(QSocMmioPlan *plan, QStringList *errors
 
 QString QSocMmioGenerator::generateVerilog(const QSocMmioPlan &plan)
 {
+    if (!plan.clearPort.isEmpty()) {
+        QStringList error;
+        if (!validatePlanInvariants(plan, &error))
+            return {};
+    }
     return buildVerilog(plan);
 }
 
@@ -1520,6 +1589,8 @@ QList<QSocMmioPortDescription> QSocMmioGenerator::describePorts(const QSocMmioPl
     } else if (plan.bus == QSocMmioBus::Axi4) {
         ports = QSocMmioAxi::ports(plan);
     }
+    if (!plan.clearPort.isEmpty())
+        ports.append({plan.clearPort, "input", 1});
     for (const QSocMmioRegisterPlan &reg : plan.registers) {
         for (const QSocMmioFieldPlan &field : reg.fields) {
             if (!field.inputPort.isEmpty()) {

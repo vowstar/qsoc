@@ -46,3 +46,6 @@
 [submodule "external/uvm-core"]
 	path = external/uvm-core
 	url = https://github.com/accellera-official/uvm-core.git
+[submodule "external/z3"]
+	path = external/z3
+	url = https://github.com/Z3Prover/z3.git

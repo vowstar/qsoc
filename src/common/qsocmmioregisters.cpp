@@ -133,6 +133,23 @@ void appendDecode(
     lines->append(QString());
 }
 
+void appendClear(QStringList *lines, const QSocMmioPlan &plan)
+{
+    if (plan.clearPort.isEmpty())
+        return;
+    lines->append("        if (" + plan.clearPort + ") begin");
+    qsizetype index = 0;
+    for (const auto &reg : plan.registers) {
+        for (const auto &field : reg.fields) {
+            if (field.access == QSocMmioAccess::ReadWrite)
+                lines->append(QString("            %1 <= %2;")
+                                  .arg(fieldName(index), literal(field.width, *field.resetValue)));
+            ++index;
+        }
+    }
+    lines->append("        end");
+}
+
 void appendWrite(
     QStringList                           *lines,
     const QSocMmioPlan                    &plan,
@@ -178,6 +195,7 @@ void appendWrite(
     lines->append("                default: begin end");
     lines->append("            endcase");
     lines->append("        end");
+    appendClear(lines, plan);
     index = 0;
     for (const auto &reg : plan.registers) {
         for (const auto &field : reg.fields) {

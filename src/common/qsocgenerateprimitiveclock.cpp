@@ -184,7 +184,7 @@ struct PortShape
     bool packed;
 };
 
-/* Builds config.ports, the one port roster the header prints verbatim.
+/* Builds config.ports, the port roster used by the header.
    One name is one port: exact-ABI input reuse shares a declaration, any
    output collision or shape mismatch rejects the controller. Control
    constants (1'b0/1'b1) stay inline in the RTL; anything else that is
@@ -194,55 +194,43 @@ bool buildClockPortPlan(QSocClockPrimitive::ClockControllerConfig &config)
     config.ports.clear();
     QHash<QString, PortShape> claims;
 
-    const auto inputDecl = [](const QString &name, int width, bool packed) {
-        return packed ? QString("    input  wire [%1:0] %2").arg(width - 1).arg(name)
-                      : QString("    input  wire %1").arg(name);
-    };
-    const auto outputDecl = [](const QString &name, int width, bool packed) {
-        return packed ? QString("    output wire [%1:0] %2").arg(width - 1).arg(name)
-                      : QString("    output wire %1").arg(name);
-    };
-
-    const auto claimShape = [&claims, &config](
-                                const QString &name,
-                                bool           isInput,
-                                int            width,
-                                bool           packed,
-                                const QString &decl,
-                                const QString &comment) {
-        const auto found = claims.constFind(name);
-        if (found == claims.cend()) {
-            claims.insert(name, {isInput, width, packed});
-            config.ports.append({decl, comment});
+    const auto claimShape =
+        [&claims,
+         &config](const QString &name, bool isInput, int width, bool packed, const QString &comment) {
+            const auto found = claims.constFind(name);
+            if (found == claims.cend()) {
+                claims.insert(name, {isInput, width, packed});
+                config.ports.append({name, isInput, width, packed, comment});
+                return true;
+            }
+            const PortShape &first = found.value();
+            if (first.isInput != isInput) {
+                QSocConsole::error()
+                    << "Clock controller port" << name << "is declared as both input and output";
+                return false;
+            }
+            if (!first.isInput) {
+                QSocConsole::error()
+                    << "Clock controller port" << name << "is driven by two outputs";
+                return false;
+            }
+            if (first.width != width) {
+                QSocConsole::error() << "Clock controller port" << name << "has incompatible widths"
+                                     << first.width << "and" << width;
+                return false;
+            }
+            if (first.packed != packed) {
+                QSocConsole::error() << "Clock controller port" << name
+                                     << "has incompatible scalar and packed declarations";
+                return false;
+            }
             return true;
-        }
-        const PortShape &first = found.value();
-        if (first.isInput != isInput) {
-            QSocConsole::error() << "Clock controller port" << name
-                                 << "is declared as both input and output";
-            return false;
-        }
-        if (!first.isInput) {
-            QSocConsole::error() << "Clock controller port" << name << "is driven by two outputs";
-            return false;
-        }
-        if (first.width != width) {
-            QSocConsole::error() << "Clock controller port" << name << "has incompatible widths"
-                                 << first.width << "and" << width;
-            return false;
-        }
-        if (first.packed != packed) {
-            QSocConsole::error() << "Clock controller port" << name
-                                 << "has incompatible scalar and packed declarations";
-            return false;
-        }
-        return true;
-    };
+        };
 
     /* Signals that must name a real port: clocks, outputs, and the
        division value. */
     const auto claimIdentifier =
-        [&claimShape, &inputDecl, &outputDecl](
+        [&claimShape](
             const QString &name, bool isInput, int width, bool packed, const QString &comment) {
             if (name.isEmpty()) {
                 return true;
@@ -252,19 +240,12 @@ bool buildClockPortPlan(QSocClockPrimitive::ClockControllerConfig &config)
                     << "Clock controller port" << name << "must be a plain identifier";
                 return false;
             }
-            return claimShape(
-                name,
-                isInput,
-                width,
-                packed,
-                isInput ? inputDecl(name, width, packed) : outputDecl(name, width, packed),
-                comment);
+            return claimShape(name, isInput, width, packed, comment);
         };
 
     /* Input controls the RTL can inline: 1'b0/1'b1 form no port. */
     const auto claimControl =
-        [&claimShape,
-         &inputDecl](const QString &name, int width, bool packed, const QString &comment) {
+        [&claimShape](const QString &name, int width, bool packed, const QString &comment) {
             switch (classifyControlAtom(name)) {
             case ControlAtom::Empty:
             case ControlAtom::Constant:
@@ -276,7 +257,7 @@ bool buildClockPortPlan(QSocClockPrimitive::ClockControllerConfig &config)
             case ControlAtom::Identifier:
                 break;
             }
-            return claimShape(name, true, width, packed, inputDecl(name, width, packed), comment);
+            return claimShape(name, true, width, packed, comment);
         };
 
     for (const auto &input : config.inputs) {
@@ -527,14 +508,7 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
         }
     }
 
-    // Generate Verilog code (without template cells)
-    generateModuleHeader(config, out);
-    generateWireDeclarations(config, out);
-    generateClockLogic(config, out);
-    generateOutputAssignments(config, out);
-
-    // Close module
-    out << "\nendmodule\n\n";
+    out << generateControllerVerilog(config);
 
     // Generate Typst clock diagram (failure does not affect Verilog generation)
     if (m_parent && m_parent->getProjectManager()) {
@@ -550,6 +524,24 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
     }
 
     return true;
+}
+
+QString QSocClockPrimitive::generateControllerVerilog(const ClockControllerConfig &config)
+{
+    if (!config.valid || config.inputs.isEmpty() || config.targets.isEmpty()) {
+        return {};
+    }
+    QString     verilog;
+    QTextStream out(&verilog);
+    generateModuleHeader(config, out);
+    generateWireDeclarations(config, out);
+    generateClockLogic(config, out);
+    generateOutputAssignments(config, out);
+
+    out << "\nendmodule\n\n";
+
+    out.flush();
+    return verilog;
 }
 
 QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfig(
@@ -1248,11 +1240,14 @@ void QSocClockPrimitive::generateModuleHeader(const ClockControllerConfig &confi
 {
     out << "\nmodule " << config.moduleName << " (\n";
 
-    /* The roster was built and checked at parse time; print it verbatim. */
     for (qsizetype i = 0; i < config.ports.size(); ++i) {
-        const bool isLast = (i == config.ports.size() - 1);
-        out << config.ports[i].decl << (isLast ? "" : ",") << "    " << config.ports[i].comment
-            << "\n";
+        const bool  isLast = (i == config.ports.size() - 1);
+        const auto &port   = config.ports[i];
+        out << (port.isInput ? "    input  wire " : "    output wire ");
+        if (port.packed) {
+            out << "[" << port.width - 1 << ":0] ";
+        }
+        out << port.name << (isLast ? "" : ",") << "    " << port.comment << "\n";
     }
 
     out << ");\n\n";
@@ -1817,7 +1812,7 @@ QString QSocClockPrimitive::getInstanceName(
     return QString("u_%1_%2_%3").arg(targetName, sourceName).arg(linkIndex);
 }
 
-bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
+QString QSocClockPrimitive::generateCellVerilog()
 {
     QString     canonical;
     QTextStream out(&canonical);
@@ -1840,7 +1835,13 @@ bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
     }
     out.flush();
 
-    const QSocGenerateArtifact::PrimitiveCellSpec spec{"clock_cell.v", canonical.toUtf8()};
+    return canonical;
+}
+
+bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
+{
+    const QSocGenerateArtifact::PrimitiveCellSpec
+        spec{"clock_cell.v", generateCellVerilog().toUtf8()};
     const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
     if (!result.success) {
         QSocConsole::warn() << result.error;
