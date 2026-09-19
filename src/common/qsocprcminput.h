@@ -113,6 +113,7 @@ struct QSocPrcmInput
     QString                         clockInput;
     QString                         resetController;
     QString                         resetSource;
+    QString                         resetTarget;
     QString                         supply;
     QSocMmioBus                     bus          = QSocMmioBus::Apb4;
     quint32                         dataWidth    = 32;

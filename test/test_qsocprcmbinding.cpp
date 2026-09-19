@@ -7,6 +7,8 @@
 
 #include <QtTest>
 
+#include <algorithm>
+
 namespace {
 
 class Test : public QObject
@@ -14,6 +16,74 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void managementReset_data()
+    {
+        QTest::addColumn<QString>("fault");
+        QTest::addColumn<QString>("path");
+        QTest::newRow("low") << QString("low") << QString();
+        QTest::newRow("high") << QString("high") << QString();
+        QTest::newRow("target") << QString("target") << QString("prcm.controller.reset.target");
+        QTest::newRow("clock") << QString("clock")
+                               << QString("reset[0].target.manage_n.async.clock");
+        QTest::newRow("cold") << QString("cold") << QString("reset[0].target.manage_n.link");
+        QTest::newRow("domain") << QString("domain")
+                                << QString("reset[0].target.manage_n.link.restart_n");
+        QTest::newRow("control") << QString("control")
+                                 << QString("clock[0].target.periph_clk.icg.enable");
+    }
+
+    void managementReset()
+    {
+        QFETCH(QString, fault);
+        QFETCH(QString, path);
+        auto node                                     = YAML::Load(qsocPrcmDeclaration());
+        node["prcm"]["controller"]["reset"]["target"] = "manage_n";
+        node["reset"][0]["source"]["restart_n"]       = YAML::Load("{active: low}");
+        node["reset"][0]["target"]["manage_n"]        = YAML::Load(
+            "{active: low, async: {clock: aon_clk, stage: 2}, link: {por_n: {}, restart_n: {}}}");
+        auto target = node["reset"][0]["target"]["manage_n"];
+        if (fault == "high")
+            target["active"] = "high";
+        if (fault == "target")
+            node["prcm"]["controller"]["reset"]["target"] = "missing";
+        if (fault == "clock")
+            target["async"]["clock"] = "periph_clk";
+        if (fault == "cold")
+            target["link"].remove("por_n");
+        if (fault == "domain") {
+            node["prcm"]["domain"]["periph"]["reset"]["source"] = "restart_n";
+            auto link = node["reset"][0]["target"]["periph_n"]["link"];
+            link.remove("hold_n");
+            link["restart_n"] = YAML::Load("{}");
+        }
+        if (fault == "control") {
+            node["reset"][0]["source"]["gate_en"] = YAML::Load("{active: high}");
+            target["link"]["gate_en"]             = YAML::Load("{}");
+        }
+        const auto result = QSocPrcmBinding::resolve(YAML::Load(YAML::Dump(node)), "reset.soc_net");
+        if (path.isEmpty()) {
+            QVERIFY2(
+                result.plan,
+                result.diagnostic.isEmpty() ? "No plan" : qPrintable(result.diagnostic[0].message));
+            QCOMPARE(result.plan->input.resetSource, "por_n");
+            QCOMPARE(result.plan->input.resetTarget, "manage_n");
+            const auto selected = std::find_if(
+                result.plan->reset.targets.cbegin(),
+                result.plan->reset.targets.cend(),
+                [](const auto &item) { return item.name == "manage_n"; });
+            QVERIFY(selected != result.plan->reset.targets.cend());
+            QCOMPARE(selected->active, fault);
+            return;
+        }
+        QVERIFY(!result.plan);
+        QCOMPARE(result.diagnostic.size(), 1);
+        QCOMPARE(result.diagnostic[0].source[0].path, path);
+        QCOMPARE(
+            result.diagnostic[0].code,
+            fault == "domain" || fault == "control" ? "PRCM_RESOURCE_CONFLICT"
+                                                    : "PRCM_RESOURCE_REFERENCE");
+    }
+
     void bind()
     {
         const auto node   = YAML::Load(qsocPrcmDeclaration());

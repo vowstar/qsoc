@@ -21,6 +21,8 @@ The controller uses an always-on supply and an active-low reset. Each domain bin
 
 Supply, quiesce, and isolation feedback use the management clock. A request output cannot also serve as completion feedback. Test bypass, clock selection, division, asynchronous feedback, and composite `power` controllers are outside the current binding scope.
 
+Optional `controller.reset.target` names a reset-tree output for runtime management reset. Its release uses the controller clock input, and its source list includes `controller.reset.source`. Domain control must not drive its reset requests. This command checks the connection, without a runtime reset proof.
+
 Save this example as `prcm.soc_net`:
 
 ```yaml

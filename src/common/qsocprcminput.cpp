@@ -147,11 +147,13 @@ QSocPrcmInput input(const Reader &reader)
     result.clockController = clock.member("controller").name();
     result.clockInput      = clock.member("input").name();
     const auto reset       = controller.member("reset");
-    reset.fields({"controller", "source"});
+    reset.fields({"controller", "source"}, {"target"});
     result.resetController = reset.member("controller").name();
     result.resetSource     = reset.member("source").name();
-    result.supply          = controller.member("supply").name();
-    const auto mmio        = reader.member("mmio");
+    if (reset.has("target"))
+        result.resetTarget = reset.member("target").name();
+    result.supply   = controller.member("supply").name();
+    const auto mmio = reader.member("mmio");
     mmio.fields({"bus", "data_width", "address_width"});
     const auto bus = QSocMmioGenerator::parseBus(mmio.member("bus").text());
     if (!bus) {

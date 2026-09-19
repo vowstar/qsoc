@@ -326,6 +326,35 @@ private:
         for (const auto &source : plan.clock.inputs) {
             input(source.name, clock.member("input").member(source.name));
         }
+        checkManagementReset();
+    }
+
+    void checkManagementReset()
+    {
+        if (plan.input.resetTarget.isEmpty())
+            return;
+        const auto field = root.member("prcm").member("controller").member("reset").member("target");
+        const auto target = reset.member("target");
+        if (!target.has(plan.input.resetTarget)) {
+            field.fail(
+                "PRCM_RESOURCE_REFERENCE",
+                "Unknown management reset target: " + plan.input.resetTarget);
+        }
+        const auto selected = target.member(plan.input.resetTarget);
+        if (selected.member("async").member("clock").name() != plan.input.clockInput) {
+            selected.member("async").member("clock").fail(
+                "PRCM_RESOURCE_REFERENCE", "Management reset must use the controller clock input.");
+        }
+        const auto link = selected.member("link");
+        if (!link.has(plan.input.resetSource)) {
+            link.fail(
+                "PRCM_RESOURCE_REFERENCE", "Management reset must include the cold reset source.");
+        }
+        requirePort(
+            QSocResetPrimitive::describePorts(plan.reset), plan.input.resetTarget, false, field);
+        claim("reset." + plan.reset.name + "." + plan.input.resetTarget, field);
+        for (const auto &name : link.table())
+            input(name, link.member(name));
     }
 
     void bindOutput()
