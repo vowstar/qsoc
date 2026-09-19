@@ -60,6 +60,12 @@ void checkClockDeclaration(const Reader &node)
     const auto target = node.member("target");
     for (const auto &name : target.table()) {
         const auto item = target.member(name);
+        if (input.has(name)) {
+            conflict(
+                item,
+                "Clock target conflicts with an input: " + name,
+                input.member(name).position());
+        }
         item.fields(
             {"icg", "link"},
             {"freq", "comment", "div", "inv", "select", "reset", "test_enable", "test_clock"});
@@ -74,6 +80,16 @@ void checkClockDeclaration(const Reader &node)
         gate.fields({"enable", "reset"}, {"polarity", "clock_on_reset"});
         gate.member("enable").name();
         gate.member("reset").name();
+        for (const auto &control : {"enable", "reset"}) {
+            const auto field  = gate.member(control);
+            const auto signal = field.name();
+            if (target.has(signal)) {
+                conflict(
+                    field,
+                    "Clock control conflicts with an output: " + signal,
+                    target.member(signal).position());
+            }
+        }
         if (gate.has("polarity") && gate.member("polarity").text() != "high") {
             unsupported(
                 gate.member("polarity"),
@@ -107,7 +123,8 @@ void checkResetDeclaration(const Reader &node)
         item.fields({"active"});
         item.member("active").choice("low", "high");
     }
-    const auto target = node.member("target");
+    const auto    target = node.member("target");
+    QSet<QString> linked;
     for (const auto &name : target.table()) {
         const auto item = target.member(name);
         item.fields({"active", "async", "link"}, {"sync", "count"});
@@ -128,10 +145,27 @@ void checkResetDeclaration(const Reader &node)
         }
         const auto link = item.member("link");
         for (const auto &input : link.table()) {
+            linked.insert(input);
             link.member(input).fields({});
             if (!source.has(input)) {
                 link.member(input).fail("PRCM_RESOURCE_REFERENCE", "Declare reset source: " + input);
             }
+        }
+    }
+    for (const auto &name : target.table()) {
+        const auto field  = target.member(name).member("async").member("clock");
+        const auto signal = field.name();
+        if (target.has(signal)) {
+            conflict(
+                field,
+                "Reset clock conflicts with a target: " + signal,
+                target.member(signal).position());
+        }
+        if (linked.contains(signal)) {
+            conflict(
+                field,
+                "Reset clock conflicts with a reset source: " + signal,
+                source.member(signal).position());
         }
     }
 }
@@ -174,24 +208,17 @@ public:
         QSocResetPrimitive resetGenerator;
         plan.clock = clockGenerator.parseClockConfig(clock.value());
         plan.reset = resetGenerator.parseResetConfig(reset.value());
-        if (!plan.clock.valid || !plan.reset.valid) {
-            root.fail("PRCM_RESOURCE", "Clock or reset declaration is invalid.");
+        if (!plan.clock.valid) {
+            clock.fail("PRCM_RESOURCE", "Clock declaration is invalid.");
+        }
+        if (!plan.reset.valid) {
+            reset.fail("PRCM_RESOURCE", "Reset declaration is invalid.");
         }
         if (plan.clock.moduleName == plan.reset.moduleName) {
             conflict(
                 reset.member("name"),
                 "Clock and reset modules need distinct names.",
                 clock.member("name").position());
-        }
-        QMap<QString, QSocPrcmSource> resetPort;
-        for (const auto &port : QSocResetPrimitive::describePorts(plan.reset)) {
-            if (resetPort.contains(port.name)) {
-                conflict(
-                    reset,
-                    "Reset port has conflicting roles: " + port.name,
-                    resetPort.value(port.name));
-            }
-            resetPort.insert(port.name, reset.position());
         }
         QSocMmioPlan mmio;
         mmio.bus          = plan.input.bus;
@@ -204,6 +231,7 @@ public:
                 .fail("PRCM_MMIO", errors.join('\n').replace("generator.", "prcm.mmio."));
         }
         checkManagement();
+        bindOutput();
         checkExternal();
         for (auto domain = plan.input.domain.cbegin(); domain != plan.input.domain.cend();
              ++domain) {
@@ -297,6 +325,20 @@ private:
         requirePort(plan.clock.ports, plan.input.clockInput, true, field.member("clock"));
         for (const auto &source : plan.clock.inputs) {
             input(source.name, clock.member("input").member(source.name));
+        }
+    }
+
+    void bindOutput()
+    {
+        for (const auto &port : plan.clock.ports) {
+            if (!port.isInput) {
+                drive(port.name, clock.member("target").member(port.name));
+            }
+        }
+        for (const auto &port : QSocResetPrimitive::describePorts(plan.reset)) {
+            if (!port.isInput) {
+                drive(port.name, reset.member("target").member(port.name));
+            }
         }
     }
 
@@ -397,6 +439,8 @@ private:
             "reset." + plan.reset.name + "." + domain.reset.source,
             field.member("reset").member("source"));
         checkFanout(domain, enable, gate, field);
+        drive(enable, gate.member("enable"));
+        drive(domain.reset.source, field.member("reset").member("source"));
         plan.domain.insert(
             name,
             {enable,

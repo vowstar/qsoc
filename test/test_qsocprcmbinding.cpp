@@ -80,6 +80,68 @@ private slots:
         QCOMPARE(duplicate.diagnostic[0].source.size(), 2);
     }
 
+    void unusedSource()
+    {
+        auto node                                = YAML::Load(qsocPrcmDeclaration());
+        node["reset"][0]["source"]["periph_clk"] = YAML::Load("{active: low}");
+        const auto result = QSocPrcmBinding::resolve(node, "controller.soc_net");
+        QVERIFY(result.plan);
+        QCOMPARE(QSocResetPrimitive::describePorts(result.plan->reset).size(), 4);
+    }
+
+    void roleSource_data()
+    {
+        QTest::addColumn<QString>("fault");
+        QTest::addColumn<QStringList>("path");
+        QTest::newRow("clock-input-target")
+            << QString("clock-input-target")
+            << QStringList{"clock[0].target.aon_clk", "clock[0].input.aon_clk"};
+        QTest::newRow("clock-control-target")
+            << QString("clock-control-target")
+            << QStringList{"clock[0].target.periph_clk.icg.enable", "clock[0].target.periph_clk"};
+        QTest::newRow("reset-clock-source")
+            << QString("reset-clock-source")
+            << QStringList{"reset[0].target.periph_n.async.clock", "reset[0].source.periph_clk"};
+        QTest::newRow("reset-clock-target")
+            << QString("reset-clock-target")
+            << QStringList{"reset[0].target.periph_n.async.clock", "reset[0].target.periph_n"};
+    }
+
+    void roleSource()
+    {
+        QFETCH(QString, fault);
+        QFETCH(QStringList, path);
+        auto node   = YAML::Load(qsocPrcmDeclaration());
+        auto target = node["reset"][0]["target"]["periph_n"];
+        if (fault == "clock-input-target") {
+            node["clock"][0]["target"]["aon_clk"] = YAML::Clone(
+                node["clock"][0]["target"]["periph_clk"]);
+            node["clock"][0]["target"].remove("periph_clk");
+            node["prcm"]["domain"]["periph"]["clock"]["target"] = "aon_clk";
+            target["async"]["clock"]                            = "aon_clk";
+        }
+        if (fault == "clock-control-target")
+            node["clock"][0]["target"]["periph_clk"]["icg"]["enable"] = "periph_clk";
+        if (fault == "reset-clock-source") {
+            node["reset"][0]["source"]["periph_clk"] = YAML::Load("{active: low}");
+            target["link"]["periph_clk"]             = YAML::Load("{}");
+        }
+        if (fault == "reset-clock-target")
+            target["async"]["clock"] = "periph_n";
+        const auto result = QSocPrcmBinding::resolve(YAML::Load(YAML::Dump(node)), "role.soc_net");
+        QVERIFY(!result.plan);
+        QCOMPARE(result.diagnostic.size(), 1);
+        QCOMPARE(result.diagnostic[0].code, "PRCM_RESOURCE_CONFLICT");
+        QCOMPARE(result.diagnostic[0].source.size(), path.size());
+        for (qsizetype i = 0; i < path.size(); ++i) {
+            const auto &source = result.diagnostic[0].source[i];
+            QCOMPARE(source.file, "role.soc_net");
+            QCOMPARE(source.path, path[i]);
+            QVERIFY(source.line > 0);
+            QVERIFY(source.column > 0);
+        }
+    }
+
     void reject_data()
     {
         QTest::addColumn<QString>("fault");
@@ -104,6 +166,11 @@ private slots:
         }
         for (const auto &name :
              {"request-feedback",
+              "power-gate",
+              "feedback-gate",
+              "request-clock",
+              "request-reset",
+              "request-reset-target",
               "cross-request-feedback",
               "root-control",
               "clock-control",
@@ -170,6 +237,16 @@ private slots:
             node["power"].push_back(YAML::Load("{name: legacy}"));
         if (fault == "reset-mix")
             target["count"] = YAML::Load("{clock: periph_clk, cycle: 8}");
+        if (fault == "power-gate")
+            node["prcm"]["supply"]["periph"]["request"] = "gate_en";
+        if (fault == "feedback-gate")
+            domain["quiesce"]["ack"]["signal"] = "gate_en";
+        if (fault == "request-clock")
+            domain["quiesce"]["request"] = "periph_clk";
+        if (fault == "request-reset")
+            domain["quiesce"]["request"] = "hold_n";
+        if (fault == "request-reset-target")
+            domain["quiesce"]["request"] = "periph_n";
         if (fault == "request-feedback")
             domain["quiesce"]["ack"]["signal"] = "stop_req";
         if (fault == "cross-request-feedback")
