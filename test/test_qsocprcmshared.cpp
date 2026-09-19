@@ -602,7 +602,7 @@ private slots:
             QVERIFY(process.waitForFinished(210000));
             const auto output = process.readAll();
             QCOMPARE(process.exitStatus(), QProcess::NormalExit);
-            QVERIFY2(process.exitCode() == 0, output.right(10000).constData());
+            QVERIFY2(process.exitCode() == 0, output.right(3000).constData());
             QFile status(directory.filePath(QString("control_%1/status").arg(task)));
             QVERIFY(status.open(QIODevice::ReadOnly));
             QCOMPARE(status.readAll().simplified().split(' ').first(), QByteArray("PASS"));
