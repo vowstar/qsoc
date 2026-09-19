@@ -140,6 +140,11 @@ public:
 
     QMap<QString, QSocMmioPortDescription> ports() const { return portTable; }
 
+    QJsonObject bindings() const
+    {
+        return {{"module", moduleName}, {"instance", instanceTable}, {"receiver", receiverTable}};
+    }
+
 private:
     void collectPort()
     {
@@ -189,22 +194,44 @@ private:
         portTable.remove(domain.reset.source);
     }
 
-    static void emitInstance(
+    void recordInstance(
+        const QString                &module,
+        const QString                &name,
+        const QMap<QString, QString> &connection,
+        const QJsonObject            &parameter = {})
+    {
+        QJsonObject port;
+        for (auto it = connection.cbegin(); it != connection.cend(); ++it)
+            port.insert(it.key(), it.value());
+        instanceTable
+            .insert(name, QJsonObject{{"module", module}, {"port", port}, {"parameter", parameter}});
+    }
+
+    void emitInstance(
         QTextStream                  &out,
         const QString                &module,
         const QString                &name,
         const QMap<QString, QString> &connection)
     {
+        recordInstance(module, name, connection);
         QStringList port;
         for (auto it = connection.cbegin(); it != connection.cend(); ++it)
             port.append("    ." + it.key() + "(" + it.value() + ")");
         out << '\n' << module << ' ' << name << " (\n" << port.join(",\n") << "\n);\n";
     }
 
-    void emitReset(QTextStream &out) const
+    void emitReset(QTextStream &out)
     {
         const auto clock = plan.input.clockInput;
         const auto cold  = prefix + "cold_n";
+        recordInstance(
+            "qsoc_rst_sync",
+            prefix + "cold_inst",
+            {{"clk", clock},
+             {"rst_in_n", plan.input.resetSource},
+             {"test_enable", "1'b0"},
+             {"rst_out_n", cold}},
+            {{"STAGE", sampleStage}});
         out << "wire " << cold << ";\n";
         out << "qsoc_rst_sync #(.STAGE(" << sampleStage << ")) " << prefix << "cold_inst (\n"
             << "    .clk(" << clock << "), .rst_in_n(" << plan.input.resetSource
@@ -218,6 +245,14 @@ private:
         for (const auto &item :
              {qMakePair(QString("clear"), management), qMakePair(QString("reset"), reset)}) {
             const auto sample = prefix + item.first + "_sample";
+            receiverTable.insert(
+                sample,
+                QJsonObject{
+                    {"clock", clock},
+                    {"edge", "rise"},
+                    {"stage", sampleStage},
+                    {"input", item.second},
+                    {"reset", QJsonObject{{"signal", cold}, {"active", "low"}}}});
             out << "reg [" << sampleStage - 1 << ":0] " << sample << ";\n"
                 << "always @(posedge " << clock << " or negedge " << cold << ") begin\n"
                 << "    if (!" << cold << ") " << sample << " <= {" << sampleStage << "{1'b1}};\n"
@@ -253,7 +288,7 @@ private:
             << "decoded : " << prefix << "target_q;\n";
     }
 
-    void emitAction(QTextStream &out) const
+    void emitAction(QTextStream &out)
     {
         for (const auto &name : {"off", "held", "run", "fault", "watch", "reset_request"})
             out << "wire " << prefix << name << ";\n";
@@ -321,6 +356,8 @@ private:
     QSocPrcmSupply                         supply;
     QString                                prefix = "prcm_";
     QMap<QString, QSocMmioPortDescription> portTable;
+    QJsonObject                            instanceTable;
+    QJsonObject                            receiverTable;
 };
 
 } // namespace
@@ -392,8 +429,9 @@ QSocPrcmGenerateResult QSocPrcmGenerator::generate(
         add(circuit.mmio.moduleName + ".v", QSocMmioGenerator::generateVerilog(circuit.mmio));
         Assembly assembly(binding, *sequence.plan, circuit.mmio, moduleName, sampleStage);
         add(moduleName + ".v", assembly.generate());
-        circuit.port   = assembly.ports();
-        result.circuit = std::move(circuit);
+        circuit.port    = assembly.ports();
+        circuit.binding = assembly.bindings();
+        result.circuit  = std::move(circuit);
     } catch (const QSocPrcmDiagnostic &diagnostic) {
         result.diagnostic.append(diagnostic);
     }

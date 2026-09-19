@@ -351,6 +351,25 @@ private slots:
         QVERIFY2(generated.circuit.has_value(), qPrintable(error.join('\n')));
         const auto &circuit = *generated.circuit;
         QCOMPARE(circuit.rtl.size(), 7);
+        QCOMPARE(circuit.binding["module"].toString(), "controller");
+        const auto instance = circuit.binding["instance"].toObject();
+        QCOMPARE(instance.size(), 5);
+        const auto cold = instance["prcm__cold_inst"].toObject();
+        QCOMPARE(cold["module"].toString(), "qsoc_rst_sync");
+        QCOMPARE(cold["parameter"].toObject()["STAGE"].toInt(), activeHigh ? 3 : 2);
+        QCOMPARE(cold["port"].toObject()["rst_in_n"].toString(), "por_n");
+        const auto bus = instance["prcm__register_inst"].toObject()["port"].toObject();
+        QCOMPARE(bus["rst_ni"].toString(), "prcm__cold_n");
+        QCOMPARE(bus["clear_i"].toString(), "prcm__clear");
+        const auto receiver = circuit.binding["receiver"].toObject();
+        QCOMPARE(receiver.size(), 2);
+        const auto sample = receiver["prcm__reset_sample"].toObject();
+        QCOMPARE(sample["clock"].toString(), "prcm_clk");
+        QCOMPARE(sample["stage"].toInt(), activeHigh ? 3 : 2);
+        QCOMPARE(sample["input"].toString(), activeHigh ? "periph_n" : "!periph_n");
+        QCOMPARE(
+            receiver["prcm__clear_sample"].toObject()["input"].toString(),
+            activeHigh ? "manage_n" : "!manage_n");
         QCOMPARE(circuit.mmio.registers[0].byteOffset, quint64(0));
         QCOMPARE(circuit.mmio.registers[1].byteOffset, quint64(width / 8));
         QCOMPARE(circuit.mmio.registers[2].byteOffset, quint64(width / 4));

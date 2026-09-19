@@ -118,7 +118,7 @@ For `prcm.soc_net`, the project output contains:
   [`prcm/rtl/clock_cell.v`, `prcm/rtl/reset_cell.v`], [Replaceable resource cells],
   [`prcm/rtl/prcm.fl`], [RTL file list, relative to its directory],
   [`prcm/include/prcm.h`], [Register offsets, field masks, and mode codes],
-  [`prcm/integration/prcm.json`], [Interface conditions and model check scope],
+  [`prcm/integration/prcm.json`], [Circuit bindings, interface conditions, and check scope],
   [`prcm/formal/prcm_formal.sv`], [Optional RTL assertions and environment],
   [`prcm/formal/check.sby`, `prcm/formal/prcm_formal.fl`], [Optional proof job and file list],
 )
@@ -129,9 +129,11 @@ REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains t
 
 Management reset clears the software request to reset_mode and retains action state, accepted transactions, pending responses, and event history. A pending write can complete after reset and change the target again. Cold reset cancels transactions. Multiple software users must serialize a complete mode operation through the platform's normal locking and MMIO ordering rules.
 
-Sequence checks cover the normal feedback model. Progress requires a stable target and eventual feedback. Customer logic, cell replacements, and physical timing need separate checks. The integration report leaves physical checks incomplete.
+Sequence checks cover normal feedback. Progress requires a stable target and eventual feedback. Customer logic and cell replacements need separate checks.
 
-`--with-formal` emits checks for the actual circuit in a separate directory. The RTL file list contains only synthesis input. File generation does not run the RTL checks. The integration report records not_run.
+`binding` records top-level instances and port connections. Receiver entries identify registers, inputs, clock edges, resets, and stage counts. Names are relative to the top module. Map them to the actual cell and netlist before applying physical constraints.
+
+`--with-formal` emits checks for the actual circuit in a separate directory. Proof jobs select the synthesis branch of resource cells. The RTL file list contains only synthesis input. File generation does not run the RTL checks. The integration report records not_run.
 
 #table(
   columns: (auto, 1fr),
@@ -143,4 +145,4 @@ Sequence checks cover the normal feedback model. Progress requires a stable targ
 
 The RTL checks compare register values and power, isolation, and quiesce requests with an independent phase model. Hardware event set takes priority over software clear. Management reset retains event history.
 
-The safety environment permits arbitrary feedback delay, write data, byte masks, and sampled power loss. Reachability uses one cold start, a legal operating mode followed by OFF, full write strobes, one-cycle feedback, and a finite depth. It does not prove eventual completion. RUN and management-reset coverage only apply when the input declares them. Physical reset timing and synchronization reliability are outside these RTL assertions.
+Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Bounded reachability uses one cold start, a legal operating mode then OFF, full strobes, and one-cycle feedback. RUN and management-reset coverage require those features in the input. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.

@@ -405,12 +405,14 @@ endmodule
     result.systemVerilog = "module " + top + " #(parameter COVER = 0);\n" + declaration.join('\n')
                            + '\n' + moduleName + " dut(\n" + connection.join(",\n") + "\n);\n"
                            + body;
-    auto files           = circuit.rtl.keys();
+    const auto rtl       = circuit.rtl.keys();
+    auto       files     = rtl;
     files.append(top + ".sv");
     result.sby = "[tasks]\nprove\ncover\n[options]\nprove: mode prove\ncover: mode cover\n"
                  "depth 160\ntimeout 120\nmulticlock on\nprove: aigsmt z3\n[engines]\n"
-                 "prove: abc pdr\ncover: smtbmc z3\n[script]\nread -formal -noautowire "
-                 + files.join(' ') + "\ncover: chparam -set COVER 1 " + top + "\nprep -top " + top
+                 "prove: abc pdr\ncover: smtbmc z3\n[script]\nread -sv -noautowire "
+                 + rtl.join(' ') + "\nread -formal -noautowire " + top
+                 + ".sv\ncover: chparam -set COVER 1 " + top + "\nprep -top " + top
                  + " -flatten\ncheck -assert\n[files]\n" + files.join('\n') + '\n';
     return result;
 }

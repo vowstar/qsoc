@@ -109,6 +109,34 @@ private slots:
             QVERIFY(status.open(QIODevice::ReadOnly));
             QCOMPARE(status.readAll().simplified().split(' ').first(), QByteArray("PASS"));
         }
+        if (run)
+            return;
+        const auto    cell       = generated.circuit->rtl["clock_cell.v"];
+        const QString assignment = "assign clk_out = iq & clk;";
+        QCOMPARE(cell.count(assignment), 1);
+        auto fault = cell;
+        fault.replace(
+            assignment,
+            "`ifdef SYNTHESIS\n`ifdef FORMAL\n" + assignment
+                + "\n`else\nassign clk_out = clk;\n`endif\n`else\n" + assignment + "\n`endif");
+        for (const bool corrupt : {true, false}) {
+            QVERIFY(save(directory.filePath("clock_cell.v"), corrupt ? fault : cell));
+            process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", "prove"});
+            QVERIFY(process.waitForStarted());
+            QVERIFY(process.waitForFinished(180000));
+            const auto log = process.readAll();
+            QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+            QFile status(directory.filePath("control_prove/status"));
+            QVERIFY(status.open(QIODevice::ReadOnly));
+            QCOMPARE(
+                status.readAll().simplified().split(' ').first(),
+                QByteArray(corrupt ? "FAIL" : "PASS"));
+            if (corrupt)
+                QVERIFY2(
+                    log.contains("Assert failed in control_formal: off_control"), log.constData());
+            else
+                QVERIFY2(process.exitCode() == 0, log.constData());
+        }
     }
 };
 

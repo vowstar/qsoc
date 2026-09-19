@@ -143,6 +143,10 @@ private slots:
         QCOMPARE(report["check"].toObject()["physical"].toString(), "not_run");
         QCOMPARE(report["check"].toObject()["rtl"].toString(), "not_generated");
         QCOMPARE(report["reset"].toObject()["stage"].toInt(), axi ? 3 : 2);
+        QCOMPARE(report["binding"].toObject()["module"].toString(), "controller");
+        const auto receiver = report["binding"].toObject()["receiver"].toObject();
+        QCOMPARE(receiver["prcm_reset_sample"].toObject()["stage"].toInt(), axi ? 3 : 2);
+        QCOMPARE(receiver["prcm_clear_sample"].toObject()["input"].toString(), "1'b0");
         const auto clockPath = output.filePath("rtl/clock_cell.v");
         const auto clock     = read(clockPath);
         const auto custom    = clock + "\n// Custom cell boundary.\n";

@@ -5,12 +5,14 @@
 #define QSOCPRCMGENERATOR_H
 
 #include "common/qsocprcmbinding.h"
+#include <QJsonObject>
 
 struct QSocPrcmCircuit
 {
     QSocMmioPlan                           mmio;
     QMap<QString, QString>                 rtl;
     QMap<QString, QSocMmioPortDescription> port;
+    QJsonObject                            binding;
 };
 
 struct QSocPrcmGenerateResult

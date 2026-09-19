@@ -117,7 +117,8 @@ QString softwareHeader(
     return lines.join('\n') + '\n';
 }
 
-QByteArray integrationReport(const QSocPrcmBindingPlan &plan, bool formal)
+QByteArray integrationReport(
+    const QSocPrcmBindingPlan &plan, const QSocPrcmCircuit &circuit, bool formal)
 {
     const auto &input  = plan.input;
     const auto &domain = *input.domain.cbegin();
@@ -130,6 +131,7 @@ QByteArray integrationReport(const QSocPrcmBindingPlan &plan, bool formal)
              {"target", input.resetTarget},
              {"stage", *input.resetStage}}},
         {"domain", input.domain.firstKey()},
+        {"binding", circuit.binding},
         {"feedback",
          QJsonObject{
              {"power", input.supplyTable[domain.supply].valid.signal},
@@ -150,6 +152,8 @@ QByteArray integrationReport(const QSocPrcmBindingPlan &plan, bool formal)
              "Reset pulse width, recovery, removal, and receiver reliability require physical "
              "checks.",
              "Clock gate and reset cell replacements must preserve the control contract.",
+             "Binding names refer to the emitted top module. Cell internals and mapped netlist "
+             "objects require checks against the actual implementation.",
              "Held requests receive feedback. A stable target is required for progress.",
              "The sequence model excludes management reset and independent reset intervention.",
              "The RTL checks cover power, isolation, and quiesce requests. Bus checks cover "
@@ -302,7 +306,7 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
              softwareHeader(circuit, plan.input, name).toUtf8()});
         artifact.push_back(
             {output.filePath("integration/" + name + ".json"),
-             integrationReport(plan, parser.isSet("with-formal"))});
+             integrationReport(plan, circuit, parser.isSet("with-formal"))});
         if (parser.isSet("with-formal")) {
             auto formal = QSocPrcmFormal::generate(plan, circuit, name, *plan.input.resetStage);
             QStringList formalList;
