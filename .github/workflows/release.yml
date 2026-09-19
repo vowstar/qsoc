@@ -181,6 +181,8 @@ jobs:
       run: |
         mkdir deploy
         copy build\qsoc.exe deploy\
+        mkdir deploy\license
+        copy external\z3\LICENSE.txt deploy\license\z3.txt
         windeployqt deploy\qsoc.exe --release --no-translations --no-system-d3d-compiler --no-opengl-sw
         # Bundle Qt modules that windeployqt may miss
         $qtBin = "$env:QT_ROOT_DIR\bin"
@@ -244,6 +246,8 @@ jobs:
       run: |
         mkdir deploy
         cp -a build/qsoc.app deploy/QSoC.app
+        mkdir -p deploy/QSoC.app/Contents/Resources/license
+        cp external/z3/LICENSE.txt deploy/QSoC.app/Contents/Resources/license/z3.txt
         macdeployqt deploy/QSoC.app -verbose=1
 
     - name: Verify deployment

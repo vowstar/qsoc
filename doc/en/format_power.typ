@@ -2,6 +2,8 @@
 <power-format>
 The `power` section defines power domains, sequencing, and dependencies.
 
+The generator does not support a `prcm` section.
+
 #block(
   fill: rgb("#fffce8"),
   inset: 8pt,

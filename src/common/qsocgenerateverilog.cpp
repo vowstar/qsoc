@@ -406,6 +406,11 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool formatOutput)
 {
     emissionRejected = false;
+    if (netlistData.IsMap() && netlistData["prcm"].IsDefined()) {
+        emissionRejected = true;
+        QSocConsole::error() << "PRCM_UNSUPPORTED: PRCM circuit generation is not available.";
+        return false;
+    }
     /* Create unconnected port reporter for collecting data */
     QSocGenerateReportUnconnected unconnectedPortReporter;
 
