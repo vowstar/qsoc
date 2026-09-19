@@ -20,11 +20,8 @@
  * relay sits in front of it, so the link can be blackholed and healed at an
  * exact point without touching the host.
  *
- * Every assertion is made against the decoded request log the mock LLM
- * writes, not against terminal output. That is deliberate: an earlier version
- * of this scenario read "turns kept coming" off the screen and concluded the
- * workflow had recovered, when in fact the mock was looping. The wire is the
- * only place where what the model was actually told is visible.
+ * Continuations use the decoded request log. Stop notices use terminal
+ * output so an early exit also has a checked reason.
  *
  * Waits are bounded predicates on that log, never fixed sleeps, so the
  * ordering is decided by observed progress rather than by a race.
@@ -391,12 +388,12 @@ void Test::aDeadWorkspaceEndsTheTurnInsteadOfBurningTheCap()
         "the agent never finished after the workspace died");
 
     const int served = wireRequests();
+    QVERIFY(served >= 1);
+    QCOMPARE(m_agent.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(m_agent.exitCode(), 0);
     QVERIFY2(
-        served >= 2,
-        qPrintable(QStringLiteral(
-                       "expected the failure to be observed, "
-                       "only %1 request(s) served")
-                       .arg(served)));
+        agentOutput().contains("The remote workspace is unusable"),
+        "the agent stops without explaining the lost workspace");
     /* The iteration cap is 100. Ending the turn means a handful of requests,
      * not that. */
     QVERIFY2(
