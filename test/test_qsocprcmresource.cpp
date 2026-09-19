@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivereset.h"
+#include "common/qsocprojectmanager.h"
+#include "qsoc_prcm_fixture.h"
 #include "qsoc_test.h"
 
+#include <QFile>
+#include <QProcess>
 #include <QRegularExpression>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QtTest>
 
 namespace {
@@ -26,11 +33,154 @@ Shape rtlPorts(const QString &rtl)
     return shape;
 }
 
+bool save(const QString &path, const QString &text)
+{
+    QFile      file(path);
+    const auto data = text.toUtf8();
+    return file.open(QIODevice::WriteOnly) && file.write(data) == data.size();
+}
+
+void checkCell(const QString &path, const QString &cell, const QString &contract)
+{
+    for (const auto &tool : {"sby", "yosys", "z3"}) {
+        if (QStandardPaths::findExecutable(tool).isEmpty()) {
+            QSOC_TEST_MISSING_DEPENDENCY(tool);
+        }
+    }
+    QVERIFY(save(path + "/contract.sv", contract));
+    const QString job = QString(R"([tasks]
+prove
+cover
+[options]
+prove: mode prove
+cover: mode cover
+depth 20
+timeout 60
+multiclock on
+prove: aigsmt z3
+[engines]
+prove: abc pdr
+cover: smtbmc z3
+[script]
+read -formal -D SYNTHESIS dut.v %1 contract.sv
+prep -top contract
+[files]
+dut.v
+%1
+contract.sv
+)")
+                            .arg(cell);
+    QVERIFY(save(path + "/cell.sby", job));
+    QProcess process;
+    process.setWorkingDirectory(path);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(QStandardPaths::findExecutable("sby"), {"-f", "cell.sby"});
+    QVERIFY(process.waitForStarted());
+    QVERIFY(process.waitForFinished(90000));
+    const auto output = process.readAll();
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(process.exitCode() == 0, output.constData());
+    for (const auto &task : {"prove", "cover"}) {
+        QFile status(path + "/cell_" + task + "/status");
+        QVERIFY(status.open(QIODevice::ReadOnly));
+        QCOMPARE(status.readAll().simplified().split(' ').constFirst(), QByteArray("PASS"));
+    }
+}
+
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void gateBehavior()
+    {
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_gate-XXXXXX");
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(directory.path());
+        project.setOutputPath(directory.path());
+        QSocGenerateManager manager(nullptr, &project);
+        QSocClockPrimitive  generator(&manager);
+        QString             rtl;
+        QTextStream         stream(&rtl);
+        QVERIFY(
+            generator.generateClockController(YAML::Load(qsocPrcmDeclaration())["clock"][0], stream));
+        QVERIFY(save(directory.filePath("dut.v"), rtl));
+        checkCell(
+            directory.path(),
+            "clock_cell.v",
+            R"(
+module contract(input clk, input en, input por_n);
+wire gated;
+clock dut(.aon_clk(clk), .gate_en(en), .por_n(por_n), .periph_clk(gated));
+reg history = 0;
+always @($global_clock) begin
+    history <= 1;
+    if (!clk) assert(!gated);
+    if (history && clk && $past(clk)) assert(gated == $past(gated));
+    if (history && clk && !$past(clk)) assert(gated == $past(en));
+    cover(history && clk && !$past(clk) && gated);
+    cover(history && clk && !$past(clk) && !gated);
+end
+endmodule
+)");
+    }
+
+    void resetBehavior_data()
+    {
+        QTest::addColumn<int>("stage");
+        QTest::newRow("two-stage") << 2;
+        QTest::newRow("three-stage") << 3;
+    }
+
+    void resetBehavior()
+    {
+        QFETCH(int, stage);
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_reset-XXXXXX");
+        QVERIFY(directory.isValid());
+        auto node = YAML::Load(qsocPrcmDeclaration())["reset"][0];
+        node["target"]["periph_n"]["async"]["stage"] = stage;
+        QSocProjectManager project;
+        project.setCurrentPath(directory.path());
+        project.setOutputPath(directory.path());
+        QSocGenerateManager manager(nullptr, &project);
+        QSocResetPrimitive  generator(&manager);
+        QString             rtl;
+        QTextStream         stream(&rtl);
+        QVERIFY(generator.generateResetController(node, stream));
+        QVERIFY(save(directory.filePath("dut.v"), rtl));
+        checkCell(
+            directory.path(),
+            "reset_cell.v",
+            QString(R"(
+module contract(input clk, input por_n, input hold_n);
+localparam STAGE = %1;
+wire rst_n = por_n & hold_n;
+wire out_n;
+reset dut(.periph_clk(clk), .por_n(por_n), .hold_n(hold_n), .periph_n(out_n));
+reg seen_reset = 0;
+reg history = 0;
+reg released = 0;
+reg [$clog2(STAGE+1)-1:0] count;
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) count <= 0;
+    else if (count < STAGE) count <= count + 1'b1;
+end
+always @($global_clock) begin
+    history <= 1;
+    if (!rst_n) seen_reset <= 1;
+    if (history && !rst_n && !$past(rst_n)) assert(!out_n);
+    if (seen_reset && rst_n && count < STAGE) assert(!out_n);
+    if (seen_reset && rst_n && count == STAGE) assert(out_n);
+    if (seen_reset && rst_n && count == STAGE && out_n) released <= 1;
+    cover(seen_reset && rst_n && count == STAGE && out_n);
+    cover(released && history && $past(out_n) && !rst_n && !out_n && !clk && !$past(clk));
+end
+endmodule
+)")
+                .arg(stage));
+    }
+
     void clockPort_data()
     {
         QTest::addColumn<int>("width");
