@@ -16,6 +16,22 @@ struct Context
 {
     QString                       file;
     QMap<QString, QSocPrcmSource> source;
+    QMap<QString, QSocPrcmSource> origin;
+
+    QSocPrcmSource locate(const QString &path, const YAML::Mark &mark) const
+    {
+        QString prefix = path;
+        while (!prefix.isEmpty() && !origin.contains(prefix)) {
+            const auto end = qMax(prefix.lastIndexOf('.'), prefix.lastIndexOf('['));
+            prefix         = end < 0 ? QString() : prefix.left(end);
+        }
+        const auto base = origin.value(prefix, {file, prefix, 0, 0});
+        return {
+            base.file,
+            base.path + path.mid(prefix.size()),
+            mark.is_null() ? base.line : mark.line + 1,
+            mark.is_null() ? base.column : mark.column + 1};
+    }
 };
 
 class Reader
@@ -27,11 +43,7 @@ public:
         , context(state)
     {
         const auto mark = node.IsDefined() ? node.Mark() : fallback;
-        origin
-            = {context.file,
-               path,
-               mark.is_null() ? 0 : mark.line + 1,
-               mark.is_null() ? 0 : mark.column + 1};
+        origin          = context.locate(path, mark);
         context.source.insert(path, origin);
     }
 
@@ -69,13 +81,9 @@ public:
             if (!entry.first.IsScalar()) {
                 fail("PRCM_TYPE", "Field names must be text.");
             }
-            const QString        name = QString::fromStdString(entry.first.Scalar());
-            const auto           mark = entry.first.Mark();
-            const QSocPrcmSource location{
-                context.file,
-                path.isEmpty() ? name : path + "." + name,
-                mark.is_null() ? 0 : mark.line + 1,
-                mark.is_null() ? 0 : mark.column + 1};
+            const QString name  = QString::fromStdString(entry.first.Scalar());
+            const auto    mark  = entry.first.Mark();
+            const auto location = context.locate(path.isEmpty() ? name : path + "." + name, mark);
             if (found.contains(name)) {
                 throw QSocPrcmDiagnostic{
                     "PRCM_DUPLICATE",

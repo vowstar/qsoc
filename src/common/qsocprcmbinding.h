@@ -33,7 +33,10 @@ class QSocPrcmBinding
 {
 public:
     /* Bind direct clock gates and reset synchronizers. No transition proof. */
-    static QSocPrcmBindingResult resolve(const YAML::Node &netlist, const QString &file);
+    static QSocPrcmBindingResult resolve(
+        const YAML::Node                    &netlist,
+        const QString                       &file,
+        const QMap<QString, QSocPrcmSource> &origin = {});
 };
 
 #endif // QSOCPRCMBINDING_H

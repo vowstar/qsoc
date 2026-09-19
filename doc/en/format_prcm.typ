@@ -7,7 +7,15 @@ PRCM declares a controller, its managed domain, and legal stable modes. Version 
 qsoc generate verilog --check prcm.soc_net
 ```
 
-The command reads input files without loading a project or writing RTL. Paths are relative to the current directory. Each file is checked separately. The check does not accept `--merge`, `--force`, or `--format`.
+The command reads input files without loading a project or writing RTL. Paths are relative to the current directory. Each file is checked separately unless `--merge` is set. The check does not accept `--force` or `--format`.
+
+Use `--merge` to combine resource files with one PRCM declaration:
+
+```sh
+qsoc generate verilog --check --merge clock.soc_net reset.soc_net prcm.soc_net
+```
+
+Each resource has one definition. Duplicate declarations report both input locations. Merged diagnostics retain the original file, line, column, and field path.
 
 The controller uses an always-on supply and an active-low reset. Each domain binds a direct positive-edge clock gate and an asynchronous reset with synchronous release. The domain request cannot replace the management reset. Gate controls and domain reset requests must not also control another target.
 

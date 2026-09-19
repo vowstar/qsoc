@@ -134,7 +134,10 @@ class QSocPrcmParser
 {
 public:
     /* Parse declarations. Resource binding and semantic checks are separate. */
-    static QSocPrcmParseResult parse(const YAML::Node &netlist, const QString &file);
+    static QSocPrcmParseResult parse(
+        const YAML::Node                    &netlist,
+        const QString                       &file,
+        const QMap<QString, QSocPrcmSource> &origin = {});
 };
 
 #endif // QSOCPRCMINPUT_H

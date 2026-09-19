@@ -184,10 +184,11 @@ QSocPrcmInput input(const Reader &reader)
 
 } // namespace
 
-QSocPrcmParseResult QSocPrcmParser::parse(const YAML::Node &netlist, const QString &file)
+QSocPrcmParseResult QSocPrcmParser::parse(
+    const YAML::Node &netlist, const QString &file, const QMap<QString, QSocPrcmSource> &origin)
 {
     QSocPrcmParseResult result;
-    Context             context{file, {}};
+    Context             context{file, {}, origin};
     try {
         const Reader root(netlist, {}, context);
         root.keys();

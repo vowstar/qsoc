@@ -39,11 +39,41 @@ private slots:
         qInstallMessageHandler(previous);
     }
 
+    void merge()
+    {
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_merge_cli-XXXXXX");
+        QVERIFY(directory.isValid());
+        auto       control = YAML::Load(qsocPrcmDeclaration());
+        YAML::Node clock(YAML::NodeType::Map);
+        clock["clock"] = YAML::Clone(control["clock"]);
+        control.remove("clock");
+        const auto                      a = directory.filePath("clock.soc_net");
+        const auto                      b = directory.filePath("control.soc_net");
+        const QMap<QString, YAML::Node> files{{a, clock}, {b, control}};
+        for (auto it = files.cbegin(); it != files.cend(); ++it) {
+            QFile file(it.key());
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            const auto data = QByteArray::fromStdString(YAML::Dump(it.value()));
+            QCOMPARE(file.write(data), data.size());
+        }
+        messages.clear();
+        QSocCliWorker worker;
+        QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+        worker.setup({"qsoc", "generate", "verilog", "--check", "--merge", a, b}, false);
+        worker.run();
+        QCOMPARE(exitSpy.size(), 1);
+        QCOMPARE(exitSpy[0][0].toInt(), 0);
+        QVERIFY(messages.join('\n').contains("2 stable mode queries pass"));
+        QCOMPARE(
+            QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot),
+            (QStringList{"clock.soc_net", "control.soc_net"}));
+    }
+
     void check_data()
     {
         QTest::addColumn<QString>("fault");
         QTest::newRow("valid") << QString();
-        for (const auto &name : {"source", "mode", "merge", "format", "force", "missing", "yaml"}) {
+        for (const auto &name : {"source", "mode", "format", "force", "missing", "yaml"}) {
             QTest::newRow(name) << QString(name);
         }
     }
@@ -70,7 +100,7 @@ private slots:
             = QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
         messages.clear();
         QStringList args{"qsoc", "generate", "verilog", "--check", "-d", directory.path()};
-        if (fault == "merge" || fault == "format" || fault == "force")
+        if (fault == "format" || fault == "force")
             args.append("--" + fault);
         args.append(path);
         QSocCliWorker worker;

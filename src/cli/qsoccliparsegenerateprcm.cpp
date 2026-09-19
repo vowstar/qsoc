@@ -3,10 +3,10 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/qsocprcmbinding.h"
+#include "common/qsocprcmdocument.h"
 #include "common/qsocprcmmode.h"
 
 #include <QCoreApplication>
-#include <QFile>
 
 namespace {
 
@@ -49,29 +49,22 @@ QString statusName(QSocPrcmCheckStatus status)
 
 bool QSocCliWorker::checkPrcmNetlists(const QStringList &filePathList)
 {
-    for (const auto &path : filePathList) {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            return showError(
-                1,
-                QCoreApplication::translate("main", "Error: cannot read %1: %2")
-                    .arg(path, file.errorString()));
+    QList<QStringList> groups;
+    if (parser.isSet("merge")) {
+        groups.append(filePathList);
+    } else {
+        for (const auto &file : filePathList) {
+            groups.append(QStringList{file});
         }
-        YAML::Node node;
-        try {
-            node = YAML::Load(file.readAll().toStdString());
-        } catch (const YAML::Exception &error) {
-            return showError(
-                1,
-                describe(
-                    {{"PRCM_YAML",
-                      QString::fromStdString(error.msg),
-                      {{path,
-                        {},
-                        error.mark.is_null() ? 0 : error.mark.line + 1,
-                        error.mark.is_null() ? 0 : error.mark.column + 1}}}}));
+    }
+    for (const auto &files : groups) {
+        const auto loaded = QSocPrcmDocumentLoader::load(files);
+        if (!loaded.document) {
+            return showError(1, describe(loaded.diagnostic));
         }
-        const auto binding = QSocPrcmBinding::resolve(node, path);
+        const auto &document = *loaded.document;
+        const auto  path     = files.join(", ");
+        const auto binding = QSocPrcmBinding::resolve(document.node, document.file, document.origin);
         if (!binding.plan) {
             return showError(1, describe(binding.diagnostic));
         }

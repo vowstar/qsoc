@@ -461,15 +461,16 @@ private:
 
 } // namespace
 
-QSocPrcmBindingResult QSocPrcmBinding::resolve(const YAML::Node &netlist, const QString &file)
+QSocPrcmBindingResult QSocPrcmBinding::resolve(
+    const YAML::Node &netlist, const QString &file, const QMap<QString, QSocPrcmSource> &origin)
 {
     QSocPrcmBindingResult result;
-    auto                  parsed = QSocPrcmParser::parse(netlist, file);
+    auto                  parsed = QSocPrcmParser::parse(netlist, file, origin);
     if (!parsed.input) {
         result.diagnostic = std::move(parsed.diagnostic);
         return result;
     }
-    Context context{file, parsed.input->source};
+    Context context{file, parsed.input->source, origin};
     try {
         const Reader root(netlist, {}, context);
         if (root.has("power") && root.member("power").size() != 0) {

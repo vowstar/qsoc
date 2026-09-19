@@ -714,11 +714,11 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     }
 
     if (parser.isSet("check")) {
-        if (parser.isSet("merge") || parser.isSet("force") || parser.isSet("format")) {
+        if (parser.isSet("force") || parser.isSet("format")) {
             return showError(
                 1,
                 QCoreApplication::translate(
-                    "main", "Error: --check does not support --merge, --force or --format."));
+                    "main", "Error: --check does not support --force or --format."));
         }
         return checkPrcmNetlists(filePathList);
     }
