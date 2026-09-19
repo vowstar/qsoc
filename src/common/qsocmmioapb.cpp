@@ -45,7 +45,9 @@ QString QSocMmioApb::generate(const QSocMmioPlan &plan)
     lines.append(registers.storage);
     lines.append(registers.decode);
     lines.append("wire write_fire = s_apb_pselx && s_apb_penable && s_apb_pwrite && s_apb_pready;");
-    lines.append("assign s_apb_pready = rst_ni;");
+    lines.append(
+        "assign s_apb_pready = rst_ni"
+        + (plan.clearPort.isEmpty() ? QString() : " && !" + plan.clearPort) + ";");
     lines.append("assign s_apb_pslverr = rst_ni && s_apb_pselx && s_apb_penable");
     lines.append("                      && !address_is_mapped(s_apb_paddr);");
     lines.append("assign s_apb_prdata = rst_ni && s_apb_pselx && s_apb_penable && !s_apb_pwrite");

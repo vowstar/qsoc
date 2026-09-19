@@ -1137,6 +1137,8 @@ QString buildFileList(const QSocMmioPlan &plan)
 
 QSocMmioUvmCollateral QSocMmioUvm::generate(const QSocMmioPlan &plan)
 {
+    if (!plan.clearPort.isEmpty())
+        return {};
     if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
         return QSocMmioAhbVerification::uvm(plan);
     }

@@ -68,6 +68,8 @@ struct QSocMmioPlan
     QList<QSocMmioRegisterPlan> registers;
     /* Unlisted addresses below this byte limit read zero and ignore writes with OKAY. */
     quint64 zeroFillBytes = 0;
+    /* Synchronous RW clear. Bus state and W1C history remain live. */
+    QString clearPort;
 
     bool operator==(const QSocMmioPlan &) const = default;
 };

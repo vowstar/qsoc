@@ -970,6 +970,7 @@ private slots:
     void describePortsMatchesGeneratedHeader();
     void moduleProjectionMatchesDescribedPorts();
     void canonicalizeRejectsConstructedInvalidPlan();
+    void writeOneClearClaimsBothPorts();
     void generatedVerilogPassesProtocolSmokeTestWhenIverilogIsAvailable();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable_data();
     void generatedWidthsPassProtocolSmokeTestWhenIverilogIsAvailable();
@@ -1680,6 +1681,28 @@ void Test::moduleProjectionMatchesDescribedPorts()
         QString::fromStdString(projection["bus"]["control"]["mode"].as<std::string>()),
         QString("slave"));
     QCOMPARE(int(projection["bus"]["control"]["mapping"].size()), 19);
+}
+
+void Test::writeOneClearClaimsBothPorts()
+{
+    QSocMmioPlan plan;
+    QVERIFY(QSocMmioGenerator::buildPlan(makeValidDefinition(), &plan));
+    QSocMmioFieldPlan field;
+    field.name       = "pending";
+    field.access     = QSocMmioAccess::WriteOneClear;
+    field.resetValue = 0;
+    field.inputPort  = "event_i";
+    field.outputPort = "event_o";
+    plan.registers.append({"irq", {}, 0x18, {field}});
+    QStringList error;
+    QVERIFY(QSocMmioGenerator::canonicalizePlan(&plan, &error));
+    for (const auto &name : {"clk_i", "event_i", "write_fire", "mode_o"}) {
+        auto invalid                                  = plan;
+        invalid.registers.last().fields[0].outputPort = name;
+        QVERIFY2(!QSocMmioGenerator::canonicalizePlan(&invalid, &error), name);
+        QVERIFY(
+            error.join('\n').contains("MMIO_CONFLICT generator.register.irq.field.pending.output"));
+    }
 }
 
 void Test::canonicalizeRejectsConstructedInvalidPlan()

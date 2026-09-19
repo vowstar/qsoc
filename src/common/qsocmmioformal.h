@@ -9,6 +9,7 @@ struct QSocMmioPlan;
 
 namespace QSocMmioFormal {
 
+/* Empty for a synchronous clear plan, which needs controller-specific checks. */
 QSocMmioFormalCollateral generate(const QSocMmioPlan &plan);
 
 } // namespace QSocMmioFormal
