@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocprcmcomposition.h"
+#include "common/qsocprcmformal.h"
 #include "common/qsocprcmshared.h"
 #include "qsoc_test.h"
 
@@ -550,6 +551,62 @@ private slots:
         QVERIFY(distinct.circuit);
         QCOMPARE(distinct.circuit->mmio.registers[0].name, "CHIP_REQUEST");
         QCOMPARE(distinct.circuit->mmio.registers[2].name, "DOMAIN_CHIP_REQUEST");
+    }
+
+    void formal_data()
+    {
+        QTest::addColumn<bool>("axi");
+        QTest::newRow("apb8-shared-names") << false;
+        QTest::newRow("axi32") << true;
+    }
+
+    void formal()
+    {
+        QFETCH(bool, axi);
+        for (const auto &tool : {"sby", "yosys", "z3"}) {
+            if (QStandardPaths::findExecutable(tool).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(tool);
+        }
+        auto input = declaration(axi, !axi);
+        if (!axi) {
+            input = YAML::Load(
+                QString::fromStdString(YAML::Dump(input))
+                    .replace("aon_clk", "D")
+                    .replace("warm_n", "FAULT")
+                    .replace("client_power", "endmodule_power")
+                    .replace("por_n", "proof_cold_n")
+                    .toStdString());
+        }
+        const auto bound = QSocPrcmBinding::resolve(input, "control.soc_net");
+        QVERIFY(bound.plan);
+        const auto composition = QSocPrcmComposition::build(bound.plan->input);
+        QVERIFY(composition.plan);
+        const auto generated = QSocPrcmShared::generate(*bound.plan, "control", 2);
+        QVERIFY(generated.circuit);
+        const auto formal = QSocPrcmFormal::generateShared(
+            *bound.plan, *composition.plan, *generated.circuit, "control", 2);
+        QVERIFY(!formal.systemVerilog.contains(QRegularExpression("@[A-Za-z_]+@")));
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared_formal-XXXXXX");
+        QVERIFY(directory.isValid());
+        for (auto file = generated.circuit->rtl.cbegin(); file != generated.circuit->rtl.cend();
+             ++file)
+            QVERIFY(save(directory.filePath(file.key()), file.value()));
+        QVERIFY(save(directory.filePath("control_formal.sv"), formal.systemVerilog));
+        QVERIFY(save(directory.filePath("control.sby"), formal.sby));
+        QProcess process;
+        process.setWorkingDirectory(directory.path());
+        process.setProcessChannelMode(QProcess::MergedChannels);
+        for (const auto &task : {"normal", "fault"}) {
+            process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", task});
+            QVERIFY(process.waitForStarted());
+            QVERIFY(process.waitForFinished(210000));
+            const auto output = process.readAll();
+            QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+            QVERIFY2(process.exitCode() == 0, output.right(10000).constData());
+            QFile status(directory.filePath(QString("control_%1/status").arg(task)));
+            QVERIFY(status.open(QIODevice::ReadOnly));
+            QCOMPARE(status.readAll().simplified().split(' ').first(), QByteArray("PASS"));
+        }
     }
 
     void behavior_data()

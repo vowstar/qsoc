@@ -6,6 +6,8 @@
 
 #include "common/qsocprcmgenerator.h"
 
+struct QSocPrcmCompositionPlan;
+
 namespace QSocPrcmFormal {
 
 QSocMmioFormalCollateral generate(
@@ -13,6 +15,14 @@ QSocMmioFormalCollateral generate(
     const QSocPrcmCircuit     &circuit,
     const QString             &moduleName,
     int                        sampleStage);
+
+/* Use the composition that produces this circuit. */
+QSocMmioFormalCollateral generateShared(
+    const QSocPrcmBindingPlan     &binding,
+    const QSocPrcmCompositionPlan &composition,
+    const QSocPrcmCircuit         &circuit,
+    const QString                 &moduleName,
+    int                            sampleStage);
 
 } // namespace QSocPrcmFormal
 

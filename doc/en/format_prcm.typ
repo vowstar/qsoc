@@ -1,7 +1,7 @@
 = PRCM
 <prcm-check>
 
-PRCM declares a controller, its managed domain, and legal stable modes. Version 1 checks resource binding and stable modes. Circuit generation supports one switched domain with APB4 or AXI4-Lite.
+PRCM declares a controller, each managed domain, and legal stable modes. Version 1 checks resource binding and stable modes. Circuit generation supports APB4 and AXI4-Lite with one management clock.
 
 ```sh
 qsoc generate verilog --check prcm.soc_net
@@ -99,11 +99,32 @@ qsoc generate verilog -d demo --merge prcm.soc_net clock.soc_net reset.soc_net
 qsoc generate verilog -d demo --with-formal prcm.soc_net
 ```
 
-The first input basename selects the module name. Generation checks stable modes and the single-domain action model before writing files. Other circuit sections and additional clock or reset controllers require a later template and produce an error.
+The first input basename selects the module name. Generation checks stable modes, each action model, and conditional service progress before writing files. Other circuit sections and additional clock or reset controllers require a later template and produce an error.
 
 Set `controller.reset.stage` to at least two. This selects the controller reset receivers, independently of each resource target's `async.stage`. The check command permits omission, but circuit generation requires an explicit value.
 
-The template accepts OFF, RESET, and RUN resource states. Mode names and software codes remain user-defined. It requires an OFF state for fault recovery and all directed transitions between declared modes. Chip policy and domain service ownership do not yet have a circuit template.
+The template accepts OFF, RESET, and RUN resource states. Mode names and software codes remain user-defined. It requires an OFF state for fault recovery and all directed transitions between declared modes. A shared circuit supports one service layer. A provider cannot depend on another service. Every running mode of a consumer must require the same service set.
+
+For two domains with OFF and RUN modes, add these entries under `prcm`. Each domain still needs its own resource bindings and mode definitions.
+
+```yaml
+domain:
+  fabric:
+    service:
+      online: {mode: RUN}
+  periph:
+    require:
+      access: {service: fabric.online, mode: [RUN]}
+chip:
+  reset_mode: SLEEP
+  mode:
+    SLEEP:
+      code: 0
+      domain: {fabric: {target: 'OFF'}, periph: {target: 'OFF'}}
+    NORMAL:
+      code: 1
+      domain: {fabric: {allow: ['OFF', RUN]}, periph: {allow: ['OFF', RUN]}}
+```
 
 For `prcm.soc_net`, the project output contains:
 
@@ -114,7 +135,9 @@ For `prcm.soc_net`, the project output contains:
   [`prcm/rtl/prcm_register.v`], [MMIO register bank],
   [`prcm/rtl/prcm_clock.v`], [Clock controller],
   [`prcm/rtl/prcm_reset.v`], [Reset controller],
-  [`prcm/rtl/qsoc_prcm_domain.v`], [Domain action FSM],
+  [`prcm/rtl/qsoc_prcm_domain.v`], [Single-domain action FSM],
+  [`prcm/rtl/qsoc_prcm_domain_service.v`], [Action FSM for a shared circuit],
+  [`prcm/rtl/qsoc_prcm_service.v`], [Service handshake, when required],
   [`prcm/rtl/clock_cell.v`, `prcm/rtl/reset_cell.v`], [Replaceable resource cells],
   [`prcm/rtl/prcm.fl`], [RTL file list, relative to its directory],
   [`prcm/include/prcm.h`], [Register offsets, field masks, and mode codes],
@@ -125,7 +148,13 @@ For `prcm.soc_net`, the project output contains:
 
 Ordinary outputs are regenerated. Existing resource cells remain unchanged unless `--force` is set. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
 
-REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains the raw request, done, invalid_mode, and fault. The mode code and three status bits must fit one data word. EVENT records power loss and uses write-one-to-clear semantics.
+For a single-domain circuit, REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains the raw request, done, invalid_mode, and fault. The mode code and three status bits must fit one data word. EVENT records power loss and uses write-one-to-clear semantics.
+
+A shared circuit allocates DOMAIN_name_REQUEST, DOMAIN_name_STATUS, and DOMAIN_name_EVENT in domain-name order. Optional CHIP_REQUEST and CHIP_STATUS precede them. The generated header supplies each offset, mask, and qualified mode code.
+
+A consumer keeps its service request until it stops using the provider. The provider executes its local shutdown target after the last consumer releases it. Each chip mode either fixes a domain target or permits every local mode. A chip policy that blocks a required provider is rejected.
+
+STATUS adds blocked_by_chip for chip control, in_use for a provider, and wait_service for a consumer. EVENT adds service_lost for a consumer. Shared integration reports use version 2 and record feedback per domain. Single-domain reports retain version 1.
 
 Management reset clears the software request to reset_mode and retains action state, accepted transactions, pending responses, and event history. A pending write can complete after reset and change the target again. Cold reset cancels transactions. Multiple software users must serialize a complete mode operation through the platform's normal locking and MMIO ordering rules.
 
@@ -142,9 +171,9 @@ Sequence checks cover normal feedback. Progress requires a stable target and eve
   [Check], [Scope],
   [Power], [While the power request is off, reset stays active and the domain clock stops. Isolation and prior work drain complete before power removal within the same cold-reset interval.],
   [Bus], [Accepted request and response state, address errors, byte-masked REQUEST updates, STATUS flags, and EVENT history through management reset.],
-  [Reachability], [Work admission, power loss, shutdown, and bus traffic during management reset after operation starts.],
+  [Single-domain reachability], [Work admission, power loss, shutdown, and bus traffic during management reset after operation starts.],
 )
 
-The RTL checks compare register values and power, isolation, and quiesce requests with an independent phase model. Hardware event set takes priority over software clear. Management reset retains event history.
+The RTL checks compare register values and power, isolation, and quiesce requests with an independent phase model. Shared proof jobs separate normal operation from fault response and check actual clock and reset outputs. Hardware event set takes priority over software clear. Management reset retains event history.
 
-Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Bounded reachability uses one cold start, a legal operating mode then OFF, full strobes, and one-cycle feedback. RUN and management-reset coverage require those features in the input. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.
+Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Single-domain bounded reachability uses one cold start, a legal operating mode then OFF, full strobes, and one-cycle feedback. RUN and management-reset coverage require those features in the input. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.

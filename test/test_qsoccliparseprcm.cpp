@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QScopeGuard>
@@ -237,6 +238,112 @@ private slots:
         QVERIFY(save(path, "instance: {unused: {module: other}}\n"));
         QCOMPARE(run({"--with-formal"}), 1);
         QVERIFY(messages.join('\n').contains("PRCM_REQUIRED"));
+    }
+
+    void generateShared()
+    {
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared_cli-XXXXXX");
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(directory.path());
+        QVERIFY(project.create("control"));
+        auto       input    = YAML::Load(qsocPrcmDeclaration());
+        const auto provider = YAML::Load(QString(qsocPrcmDeclaration())
+                                             .replace("periph", "fabric")
+                                             .replace("gate_en", "fabric_gate")
+                                             .replace("hold_n", "fabric_hold_n")
+                                             .replace("power_en", "fabric_power")
+                                             .replace("pgood", "fabric_pgood")
+                                             .replace("stop_req", "fabric_stop")
+                                             .replace("idle", "fabric_idle")
+                                             .replace("iso_req", "fabric_iso")
+                                             .replace("iso_active", "fabric_isolated")
+                                             .toStdString());
+        input["clock"][0]["target"]["fabric_clk"] = YAML::Clone(
+            provider["clock"][0]["target"]["fabric_clk"]);
+        input["reset"][0]["source"]["fabric_hold_n"] = YAML::Clone(
+            provider["reset"][0]["source"]["fabric_hold_n"]);
+        input["reset"][0]["target"]["fabric_n"] = YAML::Clone(
+            provider["reset"][0]["target"]["fabric_n"]);
+        input["prcm"]["supply"]["fabric"]      = YAML::Clone(provider["prcm"]["supply"]["fabric"]);
+        input["prcm"]["domain"]["fabric_bus"]  = YAML::Clone(provider["prcm"]["domain"]["fabric"]);
+        input["prcm"]["domain"]["client$port"] = YAML::Clone(input["prcm"]["domain"]["periph"]);
+        input["prcm"]["domain"].remove("periph");
+        input["prcm"]["domain"]["fabric_bus"]["service"]["online"]["mode"] = "RUN";
+        input["prcm"]["domain"]["fabric_bus"]["mode"]["RUN"]["code"]       = 2;
+        input["prcm"]["domain"]["client$port"]["require"]["access"]        = YAML::Load(
+            "{service: fabric_bus.online, mode: [RUN]}");
+        input["prcm"]["domain"]["client$port"]["mode"]["RUN"]["code"] = 4;
+        input["prcm"]["controller"]["reset"]["stage"]                 = 2;
+        input["prcm"]["mmio"]["data_width"]                           = 8;
+        input["prcm"]["chip"]                                         = YAML::Load(R"(
+reset_mode: SLEEP
+mode:
+  SLEEP: {code: 1, domain: {client$port: {target: OFF}, fabric_bus: {target: OFF}}}
+  NORMAL: {code: 2, domain: {client$port: {allow: [OFF, RUN]}, fabric_bus: {allow: [OFF, RUN]}}}
+)");
+        const auto path = directory.filePath("controller.soc_net");
+        const QDir output(QDir(project.getOutputPath()).filePath("controller"));
+        auto       save = [&] {
+            QFile      file(path);
+            const auto data = QByteArray::fromStdString(YAML::Dump(input));
+            return file.open(QIODevice::WriteOnly) && file.write(data) == data.size();
+        };
+        auto read = [](const QString &path) {
+            QFile file(path);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        auto run = [&] {
+            messages.clear();
+            QSocCliWorker worker;
+            QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+            worker.setup(
+                {"qsoc",
+                 "generate",
+                 "verilog",
+                 "-d",
+                 directory.path(),
+                 "-p",
+                 "control",
+                 "--with-formal",
+                 path},
+                false);
+            worker.run();
+            return exitSpy.size() == 1 ? exitSpy[0][0].toInt() : -1;
+        };
+        QVERIFY(save());
+        QVERIFY2(run() == 0, qPrintable(messages.join('\n')));
+        const auto header = read(output.filePath("include/controller.h"));
+        for (const auto &line :
+             {"DOMAIN_client_24port_REQUEST_OFFSET UINT64_C(0x2)",
+              "DOMAIN_client_24port_MODE_RUN UINT64_C(0x4)",
+              "DOMAIN_fabric_5fbus_REQUEST_OFFSET UINT64_C(0x5)",
+              "DOMAIN_fabric_5fbus_MODE_RUN UINT64_C(0x2)",
+              "CHIP_MODE_SLEEP UINT64_C(0x1)",
+              "CHIP_MODE_NORMAL UINT64_C(0x2)"})
+            QVERIFY2(header.contains(line), header.constData());
+        QVERIFY(!header.contains('$'));
+        const auto report
+            = QJsonDocument::fromJson(read(output.filePath("integration/controller.json"))).object();
+        QCOMPARE(report["version"].toInt(), 2);
+        QCOMPARE(report["domain"].toObject().size(), 2);
+        QCOMPARE(
+            report["domain"].toObject()["fabric_bus"].toObject()["power"].toString(),
+            "fabric_pgood");
+        QCOMPARE(report["check"].toObject()["service_model"].toString(), "pass");
+        QCOMPARE(report["check"].toObject()["rtl"].toString(), "not_run");
+        QCOMPARE(report["binding"].toObject()["service"].toArray().size(), 1);
+        const auto formal = read(output.filePath("formal/controller_formal.sv"));
+        QVERIFY(formal.contains("proof_d0_reset_output: assert"));
+        QVERIFY(read(output.filePath("formal/check.sby")).contains("../rtl/qsoc_prcm_service.v"));
+        const auto rtl = read(output.filePath("rtl/controller.v"));
+        input["prcm"]["chip"]["mode"]["SLEEP"]["domain"]["client$port"] = YAML::Load(
+            "{target: RUN}");
+        QVERIFY(save());
+        QCOMPARE(run(), 1);
+        QVERIFY(messages.join('\n').contains("PRCM_MODE_CONFLICT"));
+        QCOMPARE(read(output.filePath("rtl/controller.v")), rtl);
+        QCOMPARE(read(output.filePath("include/controller.h")), header);
     }
 
     void generateMerged()

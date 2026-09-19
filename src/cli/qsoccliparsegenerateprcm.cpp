@@ -4,12 +4,15 @@
 #include "cli/qsoccliworker.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocprcmbinding.h"
+#include "common/qsocprcmcomposition.h"
 #include "common/qsocprcmdocument.h"
 #include "common/qsocprcmformal.h"
 #include "common/qsocprcmgenerator.h"
 #include "common/qsocprcmmode.h"
 #include "common/qsocprcmreader.h"
 #include "common/qsocprcmsequencecheck.h"
+#include "common/qsocprcmservicecheck.h"
+#include "common/qsocprcmshared.h"
 #include "common/qsocverilogutils.h"
 #include <QTemporaryDir>
 
@@ -94,31 +97,50 @@ QString softwareName(const QString &name)
 }
 
 QString softwareHeader(
-    const QSocPrcmCircuit &circuit, const QSocPrcmInput &input, const QString &moduleName)
+    const QSocPrcmCircuit &circuit,
+    const QSocPrcmInput   &input,
+    const QString         &moduleName,
+    bool                   shared)
 {
     const QString prefix = "QSOC_" + softwareName(moduleName) + "_X";
     QStringList   lines{"#pragma once", "#include <stdint.h>", ""};
     auto          define = [&](const QString &name, quint64 value) {
         lines.append(QString("#define %1_%2 UINT64_C(0x%3)").arg(prefix, name).arg(value, 0, 16));
     };
+    QMap<QString, QString> registerName;
+    if (shared) {
+        for (const auto &domain : input.domain.keys()) {
+            for (const auto &word : {"REQUEST", "STATUS", "EVENT"})
+                registerName.insert(
+                    "DOMAIN_" + domain + '_' + word, "DOMAIN_" + softwareName(domain) + '_' + word);
+        }
+    }
     for (const auto &reg : circuit.mmio.registers) {
-        define(reg.name + "_OFFSET", reg.byteOffset);
+        const auto regName = registerName.value(reg.name, reg.name);
+        define(regName + "_OFFSET", reg.byteOffset);
         for (const auto &field : reg.fields) {
-            const auto name = reg.name + '_' + softwareName(field.name);
+            const auto name = regName + '_' + softwareName(field.name);
             define(name + "_SHIFT", field.lsb);
             define(name + "_WIDTH", field.width);
             define(name + "_MASK", ((quint64(1) << field.width) - 1) << field.lsb);
         }
     }
-    for (auto mode = input.domain.cbegin()->mode.cbegin();
-         mode != input.domain.cbegin()->mode.cend();
-         ++mode)
-        define("MODE_" + softwareName(mode.key()), mode->code);
+    for (auto domain = input.domain.cbegin(); domain != input.domain.cend(); ++domain) {
+        const auto qualifier = shared ? "DOMAIN_" + softwareName(domain.key()) + '_' : QString();
+        for (auto mode = domain->mode.cbegin(); mode != domain->mode.cend(); ++mode)
+            define(qualifier + "MODE_" + softwareName(mode.key()), mode->code);
+    }
+    if (shared)
+        for (auto mode = input.chipMode.cbegin(); mode != input.chipMode.cend(); ++mode)
+            define("CHIP_MODE_" + softwareName(mode.key()), mode->code);
     return lines.join('\n') + '\n';
 }
 
 QByteArray integrationReport(
-    const QSocPrcmBindingPlan &plan, const QSocPrcmCircuit &circuit, bool formal)
+    const QSocPrcmBindingPlan     &plan,
+    const QSocPrcmCircuit         &circuit,
+    bool                           formal,
+    const QSocPrcmCompositionPlan *composition)
 {
     const auto &input  = plan.input;
     const auto &domain = *input.domain.cbegin();
@@ -160,7 +182,54 @@ QByteArray integrationReport(
              "response state and REQUEST, STATUS, and EVENT values with delayed feedback and "
              "sampled power loss.",
              "Management reset preserves bus transactions. Cold reset cancels them."}}};
+    if (composition) {
+        QJsonObject domains;
+        for (auto item = input.domain.cbegin(); item != input.domain.cend(); ++item) {
+            domains.insert(
+                item.key(),
+                QJsonObject{
+                    {"power", input.supplyTable[item->supply].valid.signal},
+                    {"idle", item->quiesce.completion.signal},
+                    {"isolation", item->isolation.completion.signal},
+                    {"reset", item->reset.target}});
+        }
+        root["version"] = 2;
+        root["domain"]  = domains;
+        root.remove("feedback");
+        auto check             = root["check"].toObject();
+        check["service_model"] = composition->service.isEmpty() ? "not_required" : "pass";
+        check["composition"]   = "one_service_layer";
+        root["check"]          = check;
+        auto condition         = root["condition"].toArray();
+        condition.append(
+            "Providers have no service dependency. Consumers request all providers before waiting "
+            "for permission.");
+        condition.append(
+            "A provider follows its local target after the last consumer releases it. Chip policy "
+            "must permit each required service.");
+        root["condition"] = condition;
+    }
     return QJsonDocument(root).toJson();
+}
+
+QString checkSequence(const QSocPrcmSequencePlan &plan, const QString &domain)
+{
+    const auto safety = QSocPrcmSequenceCheck::safety(plan);
+    if (safety.status != QSocPrcmCheckStatus::Unsat)
+        return "PRCM_SEQUENCE_" + statusName(safety.status) + ": " + domain + ": " + safety.reason;
+    const auto progress = QSocPrcmSequenceCheck::progress(plan);
+    if (progress.status != QSocPrcmCheckStatus::Unsat)
+        return "PRCM_PROGRESS_" + statusName(progress.status) + ": " + domain + ": "
+               + progress.reason;
+    return {};
+}
+
+bool sharedCircuit(const QSocPrcmInput &input)
+{
+    if (input.domain.size() != 1 || !input.chipMode.isEmpty())
+        return true;
+    const auto &domain = *input.domain.cbegin();
+    return !domain.require.isEmpty() || !domain.service.isEmpty();
 }
 
 } // namespace
@@ -256,18 +325,42 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
                     "PRCM_CHECK_" + statusName(check.result.status) + ": " + check.name + ": "
                         + check.result.reason);
         }
-        const auto sequence = QSocPrcmSequencePlanner::build(plan.input);
-        if (!sequence.plan)
-            return showError(1, describe(sequence.diagnostic));
-        const auto safety = QSocPrcmSequenceCheck::safety(*sequence.plan);
-        if (safety.status != QSocPrcmCheckStatus::Unsat)
-            return showError(1, "PRCM_SEQUENCE_" + statusName(safety.status) + ": " + safety.reason);
-        const auto progress = QSocPrcmSequenceCheck::progress(*sequence.plan);
-        if (progress.status != QSocPrcmCheckStatus::Unsat)
-            return showError(
-                1, "PRCM_PROGRESS_" + statusName(progress.status) + ": " + progress.reason);
-        const auto name      = QFileInfo(files.first()).baseName();
-        auto       generated = QSocPrcmGenerator::generate(plan, name, *plan.input.resetStage);
+        std::optional<QSocPrcmCompositionPlan> composition;
+        if (sharedCircuit(plan.input)) {
+            const auto selected = QSocPrcmComposition::build(plan.input);
+            if (!selected.plan)
+                return showError(1, describe(selected.diagnostic));
+            composition = *selected.plan;
+            for (auto domain = composition->domain.cbegin(); domain != composition->domain.cend();
+                 ++domain) {
+                const auto error = checkSequence(domain.value(), domain.key());
+                if (!error.isEmpty())
+                    return showError(1, error);
+            }
+            if (!composition->service.isEmpty()) {
+                const auto safety = QSocPrcmServiceCheck::safety();
+                if (safety.status != QSocPrcmCheckStatus::Unsat)
+                    return showError(
+                        1, "PRCM_SERVICE_" + statusName(safety.status) + ": " + safety.reason);
+                const auto progress = QSocPrcmServiceCheck::progress();
+                if (progress.status != QSocPrcmCheckStatus::Unsat)
+                    return showError(
+                        1,
+                        "PRCM_SERVICE_PROGRESS_" + statusName(progress.status) + ": "
+                            + progress.reason);
+            }
+        } else {
+            const auto sequence = QSocPrcmSequencePlanner::build(plan.input);
+            if (!sequence.plan)
+                return showError(1, describe(sequence.diagnostic));
+            const auto error = checkSequence(*sequence.plan, plan.input.domain.firstKey());
+            if (!error.isEmpty())
+                return showError(1, error);
+        }
+        const auto name = QFileInfo(files.first()).baseName();
+        auto generated  = composition
+                              ? QSocPrcmShared::generate(plan, name, *plan.input.resetStage)
+                              : QSocPrcmGenerator::generate(plan, name, *plan.input.resetStage);
         if (!generated.circuit)
             return showError(1, describe(generated.diagnostic));
         if (parser.isSet("format")) {
@@ -303,12 +396,17 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
             {output.filePath("rtl/" + name + ".fl"), (list.join('\n') + '\n').toUtf8()});
         artifact.push_back(
             {output.filePath("include/" + name + ".h"),
-             softwareHeader(circuit, plan.input, name).toUtf8()});
+             softwareHeader(circuit, plan.input, name, composition.has_value()).toUtf8()});
         artifact.push_back(
             {output.filePath("integration/" + name + ".json"),
-             integrationReport(plan, circuit, parser.isSet("with-formal"))});
+             integrationReport(
+                 plan, circuit, parser.isSet("with-formal"), composition ? &*composition : nullptr)});
         if (parser.isSet("with-formal")) {
-            auto formal = QSocPrcmFormal::generate(plan, circuit, name, *plan.input.resetStage);
+            auto formal
+                = composition
+                      ? QSocPrcmFormal::generateShared(
+                            plan, *composition, circuit, name, *plan.input.resetStage)
+                      : QSocPrcmFormal::generate(plan, circuit, name, *plan.input.resetStage);
             QStringList formalList;
             for (const auto &file : circuit.rtl.keys()) {
                 formal.sby.replace('\n' + file + '\n', "\n../rtl/" + file + '\n');
