@@ -27,7 +27,8 @@ const QStringList phaseName{
     "STOP",
     "FAULT_RELEASE",
     "FAULT",
-    "FAULT_OFF"};
+    "FAULT_OFF",
+    "FAULT_POWER"};
 
 QSocPrcmObservation observation(unsigned value)
 {
@@ -58,22 +59,33 @@ QString condition(unsigned rows, unsigned width = 4)
     return "((" + bit + " && " + high + ") || (!" + bit + " && " + low + "))";
 }
 
-YAML::Node transitions(Phase phase)
+QMap<Phase, unsigned> transitionRows(Phase phase, Target target, bool serviceFault)
+{
+    QMap<Phase, unsigned> rows;
+    for (unsigned value = 0; value < 16; ++value) {
+        const auto next
+            = QSocPrcmSequence::step({phase, target}, target, observation(value), serviceFault);
+        if (next.state.phase != phase)
+            rows[next.state.phase] |= 1U << value;
+    }
+    return rows;
+}
+
+YAML::Node transitions(Phase phase, bool service)
 {
     QMap<Phase, QStringList> edge;
     const QStringList        select{"target_off_i", "target_reset_i", "target_run_i"};
     for (auto target : {Target::Off, Target::Reset, Target::Run}) {
-        QMap<Phase, unsigned> rows;
-        for (unsigned value = 0; value < 16; ++value) {
-            const auto next = QSocPrcmSequence::step({phase, target}, target, observation(value));
-            if (next.state.phase != phase)
-                rows[next.state.phase] |= 1U << value;
-        }
-        for (auto next = rows.cbegin(); next != rows.cend(); ++next) {
-            const auto feedback   = condition(next.value());
-            const auto targetPort = select[static_cast<int>(target)];
-            edge[next.key()].append(
-                feedback == "1" ? targetPort : "(" + targetPort + " && " + feedback + ")");
+        for (int failure = 0; failure < (service ? 2 : 1); ++failure) {
+            const auto rows = transitionRows(phase, target, failure != 0);
+            for (auto next = rows.cbegin(); next != rows.cend(); ++next) {
+                const auto feedback   = condition(next.value());
+                auto       targetPort = select[static_cast<int>(target)];
+                if (service)
+                    targetPort += failure ? " && service_fault_i" : " && !service_fault_i";
+                edge[next.key()].append(
+                    feedback == "1" ? targetPort : "(" + targetPort + " && " + feedback + ")");
+            }
         }
     }
     YAML::Node result(YAML::NodeType::Sequence);
@@ -86,21 +98,20 @@ YAML::Node transitions(Phase phase)
     return result;
 }
 
-} // namespace
-
-QString QSocPrcmSequenceRtl::generate()
+QString buildRtl(bool service)
 {
     YAML::Node node;
-    node["name"]      = "qsoc_prcm_domain";
+    node["name"]      = service ? "qsoc_prcm_domain_service" : "qsoc_prcm_domain";
     node["clk"]       = "clk_i";
     node["rst"]       = "rst_ni";
     node["rst_state"] = "INIT";
-    for (qsizetype i = 0; i < phaseName.size(); ++i) {
+    const int count   = int(service ? Phase::FaultPower : Phase::FaultOff) + 1;
+    for (int i = 0; i < count; ++i) {
         const auto                  phase = static_cast<Phase>(i);
         const auto                  name  = phaseName[i].toStdString();
         const QSocPrcmSequenceState state{phase, Target::Off};
         const auto                  control = QSocPrcmSequence::control(state);
-        node["trans"][name]                 = transitions(phase);
+        node["trans"][name]                 = transitions(phase, service);
         auto                      output    = node["moore"][name];
         const QMap<QString, bool> value{
             {"power_o", control.power},
@@ -120,4 +131,16 @@ QString QSocPrcmSequenceRtl::generate()
     QTextStream      stream(&rtl);
     QSocFSMPrimitive generator;
     return generator.generateFSMVerilog(node, stream) ? rtl : QString();
+}
+
+} // namespace
+
+QString QSocPrcmSequenceRtl::generate()
+{
+    return buildRtl(false);
+}
+
+QString QSocPrcmSequenceRtl::generateService()
+{
+    return buildRtl(true);
 }

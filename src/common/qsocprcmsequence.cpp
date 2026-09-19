@@ -86,6 +86,10 @@ Phase advance(Phase phase, Target target, const QSocPrcmObservation &value)
         if (protectedDomain && value.idle)
             return Phase::FaultOff;
         break;
+    case Phase::FaultPower:
+        if (value.power)
+            return Phase::Fault;
+        break;
     case Phase::FaultOff:
         if (target == Target::Off && !value.power && protectedDomain)
             return Phase::Off;
@@ -99,14 +103,24 @@ Phase advance(Phase phase, Target target, const QSocPrcmObservation &value)
 QSocPrcmSequenceStep QSocPrcmSequence::step(
     QSocPrcmSequenceState         state,
     std::optional<QSocPrcmTarget> request,
-    const QSocPrcmObservation    &observation)
+    const QSocPrcmObservation    &observation,
+    bool                          serviceFault)
 {
     if (request)
         state.target = *request;
     const bool lost      = powered(state.phase) && !observation.power;
     const bool releasing = !control(state).quiesce && observation.idle;
-    state.phase          = lost ? (releasing ? Phase::FaultRelease : Phase::Fault)
-                                : advance(state.phase, state.target, observation);
+    if (serviceFault && !fault(state)) {
+        if (state.phase == Phase::Init || state.phase == Phase::Off)
+            state.phase = Phase::FaultOff;
+        else if (state.phase == Phase::Power)
+            state.phase = Phase::FaultPower;
+        else
+            state.phase = releasing ? Phase::FaultRelease : Phase::Fault;
+        return {state, lost};
+    }
+    state.phase = lost ? (releasing ? Phase::FaultRelease : Phase::Fault)
+                       : advance(state.phase, state.target, observation);
     return {state, lost};
 }
 
@@ -118,6 +132,7 @@ QSocPrcmControl QSocPrcmSequence::control(const QSocPrcmSequenceState &state)
     case Phase::FaultOff:
         return {};
     case Phase::Power:
+    case Phase::FaultPower:
     case Phase::Stop:
     case Phase::Fault:
         return {true, false, true, true, true};
@@ -142,7 +157,7 @@ QSocPrcmControl QSocPrcmSequence::control(const QSocPrcmSequenceState &state)
 bool QSocPrcmSequence::fault(const QSocPrcmSequenceState &state)
 {
     return state.phase == Phase::FaultRelease || state.phase == Phase::Fault
-           || state.phase == Phase::FaultOff;
+           || state.phase == Phase::FaultOff || state.phase == Phase::FaultPower;
 }
 
 bool QSocPrcmSequence::complete(

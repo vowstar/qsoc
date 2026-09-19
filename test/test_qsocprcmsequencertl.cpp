@@ -17,7 +17,25 @@ namespace {
 
 using Phase  = QSocPrcmPhase;
 using Target = QSocPrcmTarget;
-using Sample = QPair<Target, unsigned>;
+struct Sample
+{
+    Target   target;
+    unsigned bits;
+    bool     failure;
+};
+
+QList<Sample> input(bool service)
+{
+    QList<Sample> result;
+    for (auto target : {Target::Off, Target::Reset, Target::Run}) {
+        for (unsigned bits = 0; bits < 16; ++bits) {
+            result.append({target, bits, false});
+            if (service)
+                result.append({target, bits, true});
+        }
+    }
+    return result;
+}
 
 QSocPrcmObservation feedback(unsigned bits)
 {
@@ -43,21 +61,21 @@ unsigned output(const QSocPrcmSequenceState &state)
     return bits;
 }
 
-QMap<Phase, QList<Sample>> pathToPhase()
+QMap<Phase, QList<Sample>> pathToPhase(bool service)
 {
     QMap<Phase, QList<Sample>> path{{Phase::Init, {}}};
     QList<Phase>               pending{Phase::Init};
+    const auto                 sample = input(service);
     for (qsizetype i = 0; i < pending.size(); ++i) {
         const auto phase = pending[i];
-        for (auto target : {Target::Off, Target::Reset, Target::Run}) {
-            for (unsigned bits = 0; bits < 16; ++bits) {
-                const auto next = QSocPrcmSequence::step({phase, target}, target, feedback(bits));
-                if (!path.contains(next.state.phase)) {
-                    auto trace = path[phase];
-                    trace.append(Sample{target, bits});
-                    path.insert(next.state.phase, trace);
-                    pending.append(next.state.phase);
-                }
+        for (const auto &value : sample) {
+            const auto next = QSocPrcmSequence::step(
+                {phase, value.target}, value.target, feedback(value.bits), value.failure);
+            if (!path.contains(next.state.phase)) {
+                auto trace = path[phase];
+                trace.append(value);
+                path.insert(next.state.phase, trace);
+                pending.append(next.state.phase);
             }
         }
     }
@@ -76,39 +94,51 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void modelStep_data()
+    {
+        QTest::addColumn<bool>("service");
+        QTest::newRow("domain") << false;
+        QTest::newRow("service") << true;
+    }
+
     void modelStep()
     {
+        QFETCH(bool, service);
         const auto tool = QStandardPaths::findExecutable("verilator");
         if (tool.isEmpty())
             QSOC_TEST_MISSING_DEPENDENCY("verilator");
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_rtl-XXXXXX");
         QVERIFY(directory.isValid());
-        const auto rtl = QSocPrcmSequenceRtl::generate();
+        const auto rtl = service ? QSocPrcmSequenceRtl::generateService()
+                                 : QSocPrcmSequenceRtl::generate();
         QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
-        const auto path = pathToPhase();
-        QCOMPARE(path.size(), int(Phase::FaultOff) + 1);
+        const auto path = pathToPhase(service);
+        QCOMPARE(path.size(), int(service ? Phase::FaultPower : Phase::FaultOff) + 1);
         QStringList trace;
         auto        append =
-            [&trace](bool reset, Target target, unsigned bits, const QSocPrcmSequenceState &state) {
-                const unsigned row = (unsigned(!reset) << 17) | (1U << (14 + unsigned(target)))
-                                     | (bits << 10) | output(state);
+            [&trace](bool reset, const Sample &sample, const QSocPrcmSequenceState &state) {
+                const unsigned row = (unsigned(sample.failure) << 18) | (unsigned(!reset) << 17)
+                                     | (1U << (14 + unsigned(sample.target))) | (sample.bits << 10)
+                                     | output(state);
                 trace.append(QString::number(row, 16));
             };
+        const auto sample = input(service);
         for (auto reached = path.cbegin(); reached != path.cend(); ++reached) {
-            for (auto target : {Target::Off, Target::Reset, Target::Run}) {
-                for (unsigned bits = 0; bits < 16; ++bits) {
-                    QSocPrcmSequenceState state;
-                    append(true, Target::Off, 7, state);
-                    for (const auto &sample : reached.value()) {
-                        state = QSocPrcmSequence::step(state, sample.first, feedback(sample.second))
-                                    .state;
-                        append(false, sample.first, sample.second, state);
-                    }
-                    QCOMPARE(state.phase, reached.key());
-                    state = QSocPrcmSequence::step(state, target, feedback(bits)).state;
-                    append(false, target, bits, state);
+            for (const auto &value : sample) {
+                QSocPrcmSequenceState state;
+                append(true, {Target::Off, 7, false}, state);
+                for (const auto &prior : reached.value()) {
+                    state = QSocPrcmSequence::step(
+                                state, prior.target, feedback(prior.bits), prior.failure)
+                                .state;
+                    append(false, prior, state);
                 }
+                QCOMPARE(state.phase, reached.key());
+                state
+                    = QSocPrcmSequence::step(state, value.target, feedback(value.bits), value.failure)
+                          .state;
+                append(false, value, state);
             }
         }
         QVERIFY(save(directory.filePath("trace.hex"), trace.join('\n') + '\n'));
@@ -117,16 +147,18 @@ module tb;
 reg clk_i = 0;
 reg rst_ni = 1;
 reg target_off_i, target_reset_i, target_run_i, power_i, reset_i, isolation_i, idle_i;
+reg service_fault_i;
 wire power_o, clock_o, reset_o, isolation_o, quiesce_o;
 wire state_off_o, state_reset_o, state_run_o, fault_o, power_watch_o;
-qsoc_prcm_domain dut(.*);
-reg [17:0] trace [0:@LAST@];
+@MODULE@ dut(.*);
+reg [18:0] trace [0:@LAST@];
 integer i;
 initial begin
     $readmemh("trace.hex", trace);
     for (i = 0; i <= @LAST@; i = i + 1) begin
         clk_i = 0;
         rst_ni = trace[i][17];
+        service_fault_i = trace[i][18];
         {target_run_i, target_reset_i, target_off_i} = trace[i][16:14];
         {power_i, reset_i, isolation_i, idle_i} = trace[i][13:10];
         #5;
@@ -141,6 +173,7 @@ initial begin
 end
 endmodule
 )";
+        bench.replace("@MODULE@", service ? "qsoc_prcm_domain_service" : "qsoc_prcm_domain");
         bench.replace("@LAST@", QString::number(trace.size() - 1));
         bench.replace("@COUNT@", QString::number(trace.size()));
         QVERIFY(save(directory.filePath("tb.sv"), bench));

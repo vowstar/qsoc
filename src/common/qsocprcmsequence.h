@@ -23,7 +23,8 @@ enum class QSocPrcmPhase {
     Stop,
     FaultRelease,
     Fault,
-    FaultOff
+    FaultOff,
+    FaultPower
 };
 
 struct QSocPrcmSequenceState
@@ -64,7 +65,8 @@ public:
     static QSocPrcmSequenceStep step(
         QSocPrcmSequenceState         state,
         std::optional<QSocPrcmTarget> request,
-        const QSocPrcmObservation    &observation);
+        const QSocPrcmObservation    &observation,
+        bool                          serviceFault = false);
     static QSocPrcmControl control(const QSocPrcmSequenceState &state);
     static bool            fault(const QSocPrcmSequenceState &state);
     static bool            complete(

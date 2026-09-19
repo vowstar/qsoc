@@ -11,6 +11,7 @@ class QSocPrcmSequenceRtl
 public:
     /* The caller supplies one decoded target and retains it for an invalid request. */
     static QString generate();
+    static QString generateService();
 };
 
 #endif // QSOCPRCMSEQUENCERTL_H

@@ -21,9 +21,9 @@ struct Domain
     QSocPrcmSequenceState state;
     QSocPrcmObservation   observation;
 
-    QSocPrcmSequenceStep tick(std::optional<Target> request)
+    QSocPrcmSequenceStep tick(std::optional<Target> request, bool serviceFault = false)
     {
-        const auto result = Sequence::step(state, request, observation);
+        const auto result = Sequence::step(state, request, observation, serviceFault);
         state             = result.state;
         return result;
     }
@@ -94,6 +94,50 @@ private slots:
         QVERIFY(!Sequence::control(domain.state).power);
         QVERIFY(!Sequence::complete(domain.state, Target::Off, domain.observation));
         domain.observation.power = false;
+        QVERIFY(domain.settle(Target::Off));
+    }
+
+    void serviceFailure()
+    {
+        Domain domain;
+        QVERIFY(domain.settle(Target::Run));
+        QVERIFY(!domain.tick(Target::Run, true).powerLost);
+        QVERIFY(Sequence::fault(domain.state));
+        const auto control = Sequence::control(domain.state);
+        QVERIFY(control.power);
+        QVERIFY(!control.clock);
+        QVERIFY(control.reset && control.isolation && control.quiesce);
+        QVERIFY(!domain.settle(Target::Run));
+        QVERIFY(domain.settle(Target::Off));
+        QVERIFY(domain.settle(Target::Run));
+    }
+
+    void serviceFailureBeforePower()
+    {
+        Domain domain;
+        QVERIFY(domain.settle(Target::Off));
+        QVERIFY(!domain.tick(Target::Run, true).powerLost);
+        QVERIFY(Sequence::fault(domain.state));
+        QVERIFY(!Sequence::control(domain.state).power);
+        QVERIFY(domain.settle(Target::Off));
+    }
+
+    void serviceFailureDuringPower()
+    {
+        Domain domain;
+        QVERIFY(domain.reach(Target::Run, Phase::Power));
+        QVERIFY(!domain.observation.power);
+        QVERIFY(!domain.tick(Target::Run, true).powerLost);
+        for (int cycle = 0; cycle < 8; ++cycle) {
+            domain.tick(Target::Off);
+            const auto control = Sequence::control(domain.state);
+            QVERIFY(control.power);
+            QVERIFY(!control.clock);
+            QVERIFY(control.reset && control.isolation && control.quiesce);
+            QVERIFY(Sequence::fault(domain.state));
+        }
+        domain.observation.power = true;
+        domain.tick(Target::Off);
         QVERIFY(domain.settle(Target::Off));
     }
 
