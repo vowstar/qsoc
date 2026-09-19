@@ -4,10 +4,19 @@
 #ifndef QSOCGENERATEARTIFACT_H
 #define QSOCGENERATEARTIFACT_H
 
+#include <vector>
 #include <QByteArray>
 #include <QString>
 
 namespace QSocGenerateArtifact {
+
+struct Artifact
+{
+    QString    path;
+    QByteArray contents;
+};
+
+QString write(std::vector<Artifact> artifacts, bool force);
 
 struct PrimitiveCellSpec
 {

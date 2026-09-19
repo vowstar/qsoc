@@ -147,11 +147,17 @@ QSocPrcmInput input(const Reader &reader)
     result.clockController = clock.member("controller").name();
     result.clockInput      = clock.member("input").name();
     const auto reset       = controller.member("reset");
-    reset.fields({"controller", "source"}, {"target"});
+    reset.fields({"controller", "source"}, {"target", "stage"});
     result.resetController = reset.member("controller").name();
     result.resetSource     = reset.member("source").name();
     if (reset.has("target"))
         result.resetTarget = reset.member("target").name();
+    if (reset.has("stage")) {
+        const auto stage  = reset.member("stage");
+        result.resetStage = static_cast<int>(stage.number(std::numeric_limits<int>::max()));
+        if (*result.resetStage < 2)
+            stage.fail("PRCM_RANGE", "Reset sampling requires at least two stages.");
+    }
     result.supply   = controller.member("supply").name();
     const auto mmio = reader.member("mmio");
     mmio.fields({"bus", "data_width", "address_width"});

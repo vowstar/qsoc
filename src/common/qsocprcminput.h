@@ -114,6 +114,7 @@ struct QSocPrcmInput
     QString                         resetController;
     QString                         resetSource;
     QString                         resetTarget;
+    std::optional<int>              resetStage;
     QString                         supply;
     QSocMmioBus                     bus          = QSocMmioBus::Apb4;
     quint32                         dataWidth    = 32;

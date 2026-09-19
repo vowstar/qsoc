@@ -72,9 +72,7 @@ public:
                 }
                 result.node[key.toStdString()] = field.value();
                 declaration.insert({key}, field.position());
-                if (key == "prcm") {
-                    result.origin.insert(key, field.position());
-                }
+                result.origin.insert(key, field.position());
             }
         }
     }
@@ -109,6 +107,7 @@ private:
         if (!declaration.contains({key})) {
             result.node[key.toStdString()] = YAML::Node(YAML::NodeType::Map);
             declaration.insert({key}, field.position());
+            result.origin.insert(key, field.position());
         } else if (!result.node[key.toStdString()].IsMap()) {
             duplicate(field, declaration.value({key}));
         }
@@ -121,6 +120,7 @@ private:
             }
             table[name.toStdString()] = item.value();
             declaration.insert(id, item.position());
+            result.origin.insert(key + '.' + name, item.position());
         }
     }
 
@@ -146,7 +146,15 @@ QSocPrcmDocumentResult QSocPrcmDocumentLoader::load(const QStringList &files)
             return result;
         }
         try {
-            const auto                   node = YAML::Load(file.readAll().toStdString());
+            const auto documents = YAML::LoadAll(file.readAll().toStdString());
+            if (documents.size() > 1) {
+                const auto mark = documents[1].Mark();
+                throw QSocPrcmDiagnostic{
+                    "PRCM_DOCUMENT",
+                    "Use one YAML document per file. Combine files with --merge.",
+                    {{path, {}, mark.line + 1, mark.column + 1}}};
+            }
+            const auto                   node = documents.empty() ? YAML::Node{} : documents[0];
             Context                      context{path, {}, {}};
             const Reader                 root(node, {}, context);
             QList<YAML::Node>            active;

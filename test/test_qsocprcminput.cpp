@@ -146,6 +146,9 @@ mode:
         QTest::newRow("signed") << "prcm.mmio.data_width" << "-32" << "PRCM_NUMBER";
         QTest::newRow("fraction") << "prcm.mmio.data_width" << "32.0" << "PRCM_NUMBER";
         QTest::newRow("overflow") << "prcm.mmio.data_width" << "4294967296" << "PRCM_NUMBER";
+        QTest::newRow("reset-stage") << "prcm.controller.reset.stage" << "1" << "PRCM_RANGE";
+        QTest::newRow("reset-stage-overflow")
+            << "prcm.controller.reset.stage" << "2147483648" << "PRCM_NUMBER";
         QTest::newRow("bus") << "prcm.mmio.bus" << "unknown" << "PRCM_BUS";
         QTest::newRow("signal") << "prcm.supply.peripheral.request" << "'request; endmodule'"
                                 << "PRCM_NAME";

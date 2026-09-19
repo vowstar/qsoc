@@ -13,6 +13,7 @@
 #include "common/qsocprojectmanager.h"
 
 #include <memory>
+#include <optional>
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -357,8 +358,9 @@ private:
      * @retval true Parse successfully.
      * @retval false Parse failed.
      */
-    bool parseGenerateVerilog(const QStringList &appArguments);
-    bool checkPrcmNetlists(const QStringList &filePathList);
+    bool                parseGenerateVerilog(const QStringList &appArguments);
+    bool                checkPrcmNetlists(const QStringList &filePathList);
+    std::optional<bool> generatePrcmNetlists(const QStringList &files);
 
     /**
      * @brief Process multiple netlist files by merging them.
