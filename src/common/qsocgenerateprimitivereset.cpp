@@ -543,8 +543,8 @@ void QSocResetPrimitive::generateWireDeclarations(
         // Target-level intermediate wire (if target has processing)
         bool hasTargetProcessing = !target.async.clock.isEmpty() || !target.sync.clock.isEmpty()
                                    || !target.count.clock.isEmpty();
-        if (hasTargetProcessing && target.links.size() > 0) {
-            out << "    wire " << target.name << "_internal;\n";
+        if (hasTargetProcessing) {
+            out << "    wire " << target.name << "_processed;\n";
         }
     }
 
