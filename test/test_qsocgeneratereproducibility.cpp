@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsocconsole.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
@@ -12,6 +13,7 @@
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
+#include <QBuffer>
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QDir>
@@ -278,6 +280,46 @@ private slots:
     }
 
     void cleanupTestCase() { QVERIFY(QDir(temporaryDirectory.path()).removeRecursively()); }
+
+    void prcmDoesNotGeneratePartialCircuit()
+    {
+        const auto          baseline = YAML::Load(R"(
+port:
+  source: {direction: input, type: logic}
+  result: {direction: output, type: logic}
+comb:
+  - {out: result, expr: source}
+)");
+        QSocGenerateManager generator(nullptr, &projectManager);
+        QVERIFY(generator.setNetlistData(YAML::Clone(baseline)));
+        QVERIFY(generator.processNetlist());
+        QVERIFY(generator.generateVerilog("prcm_guard"));
+        const auto original = readOutput("prcm_guard.v");
+        QVERIFY(!original.isEmpty());
+
+        QBuffer error;
+        QVERIFY(error.open(QIODevice::WriteOnly));
+        QSocConsole::setErrorDevice(&error);
+        const auto restoreConsole = qScopeGuard([] { QSocConsole::setErrorDevice(nullptr); });
+        for (const char *declaration : {"{version: 1}", "null", "{}"}) {
+            auto candidate    = YAML::Clone(baseline);
+            candidate["prcm"] = YAML::Load(declaration);
+            QVERIFY(generator.setNetlistData(candidate));
+            error.buffer().clear();
+            error.seek(0);
+            QVERIFY(!generator.processNetlist());
+            QVERIFY(error.data().contains("PRCM_UNSUPPORTED"));
+            error.buffer().clear();
+            error.seek(0);
+            QVERIFY(!generator.generateVerilog("prcm_guard"));
+            QVERIFY(error.data().contains("PRCM_UNSUPPORTED"));
+            QCOMPARE(readOutput("prcm_guard.v"), original);
+        }
+        QVERIFY(generator.setNetlistData(YAML::Clone(baseline)));
+        QVERIFY(generator.processNetlist());
+        QVERIFY(generator.generateVerilog("prcm_guard"));
+        QCOMPARE(readOutput("prcm_guard.v"), original);
+    }
 
     void applicationMetadataDoesNotChangeArtifacts()
     {

@@ -16,6 +16,7 @@
 class QSocVerilogUtils
 {
 public:
+    static bool formatFile(const QString &candidatePath);
     /**
      * @brief Clean type string for wire declaration
      * @param typeStr Original type string (e.g., "logic [7:0]")

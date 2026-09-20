@@ -2,6 +2,8 @@
 <power-format>
 The `power` section defines power domains, sequencing, and dependencies.
 
+PRCM checks resource binding and stable modes and generates single-domain controllers. See @prcm-check.
+
 #block(
   fill: rgb("#fffce8"),
   inset: 8pt,

@@ -796,6 +796,8 @@ QString buildSby(const QSocMmioPlan &plan)
 
 QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
+    if (!plan.clearPort.isEmpty())
+        return {};
     if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
         return {QSocMmioAhbVerification::formal(plan), buildSby(plan)};
     }

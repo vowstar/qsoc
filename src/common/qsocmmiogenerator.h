@@ -68,6 +68,8 @@ struct QSocMmioPlan
     QList<QSocMmioRegisterPlan> registers;
     /* Unlisted addresses below this byte limit read zero and ignore writes with OKAY. */
     quint64 zeroFillBytes = 0;
+    /* Synchronous RW clear. Bus state and W1C history remain live. */
+    QString clearPort;
 
     bool operator==(const QSocMmioPlan &) const = default;
 };
@@ -108,6 +110,7 @@ public:
     static QStringList advise(const QSocModuleDefinition &definition);
     static bool        buildPlan(
         const QSocModuleDefinition &definition, QSocMmioPlan *plan, QStringList *errors = nullptr);
+    static bool    validateInterface(const QSocMmioPlan &plan, QStringList *errors = nullptr);
     static bool    canonicalizePlan(QSocMmioPlan *plan, QStringList *errors = nullptr);
     static QString generateVerilog(const QSocMmioPlan &plan);
     static QList<QSocMmioPortDescription> describePorts(const QSocMmioPlan &plan);

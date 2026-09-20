@@ -155,10 +155,13 @@ public:
     /**
      * @brief Clock controller configuration
      */
-    /* One declared module port: the exact header line and its comment. */
+    /* One declared module port. */
     struct ClockPort
     {
-        QString decl;
+        QString name;
+        bool    isInput = true;
+        int     width   = 1;
+        bool    packed  = false;
         QString comment;
     };
 
@@ -188,6 +191,10 @@ public:
      * @return true if generation successful, false otherwise
      */
     bool generateClockController(const YAML::Node &clockNode, QTextStream &out);
+
+    /* Emit parsed configuration without file output. */
+    QString generateControllerVerilog(const ClockControllerConfig &config);
+    QString generateCellVerilog();
 
     /**
      * @brief Parse clock configuration from YAML
