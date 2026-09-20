@@ -199,30 +199,41 @@ public:
             chipStatus(out);
         registerRead(out);
         bus(out);
+        reachability(out);
         out.flush();
         QString top = original;
         top.replace(
             QRegularExpression("module\\s+" + QRegularExpression::escape(name) + "(?=\\s*\\()"),
-            "module " + name + "_formal #(parameter @FAULT@=0)");
+            "module " + name + "_formal #(parameter @FAULT@=0, @COVER@=0)");
         top.replace(QRegularExpression("(?m)^[\t ]*endmodule[\t ]*$"), body + "\nendmodule");
         auto model = referenceModel();
         model.replace("action_contract", prefix + "action_contract");
         model.replace("service_contract", prefix + "service_contract");
         QSocMmioFormalCollateral result;
-        result.systemVerilog = top + '\n' + model;
-        const auto rtl       = circuit.rtl.keys();
-        const auto file      = name + "_formal.sv";
-        result.sby = "[tasks]\nnormal\nfault\n[options]\nmode prove\nmulticlock on\n"
-                     "timeout 180\naigsmt z3\n[engines]\nabc pdr\n[script]\nread -sv -noautowire "
-                     + rtl.join(' ') + "\nread -formal -noautowire " + file
-                     + "\nfault: chparam -set @FAULT@ 1 " + name + "_formal\nprep -top " + name
-                     + "_formal -flatten\ncheck -assert\n[files]\n" + rtl.join('\n') + '\n' + file
-                     + '\n';
+        result.systemVerilog    = top + '\n' + model;
+        const auto rtl          = circuit.rtl.keys();
+        const auto file         = name + "_formal.sv";
+        int        releaseStage = stage;
+        for (const auto &target : binding.reset.targets)
+            releaseStage = qMax(releaseStage, target.async.stage);
+        const qsizetype depth = 160 + 16 * node.size() + 8 * qsizetype(releaseStage);
+        result.sby
+            = "[tasks]\nnormal prove\nfault prove error\ncover reach\ncover_fault reach error\n"
+              "[options]\nprove: mode prove\nreach: mode cover\nmulticlock on\n"
+              "timeout 180\nprove: aigsmt z3\nreach: depth "
+              + QString::number(depth)
+              + "\n[engines]\nprove: abc pdr\nreach: btor btormc\n"
+                "[script]\nread -sv -noautowire "
+              + rtl.join(' ') + "\nread -formal -noautowire " + file
+              + "\nerror: chparam -set @FAULT@ 1 " + name + "_formal"
+              + "\nreach: chparam -set @COVER@ 1 " + name + "_formal" + "\nprep -top " + name
+              + "_formal -flatten\ncheck -assert\n[files]\n" + rtl.join('\n') + '\n' + file + '\n';
         const QMap<QString, QString> token{
             {"@D@", prefix + "data_width"},
             {"@A@", prefix + "address_width"},
             {"@STAGE@", prefix + "sample_stage"},
             {"@FAULT@", prefix + "fault_case"},
+            {"@COVER@", prefix + "cover_case"},
             {"@lane@", prefix + "lane"}};
         for (auto it = token.cbegin(); it != token.cend(); ++it) {
             result.systemVerilog.replace(it.key(), it.value());
@@ -308,6 +319,7 @@ private:
     void chipStatus(QTextStream &out);
     void registerRead(QTextStream &out);
     void bus(QTextStream &out);
+    void reachability(QTextStream &out);
 
     const QSocPrcmBindingPlan     &binding;
     const QSocPrcmInput           &input;
@@ -668,6 +680,80 @@ void Proof::physical(QTextStream &out, const Domain &d)
         << " if(" << p << "seen_work) " << p << "idle_shutdown: assert("
         << config.quiesce.completion.signal << ");\n end\nend\n";
 }
+
+void Proof::reachability(QTextStream &out)
+{
+    out << "if (@COVER@) begin\nreg " << prefix << "boot=0;\n"
+        << "always @(posedge " << prefix << "clk) " << prefix << "boot<=1;\n"
+        << "always @* begin\n assume(" << input.resetSource << "==" << prefix << "boot);\n"
+        << " assume(" << prefix << "strobe=='1);\nend\n";
+    for (const auto &d : node) {
+        const auto &config = input.domain[d.name];
+        const auto &supply = input.supplyTable[config.supply];
+        const auto &mode   = plan.domain[d.name];
+        const auto  p      = d.model + "reach_";
+        out << "always @(posedge " << prefix << "clk) if(" << prefix << "history) begin\n"
+            << " if(!@FAULT@) assume(" << supply.valid.signal << "==$past(" << supply.request
+            << "));\n"
+            << " assume(" << config.isolation.completion.signal << "==$past("
+            << config.isolation.request << "));\n"
+            << " assume(" << config.quiesce.completion.signal << "==$past("
+            << config.quiesce.request << "));\nend\n"
+            << "always @(posedge " << prefix << "clk) if(" << prefix << "ready) begin\n";
+        for (auto it = mode.mode.cbegin(); it != mode.mode.cend(); ++it)
+            out << ' ' << p << "mode_" << it.key() << ": cover(" << d.actual << "mode==" << d.width
+                << "'d" << it.key() << " && " << d.actual << "done);\n";
+        out << "end\n";
+        const auto value  = mode.mode.values();
+        const bool hasRun = value.contains(QSocPrcmTarget::Run);
+        if (!hasRun && !value.contains(QSocPrcmTarget::Reset))
+            continue;
+        const auto active = d.actual + (hasRun ? "ready_run" : "ready_reset");
+        out << "reg " << p << "seen_active=0," << p << "stop=0;\n"
+            << "always @(posedge " << prefix << "clk or negedge " << prefix << "ready) begin\n"
+            << " if(!" << prefix << "ready) begin " << p << "seen_active<=0; " << p
+            << "stop<=0; end\n"
+            << " else begin\n  if(" << active << ") " << p << "seen_active<=1;\n"
+            << "  if(" << prefix << "clear) " << p << "stop<=0;\n"
+            << "  else if(" << active << " && " << prefix << "store && " << prefix
+            << "write_address==" << input.addressWidth << "'d" << d.request << " && " << d.model
+            << "decode(" << prefix << "data[" << d.width - 1 << ":0])==0) " << p
+            << "stop<=1;\n end\nend\n"
+            << "always @(posedge " << prefix << "clk) if(" << prefix << "ready) begin\n"
+            << ' ' << p << "cycle: cover(" << p << "stop && " << d.actual << "ready_off && "
+            << d.actual << "done);\n"
+            << " if(@FAULT@) " << p << "fault: cover(" << p << "seen_active && " << d.actual
+            << "fault);\n";
+        if (d.width == 64 || quint64(mode.mode.size()) < (quint64{1} << d.width))
+            out << ' ' << p << "invalid: cover(!" << d.actual << "valid && " << active << ");\n";
+        for (const auto &target : binding.reset.targets)
+            if (target.name == input.resetTarget && target.links.size() > 1)
+                out << ' ' << p << "management: cover(" << p << "seen_active && " << active
+                    << " && " << prefix << "clear);\n";
+        if (!d.use.isEmpty())
+            out << " if(@FAULT@) " << p << "service_fault: cover(" << p << "seen_active && "
+                << d.actual << "service_failure);\n";
+        out << "end\n";
+    }
+    for (qsizetype i = 0; i < plan.service.size(); ++i) {
+        const auto actual   = circuit.binding["service"].toArray()[i].toObject();
+        const auto request  = actual["request"].toString();
+        const auto grant    = actual["grant"].toString();
+        const auto p        = serviceName(i) + "reach_";
+        const auto consumer = node[plan.service[i].consumer].actual;
+        out << "reg " << p << "used=0;\n"
+            << "always @(posedge " << prefix << "clk or negedge " << prefix << "ready)\n"
+            << " if(!" << prefix << "ready) " << p << "used<=0;\n"
+            << " else if(" << consumer << "ready_run && " << request << " && " << grant << ") " << p
+            << "used<=1;\n"
+            << "always @(posedge " << prefix << "clk) if(" << prefix << "ready) begin\n"
+            << ' ' << p << "use: cover(" << p << "used);\n"
+            << ' ' << p << "release: cover(" << p << "used && !" << request << " && !" << grant
+            << ");\nend\n";
+    }
+    out << "end\n";
+}
+
 } // namespace
 
 QSocMmioFormalCollateral QSocPrcmFormal::generateShared(

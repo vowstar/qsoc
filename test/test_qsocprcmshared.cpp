@@ -556,18 +556,40 @@ private slots:
     void formal_data()
     {
         QTest::addColumn<bool>("axi");
-        QTest::newRow("apb8-shared-names") << false;
-        QTest::newRow("axi32") << true;
+        QTest::addColumn<bool>("reach");
+        QTest::addColumn<bool>("hasRun");
+        QTest::newRow("apb8-shared-names") << false << false << true;
+        QTest::newRow("axi32") << true << false << true;
+        QTest::newRow("cover-apb8-shared-names") << false << true << true;
+        QTest::newRow("cover-axi32") << true << true << true;
+        QTest::newRow("cover-reset-only") << false << true << false;
     }
 
     void formal()
     {
         QFETCH(bool, axi);
-        for (const auto &tool : {"sby", "yosys", "z3"}) {
+        QFETCH(bool, reach);
+        QFETCH(bool, hasRun);
+        QList<const char *> tools{"sby", "yosys"};
+        tools.append(reach ? QList<const char *>{"btormc", "btorsim"} : QList<const char *>{"z3"});
+        for (const auto &tool : tools) {
             if (QStandardPaths::findExecutable(tool).isEmpty())
                 QSOC_TEST_MISSING_DEPENDENCY(tool);
         }
         auto input = declaration(axi, !axi);
+        if (!hasRun) {
+            input["prcm"].remove("chip");
+            for (const auto &entry : input["prcm"]["domain"]) {
+                auto domain = entry.second;
+                domain.remove("require");
+                domain.remove("service");
+                domain["mode"].remove("RUN");
+                domain["mode"]["OFF"]["code"]   = 5;
+                domain["mode"]["RESET"]["code"] = 2;
+                domain["transition"]            = YAML::Load(
+                    "[{from: OFF, to: RESET}, {from: RESET, to: OFF}]");
+            }
+        }
         if (!axi) {
             input = YAML::Load(
                 QString::fromStdString(YAML::Dump(input))
@@ -596,7 +618,9 @@ private slots:
         QProcess process;
         process.setWorkingDirectory(directory.path());
         process.setProcessChannelMode(QProcess::MergedChannels);
-        for (const auto &task : {"normal", "fault"}) {
+        const QStringList taskName = reach ? QStringList{"cover", "cover_fault"}
+                                           : QStringList{"normal", "fault"};
+        for (const auto &task : taskName) {
             process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", task});
             QVERIFY(process.waitForStarted());
             QVERIFY(process.waitForFinished(210000));

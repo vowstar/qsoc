@@ -172,8 +172,13 @@ Sequence checks cover normal feedback. Progress requires a stable target and eve
   [Power], [While the power request is off, reset stays active and the domain clock stops. Isolation and prior work drain complete before power removal within the same cold-reset interval.],
   [Bus], [Accepted request and response state, address errors, byte-masked REQUEST updates, STATUS flags, and EVENT history through management reset.],
   [Single-domain reachability], [Work admission, power loss, shutdown, and bus traffic during management reset after operation starts.],
+  [Shared reachability], [Declared mode completion, software shutdown, invalid requests, management reset, service use and release, and faults after operation starts.],
 )
 
 The RTL checks compare register values and power, isolation, and quiesce requests with an independent phase model. Shared proof jobs separate normal operation from fault response and check actual clock and reset outputs. Hardware event set takes priority over software clear. Management reset retains event history.
 
 Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Single-domain bounded reachability uses one cold start, a legal operating mode then OFF, full strobes, and one-cycle feedback. RUN and management-reset coverage require those features in the input. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.
+
+Shared reachability uses one cold start, full strobes, and one-cycle isolation and drain feedback. Normal cases use one-cycle power feedback. Fault cases permit power loss. A domain without RUN uses its powered RESET state. A shutdown witness requires an OFF write while active and local request completion. Management reset cancels this observation.
+
+Cover failure reports a goal not reached within the search bound. Chip policy can block a declared local mode.
