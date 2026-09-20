@@ -34,6 +34,7 @@ qsoc agent --ssh user@host --workspace /home/u/proj     # remote workspace via S
 - Session persistence with resume, branch, clear, and rename
 - Schematic editor GUI alongside the CLI agent
 - Verilog generation, bus interface management, slang-based linting
+- PRCM generation with MMIO control, domain service handshakes, and formal checks
 
 ## Documentation
 

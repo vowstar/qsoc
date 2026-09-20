@@ -337,7 +337,7 @@ any selected file. `--force` replaces only the selected set.
 === Verilog Generation Options
 <verilog-generation>
 The `generate verilog` command generates Verilog code from netlist files. The
-input format is documented in @soc-net-format.
+input format is documented in @soc-net-format. PRCM input and controller generation are described in @prcm-check.
 
 #figure(
   align(center)[#table(
@@ -349,6 +349,10 @@ input format is documented in @soc-net-format.
     [`-p`, `--project <name>`], [The project name],
     [`-m`, `--merge`],
     [Merge multiple netlist files in order before processing],
+    [`--check`],
+    [Check PRCM resource binding and stable modes without a project or RTL output],
+    [`--with-formal`],
+    [Generate PRCM RTL checks alongside the controller],
     [`-f`, `--force`],
     [Replace existing clock, reset, and power primitive cell files],
     [`--format`],

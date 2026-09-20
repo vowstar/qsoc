@@ -1,27 +1,27 @@
 = PRCM
 <prcm-check>
 
-PRCM declares a controller, each managed domain, and legal stable modes. Version 1 checks resource binding and stable modes. Circuit generation supports APB4 and AXI4-Lite with one management clock.
+PRCM generates MMIO control and power, reset, and clock sequences from domain modes and service dependencies. It supports APB4 and AXI4-Lite with one management clock.
 
 ```sh
 qsoc generate verilog --check prcm.soc_net
 ```
 
-The command reads input files without loading a project or writing RTL. Paths are relative to the current directory. Each file is checked separately unless `--merge` is set. The check does not accept `--force` or `--format`.
+`--check` checks resource binding and stable modes without loading a project or writing RTL. It does not accept `--force`, `--format`, or `--with-formal`.
 
-Use `--merge` to combine resource files with one PRCM declaration:
+When resources use separate files, combine them with `--merge`:
 
 ```sh
 qsoc generate verilog --check --merge clock.soc_net reset.soc_net prcm.soc_net
 ```
 
-Each input file contains one YAML document. Use `--merge` for multiple files. Each resource has one definition. Duplicate declarations report both input locations. Merged diagnostics retain the original file, line, column, and field path.
+Paths are relative to the current directory. Each file contains one YAML document and is checked separately unless `--merge` is set. Each resource has one definition. Duplicate declarations report both input locations.
 
 The controller uses an always-on supply and an active-low reset. Each domain binds a direct positive-edge clock gate and an asynchronous reset with synchronous release. The domain request cannot replace the management reset. Gate controls and domain reset requests must not also control another target.
 
 Supply, quiesce, and isolation feedback use the management clock. A request output cannot also serve as completion feedback. Test bypass, clock selection, division, asynchronous feedback, and composite `power` controllers are outside the current binding scope.
 
-Optional `controller.reset.target` names a reset-tree output for runtime management reset. Its release uses the controller clock input, and its source list includes `controller.reset.source`. Domain control must not drive its reset requests. This command checks the connection, without a runtime reset proof.
+Optional `controller.reset.target` names a reset-tree output for runtime management reset. Its release uses the controller clock input, and its source list includes `controller.reset.source`. Domain control must not drive its reset requests.
 
 Save this example as `prcm.soc_net`:
 
@@ -81,11 +81,11 @@ prcm:
       transition: [{from: 'OFF', to: 'RUN'}, {from: 'RUN', to: 'OFF'}]
 ```
 
-`code` is the software mode value. `reset_mode` selects the initial request. It does not establish the physical reset state. Request and feedback signals use separate names.
+`code` is the software mode value. `reset_mode` selects the initial request, not the physical reset state.
 
 The stable mode check enforces one mode per domain. A running clock requires valid power. An unpowered domain requires a stopped clock, asserted reset, and active isolation. Domains on one supply share the same power value. Service requirements constrain the provider mode.
 
-MMIO uses the existing bus width limits. Register allocation, transitions, and RTL behavior are outside this check. A valid stable mode does not prove a safe path to that mode.
+MMIO uses the bus width limits in @mmio-generator. `--check` does not check transitions or RTL behavior.
 
 Conflicts report the input file, line, column, and field path. Each solver query has a ten-second limit. A conflict, timeout, unknown result, or input error returns a nonzero exit code.
 
@@ -95,11 +95,10 @@ Generate a controller inside an existing project:
 
 ```sh
 qsoc generate verilog -d demo prcm.soc_net
-qsoc generate verilog -d demo --merge prcm.soc_net clock.soc_net reset.soc_net
 qsoc generate verilog -d demo --with-formal prcm.soc_net
 ```
 
-The first input basename selects the module name. Generation checks stable modes, each action model, and conditional service progress before writing files. Other circuit sections and additional clock or reset controllers require a later template and produce an error.
+The first input basename selects the module name. Generation checks stable modes, action safety, and conditional service progress before writing files. Other circuit sections and additional clock or reset controllers are rejected.
 
 Set `controller.reset.stage` to at least two. This selects the controller reset receivers, independently of each resource target's `async.stage`. The check command permits omission, but circuit generation requires an explicit value.
 
@@ -126,7 +125,7 @@ chip:
       domain: {fabric: {allow: ['OFF', RUN]}, periph: {allow: ['OFF', RUN]}}
 ```
 
-For `prcm.soc_net`, the project output contains:
+For `prcm.soc_net`, output paths depend on the selected configuration:
 
 #table(
   columns: (auto, 1fr),
@@ -135,8 +134,8 @@ For `prcm.soc_net`, the project output contains:
   [`prcm/rtl/prcm_register.v`], [MMIO register bank],
   [`prcm/rtl/prcm_clock.v`], [Clock controller],
   [`prcm/rtl/prcm_reset.v`], [Reset controller],
-  [`prcm/rtl/qsoc_prcm_domain.v`], [Single-domain action FSM],
-  [`prcm/rtl/qsoc_prcm_domain_service.v`], [Action FSM for a shared circuit],
+  [`prcm/rtl/qsoc_prcm_domain.v`], [Action FSM for a single domain without chip policy or services],
+  [`prcm/rtl/qsoc_prcm_domain_service.v`], [Action FSM for multiple domains, chip policy, or services],
   [`prcm/rtl/qsoc_prcm_service.v`], [Service handshake, when required],
   [`prcm/rtl/clock_cell.v`, `prcm/rtl/reset_cell.v`], [Replaceable resource cells],
   [`prcm/rtl/prcm.fl`], [RTL file list, relative to its directory],
@@ -150,6 +149,8 @@ Ordinary outputs are regenerated. Existing resource cells remain unchanged unles
 
 For a single-domain circuit, REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains the raw request, done, invalid_mode, and fault. The mode code and three status bits must fit one data word. EVENT records power loss and uses write-one-to-clear semantics.
 
+Write a mode code to REQUEST, then check STATUS for completion or a fault. Bus completion acknowledges the register access, not the mode transition. An invalid code sets invalid_mode and retains the last valid execution target. Hardware event set takes priority over software clear.
+
 A shared circuit allocates DOMAIN_name_REQUEST, DOMAIN_name_STATUS, and DOMAIN_name_EVENT in domain-name order. Optional CHIP_REQUEST and CHIP_STATUS precede them. The generated header supplies each offset, mask, and qualified mode code.
 
 A consumer keeps its service request until it stops using the provider. The provider executes its local shutdown target after the last consumer releases it. Each chip mode either fixes a domain target or permits every local mode. A chip policy that blocks a required provider is rejected.
@@ -160,11 +161,11 @@ Management reset clears the software request to reset_mode and retains action st
 
 A new mode request waits for an active reset release to complete before it can reassert reset. Fault protection remains immediate.
 
-Sequence checks cover normal feedback. Progress requires a stable target and eventual feedback. Customer logic and cell replacements need separate checks.
+Progress requires a stable target and eventual feedback. Customer logic and cell replacements need separate checks.
 
 `binding` records top-level instances and port connections. Receiver entries identify registers, inputs, clock edges, resets, and stage counts. Names are relative to the top module. Map them to the actual cell and netlist before applying physical constraints.
 
-`--with-formal` emits checks for the actual circuit in a separate directory. Proof jobs select the synthesis branch of resource cells. The RTL file list contains only synthesis input. File generation does not run the RTL checks. The integration report records not_run.
+`--with-formal` emits RTL checks under `formal/`, separate from the synthesis file list. It does not run them. The integration report records not_run.
 
 #table(
   columns: (auto, 1fr),
@@ -175,10 +176,8 @@ Sequence checks cover normal feedback. Progress requires a stable target and eve
   [Shared reachability], [Declared mode completion, software shutdown, invalid requests, management reset, service use and release, and faults after operation starts.],
 )
 
-The RTL checks compare register values and power, isolation, and quiesce requests with an independent phase model. Shared proof jobs separate normal operation from fault response and check actual clock and reset outputs. Hardware event set takes priority over software clear. Management reset retains event history.
+RTL checks use the synthesis branch of resource cells and compare register values and control outputs with an independent phase model. Shared jobs separate normal operation from fault response.
 
-Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Single-domain bounded reachability uses one cold start, a legal operating mode then OFF, full strobes, and one-cycle feedback. RUN and management-reset coverage require those features in the input. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.
+Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Reachability uses one cold start, full strobes, and one-cycle feedback. Fault cases permit power loss. RUN and management-reset goals require those features in the input. A domain without RUN uses its powered RESET state.
 
-Shared reachability uses one cold start, full strobes, and one-cycle isolation and drain feedback. Normal cases use one-cycle power feedback. Fault cases permit power loss. A domain without RUN uses its powered RESET state. A shutdown witness requires an OFF write while active and local request completion. Management reset cancels this observation.
-
-Cover failure reports a goal not reached within the search bound. Chip policy can block a declared local mode.
+A shutdown goal requires an OFF write while active and local request completion. Management reset cancels this observation. Chip policy can block a declared local mode. Cover failure means the goal is not reached within the search bound. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.
