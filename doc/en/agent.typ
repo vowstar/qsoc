@@ -822,8 +822,11 @@ marked with the `<!-- qsoc-fork-tag -->` HTML comment so further `agent`
 calls inside the child cannot recurse into another fork from the same
 anchor.
 
-The child's prefix is byte-identical to the parent's, so the prompt
-cache hit on the first child turn is preserved.
+The child reuses the parent's identity and tool restrictions. It builds environment and project rules once for its own workspace. A legacy full prompt override is not split into sections. Forks rebuild the default identity in that case. Critical reminders, plan mode, and the approved plan remain system instructions.
+
+Unchanged prompt sections stay stable across turns. Workspace, permissions, model, or runtime reminders can change the request prefix. Provider caching depends on the endpoint and request contents. A fork does not guarantee a cache hit.
+
+Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, with a 64 KiB limit per file. Missing files add no rules. Unavailable or oversized files add a notice. Remote prompts never substitute local project rules or skill paths.
 
 === Definitions
 <agent-subagents-defs>
@@ -857,10 +860,11 @@ group with the offending path.
     [`description`],
     [One-line summary shown in the parent's system prompt and `/agents`.],
     [`tools`],
-    [Allowlist of tool names the child may call. Empty inherits the parent
-     set.],
+    [Allowlist restricted by the parent's allowed tools. Empty inherits
+     the parent set.],
     [`disallowed_tools`],
-    [Denylist applied after the allowlist. Pipe-separated alternates.],
+    [Additional denied tools. Parent denials still apply.
+     Pipe-separated alternates.],
     [`max_turns`],
     [Hard ceiling on the child's iteration count. Unset inherits the
      parent's limit.],

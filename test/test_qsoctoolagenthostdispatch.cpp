@@ -119,6 +119,8 @@ public:
             + QByteArrayLiteral("\n\ndata: [DONE]\n\n"));
     }
 
+    std::function<void(int)> onRequest;
+
     int        requestCount() const { return requestCount_; }
     QByteArray requestBody(int index) const { return bodies_.value(index); }
 
@@ -155,6 +157,9 @@ private:
         bodies_.append(it.value().mid(bodyStart, contentLength));
         buffers_.erase(it);
         ++requestCount_;
+        if (onRequest) {
+            onRequest(requestCount_ - 1);
+        }
         if (responses_.isEmpty()) {
             socket->disconnectFromHost();
             return;
@@ -215,6 +220,7 @@ private slots:
     void initTestCase();
     void cleanupTestCase();
     void aDispatchedChildIsToldTheWorkspaceItsToolsReach();
+    void forkLoadsRemoteRulesAtTheBindingBoundary();
     void aDispatchedChildIsNotStoppedByTheParentHostHealth();
 
 private:
@@ -434,6 +440,75 @@ void Test::aDispatchedChildIsToldTheWorkspaceItsToolsReach()
     QVERIFY2(
         !prompt.contains(QString::fromLatin1(kParentTarget)),
         "the child was told its target is the parent's host");
+}
+
+void Test::forkLoadsRemoteRulesAtTheBindingBoundary()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const auto writeRules = [](const QString &root, const QByteArray &text) {
+        QFile file(QDir(root).filePath(QStringLiteral("AGENTS.md")));
+        return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+               && file.write(text) == text.size();
+    };
+    QVERIFY(writeRules(m_project, QByteArrayLiteral("Local parent sentinel")));
+    QVERIFY(writeRules(m_workspace, QByteArrayLiteral("Bound remote sentinel")));
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueToolCall(QStringLiteral("path_context"));
+    llm.enqueueFinal(QStringLiteral("done"));
+    llm.enqueueFinal(QStringLiteral("done again"));
+    bool changed  = false;
+    llm.onRequest = [&](int index) {
+        if (index == 0) {
+            changed = writeRules(m_workspace, QByteArrayLiteral("Rebound remote sentinel"));
+        }
+    };
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    QSocSubAgentTaskSource      tasks;
+    QSocToolRegistry            registry;
+    QSocHostCatalog             catalog;
+    QVERIFY(registerHostB(&catalog));
+    auto config         = parentOnItsOwnHost();
+    config.projectPath  = m_project;
+    config.skillListing = QStringLiteral("Parent skill sentinel");
+    config.remoteProjectRules
+        = {config.remoteName, config.remoteWorkspace, QStringLiteral("Other remote sentinel")};
+    QSocAgent     parent(nullptr, &service, &registry, config);
+    QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+    registry.registerTool(&tool);
+    auto args             = spawnArgs();
+    args["subagent_type"] = "fork";
+    const auto first      = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(first.value("status", std::string()), std::string("ok"));
+    QVERIFY(changed);
+    QCOMPARE(llm.requestCount(), 2);
+    const QString prompt = systemPromptOf(llm, 0);
+    QCOMPARE(prompt, systemPromptOf(llm, 1));
+    QCOMPARE(prompt.count(QStringLiteral("Bound remote sentinel")), 1);
+    QVERIFY(!prompt.contains(QStringLiteral("Local parent sentinel")));
+    QVERIFY(!prompt.contains(QStringLiteral("Parent skill sentinel")));
+    QVERIFY(!prompt.contains(QStringLiteral("Other remote sentinel")));
+    QVERIFY(!prompt.contains(QStringLiteral("Rebound remote sentinel")));
+    const auto second = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(second.value("status", std::string()), std::string("ok"));
+    QCOMPARE(llm.requestCount(), 3);
+    const QString rebound = systemPromptOf(llm, 2);
+    QCOMPARE(rebound.count(QStringLiteral("Rebound remote sentinel")), 1);
+    QVERIFY(!rebound.contains(QStringLiteral("Bound remote sentinel")));
+    QVERIFY(writeRules(m_workspace, QByteArray(64 * 1024 + 1, 'x')));
+    llm.enqueueFinal(QStringLiteral("bounded rules"));
+    const auto oversized = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(oversized.value("status", std::string()), std::string("ok"));
+    QCOMPARE(llm.requestCount(), 4);
+    const QString limited = systemPromptOf(llm, 3);
+    QVERIFY(limited.contains(QStringLiteral("AGENTS.md were not loaded")));
+    QVERIFY(!limited.contains(QString(1024, QLatin1Char('x'))));
+    QFile::remove(QDir(m_workspace).filePath(QStringLiteral("AGENTS.md")));
 }
 
 /* Counterexample: the child inherited the parent's workspace-health probe, so

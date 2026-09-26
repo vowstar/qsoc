@@ -2300,30 +2300,34 @@ void QSocAgent::injectPerTurnReminders(json &wire) const
     }
 }
 
+QSocAgent::ForkSnapshot QSocAgent::captureForkSnapshot() const
+{
+    return {buildIdentitySystemPrompt(), agentConfig, messages, approvedPlan_, bindingRevision_};
+}
+
 QString QSocAgent::buildSystemPromptWithMemory(bool includeRuntime) const
 {
-    const auto finish = [this, includeRuntime](QString prompt) {
-        if (includeRuntime)
-            appendRuntimeSystemSections(prompt);
-        return prompt;
-    };
-    /* Legacy override path (non-sub-agent): replace the entire prompt. */
+    QString prompt;
     if (!agentConfig.systemPromptOverride.isEmpty() && !agentConfig.isSubAgent) {
-        return finish(agentConfig.systemPromptOverride);
+        prompt = agentConfig.systemPromptOverride;
+    } else {
+        prompt = buildIdentitySystemPrompt();
+        appendDynamicSystemSections(prompt);
     }
+    if (includeRuntime) {
+        appendRuntimeSystemSections(prompt);
+    }
+    return prompt;
+}
 
-    /* Sub-agent path: override replaces only the static identity /
-     * usage sections; environment, project instructions, optional
-     * skill listing and optional memory are still appended below so
-     * the child sees the same workspace, project rules, and (when
-     * enabled) the same skill / memory context as the parent. */
+QString QSocAgent::buildIdentitySystemPrompt() const
+{
     if (agentConfig.isSubAgent && !agentConfig.systemPromptOverride.isEmpty()) {
-        QString subPrompt = agentConfig.systemPromptOverride;
-        if (!subPrompt.endsWith(QLatin1Char('\n'))) {
-            subPrompt += QLatin1Char('\n');
+        QString identity = agentConfig.systemPromptOverride;
+        if (!identity.endsWith(QLatin1Char('\n'))) {
+            identity += QLatin1Char('\n');
         }
-        appendDynamicSystemSections(subPrompt);
-        return finish(subPrompt);
+        return identity;
     }
 
     QString prompt;
@@ -2449,8 +2453,7 @@ QString QSocAgent::buildSystemPromptWithMemory(bool includeRuntime) const
         "After scheduling, tell the user the id, schedule, durability, and how to cancel "
         "(schedule_delete id=<id>).\n");
 
-    appendDynamicSystemSections(prompt);
-    return finish(prompt);
+    return prompt;
 }
 
 void QSocAgent::appendRuntimeSystemSections(QString &prompt) const
@@ -2522,7 +2525,7 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                       + QSysInfo::productVersion() + QStringLiteral("\n");
         envSection += QStringLiteral("- Architecture: ") + QSysInfo::currentCpuArchitecture()
                       + QStringLiteral("\n");
-        if (!agentConfig.projectPath.isEmpty()) {
+        if (!agentConfig.remoteMode && !agentConfig.projectPath.isEmpty()) {
             envSection += QStringLiteral("- Working directory: ") + agentConfig.projectPath
                           + QStringLiteral("\n");
             QDir gitDir(agentConfig.projectPath);
@@ -2661,22 +2664,30 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
     }
 
     /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md). */
-    if (agentConfig.injectProjectMd && !agentConfig.projectPath.isEmpty()) {
-        QDir    projectDir(agentConfig.projectPath);
+    if (agentConfig.injectProjectMd) {
         QString instructions;
-        for (const QString &name :
-             {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
-            const QString path = projectDir.filePath(name);
-            QFile         file(path);
-            if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QTextStream   stream(&file);
-                const QString content = stream.readAll().trimmed();
-                file.close();
-                if (!content.isEmpty()) {
-                    if (!instructions.isEmpty()) {
-                        instructions += QStringLiteral("\n\n");
+        if (agentConfig.remoteMode) {
+            const auto &snapshot = agentConfig.remoteProjectRules;
+            if (snapshot.target == agentConfig.remoteName
+                && snapshot.workspace == agentConfig.remoteWorkspace) {
+                instructions = snapshot.text;
+            }
+        } else if (!agentConfig.projectPath.isEmpty()) {
+            QDir projectDir(agentConfig.projectPath);
+            for (const QString &name :
+                 {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
+                const QString path = projectDir.filePath(name);
+                QFile         file(path);
+                if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    QTextStream   stream(&file);
+                    const QString content = stream.readAll().trimmed();
+                    file.close();
+                    if (!content.isEmpty()) {
+                        if (!instructions.isEmpty()) {
+                            instructions += QStringLiteral("\n\n");
+                        }
+                        instructions += content;
                     }
-                    instructions += content;
                 }
             }
         }
@@ -3083,7 +3094,10 @@ void QSocAgent::setLLMService(QLLMService *llmService)
 
 void QSocAgent::setToolRegistry(QSocToolRegistry *toolRegistry)
 {
-    this->toolRegistry = toolRegistry;
+    if (this->toolRegistry != toolRegistry) {
+        ++bindingRevision_;
+        this->toolRegistry = toolRegistry;
+    }
 }
 
 void QSocAgent::setApprovedPlan(const QString &plan)
@@ -3104,6 +3118,13 @@ void QSocAgent::setEffortLevel(const QString &level)
 
 void QSocAgent::setConfig(const QSocAgentConfig &config)
 {
+    if (agentConfig.projectPath != config.projectPath || agentConfig.remoteMode != config.remoteMode
+        || agentConfig.remoteName != config.remoteName
+        || agentConfig.remoteWorkspace != config.remoteWorkspace
+        || agentConfig.remoteWorkingDir != config.remoteWorkingDir
+        || agentConfig.remoteWritableDirs != config.remoteWritableDirs) {
+        ++bindingRevision_;
+    }
     agentConfig = config;
     emit configurationChanged();
 }

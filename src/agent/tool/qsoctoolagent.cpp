@@ -15,6 +15,7 @@
 #include "agent/remote/qsocsshsession.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
+#include "common/qsocprojectmanager.h"
 
 #include <memory>
 #include <utility>
@@ -480,6 +481,8 @@ void bindConfigToHost(QSocRemoteConnection *conn, QSocAgentConfig *cfg)
     cfg->remoteWorkspace    = conn->workspace();
     cfg->remoteWorkingDir   = conn->path()->cwd();
     cfg->remoteWritableDirs = conn->path()->writableDirs();
+    cfg->skillListing.clear();
+    loadAgentRemoteProjectRules(conn, cfg);
 }
 
 /* JSON spelling of a terminal flavour. Deliberately not statusLine()'s words:
@@ -591,13 +594,7 @@ QString QSocToolAgent::execute(const json &arguments)
         return QStringLiteral(R"({"status":"error","error":"prompt is required"})");
     }
 
-    /* Fork mode: subagent_type empty or "fork" → spawn a child that
-     * inherits the parent's message history + system prompt for
-     * cache-identical prefix continuation. The parent's full
-     * conversation is forwarded; the child gets `prompt` as the
-     * next user turn. Recursion guard via the kForkMarkerTag
-     * sentinel: if the parent's history already carries one, this
-     * is a forked context, refuse a second fork. */
+    /* Forks inherit a captured identity and history, then rebuild binding rules. */
     const bool isFork = subagentType.isEmpty() || subagentType == QStringLiteral("fork");
 
     const QSocAgentDefinition *def = nullptr;
@@ -681,12 +678,15 @@ QString QSocToolAgent::execute(const json &arguments)
      * marker check. Checked BEFORE the llm-null guard so a fork
      * spawn attempt fails for the right reason regardless of llm
      * wiring. */
+    std::optional<QSocAgent::ForkSnapshot> forkSnapshot;
     if (isFork) {
         if (parentAgent_ == nullptr) {
             return QStringLiteral(
                 R"({"status":"error","error":"fork mode requires a bound parent agent"})");
         }
-        if (messagesContainForkMarker(parentAgent_->getMessages())) {
+        forkSnapshot    = parentAgent_->captureForkSnapshot();
+        effectiveConfig = forkSnapshot->config;
+        if (messagesContainForkMarker(forkSnapshot->messages)) {
             return QStringLiteral(
                 R"({"status":"error","error":"forks cannot be nested; this context is already forked"})");
         }
@@ -719,29 +719,27 @@ QString QSocToolAgent::execute(const json &arguments)
         worktreePath = createWorktreeFor(parentRepoRoot, QStringLiteral("pending"));
     }
 
-    /* Build child config. Two paths:
-     *   - Named def: apply that def's restrictions / prompt body.
-     *   - Fork:      reuse parent's rendered system prompt verbatim
-     *                so the LLM cache stays warm; no allowlist /
-     *                denylist / max_turns override; isSubAgent is
-     *                still on so the recursion guard blocks the
-     *                spawn-agent tool. */
     QSocAgentConfig childCfg = effectiveConfig;
     childCfg.isSubAgent      = true;
     if (isFork) {
-        childCfg.systemPromptOverride = parentAgent_->buildSystemPromptWithMemory(false);
-        childCfg.toolsAllow.clear();
-        childCfg.toolsDeny.clear();
-        childCfg.maxTurnsOverride = 0;
-        childCfg.criticalReminder.clear();
+        childCfg.systemPromptOverride = forkSnapshot->identityPrompt;
     } else {
         childCfg.systemPromptOverride = def->promptBody;
-        childCfg.toolsAllow           = def->toolsAllow;
-        childCfg.toolsDeny            = def->toolsDeny;
-        childCfg.maxTurnsOverride     = def->maxTurns;
-        childCfg.criticalReminder     = def->criticalReminder;
-        childCfg.autoLoadMemory       = def->injectMemory;
-        childCfg.injectProjectMd      = def->injectProjectMd;
+        childCfg.toolsDeny.append(def->toolsDeny);
+        if (!def->toolsAllow.isEmpty()) {
+            for (const auto &name : def->toolsAllow) {
+                if (!childCfg.toolsAllow.isEmpty() && !childCfg.toolsAllow.contains(name)) {
+                    childCfg.toolsDeny.append(name);
+                }
+            }
+            childCfg.toolsAllow = def->toolsAllow;
+        }
+        childCfg.toolsAllow.removeDuplicates();
+        childCfg.toolsDeny.removeDuplicates();
+        childCfg.maxTurnsOverride = def->maxTurns;
+        childCfg.criticalReminder = def->criticalReminder;
+        childCfg.autoLoadMemory   = def->injectMemory;
+        childCfg.injectProjectMd  = def->injectProjectMd;
         if (!def->injectSkills) {
             childCfg.skillListing.clear();
         }
@@ -751,6 +749,12 @@ QString QSocToolAgent::execute(const json &arguments)
     }
     if (!worktreePath.isEmpty()) {
         childCfg.projectPath = worktreePath;
+        if (isFork || def->injectSkills) {
+            QSocProjectManager project;
+            project.setProjectPath(worktreePath);
+            QSocToolSkillFind scanner(nullptr, &project);
+            childCfg.skillListing = QSocToolSkillFind::formatPromptListing(scanner.scanAllSkills());
+        }
     }
     if (childHost != nullptr) {
         bindConfigToHost(&childHost->conn, &childCfg);
@@ -762,6 +766,7 @@ QString QSocToolAgent::execute(const json &arguments)
      * invariant. The clone shares the same QSocConfig, so model and
      * endpoint selection stay in sync. */
     auto *childLlm = effectiveLlm->clone(nullptr);
+    childLlm->setModel(effectiveLlm->getCurrentModelConfig());
     if (!childModel.isEmpty()) {
         childLlm->setCurrentModel(childModel);
     }
@@ -836,9 +841,9 @@ QString QSocToolAgent::execute(const json &arguments)
             return probeParent.isNull() ? QString() : probeParent->probeWorkspaceHealth();
         });
     }
-    /* def is null in fork mode; a fork inherits the parent context and
-     * never opts into memory injection, so guard the deref. */
-    if (memoryManager_ != nullptr && def != nullptr && def->injectMemory) {
+    if (isFork && worktreePath.isEmpty() && childHost == nullptr) {
+        child->setMemoryManager(parentAgent_->getMemoryManager());
+    } else if (memoryManager_ != nullptr && def != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
     }
     /* Per-definition hooks override: when def declares its own
@@ -864,7 +869,8 @@ QString QSocToolAgent::execute(const json &arguments)
     /* Fork mode: copy parent's message history into the child + a
      * marker system message so subsequent forks detect the chain. */
     if (isFork) {
-        json forkedMessages = parentAgent_->getMessages();
+        child->setApprovedPlan(forkSnapshot->approvedPlan);
+        json forkedMessages = forkSnapshot->messages;
         if (!forkedMessages.is_array()) {
             forkedMessages = json::array();
         }

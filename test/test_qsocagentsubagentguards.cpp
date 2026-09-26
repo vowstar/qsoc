@@ -51,6 +51,117 @@ private:
     }
 
 private slots:
+    void forkSnapshotSeparatesIdentityFromBinding()
+    {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        QFile rules(project.filePath(QStringLiteral("AGENTS.md")));
+        QVERIFY(rules.open(QIODevice::WriteOnly));
+        rules.write("Project sentinel\n# Environment\nA heading inside project rules.\n");
+        rules.close();
+        QSocAgentConfig cfg;
+        cfg.projectPath      = project.path();
+        cfg.toolsDeny        = {QStringLiteral("bash_run")};
+        cfg.criticalReminder = QStringLiteral("Keep the critical rule.");
+        QSocAgent parent(nullptr, nullptr, makeRegistry(), cfg);
+        parent.setMessages(
+            json::array({{{"role", "user"}, {"content", "# Environment\nUser data"}}}));
+        parent.setApprovedPlan(QStringLiteral("Keep the approved plan."));
+        const auto snapshot = parent.captureForkSnapshot();
+        QVERIFY(!snapshot.identityPrompt.contains(QStringLiteral("# Environment")));
+        QVERIFY(!snapshot.identityPrompt.contains(QStringLiteral("Project sentinel")));
+        QCOMPARE(snapshot.messages, parent.getMessages());
+        QCOMPARE(snapshot.approvedPlan, parent.approvedPlan());
+        cfg                      = snapshot.config;
+        cfg.isSubAgent           = true;
+        cfg.systemPromptOverride = snapshot.identityPrompt;
+        QSocAgent     child(nullptr, nullptr, makeRegistry(), cfg);
+        const QString prompt = child.buildSystemPromptWithMemory();
+        QCOMPARE(prompt.count(QStringLiteral("Project sentinel")), 1);
+        QCOMPARE(prompt.count(QStringLiteral("# Project instructions")), 1);
+        QVERIFY(!child.isToolAllowed(QStringLiteral("bash_run")));
+        QVERIFY(!child.isToolAllowed(QStringLiteral("agent")));
+        QCOMPARE(cfg.criticalReminder, QStringLiteral("Keep the critical rule."));
+        parent.setMessages(json::array());
+        QCOMPARE(snapshot.messages.size(), size_t{1});
+    }
+
+    void legacyOverrideIsNotParsedIntoForkIdentity()
+    {
+        QSocAgentConfig cfg;
+        cfg.systemPromptOverride = QStringLiteral("Legacy sentinel\n# Environment\nLegacy rules");
+        QSocAgent parent(nullptr, nullptr, makeRegistry(), cfg);
+        QVERIFY(parent.buildSystemPromptWithMemory().startsWith(QStringLiteral("Legacy sentinel")));
+        const auto snapshot = parent.captureForkSnapshot();
+        QVERIFY(snapshot.identityPrompt.startsWith(QStringLiteral("You are QSoC Agent")));
+        QVERIFY(!snapshot.identityPrompt.contains(QStringLiteral("Legacy sentinel")));
+        QVERIFY(!snapshot.identityPrompt.contains(QStringLiteral("# Environment")));
+    }
+
+    void remoteRulesRequireTheCurrentBinding()
+    {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        QFile rules(project.filePath(QStringLiteral("AGENTS.md")));
+        QVERIFY(rules.open(QIODevice::WriteOnly));
+        rules.write("Local project sentinel");
+        rules.close();
+        QSocAgentConfig cfg;
+        cfg.projectPath     = project.path();
+        cfg.remoteMode      = true;
+        cfg.remoteName      = QStringLiteral("bound-host");
+        cfg.remoteWorkspace = QStringLiteral("/workspace");
+        cfg.remoteProjectRules
+            = {QStringLiteral("previous-host"),
+               cfg.remoteWorkspace,
+               QStringLiteral("Remote project sentinel")};
+        QSocAgent agent(nullptr, nullptr, makeRegistry(), cfg);
+        QString   prompt = agent.buildSystemPromptWithMemory();
+        QVERIFY(!prompt.contains(QStringLiteral("Local project sentinel")));
+        QVERIFY(!prompt.contains(QStringLiteral("Remote project sentinel")));
+        QVERIFY(!prompt.contains(project.path()));
+        cfg.remoteProjectRules.target = cfg.remoteName;
+        agent.setConfig(cfg);
+        prompt = agent.buildSystemPromptWithMemory();
+        QCOMPARE(prompt.count(QStringLiteral("Remote project sentinel")), 1);
+        cfg.remoteWorkspace = QStringLiteral("/another-workspace");
+        agent.setConfig(cfg);
+        QVERIFY(!agent.buildSystemPromptWithMemory().contains(
+            QStringLiteral("Remote project sentinel")));
+    }
+
+    void bindingRevisionTracksBindingChangesOnly()
+    {
+        QSocAgentConfig cfg;
+        auto           *registry = makeRegistry();
+        QSocAgent       agent(nullptr, nullptr, registry, cfg);
+        quint64         revision = agent.bindingRevision();
+        agent.setConfig(cfg);
+        agent.setToolRegistry(registry);
+        QCOMPARE(agent.bindingRevision(), revision);
+        cfg.planMode = true;
+        cfg.modelId  = QStringLiteral("selected-model");
+        agent.setConfig(cfg);
+        QCOMPARE(agent.bindingRevision(), revision);
+        cfg.projectPath = QStringLiteral("project");
+        agent.setConfig(cfg);
+        QCOMPARE(agent.bindingRevision(), ++revision);
+        cfg.remoteMode      = true;
+        cfg.remoteName      = QStringLiteral("bound-host");
+        cfg.remoteWorkspace = QStringLiteral("/workspace");
+        agent.setConfig(cfg);
+        QCOMPARE(agent.bindingRevision(), ++revision);
+        cfg.remoteWorkingDir = QStringLiteral("/workspace/subdir");
+        agent.setConfig(cfg);
+        QCOMPARE(agent.bindingRevision(), ++revision);
+        cfg.remoteWritableDirs = {QStringLiteral("/scratch")};
+        agent.setConfig(cfg);
+        QCOMPARE(agent.bindingRevision(), ++revision);
+        agent.setToolRegistry(makeRegistry());
+        QCOMPARE(agent.bindingRevision(), ++revision);
+        QCOMPARE(agent.captureForkSnapshot().bindingRevision, revision);
+    }
+
     /* Default config: every tool allowed; "agent" allowed for parent. */
     void testAllowlistEmptyMeansAll()
     {

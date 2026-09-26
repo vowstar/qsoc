@@ -346,6 +346,11 @@ bool checkDoubleInterrupt()
 /* Keep request-scoped transport state on the agent's request boundary. */
 void bindRemoteConnectionToAgent(QSocRemoteConnection *conn, QSocAgent *agent)
 {
+    auto config = agent->getConfig();
+    config.skillListing.clear();
+    loadAgentRemoteProjectRules(conn, &config);
+    agent->setConfig(config);
+
     conn->setWorkingDirectoryObserver([agent](const QString &cwd) {
         auto cfg             = agent->getConfig();
         cfg.remoteWorkingDir = cwd;
