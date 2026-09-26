@@ -52,6 +52,7 @@
 #include "agent/tool/qsoctoolmemory.h"
 #include "agent/tool/qsoctoolmodule.h"
 #include "agent/tool/qsoctoolmonitor.h"
+#include "agent/tool/qsoctooloutputread.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolplanmode.h"
 #include "agent/tool/qsoctoolproject.h"
@@ -993,6 +994,17 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
             config.maxIterations = maxIterStr.toInt();
         }
 
+        const auto readArtifactLimit = [&](const QString &key, qint64 &value) {
+            bool         ok     = false;
+            const qint64 parsed = socConfig->getValue(key).toLongLong(&ok);
+            if (ok && parsed > 0)
+                value = parsed;
+        };
+        readArtifactLimit(QStringLiteral("agent.tool_artifact_bytes"), config.toolArtifactBytes);
+        readArtifactLimit(
+            QStringLiteral("agent.tool_artifact_session_bytes"), config.toolArtifactSessionBytes);
+        readArtifactLimit(
+            QStringLiteral("agent.tool_artifact_page_bytes"), config.toolArtifactPageBytes);
         QString pruneThresholdStr = socConfig->getValue("agent.prune_threshold");
         if (!pruneThresholdStr.isEmpty()) {
             config.pruneThreshold = pruneThresholdStr.toDouble();
@@ -1261,6 +1273,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 
     /* Create tool registry and register tools */
     auto *toolRegistry = new QSocToolRegistry(this);
+    toolRegistry->registerTool(new QSocToolOutputRead(toolRegistry));
 
     /* Project tools */
     auto *projectListTool   = new QSocToolProjectList(this, projectManager);
@@ -3118,32 +3131,47 @@ bool QSocCliWorker::runAgentLoop(
     std::optional<QSocSession::RunRecord> pendingRecoveryContext;
     QString                               recoveryNotice;
     QString                               activeRunId;
-    const auto                            installSessionWriteBarrier =
-        [&sessionLock, &sessionLockPath](QSocSession *session, QSocFileHistory *history) {
-            if (session == nullptr) {
-                return;
-            }
-            const QString sessionPath = session->filePath();
-            session->setWriteBarrier([&sessionLock, &sessionLockPath, sessionPath, history]() {
-                if (history != nullptr && !history->storageIsBound()) {
+    const auto installSessionWriteBarrier = [&sessionLock,
+                                             &sessionLockPath,
+                                             &currentSession,
+                                             agent](QSocSession *session, QSocFileHistory *history) {
+        if (session == nullptr) {
+            return;
+        }
+        const QString sessionPath = session->filePath();
+        session->setWriteBarrier(
+            [&sessionLock, &sessionLockPath, &currentSession, agent, session, sessionPath, history]() {
+                if (currentSession.get() != session
+                    || (history != nullptr && !history->storageIsBound())) {
                     return false;
                 }
                 if (sessionLock) {
-                    return sessionLockPath == sessionPath;
+                    if (sessionLockPath != sessionPath)
+                        return false;
+                } else {
+                    auto nextLock = lockSession(sessionPath);
+                    if (!nextLock)
+                        return false;
+                    if (history != nullptr && !history->storageIsBound()) {
+                        nextLock->unlock();
+                        return false;
+                    }
+                    sessionLock     = std::move(nextLock);
+                    sessionLockPath = sessionPath;
                 }
-                auto nextLock = lockSession(sessionPath);
-                if (!nextLock) {
-                    return false;
+                const QString directory = sessionPath + QStringLiteral(".artifacts");
+                auto          store     = agent->toolResultStore();
+                if (!store) {
+                    if (!agent->bindToolResultStore(directory, session->id()))
+                        return false;
+                    store = agent->toolResultStore();
                 }
-                if (history != nullptr && !history->storageIsBound()) {
-                    nextLock->unlock();
-                    return false;
-                }
-                sessionLock     = std::move(nextLock);
-                sessionLockPath = sessionPath;
-                return true;
+                return (history == nullptr || history->storageIsBound())
+                       && store->owner() == session->id()
+                       && store->directory() == QFileInfo(directory).canonicalFilePath()
+                       && !QFileInfo(directory).isSymLink() && store->isBound();
             });
-        };
+    };
 
     /* File-history transport wiring. Backups stay local; only the live
      * snapshot/restore reads and writes follow the active transport, so a
@@ -3388,7 +3416,8 @@ bool QSocCliWorker::runAgentLoop(
     auto activateFreshSession = [&](std::unique_ptr<FreshSessionCandidate> candidate) {
         sessionLock.reset();
         sessionLockPath.clear();
-        currentSession               = std::move(candidate->session);
+        currentSession = std::move(candidate->session);
+        agent->unbindToolResultStore();
         currentFileHistory           = std::move(candidate->history);
         persistedMessages            = json::array();
         lastPersistedIndex           = 0;
@@ -4002,6 +4031,16 @@ bool QSocCliWorker::runAgentLoop(
                 sessionId, sessionPath, QSocSession::StorageMode::Existing);
         }
         installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
+        if (freshSession) {
+            agent->unbindToolResultStore();
+        } else if (!agent->bindToolResultStore(
+                       currentSession->filePath() + QStringLiteral(".artifacts"),
+                       currentSession->id())) {
+            inputMonitor.stop();
+            compositor.stop();
+            QSocConsole::warn() << "Tool result storage could not be bound to the session.";
+            return false;
+        }
 
         /* --ssh startup: the remote tools were built before this history
          * existed, so wire them now to checkpoint remote edits for rewind. */
@@ -7058,11 +7097,22 @@ bool QSocCliWorker::runAgentLoop(
                 continue;
             }
 
-            bool        sessionStageOwned = false;
-            bool        historyStageOwned = false;
-            bool        historyPublished  = false;
-            QStringList stagedHistoryFiles;
-            const auto  cleanupStage = qScopeGuard([&] {
+            const QString branchArtifacts = newPath + QStringLiteral(".artifacts");
+            if (QFileInfo::exists(branchArtifacts) || QFileInfo(branchArtifacts).isSymLink()) {
+                compositor.printContent("Session branch refused: result storage already exists.\n");
+                continue;
+            }
+            std::shared_ptr<QSocToolResultStore> branchStore;
+            bool                                 branchPublished   = false;
+            const auto                           cleanupArtifacts  = qScopeGuard([&] {
+                if (branchStore && branchStore->isBound() && !branchPublished)
+                    QDir(branchStore->directory()).removeRecursively();
+            });
+            bool                                 sessionStageOwned = false;
+            bool                                 historyStageOwned = false;
+            bool                                 historyPublished  = false;
+            QStringList                          stagedHistoryFiles;
+            const auto                           cleanupStage = qScopeGuard([&] {
                 if (sessionStageOwned) {
                     QFile::remove(sessionStage);
                 }
@@ -7126,9 +7176,23 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
             if (branchOk) {
+                const auto refs = QSocAgent::artifactReferences(branchMessages);
+                branchStore     = std::make_shared<QSocToolResultStore>(
+                    branchArtifacts,
+                    newId,
+                    QSocToolResultStore::Limits{
+                        agent->getConfig().toolArtifactBytes,
+                        agent->getConfig().toolArtifactSessionBytes,
+                        agent->getConfig().toolArtifactPageBytes});
+                const auto source = agent->toolResultStore();
+                branchOk = branchStore->isBound()
+                           && (refs.isEmpty() || (source && branchStore->inherit(*source, refs)));
+            }
+            if (branchOk) {
                 branchOk = QFile::rename(sessionStage, newPath);
                 if (branchOk) {
                     sessionStageOwned = false;
+                    branchPublished   = true;
                 }
             }
             if (!branchOk) {

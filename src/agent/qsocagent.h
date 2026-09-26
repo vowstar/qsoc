@@ -10,6 +10,7 @@
 #include "agent/qsocmemoryrecall.h"
 #include "agent/qsocrequestusage.h"
 #include "agent/qsoctool.h"
+#include "agent/qsoctoolresultstore.h"
 #include "common/qllmservice.h"
 
 class QLongTaskMonitor;
@@ -472,13 +473,24 @@ public:
      */
     QString buildSystemPromptWithMemory(bool includeRuntime = true) const;
 
+    bool bindToolResultStore(
+        const QString &directory, const QString &owner, QString *error = nullptr);
+    void                                 unbindToolResultStore();
+    std::shared_ptr<QSocToolResultStore> toolResultStore() const { return toolResultStore_; }
+    qint64                               toolResultBudgetTokens() const;
+    void                                 stopForToolResultBudget();
+    static QList<QSocToolResultStore::Reference> artifactReferences(const json &history);
+    static json artifactReferenceJson(const QSocToolResultStore::Reference &reference);
+
     struct ForkSnapshot
     {
-        QString         identityPrompt;
-        QSocAgentConfig config;
-        json            messages;
-        QString         approvedPlan;
-        quint64         bindingRevision = 0;
+        QString                               identityPrompt;
+        QSocAgentConfig                       config;
+        json                                  messages;
+        QString                               approvedPlan;
+        quint64                               bindingRevision = 0;
+        std::shared_ptr<QSocToolResultStore>  artifactStore;
+        QList<QSocToolResultStore::Reference> artifactRefs;
     };
 
     ForkSnapshot captureForkSnapshot() const;
@@ -679,7 +691,8 @@ private:
     {
         quint64                             epoch             = 0;
         quint64                             requestGeneration = 0;
-        RunMode                             mode              = RunMode::Synchronous;
+        QSocRequestSnapshot                 requestSnapshot;
+        RunMode                             mode = RunMode::Synchronous;
         std::atomic<StopMode>               stop{StopMode::None};
         std::stop_source                    stopSource;
         QPointer<QLLMService>               llm;
@@ -699,7 +712,10 @@ private:
 
     /* Approved plan carried into the execution phase (plan mode). Single
      * slot: pinned into the message history exactly once. */
-    QString approvedPlan_;
+    QString                              approvedPlan_;
+    std::shared_ptr<QSocToolResultStore> toolResultStore_;
+    void                                 appendBoundedToolMessage(
+        const QString &id, const QString &content, const QString &state, const QString &toolName);
 
     /* Selective memory recall (Phase 1). recallBlock_ holds the reminder
      * text computed once per user turn and appended to the wire payload
@@ -955,7 +971,10 @@ private:
      * @param content     Stripped tool result content (no markers)
      */
     void addToolMessage(
-        const QString &toolCallId, const QString &content, const QString &state = QString());
+        const QString &toolCallId,
+        const QString &content,
+        const QString &state    = QString(),
+        const QString &toolName = QString());
 
     /**
      * @brief Compress history if needed based on token count

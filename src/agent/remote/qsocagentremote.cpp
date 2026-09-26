@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/remote/qsocagentremote.h"
+#include "agent/tool/qsoctooloutputread.h"
 
 #include "agent/qsocagentconfig.h"
 #include "agent/qsoctool.h"
@@ -651,6 +652,7 @@ QSocToolRegistry *buildAgentRemoteRegistry(
      * place, so the address the tools bind to never changes. */
     QSocRemotePathContext *pathCtx  = conn->path();
     auto                  *registry = new QSocToolRegistry(parent);
+    registry->registerTool(new QSocToolOutputRead(registry));
     registry->registerTool(new QSocToolRemoteFileRead(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));

@@ -119,6 +119,10 @@ QSocAgent::QSocAgent(
     , heartbeatTimer(new QTimer(this))
     , retryTimer(new QTimer(this))
 {
+    toolResultStore_ = QSocToolResultStore::temporary(
+        {agentConfig.toolArtifactBytes,
+         agentConfig.toolArtifactSessionBytes,
+         agentConfig.toolArtifactPageBytes});
     /* UI keepalive: every 5 s while streaming, emit heartbeat +
      * token usage so the status line can tick. Stall detection lives
      * in the per-iteration QLongTaskMonitor, not here. */
@@ -1363,6 +1367,7 @@ void QSocAgent::processStreamIteration()
         auto snapshot   = owner->requestSnapshot(messagesWithSystem, tools, run->llm.data());
         snapshot.effort = effortLevel;
         const qint64 inputTokens = owner->requestUsage_.estimateNext(snapshot);
+        run->requestSnapshot     = snapshot;
         run->requestGeneration   = owner->requestUsage_.begin(std::move(snapshot));
         addTokenCount(owner->totalInputTokens, inputTokens);
         run->llm->sendChatCompletionStream(messagesWithSystem, tools, temperature, effortLevel);
@@ -1412,6 +1417,8 @@ void QSocAgent::handleStreamComplete(const json &response)
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
     auto message = response["choices"][0]["message"];
+    message.erase("_qsoc_artifact_refs");
+    message.erase("_qsoc_result_bounded");
 
     /* A valid streamed response means the connection is healthy: reset
      * the transient/rate-limit and context-overflow retry budgets so a
@@ -1633,9 +1640,9 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         owner->finishSynchronousRun(run, RunOutcome::Error);
         return IterationResult::Stopped;
     }
-    run->requestGeneration = owner->requestUsage_.begin(
-        owner->requestSnapshot(messagesWithSystem, tools, run->llm.data()));
-    json response = run->llm->sendChatCompletion(
+    run->requestSnapshot   = owner->requestSnapshot(messagesWithSystem, tools, run->llm.data());
+    run->requestGeneration = owner->requestUsage_.begin(run->requestSnapshot);
+    json response          = run->llm->sendChatCompletion(
         messagesWithSystem,
         tools,
         agentConfig.temperature,
@@ -1670,6 +1677,8 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
     auto message = response["choices"][0]["message"];
+    message.erase("_qsoc_artifact_refs");
+    message.erase("_qsoc_result_bounded");
     if (response.contains("usage") && response["usage"].is_object()) {
         message["_usage"] = response["usage"];
     }
@@ -1803,6 +1812,13 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             return false;
         }
 
+        if (!run->deferredToolResult && owner->toolResultBudgetTokens() < 256) {
+            owner->lastStopNotice_ = QStringLiteral(
+                "Tool batch stopped: the remaining context cannot hold another result.");
+            owner->requestStop(StopMode::Hard);
+            finishBatch();
+            return false;
+        }
         const QString toolCallId   = QString::fromStdString(toolCall["id"].get<std::string>());
         const QString functionName = QString::fromStdString(
             toolCall["function"]["name"].get<std::string>());
@@ -1874,10 +1890,19 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             }
 
             try {
-                arguments = json::parse(argumentsStr.toStdString());
-            } catch (const json::parse_error &e) {
-                const QString errorResult
-                    = QString("Error: Invalid JSON arguments - %1").arg(e.what());
+                if (argumentsStr.toUtf8().size() > 1024 * 1024)
+                    throw std::length_error("Tool arguments exceed 1 MiB.");
+                arguments = json::parse(
+                    argumentsStr.toStdString(), [](int depth, json::parse_event_t, json &) {
+                        if (depth > 64)
+                            throw std::length_error("Tool arguments exceed 64 nesting levels.");
+                        return true;
+                    });
+                if (!arguments.is_object())
+                    throw std::length_error("Tool arguments must be an object.");
+            } catch (const std::exception &) {
+                const QString errorResult = QStringLiteral(
+                    "Error: tool arguments must be an object within 1 MiB and 64 nesting levels.");
                 owner->addToolMessage(toolCallId, errorResult);
                 publishResult(errorResult);
                 if (stopBatch()) {
@@ -1984,6 +2009,27 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                     && outcome.mergedResponse["updatedInput"].is_object()) {
                     arguments = outcome.mergedResponse["updatedInput"];
                 }
+                bool                                validArguments = true;
+                QList<std::pair<const json *, int>> pending{{&arguments, 0}};
+                while (!pending.isEmpty() && validArguments) {
+                    const auto [value, depth] = pending.takeLast();
+                    if (depth > 64) {
+                        validArguments = false;
+                        break;
+                    }
+                    if (value->is_structured())
+                        for (const auto &child : *value)
+                            pending.append({&child, depth + 1});
+                }
+                if (!validArguments || arguments.dump().size() > 1024 * 1024) {
+                    const QString rejected = QStringLiteral(
+                        "Error: final tool arguments exceed 1 MiB or 64 nesting levels.");
+                    owner->addToolMessage(toolCallId, rejected);
+                    publishResult(rejected);
+                    if (stopBatch())
+                        return false;
+                    continue;
+                }
             }
 
             if (run->tools.isNull()) {
@@ -2042,7 +2088,9 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         }
 
         QList<AttachmentSpec> attachments;
-        const QString         result = extractImageAttachments(rawResult, &attachments);
+        const QString         result = functionName == QStringLiteral("tool_output_read")
+                                           ? rawResult
+                                           : extractImageAttachments(rawResult, &attachments);
         const QString         historyResult
             = run->stop.load() == StopMode::None
                   ? result
@@ -2051,13 +2099,14 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                         "Completion is uncertain, and side effects may have occurred. "
                         "Verify current state before retrying.")
                         .arg(result);
+        if (const auto attachmentMessage = buildToolAttachmentMessage(attachments))
+            run->toolBatchAttachments.push_back(*attachmentMessage);
         owner->addToolMessage(
             toolCallId,
             historyResult,
-            run->stop.load() == StopMode::None ? QString() : QStringLiteral("uncertain"));
-        if (const auto attachmentMessage = buildToolAttachmentMessage(attachments)) {
-            run->toolBatchAttachments.push_back(*attachmentMessage);
-        }
+            run->stop.load() == StopMode::None ? QString() : QStringLiteral("uncertain"),
+            functionName);
+
         run->executingToolCallId.reset();
         if (stopBatch()) {
             return false;
@@ -2302,7 +2351,14 @@ void QSocAgent::injectPerTurnReminders(json &wire) const
 
 QSocAgent::ForkSnapshot QSocAgent::captureForkSnapshot() const
 {
-    return {buildIdentitySystemPrompt(), agentConfig, messages, approvedPlan_, bindingRevision_};
+    return {
+        buildIdentitySystemPrompt(),
+        agentConfig,
+        messages,
+        approvedPlan_,
+        bindingRevision_,
+        toolResultStore_,
+        artifactReferences(messages)};
 }
 
 QString QSocAgent::buildSystemPromptWithMemory(bool includeRuntime) const
@@ -2819,21 +2875,9 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
 }
 
 void QSocAgent::addToolMessage(
-    const QString &toolCallId, const QString &content, const QString &state)
+    const QString &toolCallId, const QString &content, const QString &state, const QString &toolName)
 {
-    /* Tool messages always carry a plain string. OpenAI defines a
-     * content-array form for tool responses, but several backends
-     * reject it ("text is not set"); a string keeps every provider
-     * on the same path. Binary attachments are delivered on a
-     * follow-up user message instead. */
-    json toolMsg
-        = {{"role", "tool"},
-           {"tool_call_id", toolCallId.toStdString()},
-           {"content", content.toStdString()}};
-    if (!state.isEmpty()) {
-        toolMsg["_qsoc_tool_state"] = state.toStdString();
-    }
-    messages.push_back(toolMsg);
+    appendBoundedToolMessage(toolCallId, content, state, toolName);
 }
 
 void QSocAgent::clearHistory()
@@ -3193,6 +3237,8 @@ json QSocAgent::wireMessages(const QString &systemPrompt) const
         sanitized.erase("_usage");
         sanitized.erase("_img_tokens");
         sanitized.erase("_qsoc_tool_state");
+        sanitized.erase("_qsoc_artifact_refs");
+        sanitized.erase("_qsoc_result_bounded");
         wire.push_back(std::move(sanitized));
     }
     injectPerTurnReminders(wire);
@@ -3316,6 +3362,8 @@ bool QSocAgent::pruneToolOutputs(bool force)
 
     for (int i = 0; i < protectBoundary; i++) {
         const auto &msg = messages[static_cast<size_t>(i)];
+        if (msg.contains("_qsoc_result_bounded"))
+            continue;
         if (msg.contains("role") && msg["role"] == "tool" && msg.contains("content")
             && msg["content"].is_string()) {
             int contentTokens = estimateTokens(

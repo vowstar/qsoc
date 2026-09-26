@@ -670,6 +670,10 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     QDir().mkpath(dir);
     const QString path = QDir(dir).filePath(run.id + QStringLiteral(".meta.json"));
     QJsonObject   meta;
+    if (run.agent && run.agent->toolResultStore() && !run.agent->toolResultStore()->isTemporary()) {
+        meta["artifact_directory"] = run.agent->toolResultStore()->directory();
+        meta["artifact_owner"]     = run.agent->toolResultStore()->owner();
+    }
     meta["task_id"]       = run.id;
     meta["label"]         = run.label;
     meta["subagent_type"] = run.subagentType;
