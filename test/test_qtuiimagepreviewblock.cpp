@@ -170,6 +170,8 @@ private slots:
     /* iTerm2 path */
     void iTerm2FirstFrameEmitsInlineWithCellSize();
     void iTerm2SameCoordsAreThrottled();
+    void iTerm2SameCoordsChangedSizeReuploads();
+    void graphicsStateDistinguishesHiddenAndKeep();
     void iTerm2ScrollReEmitsAtNewCoords();
     void iTerm2ClearResetsThrottle();
 };
@@ -662,11 +664,9 @@ void Test::clearAfterPlaceEmitsKittyPlacementDelete()
     block.emitGraphicsLayer(3, 1, 60, 100);
 
     const QString out = block.emitGraphicsClear();
-    /* Per the kitty spec, the only delete action is `a=d`; the
-     * `d=p` selector means "delete placement matched by both i= and
-     * p=", which preserves the image cache for a future scroll-in. */
+    /* Lowercase i selects this image and preserves its uploaded data. */
     QVERIFY(out.contains(QStringLiteral("a=d")));
-    QVERIFY(out.contains(QStringLiteral("d=p")));
+    QVERIFY(out.contains(QStringLiteral("d=i")));
     QVERIFY(out.contains(QStringLiteral("p=1")));
     QVERIFY(out.contains(QStringLiteral("q=2")));
 }
@@ -793,6 +793,30 @@ void Test::iTerm2SameCoordsAreThrottled()
     /* Same coords - iTerm2 keeps the bitmap until the cells under
      * it get overwritten, so re-uploading would only burn bandwidth. */
     QCOMPARE(second, QString());
+}
+
+void Test::iTerm2SameCoordsChangedSizeReuploads()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    auto block = makePngBlock();
+    block.layout(60);
+    block.emitGraphicsLayer(3, 1, 60, 100);
+    block.layout(20);
+    QCOMPARE(block.graphicsState(3, 1, 20, 100), QTuiBlock::GraphicsState::Place);
+    QVERIFY(block.emitGraphicsLayer(3, 1, 20, 100).contains(QStringLiteral("\x1b]1337;File=")));
+}
+
+void Test::graphicsStateDistinguishesHiddenAndKeep()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    auto block = makePngBlock();
+    block.layout(60);
+    QCOMPARE(block.graphicsState(3, 1, 60, 100), QTuiBlock::GraphicsState::Place);
+    block.emitGraphicsLayer(3, 1, 60, 100);
+    QCOMPARE(block.graphicsState(3, 1, 60, 100), QTuiBlock::GraphicsState::Keep);
+    QCOMPARE(block.graphicsState(3, 1, 60, 1), QTuiBlock::GraphicsState::Hidden);
+    QCOMPARE(block.graphicsState(3, 1, 60, 100, {3}), QTuiBlock::GraphicsState::Place);
+    QCOMPARE(block.graphicsState(3, 1, 60, 100, {0}), QTuiBlock::GraphicsState::Keep);
 }
 
 void Test::iTerm2ScrollReEmitsAtNewCoords()

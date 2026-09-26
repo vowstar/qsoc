@@ -15,6 +15,9 @@ enable_testing()
 add_executable(qsoc_formatter_probe qsoc_formatter_probe.cpp)
 target_link_libraries(qsoc_formatter_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core)
 
+add_executable(qsoc_tui_image_probe qsoc_tui_image_probe.cpp)
+target_link_libraries(qsoc_tui_image_probe PRIVATE qsoc_core)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(CMAKE_AUTOUIC ON)

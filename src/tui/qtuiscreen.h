@@ -143,7 +143,9 @@ public:
     QString toAnsi();
 
     /* Force full redraw on next toAnsi() call */
-    void invalidate();
+    void                invalidate();
+    void                invalidateRows(int firstRow, int rowCount);
+    const QVector<int> &writtenRows() const { return writtenRows_; }
 
 private:
     int                        cols = 0;
@@ -151,6 +153,8 @@ private:
     QVector<QVector<QTuiCell>> cells;
     QVector<QVector<QTuiCell>> prevCells; /* Previous frame for diff */
     bool                       fullRedraw = true;
+    QVector<int>               dirtyRows_;
+    QVector<int>               writtenRows_;
 
     static QTuiCell defaultCell;
 };
