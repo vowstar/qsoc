@@ -114,7 +114,20 @@ public:
      * @return Validated response, or an error object
      */
     json sendChatCompletion(
-        const json &messages, const json &tools, double temperature, std::stop_token stopToken);
+        const json     &messages,
+        const json     &tools,
+        double          temperature,
+        std::stop_token stopToken,
+        const QString  &reasoningEffort = QString());
+
+    /** @brief Send with a captured endpoint without changing the selected model. */
+    json sendChatCompletionTo(
+        LLMModelConfig  endpoint,
+        const json     &messages,
+        const json     &tools,
+        double          temperature,
+        std::stop_token stopToken,
+        const QString  &reasoningEffort);
 
 public slots:
     /* Configuration */
