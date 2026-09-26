@@ -645,6 +645,17 @@ missing or unclosed. `/help` lists the user-invocable skills along with
 their `argument-hint` so they are discoverable without grepping the
 filesystem.
 
+== Tool discovery
+
+`agent.tool_presentation` and `--tool-presentation` accept `direct`, `catalog`, or `auto`. The default is `direct`, which sends all authorized tool definitions. Resumed sessions retain their saved setting unless an explicit configuration or command-line option overrides it.
+
+`catalog` keeps common file, shell, user, and completion tools visible. `tool_catalog` searches authorized names and descriptions or returns an exact tool schema. `tool_invoke` uses that schema version and a JSON object encoded in `arguments_json`. Discovery does not grant permission. Permissions and workspace continuity are checked again before execution.
+
+`auto` uses the catalog when specialized tool definitions exceed 8192 estimated tokens. Smaller catalogs use direct definitions. Tool results, described schemas, and wrapper arguments still contribute to context usage.
+
+Input replay waits for confirmation when pre-tool hooks are configured, because their side effects are uncertain.
+
+
 == Reasoning Effort
 <agent-effort>
 The `--effort` option and the `/effort` command set the reasoning effort

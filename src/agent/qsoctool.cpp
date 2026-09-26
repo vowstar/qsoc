@@ -154,6 +154,7 @@ void QSocToolRegistry::registerTool(QSocTool *tool)
         return;
     }
     registry->tools_[name] = candidate;
+    ++registry->revision_;
     connect(candidate, &QObject::destroyed, registry, [registry, candidate, name]() {
         if (registry.isNull()) {
             return;
@@ -164,6 +165,7 @@ void QSocToolRegistry::registerTool(QSocTool *tool)
             && (it.value().isNull()
                 || (!candidate.isNull() && it.value().data() == candidate.data()))) {
             registry->tools_.erase(it);
+            ++registry->revision_;
         }
     });
 }
@@ -177,7 +179,8 @@ bool QSocToolRegistry::unregisterTool(QSocTool *tool)
     bool removed = false;
     for (auto it = tools_.begin(); it != tools_.end();) {
         if (it.value().data() == tool) {
-            it      = tools_.erase(it);
+            it = tools_.erase(it);
+            ++revision_;
             removed = true;
         } else {
             ++it;

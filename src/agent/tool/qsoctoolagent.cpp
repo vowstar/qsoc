@@ -800,7 +800,11 @@ QString QSocToolAgent::execute(const json &arguments)
      * judge is a separate member, so hand it down too: a read-only
      * exploration child judges its own bash the same way. */
     if (childCfg.planMode && parentAgent_ != nullptr) {
-        child->setBashSafetyJudge(parentAgent_->bashSafetyJudge());
+        if (parentAgent_->contextualBashSafetyJudge()) {
+            child->setContextualBashSafetyJudge(parentAgent_->contextualBashSafetyJudge());
+        } else {
+            child->setBashSafetyJudge(parentAgent_->bashSafetyJudge());
+        }
     }
     /* Health probe by host. A child on host B senses and recovers host B's own
      * link through its binding, not the parent's host: the captured binding

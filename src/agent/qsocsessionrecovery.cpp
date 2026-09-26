@@ -417,3 +417,18 @@ QSocSessionRecovery::Plan QSocSessionRecovery::makePlan(
     }
     return waitPlan(messages, QStringLiteral("The persisted response already completed this turn."));
 }
+
+void QSocSessionRecovery::guardHookReplay(Plan &plan, const QSocHookConfig &hooks)
+{
+    if (plan.action != Action::ReplayInput)
+        return;
+    if (hooks.matchersFor(QSocHookEvent::SessionStart).isEmpty()
+        && hooks.matchersFor(QSocHookEvent::UserPromptSubmit).isEmpty()
+        && hooks.matchersFor(QSocHookEvent::PreToolUse).isEmpty())
+        return;
+    plan.action            = Action::Wait;
+    plan.requiresUserInput = true;
+    plan.reason            = QStringLiteral(
+        "Hook execution is uncertain. Check startup, prompt, and pre-tool "
+        "hook side effects before continuing.");
+}

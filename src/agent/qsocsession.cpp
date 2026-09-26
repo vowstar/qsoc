@@ -155,7 +155,9 @@ bool validRunContext(const QSocSession::RunRecord &record)
 {
     return record.contextPresent && !record.projectRoot.trimmed().isEmpty()
            && !record.workingDir.trimmed().isEmpty() && !record.modelId.trimmed().isEmpty()
-           && record.remoteMode == !record.remoteName.trimmed().isEmpty();
+           && record.remoteMode == !record.remoteName.trimmed().isEmpty()
+           && (record.toolPresentation == "direct" || record.toolPresentation == "catalog"
+               || record.toolPresentation == "auto");
 }
 
 bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
@@ -175,6 +177,12 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
         return false;
     }
 
+    if (context.contains("tool_presentation")) {
+        if (!context["tool_presentation"].is_string())
+            return false;
+        record->toolPresentation = QString::fromStdString(
+            context["tool_presentation"].get<std::string>());
+    }
     record->contextPresent = true;
     record->modelId        = QString::fromStdString(context["model_id"].get<std::string>());
     record->effortLevel    = QString::fromStdString(context["effort_level"].get<std::string>());
@@ -418,6 +426,7 @@ bool QSocSession::appendRun(const RunRecord &record)
         line["context"] = {
             {"model_id", record.modelId.toStdString()},
             {"effort_level", record.effortLevel.toStdString()},
+            {"tool_presentation", record.toolPresentation.toStdString()},
             {"plan_mode", record.planMode},
             {"remote_mode", record.remoteMode},
             {"remote_name", record.remoteName.toStdString()},

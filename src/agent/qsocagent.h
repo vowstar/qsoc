@@ -10,6 +10,7 @@
 #include "agent/qsocmemoryrecall.h"
 #include "agent/qsocrequestusage.h"
 #include "agent/qsoctool.h"
+#include "agent/qsoctoolcatalog.h"
 #include "agent/qsoctoolresultstore.h"
 #include "common/qllmservice.h"
 
@@ -51,6 +52,16 @@ struct QSocBashSafety
  * a deterministic stub. Unset = fail-closed (treat every command as
  * mutating). */
 using QSocBashSafetyJudge = std::function<QSocBashSafety(const QString &command)>;
+
+struct QSocBashSafetyContext
+{
+    QPointer<QLLMService> service;
+    LLMModelConfig        endpoint;
+    QString               effort;
+    std::stop_token       stop;
+};
+using QSocContextualBashSafetyJudge
+    = std::function<QSocBashSafety(const QString &, const QSocBashSafetyContext &)>;
 
 /* Reports whether the user is actively watching the terminal (terminal
  * focus, DECSET 1004). Injected so the agent can steer away from
@@ -311,7 +322,22 @@ public:
      * @details Called at dispatch for bash / remote_shell_bash while in
      *          plan mode. Unset means fail-closed (all shell blocked).
      */
-    void setBashSafetyJudge(QSocBashSafetyJudge judge) { bashSafetyJudge_ = std::move(judge); }
+    void setBashSafetyJudge(QSocBashSafetyJudge judge)
+    {
+        contextualBashSafetyJudge_ = {};
+        bashSafetyJudge_           = std::move(judge);
+    }
+    static QSocBashSafety classifyBashCommand(
+        const QString &command, const QSocBashSafetyContext &context);
+    void setContextualBashSafetyJudge(QSocContextualBashSafetyJudge judge)
+    {
+        bashSafetyJudge_           = {};
+        contextualBashSafetyJudge_ = std::move(judge);
+    }
+    const QSocContextualBashSafetyJudge &contextualBashSafetyJudge() const
+    {
+        return contextualBashSafetyJudge_;
+    }
 
     /**
      * @brief Read the installed shell safety judge (may be empty).
@@ -725,7 +751,7 @@ private:
         std::optional<QSocToolResultStatus> executingToolStatus;
         bool                                toolDeferred = false;
         std::optional<QString>              deferredToolResult;
-        json                                deferredToolArguments;
+        QSocToolDispatchView                deferredToolDispatch;
         json                                toolBatchAttachments = json::array();
         RunPhase                            phase                = RunPhase::Active;
     };
@@ -742,7 +768,8 @@ private:
     /* Memory recall is rebuilt once per user turn and sent as a system reminder. */
     QString recallBlock_;
     /* Plan-mode shell safety judge (empty = fail-closed). */
-    QSocBashSafetyJudge bashSafetyJudge_;
+    QSocBashSafetyJudge           bashSafetyJudge_;
+    QSocContextualBashSafetyJudge contextualBashSafetyJudge_;
     /* Terminal-focus probe (empty = assume the user is watching). */
     QSocUserWatchingProbe userWatchingProbe_;
     /* Workspace liveness probe (empty = assume usable). */
@@ -874,6 +901,9 @@ private:
      * @brief Drop tool definitions that are not allowed for the current
      *        agent.
      */
+    QSocToolCatalog toolCatalog(const QSocToolRegistry *registry) const;
+    nlohmann::json  presentedTools(
+        const nlohmann::json &definitions, const QSocToolRegistry *registry) const;
     nlohmann::json filterAllowedTools(
         const nlohmann::json &defs, const QSocToolRegistry *registry) const;
 

@@ -133,6 +133,8 @@ public:
         int skillsBudget      = kSkillsTokenBudget;
     };
 
+    static QSet<QString> recentFilePaths(const json &history);
+
     /** @brief Build the restore payload from injected inputs. */
     static QSocContextRestore build(const Inputs &inputs);
 

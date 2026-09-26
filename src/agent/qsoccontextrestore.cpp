@@ -2,6 +2,60 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsoccontextrestore.h"
+#include "agent/qsoctoolcatalog.h"
+
+namespace {
+QString filePathFromCall(const json &call)
+{
+    if (!call.is_object() || !call.contains("function") || !call["function"].is_object())
+        return {};
+    const auto &function = call["function"];
+    if (!function.contains("name") || !function["name"].is_string()
+        || !function.contains("arguments"))
+        return {};
+    QString name = QString::fromStdString(function["name"].get<std::string>());
+    if (name != "read_file" && name != "write_file" && name != "edit_file" && name != "tool_invoke")
+        return {};
+    const auto   &raw     = function["arguments"];
+    const QString encoded = QString::fromStdString(
+        raw.is_string() ? raw.get<std::string>() : raw.dump());
+    json arguments;
+    if (!QSocToolCatalog::parseArguments(encoded, &arguments).isEmpty())
+        return {};
+    if (name == "tool_invoke") {
+        if (arguments.size() != 3 || !arguments.contains("name") || !arguments["name"].is_string()
+            || !arguments.contains("schema_version") || !arguments["schema_version"].is_string()
+            || !arguments.contains("arguments_json") || !arguments["arguments_json"].is_string())
+            return {};
+        name             = QString::fromStdString(arguments["name"].get<std::string>());
+        const auto inner = QString::fromStdString(arguments["arguments_json"].get<std::string>());
+        if (!QSocToolCatalog::parseArguments(inner, &arguments, encoded.toUtf8().size()).isEmpty())
+            return {};
+    }
+    if ((name == "read_file" || name == "write_file" || name == "edit_file")
+        && arguments.contains("file_path") && arguments["file_path"].is_string())
+        return QString::fromStdString(arguments["file_path"].get<std::string>());
+    return {};
+}
+} // namespace
+
+QSet<QString> QSocContextRestoreBuilder::recentFilePaths(const json &history)
+{
+    QSet<QString> paths;
+    if (!history.is_array())
+        return paths;
+    for (const auto &message : history) {
+        if (!message.is_object() || !message.contains("tool_calls")
+            || !message["tool_calls"].is_array())
+            continue;
+        for (const auto &call : message["tool_calls"]) {
+            const auto path = filePathFromCall(call);
+            if (!path.isEmpty())
+                paths.insert(path);
+        }
+    }
+    return paths;
+}
 
 QStringList QSocContextRestore::readPaths() const
 {

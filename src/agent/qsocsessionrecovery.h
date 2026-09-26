@@ -4,6 +4,7 @@
 #ifndef QSOCSESSIONRECOVERY_H
 #define QSOCSESSIONRECOVERY_H
 
+#include "agent/qsochooktypes.h"
 #include "agent/qsocsession.h"
 
 #include <nlohmann/json.hpp>
@@ -51,6 +52,7 @@ public:
      * @brief True when a normal user turn can be appended without repairing history.
      */
     static bool historySafeForNewTurn(const nlohmann::json &messages);
+    static void guardHookReplay(Plan &plan, const QSocHookConfig &hooks);
 };
 
 #endif // QSOCSESSIONRECOVERY_H

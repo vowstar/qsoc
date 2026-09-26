@@ -244,7 +244,8 @@ public:
      * @brief Get the number of registered tools
      * @return Number of tools in the registry
      */
-    int count() const;
+    int     count() const;
+    quint64 revision() const { return revision_; }
 
     /**
      * @brief Get list of all registered tool names
@@ -278,6 +279,7 @@ private:
 
     QMap<QString, QPointer<QSocTool>> tools_;
     QSet<ActiveCall *>                activeCalls_;
+    quint64                           revision_ = 0;
 };
 
 #endif // QSOCTOOL_H

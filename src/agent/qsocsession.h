@@ -65,8 +65,9 @@ public:
         bool        contextPresent  = false;
         QString     modelId;
         QString     effortLevel;
-        bool        planMode   = false;
-        bool        remoteMode = false;
+        QString     toolPresentation = QStringLiteral("direct");
+        bool        planMode         = false;
+        bool        remoteMode       = false;
         QString     remoteName;
         QString     projectRoot;
         QString     workingDir;

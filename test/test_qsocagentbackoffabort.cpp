@@ -3282,7 +3282,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(service.findChildren<QNetworkReply *>().isEmpty(), 3000);
     }
 
-    void registryPolicyUsesRunSnapshot()
+    void registryRebindRejectsPendingCall()
     {
         MockServer server;
         QVERIFY(server.listen());
@@ -3302,6 +3302,7 @@ private slots:
         QSignalSpy aborted(&agent, &QSocAgent::runAborted);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
         QSignalSpy errors(&agent, &QSocAgent::runError);
+        QSignalSpy results(&agent, &QSocAgent::toolResult);
 
         agent.runStream(QStringLiteral("old registry request"));
         QTRY_COMPARE_WITH_TIMEOUT(server.requestCount(), 1, 5000);
@@ -3316,11 +3317,15 @@ private slots:
         service.streamComplete(toolCallResponse(oldTool.getName()));
         disconnect(stopConnection);
 
-        QCOMPARE(oldTool.executeCount(), 1);
+        QCOMPARE(oldTool.executeCount(), 0);
         QCOMPARE(newTool.executeCount(), 0);
         QCOMPARE(aborted.count(), 1);
         QCOMPARE(completed.count(), 0);
         QCOMPARE(errors.count(), 0);
+        QCOMPARE(results.count(), 1);
+        QCOMPARE(
+            QSocTool::classifyResult(results.first().at(1).toString()),
+            QSocToolResultStatus::Failed);
 
         agent.runStream(QStringLiteral("new registry request"));
         QTRY_COMPARE_WITH_TIMEOUT(server.requestCount(), 2, 5000);
