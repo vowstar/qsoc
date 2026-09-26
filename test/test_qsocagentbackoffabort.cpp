@@ -5,6 +5,9 @@
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocgoal.h"
 #include "agent/qsochookmanager.h"
+#include "agent/qsocmemorydream.h"
+#include "agent/qsocmemoryextractor.h"
+#include "agent/qsocmemorymanager.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
@@ -96,9 +99,10 @@ public:
         return result;
     }
 
-    void enqueueError(int statusCode)
+    void enqueueError(
+        int statusCode, const QString &message = QStringLiteral("temporarily unavailable"))
     {
-        const json body = {{"error", {{"message", "temporarily unavailable"}}}};
+        const json body = {{"error", {{"message", message.toStdString()}}}};
         responses_.enqueue(
             {statusCode,
              QByteArrayLiteral("application/json"),
@@ -696,6 +700,470 @@ class Test final : public QObject
     Q_OBJECT
 
 private slots:
+    void recallSelectorUsesExplicitOrActiveEndpoint_data()
+    {
+        QTest::addColumn<QString>("model");
+        QTest::newRow("inherit") << QString();
+        QTest::newRow("explicit") << QStringLiteral("test-model");
+        QTest::newRow("unknown") << QStringLiteral("missing-model");
+    }
+
+    void recallSelectorUsesExplicitOrActiveEndpoint()
+    {
+        QFETCH(QString, model);
+        MockServer configured;
+        MockServer active;
+        QVERIFY(configured.listen());
+        QVERIFY(active.listen());
+        ScopedLlmConfigHome configHome(configured);
+        QVERIFY(configHome.isValid());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        auto        endpoint = service.getCurrentModelConfig();
+        endpoint.url         = active.url().toString();
+        endpoint.model       = QStringLiteral("active-model");
+        service.setModel(endpoint);
+        QSocProjectManager project;
+        project.setProjectPath(directory.path());
+        QSocMemoryManager memory(nullptr, &project);
+        for (int index = 0; index < 2; ++index) {
+            QVERIFY(memory.writeTopicFile(
+                QStringLiteral("project"),
+                QStringLiteral("topic%1").arg(index),
+                QStringLiteral("project"),
+                QStringLiteral("Test topic"),
+                QStringLiteral("Runtime memory")));
+        }
+        auto config                 = testConfig();
+        config.effortLevel          = QStringLiteral("high");
+        config.memoryRecallEnabled  = true;
+        config.memoryRecallModel    = model;
+        config.memoryRecallMaxFiles = 1;
+        config.maxTurnsOverride     = 1;
+        const bool  unknown         = model == QStringLiteral("missing-model");
+        MockServer &selector        = model.isEmpty() ? active : configured;
+        if (!unknown) {
+            selector.enqueueCompletion(QStringLiteral("{\"selected_memories\":[]}"));
+        }
+        active.enqueueCompletion(QStringLiteral("Ready"));
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        agent.setMemoryManager(&memory);
+        QCOMPARE(agent.run(QStringLiteral("Review the interface")), QStringLiteral("Ready"));
+        QCOMPARE(configured.requestCount(), !unknown && !model.isEmpty() ? 1 : 0);
+        QCOMPARE(active.requestCount(), model.isEmpty() ? 2 : 1);
+        if (!unknown) {
+            const json body = json::parse(selector.requestBody(0).toStdString());
+            QCOMPARE(
+                body.at("model").get<std::string>(),
+                model.isEmpty() ? std::string("active-model") : std::string("test-model"));
+            QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
+        }
+        QCOMPARE(service.getCurrentModelConfig().url, endpoint.url);
+    }
+
+    void cancelAfterSaveCommitsAndStopsTheRun()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueCompletion(QStringLiteral("Summary"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Test");
+        config.compactThreshold     = 0;
+        config.keepRecentMessages   = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'x')}});
+        }
+        agent.setMessages(history);
+        json       saved;
+        QSignalSpy aborted(&agent, &QSocAgent::runAborted);
+        QSignalSpy compacted(&agent, &QSocAgent::compacting);
+        bool       quietDuringSave = false;
+        agent.setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+            saved = candidate.candidateMessages;
+            agent.abortAndDiscardPendingRequests();
+            quietDuringSave = aborted.isEmpty() && compacted.isEmpty();
+            return true;
+        });
+        agent.runStream(QStringLiteral("Continue"));
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 5000);
+        QVERIFY(quietDuringSave);
+        QCOMPARE(compacted.count(), 1);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(agent.getMessages() == saved);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+    }
+
+    void failedAutomaticSummaryDoesNotRepeat()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueError(400);
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Test");
+        config.compactThreshold     = 0;
+        config.keepRecentMessages   = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'x')}});
+        }
+        agent.setMessages(history);
+        QCOMPARE(agent.compactIfNeeded(), 0);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
+        QCOMPARE(agent.compactIfNeeded(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(agent.getMessages() == history);
+    }
+
+    void memoryChildrenInheritActiveEndpoint_data()
+    {
+        QTest::addColumn<bool>("dream");
+        QTest::addColumn<QString>("model");
+        QTest::newRow("extract-inherit") << false << QString();
+        QTest::newRow("dream-inherit") << true << QString();
+        QTest::newRow("extract-explicit") << false << QStringLiteral("test-model");
+        QTest::newRow("dream-explicit") << true << QStringLiteral("test-model");
+        QTest::newRow("extract-unknown") << false << QStringLiteral("missing-model");
+        QTest::newRow("dream-unknown") << true << QStringLiteral("missing-model");
+    }
+
+    void memoryChildrenInheritActiveEndpoint()
+    {
+        QFETCH(bool, dream);
+        QFETCH(QString, model);
+        MockServer configured;
+        MockServer active;
+        QVERIFY(configured.listen());
+        QVERIFY(active.listen());
+        ScopedLlmConfigHome configHome(configured);
+        QVERIFY(configHome.isValid());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        auto        endpoint = service.getCurrentModelConfig();
+        endpoint.url         = active.url().toString();
+        endpoint.model       = QStringLiteral("active-model");
+        service.setModel(endpoint);
+        auto config                   = testConfig();
+        config.effortLevel            = QStringLiteral("high");
+        config.memoryExtractModel     = model;
+        config.memoryDreamModel       = model;
+        config.memoryDreamMinHours    = 0;
+        config.memoryDreamMinSessions = 0;
+        config.projectPath            = directory.path();
+        QSocProjectManager project;
+        project.setProjectPath(directory.path());
+        QSocMemoryManager memory(nullptr, &project);
+        QVERIFY(memory.writeTopicFile(
+            QStringLiteral("project"),
+            QStringLiteral("topic"),
+            QStringLiteral("project"),
+            QStringLiteral("Test topic"),
+            QStringLiteral("Runtime memory")));
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        agent.setMessages(
+            {{{"role", "user"}, {"content", "Remember the interface"}},
+             {{"role", "assistant"}, {"content", "The interface is ready"}}});
+        const bool  unknown = model == QStringLiteral("missing-model");
+        MockServer &chosen  = model.isEmpty() ? active : configured;
+        if (!unknown) {
+            chosen.enqueueStream(QStringLiteral("No changes needed."));
+        }
+        int        spawned = 0;
+        const auto onSpawn = [&](QSocAgent *) { ++spawned; };
+        if (dream) {
+            QSocMemoryDream worker(&agent, &memory, &service);
+            QCOMPARE(
+                worker.maybeRun(directory.path(), QStringLiteral("current-session"), onSpawn).ran,
+                !unknown);
+        } else {
+            QSocMemoryExtractor worker(&agent, &memory, &service);
+            QCOMPARE(worker.extract(0, 1, onSpawn), unknown ? 0 : 2);
+        }
+        QCOMPARE(spawned, unknown ? 0 : 1);
+        QCOMPARE(active.requestCount(), !unknown && model.isEmpty() ? 1 : 0);
+        QCOMPARE(configured.requestCount(), !unknown && !model.isEmpty() ? 1 : 0);
+        if (!unknown) {
+            const json body = json::parse(chosen.requestBody(0).toStdString());
+            QCOMPARE(
+                body.at("model").get<std::string>(),
+                model.isEmpty() ? std::string("active-model") : std::string("test-model"));
+            QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
+        }
+        QCOMPARE(service.getCurrentModelConfig().url, endpoint.url);
+        QCOMPARE(service.getCurrentModelConfig().model, endpoint.model);
+    }
+
+    void compactionRebasesGoalEstimateWithoutResettingSpend_data()
+    {
+        QTest::addColumn<bool>("streaming");
+        QTest::newRow("sync") << false;
+        QTest::newRow("stream") << true;
+    }
+
+    void compactionRebasesGoalEstimateWithoutResettingSpend()
+    {
+        QFETCH(bool, streaming);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocGoalCatalog catalog;
+        catalog.load(directory.path());
+        QString error;
+        QVERIFY(catalog.create(QStringLiteral("Complete the task"), 0, &error));
+        QVERIFY(catalog.accountUsage(321, 5, &error));
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueCompletion(QStringLiteral("Summary"));
+        const QString reply(400, QLatin1Char('r'));
+        if (streaming) {
+            server.enqueueStream(reply);
+        } else {
+            server.enqueueCompletion(reply);
+        }
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.compactThreshold     = 0;
+        config.keepRecentMessages   = 1;
+        config.maxTurnsOverride     = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        agent.setGoalCatalog(&catalog);
+        json history = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(4000, 'x')}});
+        }
+        agent.setMessages(history);
+        qint64 spentAtCommit = -1;
+        connect(&agent, &QSocAgent::compacting, &agent, [&](int, int, int) {
+            spentAtCommit = catalog.current()->tokensUsed;
+        });
+        if (streaming) {
+            agent.runStream(QStringLiteral("Continue"));
+            QTRY_VERIFY_WITH_TIMEOUT(!agent.isRunning(), 10000);
+        } else {
+            agent.run(QStringLiteral("Continue"));
+        }
+        QCOMPARE(server.requestCount(), 2);
+        QCOMPARE(spentAtCommit, qint64(321));
+        const json response = {{{"role", "assistant"}, {"content", reply.toStdString()}}};
+        QCOMPARE(
+            catalog.current()->tokensUsed,
+            qint64(321) + QSocRequestUsage::estimateHistory(response));
+        QVERIFY(catalog.current()->secondsUsed >= 5);
+    }
+
+    void contextOverflowRetriesOnlyAfterCommit_data()
+    {
+        QTest::addColumn<bool>("shrinks");
+        QTest::newRow("committed") << true;
+        QTest::newRow("no-progress") << false;
+    }
+
+    void contextOverflowRetriesOnlyAfterCommit()
+    {
+        QFETCH(bool, shrinks);
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueError(400, QStringLiteral("maximum context length exceeded"));
+        server.enqueueCompletion(
+            shrinks ? QStringLiteral("Summary") : QString(400000, QLatin1Char('x')));
+        if (shrinks) {
+            server.enqueueStream(QStringLiteral("Completed"));
+        }
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.keepRecentMessages   = 1;
+        config.maxRetries           = 0;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'x')}});
+        }
+        agent.setMessages(history);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        QSignalSpy failed(&agent, &QSocAgent::runError);
+        QSignalSpy compacted(&agent, &QSocAgent::compacting);
+        agent.runStream(QStringLiteral("Continue"));
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count() + failed.count(), 1, 10000);
+        QCOMPARE(completed.count(), shrinks ? 1 : 0);
+        QCOMPARE(compacted.count(), shrinks ? 1 : 0);
+        QCOMPARE(server.requestCount(), shrinks ? 3 : 2);
+    }
+
+    void compactionBenefitUsesTheSameLocalEstimator()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueCompletion(
+            QStringLiteral("Ready"), {{"prompt_tokens", 50000}, {"completion_tokens", 1}});
+        server.enqueueCompletion(QString(4000, QLatin1Char('s')));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 1000000;
+        config.keepRecentMessages   = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 6; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", "Short message"}});
+        }
+        agent.setMessages(history);
+        QCOMPARE(agent.run(QStringLiteral("Continue")), QStringLiteral("Ready"));
+        QVERIFY(agent.estimateTotalTokens() >= 50000);
+        const auto before = agent.getMessages();
+        QCOMPARE(agent.compact(), 0);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::NoProgress);
+        QVERIFY(agent.getMessages() == before);
+        QCOMPARE(server.requestCount(), 2);
+    }
+
+    void automaticNoProgressWaitsForChangedInput()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 10000;
+        config.compactThreshold     = 0;
+        config.keepRecentMessages   = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(800, 'x')}});
+        }
+        agent.setMessages(history);
+        const QString oversized(100000, QLatin1Char('x'));
+        server.enqueueCompletion(oversized);
+        QCOMPARE(agent.compactIfNeeded(), 0);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::NoProgress);
+        QCOMPARE(agent.compactIfNeeded(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        server.enqueueCompletion(oversized);
+        QCOMPARE(agent.compact(), 0);
+        QCOMPARE(server.requestCount(), 2);
+        config.remoteWorkingDir = QStringLiteral("/workspace/changed");
+        agent.setConfig(config);
+        server.enqueueCompletion(oversized);
+        QCOMPARE(agent.compactIfNeeded(), 0);
+        QCOMPARE(server.requestCount(), 3);
+        history.push_back({{"role", "user"}, {"content", "A new task detail"}});
+        agent.setMessages(history);
+        server.enqueueCompletion(QStringLiteral("Compact summary"));
+        QVERIFY(agent.compactIfNeeded() > 0);
+        QCOMPARE(server.requestCount(), 4);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+    }
+
+    void failedOrOversizedSummaryLeavesHistory_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("empty") << QStringLiteral("empty");
+        QTest::newRow("oversized") << QStringLiteral("oversized");
+        QTest::newRow("error") << QStringLiteral("error");
+    }
+
+    void failedOrOversizedSummaryLeavesHistory()
+    {
+        QFETCH(QString, kind);
+        MockServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        configureService(service, server);
+        if (kind == QStringLiteral("error")) {
+            server.enqueueError(400);
+        } else {
+            server.enqueueCompletion(
+                kind == QStringLiteral("empty") ? QStringLiteral("  ")
+                                                : QString(100000, QLatin1Char('x')));
+        }
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 10000;
+        config.keepRecentMessages   = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(800, 'x')}});
+        }
+        agent.setMessages(history);
+        QCOMPARE(agent.compact(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(agent.getMessages() == history);
+        QCOMPARE(
+            agent.lastCompactionStatus(),
+            kind == QStringLiteral("oversized") ? QSocAgent::CompactionStatus::NoProgress
+                                                : QSocAgent::CompactionStatus::Failed);
+    }
+
+    void bodyAndImageLimitsDoNotCompact_data()
+    {
+        QTest::addColumn<QString>("message");
+        QTest::newRow("generic-body") << QStringLiteral("Request Entity Too Large");
+        QTest::newRow("image-size") << QStringLiteral("image exceeds maximum bytes");
+        QTest::newRow("unknown") << QStringLiteral("request rejected");
+    }
+
+    void bodyAndImageLimitsDoNotCompact()
+    {
+        QFETCH(QString, message);
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueError(413, message);
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config = testConfig();
+        config.maxRetries       = 0;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(800, 'x')}});
+        }
+        agent.setMessages(history);
+        QSignalSpy error(&agent, &QSocAgent::runError);
+        QSignalSpy compacted(&agent, &QSocAgent::compacting);
+        agent.runStream(QStringLiteral("continue"));
+        QTRY_COMPARE_WITH_TIMEOUT(error.count(), 1, 5000);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(compacted.isEmpty());
+        QVERIFY(agent.getMessages().size() >= history.size());
+        for (size_t index = 0; index < history.size(); ++index) {
+            QVERIFY(agent.getMessages()[index] == history[index]);
+        }
+    }
+
     void synchronousAgentPreservesEffort_data()
     {
         QTest::addColumn<QString>("effort");
@@ -731,13 +1199,17 @@ private slots:
     void compactionUsesCapturedEndpoint_data()
     {
         QTest::addColumn<bool>("explicitModel");
-        QTest::newRow("temporary-endpoint") << false;
-        QTest::newRow("configured-summary-model") << true;
+        QTest::addColumn<bool>("changeWhileRunning");
+        QTest::newRow("temporary-endpoint") << false << false;
+        QTest::newRow("configured-summary-model") << true << false;
+        QTest::newRow("temporary-endpoint-changed") << false << true;
+        QTest::newRow("configured-summary-model-changed") << true << true;
     }
 
     void compactionUsesCapturedEndpoint()
     {
         QFETCH(bool, explicitModel);
+        QFETCH(bool, changeWhileRunning);
         MockServer configuredServer;
         MockServer temporaryServer;
         MockServer nextServer;
@@ -778,10 +1250,20 @@ private slots:
         summaryServer.setRequestObserver([&](int) {
             parentUnchanged = service.getCurrentModelConfig().model == temporary.model
                               && service.getCurrentModelConfig().url == temporary.url;
-            service.setModel(next);
-            agent.setEffortLevel(QStringLiteral("low"));
+            if (changeWhileRunning) {
+                service.setModel(next);
+                agent.setEffortLevel(QStringLiteral("low"));
+            }
         });
-        QVERIFY(agent.compact() > 0);
+        const int saved = agent.compact();
+        if (changeWhileRunning) {
+            QCOMPARE(saved, 0);
+            QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Cancelled);
+            QVERIFY(agent.getMessages() == history);
+        } else {
+            QVERIFY(saved > 0);
+            QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+        }
         QVERIFY(parentUnchanged);
         QCOMPARE(configuredServer.requestCount(), explicitModel ? 1 : 0);
         QCOMPARE(temporaryServer.requestCount(), explicitModel ? 0 : 1);
@@ -794,11 +1276,16 @@ private slots:
         QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
         QCOMPARE(body.at("reasoning").at("effort").get<std::string>(), std::string("high"));
         QVERIFY(!body.contains("temperature"));
-        QCOMPARE(service.getCurrentModelConfig().url, next.url);
-        QCOMPARE(service.getCurrentModelConfig().model, next.model);
-        QVERIFY(
-            agent.getMessages().at(0).at("content").get<std::string>().find("captured summary")
-            != std::string::npos);
+        QCOMPARE(service.getCurrentModelConfig().url, changeWhileRunning ? next.url : temporary.url);
+        QCOMPARE(
+            service.getCurrentModelConfig().model,
+            changeWhileRunning ? next.model : temporary.model);
+        if (!changeWhileRunning) {
+            QVERIFY(
+                agent.getMessages().at(0).at("content").get<std::string>().find("captured summary")
+                != std::string::npos);
+            service.setModel(next);
+        }
         nextServer.enqueueCompletion(QStringLiteral("next complete"));
         const json response = service.sendChatCompletion(json::array());
         QVERIFY(!response.contains("error"));
@@ -1569,30 +2056,34 @@ private slots:
     void compactPruneObserverMayDeleteAgent()
     {
         QSocToolRegistry    registry;
-        auto               *agent = new QSocAgent(nullptr, nullptr, &registry, pruningConfig());
+        auto               *agent = new QSocAgent(nullptr, nullptr, &registry, [&] {
+            auto config                 = pruningConfig();
+            config.systemPromptOverride = "Test";
+            config.maxContextTokens     = 32768;
+            config.reservedOutputTokens = 0;
+            return config;
+        }());
         QPointer<QSocAgent> owner(agent);
         agent->setMessages(pruningHistory());
-        connect(agent, &QSocAgent::verboseOutput, &registry, [agent](const QString &message) {
-            if (message.startsWith(QStringLiteral("[Layer 1 Prune:"))) {
-                delete agent;
-            }
-        });
+        connect(agent, &QSocAgent::compacting, &registry, [agent](int, int, int) { delete agent; });
 
-        QCOMPARE(agent->compact(), 0);
+        QVERIFY(agent->compact() > 0);
         QVERIFY(owner.isNull());
     }
 
     void automaticPruneObserverMayDeleteAgent()
     {
         QSocToolRegistry    registry;
-        auto               *agent = new QSocAgent(nullptr, nullptr, &registry, pruningConfig());
+        auto               *agent = new QSocAgent(nullptr, nullptr, &registry, [&] {
+            auto config                 = pruningConfig();
+            config.systemPromptOverride = "Test";
+            config.maxContextTokens     = 32768;
+            config.reservedOutputTokens = 0;
+            return config;
+        }());
         QPointer<QSocAgent> owner(agent);
         agent->setMessages(pruningHistory());
-        connect(agent, &QSocAgent::verboseOutput, &registry, [agent](const QString &message) {
-            if (message.startsWith(QStringLiteral("[Layer 1 Prune:"))) {
-                delete agent;
-            }
-        });
+        connect(agent, &QSocAgent::compacting, &registry, [agent](int, int, int) { delete agent; });
 
         QCOMPARE(agent->run(QStringLiteral("continue")), QStringLiteral("[Agent aborted]"));
         QVERIFY(owner.isNull());

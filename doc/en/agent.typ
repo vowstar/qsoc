@@ -695,13 +695,13 @@ automatically after a capture failure.
 
 == Context Compaction
 <agent-context-compaction>
-Long conversations are managed by a three-layer compaction system:
+Long conversations use two compaction steps:
 
 + *Tool Output Pruning* (40% threshold): Older, unbounded tool outputs can be
   replaced with `[output pruned]`. Fixed result previews keep their saved references.
 + *LLM Compaction* (60% threshold): The LLM summarizes older messages.
-+ *Auto-Continue*: After compaction during streaming, the agent automatically
-  resumes the current task.
+
+After a successful compaction during a turn, the agent resumes that task.
 
 Use `/compact` to trigger compaction manually, and `/context` to inspect the
 per-category token breakdown. The context total includes the final system
@@ -721,17 +721,22 @@ Cached tokens still occupy the context window. The status script receives these 
 in `provider_usage`, separately from the existing estimated token totals.
 `reported_requests` counts completed requests with valid input usage.
 
-Each summary includes the previous summary as an anchor. Summaries can omit
-details. Read the original session history when exact earlier text matters.
+Each summary includes the previous summary as an anchor. The agent saves removed messages as read-only text artifacts and lists their IDs for `tool_output_read`. Summaries can omit details.
+
+Compaction prepares a candidate without changing the active history. It installs the candidate only if the full local request estimate decreases and fits within 90% of the effective input budget. Restored files, skills, task descriptions, and artifact references count toward that limit.
+
+A failed summary, failed save, cancellation, or session change leaves the active history intact. A failed save can retain candidate artifacts for recovery. Automatic compaction does not repeat a no-progress attempt until its history or request inputs change. `/compact` explicitly retries.
+
+The CLI saves one complete snapshot before installing compacted history. A resumed session reads either the prior history or the complete snapshot after a process exit. This does not guarantee recovery from power loss. SDK callers need persistent artifact storage and a session save callback for restart recovery.
+
+Explicit context-length errors can trigger compaction. Generic HTTP 413 responses and image-size errors do not trigger a compaction retry.
 
 Compaction inherits the current model and reasoning effort, including a
 temporary model selection. `agent.compaction_model` selects a different
 configured model for the summary only. An unknown model ID reports an error.
 The summary request does not change the model selected for normal turns.
 
-After every compaction (manual, automatic, or context-overflow), qsoc
-re-injects a bounded set of supplies so working memory survives the
-summary swap, and prints them as dim lines:
+After a summary commits, qsoc restores bounded context and prints these entries:
 
 + `Read <path> (N lines)` for the most recently read files small enough to
   re-inline their current content.
@@ -743,8 +748,7 @@ summary swap, and prints them as dim lines:
 
 At most `agent.context_restore_max_files` files (most recent first) and the
 recently invoked skills are restored, each capped per item and by an
-overall token budget. qsoc memory files and files still inside the kept
-window are skipped (memory is re-injected every turn already). Disable with
+overall token budget. File and skill reads stop at a byte limit before loading their full contents. Oversized inputs remain references. Files in the candidate’s retained messages are excluded. Memory is supplied separately on each request. Disable with
 `agent.context_restore: false`.
 
 == Memory System

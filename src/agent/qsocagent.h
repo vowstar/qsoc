@@ -224,6 +224,28 @@ public:
      * @return Number of tokens saved (0 if nothing compacted)
      */
     int compact();
+    int compactIfNeeded();
+
+    enum class CompactionStatus : quint8 { Committed, NoProgress, Cancelled, Failed };
+    struct CompactionCandidate
+    {
+        quint64            sourceRevision  = 0;
+        quint64            bindingRevision = 0;
+        quint64            policyRevision  = 0;
+        QByteArray         sourceRequestVersion;
+        json               candidateMessages = json::array();
+        json               artifactRefs      = json::array();
+        QSocContextRestore restoreNotice;
+        qint64             beforeTokens = 0;
+        qint64             afterTokens  = 0;
+    };
+    /* Save the candidate synchronously without entering an event loop.
+     * A true return commits the snapshot; subsequent cancellation stops only future work. */
+    using CompactionCommitter = std::function<bool(const CompactionCandidate &)>;
+    void             setCompactionCommitter(CompactionCommitter committer);
+    CompactionStatus lastCompactionStatus() const { return lastCompactionStatus_; }
+    void             setCandidateRestoreProvider(
+        std::function<QSocContextRestore(const json &, qint64)> provider);
 
     /**
      * @brief Find safe message boundary that doesn't split tool_calls/tool pairs
@@ -428,7 +450,7 @@ public:
      * @brief Install the lazy producer of the post-compaction restore.
      * @details The CLI owns the read state, skills, and task source, so it
      *          supplies a closure that builds the payload from current
-     *          state. The agent invokes it inside compactWithLLM (only when
+     *          state. The agent invokes it during compaction (only when
      *          a compaction actually fires, so no per-turn file I/O) and
      *          appends the resulting messages after the summary. Covers
      *          every compaction path: manual, auto, and overflow.
@@ -717,14 +739,8 @@ private:
     void                                 appendBoundedToolMessage(
         const QString &id, const QString &content, const QString &state, const QString &toolName);
 
-    /* Selective memory recall (Phase 1). recallBlock_ holds the reminder
-     * text computed once per user turn and appended to the wire payload
-     * each iteration; never persisted to `messages`, so the system-prompt
-     * prefix stays byte-stable and the provider cache survives.
-     * recallLlm_ is a lazily-cloned service pinned to the recall model
-     * when one is configured; nullptr means use the primary llmService. */
-    QString               recallBlock_;
-    QPointer<QLLMService> recallLlm_;
+    /* Memory recall is rebuilt once per user turn and sent as a system reminder. */
+    QString recallBlock_;
     /* Plan-mode shell safety judge (empty = fail-closed). */
     QSocBashSafetyJudge bashSafetyJudge_;
     /* Terminal-focus probe (empty = assume the user is watching). */
@@ -762,11 +778,19 @@ private:
     quint64      nextRunEpoch_ = 0;
 
     /* Post-compaction context restore. contextRestoreProvider_ is a lazy
-     * builder installed by the CLI and invoked inside compactWithLLM;
+     * builder installed by the CLI and invoked during compaction;
      * lastApplied_ keeps the produced payload for the synchronous /compact
      * render path. */
-    std::function<QSocContextRestore()> contextRestoreProvider_;
-    QSocContextRestore                  lastApplied_;
+    std::function<QSocContextRestore(const json &, qint64)> contextRestoreProvider_;
+    CompactionCommitter                                     compactionCommitter_;
+    CompactionStatus   lastCompactionStatus_      = CompactionStatus::NoProgress;
+    quint64            historyRevision_           = 0;
+    quint64            policyRevision_            = 0;
+    quint64            historyAccountingRevision_ = 0;
+    bool               compactionInFlight_        = false;
+    bool               compactionCommitting_      = false;
+    QByteArray         lastNoProgressVersion_;
+    QSocContextRestore lastApplied_;
 
     /* Streaming state */
     bool    isStreaming     = false;
@@ -906,14 +930,10 @@ private:
      * @param force Skip threshold check (for manual compact)
      * @return true if pruning saved enough tokens
      */
-    bool pruneToolOutputs(bool force = false);
-
-    /**
-     * @brief Layer 2: Use LLM to generate a structured summary of old messages
-     * @param force Skip threshold check (for manual compact)
-     * @return true if compaction succeeded
-     */
-    bool compactWithLLM(bool force = false);
+    int                 performCompaction(bool force, bool manual);
+    std::optional<json> summarizeHistory(const json &sourceMessages, json *recentTail);
+    QSocRequestSnapshot compactionRequest(const json &history) const;
+    QByteArray          compactionRequestVersion(const QSocRequestSnapshot &request) const;
 
     /**
      * @brief Process a single iteration of the agent loop
@@ -1054,7 +1074,6 @@ private:
     /* buildSystemPromptWithMemory declared public above */
 
     /* Compaction failure tracking */
-    int compactFailureCount = 0;
 };
 
 #endif // QSOCAGENT_H

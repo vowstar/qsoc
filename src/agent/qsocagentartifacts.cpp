@@ -26,12 +26,21 @@ QString boundedText(const QString &text, qint64 tokens)
 
 void QSocAgent::unbindToolResultStore()
 {
+    if (compactionCommitting_) {
+        return;
+    }
     toolResultStore_.reset();
     ++bindingRevision_;
 }
 
 bool QSocAgent::bindToolResultStore(const QString &directory, const QString &owner, QString *error)
 {
+    if (compactionCommitting_) {
+        if (error) {
+            *error = QStringLiteral("Cannot change artifact storage during compaction commit.");
+        }
+        return false;
+    }
     auto candidate = std::make_shared<QSocToolResultStore>(
         directory,
         owner,

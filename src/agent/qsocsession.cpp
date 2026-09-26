@@ -80,12 +80,25 @@ bool appendJsonLine(const QString &filePath, const nlohmann::json &line)
     }
 
     QFile file(filePath);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadWrite | QIODevice::Append)) {
         return false;
     }
     const auto payload = jsonLinePayload(line);
     if (!payload.has_value()) {
         return false;
+    }
+    const qint64 size = file.size();
+    if (size > 0) {
+        if (!file.seek(size - 1)) {
+            return false;
+        }
+        const QByteArray last = file.read(1);
+        if (last.size() != 1 || !file.seek(size)) {
+            return false;
+        }
+        if (last != QByteArrayLiteral("\n") && file.write("\n", 1) != 1) {
+            return false;
+        }
     }
     return file.write(*payload) == payload->size() && file.flush();
 }

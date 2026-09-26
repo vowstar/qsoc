@@ -3,10 +3,14 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
 #include "qsoc_test.h"
 
+#include <cstdlib>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtCore>
@@ -14,17 +18,7 @@
 
 using json = nlohmann::json;
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
+namespace {
 
 class Test : public QObject
 {
@@ -82,7 +76,338 @@ private:
     }
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
+    void testCandidateCommitIsAtomic_data()
+    {
+        QTest::addColumn<bool>("unbind");
+        QTest::newRow("history-and-config") << false;
+        QTest::newRow("unbind-during-commit") << true;
+    }
+
+    void testCandidateCommitIsAtomic()
+    {
+        QFETCH(bool, unbind);
+        QSocAgentConfig config;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 32768;
+        config.keepRecentMessages   = 2;
+        auto *agent                 = createAgent(config);
+        json  original              = json::array();
+        for (int index = 0; index < 12; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(4000, static_cast<char>('a' + index))}});
+        }
+        agent->setMessages(original);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("session.jsonl"));
+        QSocSession   session(QSocSession::generateId(), path);
+        QVERIFY(session.appendSnapshot(original));
+        int  calls = 0;
+        bool valid = false;
+        agent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+            ++calls;
+            const auto store    = agent->toolResultStore();
+            const auto revision = agent->bindingRevision();
+            valid               = agent->getMessages() == original
+                                  && candidate.beforeTokens > candidate.afterTokens;
+            if (unbind) {
+                agent->unbindToolResultStore();
+            }
+            valid = valid && agent->toolResultStore() == store
+                    && agent->bindingRevision() == revision;
+            agent->clearHistory();
+            agent->setMessages(json::array());
+            auto replacement        = config;
+            replacement.projectPath = directory.path();
+            agent->setConfig(replacement);
+            valid = valid && agent->getMessages() == original
+                    && agent->getConfig().projectPath == config.projectPath && agent->compact() == 0
+                    && agent->run(QStringLiteral("reentrant")).isEmpty();
+            return session.appendSnapshot(candidate.candidateMessages);
+        });
+        QVERIFY(agent->compact() > 0);
+        QCOMPARE(calls, 1);
+        QVERIFY(valid);
+        const auto refs = QSocAgent::artifactReferences(agent->getMessages());
+        QCOMPARE(refs.size(), 1);
+        QString recovered;
+        qint64  offset = 0;
+        for (;;) {
+            const auto page = agent->toolResultStore()->read(refs.front().id, offset, 32768);
+            QVERIFY(page.has_value());
+            recovered += page->text;
+            if (page->eof) {
+                break;
+            }
+            QVERIFY(page->nextOffset > offset);
+            offset = page->nextOffset;
+        }
+        const auto removed = json::parse(recovered.toStdString());
+        QVERIFY(!removed.empty());
+        QVERIFY(removed.size() < original.size());
+        for (size_t index = 0; index < removed.size(); ++index) {
+            QVERIFY(removed[index] == original[index]);
+        }
+        QCOMPARE(agent->lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+        QVERIFY(QSocSession::loadMessages(path) == agent->getMessages());
+        QVERIFY(agent->getMessages() != original);
+    }
+
+    void testCompactionCommitSurvivesExit()
+    {
+        const QString mode = qEnvironmentVariable("QSOC_COMPACT_EXIT_TEST");
+        if (!mode.isEmpty()) {
+            QSocAgentConfig config;
+            config.systemPromptOverride = QStringLiteral("Follow the task.");
+            config.maxContextTokens     = 32768;
+            config.keepRecentMessages   = 2;
+            auto         *agent         = createAgent(config);
+            const QString path          = qEnvironmentVariable("QSOC_COMPACT_SESSION");
+            const QString owner         = qEnvironmentVariable("QSOC_COMPACT_OWNER");
+            if (!agent->bindToolResultStore(path + QStringLiteral(".artifacts"), owner)) {
+                std::_Exit(2);
+            }
+            QSocSession session(owner, path);
+            agent->setMessages(QSocSession::loadMessages(path));
+            agent->setCompactionCommitter(
+                [&](const QSocAgent::CompactionCandidate &candidate) -> bool {
+                    if (mode == QStringLiteral("after")
+                        && !session.appendSnapshot(candidate.candidateMessages)) {
+                        std::_Exit(3);
+                    }
+                    std::_Exit(0);
+                });
+            agent->compact();
+            std::_Exit(4);
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        json original = json::array();
+        for (int index = 0; index < 12; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(4000, 'x')}});
+        }
+        for (const QString &phase : {QStringLiteral("before"), QStringLiteral("after")}) {
+            const QString path  = directory.filePath(phase + QStringLiteral(".jsonl"));
+            const QString owner = QSocSession::generateId();
+            QSocSession   session(owner, path);
+            QVERIFY(session.appendSnapshot(original));
+            QProcess child;
+            auto     environment = QProcessEnvironment::systemEnvironment();
+            environment.insert(QStringLiteral("QSOC_COMPACT_EXIT_TEST"), phase);
+            environment.insert(QStringLiteral("QSOC_COMPACT_SESSION"), path);
+            environment.insert(QStringLiteral("QSOC_COMPACT_OWNER"), owner);
+            child.setProcessEnvironment(environment);
+            child.setWorkingDirectory(directory.path());
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral("testCompactionCommitSurvivesExit")});
+            QVERIFY(child.waitForFinished(10000));
+            QCOMPARE(child.exitCode(), 0);
+            const auto restored = QSocSession::loadMessages(path);
+            if (phase == QStringLiteral("before")) {
+                QVERIFY(restored == original);
+            } else {
+                QVERIFY(restored != original);
+                const auto references = QSocAgent::artifactReferences(restored);
+                QCOMPARE(references.size(), 1);
+                QSocToolResultStore store(path + QStringLiteral(".artifacts"), owner);
+                QVERIFY(store.isBound());
+                const auto page = store.read(references.front().id, 0, 32768);
+                QVERIFY(page.has_value());
+                QCOMPARE(page->reference.sha256, references.front().sha256);
+                QCOMPARE(page->reference.capturedBytes, references.front().capturedBytes);
+            }
+        }
+    }
+
+    void testFailedCommitAcknowledgementKeepsRecoverableArtifact()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocAgentConfig config;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 32768;
+        config.compactThreshold     = 0;
+        config.keepRecentMessages   = 2;
+        auto         *agent         = createAgent(config);
+        const QString path          = directory.filePath(QStringLiteral("session.jsonl"));
+        const QString owner         = QSocSession::generateId();
+        QVERIFY(agent->bindToolResultStore(path + QStringLiteral(".artifacts"), owner));
+        QSocSession session(owner, path);
+        json        original = json::array();
+        for (int index = 0; index < 12; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(4000, 'x')}});
+        }
+        agent->setMessages(original);
+        QVERIFY(session.appendSnapshot(original));
+        int saves = 0;
+        agent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+            ++saves;
+            if (!session.appendSnapshot(candidate.candidateMessages)) {
+                return false;
+            }
+            /* The complete record exists, but the caller observes a failed save. */
+            return false;
+        });
+        QCOMPARE(agent->compactIfNeeded(), 0);
+        QCOMPARE(agent->lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
+        QVERIFY(agent->getMessages() == original);
+        const auto stored = agent->toolResultStore()->storedBytes();
+        QVERIFY(stored > 0);
+        const auto recovered = QSocSession::loadMessages(path);
+        QVERIFY(recovered != original);
+        const auto references = QSocAgent::artifactReferences(recovered);
+        QCOMPARE(references.size(), 1);
+        QVERIFY(agent->toolResultStore()->read(references.front().id, 0, 32768).has_value());
+        QCOMPARE(agent->compactIfNeeded(), 0);
+        QCOMPARE(saves, 1);
+        QCOMPARE(agent->toolResultStore()->storedBytes(), stored);
+        QVERIFY(QSocSession::loadMessages(path) == recovered);
+    }
+
+    void testArchivePublishFailureLeavesHistory()
+    {
+        QSocAgentConfig config;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 32768;
+        config.keepRecentMessages   = 2;
+        config.compactThreshold     = 0;
+        config.toolArtifactBytes    = 16;
+        auto *agent                 = createAgent(config);
+        json  original              = json::array();
+        for (int index = 0; index < 12; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(4000, 'x')}});
+        }
+        agent->setMessages(original);
+        int saves = 0;
+        agent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &) {
+            ++saves;
+            return true;
+        });
+        QCOMPARE(agent->compactIfNeeded(), 0);
+        QCOMPARE(agent->lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
+        QCOMPARE(agent->compactIfNeeded(), 0);
+        QCOMPARE(agent->lastCompactionStatus(), QSocAgent::CompactionStatus::NoProgress);
+        QCOMPARE(saves, 0);
+        QVERIFY(agent->getMessages() == original);
+        QCOMPARE(agent->toolResultStore()->storedBytes(), qint64(0));
+    }
+
+    void testCandidateFailuresLeaveHistory_data()
+    {
+        QTest::addColumn<QString>("failure");
+        for (const QString &failure :
+             {QStringLiteral("save"),
+              QStringLiteral("throw-save"),
+              QStringLiteral("throw-restore"),
+              QStringLiteral("restore-budget"),
+              QStringLiteral("binding")}) {
+            QTest::newRow(qPrintable(failure)) << failure;
+        }
+    }
+
+    void testCandidateFailuresLeaveHistory()
+    {
+        QFETCH(QString, failure);
+        QSocAgentConfig config;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 32768;
+        config.keepRecentMessages   = 2;
+        auto *agent                 = createAgent(config);
+        json  original              = json::array();
+        for (int index = 0; index < 12; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(4000, 'x')}});
+        }
+        agent->setMessages(original);
+        int saves = 0;
+        agent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &) {
+            ++saves;
+            if (failure == QStringLiteral("throw-save")) {
+                throw std::runtime_error("save failed");
+            }
+            return false;
+        });
+        agent->setCandidateRestoreProvider([&](const json &, qint64) {
+            if (failure == QStringLiteral("throw-restore")) {
+                throw std::runtime_error("restore failed");
+            }
+            QSocContextRestore result;
+            if (failure == QStringLiteral("restore-budget")) {
+                QSocContextRestore::FileItem item;
+                item.attachmentText = QString(200000, QLatin1Char('z'));
+                result.files.append(item);
+            }
+            if (failure == QStringLiteral("binding")) {
+                auto changed             = config;
+                changed.remoteWorkingDir = QStringLiteral("/workspace/changed");
+                agent->setConfig(changed);
+            }
+            return result;
+        });
+        const qint64 storedBefore = agent->toolResultStore()->storedBytes();
+        QSignalSpy   compacted(agent, &QSocAgent::compacting);
+        QSignalSpy   restored(agent, &QSocAgent::contextRestored);
+        QCOMPARE(agent->compact(), 0);
+        QVERIFY(agent->getMessages() == original);
+        QVERIFY(compacted.isEmpty());
+        QVERIFY(restored.isEmpty());
+        if (failure.endsWith(QStringLiteral("save"))) {
+            QVERIFY(agent->toolResultStore()->storedBytes() > storedBefore);
+        } else {
+            QCOMPARE(agent->toolResultStore()->storedBytes(), storedBefore);
+        }
+        QCOMPARE(saves, failure.endsWith(QStringLiteral("save")) ? 1 : 0);
+        const auto expected = failure == QStringLiteral("binding")
+                                  ? QSocAgent::CompactionStatus::Cancelled
+                              : failure == QStringLiteral("restore-budget")
+                                  ? QSocAgent::CompactionStatus::NoProgress
+                                  : QSocAgent::CompactionStatus::Failed;
+        QCOMPARE(agent->lastCompactionStatus(), expected);
+    }
+
+    void testRestoreReceivesActualTail()
+    {
+        QSocAgentConfig config;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 32768;
+        config.keepRecentMessages   = 10;
+        auto *agent                 = createAgent(config);
+        json  original              = json::array();
+        for (int index = 0; index < 20; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(4000, 'x')}});
+        }
+        original.push_back({{"role", "user"}, {"content", std::string(32000, 'y')}});
+        agent->setMessages(original);
+        json   tail;
+        qint64 budget = 0;
+        agent->setCandidateRestoreProvider([&](const json &recent, qint64 remaining) {
+            tail   = recent;
+            budget = remaining;
+            return QSocContextRestore{};
+        });
+        QVERIFY(agent->compact() > 0);
+        QCOMPARE(tail.size(), json::size_type(1));
+        QVERIFY(tail.front() == original.back());
+        QVERIFY(budget > 0);
+    }
+
+    void testInvalidToolPairsRejectCompaction()
+    {
+        auto *agent = createAgent();
+        json  original
+            = {{{"role", "user"}, {"content", "Task"}},
+               {{"role", "tool"}, {"tool_call_id", "orphan"}, {"content", std::string(10000, 'x')}}};
+        agent->setMessages(original);
+        QCOMPARE(agent->compact(), 0);
+        QCOMPARE(agent->lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
+        QVERIFY(agent->getMessages() == original);
+    }
 
     void testPruneToolOutputs()
     {
@@ -588,12 +913,11 @@ private slots:
         QSignalSpy spy(agent, &QSocAgent::compacting);
         agent->compact();
 
-        /* Should have emitted at least one compacting signal for Layer 1 */
-        QVERIFY(spy.count() >= 1);
+        QCOMPARE(spy.count(), 1);
 
         /* Verify signal parameters */
         QList<QVariant> args = spy.first();
-        QCOMPARE(args.at(0).toInt(), 1);                  /* Layer 1 */
+        QCOMPARE(args.at(0).toInt(), 2);                  /* Final summary */
         QVERIFY(args.at(1).toInt() > args.at(2).toInt()); /* before > after */
 
         delete agent;
@@ -606,8 +930,9 @@ private slots:
 
         QSocAgentConfig config;
         config.maxContextTokens     = 20000; /* 20k budget */
-        config.pruneThreshold       = 0.99;  /* Don't prune */
-        config.compactThreshold     = 0.5;   /* Compact at 10k tokens */
+        config.reservedOutputTokens = 0;
+        config.pruneThreshold       = 0.99; /* Don't prune */
+        config.compactThreshold     = 0.5;  /* Compact at 10k tokens */
         config.keepRecentMessages   = 2;
         config.systemPromptOverride = largePrompt;
         config.autoLoadMemory       = false;
@@ -637,6 +962,8 @@ private slots:
         delete agent;
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsocagentcompact.moc"
