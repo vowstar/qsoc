@@ -17,6 +17,8 @@
 
 #include <QElapsedTimer>
 
+#include <limits>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
@@ -28,6 +30,22 @@
 #include <QTextStream>
 
 namespace {
+
+void addTokenCount(std::atomic<qint64> &counter, qint64 increment)
+{
+    if (increment <= 0) {
+        return;
+    }
+    qint64 current = counter.load();
+    for (;;) {
+        const qint64 updated = increment > std::numeric_limits<qint64>::max() - current
+                                   ? std::numeric_limits<qint64>::max()
+                                   : current + increment;
+        if (counter.compare_exchange_weak(current, updated)) {
+            return;
+        }
+    }
+}
 
 /* Re-injected as a system message every turn while in plan mode. States
  * the read-only constraint and the explore -> clarify -> exit loop. */
@@ -245,6 +263,7 @@ void QSocAgent::finishSynchronousRun(const ActiveRunPtr &run, RunOutcome outcome
     if (owner.isNull() || owner->activeRun_ != run) {
         return;
     }
+    requestUsage_.discardPending();
     run->phase = RunPhase::Terminal;
     activeRun_.reset();
 }
@@ -292,6 +311,7 @@ void QSocAgent::finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, con
         }
     }
 
+    owner->requestUsage_.discardPending();
     run->phase = RunPhase::Terminal;
     owner->activeRun_.reset();
     owner->isStreaming = false;
@@ -868,7 +888,7 @@ void QSocAgent::handleStreamChunk(const QString &chunk)
 
     /* Estimate output tokens from this chunk */
     int chunkTokens = estimateTokens(chunk);
-    totalOutputTokens.fetch_add(chunkTokens);
+    addTokenCount(totalOutputTokens, chunkTokens);
     streamFinalContent += chunk;
 
     emit contentChunk(chunk);
@@ -885,7 +905,7 @@ void QSocAgent::handleReasoningChunk(const QString &chunk)
         streamMonitor->notifyProgress();
     }
     int chunkTokens = estimateTokens(chunk);
-    totalOutputTokens.fetch_add(chunkTokens);
+    addTokenCount(totalOutputTokens, chunkTokens);
     emit reasoningChunk(chunk);
 }
 
@@ -1269,34 +1289,9 @@ void QSocAgent::processStreamIteration()
             }
         }
 
-        /* Build messages with system prompt (includes auto-injected memory) */
-        json messagesWithSystem = json::array();
-
-        QString fullSystemPrompt = owner->buildSystemPromptWithMemory();
-        if (!fullSystemPrompt.isEmpty()) {
-            messagesWithSystem.push_back(
-                {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
-        }
-
-        for (const auto &msg : owner->messages) {
-            json sanitized = msg;
-            /* The internal `_usage` annotation is for our token estimator
-             * only; OpenAI / DeepSeek reject unknown top-level fields on
-             * messages, so strip it before the wire. */
-            sanitized.erase("_usage");
-            sanitized.erase("_img_tokens");
-            sanitized.erase("_qsoc_tool_state");
-            messagesWithSystem.push_back(sanitized);
-        }
-
-        /* Per-turn ephemeral reminders (critical reminder, plan mode, focus,
-         * approved plan, memory recall): appended to the wire payload as
-         * trailing <system-reminder> user-turn content. Not persisted into
-         * `messages`; keeps the cached system prefix stable and avoids a
-         * role:"system" message after the history that strict chat templates
-         * reject. */
-        owner->injectPerTurnReminders(messagesWithSystem);
-        action = checkpoint();
+        const QString fullSystemPrompt   = owner->buildSystemPromptWithMemory();
+        const json    messagesWithSystem = owner->wireMessages(fullSystemPrompt);
+        action                           = checkpoint();
         if (action == CheckpointAction::Restart) {
             continue;
         }
@@ -1334,7 +1329,6 @@ void QSocAgent::processStreamIteration()
                 run, RunOutcome::Error, QStringLiteral("Agent dependency destroyed"));
             return;
         }
-        const int inputTokens = owner->estimateTotalTokensFromSnapshot(fullSystemPrompt, tools);
 
         /* Send streaming request */
         action = checkpoint();
@@ -1366,7 +1360,11 @@ void QSocAgent::processStreamIteration()
                 run, RunOutcome::Error, QStringLiteral("Agent dependency destroyed"));
             return;
         }
-        owner->totalInputTokens.fetch_add(inputTokens);
+        auto snapshot   = owner->requestSnapshot(messagesWithSystem, tools, run->llm.data());
+        snapshot.effort = effortLevel;
+        const qint64 inputTokens = owner->requestUsage_.estimateNext(snapshot);
+        run->requestGeneration   = owner->requestUsage_.begin(std::move(snapshot));
+        addTokenCount(owner->totalInputTokens, inputTokens);
         run->llm->sendChatCompletionStream(messagesWithSystem, tools, temperature, effortLevel);
         return;
     }
@@ -1412,6 +1410,7 @@ void QSocAgent::handleStreamComplete(const json &response)
         return;
     }
 
+    owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
     auto message = response["choices"][0]["message"];
 
     /* A valid streamed response means the connection is healthy: reset
@@ -1421,12 +1420,7 @@ void QSocAgent::handleStreamComplete(const json &response)
     currentRetryCount         = 0;
     contextOverflowRetryCount = 0;
 
-    /* Embed the server-reported usage on the assistant message itself
-     * (private `_usage` field). The token estimator scans backwards
-     * for the most recent record carrying this and treats it as
-     * ground truth, then only estimates the tail added since. The
-     * field is stripped before each outgoing request so OpenAI-style
-     * APIs never see it. */
+    /* Persist reported usage for inspection, not as a restored request anchor. */
     if (response.contains("usage") && response["usage"].is_object()) {
         message["_usage"] = response["usage"];
     }
@@ -1601,29 +1595,8 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         return IterationResult::Stopped;
     };
 
-    /* Build messages with system prompt (includes auto-injected memory) */
-    json messagesWithSystem = json::array();
-
-    QString fullSystemPrompt = buildSystemPromptWithMemory();
-    if (!fullSystemPrompt.isEmpty()) {
-        messagesWithSystem.push_back(
-            {{"role", "system"}, {"content", fullSystemPrompt.toStdString()}});
-    }
-
-    /* Add conversation history (strip the internal `_usage` /
-     * `_img_tokens` annotations so the wire stays standard chat
-     * completion shape). */
-    for (const auto &msg : messages) {
-        json sanitized = msg;
-        sanitized.erase("_usage");
-        sanitized.erase("_img_tokens");
-        sanitized.erase("_qsoc_tool_state");
-        messagesWithSystem.push_back(sanitized);
-    }
-
-    /* Per-turn ephemeral reminders: same injection as the streaming path;
-     * defends against drift on long sync runs. */
-    injectPerTurnReminders(messagesWithSystem);
+    const QString fullSystemPrompt   = buildSystemPromptWithMemory();
+    const json    messagesWithSystem = wireMessages(fullSystemPrompt);
     if (const auto result = checkpointPreparation()) {
         return *result;
     }
@@ -1660,6 +1633,8 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         owner->finishSynchronousRun(run, RunOutcome::Error);
         return IterationResult::Stopped;
     }
+    run->requestGeneration = owner->requestUsage_.begin(
+        owner->requestSnapshot(messagesWithSystem, tools, run->llm.data()));
     json response = run->llm->sendChatCompletion(
         messagesWithSystem,
         tools,
@@ -1693,6 +1668,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         return IterationResult::Complete;
     }
 
+    owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
     auto message = response["choices"][0]["message"];
     if (response.contains("usage") && response["usage"].is_object()) {
         message["_usage"] = response["usage"];
@@ -2856,6 +2832,7 @@ void QSocAgent::clearHistory()
         clearPendingRequests();
     }
     messages = json::array();
+    requestUsage_.invalidateAnchor();
 }
 
 void QSocAgent::accountGoalUsageForIteration(int &prevTokensEstimate, QElapsedTimer &iterationTimer)
@@ -3013,10 +2990,10 @@ void QSocAgent::addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens)
         return;
     }
     if (inputTokens > 0) {
-        totalInputTokens.fetch_add(inputTokens);
+        addTokenCount(totalInputTokens, inputTokens);
     }
     if (outputTokens > 0) {
-        totalOutputTokens.fetch_add(outputTokens);
+        addTokenCount(totalOutputTokens, outputTokens);
     }
     emit tokenUsage(totalInputTokens.load(), totalOutputTokens.load());
 }
@@ -3145,6 +3122,7 @@ void QSocAgent::setMessages(const json &msgs)
 {
     if (msgs.is_array()) {
         messages = msgs;
+        requestUsage_.invalidateAnchor();
     }
 }
 
@@ -3162,27 +3140,8 @@ QSocContextRestore QSocAgent::takeLastContextRestore()
 
 int QSocAgent::estimateTokens(const QString &text) const
 {
-    /* Character-class weighted heuristic. Flat chars/4 severely
-     * under-counts CJK-heavy conversations (one CJK char ≈ 1 token in
-     * cl100k/o200k BPEs, not 0.25), which let auto-compact overshoot
-     * the model window and then crash on its own over-budget LLM call.
-     * Weights below track empirical BPE output within ~20% for
-     * English/code, Chinese, Japanese/Korean, and mixed content, which
-     * is tight enough for threshold-based compaction decisions. */
-    double tokens = 0.0;
-    for (const QChar qch : text) {
-        const ushort code = qch.unicode();
-        if (code < 0x80) {
-            tokens += 0.25; /* ASCII text/code ≈ 4 chars per token */
-        } else if (code >= 0x4E00 && code <= 0x9FFF) {
-            tokens += 1.0; /* CJK Unified Ideographs */
-        } else if ((code >= 0x3040 && code <= 0x30FF) || (code >= 0xAC00 && code <= 0xD7AF)) {
-            tokens += 0.8; /* Kana and Hangul syllables */
-        } else {
-            tokens += 0.5; /* Latin-ext, punctuation, symbols, emoji lead */
-        }
-    }
-    return static_cast<int>(tokens) + 1;
+    return static_cast<int>(
+        qMin<qint64>(QSocRequestUsage::estimateText(text), std::numeric_limits<int>::max()));
 }
 
 int QSocAgent::effectiveContextTokens() const
@@ -3198,76 +3157,49 @@ int QSocAgent::effectiveContextTokens() const
 
 int QSocAgent::estimateMessagesTokens() const
 {
-    /* Anchor on the most recent assistant message that carries server
-     * usage. Everything up to and including that message is already
-     * accounted for by `prompt_tokens`; only the tail added since needs
-     * a heuristic estimate. Fall back to full-walk estimation when no
-     * usage anchor exists yet (first turn, or non-streaming endpoints
-     * that strip the usage field). */
-    const int msgCount           = static_cast<int>(messages.size());
-    int       anchorIdx          = -1;
-    int       anchorPromptTokens = 0;
-    for (int i = msgCount - 1; i >= 0; --i) {
-        const auto &msg = messages[static_cast<size_t>(i)];
-        if (!msg.contains("_usage") || !msg["_usage"].is_object()) {
-            continue;
-        }
-        const auto &usage = msg["_usage"];
-        /* Use prompt_tokens (input only) since the agent is asking
-         * "what would the next request weigh"; output_tokens belong
-         * to the reply slice, not the input window. The assistant's
-         * own reply contributes to the next request's input — count
-         * it via the per-message tail walk below. */
-        int promptTok = 0;
-        if (usage.contains("prompt_tokens") && usage["prompt_tokens"].is_number_integer()) {
-            promptTok = usage["prompt_tokens"].get<int>();
-        } else if (usage.contains("input_tokens") && usage["input_tokens"].is_number_integer()) {
-            promptTok = usage["input_tokens"].get<int>();
-        }
-        if (promptTok > 0) {
-            anchorIdx          = i;
-            anchorPromptTokens = promptTok;
-            break;
-        }
-    }
+    return static_cast<int>(
+        qMin<qint64>(QSocRequestUsage::estimateHistory(messages), std::numeric_limits<int>::max()));
+}
 
-    int total = 0;
-    int start = 0;
-    if (anchorIdx >= 0) {
-        total = anchorPromptTokens;
-        /* Anchor's prompt covers messages [0, anchorIdx); the assistant
-         * message at anchorIdx is the reply to that prompt, so it is
-         * NOT in prompt_tokens but WILL be in the next request's
-         * prompt. Estimate from anchorIdx forward. */
-        start = anchorIdx;
+json QSocAgent::wireMessages(const QString &systemPrompt) const
+{
+    json wire = json::array();
+    if (!systemPrompt.isEmpty()) {
+        wire.push_back({{"role", "system"}, {"content", systemPrompt.toStdString()}});
     }
+    for (const auto &message : messages) {
+        json sanitized = message;
+        sanitized.erase("_usage");
+        sanitized.erase("_img_tokens");
+        sanitized.erase("_qsoc_tool_state");
+        wire.push_back(std::move(sanitized));
+    }
+    injectPerTurnReminders(wire);
+    return wire;
+}
 
-    for (int i = start; i < msgCount; ++i) {
-        const auto &msg = messages[static_cast<size_t>(i)];
-        if (msg.contains("content") && msg["content"].is_string()) {
-            total += estimateTokens(QString::fromStdString(msg["content"].get<std::string>()));
-        }
-        if (msg.contains("tool_calls")) {
-            total += estimateTokens(QString::fromStdString(msg["tool_calls"].dump()));
-        }
-        /* Image messages carry array content the string branch skips; add
-         * the precomputed per-image cost recorded in `_img_tokens`. */
-        if (msg.contains("_img_tokens") && msg["_img_tokens"].is_number_integer()) {
-            total += msg["_img_tokens"].get<int>();
-        }
-        total += 10; /* per-message structural overhead */
+QSocRequestSnapshot QSocAgent::requestSnapshot(
+    const json &wire, const json &tools, const QLLMService *service) const
+{
+    QSocRequestSnapshot snapshot;
+    snapshot.messages = wire;
+    snapshot.tools    = tools;
+    snapshot.effort   = agentConfig.effortLevel;
+    if (service) {
+        const auto endpoint = service->getCurrentModelConfig();
+        const json route
+            = {{"url", endpoint.url.toStdString()}, {"model", endpoint.model.toStdString()}};
+        snapshot.route = QString::fromLatin1(
+            QCryptographicHash::hash(
+                QByteArray::fromStdString(route.dump()), QCryptographicHash::Sha256)
+                .toHex());
+        snapshot.imageTokens = endpoint.imageMaxTokens > 0 ? endpoint.imageMaxTokens : 5000;
     }
-    return total;
+    return snapshot;
 }
 
 int QSocAgent::estimateTotalTokens() const
 {
-    for (const auto &message : messages) {
-        if (message.contains("_usage") && message["_usage"].is_object()) {
-            return estimateMessagesTokens();
-        }
-    }
-
     const QString systemPrompt = buildSystemPromptWithMemory();
     json          tools        = json::array();
     if (toolRegistry) {
@@ -3278,34 +3210,9 @@ int QSocAgent::estimateTotalTokens() const
 
 int QSocAgent::estimateTotalTokensFromSnapshot(const QString &systemPrompt, const json &tools) const
 {
-    int tokens = estimateMessagesTokens();
-
-    /* When estimateMessagesTokens fell back to anchorless walking (no
-     * server usage seen yet), system prompt + tool defs aren't covered;
-     * add them. When anchored, prompt_tokens already includes them and
-     * we'd be double-counting. Detect anchor by scanning for `_usage`. */
-    bool anchored = false;
-    for (const auto &msg : messages) {
-        if (msg.contains("_usage") && msg["_usage"].is_object()) {
-            anchored = true;
-            break;
-        }
-    }
-    if (!anchored) {
-        tokens += estimateTokens(systemPrompt);
-        if (!tools.empty()) {
-            tokens += estimateTokens(QString::fromStdString(tools.dump()));
-        }
-        /* Reminders are appended to messagesWithSystem every turn but never
-         * stored in `messages`, so the walk misses them. Count them only in
-         * the anchorless case; once anchored, prompt_tokens already includes
-         * the reminders sent that turn, so adding them again double-counts. */
-        tokens += estimateTokens(recallBlock_);
-        tokens += estimateTokens(approvedPlan_);
-        tokens += estimateTokens(agentConfig.criticalReminder);
-    }
-
-    return tokens;
+    const auto snapshot = requestSnapshot(wireMessages(systemPrompt), tools, llmService.data());
+    return static_cast<int>(
+        qMin<qint64>(requestUsage_.estimateNext(snapshot), std::numeric_limits<int>::max()));
 }
 
 int QSocAgent::compact()

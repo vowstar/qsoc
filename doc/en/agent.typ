@@ -668,7 +668,22 @@ Long conversations are managed by a three-layer compaction system:
   resumes the current task.
 
 Use `/compact` to trigger compaction manually, and `/context` to inspect the
-per-category token breakdown.
+per-category token breakdown. The context total includes the final system
+prompt, allowed tool definitions, message arrays, images, and tool arguments.
+
+A reported input-token count calibrates the next estimate only while the
+request prefix, tools, model route, and effort remain unchanged. Restored
+history uses local estimates until a new request reports usage. Images use
+the configured per-image token allowance when no matching request count
+is available.
+
+`/context` also shows provider cache usage for completed requests in the
+current agent instance. The ratio includes only requests that report both
+input and cached tokens. Reports with only separate uncached-input and cache
+components cannot calibrate the full input. Missing reports display unavailable.
+Cached tokens still occupy the context window. The status script receives these counts
+in `provider_usage`, separately from the existing estimated token totals.
+`reported_requests` counts completed requests with valid input usage.
 
 Each summary includes the previous summary as an anchor. Summaries can omit
 details. Read the original session history when exact earlier text matters.
