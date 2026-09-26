@@ -692,48 +692,75 @@ QString QTuiScrollView::toAnsi(int width)
     return out;
 }
 
-QString QTuiScrollView::collectGraphicsLayer()
+QString QTuiScrollView::prepareGraphicsLayer(QTuiScreen &screen)
 {
     QString out;
-
-    /* "Eligible" = visible this frame AND not folded. A folded block
-     * contributes no payload of its own and any prior placement must
-     * be cleared so a freshly folded image collapses cleanly. */
-    std::vector<QTuiBlock *> eligibleBlocks;
-    eligibleBlocks.reserve(visibleGraphicsEntries_.size());
-    for (const auto &entry : visibleGraphicsEntries_) {
-        if (entry.block != nullptr && !entry.block->isFolded()) {
-            eligibleBlocks.push_back(entry.block);
-        }
-    }
-
-    /* Diff: blocks that contributed graphics last frame but no longer
-     * do (left the viewport, or folded into a single line) receive a
-     * clear so the terminal drops their stale placement. */
-    for (QTuiBlock *prev : previousVisibleBlocks_) {
-        if (prev == nullptr) {
+    for (auto it = previousVisibleBlocks_.begin(); it != previousVisibleBlocks_.end();) {
+        QTuiBlock *block = *it;
+        const auto entry = std::find_if(
+            visibleGraphicsEntries_.begin(),
+            visibleGraphicsEntries_.end(),
+            [block](const auto &candidate) { return candidate.block == block; });
+        const auto state = entry == visibleGraphicsEntries_.end() ? QTuiBlock::GraphicsState::Hidden
+                                                                  : block->graphicsState(
+                                                                        entry->firstScreenRow,
+                                                                        entry->firstScreenCol,
+                                                                        entry->width,
+                                                                        entry->visibleRows);
+        if (state == QTuiBlock::GraphicsState::Keep) {
+            ++it;
             continue;
         }
-        const bool stillEligible = std::find(eligibleBlocks.begin(), eligibleBlocks.end(), prev)
-                                   != eligibleBlocks.end();
-        if (!stillEligible) {
-            out.append(prev->emitGraphicsClear());
-        }
+        const QRect eraseRect = block->graphicsEraseRect();
+        screen.invalidateRows(eraseRect.y(), eraseRect.height());
+        out += block->emitGraphicsClear();
+        it = previousVisibleBlocks_.erase(it);
     }
-
-    /* Place every eligible block. The block's own state machine
-     * decides whether to also re-emit the bitmap upload or just the
-     * placement escape. */
-    for (const auto &entry : visibleGraphicsEntries_) {
-        if (entry.block == nullptr || entry.block->isFolded()) {
-            continue;
-        }
-        out.append(entry.block->emitGraphicsLayer(
-            entry.firstScreenRow, entry.firstScreenCol, entry.width, entry.visibleRows));
-    }
-
-    previousVisibleBlocks_ = std::move(eligibleBlocks);
     return out;
+}
+
+QString QTuiScrollView::collectGraphicsLayer(const QVector<int> &writtenRows)
+{
+    QString                  out;
+    std::vector<QTuiBlock *> activeBlocks;
+    for (const auto &entry : visibleGraphicsEntries_) {
+        if (entry.block->isFolded()) {
+            continue;
+        }
+        const auto state = entry.block->graphicsState(
+            entry.firstScreenRow, entry.firstScreenCol, entry.width, entry.visibleRows, writtenRows);
+        if (state == QTuiBlock::GraphicsState::Hidden) {
+            continue;
+        }
+        if (state == QTuiBlock::GraphicsState::Place) {
+            /* Character writes have already erased inline pixels at this point. */
+            if (!entry.block->graphicsEraseRect().isEmpty()) {
+                out += entry.block->emitGraphicsClear();
+            }
+            const QString payload = entry.block->emitGraphicsLayer(
+                entry.firstScreenRow, entry.firstScreenCol, entry.width, entry.visibleRows);
+            if (payload.isEmpty()) {
+                continue;
+            }
+            out += payload;
+        }
+        activeBlocks.push_back(entry.block);
+    }
+    for (QTuiBlock *prev : previousVisibleBlocks_) {
+        if (std::find(activeBlocks.begin(), activeBlocks.end(), prev) == activeBlocks.end()) {
+            out.prepend(prev->emitGraphicsClear());
+        }
+    }
+    previousVisibleBlocks_ = std::move(activeBlocks);
+    return out;
+}
+
+void QTuiScrollView::resetGraphicsState()
+{
+    for (const auto &block : blocks) {
+        block->resetGraphicsState();
+    }
+    previousVisibleBlocks_.clear();
 }
 
 QString QTuiScrollView::collectGraphicsDestroy() const

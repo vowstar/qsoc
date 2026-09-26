@@ -44,6 +44,7 @@ void QTuiCompositor::start(int intervalMs)
     }
     active = true;
     enterAltScreen();
+    scrollView.resetGraphicsState();
 
     int termW = getTerminalWidth();
     int termH = getTerminalHeight();
@@ -118,6 +119,7 @@ void QTuiCompositor::resume()
         return;
     }
     enterAltScreen();
+    scrollView.resetGraphicsState();
     int termW = getTerminalWidth();
     int termH = getTerminalHeight();
     screen.resize(termW, termH);
@@ -536,6 +538,8 @@ void QTuiCompositor::render()
         applySelectionHighlight();
     }
 
+    const QString graphicsClear = scrollView.prepareGraphicsLayer(screen);
+    fputs(graphicsClear.toUtf8().constData(), stdout);
     QString ansi = screen.toAnsi();
     fputs(ansi.toUtf8().constData(), stdout);
 
@@ -545,7 +549,7 @@ void QTuiCompositor::render()
      * The cell grid has already reserved blank cells for the image
      * area, so the image lands in the right place without clobbering
      * any text. Empty for blocks that do not need overlays. */
-    const QString graphicsOverlay = scrollView.collectGraphicsLayer();
+    const QString graphicsOverlay = scrollView.collectGraphicsLayer(screen.writtenRows());
     if (!graphicsOverlay.isEmpty()) {
         fputs(graphicsOverlay.toUtf8().constData(), stdout);
     }

@@ -475,44 +475,62 @@ QString QTuiImagePreviewBlock::toAnsi(int width)
     return out;
 }
 
+QTuiBlock::GraphicsState QTuiImagePreviewBlock::graphicsState(
+    int                 firstScreenRow,
+    int                 firstScreenCol,
+    int                 contentWidth,
+    int                 visibleRows,
+    const QVector<int> &writtenRows) const
+{
+    if (folded || cellRows <= 0 || cellCols <= 0 || contentWidth <= 0 || bytes.isEmpty()
+        || visibleRows < rowCount()) {
+        return GraphicsState::Hidden;
+    }
+    const GraphicsProtocol protocol = detectProtocol();
+    if (protocol != GraphicsProtocol::Kitty && protocol != GraphicsProtocol::ITerm2) {
+        return GraphicsState::Hidden;
+    }
+    const QRect nextRect(firstScreenCol - 1, firstScreenRow, qMin(cellCols, contentWidth), cellRows);
+    if (placementRect != nextRect
+        || (protocol == GraphicsProtocol::Kitty && !kittyState.transmitted)) {
+        return GraphicsState::Place;
+    }
+    if (protocol == GraphicsProtocol::ITerm2) {
+        for (const int row : writtenRows) {
+            if (row >= nextRect.top() && row <= nextRect.bottom()) {
+                return GraphicsState::Place;
+            }
+        }
+    }
+    return GraphicsState::Keep;
+}
+
+QRect QTuiImagePreviewBlock::graphicsEraseRect() const
+{
+    return detectProtocol() == GraphicsProtocol::ITerm2 ? placementRect : QRect();
+}
+
+void QTuiImagePreviewBlock::resetGraphicsState() const
+{
+    kittyState.transmitted = false;
+    placementRect          = {};
+}
+
 QString QTuiImagePreviewBlock::emitGraphicsLayer(
     int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const
 {
-    /* Live overlay: paint the image into the cell rectangle
-     * reserved by layout(). The cell-grid pass has already drawn
-     * the metadata line and left the rest of the rectangle blank,
-     * so the placement lands right where the user expects. A
-     * folded block contributes nothing this frame; the scroll
-     * view diff sees it stayed visible but produced no payload
-     * and emits the clear for any prior placement. */
-    if (folded || cellRows <= 0 || cellCols <= 0 || bytes.isEmpty()) {
-        return QString();
+    if (graphicsState(firstScreenRow, firstScreenCol, contentWidth, visibleRows)
+        == GraphicsState::Hidden) {
+        return {};
     }
-
-    /* Block does not fully fit in the current viewport. Emitting
-     * the placement at full size would paint past the scroll-view
-     * bottom into the status or input bar; better to drop the
-     * graphics overlay this frame and let the cells stay blank
-     * until the user grows the terminal or scrolls. */
-    const int requiredRows = 1 + cellRows;
-    if (visibleRows < requiredRows) {
-        return QString();
-    }
-
-    /* Place the rectangle one row below the metadata line so the
-     * label stays readable above the image. The width is clamped to
-     * the current viewport in case the user shrank the terminal
-     * after layout but before this frame. */
-    const int placeRow  = firstScreenRow + 1;
-    const int placeCols = qMin(cellCols, qMax(1, contentWidth));
-
+    const QRect nextRect(firstScreenCol - 1, firstScreenRow, qMin(cellCols, contentWidth), cellRows);
     const GraphicsProtocol protocol = detectProtocol();
+    QString                out;
     if (protocol == GraphicsProtocol::Kitty) {
-        QString out;
         if (!kittyState.transmitted) {
             const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mimeType);
             if (pngBytes.isEmpty()) {
-                return QString();
+                return {};
             }
             if (kittyState.imageId == 0) {
                 kittyState.imageId = allocateKittyImageId();
@@ -520,65 +538,41 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
             out += kittyTransmitOnly(pngBytes, kittyState.imageId);
             kittyState.transmitted = true;
         }
-        out += QStringLiteral("\x1b[%1;%2H").arg(placeRow).arg(firstScreenCol);
-        out += kittyPlaceAtCursor(kittyState.imageId, /*placementId=*/1, placeCols, cellRows);
-        return out;
-    }
-
-    if (protocol == GraphicsProtocol::ITerm2) {
-        /* iTerm2 has no place-by-id, so every emission re-uploads
-         * the bitmap. Throttle: skip when neither the cell grid
-         * nor the block coordinates moved since the last frame. */
-        if (iTerm2LastRow == placeRow && iTerm2LastCol == firstScreenCol) {
-            return QString();
+        out += QStringLiteral("\x1b[%1;%2H").arg(nextRect.y() + 1).arg(firstScreenCol);
+        out += kittyPlaceAtCursor(
+            kittyState.imageId, /*placementId=*/1, nextRect.width(), nextRect.height());
+    } else if (protocol == GraphicsProtocol::ITerm2) {
+        if (placementRect == nextRect) {
+            return {};
         }
-        iTerm2LastRow = placeRow;
-        iTerm2LastCol = firstScreenCol;
-        QString out;
-        out += QStringLiteral("\x1b[%1;%2H").arg(placeRow).arg(firstScreenCol);
-        out += iTermPlaceWithSize(QFileInfo(sourceLabel).fileName(), bytes, placeCols, cellRows);
-        return out;
+        out += QStringLiteral("\x1b[%1;%2H").arg(nextRect.y() + 1).arg(firstScreenCol);
+        out += iTermPlaceWithSize(
+            QFileInfo(sourceLabel).fileName(), bytes, nextRect.width(), nextRect.height());
     }
-
-    return QString();
+    if (!out.isEmpty()) {
+        placementRect = nextRect;
+    }
+    return out;
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsClear() const
 {
-    /* iTerm2 has no protocol delete: the cells get overwritten by
-     * the next frame's text, which is enough to erase the bitmap.
-     * Reset the throttle so a future re-entry into the viewport
-     * unconditionally re-emits the inline image. */
-    iTerm2LastRow = -1;
-    iTerm2LastCol = -1;
-
-    /* `a=d` is the only delete action; the `d=` parameter selects
-     * what to delete. `d=p,i=<id>,p=<pid>` removes exactly one
-     * placement while keeping the bitmap cached, so a scroll back
-     * into the viewport only needs the lightweight placement
-     * escape again, not a full re-upload. */
-    if (!kittyState.transmitted || kittyState.imageId == 0) {
-        return QString();
+    placementRect = {};
+    if (!kittyState.transmitted || kittyState.imageId == 0
+        || detectProtocol() != GraphicsProtocol::Kitty) {
+        return {};
     }
-    if (detectProtocol() != GraphicsProtocol::Kitty) {
-        return QString();
-    }
-    return QStringLiteral("\x1b_Ga=d,d=p,i=%1,p=1,q=2\x1b\\").arg(kittyState.imageId);
+    /* Lowercase i removes this placement while retaining the image data. */
+    return QStringLiteral("\x1b_Ga=d,d=i,i=%1,p=1,q=2\x1b\\").arg(kittyState.imageId);
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsDestroy() const
 {
-    /* `a=d,d=I,i=<id>` deletes every placement of the image AND
-     * frees the bitmap from the terminal's cache. The kitty
-     * protocol has no `a=D` action; uppercase only ever appears as
-     * a `d=` selector to distinguish "free image data" from "keep
-     * image data". Called once per shutdown so the terminal
-     * reclaims any memory the session asked it to hold. */
-    if (!kittyState.transmitted || kittyState.imageId == 0) {
-        return QString();
+    QString out;
+    if (kittyState.transmitted && kittyState.imageId != 0
+        && detectProtocol() == GraphicsProtocol::Kitty) {
+        out = QStringLiteral("\x1b_Ga=d,d=I,i=%1,q=2\x1b\\").arg(kittyState.imageId);
     }
-    if (detectProtocol() != GraphicsProtocol::Kitty) {
-        return QString();
-    }
-    return QStringLiteral("\x1b_Ga=d,d=I,i=%1,q=2\x1b\\").arg(kittyState.imageId);
+    resetGraphicsState();
+    return out;
 }

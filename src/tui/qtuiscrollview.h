@@ -130,18 +130,12 @@ public:
      * as styled text without cursor-positioning escapes. */
     QString toAnsi(int width);
 
-    /* Concatenate the graphics-overlay payload of every block whose
-     * first viewport row landed on screen during the most recent
-     * render(). The returned string also carries clear escapes for
-     * blocks that were visible on the previous call but have since
-     * scrolled out, so the terminal erases their last placement and
-     * the cell area returns to blank. Subsequent scroll-ins only
-     * re-issue the lightweight placement, not the full bitmap.
-     * Empty when nothing visible has graphics to emit. The
-     * compositor pipes the result to stdout right after the cell
-     * grid so live image previews paint on top of the placeholder
-     * cells reserved by the block layout. */
-    QString collectGraphicsLayer();
+    /* Remove obsolete placements before the cell pass. Inline images
+     * also invalidate their old rows so blank cells are written again. */
+    QString prepareGraphicsLayer(QTuiScreen &screen);
+    /* Place images after the cell pass, using zero-based written rows. */
+    QString collectGraphicsLayer(const QVector<int> &writtenRows = {});
+    void    resetGraphicsState();
 
     /* Concatenate destroy escapes for every block currently held in
      * the scroll history so the terminal can reclaim any bitmap
