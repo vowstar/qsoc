@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <utility>
 
 using json = nlohmann::json;
@@ -102,7 +103,7 @@ public:
              QByteArray::fromStdString(body.dump())});
     }
 
-    void enqueueStream(const QString &content)
+    void enqueueStream(const QString &content, const json &usage = json::object())
     {
         const json contentChunk = {
             {"choices", json::array({{{"delta", {{"content", content.toStdString()}}}}})}};
@@ -113,16 +114,26 @@ public:
                           + QByteArrayLiteral("\n\ndata: ")
                           + QByteArray::fromStdString(finishChunk.dump())
                           + QByteArrayLiteral("\n\ndata: [DONE]\n\n");
+        if (!usage.empty()) {
+            const json usageChunk = {{"choices", json::array()}, {"usage", usage}};
+            body.replace(
+                QByteArrayLiteral("data: [DONE]"),
+                QByteArrayLiteral("data: ") + QByteArray::fromStdString(usageChunk.dump())
+                    + QByteArrayLiteral("\n\ndata: [DONE]"));
+        }
         responses_.enqueue({200, QByteArrayLiteral("text/event-stream"), std::move(body)});
     }
 
-    void enqueueCompletion(const QString &content)
+    void enqueueCompletion(const QString &content, const json &usage = json::object())
     {
-        const json response = {
+        json response = {
             {"choices",
              json::array(
                  {{{"message", {{"role", "assistant"}, {"content", content.toStdString()}}}}})},
         };
+        if (!usage.empty()) {
+            response["usage"] = usage;
+        }
         responses_.enqueue(
             {200,
              QByteArrayLiteral("application/json"),
@@ -808,6 +819,100 @@ private slots:
         QCOMPARE(agent.compact(), 0);
         QCOMPARE(server.requestCount(), 0);
         QVERIFY(agent.getMessages() == history);
+    }
+
+    void completedRequestAnchorTracksRulesToolsAndRestore_data()
+    {
+        QTest::addColumn<bool>("streaming");
+        QTest::newRow("synchronous") << false;
+        QTest::newRow("streaming") << true;
+    }
+
+    void completedRequestAnchorTracksRulesToolsAndRestore()
+    {
+        QFETCH(bool, streaming);
+        MockServer server;
+        QVERIFY(server.listen());
+        const json usage
+            = {{"prompt_tokens", 50000},
+               {"completion_tokens", 20},
+               {"prompt_tokens_details", {{"cached_tokens", 40000}}}};
+        if (streaming) {
+            server.enqueueStream(QStringLiteral("complete"), usage);
+        } else {
+            server.enqueueCompletion(QStringLiteral("complete"), usage);
+        }
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgentConfig  config = testConfig();
+        config.maxTurnsOverride = 1;
+        config.maxContextTokens = 1000000;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        if (streaming) {
+            QSignalSpy completed(&agent, &QSocAgent::runComplete);
+            agent.runStream(QStringLiteral("answer once"));
+            QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+        } else {
+            QCOMPARE(agent.run(QStringLiteral("answer once")), QStringLiteral("complete"));
+        }
+        QVERIFY(agent.estimateTotalTokens() >= 50000);
+        const auto historyEstimate = agent.estimateMessagesTokens();
+        agent.setApprovedPlan(QStringLiteral("Preserve the selected interface."));
+        QVERIFY(agent.estimateTotalTokens() < 50000);
+        QCOMPARE(agent.estimateMessagesTokens(), historyEstimate);
+        agent.setApprovedPlan(QString());
+        QVERIFY(agent.estimateTotalTokens() >= 50000);
+        SideEffectTool tool;
+        registry.registerTool(&tool);
+        QVERIFY(agent.estimateTotalTokens() < 50000);
+        agent.setMessages(agent.getMessages());
+        QVERIFY(agent.estimateTotalTokens() < 50000);
+        const auto observed = agent.observedUsage();
+        QCOMPARE(observed.requests, quint64(1));
+        QCOMPARE(observed.inputTokens, qint64(50000));
+        QCOMPARE(observed.cacheEligibleInputTokens, qint64(50000));
+        QCOMPARE(observed.cachedTokens, qint64(40000));
+    }
+
+    void usageAnchorUsesTheServiceThatSentTheRequest()
+    {
+        MockServer originalServer;
+        MockServer nextServer;
+        QVERIFY(originalServer.listen());
+        QVERIFY(nextServer.listen());
+        originalServer.enqueueCompletion(QStringLiteral("complete"), {{"prompt_tokens", 50000}});
+        QLLMService originalService;
+        QLLMService nextService;
+        configureService(originalService, originalServer);
+        configureService(nextService, nextServer);
+        QSocToolRegistry       registry;
+        DefinitionCallbackTool tool;
+        registry.registerTool(&tool);
+        QSocAgentConfig config  = testConfig();
+        config.maxTurnsOverride = 1;
+        config.maxContextTokens = 1000000;
+        QSocAgent agent(nullptr, &originalService, &registry, config);
+        tool.setDefinitionCallback([&](int) { agent.setLLMService(&nextService); });
+        QCOMPARE(agent.run(QStringLiteral("answer once")), QStringLiteral("complete"));
+        QCOMPARE(originalServer.requestCount(), 1);
+        QCOMPARE(nextServer.requestCount(), 0);
+        QVERIFY(agent.estimateTotalTokens() < 50000);
+        tool.setDefinitionCallback({});
+        agent.setLLMService(&originalService);
+        QVERIFY(agent.estimateTotalTokens() >= 50000);
+    }
+
+    void cumulativeUsageSaturates()
+    {
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, nullptr, &registry, testConfig());
+        QSignalSpy       reported(&agent, &QSocAgent::tokenUsage);
+        agent.addExternalTokenUsage(10, 20);
+        agent.addExternalTokenUsage(
+            std::numeric_limits<qint64>::max(), std::numeric_limits<qint64>::max());
+        QCOMPARE(reported.last()[0].toLongLong(), std::numeric_limits<qint64>::max());
+        QCOMPARE(reported.last()[1].toLongLong(), std::numeric_limits<qint64>::max());
     }
 
     void persistenceFailureStopsBeforeRequest()

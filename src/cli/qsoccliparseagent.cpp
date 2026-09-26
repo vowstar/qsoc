@@ -3270,13 +3270,25 @@ bool QSocCliWorker::runAgentLoop(
         payload["workspace"]
             = {{"cwd", QDir::currentPath().toStdString()},
                {"project_dir", projectManager->getProjectPath().toStdString()}};
-        const int used   = agent->estimateMessagesTokens();
+        const int used   = agent->estimateTotalTokens();
         const int budget = agent->getConfig().maxContextTokens;
         payload["context"]
             = {{"used_tokens", used},
                {"max_tokens", budget},
                {"used_percentage", budget > 0 ? 100.0 * used / budget : 0.0}};
-        payload["tokens"] = {{"input", sessionInputTokens}, {"output", sessionOutputTokens}};
+        payload["tokens"]   = {{"input", sessionInputTokens}, {"output", sessionOutputTokens}};
+        const auto observed = agent->observedUsage();
+        payload["provider_usage"]
+            = {{"input_tokens", observed.inputTokens},
+               {"output_tokens", observed.outputTokens},
+               {"reported_requests", observed.requests},
+               {"cache_reported_requests", observed.cacheReportedRequests},
+               {"cached_tokens",
+                observed.cacheReportedRequests > 0 ? json(observed.cachedTokens) : json(nullptr)},
+               {"cache_input_tokens",
+                observed.cacheReportedRequests > 0 ? json(observed.cacheEligibleInputTokens)
+                                                   : json(nullptr)}};
+
         if (currentSession) {
             payload["session"] = {{"id", currentSession->id().toStdString()}};
         }
@@ -5684,66 +5696,34 @@ bool QSocCliWorker::runAgentLoop(
             break;
         }
         if (cmd == "/context") {
-            /* Analyse context usage by walking the message array and
-             * categorising tokens into system prompt, project instructions,
-             * tool definitions, memory, user text, assistant text, tool
-             * calls, and tool results. Uses the same rough 4-char/token
-             * estimation the agent's compaction already relies on. */
+            const json   allMsgs          = agent->getMessages();
+            const int    maxCtx           = agent->getConfig().maxContextTokens;
+            const qint64 basePromptTokens = QSocRequestUsage::estimateText(
+                agent->buildSystemPromptWithMemory());
+            const json   definitions   = agent->getEffectiveToolDefinitions();
+            const qint64 toolDefTokens = definitions.empty()
+                                             ? 0
+                                             : QSocRequestUsage::estimateText(
+                                                   QString::fromStdString(definitions.dump()));
 
-            /* --- gather raw numbers --- */
-            const json allMsgs = agent->getMessages();
-            const int  maxCtx  = agent->getConfig().maxContextTokens;
-
-            /* System prompt decomposition: base, instructions, memory.
-             * buildSystemPromptWithMemory() returns the full string, but
-             * we can re-derive components from the config + managers. */
-            const int basePromptTokens = agent->estimateTokens(agent->buildSystemPromptWithMemory())
-                                         - agent->estimateTokens(
-                                             agent->getMemoryManager()
-                                                 ? agent->getMemoryManager()->loadMemoryForPrompt()
-                                                 : QString());
-
-            int instructionTokens = 0;
-            {
-                const QString pp = agent->getConfig().projectPath;
-                if (!pp.isEmpty()) {
-                    QDir dir(pp);
-                    for (const QString &name :
-                         {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
-                        QFile file(dir.filePath(name));
-                        if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                            instructionTokens += agent->estimateTokens(QTextStream(&file).readAll());
-                            file.close();
-                        }
-                    }
-                }
-            }
-
-            int memoryTokens = 0;
-            if (auto *mm = agent->getMemoryManager()) {
-                memoryTokens = agent->estimateTokens(mm->loadMemoryForPrompt());
-            }
-
-            int toolDefTokens = 0;
-            if (auto *reg = agent->getToolRegistry()) {
-                json defs = reg->getToolDefinitions();
-                if (!defs.empty()) {
-                    toolDefTokens = agent->estimateTokens(QString::fromStdString(defs.dump()));
-                }
-            }
+            const auto estimateMessage = [](const json &message) {
+                return qMin<qint64>(
+                    QSocRequestUsage::estimateHistory(json::array({message})),
+                    std::numeric_limits<int>::max());
+            };
 
             /* Message breakdown by role + per-tool aggregation. */
-            int userTokens  = 0;
-            int asstTokens  = 0;
-            int callTokens  = 0;
-            int resultTotal = 0;
+            qint64 userTokens  = 0;
+            qint64 asstTokens  = 0;
+            qint64 callTokens  = 0;
+            qint64 resultTotal = 0;
             /* Map tool_call_id → tool name for result attribution. */
             QMap<QString, QString> callIdToName;
             /* Per-tool token buckets: name → {calls, results}. */
             struct ToolBucket
             {
-                int calls   = 0;
-                int results = 0;
+                qint64 calls   = 0;
+                qint64 results = 0;
             };
             QMap<QString, ToolBucket> toolBuckets;
 
@@ -5753,19 +5733,15 @@ bool QSocCliWorker::runAgentLoop(
                 }
                 const std::string role = msg["role"].get<std::string>();
                 if (role == "user") {
-                    if (msg.contains("content") && msg["content"].is_string()) {
-                        userTokens += agent->estimateTokens(
-                            QString::fromStdString(msg["content"].get<std::string>()));
-                    }
-                    userTokens += 10; /* per-message overhead */
+                    userTokens += estimateMessage(msg);
                 } else if (role == "assistant") {
-                    if (msg.contains("content") && msg["content"].is_string()) {
-                        asstTokens += agent->estimateTokens(
-                            QString::fromStdString(msg["content"].get<std::string>()));
-                    }
+                    json textMessage = msg;
+                    textMessage.erase("tool_calls");
+                    asstTokens += estimateMessage(textMessage);
                     if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
                         for (const auto &tc : msg["tool_calls"]) {
-                            int tcTokens = agent->estimateTokens(QString::fromStdString(tc.dump()));
+                            const qint64 tcTokens = QSocRequestUsage::estimateText(
+                                QString::fromStdString(tc.dump()));
                             callTokens += tcTokens;
                             if (tc.contains("id") && tc["id"].is_string() && tc.contains("function")
                                 && tc["function"].contains("name")
@@ -5778,13 +5754,8 @@ bool QSocCliWorker::runAgentLoop(
                             }
                         }
                     }
-                    asstTokens += 10;
                 } else if (role == "tool") {
-                    int resultTokens = 10;
-                    if (msg.contains("content") && msg["content"].is_string()) {
-                        resultTokens += agent->estimateTokens(
-                            QString::fromStdString(msg["content"].get<std::string>()));
-                    }
+                    const qint64 resultTokens = estimateMessage(msg);
                     resultTotal += resultTokens;
                     /* Attribute to tool name via tool_call_id lookup. */
                     if (msg.contains("tool_call_id") && msg["tool_call_id"].is_string()) {
@@ -5796,16 +5767,16 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
 
-            const int usedTokens = basePromptTokens + instructionTokens + memoryTokens
-                                   + toolDefTokens + userTokens + asstTokens + callTokens
-                                   + resultTotal;
-            const int freeTokens = qMax(0, maxCtx - usedTokens);
-            const int pct        = maxCtx > 0 ? (usedTokens * 100 / maxCtx) : 0;
+            const qint64 usedTokens = agent->estimateTotalTokens();
+            const qint64 freeTokens = qMax<qint64>(0, maxCtx - usedTokens);
+            const qint64 pct        = maxCtx > 0 ? (usedTokens * 100 / maxCtx) : 0;
 
             /* --- format bar helper --- */
             constexpr int BAR_WIDTH = 20;
-            auto          makeBar   = [&](int tokens) -> QString {
-                int filled = maxCtx > 0 ? (tokens * BAR_WIDTH / maxCtx) : 0;
+            auto          makeBar   = [&](qint64 tokens) -> QString {
+                int filled = maxCtx > 0 ? static_cast<int>(
+                                              qMin<qint64>(BAR_WIDTH, tokens * BAR_WIDTH / maxCtx))
+                                        : 0;
                 filled     = qBound(0, filled, BAR_WIDTH);
                 if (tokens > 0 && filled == 0) {
                     filled = 1; /* always show at least 1 block if non-zero */
@@ -5813,7 +5784,7 @@ bool QSocCliWorker::runAgentLoop(
                 return QString(filled, QChar(0x2588))                /* █ */
                        + QString(BAR_WIDTH - filled, QChar(0x2591)); /* ░ */
             };
-            auto fmtTokens = [](int tokens) -> QString {
+            auto fmtTokens = [](qint64 tokens) -> QString {
                 if (tokens >= 1000) {
                     return QString::number(tokens / 1000.0, 'f', 1) + "k";
                 }
@@ -5827,11 +5798,31 @@ bool QSocCliWorker::runAgentLoop(
                                         .arg(fmtTokens(usedTokens), fmtTokens(maxCtx))
                                         .arg(pct));
 
+            const auto observed = agent->observedUsage();
+            if (observed.cacheReportedRequests > 0 && observed.cacheEligibleInputTokens > 0) {
+                compositor.printContent(
+                    QString(
+                        "  Provider cache: %1 / %2 input tokens (%3%) across %4 completed "
+                        "requests\n\n")
+                        .arg(observed.cachedTokens)
+                        .arg(observed.cacheEligibleInputTokens)
+                        .arg(
+                            100.0 * static_cast<double>(observed.cachedTokens)
+                                / static_cast<double>(observed.cacheEligibleInputTokens),
+                            0,
+                            'f',
+                            1)
+                        .arg(observed.cacheReportedRequests));
+            } else {
+                compositor
+                    .printContent("  Provider cache ratio unavailable\n\n", QTuiScrollView::Dim);
+            }
+
             auto printCategory =
-                [&](const QString &label, int tokens, QTuiScrollView::LineStyle style) {
+                [&](const QString &label, qint64 tokens, QTuiScrollView::LineStyle style) {
                     const QString padLabel = label.leftJustified(18);
                     const QString padNum   = fmtTokens(tokens).rightJustified(6);
-                    const int     pctVal   = maxCtx > 0 ? (tokens * 100 / maxCtx) : 0;
+                    const qint64  pctVal   = maxCtx > 0 ? (tokens * 100 / maxCtx) : 0;
                     compositor.printContent(
                         QStringLiteral("  ") + padLabel + padNum + QStringLiteral("  ")
                             + makeBar(tokens) + QStringLiteral("  ") + QString::number(pctVal)
@@ -5839,14 +5830,12 @@ bool QSocCliWorker::runAgentLoop(
                         style);
                 };
 
-            printCategory("System prompt:", basePromptTokens, QTuiScrollView::Normal);
-            if (instructionTokens > 0) {
-                printCategory("Project rules:", instructionTokens, QTuiScrollView::Normal);
-            }
+            compositor.printContent(
+                "  Category estimates include admitted image allowances. The request total also "
+                "includes reminders and any valid provider calibration.\n\n",
+                QTuiScrollView::Dim);
+            printCategory("System + memory:", basePromptTokens, QTuiScrollView::Normal);
             printCategory("Tool definitions:", toolDefTokens, QTuiScrollView::Normal);
-            if (memoryTokens > 0) {
-                printCategory("Memory:", memoryTokens, QTuiScrollView::Normal);
-            }
             printCategory("User messages:", userTokens, QTuiScrollView::Normal);
             printCategory("Asst messages:", asstTokens, QTuiScrollView::Normal);
             printCategory("Tool calls:", callTokens, QTuiScrollView::Normal);
@@ -5903,7 +5892,7 @@ bool QSocCliWorker::runAgentLoop(
                 bool    isWarning;
                 QString title;
                 QString detail;
-                int     savings;
+                qint64  savings;
             };
             QList<Suggestion> suggestions;
 
@@ -5920,13 +5909,13 @@ bool QSocCliWorker::runAgentLoop(
 
             /* 2. Large tool results (>= 15% and >= 10k tokens) */
             for (auto it = toolBuckets.begin(); it != toolBuckets.end(); ++it) {
-                int total   = it.value().calls + it.value().results;
-                int toolPct = maxCtx > 0 ? (total * 100 / maxCtx) : 0;
+                qint64 total   = it.value().calls + it.value().results;
+                qint64 toolPct = maxCtx > 0 ? (total * 100 / maxCtx) : 0;
                 if (toolPct < 15 || total < 10000) {
                     continue;
                 }
                 QString detail;
-                int     savingsEst = 0;
+                qint64  savingsEst = 0;
                 if (it.key() == QStringLiteral("shell_bash")) {
                     detail = QStringLiteral(
                         "Pipe output through head, tail, or grep to reduce result "
@@ -5959,9 +5948,9 @@ bool QSocCliWorker::runAgentLoop(
             /* 3. Read result bloat (>= 5% and >= 10k, not already flagged) */
             if (toolBuckets.contains(QStringLiteral("read_file"))) {
                 const auto &rb      = toolBuckets[QStringLiteral("read_file")];
-                int         total   = rb.calls + rb.results;
-                int         readPct = maxCtx > 0 ? (rb.results * 100 / maxCtx) : 0;
-                int         totPct  = maxCtx > 0 ? (total * 100 / maxCtx) : 0;
+                qint64      total   = rb.calls + rb.results;
+                qint64      readPct = maxCtx > 0 ? (rb.results * 100 / maxCtx) : 0;
+                qint64      totPct  = maxCtx > 0 ? (total * 100 / maxCtx) : 0;
                 if (readPct >= 5 && rb.results >= 10000 && (totPct < 15 || total < 10000)) {
                     suggestions.append(
                         Suggestion{
@@ -5973,21 +5962,6 @@ bool QSocCliWorker::runAgentLoop(
                                 "Consider referencing earlier reads. Use offset/limit for "
                                 "large files."),
                             .savings = rb.results * 3 / 10});
-                }
-            }
-
-            /* 4. Memory bloat (>= 5% and >= 5k tokens) */
-            if (memoryTokens > 0) {
-                int memPct = maxCtx > 0 ? (memoryTokens * 100 / maxCtx) : 0;
-                if (memPct >= 5 && memoryTokens >= 5000) {
-                    suggestions.append(
-                        Suggestion{
-                            .isWarning = false,
-                            .title     = QString("Memory using %1 tokens (%2%)")
-                                             .arg(fmtTokens(memoryTokens))
-                                             .arg(memPct),
-                            .detail    = QStringLiteral("Review and prune stale memory entries."),
-                            .savings   = memoryTokens * 3 / 10});
                 }
             }
 

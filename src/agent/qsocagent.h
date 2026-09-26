@@ -8,6 +8,7 @@
 #include "agent/qsoccontextrestore.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocmemoryrecall.h"
+#include "agent/qsocrequestusage.h"
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
 
@@ -456,6 +457,8 @@ public:
      */
     int estimateMessagesTokens() const;
 
+    QSocObservedUsage observedUsage() const { return requestUsage_.observed(); }
+
     /**
      * @brief Effective input-side context budget after subtracting the
      *        slice reserved for the assistant reply. Threshold checks
@@ -662,8 +665,9 @@ private:
 
     struct ActiveRun
     {
-        quint64                             epoch = 0;
-        RunMode                             mode  = RunMode::Synchronous;
+        quint64                             epoch             = 0;
+        quint64                             requestGeneration = 0;
+        RunMode                             mode              = RunMode::Synchronous;
         std::atomic<StopMode>               stop{StopMode::None};
         std::stop_source                    stopSource;
         QPointer<QLLMService>               llm;
@@ -767,6 +771,11 @@ private:
     QList<QueuedRequest>       requestQueue;
     mutable QMutex             queueMutex;
     bool                       rejectQueuedRequests_ = false; /* guarded by queueMutex */
+
+    QSocRequestUsage    requestUsage_;
+    QSocRequestSnapshot requestSnapshot(
+        const json &wire, const json &tools, const QLLMService *service) const;
+    json wireMessages(const QString &systemPrompt) const;
 
     /* Token tracking */
     std::atomic<qint64> totalInputTokens{0};
