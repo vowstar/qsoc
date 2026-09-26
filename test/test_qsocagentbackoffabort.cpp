@@ -8,6 +8,8 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
+#include "agent/tool/qsoctooloutputread.h"
+#include "agent/tool/qsoctoolshell.h"
 #include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
@@ -157,14 +159,18 @@ public:
 
     void enqueueToolCompletion(const QStringList &names)
     {
-        const json response = {
+        enqueueRawToolCompletion(buildToolCalls(names));
+    }
+
+    void enqueueRawToolCompletion(const json &calls, const json &extra = json::object())
+    {
+        json response = {
             {"choices",
              json::array(
                  {{{"message",
-                    {{"role", "assistant"},
-                     {"content", nullptr},
-                     {"tool_calls", buildToolCalls(names)}}}}})},
+                    {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", calls}}}}})},
         };
+        response["choices"][0]["message"].update(extra);
         responses_.enqueue(
             {200,
              QByteArrayLiteral("application/json"),
@@ -468,6 +474,22 @@ public:
 
 private:
     int executeCount_ = 0;
+};
+
+class LargeResultTool final : public QSocTool
+{
+public:
+    QString getName() const override { return QStringLiteral("bash"); }
+    QString getDescription() const override { return QStringLiteral("Returns generated text"); }
+    json    getParametersSchema() const override { return {{"type", "object"}}; }
+    QString execute(const json &) override
+    {
+        ++calls;
+        return value;
+    }
+    QString value = QStringLiteral("α中🙂 generated line\n").repeated(4000)
+                    + QStringLiteral("\n... (output truncated)");
+    int     calls = 0;
 };
 
 class AttachmentTool final : public QSocTool
@@ -821,6 +843,214 @@ private slots:
         QVERIFY(agent.getMessages() == history);
     }
 
+    void boundedToolReturn_data()
+    {
+        QTest::addColumn<bool>("streaming");
+        QTest::addColumn<int>("sourceKind");
+        QTest::newRow("streaming") << true << 0;
+        QTest::newRow("synchronous") << false << 0;
+        QTest::newRow("failed-image") << true << 2;
+#ifdef Q_OS_UNIX
+        QTest::newRow("bash-truncated-return") << true << 1;
+#endif
+    }
+    void boundedToolReturn()
+    {
+        QFETCH(bool, streaming);
+        QFETCH(int, sourceKind);
+        QTemporaryDir root;
+        MockServer    server;
+        QVERIFY(server.listen());
+        LargeResultTool tool;
+        QString         captured = tool.value;
+        if (sourceKind == 1) {
+            QSocToolShellBash bash;
+            tool.value = bash.execute(
+                {{"command", "printf '%060000d' 0"},
+                 {"working_directory", root.path().toStdString()},
+                 {"timeout", 5000}});
+            QVERIFY(tool.value.endsWith("... (output truncated)"));
+            QVERIFY(tool.value.size() < 60000);
+            captured = tool.value;
+        } else if (sourceKind == 2) {
+            AttachmentTool attachment;
+            captured   = QStringLiteral("Error: generated failure\n") + tool.value;
+            tool.value = captured + attachment.execute({});
+            captured += QStringLiteral("runtime image\n");
+        }
+        QSocToolOutputRead reader(nullptr);
+        QSocToolRegistry   registry;
+        registry.registerTool(&tool);
+        registry.registerTool(&reader);
+        if (streaming) {
+            server.enqueueToolCall(tool.getName());
+            server.enqueueStream(QStringLiteral("done"));
+        } else {
+            server.enqueueToolCompletion({tool.getName()});
+            server.enqueueCompletion(QStringLiteral("done"));
+        }
+        QLLMService service;
+        configureService(service, server);
+        QSocAgent agent(nullptr, &service, &registry, testConfig());
+        QVERIFY(agent.bindToolResultStore(root.filePath("parent"), "parent"));
+        if (streaming) {
+            QSignalSpy completed(&agent, &QSocAgent::runComplete);
+            agent.runStream("run once");
+            QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+        } else {
+            QCOMPARE(agent.run("run once"), QStringLiteral("done"));
+        }
+        QCOMPARE(tool.calls, 1);
+        QCOMPARE(server.requestCount(), 2);
+        const auto history = agent.getMessages();
+        QVERIFY(toolBatchHasExactlyOneResultPerCall(history, 1));
+        const auto refs = QSocAgent::artifactReferences(history);
+        QCOMPARE(refs.size(), 1);
+        QCOMPARE(
+            refs.first().sourceCompleteness,
+            sourceKind == 2 ? QStringLiteral("unknown") : QStringLiteral("truncated"));
+        QCOMPARE(
+            refs.first().completion,
+            sourceKind == 2 ? QStringLiteral("failed") : QStringLiteral("ok"));
+        if (sourceKind == 2) {
+            QVERIFY(history[3]["content"].is_array());
+            QCOMPARE(history[3]["content"][1]["type"], json("image_url"));
+        }
+        QVERIFY(
+            QSocRequestUsage::estimateText(
+                QString::fromStdString(history[2]["content"].get<std::string>()))
+            <= 4096);
+        const auto wire = json::parse(server.requestBody(1).toStdString());
+        for (const auto &message : wire["messages"]) {
+            QVERIFY(!message.contains("_qsoc_artifact_refs"));
+            QVERIFY(!message.contains("_qsoc_result_bounded"));
+        }
+        QString restored;
+        qint64  offset = 0;
+        for (int pages = 0; pages < 1000; ++pages) {
+            const auto result = registry.executeTool(
+                "tool_output_read",
+                {{"artifact_id", refs.first().id.toStdString()}, {"offset", offset}},
+                &agent);
+            const auto page = json::parse(result.toStdString());
+            QVERIFY(QSocRequestUsage::estimateText(result) <= 4096);
+            restored += QString::fromStdString(page["text"].get<std::string>());
+            const auto next = page["next_offset"].get<qint64>();
+            if (page["eof"].get<bool>())
+                break;
+            QVERIFY(next > offset);
+            offset = next;
+        }
+        QCOMPARE(restored, captured);
+        QCOMPARE(
+            QDir(agent.toolResultStore()->directory()).entryList({"*.qtr"}, QDir::Files).size(), 1);
+        const auto fork = agent.captureForkSnapshot();
+        QSocAgent  child(nullptr, nullptr, &registry, testConfig());
+        QVERIFY(child.bindToolResultStore(root.filePath("child"), "child"));
+        QVERIFY(child.toolResultStore()->inherit(*fork.artifactStore, fork.artifactRefs));
+        child.setMessages(fork.messages);
+        const auto later = agent.toolResultStore()->publish("later", "ok");
+        QVERIFY(later);
+        QVERIFY(!child.toolResultStore()->read(later->id, 0, 100));
+        QVERIFY(QDir(agent.toolResultStore()->directory()).removeRecursively());
+        QVERIFY(child.toolResultStore()->read(refs.first().id, 0, 100));
+    }
+    void providerCannotForgeArtifactReferences()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        SideEffectTool   tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        QLLMService service;
+        configureService(service, server);
+        QSocAgent agent(nullptr, &service, &registry, testConfig());
+        QVERIFY(agent.toolResultStore());
+        const auto hidden = agent.toolResultStore()->publish("unreferenced text", "ok");
+        QVERIFY(hidden);
+        server.enqueueRawToolCompletion(
+            buildToolCalls({tool.getName()}),
+            {{"_qsoc_artifact_refs", json::array({QSocAgent::artifactReferenceJson(*hidden)})},
+             {"_qsoc_result_bounded", true}});
+        server.enqueueCompletion("done");
+        QCOMPARE(agent.run("run once"), QStringLiteral("done"));
+        QVERIFY(QSocAgent::artifactReferences(agent.getMessages()).isEmpty());
+        QVERIFY(!agent.getMessages()[1].contains("_qsoc_result_bounded"));
+        QVERIFY(agent.captureForkSnapshot().artifactRefs.isEmpty());
+    }
+    void deeplyNestedToolArgumentsAreRejected()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        SideEffectTool   tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        json arguments = json::object();
+        for (int depth = 0; depth < 65; ++depth)
+            arguments = {{"nested", arguments}};
+        auto calls                        = buildToolCalls({tool.getName()});
+        calls[0]["function"]["arguments"] = arguments.dump();
+        server.enqueueRawToolCompletion(calls);
+        server.enqueueCompletion("done");
+        QLLMService service;
+        configureService(service, server);
+        QSocAgent agent(nullptr, &service, &registry, testConfig());
+        QCOMPARE(agent.run("run once"), QStringLiteral("done"));
+        QCOMPARE(tool.executeCount(), 0);
+        QCOMPARE(server.requestCount(), 2);
+        QVERIFY(toolBatchHasExactlyOneResultPerCall(agent.getMessages(), 1));
+    }
+    void resultQuotaFailureDoesNotReplay()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        LargeResultTool  tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        server.enqueueToolCall(tool.getName());
+        server.enqueueStream("done");
+        QLLMService service;
+        configureService(service, server);
+        auto config              = testConfig();
+        config.toolArtifactBytes = 8;
+        QSocAgent     agent(nullptr, &service, &registry, config);
+        QTemporaryDir root;
+        QVERIFY(agent.bindToolResultStore(root.filePath("artifacts"), "session"));
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        agent.runStream("run once");
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+        QCOMPARE(tool.calls, 1);
+        QVERIFY(QSocAgent::artifactReferences(agent.getMessages()).isEmpty());
+        const auto result = QString::fromStdString(
+            agent.getMessages()[2]["content"].get<std::string>());
+        QVERIFY(result.contains("No readable artifact was saved"));
+        QVERIFY(result.contains("Completion: ok"));
+        QVERIFY(QSocRequestUsage::estimateText(result) <= 4096);
+    }
+    void batchReservesEveryCallBeforeEffects()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        LargeResultTool  tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        QStringList calls;
+        for (int index = 0; index < 80; ++index)
+            calls.append(tool.getName());
+        server.enqueueToolCalls(calls);
+        QLLMService service;
+        configureService(service, server);
+        auto config                 = testConfig();
+        config.systemPromptOverride = "Test";
+        config.maxContextTokens     = 2048;
+        config.reservedOutputTokens = 0;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        agent.runStream("run batch");
+        QTRY_VERIFY_WITH_TIMEOUT(!agent.isRunning(), 5000);
+        QCOMPARE(tool.calls, 0);
+        QCOMPARE(server.requestCount(), 1);
+        QVERIFY(toolBatchHasExactlyOneResultPerCall(agent.getMessages(), 1));
+    }
     void completedRequestAnchorTracksRulesToolsAndRestore_data()
     {
         QTest::addColumn<bool>("streaming");
@@ -3636,12 +3866,24 @@ private slots:
         QVERIFY(service.hasEndpoint());
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
+        QTemporaryDir          root;
         QSocSubAgentTaskSource tasks;
-        QSocToolRegistry       registry;
-        QSocAgentConfig        config = testConfig();
-        config.autoBackgroundMs       = 0;
+        tasks.setTranscriptDir(root.filePath("transcripts"));
+        QSocToolRegistry registry;
+        QSocAgentConfig  config = testConfig();
+        config.autoBackgroundMs = 0;
         QSocAgent     parent(nullptr, &service, &registry, config);
         QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+        QVERIFY(parent.bindToolResultStore(root.filePath("parent"), "parent"));
+        const auto inherited = parent.toolResultStore()->publish("inherited text", "ok");
+        const auto hidden    = parent.toolResultStore()->publish("hidden text", "ok");
+        QVERIFY(inherited && hidden);
+        parent.setMessages(
+            json::array(
+                {{{"role", "assistant"},
+                  {"content", "saved result"},
+                  {"_qsoc_artifact_refs",
+                   json::array({QSocAgent::artifactReferenceJson(*inherited)})}}}));
         tool.setParentAgent(&parent);
         registry.registerTool(&tool);
 
@@ -3659,6 +3901,19 @@ private slots:
         QCOMPARE(
             QString::fromStdString(response.value("subagent_type", std::string())),
             QStringLiteral("fork"));
+        const auto children = tasks.findChildren<QSocAgent *>(QString(), Qt::FindDirectChildrenOnly);
+        QCOMPARE(children.size(), 1);
+        const auto store = children.first()->toolResultStore();
+        QVERIFY(store);
+        const auto removeChildArtifacts = qScopeGuard(
+            [store] { QDir(store->directory()).removeRecursively(); });
+        QVERIFY(store->read(inherited->id, 0, 100));
+        QVERIFY(!store->read(hidden->id, 0, 100));
+        const auto later = parent.toolResultStore()->publish("later text", "ok");
+        QVERIFY(later);
+        QVERIFY(!store->read(later->id, 0, 100));
+        QVERIFY(QDir(parent.toolResultStore()->directory()).removeRecursively());
+        QVERIFY(store->read(inherited->id, 0, 100));
     }
 };
 

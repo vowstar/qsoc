@@ -221,7 +221,10 @@ struct QSocAgentConfig
      * and then calls exit_plan_mode to present a plan for user approval.
      * Spawned sub-agents inherit the gate and return their findings and plan to
      * the parent. */
-    bool planMode = false;
+    bool   planMode                 = false;
+    qint64 toolArtifactBytes        = 16 * 1024 * 1024;
+    qint64 toolArtifactSessionBytes = 256 * 1024 * 1024;
+    qint64 toolArtifactPageBytes    = 32 * 1024;
 };
 
 #endif // QSOCAGENTCONFIG_H

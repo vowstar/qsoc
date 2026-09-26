@@ -4,6 +4,8 @@
 #include "qsoc_test.h"
 
 #include <QDirIterator>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -11,6 +13,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <QtTest>
 
 #ifdef Q_OS_UNIX
@@ -110,6 +113,35 @@ QProcessEnvironment isolatedEnvironment(const QString &root)
     environment.insert(QStringLiteral("NO_PROXY"), QStringLiteral("*"));
     environment.insert(QStringLiteral("no_proxy"), QStringLiteral("*"));
     return environment;
+}
+
+QByteArray mockConfiguration(int port, bool captureStatus = false)
+{
+    QByteArray config = QStringLiteral(
+                            "llm:\n"
+                            "  model: mock\n"
+                            "  models:\n"
+                            "    mock:\n"
+                            "      name: Mock\n"
+                            "      url: \"http://127.0.0.1:%1/v1/chat/completions\"\n"
+                            "      timeout: 10000\n"
+                            "      context: 131072\n"
+                            "      max_output_tokens: 1024\n"
+                            "      reasoning: false\n"
+                            "agent:\n"
+                            "  predict_input: false\n"
+                            "  memory_recall: false\n"
+                            "  memory_extract: false\n"
+                            "  memory_dream: false\n"
+                            "  session_title: false\n"
+                            "proxy:\n"
+                            "  type: none\n")
+                            .arg(port)
+                            .toUtf8();
+    if (captureStatus) {
+        config.replace("agent:\n", "agent:\n  status_line: 'cat > \"$QSOC_TEST_STATUS_CAPTURE\"'\n");
+    }
+    return config;
 }
 
 bool projectStorageExists(const QString &projectPath)
@@ -373,7 +405,7 @@ protected:
     void setupChildProcess() override { installPty(slavePath_.constData(), slaveFd_); }
 #endif
 
-private:
+public:
     void drainOutput()
     {
         if (masterFd_ < 0) {
@@ -397,6 +429,7 @@ private:
         }
     }
 
+private:
     void closeDescriptors()
     {
         if (slaveFd_ >= 0) {
@@ -430,6 +463,8 @@ private slots:
     void pristineProjectSwitchStaysClean();
     void unsafeProjectSwitchKeepsCurrentSession();
     void firstPromptPersistsAndCanContinue();
+    void changedArtifactBindingRefusesRequest_data();
+    void changedArtifactBindingRefusesRequest();
 
 private:
     QString m_qsoc;
@@ -654,27 +689,7 @@ void Test::firstPromptPersistsAndCanContinue()
 
     QFile configFile(QDir(config).filePath(QStringLiteral("qsoc.yml")));
     QVERIFY(configFile.open(QIODevice::WriteOnly | QIODevice::Text));
-    configFile.write(QStringLiteral(
-                         "llm:\n"
-                         "  model: mock\n"
-                         "  models:\n"
-                         "    mock:\n"
-                         "      name: Mock\n"
-                         "      url: \"http://127.0.0.1:%1/v1/chat/completions\"\n"
-                         "      timeout: 10000\n"
-                         "      context: 131072\n"
-                         "      max_output_tokens: 1024\n"
-                         "      reasoning: false\n"
-                         "agent:\n"
-                         "  predict_input: false\n"
-                         "  memory_recall: false\n"
-                         "  memory_extract: false\n"
-                         "  memory_dream: false\n"
-                         "  session_title: false\n"
-                         "proxy:\n"
-                         "  type: none\n")
-                         .arg(port)
-                         .toUtf8());
+    configFile.write(mockConfiguration(port));
     configFile.close();
 
     QProcessEnvironment environment = isolatedEnvironment(fixture.path());
@@ -726,7 +741,8 @@ void Test::firstPromptPersistsAndCanContinue()
                        .arg(QString::fromUtf8(mockErrLog))
                        .arg(QString::fromUtf8(mockOutLog))));
 
-    QString sessionPath;
+    QString    sessionPath;
+    QByteArray artifactBinding;
     {
         PtyProcess agent;
         QVERIFY(agent.startInPty(
@@ -755,6 +771,11 @@ void Test::firstPromptPersistsAndCanContinue()
         }
         QCOMPARE(files.size(), 1);
         sessionPath = sessions.filePath(files.constFirst());
+
+        QFile scope(sessionPath + QStringLiteral(".artifacts/.scope"));
+        QVERIFY(scope.open(QIODevice::ReadOnly));
+        artifactBinding = scope.readAll();
+        QVERIFY(!artifactBinding.isEmpty());
 
         QFile transcript(sessionPath);
         QVERIFY(transcript.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -787,6 +808,9 @@ void Test::firstPromptPersistsAndCanContinue()
         const QByteArray log    = resumed.output().right(8192);
         QVERIFY2(loaded, log.constData());
         QVERIFY(resumed.output().contains(QFileInfo(sessionPath).baseName().left(8).toUtf8()));
+        QFile scope(sessionPath + QStringLiteral(".artifacts/.scope"));
+        QVERIFY(scope.open(QIODevice::ReadOnly));
+        QCOMPARE(scope.readAll(), artifactBinding);
         QVERIFY(resumed.submitLine("/quit"));
         QVERIFY2(resumed.waitForExit(10000), resumed.output().right(8192).constData());
         QCOMPARE(resumed.exitStatus(), QProcess::NormalExit);
@@ -799,6 +823,149 @@ void Test::firstPromptPersistsAndCanContinue()
         QDir::Files | QDir::Hidden,
         QDirIterator::Subdirectories);
     QVERIFY2(!resumedLocks.hasNext(), "the resumed agent left a project lock behind");
+#endif
+}
+
+void Test::changedArtifactBindingRefusesRequest_data()
+{
+    QTest::addColumn<bool>("boundScope");
+    QTest::newRow("pending-artifact-symlink") << false;
+    QTest::newRow("bound-scope-replaced") << true;
+}
+
+void Test::changedArtifactBindingRefusesRequest()
+{
+#ifdef Q_OS_UNIX
+    QFETCH(bool, boundScope);
+    QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_agent_lazy_XXXXXX"));
+    QVERIFY(fixture.isValid());
+    const QString project  = QDir(fixture.path()).filePath(QStringLiteral("project"));
+    const QString config   = QDir(fixture.path()).filePath(QStringLiteral("config"));
+    const QString external = QDir(fixture.path()).filePath(QStringLiteral("external"));
+    QVERIFY(QDir().mkpath(project));
+    QVERIFY(QDir().mkpath(config));
+    QVERIFY(QDir().mkpath(external));
+    const int port = pickFreePort();
+    QVERIFY(port > 0);
+    QFile configFile(QDir(config).filePath(QStringLiteral("qsoc.yml")));
+    QVERIFY(configFile.open(QIODevice::WriteOnly));
+    const QByteArray configBytes = mockConfiguration(port, true);
+    QCOMPARE(configFile.write(configBytes), qint64(configBytes.size()));
+    configFile.close();
+
+    const auto readBytes = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const QString requestLog = QDir(fixture.path()).filePath(QStringLiteral("requests.jsonl"));
+    QFile         requests(requestLog);
+    QVERIFY(requests.open(QIODevice::WriteOnly));
+    requests.close();
+    const QString statusCapture = QDir(fixture.path()).filePath(QStringLiteral("status.json"));
+    auto          environment   = isolatedEnvironment(fixture.path());
+    environment.insert(QStringLiteral("QSOC_TEST_STATUS_CAPTURE"), statusCapture);
+    auto mockEnvironment = environment;
+    mockEnvironment.insert(QStringLiteral("MOCK_TTL"), QStringLiteral("120"));
+    mockEnvironment.insert(QStringLiteral("MOCK_REPLY"), QStringLiteral("MOCKDONE"));
+    mockEnvironment.insert(QStringLiteral("MOCK_REQUEST_LOG"), requestLog);
+    BoundedProcess mock;
+    mock.setProcessEnvironment(mockEnvironment);
+    mock.setWorkingDirectory(fixture.path());
+    mock.setStandardOutputFile(QDir(fixture.path()).filePath(QStringLiteral("mock.out")));
+    mock.setStandardErrorFile(QDir(fixture.path()).filePath(QStringLiteral("mock.err")));
+    mock.start(QString::fromUtf8(QSOC_MOCK_LLM_PATH), {QString::number(port), QStringLiteral("none")});
+    QVERIFY(mock.waitForStarted(5000));
+    QVERIFY(waitForMockReady(mock, port, 45000));
+
+    PtyProcess agent;
+    QVERIFY(agent.startInPty(
+        m_qsoc,
+        {QStringLiteral("agent"), QStringLiteral("-d"), project},
+        fixture.path(),
+        environment));
+    QVERIFY2(
+        agent.waitForOutput("Type 'exit' to exit", 15000), agent.output().right(8192).constData());
+    QVERIFY(!projectStorageExists(project));
+    QVERIFY(agent.submitLine("/effort off"));
+    const auto capturedSession = [&]() {
+        agent.drainOutput();
+        return QJsonDocument::fromJson(readBytes(statusCapture))
+            .object()
+            .value(QStringLiteral("session"))
+            .toObject()
+            .value(QStringLiteral("id"))
+            .toString();
+    };
+    QString sessionId;
+    QTRY_VERIFY2_WITH_TIMEOUT(
+        !(sessionId = capturedSession()).isEmpty(),
+        qPrintable(QStringLiteral(
+                       "Agent state: %1, exit code: %2, capture exists: "
+                       "%3\nCapture: %4\nOutput: %5")
+                       .arg(agent.state())
+                       .arg(agent.exitCode())
+                       .arg(QFileInfo::exists(statusCapture))
+                       .arg(QString::fromUtf8(readBytes(statusCapture).right(4096)))
+                       .arg(QString::fromUtf8(agent.output().right(8192)))),
+        5000);
+    QVERIFY(!QUuid(sessionId).isNull());
+    QVERIFY(!projectStorageExists(project));
+    QCOMPARE(readBytes(requestLog).count('\n'), 0);
+    const QString sessionPath = QDir(project).filePath(
+        QStringLiteral(".qsoc/sessions/") + sessionId + ".jsonl");
+    const QString artifactPath = sessionPath + QStringLiteral(".artifacts");
+    const QString scopePath    = artifactPath + QStringLiteral("/.scope");
+    QByteArray    expectedScope;
+    QByteArray    expectedTranscript;
+    if (boundScope) {
+        QVERIFY(agent.submitLine("first prompt"));
+        QVERIFY2(agent.waitForOutput("MOCKDONE", 30000), agent.output().right(8192).constData());
+        QTRY_VERIFY_WITH_TIMEOUT(readBytes(sessionPath).contains("\"event\":\"completed\""), 5000);
+        QCOMPARE(readBytes(requestLog).count('\n'), 1);
+        auto scope = QJsonDocument::fromJson(readBytes(scopePath)).object();
+        QCOMPARE(scope.value(QStringLiteral("owner")).toString(), sessionId);
+        const QString nonce = QUuid::createUuid().toString(QUuid::Id128);
+        QVERIFY(nonce != scope.value(QStringLiteral("nonce")).toString());
+        scope.insert(QStringLiteral("nonce"), nonce);
+        expectedScope = QJsonDocument(scope).toJson(QJsonDocument::Compact);
+        QFile marker(scopePath);
+        QVERIFY(marker.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(marker.write(expectedScope), qint64(expectedScope.size()));
+        marker.close();
+        expectedTranscript = readBytes(sessionPath);
+    } else {
+        QVERIFY(QDir().mkpath(QFileInfo(sessionPath).absolutePath()));
+        QFile sentinel(QDir(external).filePath(QStringLiteral("sentinel")));
+        QVERIFY(sentinel.open(QIODevice::WriteOnly));
+        QCOMPARE(sentinel.write("unchanged"), qint64(9));
+        sentinel.close();
+        QVERIFY(QFile::link(external, artifactPath));
+        QVERIFY(QFileInfo(artifactPath).isSymLink());
+    }
+    const qsizetype outputMark = agent.markOutput();
+    QVERIFY(agent.submitLine("blocked prompt"));
+    QVERIFY2(
+        agent.waitForOutputAfter(
+            "session persistence failed; request not started.", outputMark, 10000),
+        agent.output().right(8192).constData());
+    QCOMPARE(readBytes(requestLog).count('\n'), boundScope ? 1 : 0);
+    QVERIFY(agent.submitLine("/quit"));
+    QVERIFY2(agent.waitForExit(10000), agent.output().right(8192).constData());
+    QCOMPARE(agent.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(agent.exitCode(), 0);
+    QCOMPARE(readBytes(requestLog).count('\n'), boundScope ? 1 : 0);
+    QCOMPARE(readBytes(sessionPath), expectedTranscript);
+    if (boundScope) {
+        QCOMPARE(readBytes(scopePath), expectedScope);
+    } else {
+        QVERIFY(!QFileInfo::exists(sessionPath));
+        QVERIFY(QFileInfo(artifactPath).isSymLink());
+        QCOMPARE(
+            QDir(external).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
+            QStringList{QStringLiteral("sentinel")});
+        QCOMPARE(
+            readBytes(QDir(external).filePath(QStringLiteral("sentinel"))), QByteArray("unchanged"));
+    }
 #endif
 }
 

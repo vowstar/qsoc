@@ -52,6 +52,7 @@ private slots:
         QCOMPARE(def->scope, QStringLiteral("builtin"));
         QVERIFY(!def->toolsAllow.isEmpty());
         QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("tool_output_read")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("lsp")));
         /* Must NOT include any write or shell tool. */
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("write_file")));
@@ -73,6 +74,7 @@ private slots:
         QVERIFY(def != nullptr);
         QVERIFY(def->toolsAllow.contains(QStringLiteral("bash")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("tool_output_read")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("lsp")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("write_file")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("edit_file")));
@@ -195,6 +197,7 @@ private slots:
             QStringLiteral("Investigate RTL modules and report a structured map."));
         QCOMPARE(def->toolsAllow.size(), 3);
         QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("tool_output_read")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("path_context")));
         QVERIFY(!def->injectMemory);
         QVERIFY(def->injectSkills);
@@ -223,6 +226,7 @@ private slots:
         QVERIFY(def != nullptr);
         QCOMPARE(def->toolsAllow.size(), 2);
         QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("tool_output_read")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("list_files")));
     }
 

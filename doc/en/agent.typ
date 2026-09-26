@@ -657,12 +657,48 @@ The receiving side always parses `reasoning_content` and `reasoning_details`
 fields from the SSE stream, regardless of the `--effort` setting. Reasoning
 output is displayed in dim text.
 
+== Saved Tool Results
+
+Large tool returns enter history as a fixed preview and an `artifact_id`.
+`tool_output_read` reads the captured text with UTF-8 byte offsets. Continue
+at `next_offset` until `eof` is true. Each page contains complete characters.
+Repeated reads do not create new artifacts.
+
+The capture contains the text that reached the agent. A source tool can
+truncate its output before returning it. `source_completeness` is `unknown`
+unless the source reports truncation. `captured_bytes` describes the saved
+return, not the original command output. Images remain separate attachments.
+
+The defaults are 16 MiB per artifact, 256 MiB per session, and 32 KiB per
+read. Configure `agent.tool_artifact_bytes`, `agent.tool_artifact_session_bytes`,
+and `agent.tool_artifact_page_bytes` in bytes. The reader also limits pages
+to the remaining context budget. Quota or write failures leave existing
+artifacts readable and report that the new return was not saved.
+
+The C++ agent API starts with temporary result storage. Applications that
+resume history across processes bind a durable directory with
+`bindToolResultStore`. The command-line agent binds storage when a new session
+first writes history, or when it resumes an existing session.
+
+Artifacts belong to the local session, including when tools run remotely.
+A fork or `/branch` receives independent copies of only the artifacts
+referenced by its inherited history. It cannot read later parent artifacts
+or sibling artifacts. Deleting the parent's records leaves those copies
+readable. These permissions govern application tools, not arbitrary shell
+access by the same operating-system user.
+
+Each tool batch reserves a result for every call ID before executing tools.
+Result bodies use at most 4096 estimated tokens and must fit the remaining
+input window. The agent stops when another result cannot fit. Unexecuted
+calls receive an explicit result. Completed side effects are never replayed
+automatically after a capture failure.
+
 == Context Compaction
 <agent-context-compaction>
 Long conversations are managed by a three-layer compaction system:
 
-+ *Tool Output Pruning* (40% threshold): Old tool outputs are replaced with
-  `[output pruned]`. Zero LLM calls.
++ *Tool Output Pruning* (40% threshold): Older, unbounded tool outputs can be
+  replaced with `[output pruned]`. Fixed result previews keep their saved references.
 + *LLM Compaction* (60% threshold): The LLM summarizes older messages.
 + *Auto-Continue*: After compaction during streaming, the agent automatically
   resumes the current task.

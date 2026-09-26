@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/tool/qsoctoolagent.h"
+#include <QStandardPaths>
+#include <QUuid>
 
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinition.h"
@@ -880,6 +882,32 @@ QString QSocToolAgent::execute(const json &arguments)
              std::string(kForkMarkerTag) + "\nFork point: continuing as a forked sub-agent."},
         });
         child->setMessages(forkedMessages);
+    }
+
+    if (parentAgent_ && parentAgent_->toolResultStore()) {
+        const QString artifactOwner = QUuid::createUuid().toString(QUuid::Id128);
+        const QString artifactDirectory
+            = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+                  .filePath(QStringLiteral("tool-artifacts/") + artifactOwner);
+        QString artifactError;
+        bool    artifactsReady = bool(child->toolResultStore());
+        if (!parentAgent_->toolResultStore()->isTemporary())
+            artifactsReady
+                = child->bindToolResultStore(artifactDirectory, artifactOwner, &artifactError);
+        if (artifactsReady && isFork && !forkSnapshot->artifactRefs.isEmpty())
+            artifactsReady = forkSnapshot->artifactStore
+                             && child->toolResultStore()->inherit(
+                                 *forkSnapshot->artifactStore,
+                                 forkSnapshot->artifactRefs,
+                                 &artifactError);
+        if (!artifactsReady) {
+            const auto failedStore = child->toolResultStore();
+            if (failedStore && !failedStore->isTemporary() && failedStore->isBound())
+                QDir(failedStore->directory()).removeRecursively();
+            delete child;
+            return QStringLiteral("Error: child tool result storage could not be prepared. %1")
+                .arg(artifactError);
+        }
     }
 
     const QString effectiveType = isFork ? QStringLiteral("fork") : subagentType;
