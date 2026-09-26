@@ -185,6 +185,9 @@ struct QSocAgentConfig
      * Empty = no extra denies on top of allowlist and fixed child gates. */
     QStringList toolsDeny;
 
+    /* Tool presentation: direct, catalog, or auto. */
+    QString toolPresentation = QStringLiteral("direct");
+
     /* Per-agent iteration cap. 0 = inherit `maxIterations`. When > 0
      * the agent stops with a "Reached max turns limit" message after
      * this many iterations even if `maxIterations` would allow more.

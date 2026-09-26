@@ -37,6 +37,92 @@ class Test : public QObject
     }
 
 private slots:
+    void recentFileCalls_data()
+    {
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<bool>("invoke");
+        for (const auto &name : {"read_file", "write_file", "edit_file"}) {
+            QTest::newRow(name) << QString::fromLatin1(name) << false;
+            QTest::newRow((QByteArray("invoke-") + name).constData())
+                << QString::fromLatin1(name) << true;
+        }
+    }
+
+    void recentFileCalls()
+    {
+        QFETCH(QString, name);
+        QFETCH(bool, invoke);
+        json arguments = {{"file_path", "retained.txt"}};
+        if (invoke) {
+            arguments
+                = {{"name", name.toStdString()},
+                   {"schema_version", "historical"},
+                   {"arguments_json", arguments.dump()}};
+            name = QStringLiteral("tool_invoke");
+        }
+        const json history = json::array(
+            {{{"role", "assistant"},
+              {"tool_calls",
+               json::array(
+                   {{{"function",
+                      {{"name", name.toStdString()}, {"arguments", arguments.dump()}}}}})}}});
+        QCOMPARE(
+            QSocContextRestoreBuilder::recentFilePaths(history),
+            QSet<QString>{QStringLiteral("retained.txt")});
+        auto inputs           = baseInputs();
+        inputs.candidatePaths = {QStringLiteral("retained.txt"), QStringLiteral("restore.txt")};
+        inputs.excludedPaths  = QSocContextRestoreBuilder::recentFilePaths(history);
+        QStringList reads;
+        inputs.readFile = [&](const QString &path) -> std::optional<QString> {
+            reads.append(path);
+            return QStringLiteral("content");
+        };
+        const auto restored = QSocContextRestoreBuilder::build(inputs);
+        QCOMPARE(reads, QStringList{QStringLiteral("restore.txt")});
+        QCOMPARE(restored.readPaths(), reads);
+    }
+
+    void malformedRecentCalls_data()
+    {
+        QTest::addColumn<int>("kind");
+        for (int kind = 0; kind < 7; ++kind)
+            QTest::newRow(QByteArray::number(kind).constData()) << kind;
+    }
+
+    void malformedRecentCalls()
+    {
+        QFETCH(int, kind);
+        QString name = QStringLiteral("tool_invoke");
+        json    arguments
+            = {{"name", "read_file"},
+               {"schema_version", "historical"},
+               {"arguments_json", json({{"file_path", "ignored.txt"}}).dump()}};
+        if (kind == 0)
+            arguments.erase("schema_version");
+        else if (kind == 1)
+            arguments["arguments_json"] = "[1,2]";
+        else if (kind == 2)
+            arguments["name"] = "tool_invoke";
+        else if (kind == 3)
+            name = "unknown_wrapper";
+        else if (kind == 4)
+            arguments["arguments_json"]
+                = json({{"file_path", QString(600000, QLatin1Char('x')).toStdString()}}).dump();
+        else if (kind == 5) {
+            json nested = {{"file_path", "ignored.txt"}};
+            for (int depth = 0; depth < 65; ++depth)
+                nested = {{"nested", nested}};
+            arguments["arguments_json"] = nested.dump();
+        } else
+            arguments["arguments_json"] = json({{"file_path", 42}}).dump();
+        const json history = json::array(
+            {{{"tool_calls",
+               json::array(
+                   {{{"function",
+                      {{"name", name.toStdString()}, {"arguments", arguments.dump()}}}}})}}});
+        QVERIFY(QSocContextRestoreBuilder::recentFilePaths(history).isEmpty());
+    }
+
     void testTotalBudgetLimitsAllSources()
     {
         auto inputs            = baseInputs();

@@ -521,10 +521,11 @@ QString QSocAgent::toolDenyReasonForRegistry(
     if (agentConfig.planMode) {
         const bool shellJudged
             = (name == QStringLiteral("bash") || name == QStringLiteral("remote_shell_bash"));
+        const bool      child   = agentConfig.isSubAgent;
         const bool      spawnOk = (name == QStringLiteral("agent"));
         const QSocTool *tool    = registry != nullptr ? registry->getTool(name) : nullptr;
         if (!shellJudged && !spawnOk && (tool == nullptr || !tool->isReadOnly())) {
-            if (agentConfig.isSubAgent) {
+            if (child) {
                 return QStringLiteral(
                     "plan mode is read-only; report the blocked operation to the parent agent");
             }
@@ -545,20 +546,76 @@ nlohmann::json QSocAgent::getEffectiveToolDefinitions() const
     if (toolRegistry == nullptr) {
         return json::array();
     }
-    return filterAllowedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());
+    const QPointer<const QSocAgent>  owner(this);
+    const QPointer<QSocToolRegistry> registry    = toolRegistry;
+    const auto                       definitions = registry->getToolDefinitions();
+    /* A tool definition callback can delete the agent. */
+    // cppcheck-suppress knownConditionTrueFalse
+    return owner && registry ? presentedTools(definitions, registry.data()) : json::array();
+}
+
+QSocToolCatalog QSocAgent::toolCatalog(const QSocToolRegistry *registry) const
+{
+    const QPointer<const QSocAgent>        owner(this);
+    const QPointer<const QSocToolRegistry> guardedRegistry(registry);
+    const json                             binding
+        = {{"agent", agentIdentity().toStdString()},
+           {"registry", reinterpret_cast<quintptr>(registry)},
+           {"revision", registry ? registry->revision() : 0},
+           {"binding_revision", bindingRevision_},
+           {"presentation", agentConfig.toolPresentation.toStdString()},
+           {"catalog_denied", agentConfig.toolsDeny.contains(QStringLiteral("tool_catalog"))},
+           {"invoke_denied", agentConfig.toolsDeny.contains(QStringLiteral("tool_invoke"))},
+           {"project", agentConfig.projectPath.toStdString()},
+           {"cwd", QDir::currentPath().toStdString()},
+           {"remote", agentConfig.remoteMode},
+           {"target", agentConfig.remoteName.toStdString()},
+           {"workspace", agentConfig.remoteWorkspace.toStdString()},
+           {"remote_cwd", agentConfig.remoteWorkingDir.toStdString()}};
+    const auto definitions = registry ? registry->getToolDefinitions() : json::array();
+    return QSocToolCatalog(
+        /* A tool definition callback can delete the agent. */
+        // cppcheck-suppress knownConditionTrueFalse
+        owner && guardedRegistry ? filterAllowedTools(definitions, registry) : json::array(),
+        QString::fromStdString(binding.dump()));
+}
+
+nlohmann::json QSocAgent::presentedTools(
+    const json &definitions, const QSocToolRegistry *registry) const
+{
+    const QString     policy = agentConfig.toolPresentation;
+    const QStringList denied = agentConfig.toolsDeny;
+    auto              result
+        = QSocToolCatalog(filterAllowedTools(definitions, registry), {}).wireDefinitions(policy);
+    result.erase(
+        std::remove_if(
+            result.begin(),
+            result.end(),
+            [&denied](const json &definition) {
+                const QString name = QString::fromStdString(
+                    definition.at("function").at("name").get<std::string>());
+                return QSocToolCatalog::reserved(name) && denied.contains(name);
+            }),
+        result.end());
+    return result;
 }
 
 nlohmann::json QSocAgent::filterAllowedTools(
     const nlohmann::json &defs, const QSocToolRegistry *registry) const
 {
-    json filtered = json::array();
+    const QPointer<const QSocAgent>        owner(this);
+    const QPointer<const QSocToolRegistry> guardedRegistry(registry);
+    json                                   filtered = json::array();
     for (const auto &def : defs) {
         if (!def.contains("function") || !def["function"].contains("name")) {
             filtered.push_back(def);
             continue;
         }
-        const QString name = QString::fromStdString(def["function"]["name"].get<std::string>());
-        if (toolDenyReasonForRegistry(name, registry).isEmpty()) {
+        const QString name   = QString::fromStdString(def["function"]["name"].get<std::string>());
+        const QString reason = toolDenyReasonForRegistry(name, registry);
+        if (!owner || (registry && !guardedRegistry))
+            return json::array();
+        if (reason.isEmpty()) {
             filtered.push_back(def);
         }
     }
@@ -1310,7 +1367,7 @@ void QSocAgent::processStreamIteration()
         if (action == CheckpointAction::Terminal) {
             return;
         }
-        json tools = owner->filterAllowedTools(definitions, run->tools.data());
+        json tools = owner->presentedTools(definitions, run->tools.data());
         action     = checkpoint();
         if (action == CheckpointAction::Restart) {
             continue;
@@ -1613,7 +1670,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
     if (const auto result = checkpointPreparation()) {
         return *result;
     }
-    json tools = owner->filterAllowedTools(definitions, run->tools.data());
+    json tools = owner->presentedTools(definitions, run->tools.data());
     if (owner.isNull() || run->llm.isNull() || run->tools.isNull()) {
         return IterationResult::Stopped;
     }
@@ -1817,12 +1874,83 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             finishBatch();
             return false;
         }
-        const QString toolCallId   = QString::fromStdString(toolCall["id"].get<std::string>());
-        const QString functionName = QString::fromStdString(
+        const QString toolCallId = QString::fromStdString(toolCall["id"].get<std::string>());
+        const QString wireName   = QString::fromStdString(
             toolCall["function"]["name"].get<std::string>());
         const QString argumentsStr = QString::fromStdString(
             toolCall["function"]["arguments"].get<std::string>());
 
+        QSocToolDispatchView dispatch;
+        dispatch.wireCallId    = toolCallId;
+        dispatch.wireName      = wireName;
+        dispatch.canonicalName = wireName;
+        dispatch.owner         = this;
+        QString admissionError;
+        if (!run->deferredToolResult) {
+            const auto catalog = owner->toolCatalog(run->tools.data());
+            if (stopBatch())
+                return false;
+            if (run->tools.isNull()) {
+                dependencyFailed();
+                return false;
+            }
+            dispatch.schemaVersion = catalog.version();
+            admissionError = QSocToolCatalog::parseArguments(argumentsStr, &dispatch.finalArguments);
+            if (admissionError.isEmpty() && QSocToolCatalog::reserved(wireName)) {
+                if (catalog.resolvedMode(agentConfig.toolPresentation) != QStringLiteral("catalog")
+                    || agentConfig.toolsDeny.contains(wireName)) {
+                    admissionError = QStringLiteral("Error: tool discovery is not enabled");
+                } else if (wireName == QStringLiteral("tool_invoke")) {
+                    admissionError = catalog.unwrap(
+                        dispatch.finalArguments, &dispatch, argumentsStr.toUtf8().size());
+                }
+            }
+            if (admissionError.isEmpty()
+                && dispatch.canonicalName != QStringLiteral("tool_catalog")) {
+                const QString denied
+                    = owner->toolDenyReasonForRegistry(dispatch.canonicalName, run->tools.data());
+                if (stopBatch())
+                    return false;
+                if (run->tools.isNull()) {
+                    dependencyFailed();
+                    return false;
+                }
+                dispatch.tool = run->tools->getTool(dispatch.canonicalName);
+                if (!denied.isEmpty() || dispatch.tool.isNull()) {
+                    admissionError = wireName == QStringLiteral("tool_invoke") || denied.isEmpty()
+                                         ? QStringLiteral("Error: tool is not available")
+                                         : QStringLiteral("Error: tool \"%1\" is not available: %2")
+                                               .arg(dispatch.canonicalName, denied);
+                }
+            }
+        } else {
+            dispatch = std::move(run->deferredToolDispatch);
+        }
+        const QString functionName    = dispatch.canonicalName;
+        const auto    continuityError = [owner, run, dispatch]() -> QString {
+            if (!owner || owner->toolRegistry != run->tools || run->tools.isNull()) {
+                return QStringLiteral("Error: tool registry changed before execution");
+            }
+            const auto catalog = owner->toolCatalog(run->tools.data());
+            /* Catalog enumeration calls the tool's definition methods. */
+            // cppcheck-suppress knownConditionTrueFalse
+            if (!owner || !owner->isCurrentRun(run) || run->tools.isNull()) {
+                return QStringLiteral("Error: tool invocation owner changed");
+            }
+            if (catalog.version() != dispatch.schemaVersion) {
+                return QStringLiteral(
+                    "Error: tool permissions, schema, or workspace changed; describe the tool "
+                    "again");
+            }
+            if (dispatch.canonicalName != QStringLiteral("tool_catalog")
+                && (dispatch.tool.isNull()
+                    || run->tools->getTool(dispatch.canonicalName) != dispatch.tool
+                    || !owner->toolDenyReasonForRegistry(dispatch.canonicalName, run->tools.data())
+                            .isEmpty())) {
+                return QStringLiteral("Error: tool is no longer available");
+            }
+            return {};
+        };
         const QString displayId = agentIdentity() + QLatin1Char('/') + QString::number(run->epoch)
                                   + QLatin1Char('/') + toolCallId;
         const auto    publishResult = [owner, run, displayId, functionName](const QString &value) {
@@ -1842,9 +1970,20 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         };
         json    arguments;
         QString rawResult;
+        bool    staleCompletion = false;
         if (run->deferredToolResult) {
-            rawResult = *std::exchange(run->deferredToolResult, std::nullopt);
-            arguments = std::move(run->deferredToolArguments);
+            rawResult             = *std::exchange(run->deferredToolResult, std::nullopt);
+            arguments             = std::move(dispatch.finalArguments);
+            const QString changed = continuityError();
+            if (stopBatch())
+                return false;
+            if (!changed.isEmpty()) {
+                staleCompletion          = true;
+                run->executingToolStatus = QSocToolResultStatus::Uncertain;
+                rawResult                = QStringLiteral(
+                    "status: uncertain\nTool completed after its permissions or workspace changed. "
+                    "Its return was discarded. Verify the current state before retrying.");
+            }
         } else {
             run->executingToolStatus.reset();
             if (agentConfig.verbose) {
@@ -1858,11 +1997,15 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 }
             }
 
-            emit toolCalled(functionName, argumentsStr);
+            const QString displayArguments = admissionError.isEmpty()
+                                                 ? QString::fromStdString(
+                                                       dispatch.finalArguments.dump())
+                                                 : argumentsStr;
+            emit          toolCalled(functionName, displayArguments);
             if (stopBatch()) {
                 return false;
             }
-            emit owner->toolCallStarted(displayId, functionName, argumentsStr);
+            emit owner->toolCallStarted(displayId, functionName, displayArguments);
             if (stopBatch())
                 return false;
             if (run->tools.isNull()) {
@@ -1870,69 +2013,14 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 return false;
             }
 
-            /* Defend against a model recalling a tool hidden from this run. */
-            const QString denyReason
-                = owner->toolDenyReasonForRegistry(functionName, run->tools.data());
-            if (stopBatch()) {
-                return false;
-            }
-            if (!denyReason.isEmpty()) {
-                const QString denied = QStringLiteral("Error: tool \"%1\" is not available: %2")
-                                           .arg(functionName, denyReason);
-                owner->addToolMessage(toolCallId, denied);
-                publishResult(denied);
-                if (stopBatch()) {
+            if (!admissionError.isEmpty()) {
+                owner->addToolMessage(toolCallId, admissionError);
+                publishResult(admissionError);
+                if (stopBatch())
                     return false;
-                }
                 continue;
             }
-
-            try {
-                if (argumentsStr.toUtf8().size() > 1024 * 1024)
-                    throw std::length_error("Tool arguments exceed 1 MiB.");
-                arguments = json::parse(
-                    argumentsStr.toStdString(), [](int depth, json::parse_event_t, json &) {
-                        if (depth > 64)
-                            throw std::length_error("Tool arguments exceed 64 nesting levels.");
-                        return true;
-                    });
-                if (!arguments.is_object())
-                    throw std::length_error("Tool arguments must be an object.");
-            } catch (const std::exception &) {
-                const QString errorResult = QStringLiteral(
-                    "Error: tool arguments must be an object within 1 MiB and 64 nesting levels.");
-                owner->addToolMessage(toolCallId, errorResult);
-                publishResult(errorResult);
-                if (stopBatch()) {
-                    return false;
-                }
-                continue;
-            }
-
-            const bool persisted
-                = owner->runPersistenceBarrier(PersistencePoint::BeforeTool, toolCallId);
-            if (owner.isNull()) {
-                return false;
-            }
-            if (!persisted) {
-                finishBatch();
-                if (run->mode == RunMode::Streaming) {
-                    owner->finishStreamRun(
-                        run, RunOutcome::Error, QStringLiteral("Session persistence failed"));
-                } else {
-                    run->stop.store(StopMode::Hard);
-                    run->stopSource.request_stop();
-                    owner->finishSynchronousRun(run, RunOutcome::Error);
-                }
-                return false;
-            }
-            if (stopBatch()) {
-                return false;
-            }
-            if (run->tools.isNull()) {
-                dependencyFailed();
-                return false;
-            }
+            arguments = dispatch.finalArguments;
 
             /* A sibling may have replaced a shared remote transport while this
          * run waited for the model. Check continuity before hooks or a tool can
@@ -1944,6 +2032,45 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 return false;
             }
 
+            if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PreToolUse)) {
+                json payload          = buildHookEnvelope();
+                payload["event"]      = "pre_tool_use";
+                payload["tool_name"]  = functionName.toStdString();
+                payload["tool_input"] = arguments;
+                const auto outcome
+                    = hookManager->fire(QSocHookEvent::PreToolUse, functionName, payload);
+                if (stopBatch()) {
+                    return false;
+                }
+                if (outcome.blocked) {
+                    const QString reason = outcome.blockReason.isEmpty()
+                                               ? QStringLiteral("hook blocked execution")
+                                               : outcome.blockReason;
+                    const QString blocked
+                        = QStringLiteral("Tool blocked by pre_tool_use hook: %1").arg(reason);
+                    owner->addToolMessage(toolCallId, blocked);
+                    publishResult(blocked);
+                    if (stopBatch()) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (outcome.hasMergedResponse && outcome.mergedResponse.contains("updatedInput")) {
+                    arguments = outcome.mergedResponse["updatedInput"];
+                }
+            }
+
+            const QString argumentError = QSocToolCatalog::validateArguments(
+                arguments,
+                wireName == QStringLiteral("tool_invoke") ? argumentsStr.toUtf8().size() : 0);
+            if (!argumentError.isEmpty()) {
+                owner->addToolMessage(toolCallId, argumentError);
+                publishResult(argumentError);
+                if (stopBatch())
+                    return false;
+                continue;
+            }
+
             if (agentConfig.planMode
                 && (functionName == QStringLiteral("bash")
                     || functionName == QStringLiteral("remote_shell_bash"))) {
@@ -1952,8 +2079,17 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                     command = QString::fromStdString(arguments["command"].get<std::string>());
                 }
                 QSocBashSafety verdict;
-                if (bashSafetyJudge_) {
-                    verdict = bashSafetyJudge_(command);
+                const auto     contextualJudge = contextualBashSafetyJudge_;
+                const auto     legacyJudge     = bashSafetyJudge_;
+                if (contextualJudge && run->llm) {
+                    const QSocBashSafetyContext context{
+                        run->llm,
+                        run->llm->getCurrentModelConfig(),
+                        agentConfig.effortLevel,
+                        run->stopSource.get_token()};
+                    verdict = contextualJudge(command, context);
+                } else if (legacyJudge) {
+                    verdict = legacyJudge(command);
                 }
                 if (stopBatch()) {
                     return false;
@@ -1980,56 +2116,6 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 }
             }
 
-            if (hookManager != nullptr && hookManager->hasHooksFor(QSocHookEvent::PreToolUse)) {
-                json payload          = buildHookEnvelope();
-                payload["event"]      = "pre_tool_use";
-                payload["tool_name"]  = functionName.toStdString();
-                payload["tool_input"] = arguments;
-                const auto outcome
-                    = hookManager->fire(QSocHookEvent::PreToolUse, functionName, payload);
-                if (stopBatch()) {
-                    return false;
-                }
-                if (outcome.blocked) {
-                    const QString reason = outcome.blockReason.isEmpty()
-                                               ? QStringLiteral("hook blocked execution")
-                                               : outcome.blockReason;
-                    const QString blocked
-                        = QStringLiteral("Tool blocked by pre_tool_use hook: %1").arg(reason);
-                    owner->addToolMessage(toolCallId, blocked);
-                    publishResult(blocked);
-                    if (stopBatch()) {
-                        return false;
-                    }
-                    continue;
-                }
-                if (outcome.hasMergedResponse && outcome.mergedResponse.contains("updatedInput")
-                    && outcome.mergedResponse["updatedInput"].is_object()) {
-                    arguments = outcome.mergedResponse["updatedInput"];
-                }
-                bool                                validArguments = true;
-                QList<std::pair<const json *, int>> pending{{&arguments, 0}};
-                while (!pending.isEmpty() && validArguments) {
-                    const auto [value, depth] = pending.takeLast();
-                    if (depth > 64) {
-                        validArguments = false;
-                        break;
-                    }
-                    if (value->is_structured())
-                        for (const auto &child : *value)
-                            pending.append({&child, depth + 1});
-                }
-                if (!validArguments || arguments.dump().size() > 1024 * 1024) {
-                    const QString rejected = QStringLiteral(
-                        "Error: final tool arguments exceed 1 MiB or 64 nesting levels.");
-                    owner->addToolMessage(toolCallId, rejected);
-                    publishResult(rejected);
-                    if (stopBatch())
-                        return false;
-                    continue;
-                }
-            }
-
             if (run->tools.isNull()) {
                 dependencyFailed();
                 return false;
@@ -2046,8 +2132,57 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 dependencyFailed();
                 return false;
             }
+            const QString changed = continuityError();
+            if (stopBatch())
+                return false;
+            if (!changed.isEmpty()) {
+                owner->addToolMessage(toolCallId, changed);
+                publishResult(changed);
+                if (stopBatch())
+                    return false;
+                continue;
+            }
+            const bool persisted
+                = owner->runPersistenceBarrier(PersistencePoint::BeforeTool, toolCallId);
+            if (owner.isNull()) {
+                return false;
+            }
+            if (!persisted) {
+                finishBatch();
+                if (run->mode == RunMode::Streaming) {
+                    owner->finishStreamRun(
+                        run, RunOutcome::Error, QStringLiteral("Session persistence failed"));
+                } else {
+                    run->stop.store(StopMode::Hard);
+                    run->stopSource.request_stop();
+                    owner->finishSynchronousRun(run, RunOutcome::Error);
+                }
+                return false;
+            }
+            if (stopBatch()) {
+                return false;
+            }
+            if (run->tools.isNull()) {
+                dependencyFailed();
+                return false;
+            }
+
+            if (workspaceFenceStopsRun() || stopBatch())
+                return false;
+            const QString persistedChange = continuityError();
+            if (stopBatch())
+                return false;
+            if (!persistedChange.isEmpty()) {
+                owner->addToolMessage(toolCallId, persistedChange);
+                publishResult(persistedChange);
+                if (stopBatch())
+                    return false;
+                continue;
+            }
             run->executingToolCallId = toolCallId;
-            if (run->mode == RunMode::Streaming) {
+            if (functionName == QStringLiteral("tool_catalog")) {
+                rawResult = owner->toolCatalog(run->tools.data()).query(arguments);
+            } else if (run->mode == RunMode::Streaming) {
                 const json remaining(toolCalls.begin() + toolIndex, toolCalls.end());
                 const auto result = run->tools->executeToolDeferred(
                     functionName,
@@ -2071,8 +2206,9 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 if (!current())
                     return false;
                 if (!result) {
-                    run->deferredToolArguments = arguments;
-                    run->toolDeferred          = true;
+                    dispatch.finalArguments   = arguments;
+                    run->deferredToolDispatch = std::move(dispatch);
+                    run->toolDeferred         = true;
                     return false;
                 }
                 rawResult = *result;
@@ -2126,6 +2262,13 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
 
         publishResult(result);
         if (stopBatch()) {
+            return false;
+        }
+        if (staleCompletion) {
+            owner->lastStopNotice_ = QStringLiteral(
+                "Tool context changed while awaiting completion.");
+            owner->requestStop(StopMode::Soft);
+            finishBatch();
             return false;
         }
 
@@ -2764,7 +2907,7 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         QHash<QString, int> mcpToolCounts;
         const QStringList   allNames = toolRegistry->toolNames();
         for (const QString &name : allNames) {
-            if (!name.startsWith(QStringLiteral("mcp__"))) {
+            if (!name.startsWith(QStringLiteral("mcp__")) || !isToolAllowed(name)) {
                 continue;
             }
             const QString rest = name.mid(5);
@@ -3321,7 +3464,7 @@ int QSocAgent::estimateTotalTokens() const
     const QString systemPrompt = buildSystemPromptWithMemory();
     json          tools        = json::array();
     if (toolRegistry) {
-        tools = filterAllowedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());
+        tools = presentedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());
     }
     return estimateTotalTokensFromSnapshot(systemPrompt, tools);
 }
