@@ -417,6 +417,17 @@ file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/a
 
 set(PROJECT_CORE_CPP_FILES "${PROJECT_CPP_FILES}")
 list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/main\\.cpp$")
+list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/smtworker\\.cpp$")
+
+add_executable(qsoc-smt-worker
+    src/smtworker.cpp
+    src/common/qsocsmtengine.cpp
+    src/common/qsocsmtinput.cpp
+    src/common/qsocsmtservice.cpp
+)
+target_include_directories(qsoc-smt-worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(qsoc-smt-worker PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
+install(TARGETS qsoc-smt-worker RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/ui"
@@ -536,6 +547,7 @@ target_compile_definitions(qsoc_core PUBLIC
 
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(qsoc_core PUBLIC -fexperimental-library)
+    target_compile_options(qsoc-smt-worker PRIVATE -fexperimental-library)
 endif()
 
 if(WIN32)
@@ -552,6 +564,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     qsoc_core
 )
+add_dependencies(${PROJECT_NAME} qsoc-smt-worker)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.vowstar.${PROJECT_NAME}
@@ -712,6 +725,9 @@ if(CPPCHECK_COMMAND)
     # process-group, signal and path code is never checked.
     if(UNIX)
         set(CPPCHECK_PLATFORM_DEFINES -DQ_OS_UNIX)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            list(APPEND CPPCHECK_PLATFORM_DEFINES -DQ_OS_LINUX)
+        endif()
     else()
         set(CPPCHECK_PLATFORM_DEFINES -DQ_OS_WIN)
     endif()

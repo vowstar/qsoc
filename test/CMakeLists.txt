@@ -130,6 +130,31 @@ qt_add_test_target("test_qsocverilogsignalextractor")
 qt_add_test_target("test_qsoccommonqsocyamlutils")
 qt_add_test_target("test_qsocprcmsolver" LABELS "prcm")
 target_link_libraries(test_qsocprcmsolver PRIVATE libz3)
+add_executable(qsoc_smt_worker_probe
+    qsoc_smt_worker_probe.cpp
+    ../src/common/qsocsmtengine.cpp
+    ../src/common/qsocsmtinput.cpp
+    ../src/common/qsocsmtservice.cpp
+)
+target_include_directories(qsoc_smt_worker_probe PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
+target_link_libraries(qsoc_smt_worker_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(qsoc_smt_worker_probe PRIVATE -fexperimental-library)
+endif()
+qt_add_test_target("test_qsocsmtservice" LABELS "smt")
+add_dependencies(test_qsocsmtservice qsoc-smt-worker qsoc_smt_worker_probe)
+target_compile_definitions(test_qsocsmtservice PRIVATE
+    QSOC_SMT_WORKER_PATH="$<TARGET_FILE:qsoc-smt-worker>"
+    QSOC_SMT_PROBE_PATH="$<TARGET_FILE:qsoc_smt_worker_probe>"
+)
+set_tests_properties(test_qsocsmtservice PROPERTIES TIMEOUT 90)
+qt_add_test_target("test_qsoctoolsmt" LABELS "smt;agent")
+add_dependencies(test_qsoctoolsmt qsoc-smt-worker qsoc_smt_worker_probe)
+target_compile_definitions(test_qsoctoolsmt PRIVATE
+    QSOC_SMT_WORKER_PATH="$<TARGET_FILE:qsoc-smt-worker>"
+    QSOC_SMT_PROBE_PATH="$<TARGET_FILE:qsoc_smt_worker_probe>"
+)
+set_tests_properties(test_qsoctoolsmt PROPERTIES TIMEOUT 90)
 qt_add_test_target("test_qsocprcminput" LABELS "prcm")
 qt_add_test_target("test_qsocprcmmode" LABELS "prcm")
 qt_add_test_target("test_qsocprcmresource" LABELS "prcm")
@@ -227,6 +252,10 @@ qt_add_test_target("test_qsocguischematicwindow")
 qt_add_test_target("test_qsocagenttool")
 qt_add_test_target("test_qsoctoolcatalog")
 qt_add_test_target("test_qsoctooldispatch")
+add_dependencies(test_qsoctooldispatch qsoc-smt-worker)
+target_compile_definitions(test_qsoctooldispatch PRIVATE
+    QSOC_SMT_WORKER_PATH="$<TARGET_FILE:qsoc-smt-worker>"
+)
 qt_add_test_target("test_qsocagenttoolshell")
 qt_add_test_target("test_qsocmcpnaming")
 qt_add_test_target("test_qsocmcpstdio")

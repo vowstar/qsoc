@@ -14,6 +14,7 @@
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolmonitor.h"
+#include "agent/tool/qsoctoolsmt.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qsocconfig.h"
 
@@ -669,6 +670,8 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     }
     /* Control-plane tools stay local even in remote mode. */
     registry->registerTool(new QSocToolDocQuery(parent));
+    if (QSocToolSmt::supported())
+        registry->registerTool(new QSocToolSmt(parent));
     /* Remote-mode web_fetch has no QLLMService handle (the model lives on the
      * client). Image inlining therefore falls back to alt-text; users who want
      * vision should fetch locally. */

@@ -528,12 +528,34 @@ The agent provides the following tools through natural language:
   SKILL.md format and @config-files for the full layout
 - *LSP*: `lsp` for diagnostics, definitions, hover, references, and symbols
   (@agent-lsp)
+- *Constraints*: `z3_solve` checks SMT-LIB formulas and optimizes ordered objectives on Linux. See @agent-smt
 - *Web*: `web_fetch` for URL content, `web_search` via SearXNG (when configured)
 - *Schedules*: `schedule_create`, `schedule_list`, `schedule_delete` share the
   scheduler behind `/loop` (@agent-loop)
 
 LLM, MCP HTTP, and web requests are pinned to HTTP/1.1. HTTP/2-only
 endpoints are unsupported.
+
+== Constraint Solving
+<agent-smt>
+
+On Linux, `z3_solve` accepts literal SMT-LIB declarations and assertions. A separate local worker solves the formulas, including calls from remote workspaces. The tool does not read project or remote files.
+
+`mode="check"` returns satisfiability, an optional model, and an optional unsat core for named assertions. `mode="optimize"` accepts 1 to 16 `minimize` or `maximize` objectives. Objectives use lexicographic order: earlier objectives take priority. Optimize rejects quantified formulas. Pareto, box, soft constraints, and recursive definitions are unsupported.
+
+```json
+{
+  "mode": "optimize",
+  "priority": "lex",
+  "smtlib": "(declare-const x Int)(declare-const y Int)(assert (and (>= x 0) (>= y 0) (>= (+ x y) 7)))(minimize x)(minimize y)"
+}
+```
+
+The response separates execution, satisfiability, feasibility, and optimality. A feasible model does not establish an optimum. Nonlinear or unsupported certification theories report `not_proven`. Objective bounds preserve exact rationals, infinity, and infinitesimal epsilon terms. A strict bound can describe a limit that no feasible model attains. Check `optimality`, each objective's `classification`, and `bounds_proven` before treating a model as optimal.
+
+`timeout_ms` defaults to 10000 and accepts 1 to 120000. The deadline includes parsing, solving, verification, and output. Cancellation and resource limits have separate execution states. An unknown result does not establish unsatisfiability.
+
+Requests accept at most 256 KiB of SMT-LIB. Output is limited to 1 MiB, and each worker has a 512 MiB address-space limit. The worker installs this limit before reading a request and exits without solving if installation fails. Two workers can run concurrently. Excess requests wait in a bounded queue or return busy. Worker failure leaves the agent available for later calls.
 
 == Code Intelligence
 <agent-lsp>

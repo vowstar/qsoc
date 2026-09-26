@@ -60,6 +60,7 @@
 #include "agent/tool/qsoctoolsendmessage.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
+#include "agent/tool/qsoctoolsmt.h"
 #include "agent/tool/qsoctooltodo.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "cli/qagentcompletion.h"
@@ -1352,6 +1353,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     /* Documentation tools */
     auto *docQueryTool = new QSocToolDocQuery(this);
     toolRegistry->registerTool(docQueryTool);
+    if (QSocToolSmt::supported())
+        toolRegistry->registerTool(new QSocToolSmt(this));
 
     /* Memory manager and tools */
     auto *memoryManager    = new QSocMemoryManager(this, projectManager);
