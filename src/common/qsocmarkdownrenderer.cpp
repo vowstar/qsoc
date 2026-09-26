@@ -4,6 +4,7 @@
 #include "common/qsocmarkdownrenderer.h"
 
 #include "common/qsoccodehighlighter.h"
+#include "common/qsocmath.h"
 #include "tui/qtuiwidget.h"
 
 extern "C" {
@@ -13,6 +14,7 @@ extern "C" {
 }
 
 #include <QStringList>
+#include <QUuid>
 
 #include <algorithm>
 #include <cstring>
@@ -112,8 +114,14 @@ struct Walker
      * write here before any inline runs append. */
     QSocMarkdownRenderer::Kind currentKind         = QSocMarkdownRenderer::Kind::Plain;
     int                        currentHeadingLevel = 0;
+    QList<int>                 listPrefixWidths;
     QString                    pendingListBullet;
     QString                    pendingBlockquotePrefix;
+
+    QString               mathPrefix;
+    QString               mathSource;
+    QList<QSocMath::Span> mathSpans;
+    bool                  hasContent = false;
 
     void appendText(const QString &text)
     {
@@ -133,6 +141,7 @@ struct Walker
             }
             return;
         }
+        hasContent = true;
         QSocMarkdownRenderer::StyledRun run;
         run.text      = text;
         run.bold      = style.isBold();
@@ -150,6 +159,96 @@ struct Walker
             run.underline = true;
         }
         currentLine.runs.append(run);
+    }
+
+    QList<QTuiStyledRun> continuationPrefix() const
+    {
+        QList<QTuiStyledRun> prefix;
+        if (style.isInBlockQuote()) {
+            QTuiStyledRun run;
+            run.text       = QStringLiteral("│ ");
+            run.dim        = true;
+            run.decorative = true;
+            prefix.append(run);
+        }
+        if (listDepth > 0) {
+            QTuiStyledRun run;
+            run.text = QString(
+                listPrefixWidths.isEmpty() ? 2 * listDepth : listPrefixWidths.last(),
+                QLatin1Char(' '));
+            run.dim = true;
+            prefix.append(run);
+        }
+        return prefix;
+    }
+
+    void appendMath(const QSocMath::Span &span)
+    {
+        const QString raw         = mathSource.mid(span.begin, span.end - span.begin);
+        const auto    prefix      = continuationPrefix();
+        int           prefixWidth = 0;
+        for (const auto &run : prefix)
+            prefixWidth += QTuiText::visualWidth(run.text);
+        if (!hasContent && currentCell == nullptr) {
+            int firstWidth = 0;
+            for (const auto &run : currentLine.runs)
+                firstWidth += QTuiText::visualWidth(run.text);
+            prefixWidth = std::max(prefixWidth, firstWidth);
+        }
+        const int  budget = terminalWidth > 0 ? terminalWidth - prefixWidth : 256;
+        const auto layout
+            = span.closed && !(span.display && currentCell != nullptr)
+                  ? QSocMath::render(QSocMath::body(mathSource, span), span.display, budget)
+                  : std::nullopt;
+        if (!layout) {
+            const auto rawLines = raw.split(QLatin1Char('\n'));
+            for (int index = 0; index < rawLines.size(); ++index) {
+                if (index > 0 && currentCell == nullptr)
+                    flushLine();
+                appendText(rawLines[index]);
+                if (index + 1 < rawLines.size() && currentCell != nullptr)
+                    appendText(QStringLiteral(" "));
+            }
+            return;
+        }
+        if (!span.display) {
+            appendText(layout->rows.first());
+            return;
+        }
+        auto firstPrefix = hasContent ? prefix : currentLine.runs;
+        if (hasContent)
+            flushLine();
+        else
+            currentLine = {};
+        if (firstPrefix.isEmpty())
+            firstPrefix = prefix;
+        for (int index = 0; index < layout->rows.size(); ++index) {
+            currentLine.runs = index == 0 ? firstPrefix : prefix;
+            currentKind      = QSocMarkdownRenderer::Kind::Math;
+            appendText(layout->rows[index]);
+            flushLine();
+        }
+    }
+
+    void appendLiteral(const QString &literal)
+    {
+        int start = 0;
+        while (!mathPrefix.isEmpty()) {
+            const int begin = literal.indexOf(mathPrefix, start);
+            if (begin < 0)
+                break;
+            const int end   = literal.indexOf(QLatin1Char('Z'), begin + mathPrefix.size());
+            bool      valid = false;
+            const int index = literal
+                                  .mid(begin + mathPrefix.size(), end - begin - mathPrefix.size())
+                                  .toInt(&valid);
+            if (end < 0 || !valid || index < 0 || index >= mathSpans.size())
+                break;
+            appendText(literal.mid(start, begin - start));
+            appendMath(mathSpans[index]);
+            start = end + 1;
+        }
+        appendText(literal.mid(start));
     }
 
     void appendDim(const QString &text)
@@ -176,6 +275,7 @@ struct Walker
         currentLine         = QSocMarkdownRenderer::RenderedLine{};
         currentKind         = QSocMarkdownRenderer::Kind::Plain;
         currentHeadingLevel = 0;
+        hasContent          = false;
     }
 
     void emitBlankLine()
@@ -296,6 +396,8 @@ void emitListItemBullet(Walker &walker, cmark_node *itemNode)
     const QString indent = QString(2 * qMax(0, walker.listDepth - 1), QLatin1Char(' '));
     const QString bullet = isOrdered ? QString::asprintf("%d. ", orderedIdx) : QStringLiteral("- ");
     walker.pendingListBullet = indent + bullet;
+    if (!walker.listPrefixWidths.isEmpty())
+        walker.listPrefixWidths.last() = QTuiText::visualWidth(walker.pendingListBullet);
 }
 
 /* Push a styled run carrying the saved bullet (so it inherits no inline
@@ -788,8 +890,10 @@ void walkDocument(cmark_node *root, Walker &walker)
         case CMARK_NODE_LIST:
             if (isEnter) {
                 walker.listDepth++;
+                walker.listPrefixWidths.append(2 * walker.listDepth);
             } else {
                 walker.listDepth--;
+                walker.listPrefixWidths.removeLast();
                 if (walker.listDepth == 0) {
                     walker.emitBlankLine();
                 }
@@ -831,7 +935,7 @@ void walkDocument(cmark_node *root, Walker &walker)
         case CMARK_NODE_TEXT:
             if (isEnter) {
                 flushPendingPrefix(walker);
-                walker.appendText(nodeLiteral(node));
+                walker.appendLiteral(nodeLiteral(node));
             }
             break;
 
@@ -919,40 +1023,123 @@ void walkDocument(cmark_node *root, Walker &walker)
     }
 }
 
+NodePtr parseDocument(const QByteArray &utf8)
+{
+    ParserPtr parser(cmark_parser_new(CMARK_OPT_DEFAULT));
+    if (!parser)
+        return {};
+    static const char *const extensions[] = {"autolink", "tasklist", "table"};
+    for (const char *name : extensions) {
+        if (auto *extension = cmark_find_syntax_extension(name))
+            cmark_parser_attach_syntax_extension(parser.get(), extension);
+    }
+    cmark_parser_feed(parser.get(), utf8.constData(), utf8.size());
+    return NodePtr(cmark_parser_finish(parser.get()));
+}
+
+QList<QSocMath::Range> protectedRanges(cmark_node *root, const QByteArray &utf8)
+{
+    QList<int> lines{0};
+    QList<int> positions(utf8.size() + 1, 0);
+    int        chars = 0;
+    for (int at = 0; at < utf8.size();) {
+        const auto ch     = static_cast<unsigned char>(utf8[at]);
+        const int  length = ch < 0x80 ? 1 : (ch < 0xe0 ? 2 : (ch < 0xf0 ? 3 : 4));
+        for (int index = 0; index < length && at + index < utf8.size(); ++index)
+            positions[at + index] = chars;
+        if (ch == '\n')
+            lines.append(at + 1);
+        at += length;
+        chars += length == 4 ? 2 : 1;
+    }
+    positions.last() = chars;
+    auto position    = [&](int line, int column) {
+        if (line < 1 || line > lines.size())
+            return chars;
+        return positions[std::clamp(lines[line - 1] + column, 0, int(utf8.size()))];
+    };
+    QList<QSocMath::Range> ranges;
+    cmark_iter            *iter = cmark_iter_new(root);
+    if (!iter)
+        return ranges;
+    cmark_event_type event;
+    while ((event = cmark_iter_next(iter)) != CMARK_EVENT_DONE) {
+        if (event != CMARK_EVENT_ENTER)
+            continue;
+        auto      *node = cmark_iter_get_node(iter);
+        const auto type = cmark_node_get_type(node);
+        if (type == CMARK_NODE_CODE || type == CMARK_NODE_CODE_BLOCK
+            || type == CMARK_NODE_HTML_BLOCK || type == CMARK_NODE_HTML_INLINE
+            || type == CMARK_NODE_LINK || type == CMARK_NODE_IMAGE) {
+            ranges.append(
+                {position(cmark_node_get_start_line(node), cmark_node_get_start_column(node) - 1),
+                 position(cmark_node_get_end_line(node), cmark_node_get_end_column(node))});
+        }
+    }
+    cmark_iter_free(iter);
+    std::sort(ranges.begin(), ranges.end(), [](const auto &left, const auto &right) {
+        return left.begin < right.begin;
+    });
+    QList<QSocMath::Range> merged;
+    for (const auto &range : ranges) {
+        if (!merged.isEmpty() && range.begin <= merged.last().end)
+            merged.last().end = std::max(merged.last().end, range.end);
+        else
+            merged.append(range);
+    }
+    return merged;
+}
 } // namespace
 
 QList<QSocMarkdownRenderer::RenderedLine> QSocMarkdownRenderer::render(
     const QString &markdown, int terminalWidth)
 {
-    if (markdown.isEmpty()) {
+    if (markdown.isEmpty())
         return {};
-    }
     ensureExtensionsRegistered();
-
     const QByteArray utf8 = markdown.toUtf8();
-
-    /* GFM extensions enabled: autolink for plain URLs, tasklist for
-     * `[x]` checklists, and table for the column planner downstream.
-     * Strikethrough is intentionally absent (`~100ns` prose hazard). */
-    ParserPtr parser(cmark_parser_new(CMARK_OPT_DEFAULT));
-    if (parser == nullptr) {
+    auto             doc  = parseDocument(utf8);
+    if (!doc)
         return {};
-    }
-    static const char *const kExtensions[] = {"autolink", "tasklist", "table"};
-    for (const char *name : kExtensions) {
-        cmark_syntax_extension *ext = cmark_find_syntax_extension(name);
-        if (ext != nullptr) {
-            cmark_parser_attach_syntax_extension(parser.get(), ext);
-        }
-    }
-    cmark_parser_feed(parser.get(), utf8.constData(), utf8.size());
-    NodePtr doc(cmark_parser_finish(parser.get()));
-    if (doc == nullptr) {
-        return {};
-    }
-
     Walker walker;
     walker.terminalWidth = terminalWidth;
+    if (markdown.contains(QLatin1Char('$'))) {
+        walker.mathSpans = QSocMath::spans(markdown, protectedRanges(doc.get(), utf8));
+        if (!walker.mathSpans.isEmpty()) {
+            walker.mathSource = markdown;
+            do {
+                walker.mathPrefix = QStringLiteral("QSOCTEX")
+                                    + QUuid::createUuid().toString(QUuid::Id128) + "Q";
+            } while (markdown.contains(walker.mathPrefix));
+            QString masked;
+            int     begin = 0;
+            for (int index = 0; index < walker.mathSpans.size(); ++index) {
+                const auto &span = walker.mathSpans[index];
+                masked += markdown.mid(begin, span.begin - begin);
+                masked += walker.mathPrefix + QString::number(index) + "Z";
+                begin = span.end;
+            }
+            masked += markdown.mid(begin);
+            doc = parseDocument(masked.toUtf8());
+            if (!doc)
+                return {};
+        }
+    }
     walkDocument(doc.get(), walker);
     return walker.lines;
+}
+
+bool QSocMarkdownRenderer::protectsCodeFence(const QString &markdown, int lineStart)
+{
+    if (!markdown.contains(QStringLiteral("$$")))
+        return false;
+    ensureExtensionsRegistered();
+    const auto utf8 = markdown.toUtf8();
+    auto       doc  = parseDocument(utf8);
+    if (!doc)
+        return false;
+    const auto spans = QSocMath::spans(markdown, protectedRanges(doc.get(), utf8));
+    return std::any_of(spans.cbegin(), spans.cend(), [lineStart](const auto &span) {
+        return span.display && span.begin < lineStart && span.end > lineStart;
+    });
 }

@@ -3,6 +3,8 @@
 
 #include "tui/qtuicompositor.h"
 
+#include "common/qsocmarkdownrenderer.h"
+
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuicodeblock.h"
 #include "tui/qtuitoolblock.h"
@@ -249,7 +251,10 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
         const QString lineWithNl = line + QLatin1Char('\n');
 
         const QString trimmed = line.trimmed();
-        const bool    isFence = trimmed.startsWith(QStringLiteral("```"));
+        const bool    isFence = trimmed.startsWith(QStringLiteral("```"))
+                                && (activeCode != nullptr
+                                    || !QSocMarkdownRenderer::protectsCodeFence(
+                                        committed + lineWithNl, committed.size()));
 
         if (isFence) {
             if (activeCode == nullptr) {
