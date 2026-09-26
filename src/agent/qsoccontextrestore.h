@@ -95,6 +95,13 @@ public:
         QString summary;
     };
 
+    struct FileRead
+    {
+        bool    available = false;
+        bool    oversized = false;
+        QString content;
+    };
+
     struct Inputs
     {
         bool enabled = true;
@@ -104,6 +111,7 @@ public:
         QSet<QString> excludedPaths;
         /* Returns file content, or nullopt when unreadable (skipped). */
         std::function<std::optional<QString>(const QString &)> readFile;
+        std::function<FileRead(const QString &)>               readFileBounded;
 
         /* Skill names, most-recent first; body reader returns nullopt when
          * the skill body cannot be read (skipped). */
@@ -117,6 +125,7 @@ public:
         std::function<int(const QString &)> estimateTokens;
 
         /* Budgets / counts (default to the constants above). */
+        int totalBudget       = 75000;
         int maxFiles          = kMaxFilesToRestore;
         int fileBudget        = kFileTokenBudget;
         int maxTokensPerFile  = kMaxTokensPerFile;

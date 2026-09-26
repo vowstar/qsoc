@@ -250,6 +250,7 @@ void QSocAgent::finishToolBatch(const ActiveRunPtr &run)
     }
     for (const json &attachment : attachments) {
         messages.push_back(attachment);
+        ++historyRevision_;
     }
 }
 
@@ -566,6 +567,9 @@ nlohmann::json QSocAgent::filterAllowedTools(
 
 QString QSocAgent::run(const QString &userQuery)
 {
+    if (compactionCommitting_) {
+        return {};
+    }
     if (activeRun_) {
         return QStringLiteral("[Agent already running]");
     }
@@ -608,6 +612,7 @@ QString QSocAgent::run(const QString &userQuery)
     /* Snapshot the rolling token estimate so each iteration's
      * delta can be charged against the active goal's budget. */
     int           prevTokensEstimate = owner->estimateMessagesTokens();
+    quint64       accountingRevision = owner->historyAccountingRevision_;
     QElapsedTimer iterationTimer;
     iterationTimer.start();
 
@@ -630,6 +635,10 @@ QString QSocAgent::run(const QString &userQuery)
         }
 
         int currentTokens = owner->estimateMessagesTokens();
+        if (accountingRevision != owner->historyAccountingRevision_) {
+            prevTokensEstimate = currentTokens;
+            accountingRevision = owner->historyAccountingRevision_;
+        }
 
         if (owner->agentConfig.verbose) {
             QString info
@@ -759,6 +768,9 @@ void QSocAgent::resumeStream()
 
 void QSocAgent::startStream(const std::optional<QString> &userQuery, bool restoredSession)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     if (activeRun_) {
         if (userQuery.has_value() && activeRun_->mode == RunMode::Streaming
             && queueRequest(*userQuery)) {
@@ -1000,48 +1012,33 @@ void QSocAgent::handleStreamError(const QString &error)
         return;
     }
 
-    /* Reactive compaction: when the server rejects the request because
-     * the prompt overshoots the context window, force a compact and
-     * retry once. qllmservice prefixes the error with "[HTTP <code>] ",
-     * so we dispatch on the status code, never on free-text substring.
-     * HTTP 413 is always overflow; 400 only counts when the body says
-     * so (some providers, e.g. DeepSeek, return 400 for over-long
-     * prompts with a generic "Bad Request" header but a specific body).
-     * Auth/permission failures (401/403) must surface to the user
-     * verbatim; retrying a bad key is pointless. */
+    /* Only explicit context-window errors permit a compaction retry. */
     static constexpr int maxCompactRetries = 2;
-    const bool hasContextPhrase  = error.contains("Entity Too Large", Qt::CaseInsensitive)
-                                   || error.contains("context_length_exceeded", Qt::CaseInsensitive)
+    const bool hasContextPhrase  = error.contains("context_length_exceeded", Qt::CaseInsensitive)
                                    || error.contains("maximum context length", Qt::CaseInsensitive)
                                    || error.contains("prompt is too long", Qt::CaseInsensitive);
     const bool isHttp413         = error.startsWith("[HTTP 413]");
     const bool isHttp400         = error.startsWith("[HTTP 400]");
-    const bool isContextOverflow = isHttp413 || (isHttp400 && hasContextPhrase)
-                                   || (hasContextPhrase && !error.startsWith("[HTTP "));
+    const bool isContextOverflow = hasContextPhrase
+                                   && (isHttp413 || isHttp400 || !error.startsWith("[HTTP "));
     if (isContextOverflow && owner->contextOverflowRetryCount < maxCompactRetries) {
         owner->contextOverflowRetryCount++;
         if (owner->agentConfig.verbose) {
-            emit verboseOutput(QString("[Context overflow %1/%2 — forcing compact and retrying]")
+            emit verboseOutput(QString("[Context overflow %1/%2: preparing a smaller request]")
                                    .arg(owner->contextOverflowRetryCount)
                                    .arg(maxCompactRetries));
             if (finishAbort()) {
                 return;
             }
         }
-        emit owner->compacting(2, owner->estimateMessagesTokens(), 0);
+        const int saved = owner->performCompaction(true, false);
         if (finishAbort()) {
             return;
         }
-        owner->compact();
-        if (finishAbort()) {
+        if (saved > 0) {
+            owner->processStreamIteration();
             return;
         }
-        emit owner->compacting(2, 0, owner->estimateMessagesTokens());
-        if (finishAbort()) {
-            return;
-        }
-        owner->processStreamIteration();
-        return;
     }
 
     /* Classify the error. Rate-limit (429/503/529/overloaded) and
@@ -1133,24 +1130,18 @@ void QSocAgent::computeRecallForTurn(const QString &query, const ActiveRunPtr &r
         return;
     }
 
-    /* Selection path: ask a cheap model to rank headers by relevance.
-     * Lazily clone the service onto the recall model; fall back to the
-     * primary service when no model is set or the id is unknown. */
+    /* Select memory headers with the configured model and effort. */
     QLLMService *selector = run->llm.data();
     if (selector == nullptr) {
         return;
     }
+    LLMModelConfig endpoint = selector->getCurrentModelConfig();
     if (!agentConfig.memoryRecallModel.isEmpty()) {
-        if (!recallLlm_) {
-            recallLlm_ = selector->clone(this);
-            if (!recallLlm_->setCurrentModel(agentConfig.memoryRecallModel)) {
-                recallLlm_->deleteLater();
-                recallLlm_ = nullptr;
-            }
+        if (!selector->availableModels().contains(agentConfig.memoryRecallModel)) {
+            QSocConsole::warn() << "Unknown memory model:" << agentConfig.memoryRecallModel;
+            return;
         }
-        if (recallLlm_) {
-            selector = recallLlm_;
-        }
+        endpoint = selector->getModelConfig(agentConfig.memoryRecallModel);
     }
 
     json selMessages = json::array();
@@ -1164,8 +1155,13 @@ void QSocAgent::computeRecallForTurn(const QString &query, const ActiveRunPtr &r
     try {
         /* Synchronous: safe here because no stream is in flight yet. */
         const QPointer<QSocAgent> owner(this);
-        const json                resp = selector->sendChatCompletion(
-            selMessages, json::array(), 0.1, run->stopSource.get_token(), agentConfig.effortLevel);
+        const json                resp = selector->sendChatCompletionTo(
+            endpoint,
+            selMessages,
+            json::array(),
+            0.1,
+            run->stopSource.get_token(),
+            agentConfig.effortLevel);
         if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
             return;
         }
@@ -1184,9 +1180,7 @@ void QSocAgent::computeRecallForTurn(const QString &query, const ActiveRunPtr &r
         selectorOk = false;
     }
 
-    /* Selector unreachable or errored: fall back to the most recent topics
-     * so memory still surfaces under a flaky cheap model. A successful but
-     * empty selection is respected (the model judged nothing relevant). */
+    /* Failed selection uses recent topics. A valid empty selection remains empty. */
     if (!selectorOk) {
         const QPointer<QSocAgent> owner(this);
         if (agentConfig.verbose) {
@@ -1438,6 +1432,7 @@ void QSocAgent::handleStreamComplete(const json &response)
         run->toolBatchAttachments = json::array();
         /* Add assistant message with tool calls to history */
         messages.push_back(message);
+        ++historyRevision_;
 
         if (agentConfig.verbose) {
             emit verboseOutput("[Assistant requesting tool calls]");
@@ -1482,6 +1477,7 @@ void QSocAgent::handleStreamComplete(const json &response)
     /* Push full message to preserve reasoning_content for the next
      * iteration; some thinking-mode providers require it. */
     messages.push_back(message);
+    ++historyRevision_;
 
     accountGoalUsageForIteration(streamPrevTokensEstimate, streamIterationTimer);
     if (restartOrStop()) {
@@ -1563,6 +1559,7 @@ void QSocAgent::handleStreamComplete(const json &response)
          * on the model having just produced nothing. */
         if (!messages.empty()) {
             messages.erase(messages.end() - 1);
+            ++historyRevision_;
         }
         if (agentConfig.verbose) {
             emit verboseOutput(QString("[Empty response %1/%2: retrying]")
@@ -1689,6 +1686,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         run->toolBatchAttachments = json::array();
         /* Add assistant message with tool calls to history */
         messages.push_back(message);
+        ++historyRevision_;
 
         if (agentConfig.verbose) {
             emit verboseOutput("[Assistant requesting tool calls]");
@@ -2809,7 +2807,11 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
 
 void QSocAgent::addMessage(const QString &role, const QString &content)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     messages.push_back({{"role", role.toStdString()}, {"content", content.toStdString()}});
+    ++historyRevision_;
 }
 
 QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentSpec> *out)
@@ -2877,16 +2879,26 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
 void QSocAgent::addToolMessage(
     const QString &toolCallId, const QString &content, const QString &state, const QString &toolName)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     appendBoundedToolMessage(toolCallId, content, state, toolName);
+    ++historyRevision_;
 }
 
 void QSocAgent::clearHistory()
 {
+    if (compactionCommitting_) {
+        return;
+    }
     if (mailbox_ && mailbox_->resolve(QStringLiteral("main")) == agentIdentity_) {
         mailbox_->reset(this);
         clearPendingRequests();
     }
     messages = json::array();
+    ++historyRevision_;
+    ++historyAccountingRevision_;
+    streamPrevTokensEstimate = estimateMessagesTokens();
     requestUsage_.invalidateAnchor();
 }
 
@@ -3028,6 +3040,13 @@ void QSocAgent::clearPendingRequests()
 
 void QSocAgent::abortAndDiscardPendingRequests()
 {
+    if (compactionCommitting_) {
+        QMutexLocker locker(&queueMutex);
+        rejectQueuedRequests_ = true;
+        requestQueue.clear();
+        requestStop(StopMode::Hard);
+        return;
+    }
     if (mailbox_)
         mailbox_->cancel(agentIdentity_);
     {
@@ -3056,6 +3075,9 @@ void QSocAgent::addExternalTokenUsage(qint64 inputTokens, qint64 outputTokens)
 void QSocAgent::abort()
 {
     requestStop(StopMode::Soft);
+    if (compactionCommitting_) {
+        return;
+    }
     const ActiveRunPtr               run = activeRun_;
     const QPointer<QSocAgent>        owner(this);
     const QPointer<QLongTaskMonitor> monitor(streamMonitor);
@@ -3133,11 +3155,17 @@ bool QSocAgent::isRunning() const
 
 void QSocAgent::setLLMService(QLLMService *llmService)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     this->llmService = llmService;
 }
 
 void QSocAgent::setToolRegistry(QSocToolRegistry *toolRegistry)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     if (this->toolRegistry != toolRegistry) {
         ++bindingRevision_;
         this->toolRegistry = toolRegistry;
@@ -3146,22 +3174,33 @@ void QSocAgent::setToolRegistry(QSocToolRegistry *toolRegistry)
 
 void QSocAgent::setApprovedPlan(const QString &plan)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     /* Single slot: the plan is not stored in `messages` (which would
      * break tool_call/tool ordering if set mid-dispatch and would need
      * prune/compact protection). It is re-injected as a system message
      * each turn from this string, so a new plan simply overwrites the
      * old and it survives compaction for free. The caller budget-caps
      * the text and keeps the full copy on disk. */
+    ++policyRevision_;
     approvedPlan_ = plan;
 }
 
 void QSocAgent::setEffortLevel(const QString &level)
 {
+    if (compactionCommitting_) {
+        return;
+    }
+    ++policyRevision_;
     agentConfig.effortLevel = level;
 }
 
 void QSocAgent::setConfig(const QSocAgentConfig &config)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     if (agentConfig.projectPath != config.projectPath || agentConfig.remoteMode != config.remoteMode
         || agentConfig.remoteName != config.remoteName
         || agentConfig.remoteWorkspace != config.remoteWorkspace
@@ -3169,6 +3208,7 @@ void QSocAgent::setConfig(const QSocAgentConfig &config)
         || agentConfig.remoteWritableDirs != config.remoteWritableDirs) {
         ++bindingRevision_;
     }
+    ++policyRevision_;
     agentConfig = config;
     emit configurationChanged();
 }
@@ -3185,15 +3225,26 @@ json QSocAgent::getMessages() const
 
 void QSocAgent::setMessages(const json &msgs)
 {
+    if (compactionCommitting_) {
+        return;
+    }
     if (msgs.is_array()) {
         messages = msgs;
+        ++historyRevision_;
+        ++historyAccountingRevision_;
+        streamPrevTokensEstimate = estimateMessagesTokens();
         requestUsage_.invalidateAnchor();
     }
 }
 
 void QSocAgent::setContextRestoreProvider(std::function<QSocContextRestore()> provider)
 {
-    contextRestoreProvider_ = std::move(provider);
+    if (!provider) {
+        setCandidateRestoreProvider({});
+        return;
+    }
+    setCandidateRestoreProvider(
+        [provider = std::move(provider)](const json &, qint64) { return provider(); });
 }
 
 QSocContextRestore QSocAgent::takeLastContextRestore()
@@ -3280,611 +3331,4 @@ int QSocAgent::estimateTotalTokensFromSnapshot(const QString &systemPrompt, cons
     const auto snapshot = requestSnapshot(wireMessages(systemPrompt), tools, llmService.data());
     return static_cast<int>(
         qMin<qint64>(requestUsage_.estimateNext(snapshot), std::numeric_limits<int>::max()));
-}
-
-int QSocAgent::compact()
-{
-    const QPointer<QSocAgent> owner(this);
-    const int                 originalTokens = estimateMessagesTokens();
-
-    /* Layer 1: Force prune (skip threshold check) */
-    const bool pruned = pruneToolOutputs(true);
-    if (owner.isNull()) {
-        return 0;
-    }
-    if (pruned) {
-        const int afterPrune = estimateMessagesTokens();
-        emit      compacting(1, originalTokens, afterPrune);
-        // cppcheck-suppress identicalConditionAfterEarlyExit
-        if (owner.isNull()) {
-            return 0;
-        }
-    }
-
-    /* Layer 2: Force LLM compact (skip threshold check) */
-    const int  beforeCompact = owner->estimateMessagesTokens();
-    const bool compacted     = owner->compactWithLLM(true);
-    // cppcheck-suppress identicalConditionAfterEarlyExit
-    if (owner.isNull()) {
-        return 0;
-    }
-    if (compacted) {
-        const int afterCompact = owner->estimateMessagesTokens();
-        emit      owner->compacting(2, beforeCompact, afterCompact);
-        // cppcheck-suppress identicalConditionAfterEarlyExit
-        if (owner.isNull()) {
-            return 0;
-        }
-    }
-
-    const int afterTokens = owner->estimateMessagesTokens();
-    return originalTokens - afterTokens;
-}
-
-bool QSocAgent::pruneToolOutputs(bool force)
-{
-    if (!force) {
-        int currentTokens = estimateTotalTokens();
-        int pruneTokens   = static_cast<int>(effectiveContextTokens() * agentConfig.pruneThreshold);
-        if (currentTokens <= pruneTokens) {
-            return false;
-        }
-    }
-
-    int msgCount = static_cast<int>(messages.size());
-    if (msgCount == 0) {
-        return false;
-    }
-
-    /* Scan from end to find protection boundary.
-     * Everything at or after protectBoundary is protected (recent).
-     * Everything before protectBoundary is eligible for pruning. */
-    int toolTokensFromEnd = 0;
-    int protectBoundary   = 0; /* Default: protect everything (nothing to prune) */
-
-    for (int i = msgCount - 1; i >= 0; i--) {
-        const auto &msg = messages[static_cast<size_t>(i)];
-        if (msg.contains("role") && msg["role"] == "tool" && msg.contains("content")
-            && msg["content"].is_string()) {
-            int contentTokens = estimateTokens(
-                QString::fromStdString(msg["content"].get<std::string>()));
-            toolTokensFromEnd += contentTokens;
-            if (toolTokensFromEnd >= agentConfig.pruneProtectTokens) {
-                protectBoundary = i;
-                break;
-            }
-        }
-    }
-
-    /* Calculate potential savings before modifying messages */
-    int              potentialSavings = 0;
-    std::vector<int> pruneIndices;
-
-    for (int i = 0; i < protectBoundary; i++) {
-        const auto &msg = messages[static_cast<size_t>(i)];
-        if (msg.contains("_qsoc_result_bounded"))
-            continue;
-        if (msg.contains("role") && msg["role"] == "tool" && msg.contains("content")
-            && msg["content"].is_string()) {
-            int contentTokens = estimateTokens(
-                QString::fromStdString(msg["content"].get<std::string>()));
-            if (contentTokens > 100) {
-                int prunedTokens = estimateTokens(QString("[output pruned]"));
-                potentialSavings += contentTokens - prunedTokens;
-                pruneIndices.push_back(i);
-            }
-        }
-    }
-
-    if (potentialSavings < agentConfig.pruneMinimumSavings) {
-        return false;
-    }
-
-    /* Apply pruning */
-    for (int idx : pruneIndices) {
-        messages[static_cast<size_t>(idx)]["content"] = "[output pruned]";
-    }
-
-    if (agentConfig.verbose) {
-        emit verboseOutput(QString("[Layer 1 Prune: saved ~%1 tokens, boundary at message %2/%3]")
-                               .arg(potentialSavings)
-                               .arg(protectBoundary)
-                               .arg(msgCount));
-    }
-
-    return true;
-}
-
-int QSocAgent::findSafeBoundary(int proposedIndex) const
-{
-    int msgCount = static_cast<int>(messages.size());
-
-    if (proposedIndex <= 0) {
-        return 0;
-    }
-    if (proposedIndex >= msgCount) {
-        return msgCount;
-    }
-
-    /* If proposed boundary lands on a tool message, walk backwards to include
-     * the entire assistant(tool_calls) + tool group */
-    int boundary = proposedIndex;
-
-    while (boundary > 0) {
-        const auto &msg = messages[static_cast<size_t>(boundary)];
-        if (msg.contains("role") && msg["role"] == "tool") {
-            /* This is a tool response - the assistant(tool_calls) must be before it */
-            boundary--;
-        } else {
-            break;
-        }
-    }
-
-    /* If we landed on an assistant message with tool_calls, include it too */
-    if (boundary > 0) {
-        const auto &msg = messages[static_cast<size_t>(boundary)];
-        if (msg.contains("role") && msg["role"] == "assistant" && msg.contains("tool_calls")) {
-            /* Don't split: move boundary before this assistant message */
-            /* But we need to keep the whole group, so move boundary after the group */
-            /* Actually, we want to include this group in the "old" section to be summarized,
-             * so we find where the tool responses end */
-            int groupEnd = boundary + 1;
-            while (groupEnd < msgCount) {
-                const auto &nextMsg = messages[static_cast<size_t>(groupEnd)];
-                if (nextMsg.contains("role") && nextMsg["role"] == "tool") {
-                    groupEnd++;
-                } else {
-                    break;
-                }
-            }
-            boundary = groupEnd;
-        }
-    }
-
-    return boundary;
-}
-
-QString QSocAgent::formatMessagesForSummary(int start, int end) const
-{
-    QString result;
-    int     msgCount = static_cast<int>(messages.size());
-
-    if (start < 0) {
-        start = 0;
-    }
-    if (end > msgCount) {
-        end = msgCount;
-    }
-
-    for (int i = start; i < end; i++) {
-        const auto &msg = messages[static_cast<size_t>(i)];
-        if (!msg.contains("role")) {
-            continue;
-        }
-
-        QString role = QString::fromStdString(msg["role"].get<std::string>());
-
-        if (role == "assistant" && msg.contains("tool_calls")) {
-            result += QString("[Assistant called tools: ");
-            for (const auto &tc : msg["tool_calls"]) {
-                if (tc.contains("function") && tc["function"].contains("name")) {
-                    result += QString::fromStdString(tc["function"]["name"].get<std::string>());
-                    result += " ";
-                }
-            }
-            result += "]\n";
-        } else if (role == "tool") {
-            QString content = msg.contains("content") && msg["content"].is_string()
-                                  ? QString::fromStdString(msg["content"].get<std::string>())
-                                  : "";
-            /* Cap tool outputs in the summary input. Big enough to keep
-             * file paths, error tails, and command output context; small
-             * enough that a handful of multi-MB outputs cannot blow the
-             * summarizer's own input budget. */
-            if (content.length() > 2000) {
-                content = content.left(1600) + "\n... (truncated, kept tail) ...\n"
-                          + content.right(400);
-            }
-            result += QString("[Tool result: %1]\n").arg(content);
-        } else if (msg.contains("content") && msg["content"].is_string()) {
-            QString content = QString::fromStdString(msg["content"].get<std::string>());
-            result += QString("[%1]: %2\n").arg(role, content);
-        }
-    }
-
-    return result;
-}
-
-bool QSocAgent::compactWithLLM(bool force)
-{
-    const ActiveRunPtr        run = activeRun_;
-    const QPointer<QSocAgent> owner(this);
-    const auto                stopped = [owner, run]() {
-        return owner.isNull()
-               || (run && (!owner->isCurrentRun(run) || run->stopSource.stop_requested()));
-    };
-    if (stopped()) {
-        return false;
-    }
-
-    if (!force) {
-        int currentTokens = estimateTotalTokens();
-        int compactTokens = static_cast<int>(
-            effectiveContextTokens() * agentConfig.compactThreshold);
-        if (currentTokens <= compactTokens) {
-            return false;
-        }
-    }
-
-    const json sourceMessages = messages;
-    int        msgCount       = static_cast<int>(sourceMessages.size());
-
-    /* Anchored / rolling summary: if messages[0] is a prior compaction
-     * summary we generated, lift it out and feed it back as a
-     * <previous-summary> anchor instead of re-summarizing it. Without
-     * this, every successive /compact re-feeds an already-lossy
-     * summary into the summarizer and information drifts away. */
-    QString       previousSummary;
-    int           summarizeStart = 0;
-    const QString summaryMarker  = QStringLiteral("[Conversation Summary]\n");
-    if (msgCount > 0) {
-        const auto &first = sourceMessages[0];
-        if (first.contains("role") && first["role"] == "user" && first.contains("content")
-            && first["content"].is_string()) {
-            const QString firstContent = QString::fromStdString(first["content"].get<std::string>());
-            if (firstContent.startsWith(summaryMarker)) {
-                previousSummary = firstContent.mid(summaryMarker.size());
-                summarizeStart  = 1;
-            }
-        }
-    }
-
-    /* A handful of huge tool results can push tokens past the threshold
-     * with fewer than keepRecentMessages messages total. Shrink the keep
-     * window dynamically so something is always available to summarize,
-     * and only bail when there genuinely is not enough to split. */
-    const int minToSummarize = 3;
-    if (msgCount - summarizeStart < minToSummarize + 1) {
-        if (agentConfig.verbose) {
-            emit verboseOutput(QString("[Layer 2: Cannot compact, only %1 new messages]")
-                                   .arg(msgCount - summarizeStart));
-            if (stopped()) {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    /* Token-budget tail walk: count back from the end until we hit
-     * either keepRecentMessages or the recent-zone token budget. A
-     * single 50KB tool output should not be allowed to dominate the
-     * post-compact context just because it lives in the last N
-     * positions. */
-    const int tailBudget = qBound(2000, agentConfig.maxContextTokens / 4, 8000);
-    const int hardCap
-        = qMin(agentConfig.keepRecentMessages, msgCount - summarizeStart - minToSummarize);
-    int effectiveKeep = 0;
-    int tailTokens    = 0;
-    for (int i = msgCount - 1; i >= summarizeStart && effectiveKeep < hardCap; --i) {
-        const auto &msg = sourceMessages[static_cast<size_t>(i)];
-        QString     approx;
-        if (msg.contains("content") && msg["content"].is_string()) {
-            approx = QString::fromStdString(msg["content"].get<std::string>());
-        }
-        const int approxTokens = estimateTokens(approx);
-        if (effectiveKeep >= 1 && tailTokens + approxTokens > tailBudget) {
-            break;
-        }
-        tailTokens += approxTokens;
-        effectiveKeep++;
-    }
-    if (effectiveKeep < 1) {
-        effectiveKeep = qMin(1, hardCap);
-    }
-
-    /* Determine boundary: keep recent messages */
-    int proposedBoundary = msgCount - effectiveKeep;
-    int boundary         = findSafeBoundary(proposedBoundary);
-
-    if (boundary <= summarizeStart) {
-        return false;
-    }
-
-    /* Format old messages for summarization (skip the anchor itself) */
-    QString oldContent = formatMessagesForSummary(summarizeStart, boundary);
-
-    /* Try LLM summarization if service is available and not circuit-broken */
-    QString              summary;
-    bool                 llmSuccess         = false;
-    static constexpr int maxCompactFailures = 3;
-
-    /* If the conversation we want summarized is itself larger than the
-     * model can accept in a single request, the LLM call would be
-     * rejected outright. Skip straight to the mechanical fallback so
-     * compaction still makes forward progress instead of crashing with
-     * "Request Entity Too Large". Leaves 20% headroom for the summary
-     * system prompt, completion tokens, and protocol overhead. */
-    const int summaryInputTokens = estimateTokens(oldContent);
-    const int compactBudget      = static_cast<int>(
-        static_cast<double>(agentConfig.maxContextTokens) * 0.8);
-    const QPointer<QLLMService>   compactLlm = run ? run->llm : llmService;
-    const QString                 effort     = agentConfig.effortLevel;
-    std::optional<LLMModelConfig> endpoint;
-    if (!compactLlm.isNull() && compactLlm->hasEndpoint()) {
-        endpoint = compactLlm->getCurrentModelConfig();
-    }
-    if (!agentConfig.compactionModel.isEmpty()) {
-        if (compactLlm.isNull()
-            || !compactLlm->availableModels().contains(agentConfig.compactionModel)) {
-            QSocConsole::warn() << "Unknown compaction model:" << agentConfig.compactionModel;
-            return false;
-        }
-        endpoint = compactLlm->getModelConfig(agentConfig.compactionModel);
-    }
-    const bool llmCallable = compactFailureCount < maxCompactFailures && !compactLlm.isNull()
-                             && endpoint.has_value() && summaryInputTokens < compactBudget;
-
-    if (llmCallable) {
-        const QString noToolsPreamble = QStringLiteral(
-            "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n"
-            "You already have all context above. Tool calls will be rejected\n"
-            "and waste this turn. Reply must be plain markdown.\n\n");
-
-        QString anchorBlock;
-        if (!previousSummary.isEmpty()) {
-            anchorBlock
-                = QString(
-                      "Update the anchored summary below using the conversation history above.\n"
-                      "Preserve still-true details, remove stale details, merge in new facts.\n"
-                      "<previous-summary>\n%1\n</previous-summary>\n\n")
-                      .arg(previousSummary);
-        } else {
-            anchorBlock = QStringLiteral(
-                "Create a new anchored summary from the conversation history above.\n\n");
-        }
-
-        const QString templateBlock = QStringLiteral(
-            "Output exactly the Markdown structure shown inside <template>.\n"
-            "Do not include the <template> tags in your response.\n\n"
-            "<template>\n"
-            "## Task Overview\n"
-            "- [single-sentence summary]\n"
-            "## Current State\n"
-            "- [(none)]\n"
-            "## Key Files and Paths\n"
-            "- [path: why it matters, or (none)]\n"
-            "## Errors and Fixes\n"
-            "- [error: fix, or (none)]\n"
-            "## Decisions Made\n"
-            "- [decision and why, or (none)]\n"
-            "## Important Context\n"
-            "- [(none)]\n"
-            "## Actions Already Completed\n"
-            "- [tool call: outcome, or (none)]\n"
-            "## All User Messages\n"
-            "- [verbatim, oldest first]\n"
-            "## Next Steps\n"
-            "- [(none)]\n"
-            "</template>\n\n"
-            "Rules:\n"
-            "- Keep every section, even when empty - write \"(none)\".\n"
-            "- Terse bullets, not prose paragraphs.\n"
-            "- Preserve exact file paths, commands, error strings, identifiers.\n"
-            "- Reproduce every user message verbatim - they are short and critical.\n"
-            "- Do not mention the summary process or that context was compacted.\n\n"
-            "## Conversation to summarize:\n%1\n\n");
-
-        const QString summaryPrompt = noToolsPreamble + anchorBlock + templateBlock.arg(oldContent)
-                                      + noToolsPreamble;
-
-        /* Build messages for the summarization request */
-        json summaryMessages = json::array();
-        summaryMessages.push_back(
-            {{"role", "system"},
-             {"content",
-              "You are a precise conversation summarizer. Output only plain markdown - "
-              "never call tools."}});
-        summaryMessages.push_back({{"role", "user"}, {"content", summaryPrompt.toStdString()}});
-
-        /* Use synchronous call - safe because we're at the start of processStreamIteration */
-        const std::stop_token stopToken = run ? run->stopSource.get_token() : std::stop_token{};
-        const json            response  = compactLlm->sendChatCompletionTo(
-            *endpoint, summaryMessages, json::array(), 0.1, stopToken, effort);
-        if (stopped()) {
-            return false;
-        }
-
-        if (response.contains("choices") && !response["choices"].empty()) {
-            auto msg = response["choices"][0]["message"];
-            if (msg.contains("content") && msg["content"].is_string()) {
-                summary             = QString::fromStdString(msg["content"].get<std::string>());
-                llmSuccess          = true;
-                compactFailureCount = 0;
-            }
-        }
-
-        if (!llmSuccess) {
-            compactFailureCount++;
-        }
-    }
-
-    /* Fallback: mechanical truncation if LLM failed, circuit-broken, or
-     * the conversation was too large to even submit. Cap the summary at
-     * a fraction of the context budget so the post-compact messages
-     * still fit inside the model's window. */
-    if (!llmSuccess) {
-        if (agentConfig.verbose) {
-            emit verboseOutput(QString("[Layer 2: Using mechanical summary (failures: %1/%2)]")
-                                   .arg(compactFailureCount)
-                                   .arg(maxCompactFailures));
-            if (stopped()) {
-                return false;
-            }
-        }
-        const int summaryBudgetTokens
-            = qMax(2048, static_cast<int>(agentConfig.maxContextTokens / 4));
-        const int summaryBudgetChars = summaryBudgetTokens * 4; /* coarse token->char */
-        QString   carryAnchor;
-        if (!previousSummary.isEmpty()) {
-            /* Carry the prior anchor so rolling state survives even
-             * when the LLM call fails. */
-            carryAnchor = QStringLiteral("[carried anchor]\n") + previousSummary
-                          + QStringLiteral("\n[/carried anchor]\n");
-        }
-        summary = "[Previous conversation summary: " + carryAnchor;
-        for (int i = summarizeStart; i < boundary; i++) {
-            if (summary.size() >= summaryBudgetChars) {
-                summary += "...(truncated)";
-                break;
-            }
-            const auto &msg = sourceMessages[static_cast<size_t>(i)];
-            if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
-                QString role    = QString::fromStdString(msg["role"].get<std::string>());
-                QString content = QString::fromStdString(msg["content"].get<std::string>());
-                /* Keep head + tail so file paths and error tails
-                 * survive the truncation; left(100) alone routinely
-                 * decapitated commands and stack traces. */
-                if (content.length() > 400) {
-                    content = content.left(280) + " ... " + content.right(80);
-                }
-                summary += role + ": " + content + "; ";
-            }
-        }
-        summary += "]";
-    }
-
-    /* Build new message history: summary + recent messages */
-    json newMessages = json::array();
-    newMessages.push_back(
-        {{"role", "user"},
-         {"content", QString("[Conversation Summary]\n%1").arg(summary).toStdString()}});
-
-    for (int i = boundary; i < msgCount; i++) {
-        newMessages.push_back(sourceMessages[static_cast<size_t>(i)]);
-    }
-
-    /* Post-compaction context restore: append the supplies (recent files,
-     * invoked skills, running agents) after the kept messages so they are
-     * the newest context the model sees next turn. The provider builds the
-     * payload from current state; running it here (not per-turn) means file
-     * I/O happens only when a compaction actually fires. Covers every
-     * compaction path: manual, auto, overflow. */
-    QSocContextRestore appliedRestore;
-    if (agentConfig.contextRestoreEnabled && contextRestoreProvider_) {
-        const std::function<QSocContextRestore()> provider = contextRestoreProvider_;
-        const QSocContextRestore                  restore  = provider();
-        if (stopped()) {
-            return false;
-        }
-        if (!restore.isEmpty()) {
-            const json restoreMsgs = QSocContextRestoreBuilder::toMessages(restore);
-            for (const auto &msg : restoreMsgs) {
-                newMessages.push_back(msg);
-            }
-            appliedRestore = restore;
-        }
-    }
-
-    /* Compute savings before swapping so we can warn the user when the
-     * compact accomplished nothing meaningful. The "recent kept zone
-     * dominates" pattern shows up as `before == after`: the LLM call
-     * burned latency for no reason. Surfacing it lets users decide to
-     * /clear or shrink keepRecentMessages instead of looping. */
-    if (stopped() || messages != sourceMessages) {
-        return false;
-    }
-    const int beforeTokens = estimateMessagesTokens();
-    messages               = std::move(newMessages);
-    lastApplied_           = std::move(appliedRestore);
-    const int afterTokens  = estimateMessagesTokens();
-
-    if (agentConfig.verbose) {
-        const int    saved   = beforeTokens - afterTokens;
-        const double savedPc = beforeTokens > 0 ? (100.0 * saved / beforeTokens) : 0.0;
-        QString      tag;
-        if (saved <= 0) {
-            tag = " — no-op, recent zone already dominates; consider /clear";
-        } else if (savedPc < 10.0) {
-            tag = QString(" — only %1% saved, recent zone dominates").arg(savedPc, 0, 'f', 0);
-        }
-        emit verboseOutput(QString("[Layer 2 Compact: %1 -> %2 messages, ~%3 tokens%4%5]")
-                               .arg(msgCount)
-                               .arg(messages.size())
-                               .arg(afterTokens)
-                               .arg(llmSuccess ? "" : " (fallback)")
-                               .arg(tag));
-        if (stopped()) {
-            return false;
-        }
-        /* Surface the head of the produced summary so users can verify
-         * the template was followed (anchored vs fresh, section names
-         * present, no leaked tool calls). Capped so the verbose stream
-         * stays readable on big sessions. */
-        const int     dumpChars = 600;
-        const QString head      = summary.left(dumpChars);
-        emit verboseOutput(QString("[Layer 2 Summary head%1]\n%2%3")
-                               .arg(previousSummary.isEmpty() ? " (fresh)" : " (anchored)")
-                               .arg(head)
-                               .arg(summary.size() > dumpChars ? "\n... (truncated)" : ""));
-        if (stopped()) {
-            return false;
-        }
-    }
-
-    if (!lastApplied_.isEmpty() && !stopped()) {
-        emit contextRestored();
-    }
-
-    return true;
-}
-
-void QSocAgent::compressHistoryIfNeeded(const ActiveRunPtr &run)
-{
-    if (!isCurrentRun(run) || run->stopSource.stop_requested()) {
-        return;
-    }
-    const QPointer<QSocAgent> owner(this);
-    int                       originalTokens = estimateTotalTokens();
-    int                       tokens         = originalTokens;
-
-    /* Layer 1: Prune tool outputs */
-    int pruneTokens = static_cast<int>(effectiveContextTokens() * agentConfig.pruneThreshold);
-    if (tokens > pruneTokens) {
-        const bool pruned = pruneToolOutputs();
-        if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
-            return;
-        }
-        if (pruned) {
-            tokens = owner->estimateTotalTokens();
-            emit owner->compacting(1, originalTokens, tokens);
-            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
-                return;
-            }
-        }
-    }
-
-    /* Layer 2: LLM compaction */
-    int compactTokens = static_cast<int>(effectiveContextTokens() * agentConfig.compactThreshold);
-    if (tokens > compactTokens) {
-        int beforeCompact = tokens;
-        if (compactWithLLM()) {
-            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
-                return;
-            }
-            tokens = estimateTotalTokens();
-            emit compacting(2, beforeCompact, tokens);
-            if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
-                return;
-            }
-        }
-    }
-
-    /* Layer 3: Auto-continue after compaction during streaming */
-    if (tokens < originalTokens && isStreaming && isCurrentRun(run)
-        && !run->stopSource.stop_requested()) {
-        addMessage(
-            "user",
-            "[System: Context compacted. Your persistent memory is still available "
-            "in the system prompt. Continue your current task.]");
-    }
 }

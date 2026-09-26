@@ -15,6 +15,8 @@
 
 using json = nlohmann::json;
 
+namespace {
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -35,6 +37,54 @@ class Test : public QObject
     }
 
 private slots:
+    void testTotalBudgetLimitsAllSources()
+    {
+        auto inputs            = baseInputs();
+        inputs.totalBudget     = 160;
+        inputs.candidatePaths  = {QStringLiteral("large.txt")};
+        inputs.readFileBounded = [](const QString &) {
+            return QSocContextRestoreBuilder::FileRead{true, true, QStringLiteral("prefix")};
+        };
+        inputs.skillNames = {QStringLiteral("short")};
+        inputs.readSkill  = [](const QString &) -> std::optional<QString> {
+            return QStringLiteral("skill body");
+        };
+        for (int index = 0; index < 100; ++index) {
+            inputs.agents.append(
+                {QString::number(index), QStringLiteral("task"), QString(100, QLatin1Char('x'))});
+        }
+        const auto result = QSocContextRestoreBuilder::build(inputs);
+        QCOMPARE(result.files.size(), 1);
+        QCOMPARE(result.files.front().mode, QSocContextRestore::Mode::Referenced);
+        QVERIFY(!result.files.front().attachmentText.contains(QStringLiteral("prefix")));
+        QVERIFY(result.agents.size() < inputs.agents.size());
+        const auto messages = QSocContextRestoreBuilder::toMessages(result);
+        qint64     tokens   = 0;
+        for (const auto &message : messages) {
+            tokens += estimate(QString::fromStdString(message["content"].get<std::string>())) + 4;
+        }
+        QVERIFY(tokens <= inputs.totalBudget);
+    }
+
+    void testZeroBudgetDoesNotRead()
+    {
+        auto inputs            = baseInputs();
+        inputs.totalBudget     = 0;
+        inputs.candidatePaths  = {QStringLiteral("file.txt")};
+        inputs.skillNames      = {QStringLiteral("skill")};
+        int reads              = 0;
+        inputs.readFileBounded = [&](const QString &) {
+            ++reads;
+            return QSocContextRestoreBuilder::FileRead{};
+        };
+        inputs.readSkill = [&](const QString &) -> std::optional<QString> {
+            ++reads;
+            return QString();
+        };
+        QVERIFY(QSocContextRestoreBuilder::build(inputs).isEmpty());
+        QCOMPARE(reads, 0);
+    }
+
     /* 1. QSocFileReadState recency ordering + cap, re-read bumps to front. */
     void testRecencyOrdering()
     {
@@ -217,7 +267,7 @@ private slots:
         for (int i = 0; i < 6; ++i) {
             msgs.push_back(
                 {{"role", "assistant"},
-                 {"content", QString("step %1 ").arg(i).repeated(50).toStdString()}});
+                 {"content", QString("step %1 ").arg(i).repeated(200).toStdString()}});
             msgs.push_back({{"role", "user"}, {"content", "ok"}});
         }
         agent->setMessages(msgs);
@@ -269,6 +319,8 @@ private slots:
         QCOMPARE(applied.skills.size(), 1);
     }
 };
+
+} // namespace
 
 QSOC_TEST_MAIN(Test)
 

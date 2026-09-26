@@ -4,9 +4,11 @@
 #include "agent/qsocsession.h"
 #include "qsoc_test.h"
 
+#include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <QDir>
 #include <QFile>
+#include <QProcess>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -44,6 +46,62 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void testAppendSnapshotAfterTornTail()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("session.jsonl"));
+        QSocSession   session(QSocSession::generateId(), path);
+        const json    original  = {{{"role", "user"}, {"content", "Original task"}}};
+        const json    candidate = {{{"role", "user"}, {"content", "Summary"}}};
+        QVERIFY(session.appendSnapshot(original));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::Append));
+        QVERIFY(file.write("{\"type\":\"snapshot\",\"messages\":[") > 0);
+        file.close();
+        QVERIFY(QSocSession::loadMessages(path) == original);
+        QVERIFY(session.appendSnapshot(candidate));
+        QVERIFY(QSocSession::loadMessages(path) == candidate);
+        QVERIFY(session.appendMessage({{"role", "assistant"}, {"content", "Continued"}}));
+        QCOMPARE(QSocSession::loadMessages(path).size(), json::size_type(2));
+    }
+
+    void testSnapshotCommitSurvivesProcessExit()
+    {
+        const QByteArray childMode = qgetenv("QSOC_SNAPSHOT_EXIT_TEST");
+        const json       original  = {{{"role", "user"}, {"content", "Original task"}}};
+        const json       candidate = {{{"role", "user"}, {"content", "Summary"}}};
+        if (!childMode.isEmpty()) {
+            QSocSession session(
+                QStringLiteral("exit-test"), qEnvironmentVariable("QSOC_SNAPSHOT_TEST_PATH"));
+            if (childMode == "after" && !session.appendSnapshot(candidate)) {
+                std::_Exit(2);
+            }
+            std::_Exit(0);
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        for (const QString &mode : {QStringLiteral("before"), QStringLiteral("after")}) {
+            const QString path = directory.filePath(mode + QStringLiteral(".jsonl"));
+            QSocSession   session(QStringLiteral("exit-test"), path);
+            QVERIFY(session.appendSnapshot(original));
+            QProcess child;
+            auto     environment = QProcessEnvironment::systemEnvironment();
+            environment.insert(QStringLiteral("QSOC_SNAPSHOT_EXIT_TEST"), mode);
+            environment.insert(QStringLiteral("QSOC_SNAPSHOT_TEST_PATH"), path);
+            child.setProcessEnvironment(environment);
+            child.setWorkingDirectory(directory.path());
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral("testSnapshotCommitSurvivesProcessExit")});
+            QVERIFY(child.waitForFinished(10000));
+            QCOMPARE(child.exitCode(), 0);
+            QVERIFY(
+                QSocSession::loadMessages(path)
+                == (mode == QStringLiteral("after") ? candidate : original));
+        }
+    }
+
     void testGenerateIdProducesValidUuid()
     {
         const QString id = QSocSession::generateId();

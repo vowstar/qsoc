@@ -5,6 +5,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsocmemorymanager.h"
+#include "common/qsocconsole.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -122,6 +123,12 @@ QSocMemoryDream::Outcome QSocMemoryDream::maybeRun(
         return {};
     }
 
+    if (!cfg.memoryDreamModel.isEmpty()
+        && !llmService_->availableModels().contains(cfg.memoryDreamModel)) {
+        QSocConsole::warn() << "Unknown memory model:" << cfg.memoryDreamModel;
+        return {};
+    }
+
     /* Lock in the project scope so serialization matches the project-based
      * session gate; fall back to the user scope when no project is open. */
     QString lockDir = memoryManager_->projectMemoryDir();
@@ -186,6 +193,7 @@ QSocMemoryDream::Outcome QSocMemoryDream::maybeRun(
     }
 
     QLLMService *childLlm = llmService_->clone(nullptr);
+    childLlm->setModel(llmService_->getCurrentModelConfig());
     if (!cfg.memoryDreamModel.isEmpty()) {
         childLlm->setCurrentModel(cfg.memoryDreamModel);
     }

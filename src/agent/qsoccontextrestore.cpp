@@ -70,24 +70,33 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
     /* Files: most-recent first, skip excluded, cap at maxFiles, re-read
      * each, classify Read vs Referenced by the per-file token cap, and
      * keep within the total file budget. */
+    int remaining  = qMax(0, inputs.totalBudget);
     int fileTokens = 0;
     int picked     = 0;
     for (const QString &path : inputs.candidatePaths) {
-        if (picked >= inputs.maxFiles) {
+        if (picked >= inputs.maxFiles || remaining <= 10) {
             break;
         }
         if (inputs.excludedPaths.contains(path)) {
             continue;
         }
-        std::optional<QString> content = inputs.readFile ? inputs.readFile(path) : std::nullopt;
-        if (!content.has_value()) {
-            continue; /* unreadable: skip, do not consume a slot */
+        FileRead read;
+        if (inputs.readFileBounded) {
+            read = inputs.readFileBounded(path);
+        } else if (inputs.readFile) {
+            const auto content = inputs.readFile(path);
+            read.available     = content.has_value();
+            read.content       = content.value_or(QString());
         }
+        if (!read.available) {
+            continue;
+        }
+        const QString *content = &read.content;
         ++picked;
 
         QSocContextRestore::FileItem item;
         item.displayPath = path;
-        if (inputs.estimateTokens(*content) > inputs.maxTokensPerFile) {
+        if (read.oversized || inputs.estimateTokens(*content) > inputs.maxTokensPerFile) {
             item.mode = QSocContextRestore::Mode::Referenced;
             item.attachmentText
                 = QStringLiteral(
@@ -107,9 +116,10 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
                                       .arg(*content);
         }
         const int itemTokens = inputs.estimateTokens(item.attachmentText);
-        if (fileTokens + itemTokens > inputs.fileBudget) {
+        if (itemTokens > inputs.fileBudget - fileTokens || itemTokens > remaining - 10) {
             continue; /* over budget: drop this one, a later smaller one may fit */
         }
+        remaining -= itemTokens + 10;
         fileTokens += itemTokens;
         restore.files.append(item);
     }
@@ -117,6 +127,9 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
     /* Skills: most-recent first, body truncated per skill, within budget. */
     int skillTokens = 0;
     for (const QString &name : inputs.skillNames) {
+        if (remaining <= 32) {
+            break;
+        }
         std::optional<QString> body = inputs.readSkill ? inputs.readSkill(name) : std::nullopt;
         if (!body.has_value()) {
             continue;
@@ -127,19 +140,28 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
         item.name            = name;
         item.attachmentText  = QStringLiteral("## %1\n%2").arg(name, truncated);
         const int itemTokens = inputs.estimateTokens(item.attachmentText);
-        if (skillTokens + itemTokens > inputs.skillsBudget) {
+        if (itemTokens > inputs.skillsBudget - skillTokens || itemTokens > remaining - 32) {
             continue;
         }
+        remaining -= itemTokens + 32;
         skillTokens += itemTokens;
         restore.skills.append(item);
     }
 
     /* Running background agents. */
     for (const AgentRow &row : inputs.agents) {
+        if (remaining <= 32) {
+            break;
+        }
         QSocContextRestore::AgentItem item;
-        item.id             = row.id;
-        item.label          = row.label;
-        item.attachmentText = QStringLiteral("- %1 (%2): %3").arg(row.label, row.id, row.summary);
+        item.id              = row.id;
+        item.label           = row.label;
+        item.attachmentText  = QStringLiteral("- %1 (%2): %3").arg(row.label, row.id, row.summary);
+        const int itemTokens = inputs.estimateTokens(item.attachmentText);
+        if (itemTokens > remaining - 32) {
+            continue;
+        }
+        remaining -= itemTokens + 32;
         restore.agents.append(item);
     }
 

@@ -4,6 +4,7 @@
 #include "agent/qsocmemoryextractor.h"
 
 #include "agent/qsocagent.h"
+#include "common/qsocconsole.h"
 
 #include <QEventLoop>
 #include <QStringList>
@@ -142,12 +143,18 @@ int QSocMemoryExtractor::extract(
         return start; /* Nothing worth extracting yet; keep the (clamped) cursor. */
     }
 
+    if (!cfg.memoryExtractModel.isEmpty()
+        && !llmService_->availableModels().contains(cfg.memoryExtractModel)) {
+        QSocConsole::warn() << "Unknown memory model:" << cfg.memoryExtractModel;
+        return start;
+    }
+
     const QString transcript = parent_->formatMessagesForSummary(start, total);
     const QString manifest   = buildManifest(memoryManager_->scanHeaders("all"));
     const QString userMsg    = buildUserMessage(transcript, manifest, decision.newCount);
 
     /* Constrained child: memory tools only, short turn cap, no memory /
-     * project / skill injection (keeps it focused and cache-cheap). */
+     * project / skill injection. */
     QSocAgentConfig childCfg = cfg;
     childCfg.isSubAgent      = true;
     childCfg.toolsAllow      = QStringList{"memory_read", "memory_write"};
@@ -171,6 +178,7 @@ int QSocMemoryExtractor::extract(
     }
 
     QLLMService *childLlm = llmService_->clone(nullptr);
+    childLlm->setModel(llmService_->getCurrentModelConfig());
     if (!cfg.memoryExtractModel.isEmpty()) {
         childLlm->setCurrentModel(cfg.memoryExtractModel);
     }

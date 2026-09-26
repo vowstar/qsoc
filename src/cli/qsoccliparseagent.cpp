@@ -2774,10 +2774,13 @@ bool QSocCliWorker::runAgentLoop(
      * invoked by the agent only when a compaction fires. The render lambda
      * prints the dim restore lines; it is driven from the agent signal for
      * auto/overflow compaction and called directly for manual /compact. */
-    auto buildContextRestore = [&]() -> QSocContextRestore {
+    auto buildContextRestore = [&](const json &recentTail,
+                                   qint64      remainingTokens) -> QSocContextRestore {
         const QSocAgentConfig             cfg = agent->getConfig();
         QSocContextRestoreBuilder::Inputs inputs;
-        inputs.enabled = cfg.contextRestoreEnabled;
+        inputs.enabled     = cfg.contextRestoreEnabled;
+        inputs.totalBudget = static_cast<int>(
+            qMin<qint64>(remainingTokens, std::numeric_limits<int>::max()));
         inputs.estimateTokens = [agent](const QString &text) { return agent->estimateTokens(text); };
         inputs.maxFiles          = cfg.contextRestoreMaxFiles;
         inputs.fileBudget        = cfg.contextRestoreFileBudget;
@@ -2785,31 +2788,43 @@ bool QSocCliWorker::runAgentLoop(
         inputs.maxTokensPerSkill = cfg.contextRestoreMaxTokensSkill;
         inputs.skillsBudget      = cfg.contextRestoreSkillBudget;
 
-        /* Candidate files + reader: remote over SFTP when a session is up,
-         * otherwise local from disk. */
+        const qint64 maxReadBytes = qBound<qint64>(
+            qint64(1),
+            static_cast<qint64>(cfg.contextRestoreMaxTokensFile) * 8,
+            qint64(1024 * 1024));
         if (remoteConn->session() != nullptr && remoteConn->sftp() != nullptr) {
-            inputs.candidatePaths = remoteConn->path()->readState().pathsByRecencyDesc(0);
-            const qint64 maxBytes = static_cast<qint64>(cfg.contextRestoreMaxTokensFile) * 8;
-            inputs.readFile = [remoteConn, maxBytes](const QString &path) -> std::optional<QString> {
-                QSocSftpClient *sftp = remoteConn->sftp();
+            inputs.candidatePaths  = remoteConn->path()->readState().pathsByRecencyDesc(0);
+            inputs.readFileBounded = [remoteConn, maxReadBytes](const QString &path) {
+                QSocContextRestoreBuilder::FileRead result;
+                auto                               *sftp = remoteConn->sftp();
                 if (sftp == nullptr) {
-                    return std::nullopt;
+                    return result;
                 }
-                QString          err;
-                const QByteArray data = sftp->readFile(path, maxBytes, &err);
-                if (!err.isEmpty()) {
-                    return std::nullopt;
+                QString          error;
+                const QByteArray data = sftp->readFile(path, maxReadBytes + 1, &error);
+                result.available      = error.isEmpty();
+                result.oversized      = data.size() > maxReadBytes;
+                if (result.available && !result.oversized) {
+                    result.content = QString::fromUtf8(data);
                 }
-                return QString::fromUtf8(data);
+                return result;
             };
         } else if (pathContext != nullptr) {
-            inputs.candidatePaths = pathContext->readState().pathsByRecencyDesc(0);
-            inputs.readFile       = [](const QString &path) -> std::optional<QString> {
-                QFile file(path);
-                if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    return std::nullopt;
+            inputs.candidatePaths  = pathContext->readState().pathsByRecencyDesc(0);
+            inputs.readFileBounded = [maxReadBytes](const QString &path) {
+                QSocContextRestoreBuilder::FileRead result;
+                QFile                               file(path);
+                if (!file.open(QIODevice::ReadOnly)) {
+                    return result;
                 }
-                return QString::fromUtf8(file.readAll());
+                result.available = true;
+                result.oversized = file.size() > maxReadBytes;
+                if (!result.oversized) {
+                    const QByteArray data = file.read(maxReadBytes + 1);
+                    result.oversized      = data.size() > maxReadBytes;
+                    result.content        = result.oversized ? QString() : QString::fromUtf8(data);
+                }
+                return result;
             };
         }
 
@@ -2829,11 +2844,7 @@ bool QSocCliWorker::runAgentLoop(
                 excluded.insert(path);
             }
         }
-        const json msgs      = agent->getMessages();
-        const int  count     = msgs.is_array() ? static_cast<int>(msgs.size()) : 0;
-        const int  keepStart = qMax(0, count - cfg.keepRecentMessages);
-        for (int i = keepStart; i < count; ++i) {
-            const auto &msg = msgs[static_cast<size_t>(i)];
+        for (const auto &msg : recentTail) {
             if (!msg.contains("tool_calls") || !msg["tool_calls"].is_array()) {
                 continue;
             }
@@ -2878,17 +2889,26 @@ bool QSocCliWorker::runAgentLoop(
         for (const auto &pair : ordered) {
             inputs.skillNames.append(pair.second);
         }
-        auto *projMgr    = projectManager;
-        inputs.readSkill = [&skillPaths, projMgr](const QString &name) -> std::optional<QString> {
+        const qint64 maxSkillBytes = qBound<qint64>(
+            qint64(1),
+            static_cast<qint64>(cfg.contextRestoreMaxTokensSkill) * 8,
+            qint64(1024 * 1024));
+        inputs.readSkill = [&skillPaths,
+                            maxSkillBytes](const QString &name) -> std::optional<QString> {
             const QString path = skillPaths.value(QStringLiteral("/") + name);
-            if (path.isEmpty()) {
+            QFile         file(path);
+            if (path.isEmpty() || !file.open(QIODevice::ReadOnly)) {
                 return std::nullopt;
             }
-            QString body = QSocToolSkillFind(nullptr, projMgr).readSkillContent(path);
-            if (body.isEmpty()) {
-                return std::nullopt;
+            if (file.size() > maxSkillBytes) {
+                return QStringLiteral("Skill source: %1 (read the file before use)").arg(path);
             }
-            return body;
+            const QByteArray data = file.read(maxSkillBytes + 1);
+            if (data.size() > maxSkillBytes) {
+                return QStringLiteral("Skill source: %1 (read the file before use)").arg(path);
+            }
+            QTextStream stream(data, QIODevice::ReadOnly | QIODevice::Text);
+            return stream.readAll();
         };
 
         /* Running background sub-agents. */
@@ -2908,7 +2928,7 @@ bool QSocCliWorker::runAgentLoop(
 
         return QSocContextRestoreBuilder::build(inputs);
     };
-    agent->setContextRestoreProvider(buildContextRestore);
+    agent->setCandidateRestoreProvider(buildContextRestore);
 
     auto renderContextRestore = [&compositor](const QSocContextRestore &restore) {
         if (restore.isEmpty()) {
@@ -3252,13 +3272,6 @@ bool QSocCliWorker::runAgentLoop(
      * --continue / --resume. */
     int turnCounter = 0;
 
-    /* Auto-compact: after each turn, check if context usage exceeds the
-     * configured threshold. If so, compact and report savings. A circuit
-     * breaker trips after 3 consecutive compact failures to avoid an
-     * infinite retry loop when the conversation is genuinely large. */
-    int                  autoCompactFailures       = 0;
-    static constexpr int AUTO_COMPACT_MAX_FAILURES = 3;
-
     /* Cumulative session token accounting for /cost. */
     qint64 sessionInputTokens  = 0;
     qint64 sessionOutputTokens = 0;
@@ -3434,48 +3447,40 @@ bool QSocCliWorker::runAgentLoop(
         }
     };
 
-    /* Persist the session after compaction. compact() rewrites the in-memory
-     * message array, so the append-only delta path would leave the stale
-     * pre-compact lines on disk and lose the summary; rewrite the JSONL to
-     * the compacted messages, re-emit meta (rewriteMessages truncates it),
-     * and reset both cursors to the new size so a resume restores the
-     * compacted history and extraction does not re-scan collapsed turns. */
-    auto persistCompactedSession = [&]() {
-        if (!currentSession) {
-            return false;
+    auto reportCompaction = [&](int saved) {
+        switch (agent->lastCompactionStatus()) {
+        case QSocAgent::CompactionStatus::Committed:
+            compositor.printContent(
+                QString("Compacted: saved %1 estimated input tokens.\n").arg(saved));
+            renderContextRestore(agent->takeLastContextRestore());
+            break;
+        case QSocAgent::CompactionStatus::NoProgress:
+            compositor.printContent(
+                "Compaction kept the history: no smaller candidate fits the context budget.\n",
+                QTuiScrollView::Dim);
+            break;
+        case QSocAgent::CompactionStatus::Cancelled:
+            compositor.printContent(
+                "Compaction cancelled: the session changed or stopped.\n", QTuiScrollView::Dim);
+            break;
+        case QSocAgent::CompactionStatus::Failed:
+            compositor
+                .printContent("Compaction failed. The history is unchanged.\n", QTuiScrollView::Dim);
+            break;
         }
-        const QString path = currentSession->filePath();
-        /* One pass over the live file BEFORE the rewrite truncates it: keep
-         * the raw created/cwd-irrelevant metas. Manual title and auto title
-         * stay under their own keys so an auto title is not promoted to a
-         * manual one (which would block regeneration); branch and fork
-         * lineage are preserved too. */
-        const QMap<QString, QString> metas = QSocSession::readMetas(
-            path,
-            {QStringLiteral("created"),
-             QStringLiteral("title"),
-             QStringLiteral("auto_title"),
-             QStringLiteral("branch"),
-             QStringLiteral("forkedFrom")});
-        const json compacted = agent->getMessages();
-        if (!currentSession->rewriteMessages(compacted)) {
-            return false;
+    };
+    auto compactIdleHistory = [&]() {
+        const int tokens    = agent->estimateTotalTokens();
+        const int threshold = static_cast<int>(
+            agent->effectiveContextTokens() * agent->getConfig().compactThreshold);
+        if (tokens <= threshold) {
+            return;
         }
-        persistedMessages  = compacted;
-        lastPersistedIndex = static_cast<int>(compacted.size());
-        const auto reemit  = [&](const QString &key) {
-            const QString value = metas.value(key);
-            return value.isEmpty() || currentSession->appendMeta(key, value);
-        };
-        const bool metaSaved
-            = reemit(QStringLiteral("created"))
-              && currentSession->appendMeta(QStringLiteral("cwd"), sessionProjectPath(projectManager))
-              && reemit(QStringLiteral("title")) && reemit(QStringLiteral("auto_title"))
-              && reemit(QStringLiteral("branch")) && reemit(QStringLiteral("forkedFrom"));
-        lastMemoryIndex = lastPersistedIndex;
-        return metaSaved
-               && currentSession->appendMeta(
-                   QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+        statusBarWidget.setStatus("Compacting");
+        compositor.render();
+        const int saved = agent->compactIfNeeded();
+        statusBarWidget.setStatus("Ready");
+        reportCompaction(saved);
     };
 
     /* Generate a short session title once, after the first turn, when the
@@ -3519,14 +3524,17 @@ bool QSocCliWorker::runAgentLoop(
             {{"role", "user"},
              {"content", QSocSessionTitle::buildUserMessage(firstPrompt.left(2000)).toStdString()}});
 
-        const QString priorModel = cfg.sessionTitleModel.isEmpty() ? QString()
-                                                                   : llm->getCurrentModelId();
-        const bool    switched   = !cfg.sessionTitleModel.isEmpty()
-                                   && llm->setCurrentModel(cfg.sessionTitleModel);
-        const json    resp       = llm->sendChatCompletion(titleMsgs, json::array(), 0.3);
-        if (switched) {
-            llm->setCurrentModel(priorModel);
+        LLMModelConfig endpoint = llm->getCurrentModelConfig();
+        if (!cfg.sessionTitleModel.isEmpty()) {
+            if (!llm->availableModels().contains(cfg.sessionTitleModel)) {
+                statusBarWidget.setStatus("Ready");
+                QSocConsole::warn() << "Unknown title model:" << cfg.sessionTitleModel;
+                return;
+            }
+            endpoint = llm->getModelConfig(cfg.sessionTitleModel);
         }
+        const json resp
+            = llm->sendChatCompletionTo(endpoint, titleMsgs, json::array(), 0.3, {}, cfg.effortLevel);
         statusBarWidget.setStatus("Ready");
 
         QString raw;
@@ -3585,14 +3593,17 @@ bool QSocCliWorker::runAgentLoop(
             {{"role", "user"},
              {"content", QSocAwaySummary::buildUserMessage(transcript).toStdString()}});
 
-        const QString priorModel = cfg.awaySummaryModel.isEmpty() ? QString()
-                                                                  : llm->getCurrentModelId();
-        const bool    switched   = !cfg.awaySummaryModel.isEmpty()
-                                   && llm->setCurrentModel(cfg.awaySummaryModel);
-        const json    resp       = llm->sendChatCompletion(sumMsgs, json::array(), 0.3);
-        if (switched) {
-            llm->setCurrentModel(priorModel);
+        LLMModelConfig endpoint = llm->getCurrentModelConfig();
+        if (!cfg.awaySummaryModel.isEmpty()) {
+            if (!llm->availableModels().contains(cfg.awaySummaryModel)) {
+                statusBarWidget.setStatus("Ready");
+                QSocConsole::warn() << "Unknown away summary model:" << cfg.awaySummaryModel;
+                return;
+            }
+            endpoint = llm->getModelConfig(cfg.awaySummaryModel);
         }
+        const json resp
+            = llm->sendChatCompletionTo(endpoint, sumMsgs, json::array(), 0.3, {}, cfg.effortLevel);
         statusBarWidget.setStatus("Ready");
 
         QString raw;
@@ -4238,6 +4249,18 @@ bool QSocCliWorker::runAgentLoop(
         &sessionPersistenceScope,
         [&observedTerminal](const QString &) { observedTerminal = QSocSession::RunEvent::Aborted; });
 
+    agent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+        if (!persistRecoverySnapshot(
+                currentSession.get(),
+                candidate.candidateMessages,
+                persistedMessages,
+                lastPersistedIndex)) {
+            return false;
+        }
+        lastMemoryIndex = lastPersistedIndex;
+        return true;
+    });
+
     agent->setPersistenceBarrier([&](QSocAgent::PersistencePoint point, const QString &toolCallId) {
         if (activeRunId.isEmpty() || currentSession == nullptr) {
             return true;
@@ -4423,6 +4446,7 @@ bool QSocCliWorker::runAgentLoop(
     const auto clearReplCallbacks = qScopeGuard([agent, askTool, enterPlanTool, exitPlanTool]() {
         agent->setContextRestoreProvider({});
         agent->setPersistenceBarrier({});
+        agent->setCompactionCommitter({});
         agent->setUserWatchingProbe({});
         agent->setBashSafetyJudge({});
         if (askTool != nullptr) {
@@ -6591,49 +6615,12 @@ bool QSocCliWorker::runAgentLoop(
             continue;
         }
         if (cmd == "/compact") {
-            const int msgsBefore = static_cast<int>(agent->getMessages().size());
-            const int tokBefore  = agent->estimateMessagesTokens();
-            /* Show immediate feedback so the user knows it's working — the
-             * LLM summarization call inside compact() can block for several
-             * seconds and we don't want a frozen screen. */
             compositor.printContent("Compacting...\n", QTuiScrollView::Dim);
             statusBarWidget.setStatus("Compacting");
             compositor.render();
-            /* Wire the per-layer progress signal for live feedback. */
-            auto connCompacting = connect(
-                agent, &QSocAgent::compacting, [&compositor](int layer, int before, int after) {
-                    compositor.printContent(
-                        QString("  Layer %1: %2 -> %3 tokens\n").arg(layer).arg(before).arg(after),
-                        QTuiScrollView::Dim);
-                    compositor.render();
-                });
             const int saved = agent->compact();
-            QObject::disconnect(connCompacting);
-            const int msgsAfter = static_cast<int>(agent->getMessages().size());
-            const int tokAfter  = tokBefore - saved;
-            compositor.printContent(
-                QString("Compacted: %1 messages -> %2 | %3 -> %4 tokens (saved %5)\n")
-                    .arg(msgsBefore)
-                    .arg(msgsAfter)
-                    .arg(tokBefore)
-                    .arg(tokAfter)
-                    .arg(saved));
-            /* Render the context restored after this synchronous compaction
-             * (the async signal path is only wired during a turn loop). */
-            renderContextRestore(agent->takeLastContextRestore());
-            /* The summarizer can produce a 0% reduction when the recent
-             * kept zone already exceeds the budget. Tell users why so
-             * they pick /clear or trim keepRecentMessages instead of
-             * burning more LLM calls. */
-            if (saved <= 0 && tokBefore > 0) {
-                compositor.printContent(
-                    QString(
-                        "  Note: 0 tokens saved — recent kept zone dominates the "
-                        "budget. Use /clear to reset history if compaction loops.\n"),
-                    QTuiScrollView::Dim);
-            }
+            reportCompaction(saved);
             statusBarWidget.setStatus("Ready");
-            persistCompactedSession();
             continue;
         }
         if (cmd == "/btw" || cmd.startsWith(QStringLiteral("/btw "))) {
@@ -6666,6 +6653,7 @@ bool QSocCliWorker::runAgentLoop(
                 sanitized.erase("_usage");
                 sanitized.erase("_img_tokens");
                 sanitized.erase("_qsoc_tool_state");
+                sanitized.erase("_qsoc_artifact_refs");
                 sideMessages.push_back(sanitized);
             }
             const QString wrapped = QStringLiteral(
@@ -6685,6 +6673,7 @@ bool QSocCliWorker::runAgentLoop(
              * main service's stream state. No tools on the wire: the fork
              * must answer, not act. */
             QLLMService *sideLlm = mainLlm->clone(nullptr);
+            sideLlm->setModel(mainLlm->getCurrentModelConfig());
             statusBarWidget.setStatus("Answering");
             compositor.render();
 
@@ -9050,43 +9039,7 @@ bool QSocCliWorker::runAgentLoop(
                 statusBarWidget.setStatus("Ready");
             }
 
-            /* Auto-compact: if context usage exceeds the configured threshold
-             * and the circuit breaker hasn't tripped, compact now. */
-            if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
-                const int    currentTokens = agent->estimateTotalTokens();
-                const double threshold     = agent->getConfig().compactThreshold;
-                const int    budget        = agent->effectiveContextTokens();
-                if (currentTokens > static_cast<int>(budget * threshold)) {
-                    compositor.printContent("(auto-compacting...)\n", QTuiScrollView::Dim);
-                    statusBarWidget.setStatus("Compacting");
-                    compositor.render();
-                    const int before = agent->estimateMessagesTokens();
-                    const int saved  = agent->compact();
-                    /* Idle auto-compact runs outside the per-turn loop, so
-                     * render the restore here rather than via the signal. */
-                    renderContextRestore(agent->takeLastContextRestore());
-                    statusBarWidget.setStatus("Ready");
-                    /* compact() rewrote the in-memory array regardless of
-                     * savings; sync the JSONL so resume stays consistent. */
-                    persistCompactedSession();
-                    if (saved > 0) {
-                        autoCompactFailures = 0;
-                        compositor.printContent(
-                            QString("(auto-compacted: %1 -> %2 tokens, saved %3)\n")
-                                .arg(before)
-                                .arg(before - saved)
-                                .arg(saved),
-                            QTuiScrollView::Dim);
-                    } else {
-                        autoCompactFailures++;
-                        compositor.printContent(
-                            QString(
-                                "(auto-compact saved 0 tokens; recent kept zone "
-                                "dominates — consider /clear)\n"),
-                            QTuiScrollView::Dim);
-                    }
-                }
-            }
+            compactIdleHistory();
 
             /* Refresh the context-usage chip so the idle status bar shows how
              * full the window is and how close auto-compact is. */
@@ -9734,35 +9687,7 @@ bool QSocCliWorker::runAgentLoop(
                 statusBarWidget.setStatus("Ready");
             }
 
-            /* Auto-compact (same logic as streaming path). */
-            if (autoCompactFailures < AUTO_COMPACT_MAX_FAILURES) {
-                const int    currentTokens = agent->estimateTotalTokens();
-                const double threshold     = agent->getConfig().compactThreshold;
-                const int    budget        = agent->effectiveContextTokens();
-                if (currentTokens > static_cast<int>(budget * threshold)) {
-                    const int before = agent->estimateMessagesTokens();
-                    const int saved  = agent->compact();
-                    /* compact() rewrote the in-memory array regardless of
-                     * savings; sync the JSONL so resume stays consistent. */
-                    persistCompactedSession();
-                    if (saved > 0) {
-                        autoCompactFailures = 0;
-                        compositor.printContent(
-                            QString("(auto-compacted: %1 -> %2 tokens, saved %3)\n")
-                                .arg(before)
-                                .arg(before - saved)
-                                .arg(saved),
-                            QTuiScrollView::Dim);
-                    } else {
-                        autoCompactFailures++;
-                        compositor.printContent(
-                            QString(
-                                "(auto-compact saved 0 tokens; recent kept zone "
-                                "dominates — consider /clear)\n"),
-                            QTuiScrollView::Dim);
-                    }
-                }
-            }
+            compactIdleHistory();
 
             /* Refresh the context-usage chip so the idle status bar shows how
              * full the window is and how close auto-compact is. */
