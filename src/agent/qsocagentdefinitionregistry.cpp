@@ -119,6 +119,7 @@ void QSocAgentDefinitionRegistry::registerBuiltins()
         QStringLiteral("path_context"),
         QStringLiteral("lsp"),
         QStringLiteral("query_docs"),
+        QStringLiteral("z3_solve"),
         QStringLiteral("todo_list"),
         QStringLiteral("todo_add"),
         QStringLiteral("todo_update"),

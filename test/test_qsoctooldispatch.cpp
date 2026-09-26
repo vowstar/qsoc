@@ -6,6 +6,7 @@
 #include "agent/qsocsession.h"
 #include "agent/qsocsessionrecovery.h"
 #include "agent/tool/qsoctooloutputread.h"
+#include "agent/tool/qsoctoolsmt.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "qsoc_test.h"
 
@@ -234,6 +235,87 @@ class Test : public QObject
 {
     Q_OBJECT
 private slots:
+    void invokedSolverSavesBoundedResult_data()
+    {
+        QTest::addColumn<bool>("stream");
+        QTest::newRow("sync") << false;
+        QTest::newRow("stream") << true;
+    }
+
+    void invokedSolverSavesBoundedResult()
+    {
+        if (!QSocToolSmt::supported())
+            QSKIP("Worker resource limits require Linux");
+        QFETCH(bool, stream);
+        MockAgentServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        configureService(service, server.url());
+        QSocToolRegistry   registry;
+        QSocToolSmt        solver(nullptr, QStringLiteral(QSOC_SMT_WORKER_PATH));
+        QSocToolOutputRead reader(nullptr);
+        registry.registerTool(&solver);
+        registry.registerTool(&reader);
+        QSocAgent agent(nullptr, &service, &registry, config());
+        QString   formula;
+        for (int index = 0; index < 800; ++index)
+            formula += QStringLiteral("(declare-const v%1 Int)(assert (= v%1 %1))\n").arg(index);
+        const json arguments = {{"smtlib", formula.toStdString()}, {"timeout_ms", 5000}};
+        server.respond       = [&](const json &request, int index) {
+            if (index == 0)
+                return call(
+                    "describe", "tool_catalog", {{"operation", "describe"}, {"name", "z3_solve"}});
+            if (index == 1)
+                return call(
+                    "solve",
+                    "tool_invoke",
+                    {{"name", "z3_solve"},
+                     {"schema_version", latestVersion(request).toStdString()},
+                     {"arguments_json", arguments.dump()}});
+            return done();
+        };
+        QSignalSpy finished(&agent, &QSocAgent::runComplete);
+        QSignalSpy results(&agent, &QSocAgent::toolCallFinished);
+        if (stream) {
+            agent.runStream(QStringLiteral("solve"));
+            QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 10000);
+        } else {
+            QCOMPARE(agent.run(QStringLiteral("solve")), QStringLiteral("done"));
+        }
+        QCOMPARE(server.requestCount(), 3);
+        QCOMPARE(results.size(), 2);
+        QCOMPARE(results.at(1).at(1).toString(), QStringLiteral("z3_solve"));
+        QCOMPARE(results.at(1).at(3).value<QSocToolResultStatus>(), QSocToolResultStatus::Ok);
+        const QString raw    = results.at(1).at(2).toString();
+        const auto    result = json::parse(raw.toStdString());
+        QCOMPARE(result.at("execution"), json("completed"));
+        QCOMPARE(result.at("solver_status"), json("sat"));
+        QVERIFY(QSocRequestUsage::estimateText(raw) > 4096);
+        const auto references = QSocAgent::artifactReferences(agent.getMessages());
+        QCOMPARE(references.size(), 1);
+        QCOMPARE(references.front().completion, QStringLiteral("ok"));
+        QCOMPARE(references.front().sourceCompleteness, QStringLiteral("unknown"));
+        QString captured;
+        qint64  offset = 0;
+        for (;;) {
+            const auto page = agent.toolResultStore()->read(references.front().id, offset, 32768);
+            QVERIFY(page.has_value());
+            captured += page->text;
+            if (page->eof)
+                break;
+            QVERIFY(page->nextOffset > offset);
+            offset = page->nextOffset;
+        }
+        QCOMPARE(captured, raw);
+        const auto &wire = server.request(2).at("messages");
+        QCOMPARE(wire.back().at("tool_call_id"), json("solve"));
+        const QString preview = QString::fromStdString(wire.back().at("content").get<std::string>());
+        QVERIFY(preview.contains(references.front().id));
+        QVERIFY(QSocRequestUsage::estimateText(preview) <= 4096);
+        for (const auto &message : wire)
+            QVERIFY(!message.contains("_qsoc_artifact_refs"));
+    }
+
     void catalogUsesOneDeferredCall()
     {
         MockAgentServer server;

@@ -58,6 +58,7 @@ private slots:
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("write_file")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("edit_file")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("bash")));
+        QVERIFY(!def->toolsAllow.contains(QStringLiteral("z3_solve")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("memory_write")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("module_import")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("generate_verilog")));
@@ -76,6 +77,7 @@ private slots:
         QVERIFY(def->toolsAllow.contains(QStringLiteral("read_file")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("tool_output_read")));
         QVERIFY(def->toolsAllow.contains(QStringLiteral("lsp")));
+        QVERIFY(def->toolsAllow.contains(QStringLiteral("z3_solve")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("write_file")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("edit_file")));
         QVERIFY(!def->toolsAllow.contains(QStringLiteral("memory_write")));
