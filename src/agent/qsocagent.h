@@ -472,6 +472,18 @@ public:
      */
     QString buildSystemPromptWithMemory(bool includeRuntime = true) const;
 
+    struct ForkSnapshot
+    {
+        QString         identityPrompt;
+        QSocAgentConfig config;
+        json            messages;
+        QString         approvedPlan;
+        quint64         bindingRevision = 0;
+    };
+
+    ForkSnapshot captureForkSnapshot() const;
+    quint64      bindingRevision() const { return bindingRevision_; }
+
     /**
      * @brief Append a trusted runtime reminder to the leading system message.
      *        User and tool content remain unchanged.
@@ -727,6 +739,7 @@ private:
     int             streamPrevTokensEstimate = 0;
     QElapsedTimer   streamIterationTimer;
     QSocAgentConfig agentConfig;
+    quint64         bindingRevision_ = 1;
     json            messages;
 
     ActiveRunPtr activeRun_;
@@ -832,8 +845,9 @@ private:
      *        memory) onto the given buffer. Shared by the regular
      *        and sub-agent prompt assembly paths.
      */
-    void appendDynamicSystemSections(QString &prompt) const;
-    void appendRuntimeSystemSections(QString &prompt) const;
+    QString buildIdentitySystemPrompt() const;
+    void    appendDynamicSystemSections(QString &prompt) const;
+    void    appendRuntimeSystemSections(QString &prompt) const;
 
     /**
      * @brief Append ephemeral runtime reminders to the leading system message.

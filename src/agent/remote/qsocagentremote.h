@@ -19,9 +19,15 @@ class QSocSshSession;
 class QSocSftpClient;
 class QSocToolRegistry;
 class QSocConfig;
+struct QSocAgentConfig;
 class QSocMonitorTaskSource;
 class QSocHostCatalog;
 class QSocSshConfigParser;
+
+class QSocRemoteConnection;
+
+/** @brief Load bounded project rules once when binding a remote workspace. */
+void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *config);
 
 /**
  * @brief Short-lived staging bundle for one connect attempt.

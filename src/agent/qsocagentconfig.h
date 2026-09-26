@@ -152,6 +152,14 @@ struct QSocAgentConfig
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
 
+    struct RemoteProjectRules
+    {
+        QString target;
+        QString workspace;
+        QString text;
+    };
+    RemoteProjectRules remoteProjectRules;
+
     /* User-defined lifecycle hooks parsed from `agent.hooks` in
      * .qsoc.yml / qsoc.yml. Hooks always run on the local host, even
      * in remoteMode; the JSON payload includes a `remote` section so
