@@ -661,20 +661,22 @@ output is displayed in dim text.
 <agent-context-compaction>
 Long conversations are managed by a three-layer compaction system:
 
-+ *Tool Output Pruning* (60% threshold): Old tool outputs are replaced with
++ *Tool Output Pruning* (40% threshold): Old tool outputs are replaced with
   `[output pruned]`. Zero LLM calls.
-+ *LLM Compaction* (80% threshold): Older messages are summarized by the LLM,
-  preserving technical details (file paths, decisions, errors).
++ *LLM Compaction* (60% threshold): The LLM summarizes older messages.
 + *Auto-Continue*: After compaction during streaming, the agent automatically
   resumes the current task.
 
 Use `/compact` to trigger compaction manually, and `/context` to inspect the
 per-category token breakdown.
 
-Each compaction also produces a rolling anchored summary that is preserved
-across subsequent compactions. The earliest decisions, file paths, and
-constraints survive even after multiple rounds, so long sessions retain
-their starting context instead of drifting.
+Each summary includes the previous summary as an anchor. Summaries can omit
+details. Read the original session history when exact earlier text matters.
+
+Compaction inherits the current model and reasoning effort, including a
+temporary model selection. `agent.compaction_model` selects a different
+configured model for the summary only. An unknown model ID reports an error.
+The summary request does not change the model selected for normal turns.
 
 After every compaction (manual, automatic, or context-overflow), qsoc
 re-injects a bounded set of supplies so working memory survives the

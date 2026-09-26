@@ -1141,7 +1141,7 @@ void QSocAgent::computeRecallForTurn(const QString &query, const ActiveRunPtr &r
         /* Synchronous: safe here because no stream is in flight yet. */
         const QPointer<QSocAgent> owner(this);
         const json                resp = selector->sendChatCompletion(
-            selMessages, json::array(), 0.1, run->stopSource.get_token());
+            selMessages, json::array(), 0.1, run->stopSource.get_token(), agentConfig.effortLevel);
         if (owner.isNull() || !owner->isCurrentRun(run) || run->stopSource.stop_requested()) {
             return;
         }
@@ -1661,7 +1661,11 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         return IterationResult::Stopped;
     }
     json response = run->llm->sendChatCompletion(
-        messagesWithSystem, tools, agentConfig.temperature, run->stopSource.get_token());
+        messagesWithSystem,
+        tools,
+        agentConfig.temperature,
+        run->stopSource.get_token(),
+        agentConfig.effortLevel);
     // cppcheck-suppress identicalConditionAfterEarlyExit
     if (owner.isNull() || !owner->isCurrentRun(run)) {
         return IterationResult::Stopped;
@@ -3627,9 +3631,22 @@ bool QSocAgent::compactWithLLM(bool force)
     const int summaryInputTokens = estimateTokens(oldContent);
     const int compactBudget      = static_cast<int>(
         static_cast<double>(agentConfig.maxContextTokens) * 0.8);
-    const QPointer<QLLMService> compactLlm = run ? run->llm : llmService;
+    const QPointer<QLLMService>   compactLlm = run ? run->llm : llmService;
+    const QString                 effort     = agentConfig.effortLevel;
+    std::optional<LLMModelConfig> endpoint;
+    if (!compactLlm.isNull() && compactLlm->hasEndpoint()) {
+        endpoint = compactLlm->getCurrentModelConfig();
+    }
+    if (!agentConfig.compactionModel.isEmpty()) {
+        if (compactLlm.isNull()
+            || !compactLlm->availableModels().contains(agentConfig.compactionModel)) {
+            QSocConsole::warn() << "Unknown compaction model:" << agentConfig.compactionModel;
+            return false;
+        }
+        endpoint = compactLlm->getModelConfig(agentConfig.compactionModel);
+    }
     const bool llmCallable = compactFailureCount < maxCompactFailures && !compactLlm.isNull()
-                             && compactLlm->hasEndpoint() && summaryInputTokens < compactBudget;
+                             && endpoint.has_value() && summaryInputTokens < compactBudget;
 
     if (llmCallable) {
         const QString noToolsPreamble = QStringLiteral(
@@ -3693,23 +3710,10 @@ bool QSocAgent::compactWithLLM(bool force)
               "never call tools."}});
         summaryMessages.push_back({{"role", "user"}, {"content", summaryPrompt.toStdString()}});
 
-        /* Honor an explicit compaction_model for the summary call only; an
-         * empty value keeps the user's primary model. Captured before the
-         * switch and restored right after, so normal turns are unaffected. */
-        const QString priorModelId  = agentConfig.compactionModel.isEmpty()
-                                          ? QString()
-                                          : compactLlm->getCurrentModelId();
-        const bool    modelSwitched = !agentConfig.compactionModel.isEmpty()
-                                      && compactLlm->setCurrentModel(agentConfig.compactionModel);
-
         /* Use synchronous call - safe because we're at the start of processStreamIteration */
         const std::stop_token stopToken = run ? run->stopSource.get_token() : std::stop_token{};
-        const json            response
-            = compactLlm->sendChatCompletion(summaryMessages, json::array(), 0.1, stopToken);
-
-        if (modelSwitched && !compactLlm.isNull()) {
-            compactLlm->setCurrentModel(priorModelId);
-        }
+        const json            response  = compactLlm->sendChatCompletionTo(
+            *endpoint, summaryMessages, json::array(), 0.1, stopToken, effort);
         if (stopped()) {
             return false;
         }

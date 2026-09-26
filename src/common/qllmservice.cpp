@@ -37,6 +37,15 @@ struct QLLMService::StreamState
 
 namespace {
 
+void applyReasoningEffort(json &payload, const QString &effort)
+{
+    if (!effort.isEmpty()) {
+        payload["reasoning_effort"] = effort.toStdString();
+        payload["reasoning"]        = {{"effort", effort.toStdString()}};
+        payload.erase("temperature");
+    }
+}
+
 struct AsyncRequestState
 {
     QPointer<QNetworkReply> reply;
@@ -878,14 +887,7 @@ void QLLMService::sendChatCompletionStream(
      * instead of recomputing from scratch each turn. */
     payload["stream_options"] = {{"include_usage", true}};
 
-    if (!reasoningEffort.isEmpty()) {
-        /* Direct OpenAI/DeepSeek format */
-        payload["reasoning_effort"] = reasoningEffort.toStdString();
-        /* OpenRouter unified format */
-        payload["reasoning"] = {{"effort", reasoningEffort.toStdString()}};
-        /* Remove temperature - reasoning models reject it */
-        payload.erase("temperature");
-    }
+    applyReasoningEffort(payload, reasoningEffort);
 
     if (!endpoint.model.isEmpty()) {
         payload["model"] = endpoint.model.toStdString();
@@ -1532,7 +1534,11 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
 }
 
 json QLLMService::sendChatCompletion(
-    const json &messages, const json &tools, double temperature, std::stop_token stopToken)
+    const json     &messages,
+    const json     &tools,
+    double          temperature,
+    std::stop_token stopToken,
+    const QString  &reasoningEffort)
 {
     if (stopToken.stop_requested()) {
         return {{"error", "Request cancelled"}};
@@ -1541,16 +1547,30 @@ json QLLMService::sendChatCompletion(
         return {{"error", "No LLM endpoint configured"}};
     }
 
+    return sendChatCompletionTo(*active, messages, tools, temperature, stopToken, reasoningEffort);
+}
+
+json QLLMService::sendChatCompletionTo(
+    LLMModelConfig  endpoint,
+    const json     &messages,
+    const json     &tools,
+    double          temperature,
+    std::stop_token stopToken,
+    const QString  &reasoningEffort)
+{
+    if (stopToken.stop_requested()) {
+        return {{"error", "Request cancelled"}};
+    }
     const QPointer<QLLMService> owner(this);
 
-    const LLMModelConfig endpoint = *active;
-    QNetworkRequest      request  = prepareRequest(endpoint);
+    QNetworkRequest request = prepareRequest(endpoint);
 
     /* Build payload with messages and tools */
     json payload;
     payload["messages"]    = messages;
     payload["temperature"] = temperature;
     payload["stream"]      = false;
+    applyReasoningEffort(payload, reasoningEffort);
 
     if (!endpoint.model.isEmpty()) {
         payload["model"] = endpoint.model.toStdString();

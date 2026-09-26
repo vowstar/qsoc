@@ -663,6 +663,153 @@ class Test final : public QObject
     Q_OBJECT
 
 private slots:
+    void synchronousAgentPreservesEffort_data()
+    {
+        QTest::addColumn<QString>("effort");
+        QTest::newRow("off") << QString();
+        QTest::newRow("high") << QStringLiteral("high");
+    }
+
+    void synchronousAgentPreservesEffort()
+    {
+        QFETCH(QString, effort);
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueCompletion(QStringLiteral("complete"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        QSocAgentConfig  config = testConfig();
+        config.effortLevel      = effort;
+        config.maxTurnsOverride = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        QCOMPARE(agent.run(QStringLiteral("answer once")), QStringLiteral("complete"));
+        QCOMPARE(server.requestCount(), 1);
+        const json body = json::parse(server.requestBody(0).toStdString());
+        QCOMPARE(body.contains("temperature"), effort.isEmpty());
+        QCOMPARE(body.contains("reasoning_effort"), !effort.isEmpty());
+        QCOMPARE(body.contains("reasoning"), !effort.isEmpty());
+        if (!effort.isEmpty()) {
+            QCOMPARE(body.at("reasoning_effort").get<std::string>(), effort.toStdString());
+            QCOMPARE(body.at("reasoning").at("effort").get<std::string>(), effort.toStdString());
+        }
+    }
+
+    void compactionUsesCapturedEndpoint_data()
+    {
+        QTest::addColumn<bool>("explicitModel");
+        QTest::newRow("temporary-endpoint") << false;
+        QTest::newRow("configured-summary-model") << true;
+    }
+
+    void compactionUsesCapturedEndpoint()
+    {
+        QFETCH(bool, explicitModel);
+        MockServer configuredServer;
+        MockServer temporaryServer;
+        MockServer nextServer;
+        QVERIFY(configuredServer.listen());
+        QVERIFY(temporaryServer.listen());
+        QVERIFY(nextServer.listen());
+        ScopedLlmConfigHome configHome(configuredServer);
+        QVERIFY(configHome.isValid());
+        QSocConfig  serviceConfig;
+        QLLMService service(nullptr, &serviceConfig);
+        QVERIFY(service.hasEndpoint());
+        LLMModelConfig temporary = service.getCurrentModelConfig();
+        temporary.url            = temporaryServer.url().toString();
+        temporary.model          = QStringLiteral("temporary-model");
+        service.setModel(temporary);
+        LLMModelConfig next = temporary;
+        next.url            = nextServer.url().toString();
+        next.model          = QStringLiteral("next-model");
+        QSocToolRegistry registry;
+        QSocAgentConfig  config   = testConfig();
+        config.effortLevel        = QStringLiteral("high");
+        config.maxContextTokens   = 10000;
+        config.keepRecentMessages = 2;
+        if (explicitModel) {
+            config.compactionModel = QStringLiteral("test-model");
+        }
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int i = 0; i < 8; ++i) {
+            history.push_back(
+                {{"role", i % 2 == 0 ? "user" : "assistant"},
+                 {"content", std::string(800, static_cast<char>('a' + i))}});
+        }
+        agent.setMessages(history);
+        MockServer &summaryServer = explicitModel ? configuredServer : temporaryServer;
+        summaryServer.enqueueCompletion(QStringLiteral("captured summary"));
+        bool parentUnchanged = false;
+        summaryServer.setRequestObserver([&](int) {
+            parentUnchanged = service.getCurrentModelConfig().model == temporary.model
+                              && service.getCurrentModelConfig().url == temporary.url;
+            service.setModel(next);
+            agent.setEffortLevel(QStringLiteral("low"));
+        });
+        QVERIFY(agent.compact() > 0);
+        QVERIFY(parentUnchanged);
+        QCOMPARE(configuredServer.requestCount(), explicitModel ? 1 : 0);
+        QCOMPARE(temporaryServer.requestCount(), explicitModel ? 0 : 1);
+        const json body = json::parse(summaryServer.requestBody(0).toStdString());
+        QVERIFY(body.contains("reasoning_effort"));
+        QVERIFY(body.contains("reasoning"));
+        QCOMPARE(
+            body.at("model").get<std::string>(),
+            explicitModel ? std::string("test-model") : std::string("temporary-model"));
+        QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
+        QCOMPARE(body.at("reasoning").at("effort").get<std::string>(), std::string("high"));
+        QVERIFY(!body.contains("temperature"));
+        QCOMPARE(service.getCurrentModelConfig().url, next.url);
+        QCOMPARE(service.getCurrentModelConfig().model, next.model);
+        QVERIFY(
+            agent.getMessages().at(0).at("content").get<std::string>().find("captured summary")
+            != std::string::npos);
+        nextServer.enqueueCompletion(QStringLiteral("next complete"));
+        const json response = service.sendChatCompletion(json::array());
+        QVERIFY(!response.contains("error"));
+        QCOMPARE(nextServer.requestCount(), 1);
+        const json nextBody = json::parse(nextServer.requestBody(0).toStdString());
+        QCOMPARE(nextBody.at("model").get<std::string>(), std::string("next-model"));
+    }
+
+    void invalidCompactionModelDoesNotCallPrimary_data()
+    {
+        QTest::addColumn<int>("contextTokens");
+        QTest::addColumn<bool>("hasEndpoint");
+        QTest::newRow("ordinary") << 10000 << true;
+        QTest::newRow("over-budget") << 100 << true;
+        QTest::newRow("no-endpoint") << 10000 << false;
+    }
+
+    void invalidCompactionModelDoesNotCallPrimary()
+    {
+        QFETCH(int, contextTokens);
+        QFETCH(bool, hasEndpoint);
+        MockServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        if (hasEndpoint) {
+            configureService(service, server);
+        }
+        QSocToolRegistry registry;
+        QSocAgentConfig  config   = testConfig();
+        config.compactionModel    = QStringLiteral("missing-model");
+        config.keepRecentMessages = 1;
+        config.maxContextTokens   = contextTokens;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int i = 0; i < 8; ++i) {
+            history.push_back(
+                {{"role", i % 2 == 0 ? "user" : "assistant"}, {"content", std::string(800, 'x')}});
+        }
+        agent.setMessages(history);
+        QCOMPARE(agent.compact(), 0);
+        QCOMPARE(server.requestCount(), 0);
+        QVERIFY(agent.getMessages() == history);
+    }
+
     void persistenceFailureStopsBeforeRequest()
     {
         MockServer server;
