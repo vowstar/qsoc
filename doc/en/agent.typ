@@ -438,6 +438,29 @@ View and selection:
 - *Mouse drag*: Select and auto-copy to clipboard (OSC 52)
 - *Shift + drag*: Native terminal selection (fallback)
 
+Mathematical expressions use single dollars for inline formulas and double dollars
+for display formulas. Inline formulas stay on one line. Display formulas use
+Unicode rows for fractions, roots, and matrices. Code and link content retain
+literal dollars.
+
+Supported matrix environments are `matrix`, `pmatrix`, `bmatrix`, `vmatrix`, and
+`Vmatrix`, inside double dollars. Separate columns with `&` and rows with `\\`.
+Matrices require equal column counts. Empty cells retain their positions.
+Each matrix has at most 8 rows and 8 columns. Each formula has at most 64 cells.
+Nested matrices, macros, array column formats, and custom row spacing are unsupported.
+
+Formulas support Greek letters, common operators, numeric subscripts and
+superscripts, simple fractions, and square roots. Each expression is limited to
+4096 UTF-8 bytes, 32 nesting levels, 16 display rows, and 256 columns. The available
+terminal width can reduce that column limit. Unsupported input and oversized
+formulas retain their source text. Display formulas inside table cells also
+retain their source. Narrowing the terminal can cause this fallback.
+
+History, logs, and Markdown copies retain the original formula source. Mouse
+selection copies the displayed characters, including the rows of a display
+formula. Formula output uses terminal fonts and does not require an external
+TeX installation.
+
 Completion and interrupt:
 
 - `@<name>`: Fuzzy-complete a project file path

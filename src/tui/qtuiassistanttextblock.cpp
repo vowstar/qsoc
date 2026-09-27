@@ -64,7 +64,8 @@ void QTuiAssistantTextBlock::layout(int width)
          * are emitted as a single visual row (column planning already
          * fit them to width, or the table degraded to records). All
          * other content soft-wraps to width. */
-        if (line.kind == QSocMarkdownRenderer::Kind::Table) {
+        if (line.kind == QSocMarkdownRenderer::Kind::Table
+            || line.kind == QSocMarkdownRenderer::Kind::Math) {
             fullRows.append({.runs = runs, .logicalLineIndex = lineIdx, .startColInLogical = 0});
         } else {
             fullRows.append(qtuiWrapStyledRuns(runs, lineIdx, width));
