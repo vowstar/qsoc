@@ -9,6 +9,7 @@
 #include <QBuffer>
 #include <QColor>
 #include <QImage>
+#include <QRegularExpression>
 #include <QtTest>
 
 #include <memory>
@@ -67,6 +68,11 @@ public:
 
     QString toPlainText() const override { return tag; }
 
+    GraphicsState graphicsState(int, int, int, int, const QVector<int> & = {}) const override
+    {
+        return isFolded() ? GraphicsState::Hidden : GraphicsState::Place;
+    }
+
     QString emitGraphicsLayer(
         int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const override
     {
@@ -106,6 +112,41 @@ public:
     mutable int destroyCount       = 0;
 };
 
+QTuiImagePreviewBlock *appendImage(QTuiScrollView &view)
+{
+    auto image = std::make_unique<QTuiImagePreviewBlock>(
+        QStringLiteral("generated.png"), QStringLiteral("image/png"), 160, 96, makeRealPngBytes());
+    auto *ptr = image.get();
+    view.appendBlock(std::move(image));
+    return ptr;
+}
+
+QString renderFrame(QTuiScrollView &view, QTuiScreen &screen, int height)
+{
+    screen.clear();
+    view.render(screen, 0, height, screen.width());
+    QString out = view.prepareGraphicsLayer(screen);
+    out += screen.toAnsi();
+    out += view.collectGraphicsLayer(screen.writtenRows());
+    return out;
+}
+
+void clearGraphicsEnv()
+{
+    for (const char *name :
+         {"KITTY_WINDOW_ID",
+          "GHOSTTY_RESOURCES_DIR",
+          "WEZTERM_EXECUTABLE",
+          "KONSOLE_VERSION",
+          "TERM",
+          "TERM_PROGRAM",
+          "TMUX",
+          "STY",
+          "QSOC_NO_IMAGE_GRAPHICS"}) {
+        qunsetenv(name);
+    }
+}
+
 } // namespace
 
 class Test : public QObject
@@ -113,6 +154,15 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void init() { clearGraphicsEnv(); }
+    void cleanup() { clearGraphicsEnv(); }
+    void clippedImageClearsAndReturns();
+    void twoImagesDeleteOnlyHiddenPlacement();
+    void inlineImageTracksActualWrites();
+    void inlineMoveRepaintsOldRows();
+    void newScreenRetransmitsImages_data();
+    void newScreenRetransmitsImages();
+    void screenTracksOnlyWrittenRows();
     void emptyScrollViewProducesNoOverlay();
     void blocksWithDefaultEmitContributeNothing();
     void visibleBlockProbeReceivesScreenCoords();
@@ -412,6 +462,156 @@ void Test::foldAllImagePreviewsTouchesOnlyImageBlocks()
 
     QVERIFY(imagePtr->isFolded());
     QVERIFY(!probePtr->isFolded());
+}
+
+void Test::clippedImageClearsAndReturns()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiScrollView view;
+    auto          *image = appendImage(view);
+    QTuiScreen     screen(40, 20);
+    const QString  full = renderFrame(view, screen, 18);
+    QVERIFY(full.contains(QStringLiteral("a=t")));
+    QVERIFY(full.contains(QStringLiteral("a=p")));
+    const int shortHeight = image->rowCount() - 1;
+
+    const QString clipped = renderFrame(view, screen, shortHeight);
+    QCOMPARE(view.mapScreenToBlock(0).rowInBlock, 1);
+    QVERIFY(clipped.contains(QStringLiteral("a=d,d=i,")));
+    QVERIFY(!clipped.contains(QStringLiteral("a=p")));
+    for (int frame = 0; frame < 10; ++frame) {
+        const QString held = renderFrame(view, screen, shortHeight);
+        QVERIFY(!held.contains(QStringLiteral("\x1b_G")));
+    }
+    const QString restored = renderFrame(view, screen, 18);
+    QVERIFY(restored.contains(QStringLiteral("a=p")));
+    QVERIFY(!restored.contains(QStringLiteral("a=t")));
+
+    view.render(screen, 0, shortHeight, 40);
+    view.scrollUp(100);
+    const QString bottomClipped = renderFrame(view, screen, shortHeight);
+    QCOMPARE(view.mapScreenToBlock(0).rowInBlock, 0);
+    QVERIFY(bottomClipped.contains(QStringLiteral("a=d,d=i,")));
+    QVERIFY(!bottomClipped.contains(QStringLiteral("a=p")));
+}
+
+void Test::twoImagesDeleteOnlyHiddenPlacement()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    QTuiScrollView view;
+    auto          *first  = appendImage(view);
+    auto          *second = appendImage(view);
+    first->setFolded(false);
+    QTuiScreen               screen(40, 25);
+    const QString            full = renderFrame(view, screen, 23);
+    const QRegularExpression ids(QStringLiteral("\x1b_Ga=p,i=(\\d+)"));
+    auto                     matches = ids.globalMatch(full);
+    QVERIFY(matches.hasNext());
+    const QString firstId = matches.next().captured(1);
+    QVERIFY(matches.hasNext());
+    const QString secondId = matches.next().captured(1);
+    QVERIFY(firstId != secondId);
+
+    first->setFolded(true);
+    const QString folded = renderFrame(view, screen, 23);
+    QVERIFY(folded.contains(QStringLiteral("a=d,d=i,i=%1,p=1").arg(firstId)));
+    QVERIFY(!folded.contains(QStringLiteral("a=d,d=i,i=%1,p=1").arg(secondId)));
+    QVERIFY(!second->isFolded());
+    const QString held = renderFrame(view, screen, 23);
+    QVERIFY(!held.contains(QStringLiteral("a=d")));
+}
+
+void Test::inlineImageTracksActualWrites()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiScrollView view;
+    auto          *image = appendImage(view);
+    QTuiScreen     screen(40, 20);
+    QVERIFY(renderFrame(view, screen, 18).contains(QStringLiteral("\x1b]1337;File=")));
+    for (int frame = 0; frame < 10; ++frame) {
+        QVERIFY(!renderFrame(view, screen, 18).contains(QStringLiteral("\x1b]1337;File=")));
+        QVERIFY(screen.writtenRows().isEmpty());
+    }
+    screen.putString(0, 19, QStringLiteral("input"));
+    screen.toAnsi();
+    QCOMPARE(screen.writtenRows(), QVector<int>({19}));
+    QVERIFY(view.collectGraphicsLayer(screen.writtenRows()).isEmpty());
+
+    const int imageRow = 18 - image->imageCellRows();
+    screen.invalidateRows(imageRow, 1);
+    const QString chars = screen.toAnsi();
+    QCOMPARE(screen.writtenRows(), QVector<int>({imageRow}));
+    QVERIFY(chars.contains(QStringLiteral("\x1b[K")));
+    QVERIFY(
+        view.collectGraphicsLayer(screen.writtenRows()).contains(QStringLiteral("\x1b]1337;File=")));
+    screen.toAnsi();
+    QVERIFY(view.collectGraphicsLayer(screen.writtenRows()).isEmpty());
+}
+
+void Test::inlineMoveRepaintsOldRows()
+{
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiScrollView view;
+    auto          *image = appendImage(view);
+    QTuiScreen     screen(40, 20);
+    renderFrame(view, screen, 18);
+    const QRect oldRect = image->graphicsEraseRect();
+    QVERIFY(!oldRect.isEmpty());
+    const QString moved = renderFrame(view, screen, 17);
+    QVERIFY(moved.contains(QStringLiteral("\x1b]1337;File=")));
+    for (int row = oldRect.top(); row <= oldRect.bottom(); ++row) {
+        QVERIFY(screen.writtenRows().contains(row));
+    }
+    const QRect   movedRect = image->graphicsEraseRect();
+    const QString hidden    = renderFrame(view, screen, image->rowCount() - 1);
+    QVERIFY(!hidden.contains(QStringLiteral("\x1b]1337;File=")));
+    for (int row = movedRect.top(); row <= movedRect.bottom(); ++row) {
+        QVERIFY(screen.writtenRows().contains(row));
+    }
+    QVERIFY(image->graphicsEraseRect().isEmpty());
+}
+
+void Test::newScreenRetransmitsImages_data()
+{
+    QTest::addColumn<QByteArray>("terminal");
+    QTest::addColumn<QString>("upload");
+    QTest::newRow("kitty") << QByteArray("ghostty") << QStringLiteral("a=t");
+    QTest::newRow("inline") << QByteArray("iTerm.app") << QStringLiteral("\x1b]1337;File=");
+}
+
+void Test::newScreenRetransmitsImages()
+{
+    QFETCH(QByteArray, terminal);
+    QFETCH(QString, upload);
+    qputenv("TERM_PROGRAM", terminal);
+    QTuiScrollView view;
+    appendImage(view);
+    QTuiScreen screen(40, 20);
+    QVERIFY(renderFrame(view, screen, 18).contains(upload));
+    QVERIFY(!renderFrame(view, screen, 18).contains(upload));
+    view.resetGraphicsState();
+    screen.invalidate();
+    QVERIFY(renderFrame(view, screen, 18).contains(upload));
+    QVERIFY(!renderFrame(view, screen, 18).contains(upload));
+}
+
+void Test::screenTracksOnlyWrittenRows()
+{
+    QTuiScreen screen(8, 3);
+    screen.toAnsi();
+    QCOMPARE(screen.writtenRows(), QVector<int>({0, 1, 2}));
+    screen.clear();
+    screen.toAnsi();
+    QVERIFY(screen.writtenRows().isEmpty());
+    screen.putChar(0, 1, QLatin1Char('x'));
+    screen.toAnsi();
+    QCOMPARE(screen.writtenRows(), QVector<int>({1}));
+    screen.invalidateRows(0, 1);
+    screen.toAnsi();
+    QCOMPARE(screen.writtenRows(), QVector<int>({0}));
+    screen.invalidate();
+    screen.toAnsi();
+    QCOMPARE(screen.writtenRows(), QVector<int>({0, 1, 2}));
 }
 
 QSOC_TEST_MAIN(Test)

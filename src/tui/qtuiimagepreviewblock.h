@@ -55,23 +55,18 @@ public:
      * normal scrollback alongside the metadata. */
     QString toAnsi(int width) override;
 
-    /* Live alt-screen overlay: transmit the PNG once, then re-place
-     * it at the block's current cell rectangle on every frame. The
-     * placement re-emission is small (~30 bytes) and idempotent in
-     * the kitty graphics protocol, so per-frame cost stays trivial
-     * even at the 100 ms compositor tick. */
+    GraphicsState graphicsState(
+        int                 firstScreenRow,
+        int                 firstScreenCol,
+        int                 contentWidth,
+        int                 visibleRows,
+        const QVector<int> &writtenRows = {}) const override;
+    QRect graphicsEraseRect() const override;
+    void  resetGraphicsState() const override;
+
     QString emitGraphicsLayer(
         int firstScreenRow, int firstScreenCol, int contentWidth, int visibleRows) const override;
-
-    /* Erase the live placement so the cell rectangle returns to
-     * blank when the block scrolls out of the viewport. The transmit
-     * cache is kept so a scroll back in only re-emits the small
-     * placement escape, not the full bitmap upload. */
     QString emitGraphicsClear() const override;
-
-    /* Free the bitmap from the terminal cache on compositor shutdown
-     * so qsoc does not leak megabytes of image data into the host
-     * terminal's memory after exit. */
     QString emitGraphicsDestroy() const override;
 
     /* Image previews participate in fold so older bitmaps collapse
@@ -111,14 +106,7 @@ private:
     };
     mutable KittyState kittyState;
 
-    /* iTerm2 has no transmit-once primitive: every place embeds the
-     * full base64 again. Throttle by remembering the last placement
-     * coords; we only re-emit when the block has actually moved
-     * (scroll, layout change). The same-coord skip means a stable
-     * frame emits nothing for the image, since iTerm2 keeps the
-     * pixels until the underlying cells get overwritten. */
-    mutable int iTerm2LastRow = -1;
-    mutable int iTerm2LastCol = -1;
+    mutable QRect placementRect;
 
     QList<QList<QTuiStyledRun>> rendered;
 };

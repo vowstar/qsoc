@@ -138,6 +138,7 @@ void QTuiScreen::hline(int row, QChar ch)
 
 QString QTuiScreen::toAnsi()
 {
+    writtenRows_.clear();
     QString output;
     output.reserve(rows * cols * 2);
 
@@ -155,7 +156,7 @@ QString QTuiScreen::toAnsi()
 
     for (int row = 0; row < rows; row++) {
         /* Check if this row changed (skip unchanged rows for performance) */
-        if (!fullRedraw && row < prevCells.size()) {
+        if (!fullRedraw && !dirtyRows_.contains(row) && row < prevCells.size()) {
             bool rowChanged = false;
             for (int col = 0; col < cols; col++) {
                 if (cells[row][col] != prevCells[row][col]) {
@@ -178,6 +179,7 @@ QString QTuiScreen::toAnsi()
          * came after the paint, painting the rightmost cell would
          * leave the cursor at column W with no auto-advance, and the
          * subsequent EL would erase the cell we just drew. */
+        writtenRows_.append(row);
         output += QString("\033[%1;1H\033[K").arg(row + 1);
 
         for (int col = 0; col < cols;) {
@@ -277,6 +279,7 @@ QString QTuiScreen::toAnsi()
     /* Save current frame as previous */
     prevCells  = cells;
     fullRedraw = false;
+    dirtyRows_.clear();
 
     return output;
 }
@@ -284,4 +287,14 @@ QString QTuiScreen::toAnsi()
 void QTuiScreen::invalidate()
 {
     fullRedraw = true;
+}
+
+void QTuiScreen::invalidateRows(int firstRow, int rowCount)
+{
+    const int end = qMin(rows, firstRow + rowCount);
+    for (int row = qMax(0, firstRow); row < end; ++row) {
+        if (!dirtyRows_.contains(row)) {
+            dirtyRows_.append(row);
+        }
+    }
 }

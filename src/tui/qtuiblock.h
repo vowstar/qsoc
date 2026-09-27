@@ -6,6 +6,7 @@
 
 #include "tui/qtuiscreen.h"
 
+#include <QRect>
 #include <QString>
 
 /**
@@ -167,11 +168,32 @@ public:
      */
     virtual QString toAnsi(int width);
 
+    enum class GraphicsState { Hidden, Keep, Place };
+
+    virtual GraphicsState graphicsState(
+        int                 firstScreenRow,
+        int                 firstScreenCol,
+        int                 contentWidth,
+        int                 visibleRows,
+        const QVector<int> &writtenRows = {}) const
+    {
+        Q_UNUSED(firstScreenRow);
+        Q_UNUSED(firstScreenCol);
+        Q_UNUSED(contentWidth);
+        Q_UNUSED(visibleRows);
+        Q_UNUSED(writtenRows);
+        return GraphicsState::Hidden;
+    }
+
+    /* Zero-based cells that must be repainted when a placement is removed. */
+    virtual QRect graphicsEraseRect() const { return {}; }
+    virtual void  resetGraphicsState() const {}
+
     /**
      * @brief Emit a raw escape payload that overlays the cell grid
      *        for one frame of live alt-screen rendering.
      * @details Called by the scroll view after the cell-grid pass
-     *          on every block currently visible in the viewport.
+     *          on each visible block whose graphics state is Place.
      *          The default implementation returns an empty string
      *          so non-graphical blocks contribute nothing. Concrete
      *          graphical blocks (for instance the image preview
