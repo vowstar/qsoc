@@ -1632,7 +1632,12 @@ json QLLMService::sendChatCompletionTo(
             if (stopToken.stop_requested()) {
                 return {{"error", "Request cancelled"}};
             }
-            return {{"error", validationError.toStdString()}};
+            json       error = {{"error", validationError.toStdString()}};
+            const auto usage = response.find("usage");
+            if (usage != response.end() && usage->is_object()) {
+                error["usage"] = *usage;
+            }
+            return error;
         }
         if (stopToken.stop_requested()) {
             return {{"error", "Request cancelled"}};

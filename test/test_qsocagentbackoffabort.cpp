@@ -2388,8 +2388,10 @@ private slots:
         MockServer server;
         QVERIFY(server.listen());
         server.enqueueHeldRequest();
-        server.enqueueCompletion(QStringLiteral("compacted"));
-        server.enqueueStream(QStringLiteral("queued complete"));
+        server.enqueueCompletion(
+            QStringLiteral("compacted"), {{"prompt_tokens", 333}, {"completion_tokens", 44}});
+        server.enqueueStream(
+            QStringLiteral("queued complete"), {{"prompt_tokens", 111}, {"completion_tokens", 22}});
         QLLMService service;
         configureService(service, server);
         QSocToolRegistry registry;
@@ -2429,6 +2431,15 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(completed.count() + aborted.count() + errors.count() >= 1, 5000);
         QCOMPARE(completed.count() + aborted.count() + errors.count(), 1);
         QCOMPARE(server.requestCount(), 3);
+        const auto summary = agent.summaryUsage();
+        QCOMPARE(summary.attempts, quint64(2));
+        QCOMPARE(summary.reported.requests, quint64(1));
+        QCOMPARE(summary.reported.inputTokens, qint64(333));
+        QCOMPARE(summary.reported.outputTokens, qint64(44));
+        QCOMPARE(summary.missingFinishReasons, quint64(2));
+        QCOMPARE(agent.observedUsage().requests, quint64(1));
+        QCOMPARE(agent.observedUsage().inputTokens, qint64(111));
+        QCOMPARE(agent.observedUsage().outputTokens, qint64(22));
         const json firstCompaction  = json::parse(server.requestBody(0).toStdString());
         const json secondCompaction = json::parse(server.requestBody(1).toStdString());
         const json mainRequest      = json::parse(server.requestBody(2).toStdString());

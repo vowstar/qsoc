@@ -200,6 +200,9 @@ bool QSocRequestUsage::complete(quint64 generation, const json &usage)
     observed_.inputTokens += *input;
     observed_.outputTokens += output.value_or(0);
     ++observed_.requests;
+    if (output) {
+        ++observed_.outputReportedRequests;
+    }
     if (cached) {
         observed_.cachedTokens += *cached;
         observed_.cacheEligibleInputTokens += *input;

@@ -760,9 +760,24 @@ std::optional<json> QSocAgent::summarizeHistory(
         summaryRequest.messages = summaryMessages;
         summaryRequest.effort   = effort;
         if (oldContent && QSocRequestUsage::estimateRequest(summaryRequest) <= inputBudget) {
+            const auto generation = summaryRequestUsage_.begin(std::move(summaryRequest));
+            ++summaryAttempts_;
             const std::stop_token stopToken = run ? run->stopSource.get_token() : std::stop_token{};
             const json            response  = compactLlm->sendChatCompletionTo(
                 *endpoint, summaryMessages, json::array(), 0.1, stopToken, effort);
+            if (!owner) {
+                return std::nullopt;
+            }
+            summaryRequestUsage_.complete(generation, response.value("usage", json::object()));
+            summaryRequestUsage_.invalidateAnchor();
+            const auto choices         = response.find("choices");
+            const bool hasFinishReason = choices != response.end() && choices->is_array()
+                                         && !choices->empty() && choices->front().is_object()
+                                         && choices->front().contains("finish_reason")
+                                         && !choices->front()["finish_reason"].is_null();
+            if (!hasFinishReason) {
+                ++summaryMissingFinishReasons_;
+            }
             if (stopped()) {
                 return std::nullopt;
             }

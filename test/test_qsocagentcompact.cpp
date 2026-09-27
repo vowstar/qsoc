@@ -44,7 +44,8 @@ public:
         });
     }
 
-    json response;
+    json                  response;
+    std::function<void()> observer;
 
     bool listen() { return server_.listen(QHostAddress::LocalHost); }
 
@@ -82,7 +83,11 @@ private:
             json::parse(buffer.mid(bodyStart, contentLength).toStdString(), nullptr, false));
         buffers_.remove(socket);
 
-        const QByteArray body        = QByteArray::fromStdString(response.dump());
+        const json capturedResponse = response;
+        if (observer) {
+            observer();
+        }
+        const QByteArray body        = QByteArray::fromStdString(capturedResponse.dump());
         const QByteArray contentType = QByteArrayLiteral("application/json");
         QByteArray headers = QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: ") + contentType
                              + QByteArrayLiteral("\r\nContent-Length: ");
@@ -1057,6 +1062,175 @@ private slots:
             QVERIFY(QSocSession::loadMessages(path) == original);
             QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
         }
+    }
+
+    void testSummaryUsage_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("accepted");
+        QTest::addColumn<quint64>("reports");
+        QTest::addColumn<quint64>("outputReports");
+        QTest::addColumn<quint64>("missingFinish");
+        QTest::newRow("accepted") << QStringLiteral("accepted") << true << quint64(1) << quint64(1)
+                                  << quint64(0);
+        QTest::newRow("length") << QStringLiteral("length") << false << quint64(1) << quint64(1)
+                                << quint64(0);
+        QTest::newRow("malformed")
+            << QStringLiteral("malformed") << false << quint64(1) << quint64(1) << quint64(1);
+        QTest::newRow("missing-finish")
+            << QStringLiteral("missing-finish") << true << quint64(1) << quint64(1) << quint64(1);
+        QTest::newRow("missing-usage")
+            << QStringLiteral("missing-usage") << true << quint64(0) << quint64(0) << quint64(0);
+        QTest::newRow("missing-output")
+            << QStringLiteral("missing-output") << true << quint64(1) << quint64(0) << quint64(0);
+        QTest::newRow("zero") << QStringLiteral("zero") << true << quint64(1) << quint64(1)
+                              << quint64(0);
+        QTest::newRow("stale") << QStringLiteral("stale") << false << quint64(1) << quint64(1)
+                               << quint64(0);
+    }
+
+    void testSummaryUsage()
+    {
+        QFETCH(QString, mode);
+        QFETCH(bool, accepted);
+        QFETCH(quint64, reports);
+        QFETCH(quint64, outputReports);
+        QFETCH(quint64, missingFinish);
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response
+            = {{"choices",
+                json::array(
+                    {{{"finish_reason", "stop"},
+                      {"message",
+                       {{"role", "assistant"}, {"content", "Keep the task constraint."}}}}})},
+               {"usage",
+                {{"prompt_tokens", 503},
+                 {"completion_tokens", 71},
+                 {"completion_tokens_details", {{"reasoning_tokens", 40}}},
+                 {"prompt_tokens_details", {{"cached_tokens", 400}}}}}};
+        if (mode == QStringLiteral("length")) {
+            server.response["choices"][0]["finish_reason"] = "length";
+        } else if (mode == QStringLiteral("malformed")) {
+            server.response["choices"] = json::array();
+        } else if (mode == QStringLiteral("missing-finish")) {
+            server.response["choices"][0].erase("finish_reason");
+        } else if (mode == QStringLiteral("missing-usage")) {
+            server.response.erase("usage");
+        } else if (mode == QStringLiteral("missing-output")) {
+            server.response["usage"].erase("completion_tokens");
+        } else if (mode == QStringLiteral("zero")) {
+            server.response["usage"]
+                = {{"prompt_tokens", 0},
+                   {"completion_tokens", 0},
+                   {"prompt_tokens_details", {{"cached_tokens", 0}}}};
+        }
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.model           = QStringLiteral("usage-model");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = 131072;
+        endpoint.maxOutputTokens = 4096;
+        endpoint.timeout         = 3000;
+        service.setModel(endpoint);
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        json             history = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(2000, static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(history);
+        const int before = agent.estimateTotalTokens();
+        if (mode == QStringLiteral("stale")) {
+            server.observer = [&] {
+                history.push_back({{"role", "user"}, {"content", "A new requirement arrived."}});
+                agent.setMessages(history);
+            };
+        }
+        const int saved = agent.compact();
+        QCOMPARE(saved > 0, accepted);
+        const auto summary = agent.summaryUsage();
+        QCOMPARE(summary.attempts, quint64(1));
+        QCOMPARE(summary.reported.requests, reports);
+        QCOMPARE(summary.reported.outputReportedRequests, outputReports);
+        QCOMPARE(summary.missingFinishReasons, missingFinish);
+        const bool zero = mode == QStringLiteral("zero");
+        QCOMPARE(summary.reported.inputTokens, reports > 0 && !zero ? qint64(503) : qint64(0));
+        QCOMPARE(summary.reported.outputTokens, outputReports > 0 && !zero ? qint64(71) : qint64(0));
+        QCOMPARE(summary.reported.cachedTokens, reports > 0 && !zero ? qint64(400) : qint64(0));
+        QCOMPARE(agent.observedUsage().requests, quint64(0));
+        if (!accepted) {
+            QVERIFY(agent.getMessages() == history);
+            if (mode != QStringLiteral("stale")) {
+                QCOMPARE(agent.estimateTotalTokens(), before);
+            }
+        }
+    }
+
+    void testSummaryDoesNotConsumeForegroundUsage()
+    {
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response
+            = {{"choices",
+                json::array(
+                    {{{"finish_reason", "stop"},
+                      {"message", {{"role", "assistant"}, {"content", "foreground complete"}}}}})},
+               {"usage", {{"prompt_tokens", 101}, {"completion_tokens", 17}}}};
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.model           = QStringLiteral("overlap-model");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = 131072;
+        endpoint.maxOutputTokens = 4096;
+        endpoint.timeout         = 3000;
+        service.setModel(endpoint);
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.autoLoadMemory       = false;
+        config.memoryRecallEnabled  = false;
+        config.memoryExtractEnabled = false;
+        config.memoryDreamEnabled   = false;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        json             history = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(2000, static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(history);
+        int saved       = 0;
+        server.observer = [&] {
+            if (server.requestCount() != 1) {
+                return;
+            }
+            server.response
+                = {{"choices",
+                    json::array(
+                        {{{"finish_reason", "stop"},
+                          {"message",
+                           {{"role", "assistant"}, {"content", "Keep the task constraint."}}}}})},
+                   {"usage", {{"prompt_tokens", 303}, {"completion_tokens", 29}}}};
+            saved = agent.compact();
+        };
+        QCOMPARE(agent.run(QStringLiteral("continue")), QStringLiteral("foreground complete"));
+        QVERIFY(saved > 0);
+        QCOMPARE(server.requestCount(), 2);
+        QCOMPARE(agent.observedUsage().requests, quint64(1));
+        QCOMPARE(agent.observedUsage().inputTokens, qint64(101));
+        QCOMPARE(agent.observedUsage().outputTokens, qint64(17));
+        const auto summary = agent.summaryUsage();
+        QCOMPARE(summary.attempts, quint64(1));
+        QCOMPARE(summary.reported.requests, quint64(1));
+        QCOMPARE(summary.reported.inputTokens, qint64(303));
+        QCOMPARE(summary.reported.outputTokens, qint64(29));
     }
 
     void testSummaryRequestBudget_data()

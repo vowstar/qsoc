@@ -754,6 +754,8 @@ Cached tokens still occupy the context window. The status script receives these 
 in `provider_usage`, separately from the existing estimated token totals.
 `reported_requests` counts completed requests with valid input usage.
 
+Summary requests have separate counters in `/context` and the status script’s `summary_usage` object. Attempts include rejected or discarded summary candidates. Valid usage is counted before candidate acceptance. Missing usage and missing completion reasons remain distinguishable from reported zero values. Cancellation can leave usage unavailable. `output_reported_requests` identifies reports with an output count. Summary usage does not change foreground context calibration or estimated goal token accounting.
+
 Each summary uses the previous summary as an anchor and merges active requirements. It does not retain every user message verbatim. The agent saves removed messages as read-only text artifacts and lists their IDs. The index states whether `tool_output_read` is exposed to this agent. Missing or denied tools stay unavailable. Local storage does not grant tool access. Summaries can omit details.
 
 Artifacts preserve captured message and tool text. They cannot recover text that an upstream tool truncated before returning it. Artifact byte quotas and the model context budget are separate limits.

@@ -164,6 +164,7 @@ private slots:
         QVERIFY(!usage.complete(second, {{"prompt_tokens", 200}}));
         auto observed = usage.observed();
         QCOMPARE(observed.requests, quint64(1));
+        QCOMPARE(observed.outputReportedRequests, quint64(1));
         QCOMPARE(observed.cacheReportedRequests, quint64(0));
         const auto third = usage.begin(request());
         usage.discardPending();
@@ -173,6 +174,8 @@ private slots:
             {{"prompt_tokens", 100}, {"prompt_tokens_details", {{"cached_tokens", 0}}}}));
         observed = usage.observed();
         QCOMPARE(observed.inputTokens, qint64(300));
+        QCOMPARE(observed.outputTokens, qint64(10));
+        QCOMPARE(observed.outputReportedRequests, quint64(1));
         QCOMPARE(observed.cacheEligibleInputTokens, qint64(100));
         QCOMPARE(observed.cacheReportedRequests, quint64(1));
         QCOMPARE(observed.cachedTokens, qint64(0));

@@ -25,6 +25,7 @@ struct QSocObservedUsage
     qint64  cacheEligibleInputTokens = 0;
     quint64 requests                 = 0;
     quint64 cacheReportedRequests    = 0;
+    quint64 outputReportedRequests   = 0;
 };
 
 class QSocRequestUsage

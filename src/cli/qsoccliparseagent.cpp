@@ -3319,12 +3319,33 @@ bool QSocCliWorker::runAgentLoop(
             = {{"input_tokens", observed.inputTokens},
                {"output_tokens", observed.outputTokens},
                {"reported_requests", observed.requests},
+               {"output_reported_requests", observed.outputReportedRequests},
                {"cache_reported_requests", observed.cacheReportedRequests},
                {"cached_tokens",
                 observed.cacheReportedRequests > 0 ? json(observed.cachedTokens) : json(nullptr)},
                {"cache_input_tokens",
                 observed.cacheReportedRequests > 0 ? json(observed.cacheEligibleInputTokens)
                                                    : json(nullptr)}};
+
+        const auto summary = agent->summaryUsage();
+        payload["summary_usage"]
+            = {{"attempts", summary.attempts},
+               {"reported_requests", summary.reported.requests},
+               {"output_reported_requests", summary.reported.outputReportedRequests},
+               {"missing_finish_reasons", summary.missingFinishReasons},
+               {"input_tokens",
+                summary.reported.requests > 0 ? json(summary.reported.inputTokens) : json(nullptr)},
+               {"output_tokens",
+                summary.reported.outputReportedRequests > 0 ? json(summary.reported.outputTokens)
+                                                            : json(nullptr)},
+               {"cache_reported_requests", summary.reported.cacheReportedRequests},
+               {"cached_tokens",
+                summary.reported.cacheReportedRequests > 0 ? json(summary.reported.cachedTokens)
+                                                           : json(nullptr)},
+               {"cache_input_tokens",
+                summary.reported.cacheReportedRequests > 0
+                    ? json(summary.reported.cacheEligibleInputTokens)
+                    : json(nullptr)}};
 
         if (currentSession) {
             payload["session"] = {{"id", currentSession->id().toStdString()}};
@@ -5827,6 +5848,38 @@ bool QSocCliWorker::runAgentLoop(
             } else {
                 compositor
                     .printContent("  Provider cache ratio unavailable\n\n", QTuiScrollView::Dim);
+            }
+
+            const auto summary = agent->summaryUsage();
+            if (summary.attempts > 0) {
+                const QString summaryInput  = summary.reported.requests > 0
+                                                  ? QString::number(summary.reported.inputTokens)
+                                                  : QStringLiteral("unavailable");
+                const QString summaryOutput = summary.reported.outputReportedRequests > 0
+                                                  ? QString::number(summary.reported.outputTokens)
+                                                  : QStringLiteral("unavailable");
+                compositor.printContent(
+                    QStringLiteral(
+                        "  Summary: %1 attempts, %2 input reports, %3 output reports\n"
+                        "  Reported summary tokens: input %4, output %5\n")
+                        .arg(summary.attempts)
+                        .arg(summary.reported.requests)
+                        .arg(summary.reported.outputReportedRequests)
+                        .arg(summaryInput, summaryOutput));
+                if (summary.reported.cacheReportedRequests > 0) {
+                    compositor.printContent(
+                        QStringLiteral(
+                            "  Summary cache: %1 / %2 input tokens across %3 reported requests\n")
+                            .arg(summary.reported.cachedTokens)
+                            .arg(summary.reported.cacheEligibleInputTokens)
+                            .arg(summary.reported.cacheReportedRequests));
+                } else {
+                    compositor
+                        .printContent("  Summary cache usage unavailable\n", QTuiScrollView::Dim);
+                }
+                compositor.printContent(
+                    QStringLiteral("  Summary requests without a completion reason: %1\n\n")
+                        .arg(summary.missingFinishReasons));
             }
 
             auto printCategory =

@@ -508,6 +508,17 @@ public:
 
     QSocObservedUsage observedUsage() const { return requestUsage_.observed(); }
 
+    struct SummaryUsage
+    {
+        QSocObservedUsage reported;
+        quint64           attempts             = 0;
+        quint64           missingFinishReasons = 0;
+    };
+    SummaryUsage summaryUsage() const
+    {
+        return {summaryRequestUsage_.observed(), summaryAttempts_, summaryMissingFinishReasons_};
+    }
+
     /**
      * @brief Effective input-side context budget after subtracting the
      *        slice reserved for the assistant reply. Threshold checks
@@ -853,6 +864,9 @@ private:
     bool                       rejectQueuedRequests_ = false; /* guarded by queueMutex */
 
     QSocRequestUsage    requestUsage_;
+    QSocRequestUsage    summaryRequestUsage_;
+    quint64             summaryAttempts_             = 0;
+    quint64             summaryMissingFinishReasons_ = 0;
     QSocRequestSnapshot requestSnapshot(
         const json &wire, const json &tools, const QLLMService *service) const;
     json wireMessages(const QString &systemPrompt) const;
