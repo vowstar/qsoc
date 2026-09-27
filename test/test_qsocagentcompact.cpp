@@ -5,6 +5,7 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
+#include "agent/tool/qsoctooloutputread.h"
 #include "common/qllmservice.h"
 #include "qsoc_test.h"
 
@@ -97,6 +98,32 @@ private:
     QTcpServer                      server_;
 };
 
+std::optional<QString> readSavedText(QSocToolRegistry &registry, QSocAgent &agent, const QString &id)
+{
+    QString text;
+    qint64  offset = 0;
+    for (int index = 0; index < 1000; ++index) {
+        const auto result = registry.executeTool(
+            QStringLiteral("tool_output_read"),
+            {{"artifact_id", id.toStdString()}, {"offset", offset}},
+            &agent);
+        const auto page = json::parse(result.toStdString(), nullptr, false);
+        if (!page.is_object() || !page.contains("text") || !page["text"].is_string()) {
+            return std::nullopt;
+        }
+        text += QString::fromStdString(page["text"].get<std::string>());
+        if (page.value("eof", false)) {
+            return text;
+        }
+        const qint64 next = page.value("next_offset", qint64(0));
+        if (next <= offset) {
+            return std::nullopt;
+        }
+        offset = next;
+    }
+    return std::nullopt;
+}
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -153,6 +180,152 @@ private:
     }
 
 private slots:
+    void testRecoveryNotice_data()
+    {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("readable");
+        QTest::newRow("direct") << QStringLiteral("direct") << true;
+        QTest::newRow("catalog") << QStringLiteral("catalog") << true;
+        QTest::newRow("missing") << QStringLiteral("missing") << false;
+        QTest::newRow("denied") << QStringLiteral("denied") << false;
+        QTest::newRow("not-allowed") << QStringLiteral("not-allowed") << false;
+    }
+
+    void testRecoveryNotice()
+    {
+        QFETCH(QString, mode);
+        QFETCH(bool, readable);
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.toolPresentation     = mode == QStringLiteral("catalog") ? mode
+                                                                        : QStringLiteral("direct");
+        if (mode == QStringLiteral("denied")) {
+            config.toolsDeny = {QStringLiteral("tool_output_read")};
+        }
+        if (mode == QStringLiteral("not-allowed")) {
+            config.toolsAllow = {QStringLiteral("read_file")};
+        }
+        auto *agent    = createAgent(config);
+        auto *registry = agent->getToolRegistry();
+        if (mode != QStringLiteral("missing")) {
+            registry->registerTool(new QSocToolOutputRead(registry));
+        }
+        const auto definitions = agent->getEffectiveToolDefinitions();
+        json       history     = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(4000, static_cast<char>('a' + index))}});
+        }
+        agent->setMessages(history);
+        QVERIFY(agent->compact() > 0);
+        const QString summary = QString::fromStdString(agent->getMessages().front().at("content"));
+        QCOMPARE(
+            summary.contains(QStringLiteral("remains available with tool_output_read")), readable);
+        QCOMPARE(summary.contains(QStringLiteral("tool_output_read unavailable")), !readable);
+        QVERIFY(agent->getEffectiveToolDefinitions() == definitions);
+        const auto references = QSocAgent::artifactReferences(agent->getMessages());
+        QVERIFY(!references.empty());
+        if (readable) {
+            const auto captured = readSavedText(*registry, *agent, references.back().id);
+            QVERIFY(captured.has_value());
+            QVERIFY(json::parse(captured->toStdString()).front() == history.front());
+        } else {
+            QVERIFY(agent->toolResultStore()->read(references.back().id, 0, 32768).has_value());
+        }
+        delete agent;
+    }
+
+    void testRepeatedCompactionResumeAndFork()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        auto *parent                = createAgent(config);
+        auto *registry              = parent->getToolRegistry();
+        registry->registerTool(new QSocToolOutputRead(registry));
+        const auto sessionId    = QSocSession::generateId();
+        const auto artifactPath = directory.filePath(QStringLiteral("parent-artifacts"));
+        const auto sessionPath  = directory.filePath(QStringLiteral("session.jsonl"));
+        QVERIFY(parent->bindToolResultStore(artifactPath, sessionId));
+        QSocSession session(sessionId, sessionPath);
+        parent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+            return session.appendSnapshot(candidate.candidateMessages);
+        });
+        QStringList expected;
+        for (int round = 0; round < 3; ++round) {
+            auto history = parent->getMessages();
+            for (int index = 0; index < 12; ++index) {
+                const auto content = QStringLiteral("round_%1_message_%2 ").arg(round).arg(index)
+                                     + QString(4000, QLatin1Char('x'));
+                if (index == 0) {
+                    expected.append(content);
+                }
+                history.push_back(
+                    {{"role", index % 2 ? "assistant" : "user"},
+                     {"content", content.toStdString()}});
+            }
+            parent->setMessages(history);
+            QVERIFY(parent->compact() > 0);
+            QVERIFY(QSocSession::loadMessages(sessionPath) == parent->getMessages());
+        }
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response = {
+            {"choices",
+             json::array(
+                 {{{"message", {{"role", "assistant"}, {"content", "done"}}},
+                   {"finish_reason", "stop"}}})}};
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.name    = QStringLiteral("resume-test");
+        endpoint.model   = QStringLiteral("resume-test");
+        endpoint.url     = server.url();
+        endpoint.timeout = 3000;
+        service.setModel(endpoint);
+        QSocAgent resumed(nullptr, &service, registry, config);
+        QVERIFY(resumed.bindToolResultStore(artifactPath, sessionId));
+        const auto saved = QSocSession::loadMessages(sessionPath);
+        resumed.setMessages(saved);
+        QCOMPARE(resumed.run(QStringLiteral("continue-resumed")), QStringLiteral("done"));
+        QCOMPARE(server.requestCount(), 1);
+        for (json::size_type index = 0; index < saved.size(); ++index) {
+            auto visible = saved[index];
+            visible.erase("_qsoc_artifact_refs");
+            QVERIFY(server.request(0).at("messages").at(index + 1) == visible);
+        }
+        const auto fork        = resumed.captureForkSnapshot();
+        auto       childConfig = fork.config;
+        childConfig.isSubAgent = true;
+        QSocAgent child(nullptr, &service, registry, childConfig);
+        QVERIFY(child.bindToolResultStore(
+            directory.filePath(QStringLiteral("child-artifacts")), QSocSession::generateId()));
+        QVERIFY(child.toolResultStore()->inherit(*fork.artifactStore, fork.artifactRefs));
+        child.setMessages(fork.messages);
+        QVERIFY(QDir(artifactPath).removeRecursively());
+        QCOMPARE(child.run(QStringLiteral("continue-child")), QStringLiteral("done"));
+        QCOMPARE(server.requestCount(), 2);
+        for (json::size_type index = 0; index < fork.messages.size(); ++index) {
+            auto visible = fork.messages[index];
+            visible.erase("_qsoc_artifact_refs");
+            visible.erase("_usage");
+            QVERIFY(server.request(1).at("messages").at(index + 1) == visible);
+        }
+        QString captured;
+        for (const auto &reference : fork.artifactRefs) {
+            const auto text = readSavedText(*registry, child, reference.id);
+            QVERIFY(text.has_value());
+            captured += *text;
+        }
+        for (const auto &content : expected) {
+            QVERIFY(captured.contains(content));
+        }
+        delete parent;
+    }
+
     void testCandidateCommitIsAtomic_data()
     {
         QTest::addColumn<bool>("unbind");

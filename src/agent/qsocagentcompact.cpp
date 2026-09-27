@@ -201,12 +201,27 @@ QSocRequestSnapshot requestWithHistory(const QSocRequestSnapshot &source, const 
     return request;
 }
 
-void attachArtifactIndex(json &history, const json &references, bool summarized)
+bool exposesArtifactReader(const json &tools)
+{
+    for (const auto &tool : tools) {
+        const auto function = tool.find("function");
+        if (function != tool.end() && function->is_object()
+            && function->value("name", std::string()) == "tool_output_read") {
+            return true;
+        }
+    }
+    return false;
+}
+
+void attachArtifactIndex(json &history, const json &references, bool summarized, bool readerAvailable)
 {
     if (references.empty()) {
         return;
     }
-    QString text = QStringLiteral("\n\nEarlier context remains available with tool_output_read:\n");
+    QString text = readerAvailable
+                       ? QStringLiteral(
+                             "\n\nEarlier context remains available with tool_output_read:\n")
+                       : QStringLiteral("\n\nLocal archives (tool_output_read unavailable):\n");
     for (const auto &reference : references) {
         text += QString::fromStdString(reference.at("artifact_id").get<std::string>())
                 + QLatin1Char('\n');
@@ -482,7 +497,11 @@ int QSocAgent::performCompaction(bool force, bool manual)
         }
     });
     candidate.artifactRefs.push_back(artifactReferenceJson(*archive));
-    attachArtifactIndex(candidate.candidateMessages, candidate.artifactRefs, summarized);
+    attachArtifactIndex(
+        candidate.candidateMessages,
+        candidate.artifactRefs,
+        summarized,
+        exposesArtifactReader(request.tools));
     const auto archivedRequest = requestWithHistory(request, candidate.candidateMessages);
     if (!current()) {
         if (owner) {

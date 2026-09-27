@@ -169,12 +169,13 @@ void QSocAgent::appendBoundedToolMessage(
                 [run] { return !run || run->stop.load() == StopMode::None; });
         if (saved) {
             refs.push_back(artifactReferenceJson(*saved));
-            const QString notice
-                = QStringLiteral("\n[Captured tool return saved. Read with tool_output_read: %1]")
-                      .arg(QString::fromStdString(refs.front().dump()));
-            view = boundedText(
-                       content, std::max(qint64(0), budget - QSocRequestUsage::estimateText(notice)))
-                   + notice;
+            const QString notice = QStringLiteral(
+                                       "\n[Captured tool return saved locally: %1. Use "
+                                       "tool_output_read when available.]")
+                                       .arg(QString::fromStdString(refs.front().dump()));
+            view                 = boundedText(
+                                       content, std::max(qint64(0), budget - QSocRequestUsage::estimateText(notice)))
+                                   + notice;
         } else {
             const QString notice
                 = QStringLiteral(

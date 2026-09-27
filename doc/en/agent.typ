@@ -754,7 +754,9 @@ Cached tokens still occupy the context window. The status script receives these 
 in `provider_usage`, separately from the existing estimated token totals.
 `reported_requests` counts completed requests with valid input usage.
 
-Each summary includes the previous summary as an anchor. The agent saves removed messages as read-only text artifacts and lists their IDs for `tool_output_read`. Summaries can omit details.
+Each summary includes the previous summary as an anchor. The agent saves removed messages as read-only text artifacts and lists their IDs. The index states whether `tool_output_read` is exposed to this agent. Missing or denied tools stay unavailable. Local storage does not grant tool access. Summaries can omit details.
+
+Artifacts preserve captured message and tool text. They cannot recover text that an upstream tool truncated before returning it. Artifact byte quotas and the model context budget are separate limits.
 
 Compaction prepares a candidate without changing the active history. It installs the candidate only if the full local request estimate decreases and fits within 90% of the effective input budget. Restored files, skills, task descriptions, and artifact references count toward that limit.
 
