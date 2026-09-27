@@ -72,39 +72,75 @@ bool completeToolPairs(const json &history)
     return pending.isEmpty();
 }
 
+json summaryMessage(const json &message)
+{
+    json result = json::object();
+    for (const char *key : {"role", "tool_call_id", "name", "tool_calls"}) {
+        if (message.contains(key)) {
+            result[key] = message[key];
+        }
+    }
+    const auto content = message.find("content");
+    if (content == message.end()) {
+        return result;
+    }
+    if (content->is_string() || content->is_null()) {
+        result["content"] = *content;
+    } else if (content->is_array()) {
+        result["content"] = json::array();
+        for (const auto &part : *content) {
+            if (part.is_object() && part.contains("text") && part["text"].is_string()) {
+                result["content"].push_back({{"type", "text"}, {"text", part["text"]}});
+            } else {
+                result["content"].push_back({{"type", "omitted_nontext_content"}});
+            }
+        }
+    }
+    return result;
+}
+
 QString formatSummary(const json &history, int start, int end)
 {
     QString   result;
     const int count = static_cast<int>(history.size());
     for (int i = qMax(0, start); i < qMin(end, count); ++i) {
-        const auto   &message = history[static_cast<size_t>(i)];
-        const QString role    = QString::fromStdString(message.value("role", std::string()));
-        if (role == QStringLiteral("assistant") && message.contains("tool_calls")) {
-            result += QStringLiteral("[Assistant called tools: ");
-            for (const auto &call : message["tool_calls"]) {
-                if (call.contains("function") && call["function"].is_object()
-                    && call["function"].contains("name") && call["function"]["name"].is_string()) {
-                    result += QString::fromStdString(call["function"]["name"].get<std::string>())
-                              + QLatin1Char(' ');
-                }
-            }
-            result += QStringLiteral("]\n");
-            continue;
-        }
-        const auto value = message.find("content");
-        if (value == message.end() || !value->is_string()) {
-            continue;
-        }
-        QString content = QString::fromStdString(value->get<std::string>());
-        if (role == QStringLiteral("tool") && content.size() > 2000) {
-            content = content.left(1600) + QStringLiteral("\n... (truncated, kept tail) ...\n")
-                      + content.right(400);
-        }
-        result += role == QStringLiteral("tool")
-                      ? QStringLiteral("[Tool result: %1]\n").arg(content)
-                      : QStringLiteral("[%1]: %2\n").arg(role, content);
+        result += QString::fromStdString(summaryMessage(history[static_cast<size_t>(i)]).dump())
+                  + QLatin1Char('\n');
     }
     return result;
+}
+
+std::optional<QString> completedSummary(const json &response)
+{
+    const auto choices = response.find("choices");
+    if (choices == response.end() || !choices->is_array() || choices->empty()) {
+        return std::nullopt;
+    }
+    const auto &choice = choices->front();
+    if (!choice.is_object()) {
+        return std::nullopt;
+    }
+    const auto finish = choice.find("finish_reason");
+    if (finish != choice.end() && !finish->is_null() && *finish != "stop") {
+        return std::nullopt;
+    }
+    const auto message = choice.find("message");
+    if (message == choice.end() || !message->is_object()) {
+        return std::nullopt;
+    }
+    for (const char *key : {"tool_calls", "function_call", "refusal"}) {
+        const auto field = message->find(key);
+        if (field != message->end() && !field->is_null() && !field->empty()
+            && !(field->is_string() && field->get_ref<const std::string &>().empty())) {
+            return std::nullopt;
+        }
+    }
+    const auto content = message->find("content");
+    if (content == message->end() || !content->is_string()) {
+        return std::nullopt;
+    }
+    const QString text = QString::fromStdString(content->get<std::string>());
+    return text.trimmed().isEmpty() ? std::nullopt : std::optional<QString>(text);
 }
 
 bool pruneHistory(json &history, const QSocAgentConfig &config)
@@ -345,7 +381,7 @@ int QSocAgent::performCompaction(bool force, bool manual)
     bool       summarized    = false;
     json       recentTail    = candidate.candidateMessages;
     if (force || prunedTokens > window * agentConfig.compactThreshold) {
-        const auto summary = summarizeHistory(candidate.candidateMessages, &recentTail);
+        const auto summary = summarizeHistory(source, candidate.candidateMessages, &recentTail);
         if (!current()) {
             if (owner) {
                 owner->lastCompactionStatus_ = CompactionStatus::Cancelled;
@@ -521,7 +557,8 @@ void QSocAgent::compressHistoryIfNeeded(const ActiveRunPtr &run)
         performCompaction(false, false);
     }
 }
-std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json *recentTail)
+std::optional<json> QSocAgent::summarizeHistory(
+    const json &summarySource, const json &retainedSource, json *recentTail)
 {
     const ActiveRunPtr        run = activeRun_;
     const QPointer<QSocAgent> owner(this);
@@ -533,14 +570,14 @@ std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json
         return std::nullopt;
     }
 
-    int msgCount = static_cast<int>(sourceMessages.size());
+    int msgCount = static_cast<int>(retainedSource.size());
 
     /* Carry the previous summary as an anchor. */
     QString       previousSummary;
     int           summarizeStart = 0;
     const QString summaryMarker  = QStringLiteral("[Conversation Summary]\n");
     if (msgCount > 0) {
-        const auto &first = sourceMessages[0];
+        const auto &first = summarySource[0];
         if (first.contains("role") && first["role"] == "user" && first.contains("content")
             && first["content"].is_string()) {
             const QString firstContent = QString::fromStdString(first["content"].get<std::string>());
@@ -578,7 +615,7 @@ std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json
     int effectiveKeep = 0;
     int tailTokens    = 0;
     for (int i = msgCount - 1; i >= summarizeStart && effectiveKeep < hardCap; --i) {
-        const auto &msg = sourceMessages[static_cast<size_t>(i)];
+        const auto &msg = retainedSource[static_cast<size_t>(i)];
         QString     approx;
         if (msg.contains("content") && msg["content"].is_string()) {
             approx = QString::fromStdString(msg["content"].get<std::string>());
@@ -596,14 +633,14 @@ std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json
 
     /* Determine boundary: keep recent messages */
     int proposedBoundary = msgCount - effectiveKeep;
-    int boundary         = safeBoundary(sourceMessages, proposedBoundary);
+    int boundary         = safeBoundary(retainedSource, proposedBoundary);
 
     if (boundary <= summarizeStart) {
         return std::nullopt;
     }
 
     /* Format old messages for summarization (skip the anchor itself) */
-    QString oldContent = formatSummary(sourceMessages, summarizeStart, boundary);
+    QString oldContent = formatSummary(summarySource, summarizeStart, boundary);
 
     /* Try LLM summarization if service is available and not circuit-broken */
     QString summary;
@@ -699,17 +736,10 @@ std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json
             if (stopped()) {
                 return std::nullopt;
             }
-            if (response.contains("choices") && response["choices"].is_array()
-                && !response["choices"].empty()) {
-                const auto &choice = response["choices"][0];
-                if (choice.contains("message") && choice["message"].is_object()) {
-                    const auto &message = choice["message"];
-                    if (message.contains("content") && message["content"].is_string()) {
-                        summary    = QString::fromStdString(message["content"].get<std::string>());
-                        llmSuccess = !message.contains("tool_calls")
-                                     || message["tool_calls"].empty();
-                    }
-                }
+            const auto completed = completedSummary(response);
+            if (completed) {
+                summary    = *completed;
+                llmSuccess = true;
             }
             if (!llmSuccess || summary.trimmed().isEmpty()) {
                 lastCompactionStatus_ = CompactionStatus::Failed;
@@ -735,18 +765,22 @@ std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json
                 summary += "...(truncated)";
                 break;
             }
-            const auto &msg = sourceMessages[static_cast<size_t>(i)];
-            if (msg.contains("role") && msg.contains("content") && msg["content"].is_string()) {
-                QString role    = QString::fromStdString(msg["role"].get<std::string>());
-                QString content = QString::fromStdString(msg["content"].get<std::string>());
-                /* Keep head + tail so file paths and error tails
-                 * survive the truncation; left(100) alone routinely
-                 * decapitated commands and stack traces. */
-                if (content.length() > 400) {
-                    content = content.left(280) + " ... " + content.right(80);
+            const auto extracted = summaryMessage(summarySource[static_cast<size_t>(i)]);
+            QString    content   = QString::fromStdString(extracted.at("role").dump())
+                                   + QStringLiteral(": ");
+            for (const char *field : {"content", "tool_calls", "tool_call_id", "name"}) {
+                if (!extracted.contains(field)) {
+                    continue;
                 }
-                summary += role + ": " + content + "; ";
+                if (std::string_view(field) != "content") {
+                    content += QString::fromLatin1(field) + QLatin1Char('=');
+                }
+                content += QString::fromStdString(extracted[field].dump()) + QLatin1Char(' ');
             }
+            if (content.length() > 400) {
+                content = content.left(280) + QStringLiteral(" ... ") + content.right(80);
+            }
+            summary += content + QLatin1Char('\n');
         }
         summary += "]";
     }
@@ -759,8 +793,8 @@ std::optional<json> QSocAgent::summarizeHistory(const json &sourceMessages, json
 
     *recentTail = json::array();
     for (int i = boundary; i < msgCount; i++) {
-        newMessages.push_back(sourceMessages[static_cast<size_t>(i)]);
-        recentTail->push_back(sourceMessages[static_cast<size_t>(i)]);
+        newMessages.push_back(retainedSource[static_cast<size_t>(i)]);
+        recentTail->push_back(retainedSource[static_cast<size_t>(i)]);
     }
 
     return newMessages;

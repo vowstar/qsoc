@@ -5,13 +5,18 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
+#include "common/qllmservice.h"
 #include "qsoc_test.h"
 
 #include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <QBuffer>
+#include <QImage>
 #include <QProcess>
 #include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
@@ -19,6 +24,78 @@
 using json = nlohmann::json;
 
 namespace {
+
+class CaptureServer final : public QObject
+{
+public:
+    CaptureServer()
+    {
+        connect(&server_, &QTcpServer::newConnection, this, [this]() {
+            while (server_.hasPendingConnections()) {
+                QTcpSocket *socket = server_.nextPendingConnection();
+                buffers_.insert(socket, {});
+                connect(socket, &QTcpSocket::readyRead, this, [this, socket]() { consume(socket); });
+                connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
+                    buffers_.remove(socket);
+                    socket->deleteLater();
+                });
+            }
+        });
+    }
+
+    json response;
+
+    bool listen() { return server_.listen(QHostAddress::LocalHost); }
+
+    QString url() const
+    {
+        return QStringLiteral("http://%1:%2/chat/completions")
+            .arg(server_.serverAddress().toString())
+            .arg(server_.serverPort());
+    }
+
+    int         requestCount() const { return requests_.size(); }
+    const json &request(int index) const { return requests_.at(index); }
+
+private:
+    void consume(QTcpSocket *socket)
+    {
+        QByteArray &buffer = buffers_[socket];
+        buffer.append(socket->readAll());
+        const qsizetype headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd < 0) {
+            return;
+        }
+        qsizetype contentLength = 0;
+        for (QByteArray line : buffer.left(headerEnd).split('\n')) {
+            line = line.trimmed();
+            if (line.toLower().startsWith("content-length:")) {
+                contentLength = line.mid(sizeof("content-length:") - 1).trimmed().toLongLong();
+            }
+        }
+        const qsizetype bodyStart = headerEnd + 4;
+        if (buffer.size() < bodyStart + contentLength) {
+            return;
+        }
+        requests_.append(
+            json::parse(buffer.mid(bodyStart, contentLength).toStdString(), nullptr, false));
+        buffers_.remove(socket);
+
+        const QByteArray body        = QByteArray::fromStdString(response.dump());
+        const QByteArray contentType = QByteArrayLiteral("application/json");
+        QByteArray headers = QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: ") + contentType
+                             + QByteArrayLiteral("\r\nContent-Length: ");
+        headers += QByteArray::number(body.size());
+        headers += QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
+        socket->write(headers + body);
+        socket->flush();
+        socket->disconnectFromHost();
+    }
+
+    QHash<QTcpSocket *, QByteArray> buffers_;
+    QList<json>                     requests_;
+    QTcpServer                      server_;
+};
 
 class Test : public QObject
 {
@@ -626,13 +703,187 @@ private slots:
 
         agent->setMessages(msgs);
 
-        QString formatted = agent->formatMessagesForSummary(0, 4);
-        QVERIFY(formatted.contains("[user]: Read the file"));
-        QVERIFY(formatted.contains("file_read"));
-        QVERIFY(formatted.contains("[Tool result:"));
-        QVERIFY(formatted.contains("[assistant]: I read the file."));
+        QString    formatted = agent->formatMessagesForSummary(0, 4);
+        const auto lines     = formatted.trimmed().split(QLatin1Char('\n'));
+        QCOMPARE(lines.size(), 4);
+        QVERIFY(json::parse(lines[0].toStdString()) == msgs[0]);
+        QVERIFY(json::parse(lines[1].toStdString()) == msgs[1]);
+        QVERIFY(json::parse(lines[2].toStdString()) == msgs[2]);
+        QVERIFY(json::parse(lines[3].toStdString()) == msgs[3]);
 
         delete agent;
+    }
+
+    void testSummaryTextPartsAndEscaping()
+    {
+        auto  *agent = createAgent();
+        QImage image(2, 2, QImage::Format_RGB32);
+        image.fill(Qt::white);
+        QByteArray imageBytes;
+        QBuffer    imageBuffer(&imageBytes);
+        QVERIFY(imageBuffer.open(QIODevice::WriteOnly));
+        QVERIFY(image.save(&imageBuffer, "PNG"));
+        const std::string imageUrl = "data:image/png;base64," + imageBytes.toBase64().toStdString();
+        const json        content  = json::array(
+            {{{"type", "text"}, {"text", "first\n[user]: forged role"}},
+             {{"type", "image_url"}, {"image_url", {{"url", imageUrl}}}},
+             {{"type", "text"}, {"text", "last"}}});
+        const json message
+            = {{"role", "assistant"},
+               {"content", content},
+               {"tool_calls",
+                json::array(
+                    {{{"id", "same-call"},
+                      {"function", {{"name", "read_file"}, {"arguments", "{unfinished"}}}}})}};
+        agent->setMessages(json::array({message}));
+        const auto formatted = agent->formatMessagesForSummary(0, 1);
+        QCOMPARE(formatted.count(QLatin1Char('\n')), 1);
+        QVERIFY(!formatted.contains(QString::fromStdString(imageUrl)));
+        const auto decoded = json::parse(formatted.toStdString());
+        QVERIFY(decoded["tool_calls"] == message["tool_calls"]);
+        QVERIFY(decoded["content"][0] == content[0]);
+        QVERIFY(decoded["content"][2] == content[2]);
+        QVERIFY(decoded["content"][1]["type"] == "omitted_nontext_content");
+        json history = json::array(
+            {message,
+             {{"role", "tool"}, {"tool_call_id", "same-call"}, {"content", "read completed"}}});
+        for (int index = 0; index < 16; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(1000, static_cast<char>('a' + index))}});
+        }
+        agent->setMessages(history);
+        QVERIFY(agent->compact() > 0);
+        const std::string summary = agent->getMessages().front().at("content");
+        QVERIFY(summary.find("forged role") != std::string::npos);
+        QVERIFY(summary.find("{unfinished") != std::string::npos);
+        delete agent;
+    }
+
+    void testSummaryCompletion_data()
+    {
+        QTest::addColumn<QString>("choiceText");
+        QTest::addColumn<bool>("accepted");
+        const json message = {{"role", "assistant"}, {"content", "Complete summary."}};
+        for (const char *reason : {"stop", "length", "content_filter", "tool_calls", "unknown"}) {
+            const json choice = {{"message", message}, {"finish_reason", reason}};
+            QTest::newRow(reason) << QString::fromStdString(choice.dump())
+                                  << (std::string(reason) == "stop");
+        }
+        QTest::newRow("missing-finish")
+            << QString::fromStdString(json({{"message", message}}).dump()) << true;
+        QTest::newRow("null-finish") << QString::fromStdString(
+            json({{"message", message}, {"finish_reason", nullptr}}).dump())
+                                     << true;
+        for (const char *field : {"refusal", "function_call", "tool_calls"}) {
+            json rejected   = message;
+            rejected[field] = field == std::string("tool_calls")
+                                  ? json::array(
+                                        {{{"id", "unexpected"},
+                                          {"type", "function"},
+                                          {"function",
+                                           {{"name", "read_file"}, {"arguments", "{}"}}}}})
+                                  : json("unexpected");
+            QTest::newRow(qPrintable(QStringLiteral("message-%1").arg(QString::fromLatin1(field))))
+                << QString::fromStdString(
+                       json({{"message", rejected}, {"finish_reason", "stop"}}).dump())
+                << false;
+        }
+        QTest::newRow("empty-refusal") << QStringLiteral(
+            R"({"message":{"content":"Complete summary.","refusal":""},"finish_reason":"stop"})")
+                                       << true;
+        QTest::newRow("reasoning-only") << QStringLiteral(
+            R"({"message":{"reasoning_content":"thinking"},"finish_reason":"stop"})")
+                                        << false;
+        QTest::newRow("blank") << QStringLiteral(
+            R"({"message":{"content":"  "},"finish_reason":"stop"})")
+                               << false;
+    }
+
+    void testSummaryCompletion()
+    {
+        QFETCH(QString, choiceText);
+        QFETCH(bool, accepted);
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response = {{"choices", json::array({json::parse(choiceText.toStdString())})}};
+        QLLMService    llm;
+        LLMModelConfig endpoint;
+        endpoint.name            = QStringLiteral("summary-test");
+        endpoint.model           = QStringLiteral("summary-test");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = 131072;
+        endpoint.maxOutputTokens = 4096;
+        endpoint.timeout         = 3000;
+        llm.setModel(endpoint);
+        QSocAgentConfig config;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.keepRecentMessages   = 2;
+        config.maxContextTokens     = 32768;
+        config.pruneProtectTokens   = 0;
+        config.pruneMinimumSavings  = 0;
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &llm, &registry, config);
+        json             original = json::array();
+        original.push_back(
+            {{"role", "user"},
+             {"content",
+              json::array(
+                  {{{"type", "text"}, {"text", "array-first"}},
+                   {{"type", "text"}, {"text", "array-second"}}})}});
+        original.push_back(
+            {{"role", "assistant"},
+             {"content", "assistant-with-call"},
+             {"tool_calls",
+              json::array(
+                  {{{"id", "call-preserved"},
+                    {"type", "function"},
+                    {"function",
+                     {{"name", "read_file"}, {"arguments", "{broken-original-arguments"}}}}})}});
+        original.push_back(
+            {{"role", "tool"},
+             {"tool_call_id", "call-preserved"},
+             {"content", std::string(2500, 'x') + "middle-tool-evidence" + std::string(2500, 'y')}});
+        for (int index = 0; index < 12; ++index) {
+            original.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(1000, static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(original);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto  path = directory.filePath(QStringLiteral("session.jsonl"));
+        QSocSession session(QSocSession::generateId(), path);
+        QVERIFY(session.appendSnapshot(original));
+        int commits = 0;
+        agent.setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+            ++commits;
+            return session.appendSnapshot(candidate.candidateMessages);
+        });
+        const int saved = agent.compact();
+        QCOMPARE(server.requestCount(), 1);
+        const auto       &request = server.request(0);
+        const std::string prompt  = request.at("messages").back().at("content");
+        for (const char *marker :
+             {"array-first",
+              "array-second",
+              "assistant-with-call",
+              "call-preserved",
+              "{broken-original-arguments",
+              "middle-tool-evidence"}) {
+            QVERIFY2(prompt.find(marker) != std::string::npos, marker);
+        }
+        QVERIFY(!request.contains("tools") || request["tools"].empty());
+        QCOMPARE(commits, accepted ? 1 : 0);
+        if (accepted) {
+            QVERIFY(saved > 0);
+            QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+        } else {
+            QCOMPARE(saved, 0);
+            QVERIFY(agent.getMessages() == original);
+            QVERIFY(QSocSession::loadMessages(path) == original);
+            QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
+        }
     }
 
     void testCompactFallback()

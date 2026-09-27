@@ -961,7 +961,8 @@ private:
      * @return true if pruning saved enough tokens
      */
     int                 performCompaction(bool force, bool manual);
-    std::optional<json> summarizeHistory(const json &sourceMessages, json *recentTail);
+    std::optional<json> summarizeHistory(
+        const json &summarySource, const json &retainedSource, json *recentTail);
     QSocRequestSnapshot compactionRequest(const json &history) const;
     QByteArray          compactionRequestVersion(const QSocRequestSnapshot &request) const;
 

@@ -758,6 +758,8 @@ Each summary includes the previous summary as an anchor. The agent saves removed
 
 Compaction prepares a candidate without changing the active history. It installs the candidate only if the full local request estimate decreases and fits within 90% of the effective input budget. Restored files, skills, task descriptions, and artifact references count toward that limit.
 
+Summary requests preserve text parts, assistant text, tool call identifiers, and original argument strings. Explicitly truncated, filtered, refused, or tool-producing summaries are rejected. A provided completion reason must be `stop`. Providers that omit the completion reason remain compatible, but completion cannot be verified from that field.
+
 A failed summary, failed save, cancellation, or session change leaves the active history intact. A failed save can retain candidate artifacts for recovery. Automatic compaction does not repeat a no-progress attempt until its history or request inputs change. `/compact` explicitly retries.
 
 The CLI saves one complete snapshot before installing compacted history. A resumed session reads either the prior history or the complete snapshot after a process exit. This does not guarantee recovery from power loss. SDK callers need persistent artifact storage and a session save callback for restart recovery.
