@@ -3405,10 +3405,17 @@ int QSocAgent::estimateTokens(const QString &text) const
 
 int QSocAgent::effectiveContextTokens() const
 {
-    /* Model windows cover input + output combined; the assistant reply
-     * carves a slice off the same pool. Threshold math must run against
-     * the input budget alone, otherwise the request can clear the
-     * compact threshold and still get rejected when the reply lands. */
+    const QPointer<QLLMService> service = activeRun_ ? activeRun_->llm : llmService;
+    if (service && service->hasEndpoint()) {
+        const auto   endpoint = service->getCurrentModelConfig();
+        const qint64 window   = qMax(0, qMin(agentConfig.maxContextTokens, endpoint.contextTokens));
+        const qint64 reserved
+            = endpoint.maxOutputTokens > 0
+                  ? endpoint.maxOutputTokens
+                  : qBound(qint64(0), qint64(agentConfig.reservedOutputTokens), window / 2);
+        return static_cast<int>(qMax<qint64>(0, window - reserved));
+    }
+    /* An omitted output limit leaves the provider allowance unknown. */
     const int reserved
         = qBound(0, agentConfig.reservedOutputTokens, agentConfig.maxContextTokens / 2);
     return qMax(1024, agentConfig.maxContextTokens - reserved);

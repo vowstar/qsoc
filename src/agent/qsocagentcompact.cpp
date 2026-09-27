@@ -99,13 +99,22 @@ json summaryMessage(const json &message)
     return result;
 }
 
-QString formatSummary(const json &history, int start, int end)
+std::optional<QString> formatSummary(
+    const json &history, int start, int end, qint64 budget = std::numeric_limits<qint64>::max())
 {
     QString   result;
-    const int count = static_cast<int>(history.size());
+    qint64    tokens = 0;
+    const int count  = static_cast<int>(history.size());
     for (int i = qMax(0, start); i < qMin(end, count); ++i) {
-        result += QString::fromStdString(summaryMessage(history[static_cast<size_t>(i)]).dump())
-                  + QLatin1Char('\n');
+        const QString line   = QString::fromStdString(
+                                   summaryMessage(history[static_cast<size_t>(i)]).dump())
+                               + QLatin1Char('\n');
+        const qint64  needed = QSocRequestUsage::estimateText(line);
+        if (needed > budget - tokens) {
+            return std::nullopt;
+        }
+        tokens += needed;
+        result += line;
     }
     return result;
 }
@@ -264,7 +273,7 @@ int QSocAgent::findSafeBoundary(int proposedIndex) const
 
 QString QSocAgent::formatMessagesForSummary(int start, int end) const
 {
-    return formatSummary(messages, start, end);
+    return formatSummary(messages, start, end).value_or(QString());
 }
 
 QSocRequestSnapshot QSocAgent::compactionRequest(const json &history) const
@@ -404,6 +413,11 @@ int QSocAgent::performCompaction(bool force, bool manual)
             return 0;
         }
         if (summary) {
+            const QString text = QString::fromStdString(summary->front().at("content"));
+            const QString body = text.mid(QStringLiteral("[Conversation Summary]\n").size());
+            if (QSocRequestUsage::estimateText(body) > qMax<qint64>(1, window / 4)) {
+                return 0;
+            }
             candidate.candidateMessages = *summary;
             summarized                  = true;
         } else if (lastCompactionStatus_ == CompactionStatus::Failed) {
@@ -623,43 +637,32 @@ std::optional<json> QSocAgent::summarizeHistory(
         return std::nullopt;
     }
 
-    /* Token-budget tail walk: count back from the end until we hit
-     * either keepRecentMessages or the recent-zone token budget. A
-     * single 50KB tool output should not be allowed to dominate the
-     * post-compact context just because it lives in the last N
-     * positions. */
-    const int tailBudget = qBound(2000, agentConfig.maxContextTokens / 4, 8000);
-    const int hardCap
+    const qint64 tailBudget = qBound(1, effectiveContextTokens() / 4, 8000);
+    const int    hardCap
         = qMin(agentConfig.keepRecentMessages, msgCount - summarizeStart - minToSummarize);
-    int effectiveKeep = 0;
-    int tailTokens    = 0;
-    for (int i = msgCount - 1; i >= summarizeStart && effectiveKeep < hardCap; --i) {
-        const auto &msg = retainedSource[static_cast<size_t>(i)];
-        QString     approx;
-        if (msg.contains("content") && msg["content"].is_string()) {
-            approx = QString::fromStdString(msg["content"].get<std::string>());
+    int    boundary   = msgCount;
+    qint64 tailTokens = 0;
+    while (msgCount - boundary < hardCap) {
+        int groupStart = boundary - 1;
+        while (groupStart > summarizeStart
+               && retainedSource[static_cast<size_t>(groupStart)].value("role", "") == "tool") {
+            --groupStart;
         }
-        const int approxTokens = estimateTokens(approx);
-        if (effectiveKeep >= 1 && tailTokens + approxTokens > tailBudget) {
+        if (groupStart < summarizeStart + minToSummarize) {
             break;
         }
-        tailTokens += approxTokens;
-        effectiveKeep++;
+        json group = json::array();
+        for (int index = groupStart; index < boundary; ++index) {
+            group.push_back(retainedSource[static_cast<size_t>(index)]);
+        }
+        const qint64 groupTokens = QSocRequestUsage::estimateHistory(group);
+        if (boundary < msgCount && groupTokens > tailBudget - tailTokens) {
+            break;
+        }
+        tailTokens += groupTokens;
+        boundary = groupStart;
     }
-    if (effectiveKeep < 1) {
-        effectiveKeep = qMin(1, hardCap);
-    }
-
-    /* Determine boundary: keep recent messages */
-    int proposedBoundary = msgCount - effectiveKeep;
-    int boundary         = safeBoundary(retainedSource, proposedBoundary);
-
-    if (boundary <= summarizeStart) {
-        return std::nullopt;
-    }
-
-    /* Format old messages for summarization (skip the anchor itself) */
-    QString oldContent = formatSummary(summarySource, summarizeStart, boundary);
+    const qint64 summaryBudget = qMax<qint64>(1, effectiveContextTokens() / 4);
 
     /* Try LLM summarization if service is available and not circuit-broken */
     QString summary;
@@ -681,6 +684,13 @@ std::optional<json> QSocAgent::summarizeHistory(
         endpoint = compactLlm->getModelConfig(agentConfig.compactionModel);
     }
     if (!compactLlm.isNull() && endpoint.has_value()) {
+        const qint64 summaryWindow = qMax(0, endpoint->contextTokens);
+        const qint64 outputReserve
+            = endpoint->maxOutputTokens > 0
+                  ? endpoint->maxOutputTokens
+                  : qBound(qint64(0), qint64(agentConfig.reservedOutputTokens), summaryWindow / 2);
+        const qint64 inputBudget = qMax<qint64>(0, summaryWindow - outputReserve);
+        const auto oldContent = formatSummary(summarySource, summarizeStart, boundary, inputBudget);
         const QString noToolsPreamble = QStringLiteral(
             "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n"
             "You already have all context above. Tool calls will be rejected\n"
@@ -717,8 +727,8 @@ std::optional<json> QSocAgent::summarizeHistory(
             "- [(none)]\n"
             "## Actions Already Completed\n"
             "- [tool call: outcome, or (none)]\n"
-            "## All User Messages\n"
-            "- [verbatim, oldest first]\n"
+            "## Active User Requirements\n"
+            "- [current goals and constraints]\n"
             "## Next Steps\n"
             "- [(none)]\n"
             "</template>\n\n"
@@ -726,12 +736,16 @@ std::optional<json> QSocAgent::summarizeHistory(
             "- Keep every section, even when empty - write \"(none)\".\n"
             "- Terse bullets, not prose paragraphs.\n"
             "- Preserve exact file paths, commands, error strings, identifiers.\n"
-            "- Reproduce every user message verbatim - they are short and critical.\n"
+            "- Preserve active user requirements and unresolved work. Merge repeated "
+            "requirements.\n"
+            "- Remove superseded decisions and completed routine details.\n"
             "- Do not mention the summary process or that context was compacted.\n\n"
             "## Conversation to summarize:\n%1\n\n");
 
-        const QString summaryPrompt = noToolsPreamble + anchorBlock + templateBlock.arg(oldContent)
-                                      + noToolsPreamble;
+        const QString summaryPrompt
+            = noToolsPreamble + anchorBlock
+              + QStringLiteral("Keep the summary within %1 estimated tokens.\n").arg(summaryBudget)
+              + templateBlock.arg(oldContent.value_or(QString())) + noToolsPreamble;
 
         /* Build messages for the summarization request */
         json summaryMessages = json::array();
@@ -745,10 +759,7 @@ std::optional<json> QSocAgent::summarizeHistory(
         QSocRequestSnapshot summaryRequest;
         summaryRequest.messages = summaryMessages;
         summaryRequest.effort   = effort;
-        const int summaryWindow = qMax(1024, endpoint->contextTokens);
-        const int outputReserve = qBound(
-            0, qMax(agentConfig.reservedOutputTokens, endpoint->maxOutputTokens), summaryWindow / 2);
-        if (QSocRequestUsage::estimateRequest(summaryRequest) <= summaryWindow - outputReserve) {
+        if (oldContent && QSocRequestUsage::estimateRequest(summaryRequest) <= inputBudget) {
             const std::stop_token stopToken = run ? run->stopSource.get_token() : std::stop_token{};
             const json            response  = compactLlm->sendChatCompletionTo(
                 *endpoint, summaryMessages, json::array(), 0.1, stopToken, effort);
@@ -769,21 +780,19 @@ std::optional<json> QSocAgent::summarizeHistory(
 
     /* Mechanical summary when no endpoint can accept the input. */
     if (!llmSuccess) {
-        const int summaryBudgetTokens
-            = qMax(2048, static_cast<int>(agentConfig.maxContextTokens / 4));
-        const int summaryBudgetChars = summaryBudgetTokens * 4; /* coarse token->char */
-        QString   carryAnchor;
+        QString carryAnchor;
         if (!previousSummary.isEmpty()) {
             /* Retain the existing anchor. */
             carryAnchor = QStringLiteral("[carried anchor]\n") + previousSummary
                           + QStringLiteral("\n[/carried anchor]\n");
         }
-        summary = "[Previous conversation summary: " + carryAnchor;
+        summary                 = "[Previous conversation summary: " + carryAnchor;
+        const QString truncated = QStringLiteral("...(truncated)]");
+        if (QSocRequestUsage::estimateText(summary + truncated) > summaryBudget) {
+            lastCompactionStatus_ = CompactionStatus::Failed;
+            return std::nullopt;
+        }
         for (int i = summarizeStart; i < boundary; i++) {
-            if (summary.size() >= summaryBudgetChars) {
-                summary += "...(truncated)";
-                break;
-            }
             const auto extracted = summaryMessage(summarySource[static_cast<size_t>(i)]);
             QString    content   = QString::fromStdString(extracted.at("role").dump())
                                    + QStringLiteral(": ");
@@ -798,6 +807,10 @@ std::optional<json> QSocAgent::summarizeHistory(
             }
             if (content.length() > 400) {
                 content = content.left(280) + QStringLiteral(" ... ") + content.right(80);
+            }
+            if (QSocRequestUsage::estimateText(summary + content + truncated) > summaryBudget) {
+                summary += QStringLiteral("...(truncated)");
+                break;
             }
             summary += content + QLatin1Char('\n');
         }

@@ -1059,6 +1059,197 @@ private slots:
         }
     }
 
+    void testSummaryRequestBudget_data()
+    {
+        QTest::addColumn<int>("window");
+        QTest::addColumn<int>("output");
+        QTest::addColumn<bool>("sent");
+        QTest::newRow("small-output-limit") << 4096 << 512 << true;
+        QTest::newRow("large-output-limit") << 8192 << 6500 << false;
+        QTest::newRow("provider-default") << 8192 << 0 << true;
+        QTest::newRow("invalid-output-limit") << 8192 << 9000 << false;
+        QTest::newRow("invalid-window") << 0 << 0 << false;
+        QTest::newRow("tiny-window") << 1000 << 600 << false;
+    }
+
+    void testSummaryRequestBudget()
+    {
+        QFETCH(int, window);
+        QFETCH(int, output);
+        QFETCH(bool, sent);
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response = {
+            {"choices",
+             json::array(
+                 {{{"finish_reason", "stop"},
+                   {"message",
+                    {{"role", "assistant"}, {"content", "Keep the task constraint."}}}}})}};
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.model           = QStringLiteral("budget-model");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = window;
+        endpoint.maxOutputTokens = output;
+        endpoint.timeout         = 3000;
+        service.setModel(endpoint);
+        QSocAgentConfig config;
+        config.maxContextTokens     = 32768;
+        config.keepRecentMessages   = 2;
+        config.effortLevel          = QStringLiteral("high");
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        json             history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(1200, static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(history);
+        agent.compact();
+        QCOMPARE(server.requestCount(), sent ? 1 : 0);
+        if (sent) {
+            const auto &body = server.request(0);
+            QCOMPARE(body.contains("max_tokens"), output > 0);
+            if (output > 0) {
+                QCOMPARE(body.at("max_tokens").get<int>(), output);
+                QSocRequestSnapshot request;
+                request.messages = body.at("messages");
+                QVERIFY(QSocRequestUsage::estimateRequest(request) + output <= window);
+            }
+            QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
+            QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+        }
+        QCOMPARE(agent.effectiveContextTokens(), output > 0 ? qMax(0, window - output) : window / 2);
+        if (output >= window) {
+            QVERIFY(agent.getMessages() == history);
+        }
+        QCOMPARE(service.getCurrentModelConfig().maxOutputTokens, output);
+    }
+
+    void testOversizedSummaryIsAtomic()
+    {
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response = {
+            {"choices",
+             json::array(
+                 {{{"finish_reason", "stop"},
+                   {"message", {{"role", "assistant"}, {"content", std::string(9000, 's')}}}}})}};
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.model           = QStringLiteral("summary-model");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = 131072;
+        endpoint.maxOutputTokens = 4096;
+        endpoint.timeout         = 3000;
+        service.setModel(endpoint);
+        QSocAgentConfig config;
+        config.maxContextTokens     = 10000;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        json             history = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(2000, static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(history);
+        int commits = 0;
+        agent.setCompactionCommitter([&](const QSocAgent::CompactionCandidate &) {
+            ++commits;
+            return true;
+        });
+        QCOMPARE(agent.compact(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        QCOMPARE(commits, 0);
+        QVERIFY(agent.getMessages() == history);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::NoProgress);
+    }
+
+    void testTailCountsCompleteMessages_data()
+    {
+        QTest::addColumn<bool>("toolGroup");
+        QTest::addColumn<int>("characters");
+        QTest::newRow("text-parts") << false << 24000;
+        QTest::newRow("large-call-arguments") << true << 24000;
+        QTest::newRow("unfit-call-group") << true << 100000;
+    }
+
+    void testTailCountsCompleteMessages()
+    {
+        QFETCH(bool, toolGroup);
+        QFETCH(int, characters);
+        QSocAgentConfig config;
+        config.maxContextTokens     = 32768;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        auto *agent                 = createAgent(config);
+        json  history               = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(2000, static_cast<char>('a' + index))}});
+        }
+        if (toolGroup) {
+            history.push_back(
+                {{"role", "assistant"},
+                 {"content", nullptr},
+                 {"tool_calls",
+                  json::array(
+                      {{{"id", "large-call"},
+                        {"type", "function"},
+                        {"function",
+                         {{"name", "read_file"}, {"arguments", std::string(characters, 'x')}}}}})}});
+            history.push_back(
+                {{"role", "tool"}, {"tool_call_id", "large-call"}, {"content", "done"}});
+        } else {
+            history.push_back(
+                {{"role", "user"},
+                 {"content",
+                  json::array({{{"type", "text"}, {"text", std::string(characters, 'x')}}})}});
+        }
+        agent->setMessages(history);
+        const int saved = agent->compact();
+        if (characters > 24000) {
+            QCOMPARE(saved, 0);
+            QVERIFY(agent->getMessages() == history);
+        } else {
+            QVERIFY(saved > 0);
+            const auto compacted = agent->getMessages();
+            QCOMPARE(compacted.size(), toolGroup ? json::size_type(3) : json::size_type(2));
+            QVERIFY(compacted.back() == history.back());
+            if (toolGroup) {
+                QVERIFY(compacted.at(1) == history.at(history.size() - 2));
+            }
+            QVERIFY(!QSocAgent::artifactReferences(compacted).empty());
+        }
+        delete agent;
+    }
+
+    void testOversizedMechanicalAnchorIsAtomic()
+    {
+        QSocAgentConfig config;
+        config.maxContextTokens     = 10000;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        auto *agent                 = createAgent(config);
+        json  history               = json::array(
+            {{{"role", "user"}, {"content", "[Conversation Summary]\n" + std::string(8000, 'x')}}});
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'y')}});
+        }
+        agent->setMessages(history);
+        QCOMPARE(agent->compact(), 0);
+        QVERIFY(agent->getMessages() == history);
+        QCOMPARE(agent->lastCompactionStatus(), QSocAgent::CompactionStatus::Failed);
+        delete agent;
+    }
+
     void testCompactFallback()
     {
         /* Without LLM service, compactWithLLM should fall back to mechanical summary */

@@ -754,11 +754,11 @@ Cached tokens still occupy the context window. The status script receives these 
 in `provider_usage`, separately from the existing estimated token totals.
 `reported_requests` counts completed requests with valid input usage.
 
-Each summary includes the previous summary as an anchor. The agent saves removed messages as read-only text artifacts and lists their IDs. The index states whether `tool_output_read` is exposed to this agent. Missing or denied tools stay unavailable. Local storage does not grant tool access. Summaries can omit details.
+Each summary uses the previous summary as an anchor and merges active requirements. It does not retain every user message verbatim. The agent saves removed messages as read-only text artifacts and lists their IDs. The index states whether `tool_output_read` is exposed to this agent. Missing or denied tools stay unavailable. Local storage does not grant tool access. Summaries can omit details.
 
 Artifacts preserve captured message and tool text. They cannot recover text that an upstream tool truncated before returning it. Artifact byte quotas and the model context budget are separate limits.
 
-Compaction prepares a candidate without changing the active history. It installs the candidate only if the full local request estimate decreases and fits within 90% of the effective input budget. Restored files, skills, task descriptions, and artifact references count toward that limit.
+Compaction prepares a candidate without changing the active history. It installs the candidate only if the full local request estimate decreases and fits within 90% of the effective input budget. An explicit endpoint output allowance is subtracted from the smaller agent and endpoint window. Restored files, skills, task descriptions, and artifact references count toward that limit.
 
 Summary requests preserve text parts, assistant text, tool call identifiers, and original argument strings. Explicitly truncated, filtered, refused, or tool-producing summaries are rejected. A provided completion reason must be `stop`. Providers that omit the completion reason remain compatible, but completion cannot be verified from that field.
 
@@ -772,6 +772,8 @@ Compaction inherits the current model and reasoning effort, including a
 temporary model selection. `agent.compaction_model` selects a different
 configured model for the summary only. An unknown model ID reports an error.
 The summary request does not change the model selected for normal turns.
+
+Summary requests use the selected endpoint’s context window and configured output limit. A missing output limit keeps the provider default and uses the local reservation estimate. Recent messages count complete tool groups, text parts, and arguments toward their budget. The summary text is capped at one quarter of the effective input budget. Oversized model summaries are rejected. The mechanical fallback preserves an existing anchor only when it fits. The full candidate is checked again before installation.
 
 After a summary commits, qsoc restores bounded context and prints these entries:
 

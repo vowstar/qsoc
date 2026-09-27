@@ -584,7 +584,7 @@ private:
 class ScopedLlmConfigHome final
 {
 public:
-    explicit ScopedLlmConfigHome(const MockServer &server)
+    explicit ScopedLlmConfigHome(const MockServer &server, int context = 128000, int maxOutput = 0)
         : hadQsocHome_(qEnvironmentVariableIsSet("QSOC_HOME"))
         , hadXdgHome_(qEnvironmentVariableIsSet("XDG_CONFIG_HOME"))
         , oldQsocHome_(qgetenv("QSOC_HOME"))
@@ -604,7 +604,10 @@ public:
                                     "    test-model:\n"
                                     "      url: ")
                                 + server.url().toString().toUtf8()
-                                + QByteArrayLiteral("\n      timeout: 10000\n");
+                                + QByteArrayLiteral("\n      timeout: 10000\n      context: ")
+                                + QByteArray::number(context)
+                                + QByteArrayLiteral("\n      max_output_tokens: ")
+                                + QByteArray::number(maxOutput) + QByteArrayLiteral("\n");
         valid_                = configFile.write(yaml) == yaml.size();
         configFile.close();
         qputenv("QSOC_HOME", dir_.path().toUtf8());
@@ -1216,14 +1219,16 @@ private slots:
         QVERIFY(configuredServer.listen());
         QVERIFY(temporaryServer.listen());
         QVERIFY(nextServer.listen());
-        ScopedLlmConfigHome configHome(configuredServer);
+        ScopedLlmConfigHome configHome(configuredServer, 4096, 512);
         QVERIFY(configHome.isValid());
         QSocConfig  serviceConfig;
         QLLMService service(nullptr, &serviceConfig);
         QVERIFY(service.hasEndpoint());
-        LLMModelConfig temporary = service.getCurrentModelConfig();
-        temporary.url            = temporaryServer.url().toString();
-        temporary.model          = QStringLiteral("temporary-model");
+        LLMModelConfig temporary  = service.getCurrentModelConfig();
+        temporary.contextTokens   = 131072;
+        temporary.maxOutputTokens = 4096;
+        temporary.url             = temporaryServer.url().toString();
+        temporary.model           = QStringLiteral("temporary-model");
         service.setModel(temporary);
         LLMModelConfig next = temporary;
         next.url            = nextServer.url().toString();
@@ -1273,6 +1278,12 @@ private slots:
         QCOMPARE(
             body.at("model").get<std::string>(),
             explicitModel ? std::string("test-model") : std::string("temporary-model"));
+        QCOMPARE(body.at("max_tokens").get<int>(), explicitModel ? 512 : 4096);
+        QSocRequestSnapshot summaryRequest;
+        summaryRequest.messages = body.at("messages");
+        QVERIFY(
+            QSocRequestUsage::estimateRequest(summaryRequest) + body.at("max_tokens").get<int>()
+            <= (explicitModel ? 4096 : 131072));
         QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
         QCOMPARE(body.at("reasoning").at("effort").get<std::string>(), std::string("high"));
         QVERIFY(!body.contains("temperature"));
