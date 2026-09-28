@@ -1103,7 +1103,8 @@ QList<QSocMarkdownRenderer::RenderedLine> QSocMarkdownRenderer::render(
         return {};
     Walker walker;
     walker.terminalWidth = terminalWidth;
-    if (markdown.contains(QLatin1Char('$'))) {
+    if (markdown.contains(QLatin1Char('$')) || markdown.contains(QStringLiteral("\\("))
+        || markdown.contains(QStringLiteral("\\["))) {
         walker.mathSpans = QSocMath::spans(markdown, protectedRanges(doc.get(), utf8));
         if (!walker.mathSpans.isEmpty()) {
             walker.mathSource = markdown;
@@ -1131,7 +1132,7 @@ QList<QSocMarkdownRenderer::RenderedLine> QSocMarkdownRenderer::render(
 
 bool QSocMarkdownRenderer::protectsCodeFence(const QString &markdown, int lineStart)
 {
-    if (!markdown.contains(QStringLiteral("$$")))
+    if (!markdown.contains(QStringLiteral("$$")) && !markdown.contains(QStringLiteral("\\[")))
         return false;
     ensureExtensionsRegistered();
     const auto utf8 = markdown.toUtf8();

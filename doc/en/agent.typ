@@ -438,19 +438,39 @@ View and selection:
 - *Mouse drag*: Select and auto-copy to clipboard (OSC 52)
 - *Shift + drag*: Native terminal selection (fallback)
 
-Mathematical expressions use single dollars for inline formulas and double dollars
+Mathematical expressions use `$...$` or `\(...\)` inline, and `$$...$$` or `\[...\]`
 for display formulas. Inline formulas stay on one line. Display formulas use
-Unicode rows for fractions, roots, and matrices. Code and link content retain
-literal dollars.
+Unicode rows for fractions, roots, matrices, and aligned equations. Code and link
+content retain literal formula syntax.
 
 Supported matrix environments are `matrix`, `pmatrix`, `bmatrix`, `vmatrix`, and
-`Vmatrix`, inside double dollars. Separate columns with `&` and rows with `\\`.
-Matrices require equal column counts. Empty cells retain their positions.
-Each matrix has at most 8 rows and 8 columns. Each formula has at most 64 cells.
-Nested matrices, macros, array column formats, and custom row spacing are unsupported.
+`Vmatrix`, inside display formulas. The `array` environment accepts `l`, `c`, and
+`r` column alignment and `|` or `||` separators for augmented matrices. Use
+`\left[` and `\right]` to surround an array. The `aligned` environment aligns
+equation columns. Separate columns with `&` and rows with `\\`.
+Each environment requires equal column counts and preserves empty cells.
+Each environment has at most 8 rows and 8 columns. Each formula has at most 64 cells.
+Nested environments, custom macros, and custom row spacing are unsupported.
 
-Formulas support Greek letters, common operators, numeric subscripts and
-superscripts, simple fractions, and square roots. Each expression is limited to
+Formulas support Greek letters, common operators, and subscripts and superscripts.
+Scripts use Unicode when available; other scripts retain explicit grouping, such
+as `x^{1/n}`. Compound bases keep parentheses around their scope.
+Fractions accept `\frac`, `\dfrac`, `\tfrac`, and `\cfrac`, including nested fractions.
+Roots accept `\sqrt{x}` and `\sqrt[n]{x}`. Common functions include `\sin`, `\cos`,
+`\log`, `\exp`, and `\lim`.
+
+Use `\text{...}` for literal text, `\operatorname{...}` for operator names,
+and `\quad` or `\qquad` for spacing. Text arguments can contain Chinese and escaped
+punctuation, but cannot contain nested groups or commands. Font commands
+`\mathrm`, `\mathbf`, `\mathit`, `\mathsf`, and `\mathtt` preserve their contents
+using the terminal font. `\mathbb` supports `R`, `C`, `N`, `Z`, `Q`, and `P`;
+`\mathcal` supports uppercase Latin letters.
+
+Display formulas support `\boxed`, `\overset`, `\underset`, and stacked limits for
+`\sum`, `\prod`, and `\int`. Inline annotations retain explicit grouping.
+`\substack` keeps its rows in a parenthesized, semicolon-separated list.
+
+Each expression is limited to
 4096 UTF-8 bytes, 32 nesting levels, 16 display rows, and 256 columns. The available
 terminal width can reduce that column limit. Unsupported input and oversized
 formulas retain their source text. Display formulas inside table cells also

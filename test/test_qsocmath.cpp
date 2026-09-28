@@ -55,6 +55,11 @@ private slots:
     void scalarLayouts();
     void matrixLayouts();
     void matrixEnvironments();
+    void commonCommands();
+    void structuredLayouts();
+    void screenshotExamples();
+    void alternativeDelimiters();
+    void extendedBounds();
     void invalidSyntax();
     void dimensions();
     void budgets();
@@ -72,7 +77,7 @@ void Test::scalarLayouts()
     QCOMPARE(rendered(R"($$\frac{1}{2}$$)"), (QStringList{" 1 ", "───", " 2 "}));
     QCOMPARE(rendered(R"($$\sqrt{x}$$)"), (QStringList{" ─", "√x"}));
     QCOMPARE(rendered(R"($$\frac{12}{3}=x$$)"), (QStringList{" 12   ", "────=x", " 3    "}));
-    QVERIFY(!QSocMath::render("x_i", false));
+    QCOMPARE(rendered("$x_i$"), QStringList{"xᵢ"});
     QVERIFY(!QSocMath::render(QString::fromUcs4(U"𝛼"), false));
     QVERIFY(!QSocMath::render(QStringLiteral("a\u0301"), false));
 }
@@ -116,6 +121,161 @@ void Test::matrixEnvironments()
         (QStringList{"|| x ||", "||   ||", "|| x ||"}));
 }
 
+void Test::commonCommands()
+{
+    for (const QString &name : {"dfrac", "tfrac", "cfrac"}) {
+        QCOMPARE(rendered("$\\" + name + "{a}{b}$"), rendered(R"($\frac{a}{b}$)"));
+        QCOMPARE(rendered("$$\\" + name + "{a}{b}$$"), rendered(R"($$\frac{a}{b}$$)"));
+    }
+    QCOMPARE(rendered(R"($\sqrt[3]{27}=3$)"), QStringList{"³√(27)=3"});
+    QCOMPARE(rendered(R"($$\sqrt[3]{27}$$)"), (QStringList{"  ──", "³√27"}));
+    QCOMPARE(rendered(R"($\sqrt[n]{x}=x^{1/n}$)"), QStringList{"ⁿ√(x)=x^{1/n}"});
+    QCOMPARE(rendered(R"($x_i+y_{out}+A^{\mathsf{T}}$)"), QStringList{"xᵢ+yₒᵤₜ+Aᵀ"});
+    QCOMPARE(rendered(R"(\({a+b}^2\))"), QStringList{"(a+b)²"});
+    QCOMPARE(rendered(R"($x_{i+1}^{n-1}$)"), QStringList{"xᵢ₊₁ⁿ⁻¹"});
+    QCOMPARE(
+        rendered(R"($\text{中文 与 }\mathrm{a}\quad\mathbf{b}\qquad\mathit{c}$)"),
+        QStringList{"中文 与 a  b    c"});
+    QCOMPARE(rendered(R"($\text{\{a\}\_\$\%}$)"), QStringList{"{a}_$%"});
+    QCOMPARE(rendered(R"($\left(x+1\right)\,\sin\theta$)"), QStringList{"(x+1) sinθ"});
+    QCOMPARE(rendered(R"($\mathbb{R}\quad\mathcal{L}$)"), QStringList{QString::fromUcs4(U"ℝ  ℒ")});
+    QCOMPARE(rendered(R"($\operatorname{rank}(A)$)"), QStringList{"rank(A)"});
+    QCOMPARE(rendered(R"($\frac{1}{\frac{2}{3}}$)"), QStringList{"(1)/((2)/(3))"});
+    QCOMPARE(rendered(R"($\frac{1}{2}^2$)"), QStringList{"((1)/(2))²"});
+    QCOMPARE(rendered(R"($\mathbb{RC}^2$)"), QStringList{"(ℝℂ)²"});
+}
+
+void Test::structuredLayouts()
+{
+    QCOMPARE(
+        rendered(R"($$\begin{aligned}x&=1\\long&=2\end{aligned}$$)"),
+        (QStringList{"   x =1", "long =2"}));
+    QCOMPARE(rendered(R"($$\boxed{x=1}$$)"), (QStringList{"┌─────┐", "│ x=1 │", "└─────┘"}));
+    QCOMPARE(rendered(R"($$\overset{a}{x}+\underset{b}{y}$$)"), (QStringList{"a  ", "x+y", "  b"}));
+    QCOMPARE(rendered(R"($$\sum_{i=1}^{n}x_i$$)"), (QStringList{" n   ", " ∑ xᵢ", "i=1  "}));
+    QCOMPARE(rendered(R"($$\sum_{i=1}^{nn}x_i$$)"), (QStringList{"nn   ", " ∑ xᵢ", "i=1  "}));
+    QCOMPARE(rendered(R"($\underset{n}{\lim}$)"), QStringList{"(lim)_{n}"});
+    QCOMPARE(rendered(R"($\substack{i=1\\j=2}$)"), QStringList{"(i=1; j=2)"});
+    QCOMPARE(
+        rendered(R"($$\left[\begin{array}{cc|c}1&2&3\\4&5&6\end{array}\right]$$)"),
+        (QStringList{"⎡ 1  2 │ 3 ⎤", "⎢      │   ⎥", "⎣ 4  5 │ 6 ⎦"}));
+    QCOMPARE(
+        rendered(R"($$\begin{array}{l|r}1&22\\333&4\end{array}$$)"),
+        (QStringList{"1   │ 22", "    │   ", "333 │  4"}));
+    QCOMPARE(rendered(R"($$\left.\frac{a}{b}\right|$$)"), (QStringList{" a  |", "─── |", " b  |"}));
+    QCOMPARE(
+        rendered(R"($$\cfrac{1}{1+\cfrac{1}{2}}$$)"),
+        (QStringList{"   1   ", "───────", "    1  ", " 1+─── ", "    2  "}));
+}
+
+void Test::screenshotExamples()
+{
+    const QStringList formulas{
+        R"(\dfrac{a}{b})",
+        R"(\dfrac{6}{8}=\dfrac{3}{4})",
+        R"(\dfrac{7}{3}=2\dfrac{1}{3})",
+        R"(\dfrac{\dfrac{1}{2}+\dfrac{1}{3}}{1-\dfrac{1}{4}}=\dfrac{10}{9})",
+        R"(x=a_0+\cfrac{1}{a_1+\cfrac{1}{a_2+\cfrac{1}{a_3+\cdots}}})",
+        R"(\sqrt[3]{27}=3)",
+        R"(\sqrt[n]{x}=x^{1/n})",
+        R"(\sqrt{a^2b}=a\sqrt{b}\quad(a\ge0))",
+        R"(x=\frac{-b\pm\sqrt{b^2-4ac}}{2a})",
+        R"(I_3=\begin{pmatrix}1&0&0\\0&1&0\\0&0&1\end{pmatrix})",
+        R"(\Lambda=\begin{pmatrix}\lambda_1&0&0\\0&\lambda_2&0\\0&0&\lambda_3\end{pmatrix})",
+        R"(U=\begin{bmatrix}1&2&3\\0&4&5\\0&0&6\end{bmatrix})",
+        R"(A=\begin{bmatrix}2&1&0\\1&3&1\\0&1&2\end{bmatrix},\quad A=A^{\mathsf{T}})",
+        R"(\left[\begin{array}{cc|c}1&2&3\\4&5&6\end{array}\right]\quad\text{与}\quad\begin{vmatrix}a&b\\c&d\end{vmatrix}=ad-bc)",
+        R"(\boxed{\begin{aligned}f(x)&=\sum_{i=1}^{n}x_i\\g(x)&=\underset{t}{\lim}\frac{x}{t}\end{aligned}})"};
+    for (const QString &formula : formulas) {
+        const auto layout = QSocMath::render(formula, true, 120);
+        QVERIFY2(layout, qPrintable(formula));
+        QVERIFY(layout->rows.size() <= 16);
+        QVERIFY(layout->baseline >= 0 && layout->baseline < layout->rows.size());
+        for (const auto &row : layout->rows)
+            QCOMPARE(QTuiText::visualWidth(row), layout->width);
+        const QString markdown = "$$" + formula + "$$";
+        QCOMPARE(rendered(markdown, 120), layout->rows);
+        QTuiAssistantTextBlock block(markdown);
+        block.layout(120);
+        QCOMPARE(block.toMarkdown(), markdown);
+        block.layout(1);
+        block.layout(120);
+        QCOMPARE(block.rowCount(), layout->rows.size());
+    }
+}
+
+void Test::alternativeDelimiters()
+{
+    QCOMPARE(rendered(R"(中文\(x_i\)和\(\dfrac{1}{2}\)。)"), QStringList{"中文xᵢ和(1)/(2)。"});
+    QCOMPARE(rendered(R"(\[\frac{1}{2}\])"), rendered(R"($$\frac{1}{2}$$)"));
+    QCOMPARE(rendered("> \\[\n> \\frac{1}{2}\n> \\]", 5), rendered(R"(> $$\frac{1}{2}$$)", 5));
+    const QStringList protectedSources{
+        R"(`\(x_i\)`)",
+        R"([\(x_i\)](https://example.com))",
+        "```text\n\\[x_i\\]\n```",
+        R"(\\(x_i\\))"};
+    for (const auto &source : protectedSources)
+        QVERIFY(!rendered(source).join('\n').contains("xᵢ"));
+    for (const QString &source :
+         {QString(R"(\[\unknown{x}\])"), QString(R"(\(x_i)"), QString(R"(\[x_i$$)")})
+        QCOMPARE(rendered(source), QStringList{source});
+    const QString body = R"(\text{price $5})";
+    QCOMPARE(rendered("\\(" + body + "\\)"), QStringList{"price $5"});
+    const auto spans = QSocMath::spans("\\[\nx_i\n\\]", {});
+    QCOMPARE(spans.size(), 1);
+    QCOMPARE(QSocMath::body("\\[\nx_i\n\\]", spans.first()), QString("\nx_i\n"));
+    QVERIFY(QSocMarkdownRenderer::protectsCodeFence("\\[\n```text\nx\n", 3));
+    const QString slashes(65536, QLatin1Char('\\'));
+    QVERIFY(QSocMath::spans(slashes + R"((x_i\))", {}).isEmpty());
+    const auto afterSlashes = QSocMath::spans(slashes + R"(\(x_i\))", {});
+    QCOMPARE(afterSlashes.size(), 1);
+    QCOMPARE(afterSlashes.first().begin, slashes.size());
+}
+
+void Test::extendedBounds()
+{
+    const QStringList invalid{
+        R"(\sqrt[]{x})",
+        R"(\sqrt[3{x})",
+        R"(\sqrt[\unknown]{x})",
+        R"(\left(x)",
+        R"(x\right))",
+        R"(\left x\right))",
+        R"(\begin{array}{p{2cm}}x\end{array})",
+        R"(\begin{array}{||||c}x\end{array})",
+        R"(\begin{array}{ccccccccc}1&2&3&4&5&6&7&8&9\end{array})",
+        R"(\begin{aligned}x&=1\\y\end{aligned})",
+        R"(\begin{aligned}x&=1\\[2pt]y&=2\end{aligned})",
+        R"(\text{unfinished)",
+        R"(\text{\unknown})",
+        R"(\text{a{b}})",
+        R"(x^{\begin{matrix}1\end{matrix}})",
+        R"(x_{i}_{j})",
+        R"(x^{n}^{2})",
+        R"(\boxed{})",
+        R"(\overset{}{x})",
+        R"(\mathbb{A})"};
+    for (const auto &formula : invalid) {
+        QVERIFY2(!QSocMath::render(formula, true), qPrintable(formula));
+        const QString source = "$$" + formula + "$$";
+        QCOMPARE(rendered(source, 256), QStringList{source});
+    }
+    for (const QString &prefix : {QString("\\boxed{"), QString("\\left("), QString("\\sqrt[3]{")}) {
+        const QString closing = prefix == "\\left(" ? "\\right)" : "}";
+        QString       formula = "x";
+        for (int depth = 0; depth < 40; ++depth)
+            formula = prefix + formula + closing;
+        QVERIFY(!QSocMath::render(formula, true));
+    }
+    QVERIFY(!QSocMath::render("\\text{" + QString(257, 'x') + "}", true));
+    QVERIFY(!QSocMath::render("x_{" + QString(257, 'A') + "}", false));
+    const QString small  = R"(\boxed{\begin{aligned}x&=1\\y&=2\end{aligned}})";
+    const auto    layout = QSocMath::render(small, true);
+    QVERIFY(layout);
+    QVERIFY(QSocMath::render(small, true, layout->width));
+    QVERIFY(!QSocMath::render(small, true, layout->width - 1));
+}
+
 void Test::invalidSyntax()
 {
     const QStringList inputs{
@@ -130,7 +290,7 @@ void Test::invalidSyntax()
         R"(\begin{matrix}1\end{matrix}^2)",
         R"({\begin{matrix}1\end{matrix}}^2)",
         R"(\begin{matrix}\begin{matrix}1\end{matrix}\end{matrix})",
-        R"(\begin{array}{cc}1&2\end{array})",
+        R"(\begin{array}{cc}1&2&3\end{array})",
         R"(\begin{matrix*}1\end{matrix*})",
         R"(\beginning{matrix}1\end{matrix})",
         R"(\frac{1}{2)",
@@ -289,7 +449,11 @@ void Test::streamingCuts()
         "$$\\frac{1}{2}\n```unclosed\n",
         "before `code $x_2$`\n$$\\sqrt{x}$$\n",
         "unmatched ` tick\n$$\\unknown\n```inside\n$$\n",
-        "multiline ` code\n$$ literal dollars`\n```text\nx\n```\n"};
+        "multiline ` code\n$$ literal dollars`\n```text\nx\n```\n",
+        "中文\\(x_i\\)\n",
+        "\\[\n\\left[\\begin{array}{cc|c}1&2&3\\\\4&5&6\\end{array}\\right]\n\\]\n",
+        "\\[\n\\unknown\n```inside\n\\]\n```text\nx\n```\n",
+        "$$\\boxed{\\begin{aligned}x&=\\dfrac{1}{2}\\\\y&=\\sqrt[3]{8}\\end{aligned}}$$\n"};
     for (const auto &source : sources) {
         QTuiCompositor reference;
         reference.appendAssistantChunk(source);
