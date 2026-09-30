@@ -913,6 +913,11 @@ power:
     host_reset: rst_ao
     test_enable: test_en
     domain:
+      - name: ao
+        v_mv: 900
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
       - name: gpu
         depend:
           - name: ao
@@ -980,6 +985,10 @@ power:
 
         /* Verify test_en connection */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en (test_en)"));
+
+        /* The dependency domain is declared, so its ready signal is too */
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire rdy_ao"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire dep_hard_all_gpu = rdy_ao;"));
     }
     /* A malformed scalar in the power shape used to abort the process. */
     void test_malformed_power_shape_is_reported_not_fatal()
@@ -1041,6 +1050,67 @@ power:
         QFETCH(QString, netlist);
         QFETCH(QString, fragment);
         messageList.clear();
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(!QFile::exists(verilogPath));
+        QVERIFY2(
+            messageList.join('\n').contains(fragment),
+            qPrintable(fragment + " | " + messageList.join('\n').right(600)));
+    }
+
+    /* A dependency must name a domain of the same controller. */
+    void test_power_undefined_domain_is_rejected_data()
+    {
+        QTest::addColumn<QString>("stem");
+        QTest::addColumn<QString>("depend");
+        QTest::addColumn<QString>("fragment");
+
+        QTest::newRow("hard") << "rej_dep_hard" << "- name: ghost\n            type: hard"
+                              << "domain core depends on undefined domain ghost (hard)";
+        QTest::newRow("soft") << "rej_dep_soft" << "- name: ghost\n            type: soft"
+                              << "domain core depends on undefined domain ghost (soft)";
+        QTest::newRow("default-type") << "rej_dep_default" << "- name: ghost"
+                                      << "domain core depends on undefined domain ghost (hard)";
+        QTest::newRow("other-controller") << "rej_dep_other" << "- name: peer"
+                                          << "domain core depends on undefined domain peer (hard)";
+        QTest::newRow("unnamed") << "rej_dep_unnamed" << "- type: hard"
+                                 << "domain core has a depend entry without a name";
+    }
+
+    void test_power_undefined_domain_is_rejected()
+    {
+        QFETCH(QString, stem);
+        QFETCH(QString, depend);
+        QFETCH(QString, fragment);
+        messageList.clear();
+        /* `peer` exists only in a sibling controller, which does not make it visible here. */
+        const QString netlist     = QString(R"(
+power:
+  - name: dep_ctl
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: ao
+      - name: core
+        depend:
+          %1
+  - name: peer_ctl
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: peer
+)")
+                                        .arg(depend);
         const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
         QVERIFY(!netlistPath.isEmpty());
         const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");

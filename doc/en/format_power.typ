@@ -17,9 +17,9 @@ For MMIO control and checked domain sequencing, see @prcm-check.
   entry) at the top level.
 
   Unlike clock/reset, the power controller's `depend:` field
-  references *only* declared domain names (no auto-input pattern). A
-  typo in `depend.name` is caught at parse time and reported as a
-  warning.
+  references *only* domains declared in the same controller (no
+  auto-input pattern). A `depend` entry with a missing or undeclared
+  name is an error, and nothing is generated.
 ]
 
 == Power Overview
@@ -340,7 +340,7 @@ Generates `.typ` circuit diagram alongside Verilog.
     align: (left, left, left, left),
     table.header([Property], [Type], [Required], [Description]),
     table.hline(),
-    [`name`], [String], [Yes], [Dependency domain name],
+    [`name`], [String], [Yes], [Name of a domain in the same controller],
     [`type`], [String], [No], [hard or soft (default: hard)],
   )],
   caption: [DEPENDENCY PROPERTIES],

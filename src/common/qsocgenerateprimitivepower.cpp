@@ -41,27 +41,30 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
         return false;
     }
 
-    /* Cross-check that every `depend:` references a declared domain.
-       Pre-fix a typo emitted `wire dep_hard_all_lp = rdy_ghost_dom;`
-       referencing an undeclared signal in the controller. */
+    /* The controller declares rdy_<name> only for its own domains, so a
+       dependency on any other name references an undeclared signal. */
     {
         QSet<QString> declaredDomains;
         for (const auto &domain : config.domains) {
             declaredDomains.insert(domain.name);
         }
+        bool undefined = false;
         for (const auto &domain : config.domains) {
             for (const auto &dep : domain.depends) {
-                if (!declaredDomains.contains(dep.name)) {
-                    /* rdy_<name> may arrive as an external top-level port;
-                       the primitive cannot see the netlist to tell a typo
-                       from that documented pattern, so this stays a
-                       warning until the census can resolve it globally. */
-                    QSocConsole::warn() << "Power domain" << domain.name << "depends on" << dep.name
-                                        << "which is not declared in the `domain:` list - "
-                                           "the generated controller will reference rdy_"
-                                               + dep.name;
+                if (dep.name.isEmpty()) {
+                    QSocConsole::error() << "Power controller" << config.name << "domain"
+                                         << domain.name << "has a depend entry without a name";
+                    undefined = true;
+                } else if (!declaredDomains.contains(dep.name)) {
+                    QSocConsole::error()
+                        << "Power controller" << config.name << "domain" << domain.name
+                        << "depends on undefined domain" << dep.name << "(" + dep.type + ")";
+                    undefined = true;
                 }
             }
+        }
+        if (undefined) {
+            return false;
         }
     }
 
@@ -183,7 +186,8 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
 
                     Dependency dep;
                     if (depNode["name"]) {
-                        dep.name = QString::fromStdString(depNode["name"].as<std::string>());
+                        dep.name = QSocVerilogUtils::sanitizeBitSelectInName(
+                            QString::fromStdString(depNode["name"].as<std::string>()));
                     }
                     if (depNode["type"]) {
                         dep.type = QString::fromStdString(depNode["type"].as<std::string>());
