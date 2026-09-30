@@ -346,6 +346,111 @@ private slots:
         QCOMPARE(QSocSession::resolveId(tempDir.path(), QStringLiteral("zzz")), QString());
     }
 
+    void testResolveResumeTargets()
+    {
+        using Kind = QSocSession::ResumeTarget::Kind;
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString project = tempDir.path();
+
+        QCOMPARE(QSocSession::resolveResume(project, QString()).kind, Kind::Empty);
+        QCOMPARE(QSocSession::resolveResume(project, QStringLiteral("abc")).kind, Kind::NoMatch);
+
+        const QString idA = QSocSession::generateId();
+        const QString idB = QSocSession::generateId();
+        for (const QString &id : {idA, idB}) {
+            QSocSession session(id, QDir(QSocSession::sessionsDir(project)).filePath(id + ".jsonl"));
+            QVERIFY(session.appendMessage({{"role", "user"}, {"content", "hello"}}));
+        }
+
+        const auto pick = QSocSession::resolveResume(project, QString());
+        QCOMPARE(pick.kind, Kind::Pick);
+        QCOMPARE(pick.choices.size(), 2);
+
+        /* The active session is never offered and never reloaded. */
+        const auto others = QSocSession::resolveResume(project, QString(), idA);
+        QCOMPARE(others.kind, Kind::Pick);
+        QCOMPARE(others.choices.size(), 1);
+        QCOMPARE(others.choices.first().id, idB);
+        QCOMPARE(QSocSession::resolveResume(project, idA, idA).kind, Kind::Current);
+
+        const auto load = QSocSession::resolveResume(project, idB, idA);
+        QCOMPARE(load.kind, Kind::Load);
+        QCOMPARE(load.id, idB);
+
+        const QString projectB = project + QStringLiteral("/other");
+        const QString idC      = QSocSession::generateId();
+        QSocSession   only(idC, QDir(QSocSession::sessionsDir(projectB)).filePath(idC + ".jsonl"));
+        QVERIFY(only.appendMessage({{"role", "user"}, {"content", "hello"}}));
+        QCOMPARE(QSocSession::resolveResume(projectB, QString(), idC).kind, Kind::Empty);
+    }
+
+    void testResumeCommand()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+        const QString project = QFileInfo(tempDir.path()).canonicalFilePath();
+        const QString id      = QSocSession::generateId();
+        QSocSession   session(id, QDir(QSocSession::sessionsDir(project)).filePath(id + ".jsonl"));
+
+        /* Nothing on disk yet: nothing to resume. */
+        QVERIFY(session.resumeCommand(QStringLiteral("qsoc"), project, project).isEmpty());
+        QVERIFY(session.appendMeta(QStringLiteral("cwd"), project));
+        QVERIFY(session.resumeCommand(QStringLiteral("qsoc"), project, project).isEmpty());
+
+        QVERIFY(session.appendMessage({{"role", "user"}, {"content", "hello"}}));
+        QCOMPARE(
+            session.resumeCommand(QStringLiteral("qsoc"), project, project),
+            QStringLiteral("qsoc agent --resume ") + id);
+
+        /* A launch directory other than the project adds -d. */
+        const QString elsewhere = project + QStringLiteral("/sub");
+        QVERIFY(QDir().mkpath(elsewhere));
+        QCOMPARE(
+            session.resumeCommand(QStringLiteral("build/qsoc"), project, elsewhere),
+            QStringLiteral("build/qsoc agent -d %1 --resume %2").arg(project, id));
+
+        /* A remote session reconnects to the same target and workspace. */
+        QCOMPARE(
+            session.resumeCommand(
+                QStringLiteral("qsoc"),
+                project,
+                project,
+                QStringLiteral("build@example.invalid:2222"),
+                QStringLiteral("/srv/work")),
+            QStringLiteral(
+                "qsoc agent --ssh build@example.invalid:2222 --workspace /srv/work --resume ")
+                + id);
+        QCOMPARE(
+            session.resumeCommand(
+                QStringLiteral("qsoc"),
+                project,
+                elsewhere,
+                QStringLiteral("build@example.invalid:22"),
+                QStringLiteral("/srv/my work")),
+            QStringLiteral(
+                "qsoc agent -d %1 --ssh build@example.invalid:22 --workspace '/srv/my work' "
+                "--resume %2")
+                .arg(project, id));
+        /* A target without a workspace is not a reconnectable binding. */
+        QCOMPARE(
+            session.resumeCommand(
+                QStringLiteral("qsoc"), project, project, QStringLiteral("build@example.invalid:22")),
+            QStringLiteral("qsoc agent --resume ") + id);
+
+        /* Paths the shell would split are single-quoted. */
+        const QString spaced = project + QStringLiteral("/my proj's");
+        QVERIFY(QDir().mkpath(spaced));
+        const QString spacedId = QSocSession::generateId();
+        QSocSession
+            quoted(spacedId, QDir(QSocSession::sessionsDir(spaced)).filePath(spacedId + ".jsonl"));
+        QVERIFY(quoted.appendMessage({{"role", "user"}, {"content", "hello"}}));
+        QCOMPARE(
+            quoted.resumeCommand(QStringLiteral("/opt/q soc/qsoc"), spaced, project),
+            QStringLiteral("'/opt/q soc/qsoc' agent -d '%1/my proj'\\''s' --resume %2")
+                .arg(project, spacedId));
+    }
+
     void testRewriteMessagesTruncates()
     {
         QTemporaryDir tempDir;

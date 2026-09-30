@@ -680,6 +680,11 @@ std::unique_ptr<QLockFile> lockSession(const QString &sessionPath)
     return lock;
 }
 
+bool isResumeCommand(const QString &command)
+{
+    return command == QStringLiteral("/resume") || command.startsWith(QStringLiteral("/resume "));
+}
+
 bool persistSessionState(
     QSocAgent *agent, QSocSession *session, json &persistedMessages, int &lastPersistedIndex)
 {
@@ -883,6 +888,7 @@ int currentTerminalWidth()
 
 bool QSocCliWorker::parseAgent(const QStringList &appArguments)
 {
+    agentLaunchDir = QDir::currentPath();
     /* Clear upstream positional arguments and setup subcommand */
     parser.clearPositionalArguments();
     parser.addOptions({
@@ -2026,7 +2032,7 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         const QStringList positionals = parser.positionalArguments();
         const QString     rawValue    = positionals.isEmpty() ? QString() : positionals.first();
         if (!rawValue.isEmpty()) {
-            resumeSessionId = QSocSession::resolveId(projectPath, rawValue);
+            resumeSessionId = QSocSession::resolveResume(projectPath, rawValue).id;
             if (resumeSessionId.isEmpty()) {
                 return showError(
                     1,
@@ -2660,6 +2666,7 @@ bool QSocCliWorker::runAgentLoop(
         {QStringLiteral("/effort"), QStringLiteral("off|low|medium|high")},
         {QStringLiteral("/memory"), QStringLiteral("[<name> | rm <name>]")},
         {QStringLiteral("/model"), QStringLiteral("<model-id>")},
+        {QStringLiteral("/resume"), QStringLiteral("[<session-id>]")},
     };
 
     connect(
@@ -2739,6 +2746,7 @@ bool QSocCliWorker::runAgentLoop(
            QStringLiteral("model"),
            QStringLiteral("project"),
            QStringLiteral("rename"),
+           QStringLiteral("resume"),
            QStringLiteral("status"),
            QStringLiteral("exit"),
            QStringLiteral("quit")};
@@ -3438,6 +3446,17 @@ bool QSocCliWorker::runAgentLoop(
         return candidate;
     };
 
+    /* In remote mode the file-writing tools are the SFTP-backed ones and the
+     * live accessor has to follow the transport; wiring only the local tools
+     * would silently checkpoint the local disk. */
+    auto rewireFileHistory = [&]() {
+        if (agent->getConfig().remoteMode && remoteRegistry != nullptr) {
+            wireRemoteFileHistory(remoteRegistry);
+        } else {
+            wireFileHistoryTools();
+        }
+    };
+
     auto activateFreshSession = [&](std::unique_ptr<FreshSessionCandidate> candidate) {
         sessionLock.reset();
         sessionLockPath.clear();
@@ -3449,14 +3468,7 @@ bool QSocCliWorker::runAgentLoop(
         historyInputBlocked          = false;
         recoveryRequiresUserInput    = false;
         releaseRecoveryGateAtRequest = false;
-        /* In remote mode the file-writing tools are the SFTP-backed ones and
-         * the live accessor has to follow the transport; wiring only the
-         * local tools here would silently checkpoint the local disk. */
-        if (agent->getConfig().remoteMode && remoteRegistry != nullptr) {
-            wireRemoteFileHistory(remoteRegistry);
-        } else {
-            wireFileHistoryTools();
-        }
+        rewireFileHistory();
     };
 
     auto reportCompaction = [&](int saved) {
@@ -3931,6 +3943,287 @@ bool QSocCliWorker::runAgentLoop(
         return true;
     };
 
+    /* Command that resumes a session from the shell that launched the agent,
+     * on the remote workspace it is bound to now. */
+    const auto resumeCommandFor = [this, remoteConn](const QSocSession &session) {
+        const QStringList args = QCoreApplication::arguments();
+        return session.resumeCommand(
+            args.isEmpty() ? QStringLiteral("qsoc") : args.first(),
+            sessionProjectPath(projectManager),
+            agentLaunchDir,
+            remoteConn->target(),
+            remoteConn->workspace());
+    };
+
+    /* Printed after the terminal is restored, silent while nothing is saved. */
+    const auto printResumeHint = [&]() {
+        const QString command = currentSession ? resumeCommandFor(*currentSession) : QString();
+        if (!command.isEmpty()) {
+            QSocConsole::out() << "\nResume this session with:\n" << command << Qt::endl;
+        }
+    };
+
+    /* Resume picker shared by --resume and /resume. Empty when cancelled. */
+    const auto pickSession = [&](const QList<QSocSession::Info> &sessions) {
+        QList<QTuiMenu::MenuItem> items;
+        items.reserve(sessions.size());
+        const int termW = currentTerminalWidth();
+        for (const QSocSession::Info &info : sessions) {
+            QTuiMenu::MenuItem item;
+            /* Title fallback chain: rename → first prompt → branch
+             * label → "(empty)". Cleaned of newlines so wide
+             * pasted prompts collapse onto one row. */
+            QString primary = !info.title.isEmpty()         ? info.title
+                              : !info.firstPrompt.isEmpty() ? info.firstPrompt
+                              : !info.branch.isEmpty()      ? info.branch
+                                                            : QString();
+            primary         = cleanPromptForLabel(primary);
+            /* Hint carries the always-on metadata. Keep it short
+             * so the label gets the wide budget; render leading
+             * separator inside the hint so single-line layouts
+             * stay readable. */
+            QString hint = QString::fromUtf8("\xc2\xb7 %1 \xc2\xb7 %2 msg")
+                               .arg(formatRelativeTime(info.lastModified))
+                               .arg(info.messageCount);
+            if (info.messageCount != 1) {
+                hint.append(QLatin1Char('s'));
+            }
+            /* Surface the branch label (set on a fork) so forks are
+             * distinguishable, and only when it is not already the
+             * primary label. */
+            if (!info.branch.isEmpty() && info.branch != primary) {
+                hint.append(QString::fromUtf8(" \xc2\xb7 %1").arg(info.branch));
+            }
+            /* Width-aware label budget: leave the hint intact
+             * since it is short and load-bearing, then give the
+             * label whatever cells remain after subtracting menu
+             * chrome ("  " + label + "  " + hint = 4 cells of
+             * gutter, plus 1 cell cushion). Floor of 8 keeps the
+             * label visible at extreme narrow widths instead of
+             * overflowing the terminal and overwriting the hint. */
+            const int hintW    = QTuiText::visualWidth(hint);
+            const int chrome   = 5;
+            const int labelMax = qMax(8, termW - hintW - chrome);
+            item.label         = truncateVisual(primary, labelMax);
+            item.hint          = hint;
+            items.append(item);
+        }
+        QTuiMenu menu;
+        menu.setTitle("Resume session");
+        menu.setItems(items);
+        menu.setSearchable(true);
+        menu.setHighlight(0);
+        const int selected = menu.exec();
+        compositor.invalidate();
+        compositor.render();
+        return selected >= 0 && selected < sessions.size() ? sessions[selected].id : QString();
+    };
+
+    struct ExistingSessionCandidate
+    {
+        std::unique_ptr<QSocSession>     session;
+        std::unique_ptr<QSocFileHistory> history;
+        std::unique_ptr<QLockFile>       lock;
+    };
+
+    /* Open and lock a saved session without touching the active one. */
+    const auto prepareExistingSessionAt =
+        [&](const QString &projectPath, const QString &sessionId, const char **why) {
+            const QString sessionPath
+                = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
+            auto candidate = std::make_unique<ExistingSessionCandidate>();
+            if (!existingSessionPathIsRegular(sessionPath)) {
+                *why = "Session is not a regular file:";
+                return std::unique_ptr<ExistingSessionCandidate>();
+            }
+            candidate->history = std::make_unique<QSocFileHistory>(projectPath, sessionId);
+            if (!candidate->history->storageIsBound()) {
+                *why = "Project storage binding is unsafe for session:";
+                return std::unique_ptr<ExistingSessionCandidate>();
+            }
+            candidate->lock = lockSession(sessionPath);
+            if (!candidate->lock
+                || !existingSessionPathIsRegular(sessionPath)
+                // cppcheck-suppress knownConditionTrueFalse
+                || !candidate->history->storageIsBound()) {
+                *why = "Session could not be locked safely:";
+                return std::unique_ptr<ExistingSessionCandidate>();
+            }
+            candidate->session = std::make_unique<QSocSession>(
+                sessionId, sessionPath, QSocSession::StorageMode::Existing);
+            return candidate;
+        };
+
+    /* Bind a prepared session's tool results, then make it the active one. */
+    const auto activateExistingSession = [&](std::unique_ptr<ExistingSessionCandidate> candidate) {
+        const QString sessionPath = candidate->session->filePath();
+        if (!agent->bindToolResultStore(
+                sessionPath + QStringLiteral(".artifacts"), candidate->session->id())) {
+            return false;
+        }
+        sessionLock        = std::move(candidate->lock);
+        sessionLockPath    = sessionPath;
+        currentSession     = std::move(candidate->session);
+        currentFileHistory = std::move(candidate->history);
+        installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
+        return true;
+    };
+
+    /* Load the active session's saved history into the agent and transcript. */
+    const auto restoreSessionHistory = [&](bool explicitResumeRequested) {
+        const QString projectPath = sessionProjectPath(projectManager);
+        const QString sessionId   = currentSession->id();
+        const QString sessionPath = currentSession->filePath();
+        const json    restored    = QSocSession::loadMessages(sessionPath);
+        if (restored.is_array()) {
+            json visibleMessages       = restored;
+            json restoredAgentMessages = restored;
+            persistedMessages          = restored;
+            lastPersistedIndex         = static_cast<int>(restored.size());
+
+            const auto latestRun = QSocSession::latestRun(sessionPath);
+            if (latestRun && !keepToolPresentation) {
+                auto restoredConfig             = agent->getConfig();
+                restoredConfig.toolPresentation = latestRun->toolPresentation;
+                agent->setConfig(restoredConfig);
+            }
+            if (explicitResumeRequested && latestRun.has_value()) {
+                QString                 activeGoalId;
+                std::optional<QSocGoal> activeGoal;
+                if (goalCatalog != nullptr) {
+                    activeGoal = goalCatalog->current();
+                    if (activeGoal.has_value() && activeGoal->status == QSocGoalStatus::Active) {
+                        activeGoalId = activeGoal->id;
+                    }
+                }
+
+                QSocSession::RunRecord    currentContext = *latestRun;
+                QSocSessionRecovery::Plan recovery;
+                if (latestRun->isRunning() && !QSocSession::hasRecoveryClaim(latestRun->runId)) {
+                    recovery.messages = restored;
+                    recovery.reason = QStringLiteral("this run has no local recovery authorization");
+                } else {
+                    recovery = QSocSessionRecovery::makePlan(
+                        latestRun, restored, currentContext, activeGoalId);
+                }
+                QSocSessionRecovery::guardHookReplay(recovery, agent->getConfig().hooks);
+                if (recovery.action != QSocSessionRecovery::Action::Wait) {
+                    QString                contextFailure;
+                    QSocSession::RunRecord effectiveRun = *latestRun;
+                    if (!resolveRunContext(*latestRun, &effectiveRun, &contextFailure)) {
+                        recovery.action = QSocSessionRecovery::Action::Wait;
+                        recovery.reason = contextFailure;
+                    } else {
+                        recovery = QSocSessionRecovery::makePlan(
+                            effectiveRun, restored, effectiveRun, activeGoalId);
+                        if (recovery.action != QSocSessionRecovery::Action::Wait) {
+                            pendingRecoveryContext = effectiveRun;
+                        }
+                    }
+                }
+                if (recovery.action != QSocSessionRecovery::Action::Wait) {
+                    visibleMessages       = recovery.messages;
+                    pendingRecoveryAction = recovery.action;
+                    pendingRecoveryRunId  = latestRun->runId;
+                    if (recovery.action == QSocSessionRecovery::Action::ReplayInput) {
+                        pendingRecoveryInput = recovery.input;
+                    }
+                    pendingRecoveryMessages = visibleMessages;
+                } else if (latestRun->event == QSocSession::RunEvent::Invalid || latestRun->isRunning()) {
+                    recoveryRequiresUserInput = recovery.requiresUserInput;
+                    if (QSocSessionRecovery::historySafeForNewTurn(recovery.messages)) {
+                        if (persistRecoverySnapshot(
+                                currentSession.get(),
+                                recovery.messages,
+                                persistedMessages,
+                                lastPersistedIndex)) {
+                            visibleMessages       = recovery.messages;
+                            restoredAgentMessages = recovery.messages;
+                        } else {
+                            recovery.reason = QStringLiteral(
+                                "the repaired session history could not be persisted");
+                        }
+                    }
+                    recoveryNotice = recovery.reason;
+                }
+            }
+
+            const bool baselineSafe = QSocSessionRecovery::historySafeForNewTurn(
+                restoredAgentMessages);
+            agent->setMessages(baselineSafe ? restoredAgentMessages : json::array());
+            historyInputBlocked = pendingRecoveryAction == QSocSessionRecovery::Action::Wait
+                                  && !baselineSafe;
+            if (historyInputBlocked && recoveryNotice.isEmpty()) {
+                recoveryNotice = QStringLiteral(
+                    "session history must be cleared before starting a new turn");
+            }
+            QSocSessionTranscript::appendTo(visibleMessages, compositor.contentView());
+            /* Restore the extraction cursor so a turn left unextracted
+             * before a crash is picked up; fall back to the message
+             * count (skip history) when no cursor was persisted. */
+            {
+                bool          okIdx = false;
+                const QString savedIdx
+                    = QSocSession::readMeta(sessionPath, QStringLiteral("last_memory_index"));
+                const int parsed = savedIdx.toInt(&okIdx);
+                lastMemoryIndex  = (okIdx && parsed >= 0 && parsed <= lastPersistedIndex)
+                                       ? parsed
+                                       : lastPersistedIndex;
+            }
+            /* Recreate the monotonic turn counter so the next snapshot
+             * continues the sequence from where the previous session
+             * left off. Prefer on-disk file-history state when it
+             * exists (authoritative); fall back to the user-message
+             * count for sessions created before file-history was
+             * introduced. */
+            turnCounter            = currentFileHistory->latestTurn();
+            int persistedUserTurns = 0;
+            for (const auto &msg : persistedMessages) {
+                if (msg.is_object() && msg.contains("role") && msg["role"].is_string()
+                    && msg["role"].get<std::string>() == "user") {
+                    persistedUserTurns++;
+                }
+            }
+            turnCounter = qMax(turnCounter, persistedUserTurns);
+            compositor.printContent(QString("(Resumed session %1, %2 messages)\n\n")
+                                        .arg(sessionId.left(8))
+                                        .arg(visibleMessages.size()));
+            if (pendingRecoveryAction != QSocSessionRecovery::Action::Wait) {
+                compositor.printContent(
+                    pendingRecoveryAction == QSocSessionRecovery::Action::ContinueGoal
+                        ? QStringLiteral("(Continuing interrupted goal)\n\n")
+                        : QStringLiteral("(Continuing interrupted run)\n\n"),
+                    QTuiScrollView::Dim);
+            } else if (!recoveryNotice.isEmpty()) {
+                compositor.printContent(
+                    QStringLiteral("(Interrupted run not continued: %1)\n\n").arg(recoveryNotice),
+                    QTuiScrollView::Dim);
+            }
+            compositor.dismissTopBanner();
+            compositor.contentView().scrollToBottom();
+
+            /* Restore pending TODOs from .qsoc/todos.md so the user
+             * sees what was in progress when the session was saved. */
+            loadTodoWidget(projectPath);
+
+            /* Restore an approved plan (the .md file is the source of
+             * truth) so the execution phase keeps following it. */
+            const QString planFile = QDir(QDir(projectPath).filePath(QStringLiteral(".qsoc/plans")))
+                                         .filePath(sessionId + QStringLiteral(".md"));
+            QFile         planIn(planFile);
+            if (planIn.exists() && planIn.open(QIODevice::ReadOnly)) {
+                QString plan = QString::fromUtf8(planIn.readAll());
+                planIn.close();
+                static constexpr int kPlanCharCap = 8000;
+                if (plan.size() > kPlanCharCap) {
+                    plan = plan.left(kPlanCharCap)
+                           + QStringLiteral("\n...[truncated; full plan at %1]").arg(planFile);
+                }
+                agent->setApprovedPlan(plan);
+            }
+        }
+    };
+
     {
         const QString projectPath             = sessionProjectPath(projectManager);
         QString       sessionId               = resumeSessionId;
@@ -3940,132 +4233,56 @@ bool QSocCliWorker::runAgentLoop(
          * picker uses QTuiMenu which needs the compositor to be running,
          * which it already is at this point. */
         if (sessionId == QStringLiteral("-")) {
+            const auto target = QSocSession::resolveResume(projectPath, QString());
             sessionId.clear();
-            const auto sessions = QSocSession::listAll(projectPath);
-            if (sessions.isEmpty()) {
+            if (target.kind == QSocSession::ResumeTarget::Kind::Empty) {
                 compositor.printContent("No previous sessions found — starting fresh.\n\n");
             } else {
-                QList<QTuiMenu::MenuItem> items;
-                items.reserve(sessions.size());
-                const int termW = currentTerminalWidth();
-                for (const QSocSession::Info &info : sessions) {
-                    QTuiMenu::MenuItem item;
-                    /* Title fallback chain: rename → first prompt → branch
-                     * label → "(empty)". Cleaned of newlines so wide
-                     * pasted prompts collapse onto one row. */
-                    QString primary = !info.title.isEmpty()         ? info.title
-                                      : !info.firstPrompt.isEmpty() ? info.firstPrompt
-                                      : !info.branch.isEmpty()      ? info.branch
-                                                                    : QString();
-                    primary         = cleanPromptForLabel(primary);
-                    /* Hint carries the always-on metadata. Keep it short
-                     * so the label gets the wide budget; render leading
-                     * separator inside the hint so single-line layouts
-                     * stay readable. */
-                    QString hint = QString::fromUtf8("\xc2\xb7 %1 \xc2\xb7 %2 msg")
-                                       .arg(formatRelativeTime(info.lastModified))
-                                       .arg(info.messageCount);
-                    if (info.messageCount != 1) {
-                        hint.append(QLatin1Char('s'));
-                    }
-                    /* Surface the branch label (set on a fork) so forks are
-                     * distinguishable, and only when it is not already the
-                     * primary label. */
-                    if (!info.branch.isEmpty() && info.branch != primary) {
-                        hint.append(QString::fromUtf8(" \xc2\xb7 %1").arg(info.branch));
-                    }
-                    /* Width-aware label budget: leave the hint intact
-                     * since it is short and load-bearing, then give the
-                     * label whatever cells remain after subtracting menu
-                     * chrome ("  " + label + "  " + hint = 4 cells of
-                     * gutter, plus 1 cell cushion). Floor of 8 keeps the
-                     * label visible at extreme narrow widths instead of
-                     * overflowing the terminal and overwriting the hint. */
-                    const int hintW    = QTuiText::visualWidth(hint);
-                    const int chrome   = 5;
-                    const int labelMax = qMax(8, termW - hintW - chrome);
-                    item.label         = truncateVisual(primary, labelMax);
-                    item.hint          = hint;
-                    items.append(item);
-                }
-                QTuiMenu menu;
-                menu.setTitle("Resume session");
-                menu.setItems(items);
-                menu.setSearchable(true);
-                menu.setHighlight(0);
-                const int selected = menu.exec();
-                compositor.invalidate();
-                compositor.render();
-                if (selected >= 0 && selected < sessions.size()) {
-                    sessionId = sessions[selected].id;
-                }
+                sessionId = pickSession(target.choices);
             }
         } else if (!sessionId.isEmpty()) {
-            const QString resolved = QSocSession::resolveId(projectPath, sessionId);
             /* Clear an unresolved value so the fall-through generates a fresh
              * UUID instead of creating a session file named after the raw
              * (typo / ambiguous) query. */
-            sessionId = resolved;
+            sessionId = QSocSession::resolveId(projectPath, sessionId);
         }
 
         const bool freshSession = sessionId.isEmpty();
         if (freshSession) {
             sessionId = QSocSession::generateId();
-        }
-        const QString sessionPath
-            = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
-        const bool sessionExists = existingSessionPathIsRegular(sessionPath);
-        if (freshSession && !freshSessionPathAvailable(sessionPath)) {
-            inputMonitor.stop();
-            compositor.stop();
-            QSocConsole::warn() << "Could not prepare a fresh session path:" << sessionId;
-            return false;
-        }
-        if (!freshSession && !sessionExists) {
-            inputMonitor.stop();
-            compositor.stop();
-            QSocConsole::warn() << "Session is not a regular file:" << sessionId;
-            return false;
-        }
-        currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, sessionId);
-        if (!currentFileHistory->storageIsBound()) {
-            inputMonitor.stop();
-            compositor.stop();
-            QSocConsole::warn() << "Project storage binding is unsafe for session:" << sessionId;
-            return false;
-        }
-        if (freshSession) {
-            currentSession = std::make_unique<QSocSession>(
-                sessionId, sessionPath, QSocSession::StorageMode::Fresh);
-        } else {
-            auto nextLock = lockSession(sessionPath);
-            if (!nextLock
-                || !existingSessionPathIsRegular(sessionPath)
-                // cppcheck-suppress knownConditionTrueFalse
-                || !currentFileHistory->storageIsBound()) {
-                if (nextLock && nextLock->isLocked()) {
-                    nextLock->unlock();
-                }
+            const QString sessionPath
+                = QDir(QSocSession::sessionsDir(projectPath)).filePath(sessionId + ".jsonl");
+            if (!freshSessionPathAvailable(sessionPath)) {
                 inputMonitor.stop();
                 compositor.stop();
-                QSocConsole::warn() << "Session could not be locked safely:" << sessionId;
+                QSocConsole::warn() << "Could not prepare a fresh session path:" << sessionId;
                 return false;
             }
-            sessionLock     = std::move(nextLock);
-            sessionLockPath = sessionPath;
-            currentSession  = std::make_unique<QSocSession>(
-                sessionId, sessionPath, QSocSession::StorageMode::Existing);
-        }
-        installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
-        if (freshSession) {
+            currentFileHistory = std::make_unique<QSocFileHistory>(projectPath, sessionId);
+            if (!currentFileHistory->storageIsBound()) {
+                inputMonitor.stop();
+                compositor.stop();
+                QSocConsole::warn()
+                    << "Project storage binding is unsafe for session:" << sessionId;
+                return false;
+            }
+            currentSession = std::make_unique<QSocSession>(
+                sessionId, sessionPath, QSocSession::StorageMode::Fresh);
+            installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
             agent->unbindToolResultStore();
-        } else if (!agent->bindToolResultStore(
-                       currentSession->filePath() + QStringLiteral(".artifacts"),
-                       currentSession->id())) {
-            inputMonitor.stop();
-            compositor.stop();
-            QSocConsole::warn() << "Tool result storage could not be bound to the session.";
-            return false;
+        } else {
+            const char *why       = nullptr;
+            auto        candidate = prepareExistingSessionAt(projectPath, sessionId, &why);
+            if (!candidate || !activateExistingSession(std::move(candidate))) {
+                inputMonitor.stop();
+                compositor.stop();
+                if (why != nullptr) {
+                    QSocConsole::warn() << why << sessionId;
+                } else {
+                    QSocConsole::warn() << "Tool result storage could not be bound to the session.";
+                }
+                return false;
+            }
         }
 
         /* --ssh startup: the remote tools were built before this history
@@ -4074,167 +4291,14 @@ bool QSocCliWorker::runAgentLoop(
             wireRemoteFileHistory(remoteRegistry);
         }
 
-        /* Resume an existing session if the JSONL already exists; otherwise
-         * stamp the new session with creation metadata. */
-        if (sessionExists) {
-            const json restored = QSocSession::loadMessages(sessionPath);
-            if (restored.is_array()) {
-                json visibleMessages       = restored;
-                json restoredAgentMessages = restored;
-                persistedMessages          = restored;
-                lastPersistedIndex         = static_cast<int>(restored.size());
-
-                const auto latestRun = QSocSession::latestRun(sessionPath);
-                if (latestRun && !keepToolPresentation) {
-                    auto restoredConfig             = agent->getConfig();
-                    restoredConfig.toolPresentation = latestRun->toolPresentation;
-                    agent->setConfig(restoredConfig);
-                }
-                if (explicitResumeRequested && latestRun.has_value()) {
-                    QString                 activeGoalId;
-                    std::optional<QSocGoal> activeGoal;
-                    if (goalCatalog != nullptr) {
-                        activeGoal = goalCatalog->current();
-                        if (activeGoal.has_value() && activeGoal->status == QSocGoalStatus::Active) {
-                            activeGoalId = activeGoal->id;
-                        }
-                    }
-
-                    QSocSession::RunRecord    currentContext = *latestRun;
-                    QSocSessionRecovery::Plan recovery;
-                    if (latestRun->isRunning() && !QSocSession::hasRecoveryClaim(latestRun->runId)) {
-                        recovery.messages = restored;
-                        recovery.reason   = QStringLiteral(
-                            "this run has no local recovery authorization");
-                    } else {
-                        recovery = QSocSessionRecovery::makePlan(
-                            latestRun, restored, currentContext, activeGoalId);
-                    }
-                    QSocSessionRecovery::guardHookReplay(recovery, agent->getConfig().hooks);
-                    if (recovery.action != QSocSessionRecovery::Action::Wait) {
-                        QString                contextFailure;
-                        QSocSession::RunRecord effectiveRun = *latestRun;
-                        if (!resolveRunContext(*latestRun, &effectiveRun, &contextFailure)) {
-                            recovery.action = QSocSessionRecovery::Action::Wait;
-                            recovery.reason = contextFailure;
-                        } else {
-                            recovery = QSocSessionRecovery::makePlan(
-                                effectiveRun, restored, effectiveRun, activeGoalId);
-                            if (recovery.action != QSocSessionRecovery::Action::Wait) {
-                                pendingRecoveryContext = effectiveRun;
-                            }
-                        }
-                    }
-                    if (recovery.action != QSocSessionRecovery::Action::Wait) {
-                        visibleMessages       = recovery.messages;
-                        pendingRecoveryAction = recovery.action;
-                        pendingRecoveryRunId  = latestRun->runId;
-                        if (recovery.action == QSocSessionRecovery::Action::ReplayInput) {
-                            pendingRecoveryInput = recovery.input;
-                        }
-                        pendingRecoveryMessages = visibleMessages;
-                    } else if (
-                        latestRun->event == QSocSession::RunEvent::Invalid
-                        || latestRun->isRunning()) {
-                        recoveryRequiresUserInput = recovery.requiresUserInput;
-                        if (QSocSessionRecovery::historySafeForNewTurn(recovery.messages)) {
-                            if (persistRecoverySnapshot(
-                                    currentSession.get(),
-                                    recovery.messages,
-                                    persistedMessages,
-                                    lastPersistedIndex)) {
-                                visibleMessages       = recovery.messages;
-                                restoredAgentMessages = recovery.messages;
-                            } else {
-                                recovery.reason = QStringLiteral(
-                                    "the repaired session history could not be persisted");
-                            }
-                        }
-                        recoveryNotice = recovery.reason;
-                    }
-                }
-
-                const bool baselineSafe = QSocSessionRecovery::historySafeForNewTurn(
-                    restoredAgentMessages);
-                agent->setMessages(baselineSafe ? restoredAgentMessages : json::array());
-                historyInputBlocked = pendingRecoveryAction == QSocSessionRecovery::Action::Wait
-                                      && !baselineSafe;
-                if (historyInputBlocked && recoveryNotice.isEmpty()) {
-                    recoveryNotice = QStringLiteral(
-                        "session history must be cleared before starting a new turn");
-                }
-                QSocSessionTranscript::appendTo(visibleMessages, compositor.contentView());
-                /* Restore the extraction cursor so a turn left unextracted
-                 * before a crash is picked up; fall back to the message
-                 * count (skip history) when no cursor was persisted. */
-                {
-                    bool          okIdx = false;
-                    const QString savedIdx
-                        = QSocSession::readMeta(sessionPath, QStringLiteral("last_memory_index"));
-                    const int parsed = savedIdx.toInt(&okIdx);
-                    lastMemoryIndex  = (okIdx && parsed >= 0 && parsed <= lastPersistedIndex)
-                                           ? parsed
-                                           : lastPersistedIndex;
-                }
-                /* Recreate the monotonic turn counter so the next snapshot
-                 * continues the sequence from where the previous session
-                 * left off. Prefer on-disk file-history state when it
-                 * exists (authoritative); fall back to the user-message
-                 * count for sessions created before file-history was
-                 * introduced. */
-                turnCounter            = currentFileHistory->latestTurn();
-                int persistedUserTurns = 0;
-                for (const auto &msg : persistedMessages) {
-                    if (msg.is_object() && msg.contains("role") && msg["role"].is_string()
-                        && msg["role"].get<std::string>() == "user") {
-                        persistedUserTurns++;
-                    }
-                }
-                turnCounter = qMax(turnCounter, persistedUserTurns);
-                compositor.printContent(QString("(Resumed session %1, %2 messages)\n\n")
-                                            .arg(sessionId.left(8))
-                                            .arg(visibleMessages.size()));
-                if (pendingRecoveryAction != QSocSessionRecovery::Action::Wait) {
-                    compositor.printContent(
-                        pendingRecoveryAction == QSocSessionRecovery::Action::ContinueGoal
-                            ? QStringLiteral("(Continuing interrupted goal)\n\n")
-                            : QStringLiteral("(Continuing interrupted run)\n\n"),
-                        QTuiScrollView::Dim);
-                } else if (!recoveryNotice.isEmpty()) {
-                    compositor.printContent(
-                        QStringLiteral("(Interrupted run not continued: %1)\n\n").arg(recoveryNotice),
-                        QTuiScrollView::Dim);
-                }
-                compositor.dismissTopBanner();
-                compositor.contentView().scrollToBottom();
-
-                /* Restore pending TODOs from .qsoc/todos.md so the user
-                 * sees what was in progress when the session was saved. */
-                loadTodoWidget(projectPath);
-
-                /* Restore an approved plan (the .md file is the source of
-                 * truth) so the execution phase keeps following it. */
-                const QString planFile
-                    = QDir(QDir(projectPath).filePath(QStringLiteral(".qsoc/plans")))
-                          .filePath(sessionId + QStringLiteral(".md"));
-                QFile planIn(planFile);
-                if (planIn.exists() && planIn.open(QIODevice::ReadOnly)) {
-                    QString plan = QString::fromUtf8(planIn.readAll());
-                    planIn.close();
-                    static constexpr int kPlanCharCap = 8000;
-                    if (plan.size() > kPlanCharCap) {
-                        plan = plan.left(kPlanCharCap)
-                               + QStringLiteral("\n...[truncated; full plan at %1]").arg(planFile);
-                    }
-                    agent->setApprovedPlan(plan);
-                }
-            }
-        } else {
+        if (freshSession) {
             currentSession->appendMeta(
                 QStringLiteral("created"),
                 QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
             currentSession->appendMeta(QStringLiteral("cwd"), projectPath);
             compositor.printContent(QString("(New session %1)\n\n").arg(sessionId.left(8)));
+        } else {
+            restoreSessionHistory(explicitResumeRequested);
         }
 
         wireFileHistoryTools();
@@ -5545,9 +5609,9 @@ bool QSocCliWorker::runAgentLoop(
                 compositor.printContent("Goodbye!\n");
                 break;
             }
-            if (blockedCommand != QStringLiteral("/clear")) {
+            if (blockedCommand != QStringLiteral("/clear") && !isResumeCommand(blockedCommand)) {
                 compositor.printContent(QStringLiteral(
-                    "Session history cannot accept a new turn. Use /clear or exit.\n"));
+                    "Session history cannot accept a new turn. Use /clear, /resume, or exit.\n"));
                 continue;
             }
         }
@@ -6520,6 +6584,98 @@ bool QSocCliWorker::runAgentLoop(
             compositor.printContent(QStringLiteral("History cleared.\n"));
             continue;
         }
+        if (isResumeCommand(cmd)) {
+            using ResumeKind = QSocSession::ResumeTarget::Kind;
+            if (!currentFileHistory || !currentFileHistory->storageIsBound()
+                || (currentSession && QFileInfo(currentSession->filePath()).isSymLink())) {
+                compositor.printContent("Resume refused: the project storage binding changed.\n");
+                continue;
+            }
+            if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+                    localRegistry->getTool(QStringLiteral("agent")));
+                spawnTool != nullptr && spawnTool->taskSource() != nullptr
+                && spawnTool->taskSource()->hasUnsettledRun()) {
+                compositor.printContent(
+                    "Resume refused: a sub-agent is still pending or running.\n");
+                continue;
+            }
+            const QString query       = input.mid(7).trimmed();
+            const QString projectPath = sessionProjectPath(projectManager);
+            const auto    target      = QSocSession::resolveResume(
+                projectPath, query, currentSession ? currentSession->id() : QString());
+            if (target.kind == ResumeKind::Empty) {
+                compositor.printContent("No other saved session to resume.\n");
+                continue;
+            }
+            if (target.kind == ResumeKind::NoMatch) {
+                compositor.printContent(QString("No session matches '%1'.\n").arg(query));
+                continue;
+            }
+            if (target.kind == ResumeKind::Current) {
+                compositor.printContent(QString("Already in session %1.\n").arg(target.id.left(8)));
+                continue;
+            }
+            const QString nextId = target.kind == ResumeKind::Pick ? pickSession(target.choices)
+                                                                   : target.id;
+            if (nextId.isEmpty()) {
+                compositor.printContent("Resume cancelled.\n");
+                continue;
+            }
+            /* A blocked history is not in the agent, so persisting it would
+             * overwrite the saved transcript with an empty one. */
+            if (!historyInputBlocked && currentSession
+                && !persistSessionState(
+                    agent, currentSession.get(), persistedMessages, lastPersistedIndex)) {
+                compositor.printContent("Session persistence failed; session unchanged.\n");
+                continue;
+            }
+            const char *why       = nullptr;
+            auto        candidate = prepareExistingSessionAt(projectPath, nextId, &why);
+            if (!candidate) {
+                compositor.printContent(
+                    QString("Resume refused: %1 %2\n").arg(QString::fromUtf8(why), nextId.left(8)));
+                continue;
+            }
+            if (!activateExistingSession(std::move(candidate))) {
+                agent->unbindToolResultStore();
+                compositor.printContent("Resume refused: tool result storage could not be bound.\n");
+                continue;
+            }
+            rewireFileHistory();
+            agent->clearPendingRequests();
+            pendingAutoInputs.clear();
+            agent->clearHistory();
+            agent->setApprovedPlan(QString());
+            pendingRecoveryAction = QSocSessionRecovery::Action::Wait;
+            pendingRecoveryInput.clear();
+            pendingRecoveryRunId.clear();
+            pendingRecoveryMessages.reset();
+            pendingRecoveryContext.reset();
+            recoveryNotice.clear();
+            persistedMessages            = json::array();
+            lastPersistedIndex           = 0;
+            lastMemoryIndex              = 0;
+            turnCounter                  = 0;
+            historyInputBlocked          = false;
+            recoveryRequiresUserInput    = false;
+            releaseRecoveryGateAtRequest = false;
+            memoryCapNotified            = false;
+            titleGenerated               = false;
+            if (pathContext) {
+                pathContext->readState().clear();
+            }
+            invokedSkills.clear();
+            skillSeq = 1;
+            compositor.contentView().clear();
+            restoreSessionHistory(true);
+            statusBarWidget.setContextUsage(
+                agent->estimateTotalTokens(),
+                agent->effectiveContextTokens(),
+                agent->getConfig().compactThreshold);
+            compositor.invalidate();
+            compositor.render();
+            continue;
+        }
         if (cmd == "/help") {
             compositor.printContent("Commands:\n");
             compositor.printContent("  exit, /exit  - Exit the agent\n");
@@ -6545,6 +6701,8 @@ bool QSocCliWorker::runAgentLoop(
                 "  /project <p> - Switch to another project (reloads config, clears caches,\n"
                 "                 starts a new session; current session is saved)\n");
             compositor.printContent("  /rename <t>  - Set session title for resume picker\n");
+            compositor.printContent(
+                "  /resume [id] - Switch to a saved session (picker without an id)\n");
             compositor.printContent(
                 "  /ssh <u@host:port> - Switch to SSH remote workspace; /local to return\n");
             compositor.printContent("  /local       - Leave remote workspace, back to local mode\n");
@@ -7192,8 +7350,8 @@ bool QSocCliWorker::runAgentLoop(
             }
 
             const QString label = branchName.isEmpty() ? newId.left(8) : branchName;
-            compositor.printContent(
-                QString("(Branched to %1, resume with: --resume %2)\n").arg(label, newId.left(8)));
+            compositor.printContent(QString("(Branched to %1. Resume this branch with: %2)\n")
+                                        .arg(label, resumeCommandFor(QSocSession(newId, newPath))));
             continue;
         }
         if (cmd.startsWith("/rename")) {
@@ -8798,10 +8956,11 @@ bool QSocCliWorker::runAgentLoop(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
-                [agent, &compositor, &escMonitor]() {
+                [agent, &compositor, &escMonitor, &printResumeHint]() {
                     if (checkDoubleInterrupt()) {
                         escMonitor.stop();
                         compositor.stop();
+                        printResumeHint();
                         std::exit(130);
                     }
                     agent->abort();
@@ -8859,6 +9018,11 @@ bool QSocCliWorker::runAgentLoop(
                                 }
                             }
                         }
+                        return;
+                    }
+                    if (isResumeCommand(text.trimmed().toLower())) {
+                        compositor.printContent(
+                            "\nStop or finish the running turn before /resume.\n");
                         return;
                     }
                     if (text.startsWith("/model")) {
@@ -9479,10 +9643,11 @@ bool QSocCliWorker::runAgentLoop(
                 &escMonitor,
                 &QAgentInputMonitor::ctrlCPressed,
                 agent,
-                [agent, &compositor, &escMonitor]() {
+                [agent, &compositor, &escMonitor, &printResumeHint]() {
                     if (checkDoubleInterrupt()) {
                         escMonitor.stop();
                         compositor.stop();
+                        printResumeHint();
                         std::exit(130);
                     }
                     agent->abort();
@@ -9527,6 +9692,11 @@ bool QSocCliWorker::runAgentLoop(
                                 }
                             }
                         }
+                        return;
+                    }
+                    if (isResumeCommand(text.trimmed().toLower())) {
+                        compositor.printContent(
+                            "\nStop or finish the running turn before /resume.\n");
                         return;
                     }
                     if (text.startsWith("/model")) {
@@ -9730,6 +9900,7 @@ bool QSocCliWorker::runAgentLoop(
     /* Stop TUI and restore terminal */
     const bool inputRestored = inputMonitor.stop();
     compositor.stop();
+    printResumeHint();
 
     if (!inputRestored) {
         return showError(1, QStringLiteral("terminal input restoration failed"));

@@ -306,6 +306,11 @@ The following commands are available during an interactive session:
     [`/project <path>`],
     [Switch project root (reloads config, starts a new session)],
     [`/rename <title>`], [Set session title for the resume picker],
+    [`/resume [id]`],
+    [Switch to a saved session of this project, the same as `--resume`.
+     Without an id it opens the picker, which leaves out the current session.
+     The current session is saved first. Refused while a turn or sub-agent is
+     running, or when another agent holds the session.],
     [`/ssh [[user\@]host[:port]]`],
     [Connect to an SSH remote workspace. Empty opens a picker of
      `~/.ssh/config` aliases plus the saved binding. The user defaults
@@ -1617,9 +1622,24 @@ and exiting an unused agent does not create `.qsoc/`. This enables:
 - `qsoc agent --resume [id]`: pick a session from a list, or load one by id /
   unique prefix; readable conversation messages and paired tool results are
   restored from the persisted model context into the TUI scrollback
+- `/resume [id]`: the same selection inside a running agent; the current
+  session is saved before the switch
 - `/branch [name]`: fork the current session into a new id, preserving the
   original
 - `/rename <title>`: set a human-readable title shown by the resume picker
+
+When an interactive agent exits with a saved session, it prints the command
+that resumes it. `-d` is added when the project is not the launch directory:
+
+```text
+Resume this session with:
+qsoc agent -d /path/to/project --resume dce6ba26-2673-4c56-a361-2634e37b9dd1
+```
+
+A session bound to an SSH workspace also gets `--ssh <target> --workspace
+<path>` for the current binding, for example
+`qsoc agent --ssh build@example.invalid:22 --workspace /srv/work --resume <id>`.
+`/branch` prints the same command for the new branch.
 
 An explicit resume continues an interrupted run only when QSoC can verify its
 saved model, workspace, goal, and local recovery record. Finished or

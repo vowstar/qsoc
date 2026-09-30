@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
@@ -999,6 +1000,64 @@ QString QSocSession::resolveId(const QString &projectPath, const QString &idOrPr
         return match;
     }
     return QString();
+}
+
+QString QSocSession::resumeCommand(
+    const QString &program,
+    const QString &projectPath,
+    const QString &workingDir,
+    const QString &sshTarget,
+    const QString &sshWorkspace) const
+{
+    const QFileInfo file(filePathValue);
+    if (!file.isFile() || file.isSymLink()) {
+        return QString();
+    }
+    const auto quote = [](const QString &arg) {
+        static const QRegularExpression plain(QStringLiteral("^[A-Za-z0-9_./:@%+=,-]+$"));
+        if (plain.match(arg).hasMatch()) {
+            return arg;
+        }
+        QString quoted = arg;
+        quoted.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+        return QLatin1Char('\'') + quoted + QLatin1Char('\'');
+    };
+    const auto canonical = [](const QString &path) {
+        const QFileInfo info(path);
+        const QString   resolved = info.canonicalFilePath();
+        return resolved.isEmpty() ? info.absoluteFilePath() : resolved;
+    };
+    QStringList   parts{quote(program), QStringLiteral("agent")};
+    const QString project = canonical(projectPath);
+    if (project != canonical(workingDir)) {
+        parts << QStringLiteral("-d") << quote(project);
+    }
+    if (!sshTarget.isEmpty() && !sshWorkspace.isEmpty()) {
+        parts << QStringLiteral("--ssh") << quote(sshTarget) << QStringLiteral("--workspace")
+              << quote(sshWorkspace);
+    }
+    parts << QStringLiteral("--resume") << quote(sessionIdValue);
+    return parts.join(QLatin1Char(' '));
+}
+
+QSocSession::ResumeTarget QSocSession::resolveResume(
+    const QString &projectPath, const QString &query, const QString &currentId)
+{
+    ResumeTarget target;
+    if (!query.isEmpty()) {
+        target.id   = resolveId(projectPath, query);
+        target.kind = target.id.isEmpty()      ? ResumeTarget::Kind::NoMatch
+                      : target.id == currentId ? ResumeTarget::Kind::Current
+                                               : ResumeTarget::Kind::Load;
+        return target;
+    }
+    for (const Info &info : listAll(projectPath)) {
+        if (info.id != currentId) {
+            target.choices.append(info);
+        }
+    }
+    target.kind = target.choices.isEmpty() ? ResumeTarget::Kind::Empty : ResumeTarget::Kind::Pick;
+    return target;
 }
 
 QString QSocSession::sessionsDir(const QString &projectPath)

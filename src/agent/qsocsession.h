@@ -109,6 +109,20 @@ public:
     QString id() const { return sessionIdValue; }
     QString filePath() const { return filePathValue; }
 
+    /**
+     * @brief Shell command that resumes this session from @p workingDir.
+     * @details Adds `-d <projectPath>` only when the project is not
+     *          @p workingDir, adds `--ssh` and `--workspace` when both remote
+     *          values are set, and quotes arguments the shell would split.
+     * @return Empty until the session has a record on disk.
+     */
+    QString resumeCommand(
+        const QString &program,
+        const QString &projectPath,
+        const QString &workingDir,
+        const QString &sshTarget    = QString(),
+        const QString &sshWorkspace = QString()) const;
+
     /** @brief Install a guard that must succeed immediately before any disk write. */
     void setWriteBarrier(std::function<bool()> barrier);
 
@@ -220,6 +234,29 @@ public:
      * @return Empty string when no unique match is found.
      */
     static QString resolveId(const QString &projectPath, const QString &idOrPrefix);
+
+    /** @brief Outcome of a resume request, shared by --resume and /resume. */
+    struct ResumeTarget
+    {
+        enum class Kind {
+            Pick,    /* No query: choose from `choices` */
+            Load,    /* Query matched `id` */
+            Empty,   /* No query and no saved session other than the current one */
+            NoMatch, /* Query matched no session, or more than one */
+            Current, /* Query matched the active session `id` */
+        };
+        Kind        kind = Kind::Empty;
+        QString     id;
+        QList<Info> choices;
+    };
+
+    /**
+     * @brief Resolve a resume query against the project's saved sessions.
+     * @param query Id, unique prefix, title, or branch; empty asks for a pick.
+     * @param currentId Active session, excluded from the choices.
+     */
+    static ResumeTarget resolveResume(
+        const QString &projectPath, const QString &query, const QString &currentId = QString());
 
     /**
      * @brief Compute the canonical sessions directory for a project.

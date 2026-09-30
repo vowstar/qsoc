@@ -91,6 +91,9 @@ private:
     QSocGenerateManager *generateManager = nullptr;
     QSocMcpManager      *mcpManager      = nullptr;
 
+    /* Shell directory of the agent launch, before --workspace changes it. */
+    QString agentLaunchDir;
+
     /* Parsed ~/.ssh/config handed to the sub-agent spawn tool, which keeps
      * a non-owning pointer for its whole life. Owned here because the tool
      * is parented to this worker and therefore outlives parseAgent()'s
