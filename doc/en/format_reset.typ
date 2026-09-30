@@ -351,7 +351,8 @@ reset:
 
 === Reset Reason Behavior
 <soc-net-reset-reason-implementation>
-Each non-POR source asynchronously sets its own sticky flag. Sources are
+Each non-POR source asynchronously sets its own sticky flag. Every declared
+source becomes a controller input, including one that feeds no target. Sources are
 normalized to active-low. POR release or a software clear pulse starts a
 two-cycle clear window; `valid` gates the output during initialization.
 Use an always-on `reason.clock` and specify `reason.root_reset` explicitly.

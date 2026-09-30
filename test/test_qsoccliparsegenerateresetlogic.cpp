@@ -823,6 +823,124 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "module reason_reset_ctrl_bitvec"));
     }
 
+    void testResetReasonOnlySourcesBecomePorts()
+    {
+        const QString netlistContent = R"(
+port:
+  clk_32k:
+    direction: input
+    type: logic
+  por_rst_n:
+    direction: input
+    type: logic
+  ext_rst_n:
+    direction: input
+    type: logic
+  wdt_rst_n:
+    direction: input
+    type: logic
+  sys_rst_n:
+    direction: output
+    type: logic
+  reason:
+    direction: output
+    type: logic [1:0]
+  reason_valid:
+    direction: output
+    type: logic
+  reason_clear:
+    direction: input
+    type: logic
+
+instance: {}
+
+net: {}
+
+reset:
+  - name: reason_only_ctrl
+    clock: clk_32k
+    source:
+      por_rst_n:
+        active: low
+      ext_rst_n:
+        active: low
+      wdt_rst_n:
+        active: high
+    target:
+      sys_rst_n:
+        active: low
+        link:
+          ext_rst_n:
+    reason:
+      clock: clk_32k
+      output: reason
+      valid: reason_valid
+      clear: reason_clear
+      root_reset: por_rst_n
+)";
+
+        const QString netlistPath = createTempFile("test_reset_reason_only.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        const QDir    outputDir(projectManager.getOutputPath());
+        const QString verilogPath = outputDir.filePath("test_reset_reason_only.v");
+        const QString cellPath    = outputDir.filePath("reset_cell.v");
+        QVERIFY(QFile::exists(verilogPath));
+        QVERIFY(QFile::exists(cellPath));
+
+        QFile verilogFile(verilogPath);
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+        verilogFile.close();
+
+        /* Root reset and an unlinked recorded source are read only by the recorder */
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "input wire por_rst_n, /**< Reset sources */"));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "input wire wdt_rst_n, /**< Reset sources */"));
+
+        const QString compiler = QStandardPaths::findExecutable("iverilog");
+        if (compiler.isEmpty()) {
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog"));
+        }
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString nettypePath = QDir(directory.path()).filePath("nettype.v");
+        QFile         nettypeFile(nettypePath);
+        QVERIFY(nettypeFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        nettypeFile.write("`default_nettype none\n");
+        nettypeFile.close();
+
+        QProcess process;
+        process.setProcessChannelMode(QProcess::MergedChannels);
+        process.start(
+            compiler,
+            {"-g2005",
+             "-s",
+             "reason_only_ctrl",
+             "-o",
+             QDir(directory.path()).filePath("a.out"),
+             nettypePath,
+             verilogPath,
+             cellPath});
+        QVERIFY(process.waitForStarted());
+        QVERIFY(process.waitForFinished());
+        const QByteArray compilerOutput = process.readAll();
+        QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+        QVERIFY2(process.exitCode() == 0, compilerOutput.constData());
+    }
+
     void testResetCellFileGeneration()
     {
         QString netlistContent = R"(

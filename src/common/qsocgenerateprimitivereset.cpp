@@ -470,6 +470,15 @@ QList<QSocResetPrimitive::ResetPort> QSocResetPrimitive::describePorts(
         }
     }
 
+    // The reason recorder reads every declared source, linked or not
+    if (config.reason.enabled) {
+        for (const auto &source : config.sources) {
+            if (!outputSignals.contains(source.name) && !sources.contains(source.name)) {
+                sources.append(source.name);
+            }
+        }
+    }
+
     QList<ResetPort> ports;
 
     // Clock inputs
