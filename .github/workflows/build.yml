@@ -57,6 +57,17 @@ jobs:
         mkdir -p "$RUNNER_TEMP/oss-cad-suite"
         tar -xzf "$archive" -C "$RUNNER_TEMP/oss-cad-suite" --strip-components=1
         echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
+    - name: Install typst
+      if: github.event_name == 'pull_request'
+      run: |
+        archive="$RUNNER_TEMP/typst.tar.xz"
+        curl --fail --location --retry 3 \
+          https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz \
+          --output "$archive"
+        echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  $archive" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/typst"
+        tar -xJf "$archive" -C "$RUNNER_TEMP/typst" --strip-components=1
+        echo "$RUNNER_TEMP/typst" >> "$GITHUB_PATH"
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:

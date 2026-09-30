@@ -976,8 +976,8 @@ QString QSocPowerPrimitive::escapeTypstId(const QString &str) const
 QString QSocPowerPrimitive::typstHeader() const
 {
     return QStringLiteral(
-        "#import \"@preview/circuiteria:0.2.0\": *\n"
-        "#import \"@preview/cetz:0.3.2\": draw\n"
+        "#import \"@preview/circuiteria:0.2.1\": *\n"
+        "#import \"@preview/cetz:0.3.4\": draw\n"
         "#set page(width: auto, height: auto, margin: .5cm)\n"
         "#set text(font: \"Sarasa Mono SC\", size: 10pt)\n"
         "#align(center)[\n"
