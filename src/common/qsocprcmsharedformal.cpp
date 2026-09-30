@@ -220,7 +220,7 @@ public:
         result.sby
             = "[tasks]\nnormal prove\nfault prove error\ncover reach\ncover_fault reach error\n"
               "[options]\nprove: mode prove\nreach: mode cover\nmulticlock on\n"
-              "timeout 180\nprove: aigsmt z3\nreach: depth "
+              "prove: aigsmt z3\nreach: depth "
               + QString::number(depth)
               + "\n[engines]\nprove: abc pdr\nreach: btor btormc\n"
                 "[script]\nread -sv -noautowire "

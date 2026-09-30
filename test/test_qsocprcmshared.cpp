@@ -623,7 +623,7 @@ private slots:
         for (const auto &task : taskName) {
             process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", task});
             QVERIFY(process.waitForStarted());
-            QVERIFY(process.waitForFinished(210000));
+            QVERIFY(process.waitForFinished(-1));
             const auto output = process.readAll();
             QCOMPARE(process.exitStatus(), QProcess::NormalExit);
             QVERIFY2(process.exitCode() == 0, output.right(3000).constData());

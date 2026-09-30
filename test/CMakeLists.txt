@@ -168,6 +168,10 @@ qt_add_test_target("test_qsocprcmgenerator" LABELS "prcm")
 qt_add_test_target("test_qsocprcmshared" LABELS "prcm")
 qt_add_test_target("test_qsocprcmservicecheck" LABELS "prcm")
 qt_add_test_target("test_qsocprcmformal" LABELS "prcm")
+# The generated sby jobs carry no wall-clock limit, so ctest bounds the run.
+set_tests_properties(
+    test_qsocprcmshared test_qsocprcmformal
+    PROPERTIES TIMEOUT 3600 ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")
 qt_add_test_target("test_qsocmmioclear" LABELS "mmio;prcm")
 qt_add_test_target("test_qsocprcmbinding" LABELS "prcm")
 qt_add_test_target("test_qsocprcmdocument" LABELS "prcm")

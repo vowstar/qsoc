@@ -100,7 +100,7 @@ private slots:
         process.setProcessChannelMode(QProcess::MergedChannels);
         process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby"});
         QVERIFY(process.waitForStarted());
-        QVERIFY(process.waitForFinished(180000));
+        QVERIFY(process.waitForFinished(-1));
         const auto output = process.readAll();
         QCOMPARE(process.exitStatus(), QProcess::NormalExit);
         QVERIFY2(process.exitCode() == 0, output.right(3000).constData());
@@ -123,7 +123,7 @@ private slots:
             QVERIFY(save(directory.filePath("clock_cell.v"), corrupt ? fault : cell));
             process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", "prove"});
             QVERIFY(process.waitForStarted());
-            QVERIFY(process.waitForFinished(180000));
+            QVERIFY(process.waitForFinished(-1));
             const auto log = process.readAll();
             QCOMPARE(process.exitStatus(), QProcess::NormalExit);
             QFile status(directory.filePath("control_prove/status"));

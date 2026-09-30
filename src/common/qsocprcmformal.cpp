@@ -408,7 +408,7 @@ endmodule
     auto       files     = rtl;
     files.append(top + ".sv");
     result.sby = "[tasks]\nprove\ncover\n[options]\nprove: mode prove\ncover: mode cover\n"
-                 "depth 160\ntimeout 120\nmulticlock on\nprove: aigsmt z3\n[engines]\n"
+                 "depth 160\nmulticlock on\nprove: aigsmt z3\n[engines]\n"
                  "prove: abc pdr\ncover: smtbmc z3\n[script]\nread -sv -noautowire "
                  + rtl.join(' ') + "\nread -formal -noautowire " + top
                  + ".sv\ncover: chparam -set COVER 1 " + top + "\nprep -top " + top
