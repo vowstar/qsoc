@@ -570,6 +570,8 @@ void QSocResetPrimitive::generateResetLogic(const ResetControllerConfig &config,
             bool hasSync  = !link.sync.clock.isEmpty();
             bool hasCount = !link.count.clock.isEmpty();
 
+            const QString normalizedSource = getNormalizedSource(link.source, config);
+
             if (hasAsync || hasSync || hasCount) {
                 generateResetComponentInstance(
                     target.name,
@@ -578,12 +580,10 @@ void QSocResetPrimitive::generateResetLogic(const ResetControllerConfig &config,
                     hasSync ? &link.sync : nullptr,
                     hasCount ? &link.count : nullptr,
                     false, // no inv in new architecture
-                    link.source,
+                    normalizedSource,
                     outputWire,
                     out);
             } else {
-                // Direct connection - apply source polarity normalization
-                QString normalizedSource = getNormalizedSource(link.source, config);
                 out << "    assign " << outputWire << " = " << normalizedSource << ";\n";
             }
         }
@@ -1228,8 +1228,9 @@ QString QSocResetPrimitive::typstTarget(
         }
     }
 
-    // Check which sources are high-active (need inversion bubble at AND input)
+    // High-active sources get an inversion bubble where they enter an active-low input
     QVector<bool> linkNeedsInvert(numSources, false);
+    const float   bubbleR = 0.1f;
     for (int i = 0; i < numSources; ++i) {
         const QString &srcName = target.links[i].source;
         if (sourceIsHighActive.contains(srcName) && sourceIsHighActive[srcName]) {
@@ -1381,9 +1382,16 @@ QString QSocResetPrimitive::typstTarget(
             s << "  draw.content((" << (linkCompX + 0.75f) << ", " << (compY - 0.55f)
               << "), text(size: 5pt)[" << label2 << "])\n";
 
-            // Draw input stub to component
-            s << "  wire.stub(\"" << compId << "-port-in\", \"west\", name: \"" << srcName
-              << "\")\n";
+            // Inversion bubble at the component input for high-active sources
+            if (linkNeedsInvert[i]) {
+                s << "  draw.circle((" << (linkCompX - bubbleR) << ", " << portY
+                  << "), radius: " << bubbleR << ", stroke: black, fill: white)\n";
+                s << "  wire.stub((" << (linkCompX - 2 * bubbleR) << ", " << portY
+                  << "), \"west\", name: \"" << srcName << "\")\n";
+            } else {
+                s << "  wire.stub(\"" << compId << "-port-in\", \"west\", name: \"" << srcName
+                  << "\")\n";
+            }
 
             // Store output port as AND input
             andInputPorts[i] = compId + QStringLiteral("-port-out");
@@ -1427,18 +1435,21 @@ QString QSocResetPrimitive::typstTarget(
         s << "  )\n";
 
         /* Circuiteria spaces block ports evenly and ignores any per-port
-           position, so inputs are drawn to explicit (x, linkPortY) points. */
-        const float bubbleR = 0.1f;
+           position, so inputs are drawn to explicit (x, linkPortY) points.
+           Component outputs are active-low; only direct high-active sources
+           take a bubble here. */
         for (int i = 0; i < numSources; ++i) {
-            const float portY = linkPortY[i];
-            const float edgeX = linkNeedsInvert[i] ? andX - 2 * bubbleR : andX;
+            const float portY  = linkPortY[i];
+            const bool  direct = andInputPorts[i].isEmpty();
+            const bool  invert = direct && linkNeedsInvert[i];
+            const float edgeX  = invert ? andX - 2 * bubbleR : andX;
 
-            if (linkNeedsInvert[i]) {
+            if (invert) {
                 s << "  draw.circle((" << (andX - bubbleR) << ", " << portY
                   << "), radius: " << bubbleR << ", stroke: black, fill: white)\n";
             }
 
-            if (andInputPorts[i].isEmpty()) {
+            if (direct) {
                 s << "  wire.stub((" << edgeX << ", " << portY << "), \"west\", name: \""
                   << target.links[i].source << "\")\n";
             } else {

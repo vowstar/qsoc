@@ -80,7 +80,7 @@ Reset controllers operate at two distinct processing levels with defined compone
 <soc-net-reset-processing-order>
 Signal processing follows a defined order at each level:
 
-*Link Level*: `source` → `[async|sync|count]` → output wire
+*Link Level*: `source` → active-low normalization → `[async|sync|count]` → output wire
 
 *Target Level*: `[AND of all link outputs]` → `[async|sync|count]` → final output
 

@@ -118,14 +118,28 @@ void Test::resetAndInputsAreStraightAndBubblesSitOnStubs()
     }
     QCOMPARE(wires, 2);
 
-    static const QRegularExpression stubPattern(
-        QStringLiteral("wire\\.stub\\(\\((-?[\\d.]+), (-?[\\d.]+)\\), \"west\""));
-    int stubs = 0;
-    for (auto it = stubPattern.globalMatch(typst); it.hasNext(); ++stubs) {
-        const auto match = it.next();
-        endpoints.append({match.captured(1).toDouble(), match.captured(2).toDouble()});
+    /* A high-active source entering a link component is inverted at that
+       component's input, so its stub ends at a bubble on the component edge. */
+    QVERIFY(blocks.contains("cpu_rst_n_L2_SYNC"));
+    const Block    syncComp = blocks.value("cpu_rst_n_L2_SYNC");
+    QList<QPointF> compEndpoints;
+
+    static const QRegularExpression stubPattern(QStringLiteral(
+        "wire\\.stub\\(\\((-?[\\d.]+), (-?[\\d.]+)\\), \"west\", name: \"([^\"]+)\""));
+    int                             stubs = 0;
+    for (auto it = stubPattern.globalMatch(typst); it.hasNext();) {
+        const auto    match = it.next();
+        const QPointF point(match.captured(1).toDouble(), match.captured(2).toDouble());
+        if (match.captured(3) == "sw_rst") {
+            compEndpoints.append(point);
+        } else {
+            endpoints.append(point);
+            ++stubs;
+        }
     }
     QCOMPARE(stubs, 2);
+    QCOMPARE(compEndpoints.size(), 1);
+    QVERIFY(qAbs(compEndpoints.first().y() - syncComp.centerY()) < kTolerance);
 
     for (const QPointF &point : endpoints) {
         QVERIFY(inside(point.y()));
@@ -139,9 +153,11 @@ void Test::resetAndInputsAreStraightAndBubblesSitOnStubs()
         const double cx     = match.captured(1).toDouble();
         const double cy     = match.captured(2).toDouble();
         const double radius = match.captured(3).toDouble();
-        QVERIFY(qAbs(cx + radius - andGate.x) < kTolerance);
+        const bool   atAnd  = qAbs(cx + radius - andGate.x) < kTolerance;
+        const bool   atComp = qAbs(cx + radius - syncComp.x) < kTolerance;
+        QVERIFY(atAnd || atComp);
         bool onEndpoint = false;
-        for (const QPointF &point : endpoints) {
+        for (const QPointF &point : atAnd ? endpoints : compEndpoints) {
             onEndpoint = onEndpoint
                          || (qAbs(point.x() - (cx - radius)) < kTolerance
                              && qAbs(point.y() - cy) < kTolerance);
@@ -155,7 +171,7 @@ void Test::resetAndInputsAreStraightAndBubblesSitOnStubs()
     for (const QPointF &point : endpoints) {
         onEdge += qAbs(point.x() - andGate.x) < kTolerance ? 1 : 0;
     }
-    QCOMPARE(onEdge, 2);
+    QCOMPARE(onEdge, 3);
 }
 
 void Test::clockLinkComponentMeetsItsMuxPort()

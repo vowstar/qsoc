@@ -9,8 +9,11 @@
 
 #include <QDir>
 #include <QFile>
+#include <QProcess>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTextStream>
 #include <QtCore>
@@ -302,7 +305,7 @@ reset:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_rst_sync #("));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".STAGE(4)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "i_cpu_rst_link0_async"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_in_n   (i3c_soc_rst)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_in_n(~i3c_soc_rst)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_out_n  (cpu_rst_link0_n)"));
     }
 
@@ -488,8 +491,8 @@ reset:
         /* Verify polarity handling in direct assign statements */
         QVERIFY(
             verifyVerilogContentNormalized(verilogContent, "assign i3c_rst_link1_n = ~i3c_soc_rst"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_in_n(i3c_soc_rst)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_in_n(trig_cpu_rst)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_in_n(~i3c_soc_rst)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_in_n(~trig_cpu_rst)"));
     }
 
     void testSyncOnlyReset()
@@ -1285,6 +1288,170 @@ reset:
         QVERIFY2(
             messageList.join('\n').contains(fragment),
             qPrintable(fragment + " | " + messageList.join('\n').right(600)));
+    }
+
+    void test_source_polarity_simulates_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::addColumn<QString>("active");
+        const QStringList kinds = {"async", "sync", "count", "direct", "post"};
+        for (const QString &kind : kinds) {
+            for (const QString &active : {QStringLiteral("high"), QStringLiteral("low")}) {
+                QTest::addRow("%s-%s", qPrintable(kind), qPrintable(active)) << kind << active;
+            }
+        }
+    }
+
+    /* The target must be asserted exactly while the source is at its active
+       level, allowing a few clocks of synchronizer or counter latency. */
+    void test_source_polarity_simulates()
+    {
+        QFETCH(QString, kind);
+        QFETCH(QString, active);
+        const QString compiler = QStandardPaths::findExecutable("iverilog");
+        const QString runtime  = QStandardPaths::findExecutable("vvp");
+        if (compiler.isEmpty() || runtime.isEmpty()) {
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("iverilog and vvp"));
+        }
+
+        const QString stem = QStringLiteral("rst_pol_%1_%2").arg(kind, active);
+        QString       linkBody;
+        QString       targetBody;
+        if (kind == "async" || kind == "sync") {
+            linkBody = QStringLiteral("            %1: {clock: clk, stage: 2}\n").arg(kind);
+        } else if (kind == "count") {
+            linkBody = QStringLiteral("            count: {clock: clk, cycle: 3}\n");
+        } else if (kind == "post") {
+            targetBody = QStringLiteral("        async: {clock: clk, stage: 2}\n");
+        }
+        const QString netlist     = QStringLiteral(
+                                        "reset:\n"
+                                        "  - name: %1_ctrl\n"
+                                        "    source:\n"
+                                        "      rst_src: {active: %2}\n"
+                                        "    target:\n"
+                                        "      dst_n:\n"
+                                        "        active: low\n"
+                                        "%3"
+                                        "        link:\n"
+                                        "          rst_src:\n"
+                                        "%4")
+                                        .arg(stem, active, targetBody, linkBody);
+        const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
+        QVERIFY(!netlistPath.isEmpty());
+        const QDir    outputDir(projectManager.getOutputPath());
+        const QString verilogPath = outputDir.filePath(stem + ".v");
+        QFile::remove(verilogPath);
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        QVERIFY(QFile::exists(verilogPath));
+
+        /* The diagram inverts a high-active source where the RTL does: at the
+           link component input, not between the component and the AND gate. */
+        if (kind == "async" || kind == "sync" || kind == "count") {
+            QFile typstFile(outputDir.filePath(stem + "_ctrl.typ"));
+            QVERIFY(typstFile.open(QIODevice::ReadOnly | QIODevice::Text));
+            const QStringList lines = QString::fromUtf8(typstFile.readAll()).split('\n');
+            const QString     stub
+                = active == "high"
+                      ? QStringLiteral("), \"west\", name: \"rst_src\")")
+                      : QStringLiteral("wire.stub(\"dst_n_L0_%1-port-in\"").arg(kind.toUpper());
+            QString beforeStub;
+            bool    found = false;
+            for (int i = 1; i < lines.size(); ++i) {
+                if (lines[i].contains("wire.stub(") && lines[i].contains(stub)) {
+                    beforeStub = lines[i - 1];
+                    found      = true;
+                }
+            }
+            QVERIFY2(found, qPrintable(stub));
+            const int bubbles = static_cast<int>(
+                lines.filter(QStringLiteral("draw.circle(")).size());
+            QCOMPARE(bubbles, active == "high" ? 1 : 0);
+            QCOMPARE(beforeStub.contains("draw.circle("), active == "high");
+            QVERIFY(lines.join('\n').contains("wire.wire(\"w_dst_n_l0_to_and\""));
+        }
+
+        const QString on    = active == "high" ? "1'b1" : "1'b0";
+        const QString bench = QStringLiteral(
+                                  "`timescale 1ns/1ps\n"
+                                  "module tb;\n"
+                                  "  localparam LAT = 6;\n"
+                                  "  reg clk = 1'b0;\n"
+                                  "  reg rst_src = %2;\n"
+                                  "  reg asserted = 1'b1;\n"
+                                  "  integer since = 0;\n"
+                                  "  integer errors = 0;\n"
+                                  "  wire dst_n;\n"
+                                  "  %1_ctrl dut(%3.rst_src(rst_src), .dst_n(dst_n));\n"
+                                  "  always #5 clk = ~clk;\n"
+                                  "  always @(negedge clk) begin\n"
+                                  "    since = since + 1;\n"
+                                  "    if (since > LAT && dst_n !== !asserted) begin\n"
+                                  "      errors = errors + 1;\n"
+                                  "      $display(\"MISMATCH t=%t src=%b dst_n=%b\", $time, "
+                                  "rst_src, dst_n);\n"
+                                  "    end\n"
+                                  "  end\n"
+                                  "  task drive(input a);\n"
+                                  "    begin\n"
+                                  "      asserted = a;\n"
+                                  "      rst_src = a ? %2 : ~%2;\n"
+                                  "      since = 0;\n"
+                                  "      repeat (12) @(posedge clk);\n"
+                                  "    end\n"
+                                  "  endtask\n"
+                                  "  initial begin\n"
+                                  "    drive(1'b1);\n"
+                                  "    drive(1'b0);\n"
+                                  "    drive(1'b1);\n"
+                                  "    drive(1'b0);\n"
+                                  "    if (errors == 0) $display(\"TEST_PASS\");\n"
+                                  "    else $display(\"TEST_FAIL\");\n"
+                                  "    $finish;\n"
+                                  "  end\n"
+                                  "endmodule\n")
+                                  .arg(stem, on, kind == "direct" ? "" : ".clk(clk), ");
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString benchPath = QDir(directory.path()).filePath("tb.v");
+        const QString imagePath = QDir(directory.path()).filePath("tb.vvp");
+        QFile         benchFile(benchPath);
+        QVERIFY(benchFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        benchFile.write(bench.toUtf8());
+        benchFile.close();
+
+        QProcess build;
+        build.setProcessChannelMode(QProcess::MergedChannels);
+        build.start(
+            compiler,
+            {"-g2005",
+             "-s",
+             "tb",
+             "-o",
+             imagePath,
+             verilogPath,
+             outputDir.filePath("reset_cell.v"),
+             benchPath});
+        QVERIFY(build.waitForStarted());
+        QVERIFY(build.waitForFinished());
+        const QByteArray buildLog = build.readAll();
+        QVERIFY2(build.exitCode() == 0, buildLog.constData());
+
+        QProcess simulation;
+        simulation.setProcessChannelMode(QProcess::MergedChannels);
+        simulation.start(runtime, {imagePath});
+        QVERIFY(simulation.waitForStarted());
+        QVERIFY(simulation.waitForFinished());
+        const QByteArray log = simulation.readAll();
+        QVERIFY2(log.contains("TEST_PASS"), log.constData());
     }
 };
 
