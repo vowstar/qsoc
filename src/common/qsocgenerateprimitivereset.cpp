@@ -1423,47 +1423,28 @@ QString QSocResetPrimitive::typstTarget(
         s << "  element.block(\n";
         s << "    x: " << andX << ", y: " << andBottomY << ", w: 1.2, h: " << andHeight << ",\n";
         s << "    id: \"" << andId << "\", name: \"AND\", fill: util.colors.green,\n";
-
-        // Define ports with explicit positions to align with link components
-        s << "    ports: (west: (";
-        for (int i = 0; i < numSources; ++i) {
-            if (i > 0)
-                s << ", ";
-            // Calculate port position as ratio within AND gate height (from bottom)
-            float portRatio = (linkPortY[i] - andBottomY) / andHeight;
-            s << "(id: \"in" << i << "\", pos: " << portRatio << ")";
-        }
-        s << ",), east: ((id: \"out\"),))\n";
+        s << "    ports: (east: ((id: \"out\"),))\n";
         s << "  )\n";
 
-        // Connect inputs to AND gate (with inversion bubble for high-active sources)
+        /* Circuiteria spaces block ports evenly and ignores any per-port
+           position, so inputs are drawn to explicit (x, linkPortY) points. */
+        const float bubbleR = 0.1f;
         for (int i = 0; i < numSources; ++i) {
-            QString andInPort = andId + QStringLiteral("-port-in") + QString::number(i);
-            float   portY     = linkPortY[i];
+            const float portY = linkPortY[i];
+            const float edgeX = linkNeedsInvert[i] ? andX - 2 * bubbleR : andX;
 
-            // Draw inversion bubble at AND input for high-active sources
             if (linkNeedsInvert[i]) {
-                float bubbleX = andX - 0.15f; // Just before AND gate west edge
-                s << "  draw.circle((" << bubbleX << ", " << portY << "), radius: 0.1, "
-                  << "stroke: black, fill: white)\n";
+                s << "  draw.circle((" << (andX - bubbleR) << ", " << portY
+                  << "), radius: " << bubbleR << ", stroke: black, fill: white)\n";
             }
 
             if (andInputPorts[i].isEmpty()) {
-                // Direct connection - draw stub
-                s << "  wire.stub(\"" << andInPort << "\", \"west\", name: \""
+                s << "  wire.stub((" << edgeX << ", " << portY << "), \"west\", name: \""
                   << target.links[i].source << "\")\n";
             } else {
-                // Connect from link component output to AND input
-                // If bubble exists, wire ends at bubble, otherwise at AND port
-                if (linkNeedsInvert[i]) {
-                    float bubbleX = andX - 0.15f;
-                    s << "  draw.line(\"" << andInputPorts[i] << "\", (" << (bubbleX - 0.1f) << ", "
-                      << portY << "))\n";
-                } else {
-                    s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_and\", (\n";
-                    s << "    \"" << andInputPorts[i] << "\", \"" << andInPort << "\"\n";
-                    s << "  ))\n";
-                }
+                s << "  wire.wire(\"w_" << tid << "_l" << i << "_to_and\", (\n";
+                s << "    \"" << andInputPorts[i] << "\", (" << edgeX << ", " << portY << ")\n";
+                s << "  ))\n";
             }
         }
 

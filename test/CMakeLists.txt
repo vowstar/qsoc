@@ -189,6 +189,7 @@ qt_add_test_target("test_qsoccliparsegeneratemultidriverguard")
 qt_add_test_target("test_qsoccliparsegeneratepowerlogic")
 qt_add_test_target("test_qsoccliparsegeneratereportunconnected")
 qt_add_test_target("test_qsocgenerateconnectedtargetmap")
+qt_add_test_target("test_qsocgeneratetypstgeometry")
 qt_add_test_target("test_qsocgeneratereproducibility")
 add_dependencies(test_qsocgeneratereproducibility qsoc_formatter_probe)
 target_compile_definitions(

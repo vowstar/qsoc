@@ -2998,11 +2998,13 @@ QString QSocClockPrimitive::typstTarget(
     QVector<QString> muxInputPorts(numSources);
 
     // Calculate Y positions for each link to align with MUX auto-distributed ports
-    // Circuiteria MUX ports are top-to-bottom: port-in[i] at y + h * (1 - (i + 0.5) / n)
+    // Circuiteria MUX ports are top-to-bottom: port-in[i] at y + h * (1 - (i + 0.5) / entries)
+    const bool     needMux    = (numSources > 1) || (!target.select.isEmpty() && numSources > 0);
+    const int      muxEntries = needMux ? qMax(2, numSources) : numSources;
     QVector<float> linkPortY(numSources);
     for (int i = 0; i < numSources; ++i) {
         // MUX port center Y (top-to-bottom distribution)
-        float muxPortY = muxBottomY + muxHeight * (1.0f - (float(i) + 0.5f) / float(numSources));
+        float muxPortY = muxBottomY + muxHeight * (1.0f - (float(i) + 0.5f) / float(muxEntries));
         // Link component should align with this port
         linkPortY[i] = muxPortY - compHeight / 2; // Block bottom-left Y
     }
@@ -3128,15 +3130,14 @@ QString QSocClockPrimitive::typstTarget(
     }
 
     // Step 2: Draw MUX or single source block
-    bool    needMux = (numSources > 1) || (!target.select.isEmpty() && numSources > 0);
     QString muxOutputPort;
 
     if (needMux) {
-        QString muxId   = escapeTypstId(tid + QStringLiteral("_MUX"));
-        int     entries = qMax(2, numSources);
+        QString muxId = escapeTypstId(tid + QStringLiteral("_MUX"));
         s << "  element.multiplexer(\n";
         s << "    x: " << muxX << ", y: " << muxBottomY << ", w: 1.0, h: " << muxHeight << ",\n";
-        s << "    id: \"" << muxId << "\", fill: util.colors.orange, entries: " << entries << "\n";
+        s << "    id: \"" << muxId << "\", fill: util.colors.orange, entries: " << muxEntries
+          << "\n";
         s << "  )\n";
 
         if (!target.select.isEmpty())
