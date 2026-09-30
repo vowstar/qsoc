@@ -70,6 +70,8 @@ public:
         out << "module " << name << " (\n" << declaration.join(",\n") << "\n);\n\n";
         emitReset(out);
         emitChip(out);
+        for (qsizetype index = 0; index < plan.service.size(); ++index)
+            emitServiceWire(out, index);
         for (auto domain = node.cbegin(); domain != node.cend(); ++domain)
             emitDomain(out, domain.key(), domain.value());
         for (qsizetype index = 0; index < plan.service.size(); ++index)
@@ -531,16 +533,22 @@ private:
                 {"reset", p + "reset"}});
     }
 
+    void emitServiceWire(QTextStream &out, qsizetype index)
+    {
+        const auto s = servicePrefix(index);
+        out << "wire " << s << "request, " << s << "hold, " << s << "failure, " << s
+            << "permission;\nreg " << s << "grant;\n";
+    }
+
     void emitService(QTextStream &out, qsizetype index)
     {
         const auto &edge = plan.service[index];
         const auto  s    = servicePrefix(index);
         const auto  c    = node[edge.consumer].prefix;
         const auto  p    = node[edge.provider].prefix;
-        out << "wire " << s << "request, " << s << "hold;\nreg " << s << "grant;\n"
-            << "wire " << s << "failure = " << s << "request && (" << s << "hold ? (!" << s
+        out << "assign " << s << "failure = " << s << "request && (" << s << "hold ? (!" << s
             << "grant || !" << p << "ready_run) : " << p << "fault);\n"
-            << "wire " << s << "permission = " << s << "hold && " << s << "grant && " << p
+            << "assign " << s << "permission = " << s << "hold && " << s << "grant && " << p
             << "ready_run && !" << p << "fault;\n"
             << "always @(posedge " << input.clockInput << " or negedge " << prefix
             << "cold_n) begin\n"

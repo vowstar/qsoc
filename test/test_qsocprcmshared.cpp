@@ -633,6 +633,43 @@ private slots:
         }
     }
 
+    void verilog2005_data()
+    {
+        QTest::addColumn<bool>("axi");
+        QTest::addColumn<bool>("shared");
+        QTest::newRow("apb8") << false << false;
+        QTest::newRow("shared-axi32") << true << true;
+    }
+
+    void verilog2005()
+    {
+        QFETCH(bool, axi);
+        QFETCH(bool, shared);
+        const auto tool = QStandardPaths::findExecutable("iverilog");
+        if (tool.isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY("iverilog");
+        const auto bound = QSocPrcmBinding::resolve(declaration(axi, shared), "control.soc_net");
+        QVERIFY(bound.plan);
+        const auto generated = QSocPrcmShared::generate(*bound.plan, "control", 2);
+        QVERIFY(generated.circuit);
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared_v2005-XXXXXX");
+        QVERIFY(directory.isValid());
+        QStringList argument{"-g2005", "-s", "control", "-o", directory.filePath("control.vvp")};
+        for (auto it = generated.circuit->rtl.cbegin(); it != generated.circuit->rtl.cend(); ++it) {
+            QVERIFY(save(directory.filePath(it.key()), it.value()));
+            argument.append(directory.filePath(it.key()));
+        }
+        QProcess process;
+        process.setProcessChannelMode(QProcess::MergedChannels);
+        process.start(tool, argument);
+        QVERIFY(process.waitForStarted());
+        QVERIFY(process.waitForFinished(60000));
+        const auto output = process.readAll();
+        QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+        QVERIFY2(process.exitCode() == 0, output.constData());
+        QVERIFY2(output.isEmpty(), output.constData());
+    }
+
     void behavior_data()
     {
         QTest::addColumn<bool>("axi");
