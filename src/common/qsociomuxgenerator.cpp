@@ -438,8 +438,8 @@ const QSet<QString> kIoRingDirectKeys = {"cell", "port"};
 const QSet<QString> kConstraintKeys   = {"name", "kind", "expr", "property"};
 const QSet<QString> kPadPortKeys
     = {"pad", "input_value", "input_enable", "output_value", "output_enable"};
-const QSet<QString> kPadPullKeys    = {"port", "table", "kind"};
-const QSet<QString> kPadControlKeys = {"port", "table", "default"};
+const QSet<QString> kPadPullKeys    = {"function", "kind"};
+const QSet<QString> kPadControlKeys = {"function", "default"};
 constexpr qsizetype kMaximumRows    = 16; /* a 4-bit lane of the pad word */
 
 /**
@@ -467,95 +467,109 @@ bool reservedControlName(const QString &name)
 }
 
 /**
- * @brief A row or mode label: printed as is, so no blanks and never empty.
+ * @brief A pad group read from its `function` rows.
  */
-bool validRowLabel(const QString &label)
+struct QSocPadFunction
 {
-    static const QRegularExpression blank(QStringLiteral("\\s"));
-    return !label.isEmpty() && !label.contains(blank);
-}
+    QList<QString>                pins; /**< Pin columns in order of first use */
+    QList<QSocCellTable::Row>     rows;
+    QList<QSocCellTable::Pattern> patterns; /**< Per row, over pins, labelled by the key */
+    QList<QString>                paths;    /**< Per row, its diagnostic path */
+};
 
 /**
- * @brief Read one transcribed row and check it against the port count.
+ * @brief Read the `function` rows of one pad group.
+ *
+ * A column holding 0, 1 or x in some row is a pin. Any other column must be one
+ * of the attributes, and every row sets the first, the key.
  */
-bool parsePadRow(
-    const YAML::Node       &node,
-    const QString          &path,
-    const QString          &label,
-    qsizetype               width,
-    QList<QSocPadTableRow> *rows,
-    QStringList            *errors)
+bool parsePadFunction(
+    const YAML::Node  &node,
+    const QString     &path,
+    const QStringList &attributes,
+    QSocPadFunction   *group,
+    QStringList       *errors)
 {
-    if (!node.IsSequence()) {
-        appendError(errors, "TYPE", path, "must be a sequence of 0, 1 or x");
-        return false;
-    }
-    QSocPadTableRow row;
-    row.label = label;
-    for (const YAML::Node &cell : node) {
-        if (!cell.IsScalar()) {
-            appendError(errors, "TYPE", path, "must be a sequence of 0, 1 or x");
-            return false;
+    QList<YAML::Node> rowNodes;
+    if (node && node.IsMap()) {
+        rowNodes.append(node);
+    } else if (node && node.IsSequence()) {
+        for (const YAML::Node &row : node) {
+            rowNodes.append(row);
         }
-        const QString text = QString::fromStdString(cell.Scalar());
-        if (text != "0" && text != "1" && text != "x") {
-            appendError(errors, "VALUE", path, "each entry must be 0, 1 or x");
-            return false;
-        }
-        row.value.append(text);
-    }
-    if (row.value.size() != width) {
-        appendError(
-            errors,
-            "RANGE",
-            path,
-            QString("holds %1 entries but the port list holds %2").arg(row.value.size()).arg(width));
-        return false;
-    }
-    rows->append(row);
-    return true;
-}
-
-/**
- * @brief Read one direction, which is either a single row or a map of labelled rows.
- */
-bool parsePadDirection(
-    const YAML::Node       &node,
-    const QString          &path,
-    qsizetype               width,
-    QList<QSocPadTableRow> *rows,
-    QStringList            *errors)
-{
-    if (node.IsSequence()) {
-        return parsePadRow(node, path, QString(), width, rows, errors);
-    }
-    if (!node.IsMap()) {
-        appendError(errors, "TYPE", path, "must be a sequence or a map of labelled sequences");
-        return false;
     }
     bool          valid = true;
-    QSet<QString> seen;
-    for (const auto &entry : node) {
-        if (!entry.first.IsScalar()) {
-            appendError(errors, "TYPE", path, "strength labels must be scalar");
-            valid = false;
+    QSocCellPorts ports;
+    for (qsizetype index = 0; index < rowNodes.size(); ++index) {
+        const QString rowPath = node.IsMap() ? path : QString("%1[%2]").arg(path).arg(index);
+        group->paths.append(rowPath);
+        if (!rowNodes.at(index).IsMap()) {
             continue;
         }
-        const QString label = QString::fromStdString(entry.first.Scalar());
-        if (!validRowLabel(label)) {
-            appendError(errors, "LABEL", path, "strength labels must be single words");
-            valid = false;
-            continue;
+        for (const auto &entry : rowNodes.at(index)) {
+            const QString value = entry.second.IsScalar()
+                                      ? QString::fromStdString(entry.second.Scalar()).trimmed()
+                                      : QString();
+            if (value != "0" && value != "1" && value.compare("x", Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+            const QString pin = QString::fromStdString(entry.first.Scalar());
+            if (!QSocVerilogUtils::isValidVerilogIdentifier(pin)) {
+                appendError(errors, "IDENTIFIER", rowPath + "." + pin, "must be a Verilog identifier");
+                valid = false;
+            } else if (!group->pins.contains(pin)) {
+                group->pins.append(pin);
+                ports.insert(pin, QSocCellPort("in"));
+            }
         }
-        if (seen.contains(label)) {
-            appendError(errors, "DUPLICATE", path + "." + label, "strength label is duplicated");
-            valid = false;
-            continue;
+    }
+    const QSocCellTable table = QSocCellTable::parse(node, ports, path, QSocCellTable::Check::Rows);
+    for (const QString &diagnostic : table.errors()) {
+        const qsizetype colon = diagnostic.indexOf(QStringLiteral(": "));
+        appendError(errors, "FUNCTION", diagnostic.left(colon), diagnostic.mid(colon + 2));
+    }
+    if (!valid || !table.isValid()) {
+        return false;
+    }
+    group->rows = table.rows();
+    for (qsizetype index = 0; index < group->rows.size(); ++index) {
+        const QSocCellTable::Row &row = group->rows.at(index);
+        for (auto it = row.sets.cbegin(); it != row.sets.cend(); ++it) {
+            if (!attributes.contains(it.key())) {
+                appendError(
+                    errors,
+                    "UNSUPPORTED",
+                    group->paths.at(index) + "." + it.key(),
+                    QString("a column is a pin or one of %1").arg(attributes.join(", ")));
+                valid = false;
+            }
         }
-        seen.insert(label);
-        valid = parsePadRow(entry.second, path + "." + label, label, width, rows, errors) && valid;
+        if (!row.sets.contains(attributes.first())) {
+            appendError(
+                errors,
+                "REQUIRED",
+                group->paths.at(index) + "." + attributes.first(),
+                "property is required");
+            valid = false;
+        }
+    }
+    if (valid) {
+        group->patterns = table.patterns(attributes.first(), group->pins);
     }
     return valid;
+}
+
+/**
+ * @brief One row of a pad group as the plan holds it: a value per pin.
+ */
+QSocPadTableRow padTableRow(const QSocCellTable::Pattern &pattern, const QString &label)
+{
+    QSocPadTableRow row;
+    row.label = label;
+    for (const QChar bit : pattern.bits) {
+        row.value.append(QString(bit));
+    }
+    return row;
 }
 
 bool parsePullRequest(
@@ -610,15 +624,6 @@ bool parsePadCell(
         if (!validateMap(pull, kPadPullKeys, pullPath, errors)) {
             return false;
         }
-        if (!pull["port"] || !pull["port"].IsSequence()) {
-            appendError(errors, "REQUIRED", pullPath + ".port", "must be a sequence of port names");
-            return false;
-        }
-        for (const YAML::Node &entry : pull["port"]) {
-            QString name;
-            valid = parseIdentifier(entry, pullPath + ".port", &name, errors) && valid;
-            plan->pull.port.append(name);
-        }
         if (pull["kind"]) {
             const QString kind = QString::fromStdString(pull["kind"].Scalar());
             if (kind != "resistor" && kind != "driver") {
@@ -627,43 +632,46 @@ bool parsePadCell(
             }
             plan->pull.isDriver = kind == "driver";
         }
-        if (!pull["table"]) {
-            appendError(errors, "REQUIRED", pullPath + ".table", "property is required");
+        if (!pull["function"]) {
+            appendError(errors, "REQUIRED", pullPath + ".function", "property is required");
             return false;
         }
-        const YAML::Node table     = pull["table"];
-        const QString    tablePath = pullPath + ".table";
-        if (!table.IsMap()) {
-            appendError(errors, "TYPE", tablePath, "must be a map of mode names");
-            return false;
+        const QString   functionPath = pullPath + ".function";
+        QSocPadFunction group;
+        valid
+            = parsePadFunction(pull["function"], functionPath, {"pull", "strength"}, &group, errors)
+              && valid;
+        plan->pull.port = group.pins;
+        for (qsizetype index = 0; index < group.patterns.size(); ++index) {
+            const QString name     = group.patterns.at(index).label;
+            const QString strength = group.rows.at(index).sets.value(QStringLiteral("strength"));
+            QList<QSocPadTableRow> &rows   = plan->pull.mode[name];
+            const bool              single = !rows.isEmpty() && rows.first().label.isEmpty();
+            if (single || (!rows.isEmpty() && strength.isEmpty())) {
+                appendError(
+                    errors,
+                    "DUPLICATE",
+                    group.paths.at(index),
+                    QString("mode %1 is duplicated").arg(name));
+                valid = false;
+                continue;
+            }
+            const bool seen = std::any_of(rows.cbegin(), rows.cend(), [&](const auto &row) {
+                return row.label == strength;
+            });
+            if (seen) {
+                appendError(
+                    errors,
+                    "DUPLICATE",
+                    group.paths.at(index),
+                    QString("strength %1 of %2 is duplicated").arg(strength, name));
+                valid = false;
+                continue;
+            }
+            rows.append(padTableRow(group.patterns.at(index), strength));
         }
-        const qsizetype width = plan->pull.port.size();
-        for (const auto &entry : table) {
-            if (!entry.first.IsScalar()) {
-                appendError(errors, "TYPE", tablePath, "mode names must be scalar");
-                valid = false;
-                continue;
-            }
-            const QString          name = QString::fromStdString(entry.first.Scalar());
-            QList<QSocPadTableRow> rows;
-            if (!validRowLabel(name)) {
-                appendError(errors, "LABEL", tablePath, "mode names must be single words");
-                valid = false;
-                continue;
-            }
-            if (plan->pull.has(name)) {
-                appendError(errors, "DUPLICATE", tablePath + "." + name, "mode is duplicated");
-                valid = false;
-                continue;
-            }
-            if (parsePadDirection(entry.second, tablePath + "." + name, width, &rows, errors)) {
-                plan->pull.mode.insert(name, rows);
-            } else {
-                valid = false;
-            }
-        }
-        if (!plan->pull.has(QStringLiteral("none"))) {
-            appendError(errors, "REQUIRED", tablePath + ".none", "the table needs a none row");
+        if (!group.patterns.isEmpty() && !plan->pull.has(QStringLiteral("none"))) {
+            appendError(errors, "REQUIRED", functionPath, "needs a none row");
             valid = false;
         }
     }
@@ -705,59 +713,40 @@ bool parsePadCell(
                 continue;
             }
             const YAML::Node body = entry.second;
-            if (!body["port"] || !body["port"].IsSequence()) {
-                appendError(
-                    errors, "REQUIRED", itemPath + ".port", "must be a sequence of port names");
+            if (!body["function"]) {
+                appendError(errors, "REQUIRED", itemPath + ".function", "property is required");
                 valid = false;
                 continue;
             }
-            for (const YAML::Node &portEntry : body["port"]) {
-                QString name;
-                valid = parseIdentifier(portEntry, itemPath + ".port", &name, errors) && valid;
-                item.port.append(name);
-            }
-            if (!body["table"] || !body["table"].IsMap()) {
-                appendError(errors, "REQUIRED", itemPath + ".table", "must be a map of labelled rows");
+            const QString   functionPath = itemPath + ".function";
+            QSocPadFunction group;
+            if (!parsePadFunction(body["function"], functionPath, {item.name}, &group, errors)) {
                 valid = false;
                 continue;
             }
-            QSet<QString> seen;
-            for (const auto &rowEntry : body["table"]) {
-                const QString label = QString::fromStdString(rowEntry.first.Scalar());
-                if (!validRowLabel(label)) {
-                    appendError(
-                        errors, "LABEL", itemPath + ".table", "row labels must be single words");
-                    valid = false;
-                    continue;
-                }
-                if (seen.contains(label)) {
+            item.port = group.pins;
+            for (qsizetype index = 0; index < group.patterns.size(); ++index) {
+                const QString label = group.patterns.at(index).label;
+                const bool    seen
+                    = std::any_of(item.row.cbegin(), item.row.cend(), [&](const QSocPadTableRow &row) {
+                          return row.label == label;
+                      });
+                if (seen) {
                     appendError(
                         errors,
                         "DUPLICATE",
-                        itemPath + ".table." + label,
-                        "row label is duplicated");
+                        group.paths.at(index),
+                        QString("row %1 is duplicated").arg(label));
                     valid = false;
                     continue;
                 }
-                seen.insert(label);
-                valid = parsePadRow(
-                            rowEntry.second,
-                            itemPath + ".table." + label,
-                            label,
-                            item.port.size(),
-                            &item.row,
-                            errors)
-                        && valid;
-            }
-            if (item.row.isEmpty()) {
-                appendError(errors, "REQUIRED", itemPath + ".table", "needs at least one row");
-                valid = false;
+                item.row.append(padTableRow(group.patterns.at(index), label));
             }
             if (item.row.size() > kMaximumRows) {
                 appendError(
                     errors,
                     "RANGE",
-                    itemPath + ".table",
+                    functionPath,
                     QString("has %1 rows, at most %2").arg(item.row.size()).arg(kMaximumRows));
                 valid = false;
             }
@@ -2889,7 +2878,7 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
             appendError(
                 errors,
                 "RANGE",
-                cell.path + ".pull.table",
+                cell.path + ".pull.function",
                 QString("at most %1 strength rows per direction and %2 named modes")
                     .arg(kMaximumRows)
                     .arg(kMaximumRows - QSocPadEncoding::FirstNamed));
@@ -2936,8 +2925,8 @@ bool validatePadCapability(const QSocIomuxPlan &plan, QStringList *errors)
                 appendError(
                     errors,
                     "CAPABILITY",
-                    QString("%1.pull.table.%2").arg(cell.path, it.key()),
-                    "only up and down carry strength rows");
+                    cell.path + ".pull.function",
+                    QString("mode %1 has strength rows, only up and down carry them").arg(it.key()));
                 valid = false;
             }
         }

@@ -1026,11 +1026,10 @@ void Test::padCellPortsAcceptLibraryDirectionSpelling()
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
     integration:
 )");
 
@@ -1109,11 +1108,10 @@ pvss:
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
     io_lib:
       gpio_pad_ps: {kind: signal, width: 40, variant: {west_east: gpio_pad_ps, north_south: gpio_pad_ps_v}}
       pvss: {kind: power, width: 20, variant: rotate}

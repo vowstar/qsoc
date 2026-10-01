@@ -201,17 +201,15 @@ pad_cell:
     output_value: I
     output_enable: OE
   pull:
-    port: [PE, PS]
-    table:
-      none: ["0", "x"]
-      up: ["1", "1"]
-      down: ["1", "0"]
+    function:
+      - {PE: 0, pull: none}
+      - {PE: 1, PS: 1, pull: up}
+      - {PE: 1, PS: 0, pull: down}
   control:
     drive:
-      port: [DS]
-      table:
-        low: ["0"]
-        high: ["1"]
+      function:
+        - {DS: 0, drive: low}
+        - {DS: 1, drive: high}
   constraint:
     - name: pull_select_needs_enable
       expr: "!PS || PE"
@@ -224,24 +222,32 @@ would be left floating in a netlist that elaborates. A role that is absent
 from `port` is a role the cell lacks, and a route that asks for it is an
 error. The same holds for a missing `pull` section or an absent control.
 
-`pull.table` maps mode names to the values the pull ports take, one entry per
-port, transcribed from the databook. `none` is required and encodes as the
-all-zero selector. `up`, `down`, `keeper`, and `oscillator` carry meaning to
-the generator.
-Any other name is a mode the cell documents, which a route asks for by that
-name. A mode holds either one row or a map of strength labels to rows, so a
-cell with two pull-up strengths and one pull-down strength is expressed as
-`up: {"47k": [...], "100k": [...]}` and `down: [...]`. A route writes
-`pull: up` for a single row and `pull: {mode: up, strength: "47k"}` for a
-labelled one.
+`pull.function` and each control's `function` are truth-table rows,
+transcribed from the databook. A row maps pins to 0, 1, or x and names its
+label: `pull` for the pull, the control name for a control. An omitted pin
+is x, and a single map in place of the list is one row. A column that
+holds 0, 1, or x is a pin, and the group drives its pins in the order they
+first appear. A label is one word of letters, digits, `_`, and `.`, other
+than 0, 1, or x. Every row is a state the generator can drive, so two
+labels may share one pattern.
 
-A mode name, a strength label, or a row label written twice is an error,
+`none` is a required pull mode and encodes as the all-zero selector. `up`,
+`down`, `keeper`, and `oscillator` carry meaning to the generator. Any
+other name is a mode the cell documents, which a route asks for by that
+name. A `strength` column grades a mode, so a cell with two pull-up
+strengths and one pull-down strength is expressed as
+`{PE: 1, PS: 1, R: 0, pull: up, strength: 47k}`,
+`{PE: 1, PS: 1, R: 1, pull: up, strength: 100k}`, and
+`{PE: 1, PS: 0, pull: down}`. A route writes `pull: up` for a single row and
+`pull: {mode: up, strength: 47k}` for a labelled one.
+
+A mode, a strength of one mode, or a row label written twice is an error,
 so one label never names two rows.
 
 `control` declares every other input group of the cell: drive strength,
 slew rate, Schmitt trigger, analog enable, an open-drain mode pin, a filter
-enable, whatever the databook lists. Each control names its pins, a table of
-labelled rows, and an optional `default` row, which is otherwise the first.
+enable, whatever the databook lists. Each control has `function` rows and
+an optional `default` row, which is otherwise the first.
 The control name is yours. It must be a Verilog identifier, because it
 appears as is in ports, register fields, and the report, and it may not be
 one of the names in the table below. Every cell pin is named once, by a
@@ -286,9 +292,11 @@ unchanged. The fixed names and the names a control may not take:
     table.header([Where], [Name], [Meaning]),
     table.hline(),
     [`port`, route, `safe`], [`input_value` `input_enable` `output_value` `output_enable`], [the four roles],
-    [`pull.table`], [`none` `up` `down` `keeper` `oscillator`], [modes 0 to 4, `none` required, `up` and `down` graded],
+    [`pull.function`], [`none` `up` `down` `keeper` `oscillator`], [modes 0 to 4, `none` required, `up` and `down` graded],
+    [`pull.function`], [`pull` `strength`], [columns that are not pins],
     [`pull.kind`], [`resistor` `driver`], [whether the pulls are resistors],
-    [control body], [`port` `table` `default`], [keys],
+    [`pull`], [`function` `kind`], [keys],
+    [control body], [`function` `default`], [keys],
     [`safe`], [the roles, `pull`, control names], [keys],
     [control name], [the roles, `pull`, `pull_mode`, `up_sel`, `down_sel`, `select`, `rx_*`, `*_src`, `*_inv`, `*_detect`, `*_int_en`, `*_int_pend`], [taken, would collide with a generated port or field],
   )],

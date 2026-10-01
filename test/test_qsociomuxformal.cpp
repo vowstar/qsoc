@@ -530,11 +530,10 @@ QSocModuleDefinition makePadCellDefinition(const QString &claim)
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
       constraint:
         - name: pull_select_needs_enable
           expr: "%1"
@@ -681,17 +680,15 @@ QSocModuleDefinition makeOptionDefinition()
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
       control:
         drive:
-          port: [DS]
-          table:
-            low: ["0"]
-            high: ["1"]
+          function:
+            - {DS: 0, drive: low}
+            - {DS: 1, drive: high}
     integration:
       instance: u_iomux0
       clock: clk_iomux
@@ -916,17 +913,15 @@ QSocIomuxPlan linkedPlan(bool invert = false)
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
       control:
         drive:
-          port: [DS]
-          table:
-            low: ["0"]
-            high: ["1"]
+          function:
+            - {DS: 0, drive: low}
+            - {DS: 1, drive: high}
     integration:
       instance: u_iomux0
       clock: clk_iomux
@@ -1163,17 +1158,15 @@ void Test::forceIsProvenAboveEverySourceWhenAvailable()
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
       control:
         drive:
-          port: [DS]
-          table:
-            low: ["0"]
-            high: ["1"]
+          function:
+            - {DS: 0, drive: low}
+            - {DS: 1, drive: high}
       safe:
         input_enable: 1
         pull: down
@@ -1270,18 +1263,16 @@ void Test::unroutedSlotsLandOnTheDefaultRowWhenAvailable()
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
       control:
         drive:
-          port: [DS]
-          table:
-            low: ["0"]
-            mid: ["1"]
-            high: ["1"]
+          function:
+            - {DS: 0, drive: low}
+            - {DS: 1, drive: mid}
+            - {DS: 1, drive: high}
           default: mid
     integration:
       instance: u_iomux0

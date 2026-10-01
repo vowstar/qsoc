@@ -4618,18 +4618,16 @@ QString padCellBlock()
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
-          bus_hold: ["1", "1"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
+          - {PE: 1, PS: 1, pull: bus_hold}
       control:
         drive:
-          port: [DS]
-          table:
-            low: ["0"]
-            high: ["1"]
+          function:
+            - {DS: 0, drive: low}
+            - {DS: 1, drive: high}
       constraint:
         - name: pull_select_needs_enable
           expr: "!PS || PE"
@@ -4838,17 +4836,18 @@ void Test::padCellRejectsWhatItLacks_data()
         << "        control: {slew: fast}\n"
         << "pin 0 slot 0.control.slew: pad cell gpio_pad_ps has no control slew";
     QTest::newRow("duplicate strength label")
-        << "          up: [\"1\", \"1\"]\n"
-        << "          up: {\"47k\": [\"1\", \"1\"], \"47k\": [\"1\", \"0\"]}\n"
-        << "IOMUX_DUPLICATE generator.pad_cell.pull.table.up.47k: strength label is duplicated";
+        << "          - {PE: 1, PS: 1, pull: up}\n"
+        << "          - {PE: 1, PS: 1, pull: up, strength: 47k}\n"
+           "          - {PE: 1, PS: 0, pull: up, strength: 47k}\n"
+        << "IOMUX_DUPLICATE generator.pad_cell.pull.function[2]: strength 47k of up is duplicated";
     QTest::newRow("duplicate pull mode")
-        << "          down: [\"1\", \"0\"]\n"
-        << "          down: [\"1\", \"0\"]\n          down: [\"0\", \"0\"]\n"
-        << "IOMUX_DUPLICATE generator.pad_cell.pull.table.down: mode is duplicated";
+        << "          - {PE: 1, PS: 0, pull: down}\n"
+        << "          - {PE: 1, PS: 0, pull: down}\n          - {PE: 0, PS: 0, pull: down}\n"
+        << "IOMUX_DUPLICATE generator.pad_cell.pull.function[3]: mode down is duplicated";
     QTest::newRow("duplicate control row")
-        << "            low: [\"0\"]\n"
-        << "            low: [\"0\"]\n            low: [\"1\"]\n"
-        << "IOMUX_DUPLICATE generator.pad_cell.control.drive.table.low: row label is duplicated";
+        << "            - {DS: 0, drive: low}\n"
+        << "            - {DS: 0, drive: low}\n            - {DS: 1, drive: low}\n"
+        << "IOMUX_DUPLICATE generator.pad_cell.control.drive.function[1]: row low is duplicated";
     QTest::newRow("keeper without the receiver enabled")
         << "        input_enable: 1\n        pull: keeper\n"
         << "        input_enable: 0\n        pull: keeper\n"
@@ -4860,12 +4859,12 @@ void Test::padCellRejectsWhatItLacks_data()
         << "pin 1 slot 1.pull.mode: pad cell gpio_pad_ps has no receiver, so keeper cannot be "
            "woven";
     QTest::newRow("keeper woven from a driver")
-        << "        port: [PE, PS]\n"
-        << "        port: [PE, PS]\n        kind: driver\n"
+        << "      pull:\n"
+        << "      pull:\n        kind: driver\n"
         << "pin 1 slot 1.pull.mode: pad cell gpio_pad_ps pulls with its driver, so keeper cannot "
            "be woven";
     QTest::newRow("keeper woven without a down row")
-        << "          down: [\"1\", \"0\"]\n"
+        << "          - {PE: 1, PS: 0, pull: down}\n"
         << ""
         << "pin 1 slot 1.pull.mode: pad cell gpio_pad_ps needs both up and down rows to weave "
            "keeper";
@@ -4888,13 +4887,27 @@ void Test::padCellRejectsWhatItLacks_data()
         << "          expr: \"!PS || PE\"\n"
         << "          expr: \"!PS || PE\"\n          property: \"1\"\n"
         << "constraint[0]: needs exactly one of expr or property";
-    QTest::newRow("table row wider than the port list")
-        << "          up: [\"1\", \"1\"]\n"
-        << "          up: [\"1\", \"1\", \"1\"]\n"
-        << "pull.table.up: holds 3 entries but the port list holds 2";
-    QTest::newRow("table without a none row") << "          none: [\"0\", \"x\"]\n"
+    QTest::newRow("pin value that is no level")
+        << "          - {PE: 1, PS: 1, pull: up}\n"
+        << "          - {PE: 1, PS: high, pull: up}\n"
+        << "IOMUX_FUNCTION generator.pad_cell.pull.function[1].PS: input pin takes 0, 1 or x, not "
+           "'high'";
+    QTest::newRow("column that is no pin nor pull")
+        << "          - {PE: 1, PS: 1, pull: up}\n"
+        << "          - {PE: 1, PS: 1, pull: up, speed: fast}\n"
+        << "IOMUX_UNSUPPORTED generator.pad_cell.pull.function[1].speed: a column is a pin or one "
+           "of pull, strength";
+    QTest::newRow("row without a pull mode")
+        << "          - {PE: 1, PS: 1, pull: up}\n"
+        << "          - {PE: 1, PS: 1, pull: up}\n          - {PE: 0, PS: 1, strength: weak}\n"
+        << "IOMUX_REQUIRED generator.pad_cell.pull.function[2].pull: property is required";
+    QTest::newRow("table without a none row") << "          - {PE: 0, pull: none}\n"
                                               << ""
-                                              << "pull.table.none: the table needs a none row";
+                                              << "pull.function: needs a none row";
+    QTest::newRow("port list of the table form")
+        << "      pull:\n"
+        << "      pull:\n        port: [PE, PS]\n"
+        << "IOMUX_UNSUPPORTED generator.pad_cell.pull.port: unsupported property";
     QTest::newRow("integration still names the four vectors")
         << "        io: chip_gpio\n"
         << "        io: chip_gpio\n        input_value: pad_in\n"
@@ -6238,11 +6251,13 @@ void Test::strengthPastTheTableLandsOnTheFirstRow()
 {
     /* Three up rows take a 2-bit select, so software can write 3. */
     QString       padCell = padCellBlock();
-    const QString single  = "          up: [\"1\", \"1\"]\n";
+    const QString single  = "          - {PE: 1, PS: 1, pull: up}\n";
     QVERIFY(padCell.contains(single));
     padCell.replace(
         single,
-        "          up: {weak: [\"1\", \"1\"], mid: [\"1\", \"1\"], strong: [\"1\", \"1\"]}\n");
+        "          - {PE: 1, PS: 1, pull: up, strength: weak}\n"
+        "          - {PE: 1, PS: 1, pull: up, strength: mid}\n"
+        "          - {PE: 1, PS: 1, pull: up, strength: strong}\n");
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -6290,9 +6305,12 @@ void Test::strengthPastTheTableLandsOnTheFirstRow()
 void Test::wovenKeeperCarriesItsStrength()
 {
     QString       padCell = padCellBlock();
-    const QString single  = "          up: [\"1\", \"1\"]\n";
+    const QString single  = "          - {PE: 1, PS: 1, pull: up}\n";
     QVERIFY(padCell.contains(single));
-    padCell.replace(single, "          up: {weak: [\"1\", \"1\"], strong: [\"1\", \"1\"]}\n");
+    padCell.replace(
+        single,
+        "          - {PE: 1, PS: 1, pull: up, strength: weak}\n"
+        "          - {PE: 1, PS: 1, pull: up, strength: strong}\n");
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -6364,18 +6382,18 @@ void Test::padTablesAreBoundedToEightBitCodes()
 {
     QString rows;
     for (int index = 0; index < 17; ++index) {
-        rows += QString("            r%1: [\"1\", \"1\"]\n").arg(index);
+        rows += QString("          - {PE: 1, PS: 1, pull: up, strength: r%1}\n").arg(index);
     }
     QString       padCell = padCellBlock();
-    const QString single  = "          up: [\"1\", \"1\"]\n";
+    const QString single  = "          - {PE: 1, PS: 1, pull: up}\n";
     QVERIFY(padCell.contains(single));
-    padCell.replace(single, "          up:\n" + rows);
+    padCell.replace(single, rows);
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(padCell), &plan, &errors));
     QVERIFY2(
         errors.contains(
-            "IOMUX_RANGE generator.pad_cell.pull.table: at most 16 strength rows per "
+            "IOMUX_RANGE generator.pad_cell.pull.function: at most 16 strength rows per "
             "direction and 11 named modes"),
         qPrintable(errors.join('\n')));
 }
@@ -6385,9 +6403,9 @@ void Test::unreachableModeLandsOnNone()
     /* Only a register can present a mode with no row. The none row of this
      * cell drives the enable high, which is what such a mode must produce. */
     QString       padCell = padCellBlock();
-    const QString none    = "          none: [\"0\", \"x\"]\n";
+    const QString none    = "          - {PE: 0, pull: none}\n";
     QVERIFY(padCell.contains(none));
-    padCell.replace(none, "          none: [\"1\", \"x\"]\n");
+    padCell.replace(none, "          - {PE: 1, pull: none}\n");
     QSocIomuxPlan plan;
     QStringList   errors;
     QVERIFY2(
@@ -6407,9 +6425,9 @@ void Test::nativeKeeperRowIsSelectedNotWoven()
     /* A cell with its own keeper pin state: mode 3 selects that row and no
      * loop is woven, so oscillator is not reachable either. */
     QString       padCell = padCellBlock();
-    const QString down    = "          down: [\"1\", \"0\"]\n";
+    const QString down    = "          - {PE: 1, PS: 0, pull: down}\n";
     QVERIFY(padCell.contains(down));
-    padCell.replace(down, down + "          keeper: [\"0\", \"1\"]\n");
+    padCell.replace(down, down + "          - {PE: 0, PS: 1, pull: keeper}\n");
     QSocIomuxPlan plan;
     QStringList   errors;
     const QString source = QString(R"(generator:
@@ -6971,7 +6989,8 @@ void Test::unroutedSlotsTakeTheDeclaredDefaultRow()
     /* drive defaults to high: pin 1 has no route asking for drive, so its
      * chain closes on row 1, and a routed low is the only explicit term. */
     QString       padCell = padCellBlock();
-    const QString table = "          table:\n            low: [\"0\"]\n            high: [\"1\"]\n";
+    const QString table   = "          function:\n            - {DS: 0, drive: low}\n            - "
+                            "{DS: 1, drive: high}\n";
     QVERIFY(padCell.contains(table));
     padCell.replace(table, table + "          default: high\n");
     QSocIomuxPlan plan;
@@ -7029,11 +7048,8 @@ void Test::controlNamesAndPinsAreRefusedWhenTaken()
      * detectors. */
     QString shared = padCellBlock();
     shared.replace(
-        "          port: [DS]\n          table:\n            low: [\"0\"]\n            high: "
-        "[\"1\"]\n",
-        "          port: [DS, PS]\n          table:\n            low: [\"0\", \"0\"]\n            "
-        "high: "
-        "[\"1\", \"1\"]\n");
+        "            - {DS: 0, drive: low}\n            - {DS: 1, drive: high}\n",
+        "            - {DS: 0, PS: 0, drive: low}\n            - {DS: 1, PS: 1, drive: high}\n");
     QVERIFY(shared != padCellBlock());
     QVERIFY(!QSocIomuxGenerator::buildPlan(makePadCellDefinition(shared), &plan, &errors));
     QVERIFY2(
@@ -7079,9 +7095,10 @@ void Test::linksNeedAPadCellAndRowsToChooseFrom()
                     "pad_cell declaration"});
 
     QString       padCell = padCellBlock();
-    const QString table = "          table:\n            low: [\"0\"]\n            high: [\"1\"]\n";
+    const QString table   = "          function:\n            - {DS: 0, drive: low}\n            - "
+                            "{DS: 1, drive: high}\n";
     QVERIFY(padCell.contains(table));
-    padCell.replace(table, "          table:\n            low: [\"0\"]\n");
+    padCell.replace(table, "          function:\n            - {DS: 0, drive: low}\n");
     const QString oneRow = QString(R"(generator:
     kind: iomux
     bus: axi4_lite
@@ -7126,17 +7143,19 @@ void Test::padRecordContinuesIntoTheNextWord()
         output_value: I
         output_enable: OE
       pull:
-        port: [PE, PS]
-        table:
-          none: ["0", "x"]
-          up: ["1", "1"]
-          down: ["1", "0"]
+        function:
+          - {PE: 0, pull: none}
+          - {PE: 1, PS: 1, pull: up}
+          - {PE: 1, PS: 0, pull: down}
       control:
 )yaml");
         for (int index = 0; index < controls; ++index) {
-            text += QString("        c%1:\n          port: [D%1]\n          table:\n").arg(index);
+            text += QString("        c%1:\n          function:\n").arg(index);
             for (int row = 0; row < rows; ++row) {
-                text += QString("            r%1: [\"%2\"]\n").arg(row).arg(row % 2);
+                text += QString("            - {D%1: %2, c%1: r%3}\n")
+                            .arg(index)
+                            .arg(row % 2)
+                            .arg(row);
             }
         }
         return text;
@@ -7198,7 +7217,8 @@ void Test::padRecordContinuesIntoTheNextWord()
     QCOMPARE(findField(plan.mmio, "pin_pad_ctrl_0", "c0")->width, 4U);
     QVERIFY(!QSocIomuxGenerator::buildPlan(source(cell(1, 17)), &plan, &errors));
     QVERIFY2(
-        errors.contains("IOMUX_RANGE generator.pad_cell.control.c0.table: has 17 rows, at most 16"),
+        errors.contains(
+            "IOMUX_RANGE generator.pad_cell.control.c0.function: has 17 rows, at most 16"),
         qPrintable(errors.join('\n')));
 }
 
@@ -7624,7 +7644,8 @@ void Test::reportAcceptsSelectorNamedControl()
 {
     auto definition                 = makeAllOptionDefinition();
     auto cell                       = definition.extraAttributes["generator"]["pad_cell"];
-    cell["control"]["drive_select"] = YAML::Clone(cell["control"]["drive"]);
+    cell["control"]["drive_select"] = YAML::Load(
+        "{function: [{DS: 0, drive_select: low}, {DS: 1, drive_select: high}]}");
     cell["control"].remove("drive");
     definition.extraAttributes["generator"]["route"] = YAML::Load("[]");
     QSocIomuxPlan plan;
@@ -7866,26 +7887,23 @@ QString padClassesBlock()
         cell: gpio_pad_ps
         port: {pad: PAD, input_value: C, input_enable: IE, output_value: I, output_enable: OE}
         pull:
-          port: [PE, PS]
-          table:
-            none: ["0", "x"]
-            up: ["1", "1"]
-            down: ["1", "0"]
+          function:
+            - {PE: 0, pull: none}
+            - {PE: 1, PS: 1, pull: up}
+            - {PE: 1, PS: 0, pull: down}
         control:
           drive:
-            port: [DS]
-            table:
-              low: ["0"]
-              high: ["1"]
+            function:
+              - {DS: 0, drive: low}
+              - {DS: 1, drive: high}
       od:
         cell: gpio_pad_od
         port: {pad: PAD, input_value: C, input_enable: IE, output_value: I, output_enable: OE}
         control:
           od:
-            port: [OD]
-            table:
-              pp: ["0"]
-              od: ["1"]
+            function:
+              - {OD: 0, od: pp}
+              - {OD: 1, od: od}
 )yaml");
 }
 
@@ -8487,6 +8505,7 @@ void Test::singlePinPadBusStaysAVector()
     QStringList   errors;
     QString       classes = padClassesBlock();
     classes.replace("      od:\n", "      unused:\n");
+    classes.replace(", od: ", ", unused: ");
     const QSocModuleDefinition definition = makeDefinition(QString(R"(generator:
     kind: iomux
     bus: axi4_lite
