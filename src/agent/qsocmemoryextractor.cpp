@@ -4,12 +4,47 @@
 #include "agent/qsocmemoryextractor.h"
 
 #include "agent/qsocagent.h"
+#include "agent/qsocsession.h"
 #include "common/qsocconsole.h"
 
 #include <QEventLoop>
 #include <QStringList>
 
 using json = nlohmann::json;
+
+void QSocMemoryExtractor::carryOver(Cursor &cursor, const json &source, int replacementSize)
+{
+    const int total = source.is_array() ? static_cast<int>(source.size()) : 0;
+    for (int idx = qBound(0, cursor.index, total); idx < total; idx++) {
+        cursor.pending.push_back(source[idx]);
+    }
+    cursor.index = replacementSize;
+}
+
+bool QSocMemoryExtractor::saveCursor(QSocSession *session, const Cursor &cursor)
+{
+    return session != nullptr
+           && session->appendMeta(
+               QStringLiteral("memory_pending"), QString::fromStdString(cursor.pending.dump()))
+           && session->appendMeta(QStringLiteral("last_memory_index"), QString::number(cursor.index));
+}
+
+QSocMemoryExtractor::Cursor QSocMemoryExtractor::loadCursor(
+    const QString &sessionPath, int messageCount)
+{
+    const auto saved = QSocSession::readMetas(
+        sessionPath, {QStringLiteral("last_memory_index"), QStringLiteral("memory_pending")});
+    bool      valid = false;
+    const int index = saved.value(QStringLiteral("last_memory_index")).toInt(&valid);
+    Cursor    cursor;
+    cursor.index = valid && index >= 0 && index <= messageCount ? index : messageCount;
+    cursor.pending
+        = json::parse(saved.value(QStringLiteral("memory_pending")).toStdString(), nullptr, false);
+    if (!cursor.pending.is_array()) {
+        cursor.pending = json::array();
+    }
+    return cursor;
+}
 
 QSocMemoryExtractor::Decision QSocMemoryExtractor::decide(
     const json &messages, int cursor, const QSocAgentConfig &cfg)
@@ -114,44 +149,56 @@ QSocMemoryExtractor::QSocMemoryExtractor(
     , llmService_(llmService)
 {}
 
-int QSocMemoryExtractor::extract(
-    int cursor, int turnNumber, const std::function<void(QSocAgent *)> &onSpawn)
+bool QSocMemoryExtractor::extract(
+    Cursor &cursor, int turnNumber, const std::function<void(QSocAgent *)> &onSpawn)
 {
     if (!parent_ || !memoryManager_ || !llmService_) {
-        return cursor;
+        return false;
     }
 
     const QSocAgentConfig cfg = parent_->getConfig();
     if (!cfg.memoryExtractEnabled) {
-        return cursor;
+        return false;
     }
     if (cfg.memoryExtractEveryTurns > 1 && (turnNumber % cfg.memoryExtractEveryTurns) != 0) {
-        return cursor;
+        return false;
     }
 
     const json messages = parent_->getMessages();
     const int  total    = messages.is_array() ? static_cast<int>(messages.size()) : 0;
     /* Heal a stale cursor left past the end by an in-session compaction
      * that shrank `messages`; otherwise extraction would never run again. */
-    const int      start    = qBound(0, cursor, total);
-    const Decision decision = decide(messages, start, cfg);
+    const int  start   = qBound(0, cursor.index, total);
+    const bool clamped = start != cursor.index;
+    cursor.index       = start;
+    json slice         = cursor.pending.is_array() ? cursor.pending : json::array();
+    for (int idx = start; idx < total; idx++) {
+        slice.push_back(messages[idx]);
+    }
+    const Decision decision = decide(slice, 0, cfg);
+    const auto     consume  = [&cursor, total]() {
+        cursor.index   = total;
+        cursor.pending = json::array();
+        return true;
+    };
 
     if (decision.alreadyWritten) {
-        return total; /* Main agent saved; advance past the slice. */
+        return consume(); /* Main agent saved; advance past the slice. */
     }
     if (!decision.run) {
-        return start; /* Nothing worth extracting yet; keep the (clamped) cursor. */
+        return clamped; /* Nothing worth extracting yet. */
     }
 
     if (!cfg.memoryExtractModel.isEmpty()
         && !llmService_->availableModels().contains(cfg.memoryExtractModel)) {
         QSocConsole::warn() << "Unknown memory model:" << cfg.memoryExtractModel;
-        return start;
+        return clamped;
     }
 
-    const QString transcript = parent_->formatMessagesForSummary(start, total);
-    const QString manifest   = buildManifest(memoryManager_->scanHeaders("all"));
-    const QString userMsg    = buildUserMessage(transcript, manifest, decision.newCount);
+    const QString transcript
+        = QSocAgent::formatHistoryForSummary(slice, 0, static_cast<int>(slice.size()));
+    const QString manifest = buildManifest(memoryManager_->scanHeaders("all"));
+    const QString userMsg  = buildUserMessage(transcript, manifest, decision.newCount);
 
     /* Constrained child: memory tools only, short turn cap, no memory /
      * project / skill injection. */
@@ -212,5 +259,5 @@ int QSocMemoryExtractor::extract(
 
     delete child;
 
-    return total;
+    return consume();
 }

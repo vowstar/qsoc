@@ -895,8 +895,10 @@ private slots:
                 worker.maybeRun(directory.path(), QStringLiteral("current-session"), onSpawn).ran,
                 !unknown);
         } else {
-            QSocMemoryExtractor worker(&agent, &memory, &service);
-            QCOMPARE(worker.extract(0, 1, onSpawn), unknown ? 0 : 2);
+            QSocMemoryExtractor         worker(&agent, &memory, &service);
+            QSocMemoryExtractor::Cursor cursor;
+            QCOMPARE(worker.extract(cursor, 1, onSpawn), !unknown);
+            QCOMPARE(cursor.index, unknown ? 0 : 2);
         }
         QCOMPARE(spawned, unknown ? 0 : 1);
         QCOMPARE(active.requestCount(), !unknown && model.isEmpty() ? 1 : 0);

@@ -3251,11 +3251,10 @@ bool QSocCliWorker::runAgentLoop(
         agent->setMessages(safe ? persistedMessages : json::array());
         return safe;
     };
-    /* Cursor into the message array marking what background extraction has
-     * already processed. Advances past extracted slices; reset to the
-     * message count on resume so a resumed session does not re-extract
-     * already-seen history. */
-    int lastMemoryIndex = 0;
+    /* Background extraction progress: an index into the message array plus
+     * the unprocessed messages a compaction removed. Both are session meta,
+     * so a turn compacted before extraction survives an exit. */
+    QSocMemoryExtractor::Cursor memoryCursor;
     /* Consolidation ("dream") is attempted once per process, after the
      * first turn settles, so it never blocks startup. The time/session
      * gates inside maybeRun decide whether it actually runs. */
@@ -4161,15 +4160,7 @@ bool QSocCliWorker::runAgentLoop(
             /* Restore the extraction cursor so a turn left unextracted
              * before a crash is picked up; fall back to the message
              * count (skip history) when no cursor was persisted. */
-            {
-                bool          okIdx = false;
-                const QString savedIdx
-                    = QSocSession::readMeta(sessionPath, QStringLiteral("last_memory_index"));
-                const int parsed = savedIdx.toInt(&okIdx);
-                lastMemoryIndex  = (okIdx && parsed >= 0 && parsed <= lastPersistedIndex)
-                                       ? parsed
-                                       : lastPersistedIndex;
-            }
+            memoryCursor = QSocMemoryExtractor::loadCursor(sessionPath, lastPersistedIndex);
             /* Recreate the monotonic turn counter so the next snapshot
              * continues the sequence from where the previous session
              * left off. Prefer on-disk file-history state when it
@@ -4325,14 +4316,25 @@ bool QSocCliWorker::runAgentLoop(
         [&observedTerminal](const QString &) { observedTerminal = QSocSession::RunEvent::Aborted; });
 
     agent->setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+        const auto previous    = memoryCursor;
+        const int  replacement = static_cast<int>(candidate.candidateMessages.size());
+        if (agent->getConfig().memoryExtractEnabled && agent->getMemoryManager() != nullptr) {
+            QSocMemoryExtractor::carryOver(memoryCursor, agent->getMessages(), replacement);
+        } else {
+            memoryCursor.index = replacement;
+        }
+        /* Pending goes to disk before the snapshot: a crash in between
+         * extracts the slice twice instead of never. */
+        QSocMemoryExtractor::saveCursor(currentSession.get(), memoryCursor);
         if (!persistRecoverySnapshot(
                 currentSession.get(),
                 candidate.candidateMessages,
                 persistedMessages,
                 lastPersistedIndex)) {
+            memoryCursor = previous;
+            QSocMemoryExtractor::saveCursor(currentSession.get(), memoryCursor);
             return false;
         }
-        lastMemoryIndex = lastPersistedIndex;
         return true;
     });
 
@@ -6563,7 +6565,7 @@ bool QSocCliWorker::runAgentLoop(
             agent->clearHistory();
             persistedMessages            = json::array();
             lastPersistedIndex           = 0;
-            lastMemoryIndex              = 0;
+            memoryCursor                 = {};
             turnCounter                  = 0;
             historyInputBlocked          = false;
             recoveryRequiresUserInput    = false;
@@ -6654,7 +6656,7 @@ bool QSocCliWorker::runAgentLoop(
             recoveryNotice.clear();
             persistedMessages            = json::array();
             lastPersistedIndex           = 0;
-            lastMemoryIndex              = 0;
+            memoryCursor                 = {};
             turnCounter                  = 0;
             historyInputBlocked          = false;
             recoveryRequiresUserInput    = false;
@@ -8315,7 +8317,7 @@ bool QSocCliWorker::runAgentLoop(
             agent->clearHistory();
             activateFreshSession(std::move(nextSession));
             lastPersistedIndex = 0;
-            lastMemoryIndex    = 0;
+            memoryCursor       = {};
             turnCounter        = 0;
             /* Different project = different memory store: re-arm the
              * once-per-process dream pass and the near-cap notice. */
@@ -9154,13 +9156,9 @@ bool QSocCliWorker::runAgentLoop(
                     QObject::connect(
                         &inputMonitor, &QAgentInputMonitor::escPressed, memChild, &QSocAgent::abort);
                 };
-                const int prevMemoryIndex = lastMemoryIndex;
-                lastMemoryIndex
-                    = QSocMemoryExtractor(agent, agent->getMemoryManager(), agent->getLLMService())
-                          .extract(lastMemoryIndex, turnCounter, onMemSpawn);
-                if (currentSession && lastMemoryIndex != prevMemoryIndex) {
-                    currentSession->appendMeta(
-                        QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+                if (QSocMemoryExtractor(agent, agent->getMemoryManager(), agent->getLLMService())
+                        .extract(memoryCursor, turnCounter, onMemSpawn)) {
+                    QSocMemoryExtractor::saveCursor(currentSession.get(), memoryCursor);
                 }
                 maybeGenerateSessionTitle();
                 /* Idle delay elapsed mid-turn while unfocused: show the
@@ -9808,13 +9806,9 @@ bool QSocCliWorker::runAgentLoop(
                     QObject::connect(
                         &inputMonitor, &QAgentInputMonitor::escPressed, memChild, &QSocAgent::abort);
                 };
-                const int prevMemoryIndex = lastMemoryIndex;
-                lastMemoryIndex
-                    = QSocMemoryExtractor(agent, agent->getMemoryManager(), agent->getLLMService())
-                          .extract(lastMemoryIndex, turnCounter, onMemSpawn);
-                if (currentSession && lastMemoryIndex != prevMemoryIndex) {
-                    currentSession->appendMeta(
-                        QStringLiteral("last_memory_index"), QString::number(lastMemoryIndex));
+                if (QSocMemoryExtractor(agent, agent->getMemoryManager(), agent->getLLMService())
+                        .extract(memoryCursor, turnCounter, onMemSpawn)) {
+                    QSocMemoryExtractor::saveCursor(currentSession.get(), memoryCursor);
                 }
                 maybeGenerateSessionTitle();
                 /* Idle delay elapsed mid-turn while unfocused: show the

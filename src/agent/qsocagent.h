@@ -273,6 +273,9 @@ public:
      */
     QString formatMessagesForSummary(int start, int end) const;
 
+    /** @brief Same as formatMessagesForSummary over a caller-supplied history. */
+    static QString formatHistoryForSummary(const json &history, int start, int end);
+
     /**
      * @brief Set the LLM service
      * @param llmService Pointer to the LLM service

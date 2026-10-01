@@ -273,7 +273,12 @@ int QSocAgent::findSafeBoundary(int proposedIndex) const
 
 QString QSocAgent::formatMessagesForSummary(int start, int end) const
 {
-    return formatSummary(messages, start, end).value_or(QString());
+    return formatHistoryForSummary(messages, start, end);
+}
+
+QString QSocAgent::formatHistoryForSummary(const json &history, int start, int end)
+{
+    return formatSummary(history, start, end).value_or(QString());
 }
 
 QSocRequestSnapshot QSocAgent::compactionRequest(const json &history) const

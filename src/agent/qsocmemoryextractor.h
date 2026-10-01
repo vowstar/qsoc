@@ -14,6 +14,7 @@
 
 class QSocAgent;
 class QLLMService;
+class QSocSession;
 
 /**
  * @brief Background memory extraction via a constrained sub-agent.
@@ -27,11 +28,30 @@ class QLLMService;
  *          A cursor (index into the message array) tracks which messages
  *          have been processed. When the main agent already called
  *          memory_write in the slice, extraction is skipped and the cursor
- *          advances (no duplicate work).
+ *          advances (no duplicate work). Messages a compaction removes
+ *          before they were processed stay in Cursor::pending and lead the
+ *          next slice.
  */
 class QSocMemoryExtractor
 {
 public:
+    /* Extraction progress: messages[index, end) plus pending are unprocessed. */
+    struct Cursor
+    {
+        int            index   = 0;
+        nlohmann::json pending = nlohmann::json::array();
+    };
+
+    /* Called before a compaction replaces @p source with @p replacementSize
+     * messages: keep source[index, end) pending and move index to the end of
+     * the replacement, which only restates what pending already holds. */
+    static void carryOver(Cursor &cursor, const nlohmann::json &source, int replacementSize);
+
+    /* Session meta round trip. load() falls back to @p messageCount (skip
+     * history) when no valid index was saved. */
+    static bool   saveCursor(QSocSession *session, const Cursor &cursor);
+    static Cursor loadCursor(const QString &sessionPath, int messageCount);
+
     /* Outcome of the pure pre-flight check over messages[cursor, end). */
     struct Decision
     {
@@ -56,13 +76,15 @@ public:
 
     QSocMemoryExtractor(QSocAgent *parent, QSocMemoryManager *memoryManager, QLLMService *llmService);
 
-    /* Run extraction for the slice after @p cursor. Returns the new
-     * cursor: end-of-messages when a child ran or the main agent already
-     * saved; unchanged when skipped (too few new messages, disabled, or
-     * off-cadence for @p turnNumber). Synchronous; safe at REPL idle.
-     * onSpawn, when set, is invoked with the child just before it starts,
-     * so the caller can show status and wire abort. */
-    int extract(int cursor, int turnNumber, const std::function<void(QSocAgent *)> &onSpawn = {});
+    /* Run extraction for pending plus the messages after cursor.index. When a
+     * child ran or the main agent already saved, the cursor moves to the end
+     * of messages and pending empties; when skipped (too few new messages,
+     * disabled, or off-cadence for @p turnNumber) only a stale index is
+     * clamped. Returns true when the cursor changed. Synchronous; safe at
+     * REPL idle. onSpawn, when set, is invoked with the child just before it
+     * starts, so the caller can show status and wire abort. */
+    bool extract(
+        Cursor &cursor, int turnNumber, const std::function<void(QSocAgent *)> &onSpawn = {});
 
 private:
     QSocAgent         *parent_;

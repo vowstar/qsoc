@@ -422,6 +422,7 @@ qt_add_test_target("test_qlongtaskmonitor")
 qt_add_test_target("test_qsocpredictioncontroller")
 qt_add_test_target("test_qsocmemoryrecall")
 qt_add_test_target("test_qsocmemoryextractor")
+qt_add_test_target("test_qsocmemoryaftercompaction")
 qt_add_test_target("test_qsocmemorydream")
 qt_add_test_target("test_qsocsftpstranded" LOCK qsoc_loopback_sshd)
 foreach(_mock_test
