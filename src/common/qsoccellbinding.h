@@ -4,6 +4,7 @@
 #ifndef QSOCCELLBINDING_H
 #define QSOCCELLBINDING_H
 
+#include "common/qsoccellsynth.h"
 #include "common/qsoccelltable.h"
 
 #include <QList>
@@ -22,7 +23,9 @@ class QSocProjectManager;
  * @details A library entry declares a clock cell with a `function` truth
  *          table or a `sequential` template, plus optional `tie` constants.
  *          The project key `cell.target` selects generic behavioral roles or
- *          asic roles that instantiate the declared cells.
+ *          asic roles that instantiate the declared cells. In asic mode a
+ *          combinational role no cell implements is composed from the
+ *          declared combinational cells by exact synthesis.
  */
 class QSocCellBinding
 {
@@ -47,6 +50,7 @@ public:
         int                    cell = -1; /**< Index in cells(), -1 when composed */
         QMap<QString, QString> pin;       /**< Cell pin to role port */
         QStringList            via;       /**< Role instances of a composed role, in signal order */
+        QSocCellSynthNetlist   network;   /**< Declared cells of a synthesized role */
     };
 
     /**
@@ -85,23 +89,34 @@ public:
     /** Behavioral model of a declared cell. */
     static QString model(const Cell &cell);
 
+    /**
+     * @brief The declared cells synthesis may use, as the solver sees them.
+     * @details Combinational cells with one output and 1 to 3 inputs left
+     *          after the ties, in cells() order.
+     */
+    QList<QSocCellSynthCell> basis() const;
+
     /** Role binding report in YAML. */
     QString report() const;
 
 private:
-    Target                 mode = Target::Generic;
+    Target                 mode   = Target::Generic;
+    unsigned               budget = QSocCellSynthRequest::defaultResourceLimit;
     QList<Cell>            declared;
     QMap<QString, Binding> bound;
+    QMap<QString, QString> failed; /**< Role to why synthesis left it unresolved */
     QStringList            problems;
     QStringList            notices;
 
-    void readTarget(const YAML::Node &project);
-    void declare(const QString &name, const YAML::Node &entry);
-    bool readTemplate(Cell *cell, const YAML::Node &node, const QString &path);
-    bool readTies(Cell *cell, const YAML::Node &node, const QString &path);
-    void bind();
-    void compose();
-    void claim(const QString &role, const QList<int> &cells, const QList<Binding> &bindings);
+    void    readTarget(const YAML::Node &project);
+    void    declare(const QString &name, const YAML::Node &entry);
+    bool    readTemplate(Cell *cell, const YAML::Node &node, const QString &path);
+    bool    readTies(Cell *cell, const YAML::Node &node, const QString &path);
+    void    bind();
+    void    synthesize();
+    void    compose();
+    QString network(const QString &role, const QSocCellSynthNetlist &netlist) const;
+    void    claim(const QString &role, const QList<int> &cells, const QList<Binding> &bindings);
 };
 
 #endif // QSOCCELLBINDING_H

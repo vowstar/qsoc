@@ -185,6 +185,7 @@ qt_add_test_target("test_qsocprimitivecell")
 set_tests_properties(test_qsocprimitivecell PROPERTIES TIMEOUT 3600
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")
 qt_add_test_target("test_qsoccelltable")
+qt_add_test_target("test_qsoccellsynth" LABELS "cell")
 qt_add_test_target("test_qsoccellbinding")
 set_tests_properties(test_qsoccellbinding PROPERTIES TIMEOUT 3600
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")

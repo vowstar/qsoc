@@ -9,8 +9,11 @@
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QProcess>
 #include <QStandardPaths>
@@ -47,6 +50,8 @@ const QString inv  = entry("CKND4", "I", "ZN", "function: {ZN: \"!I\"}");
 const QString or2  = entry("CKOR2D2", "A1 A2", "Z", "function: {Z: \"A1 | A2\"}");
 const QString xor2 = entry("CKXOR2D2", "A1 A2", "Z", "function: {Z: \"A1 ^ A2\"}");
 const QString mux2 = entry("CKMUX2D2", "I0 I1 S", "Z", "function: [{S: 0, Z: I0}, {S: 1, Z: I1}]");
+const QString nor2 = entry("CKNR2D2", "A1 A2", "ZN", "function: {ZN: \"!(A1 | A2)\"}");
+const QString and2 = entry("CKAN2D2", "A1 A2", "Z", "function: {Z: \"A1 & A2\"}");
 const QString icg  = entry(
     "CKLNQD4",
     "CP E TE",
@@ -118,8 +123,9 @@ QStringList listed(const QString &output, const QString &list)
     return lines;
 }
 
-/* A project in root with the given library and cell target. */
-bool makeProject(const QString &root, const QString &library, const QString &target)
+/* A project in root with the given library, cell target and synthesis budget. */
+bool makeProject(
+    const QString &root, const QString &library, const QString &target, const QString &rlimit = {})
 {
     QSocProjectManager project;
     project.setProjectName("cells");
@@ -130,6 +136,8 @@ bool makeProject(const QString &root, const QString &library, const QString &tar
     YAML::Node    node = YAML::LoadFile(file.toStdString());
     if (!target.isEmpty())
         node["cell"]["target"] = target.toStdString();
+    if (!rlimit.isEmpty())
+        node["cell"]["synth_rlimit"] = rlimit.toStdString();
     std::ofstream(file.toStdString()) << node;
     return library.isEmpty() || save(QDir(root).filePath("module/cells.soc_mod"), library);
 }
@@ -195,6 +203,27 @@ reset:
           por_n:
             async: {clock: clk_a, stage: 3}
 )";
+
+/* Declared combinational bases for composition, each with a clock gate and a
+ * synchronizer so a whole clock controller elaborates. */
+QMap<QString, QString> compositionBases()
+{
+    return {
+        {"nand2-inv", nand2 + inv},
+        {"nor2-inv", nor2 + inv},
+        {"and2-or2-inv", and2 + or2 + inv},
+        {"xor2-and2", xor2 + and2},
+        {"nand2", nand2},
+    };
+}
+
+const QStringList synthRoles
+    = {"qsoc_ck_buf", "qsoc_ck_inv", "qsoc_ck_or2", "qsoc_ck_xor2", "qsoc_ck_mux2"};
+
+QString composedLibrary(const QString &base)
+{
+    return icg + sync2 + compositionBases().value(base);
+}
 
 /* Run one task of the contract job; returns the status sby recorded. */
 QString sbyStatus(const QString &dir, const QString &task, QString *log)
@@ -386,7 +415,9 @@ private slots:
             binding.roles().value("qsoc_ck_mux2").pin,
             (QMap<QString, QString>{
                 {"D0", "clk_in0"}, {"D1", "clk_in1"}, {"SEL", "clk_sel"}, {"Y", "clk_out"}}));
-        QVERIFY(!binding.roles().contains("qsoc_ck_or2"));
+        /* No OR cell: the role is composed, not bound. */
+        QCOMPARE(binding.roles().value("qsoc_ck_or2").cell, -1);
+        QVERIFY(!binding.roles().value("qsoc_ck_or2").network.gate.isEmpty());
     }
 
     void gateWithoutTestPinOrsTestEnable()
@@ -420,13 +451,259 @@ private slots:
     {
         const QSocCellBinding binding = bindYaml(icg + or2);
         QVERIFY(binding.isValid());
+        /* An OR with one pin tied low is a buffer, nothing monotone inverts. */
+        QVERIFY(binding.roles().value("qsoc_ck_buf").network.gate.size() == 1);
         QVERIFY(binding.warnings().join('\n').contains(
-            "qsoc_ck_buf, qsoc_ck_inv, qsoc_ck_xor2, qsoc_ck_mux2, qsoc_ck_icg_neg, qsoc_sync"));
+            "qsoc_ck_inv, qsoc_ck_xor2, qsoc_ck_mux2, qsoc_ck_icg_neg, qsoc_sync"));
         QVERIFY(
             roleText(binding, "qsoc_ck_xor2")
                 .contains("    qsoc_role_unresolved_ck_xor2 u_cell (\n        .clk_in0(clk_in0),"));
         QVERIFY(binding.report().contains(
             "qsoc_ck_xor2:\n    unresolved: qsoc_role_unresolved_ck_xor2"));
+    }
+
+    void composesRolesFromDeclaredCells_data()
+    {
+        QTest::addColumn<QString>("base");
+        for (const QString &base : compositionBases().keys())
+            QTest::newRow(qPrintable(base)) << base;
+    }
+
+    /* Every combinational role is direct or composed, and composed ones
+     * compute the role function with declared cells only. */
+    void composesRolesFromDeclaredCells()
+    {
+        QFETCH(QString, base);
+        QElapsedTimer timer;
+        timer.start();
+        const QSocCellBinding binding = bindYaml(composedLibrary(base));
+        const qint64          spent   = timer.elapsed();
+        QVERIFY2(binding.isValid(), qPrintable(binding.errors().join('\n')));
+        QStringList names;
+        for (const QSocCellBinding::Cell &cell : binding.cells())
+            names.append(cell.name);
+        for (const QString &role : synthRoles) {
+            QVERIFY2(binding.roles().contains(role), qPrintable(role));
+            const QSocCellBinding::Binding bound = binding.roles().value(role);
+            if (bound.cell >= 0)
+                continue;
+            QVERIFY(!bound.network.gate.isEmpty());
+            const QString text = roleText(binding, role);
+            for (int i = 0; i < bound.network.gate.size(); ++i) {
+                const QString cell = bound.network.gate.at(i).cell;
+                QVERIFY(names.contains(cell));
+                QVERIFY(
+                    text.contains(QString("    (* dont_touch = \"true\" *)\n    %1 u_cell_g%2 (\n")
+                                      .arg(cell)
+                                      .arg(i)));
+            }
+            QVERIFY(text.contains("Composed from declared cells as u_cell_g0"));
+            std::printf(
+                "%s %s: depth %d, %d cells\n",
+                qPrintable(base),
+                qPrintable(role),
+                bound.network.depth,
+                int(bound.network.gate.size()));
+        }
+        /* A declared inverter beats NANDs tied as inverters, whatever the names. */
+        if (base == "nand2-inv") {
+            const QSocCellSynthNetlist buffer = binding.roles().value("qsoc_ck_buf").network;
+            QCOMPARE(buffer.gate.size(), 2);
+            for (const QSocCellSynthGate &gate : buffer.gate)
+                QCOMPARE(gate.cell, QString("CKND4"));
+        }
+        std::printf(
+            "%s: resolve with synthesis %lld ms\n", qPrintable(base), static_cast<long long>(spent));
+        const QString report = binding.report();
+        QVERIFY(report.contains("    synthesized:\n      depth: "));
+        QVERIFY(report.contains("      hazard: free for one input change at a time"));
+        QVERIFY(
+            report.contains("      hazard: free for clk_in0 and clk_in1 changes while clk_sel holds")
+            || binding.roles().value("qsoc_ck_mux2").cell >= 0);
+        /* Generic mode never synthesizes. */
+        const QSocCellBinding generic = bindYaml(composedLibrary(base), "generic");
+        for (const QSocCellBinding::Binding &bound : generic.roles())
+            QVERIFY(bound.network.gate.isEmpty());
+    }
+
+    void synthesisTimePerRole_data() { composesRolesFromDeclaredCells_data(); }
+
+    /* Solver time for each role of each base, for the record. */
+    void synthesisTimePerRole()
+    {
+        QFETCH(QString, base);
+        const QSocCellBinding                  binding = bindYaml(composedLibrary(base));
+        const QMap<QString, QSocCellSynthRole> roles{
+            {"qsoc_ck_buf", QSocCellSynthRole::Buf},
+            {"qsoc_ck_inv", QSocCellSynthRole::Inv},
+            {"qsoc_ck_or2", QSocCellSynthRole::Or2},
+            {"qsoc_ck_xor2", QSocCellSynthRole::Xor2},
+            {"qsoc_ck_mux2", QSocCellSynthRole::Mux2},
+        };
+        for (auto it = roles.constBegin(); it != roles.constEnd(); ++it) {
+            QSocCellSynthRequest request;
+            request.role  = it.value();
+            request.basis = binding.basis();
+            QElapsedTimer timer;
+            timer.start();
+            const QSocCellSynthResult result = QSocCellSynth::synthesize(request);
+            std::printf(
+                "%s\n",
+                qPrintable(QString("%1 %2: %3 ms, rlimit %4, %5")
+                               .arg(base, it.key())
+                               .arg(timer.elapsed())
+                               .arg(result.resourceUsed)
+                               .arg(
+                                   result.status == QSocCellSynthStatus::Found
+                                       ? QSocCellSynth::report(it.value(), result.netlist)
+                                       : result.reason)));
+            QCOMPARE(result.status, QSocCellSynthStatus::Found);
+        }
+    }
+
+    /* Same declarations in any order give the same bytes. */
+    void compositionIgnoresDeclarationOrder()
+    {
+        QStringList parts = {nand2, nor2, inv, icg, and2};
+        std::sort(parts.begin(), parts.end());
+        QString first;
+        int     orders = 0;
+        do {
+            const QSocCellBinding binding = bindYaml(parts.join(QString()));
+            QString               all     = binding.report();
+            for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::roles(binding))
+                all += cell.text;
+            if (first.isEmpty())
+                first = all;
+            QCOMPARE(all, first);
+            ++orders;
+        } while (std::next_permutation(parts.begin(), parts.end()) && orders < 24);
+        QCOMPARE(orders, 24);
+        QVERIFY(first.contains("u_cell_g"));
+    }
+
+    void impossibleRoleStaysUnresolved()
+    {
+        QTemporaryDir root(QDir::tempPath() + "/test_qsoc_cellbinding-XXXXXX");
+        QVERIFY(root.isValid());
+        QVERIFY(makeProject(root.path(), icg + sync2 + or2 + and2, "asic"));
+        const QString netlist = root.filePath("cell_top.soc_net");
+        QVERIFY(save(netlist, clockNetlist));
+        generate(root.path(), netlist);
+        const QString warning = messages.join('\n');
+        QVERIFY2(
+            warning.contains(
+                "cell role qsoc_ck_xor2 not composed: proven impossible, no "
+                "hazard-free network of at most 8 declared cells exists"),
+            qPrintable(warning));
+        QVERIFY(warning.contains("cell role qsoc_ck_inv not composed: proven impossible"));
+        const QString output = root.filePath("output");
+        const QString report = load(QDir(output).filePath("qsoc_cell/qsoc_cell_role.rpt"));
+        QVERIFY(report.contains(
+            "qsoc_ck_xor2:\n    unresolved: qsoc_role_unresolved_ck_xor2\n    synthesis: proven "
+            "impossible, no hazard-free network"));
+        const QString role = load(QDir(output).filePath("qsoc_cell/rtl/role/qsoc_ck_xor2.v"));
+        QVERIFY(role.contains("qsoc_role_unresolved_ck_xor2 u_cell ("));
+        QVERIFY(role.contains("and it was not composed:\n *          proven impossible"));
+    }
+
+    void budgetExhaustionStaysUnresolved()
+    {
+        QTemporaryDir root(QDir::tempPath() + "/test_qsoc_cellbinding-XXXXXX");
+        QVERIFY(root.isValid());
+        QVERIFY(makeProject(root.path(), icg + sync2 + nand2, "asic", "1000"));
+        const QString netlist = root.filePath("cell_top.soc_net");
+        QVERIFY(save(netlist, clockNetlist));
+        generate(root.path(), netlist);
+        QVERIFY2(
+            messages.join('\n').contains(
+                "cell role qsoc_ck_mux2 not composed: the solver "
+                "budget of 1000 ran out, raise cell.synth_rlimit"),
+            qPrintable(messages.join('\n')));
+        const QString report = load(root.filePath("output/qsoc_cell/qsoc_cell_role.rpt"));
+        QVERIFY(report.contains("synth_rlimit: 1000\n"));
+        QVERIFY(report.contains(
+            "qsoc_ck_mux2:\n    unresolved: qsoc_role_unresolved_ck_mux2\n"
+            "    synthesis: the solver budget of 1000 ran out"));
+        /* The default budget composes it. */
+        const QSocCellBinding binding = bindYaml(icg + nand2);
+        QVERIFY(!binding.roles().value("qsoc_ck_mux2").network.gate.isEmpty());
+    }
+
+    void budgetKeyIsChecked()
+    {
+        const auto load = [](const QString &value) {
+            return QSocCellBinding::resolve(
+                YAML::Load(
+                    QString("cell: {target: asic, synth_rlimit: %1}").arg(value).toStdString()),
+                YAML::Load((icg + nand2).toStdString()));
+        };
+        QVERIFY(load("0").isValid());
+        QVERIFY(load("4294967295").isValid());
+        for (const QString &bad : {"-1", "many", "4294967296", "1.5"}) {
+            const QSocCellBinding binding = load(bad);
+            QVERIFY2(!binding.isValid(), qPrintable(bad));
+            QVERIFY(binding.errors().join('\n').contains("cell.synth_rlimit: must be an integer"));
+        }
+    }
+
+    void composedGenerationElaborates_data() { composesRolesFromDeclaredCells_data(); }
+
+    /* The whole clock controller elaborates on composed roles and the
+     * contract of every composed role proves; a swapped wire fails it. */
+    void composedGenerationElaborates()
+    {
+        QFETCH(QString, base);
+        QTemporaryDir root(QDir::tempPath() + "/test_qsoc_cellbinding-XXXXXX");
+        QVERIFY(root.isValid());
+        QVERIFY(makeProject(root.path(), composedLibrary(base), "asic"));
+        const QString netlist = root.filePath("cell_top.soc_net");
+        QVERIFY(save(netlist, clockNetlist));
+        generate(root.path(), netlist, true);
+        const QString output = root.filePath("output");
+        QVERIFY2(
+            QFile::exists(QDir(output).filePath("cell_top/rtl/cell_top.v")),
+            qPrintable(messages.join('\n')));
+        if (QStandardPaths::findExecutable("iverilog").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY("iverilog");
+        QString log;
+        QVERIFY2(
+            run("iverilog",
+                QStringList{"-g2005", "-s", "cell_top", "-o", root.filePath("a.out")}
+                    + listed(output, "qsoc.fl")
+                    + listed(output, "qsoc_cell/model/qsoc_cell_model.fl"),
+                output,
+                &log),
+            qPrintable(log));
+
+        for (const char *tool : {"sby", "yosys", "yosys-abc", "z3"}) {
+            if (QStandardPaths::findExecutable(tool).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(tool);
+        }
+        const QSocCellBinding binding = bindYaml(composedLibrary(base));
+        const QString         job     = QDir(output).filePath("qsoc_cell/formal/contract");
+        const QString         tasks   = load(QDir(job).filePath("contract.sby"));
+        QString               mutated;
+        for (const QString &role : synthRoles) {
+            if (binding.roles().value(role).network.gate.isEmpty())
+                continue;
+            QVERIFY2(tasks.contains("\n" + role + "\n"), qPrintable(role));
+            QCOMPARE(sbyStatus(job, role, &log), QString("PASS"));
+            if (role == "qsoc_ck_xor2" || !mutated.isEmpty())
+                continue;
+            /* Swap the first two role inputs of the network. */
+            const QString file = QDir(output).filePath("qsoc_cell/rtl/role/" + role + ".v");
+            QString       text = load(file);
+            const QString from = role == "qsoc_ck_mux2" ? "(clk_sel)" : "(clk_in";
+            const QString to   = role == "qsoc_ck_mux2" ? "(clk_in0)" : "(1'b1 ^ clk_in";
+            if (!text.contains(from))
+                continue;
+            QVERIFY(save(file, text.replace(from, to)));
+            mutated = role;
+        }
+        QVERIFY(!mutated.isEmpty());
+        QDir(QDir(job).filePath("contract_" + mutated)).removeRecursively();
+        QCOMPARE(sbyStatus(job, mutated, &log), QString("FAIL"));
     }
 
     void unresolvedRoleFailsOnlyWhereUsed_data()

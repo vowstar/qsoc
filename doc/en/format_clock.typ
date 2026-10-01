@@ -751,7 +751,8 @@ Each MUX, ICG, DIV, or INV stage can insert an STA guide buffer in series with i
 A guide with `cell` instantiates that cell and needs `in` and `out`. A guide
 without `cell`, `in` or `out` instantiates the `qsoc_ck_buf` role
 (@cell-roles) under the same instance name, so a declared buffer sits at
-`<instance>/u_cell` in the `asic` target (@cell-declare).
+`<instance>/u_cell` in the `asic` target, or a composed one at
+`<instance>/u_cell_g<i>` (@cell-declare).
 
 #figure(
   align(center)[#table(

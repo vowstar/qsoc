@@ -6,6 +6,8 @@
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 
+#include <limits>
+
 namespace {
 
 using Cell    = QSocCellBinding::Cell;
@@ -36,6 +38,28 @@ const QMap<QString, QString> kGatePort
     = {{"clock", "clk"}, {"enable", "en"}, {"test", "test_en"}, {"output", "clk_out"}};
 const QMap<QString, QString> kSyncPort
     = {{"clock", "clk"}, {"data", "d"}, {"reset", "rst_n"}, {"output", "q"}};
+
+/* Roles synthesis may compose. Role inputs follow rolePorts() order. */
+const QMap<QString, QSocCellSynthRole> kSynthRole = {
+    {"qsoc_ck_buf", QSocCellSynthRole::Buf},
+    {"qsoc_ck_inv", QSocCellSynthRole::Inv},
+    {"qsoc_ck_or2", QSocCellSynthRole::Or2},
+    {"qsoc_ck_xor2", QSocCellSynthRole::Xor2},
+    {"qsoc_ck_mux2", QSocCellSynthRole::Mux2},
+};
+
+/* What the hazard check of a synthesized role covers. */
+QString hazardScope(const QString &role)
+{
+    return role == "qsoc_ck_mux2" ? "clk_in0 and clk_in1 changes while clk_sel holds"
+                                  : "one input change at a time";
+}
+
+/* Instance names of a synthesized network of count cells. */
+QString networkInstances(qsizetype count)
+{
+    return count == 1 ? QString("u_cell_g0") : QString("u_cell_g0 to u_cell_g%1").arg(count - 1);
+}
 
 QString scalar(const YAML::Node &node)
 {
@@ -139,6 +163,33 @@ QString syncChain(const Cell &cell)
         .arg(instance(cell.name, "u_cell", connect, "            ", true));
 }
 
+void reportNetwork(
+    YAML::Emitter                  &out,
+    const QString                  &role,
+    const QSocCellSynthNetlist     &netlist,
+    const QList<QSocCellSynthCell> &basis)
+{
+    QMap<QString, int> usage;
+    for (const QSocCellSynthGate &gate : netlist.gate)
+        ++usage[gate.cell];
+    const bool clean = QSocCellSynth::hazardFree(kSynthRole.value(role), netlist, basis);
+    out << YAML::Key << "synthesized" << YAML::Value << YAML::BeginMap;
+    out << YAML::Key << "depth" << YAML::Value << netlist.depth;
+    out << YAML::Key << "cells" << YAML::Value << netlist.gate.size();
+    out << YAML::Key << "use" << YAML::Value << YAML::Flow << YAML::BeginMap;
+    for (auto it = usage.constBegin(); it != usage.constEnd(); ++it)
+        out << YAML::Key << it.key().toStdString() << YAML::Value << it.value();
+    out << YAML::EndMap;
+    out << YAML::Key << "instance" << YAML::Value << YAML::Flow << YAML::BeginMap;
+    for (int i = 0; i < netlist.gate.size(); ++i)
+        out << YAML::Key << QString("u_cell_g%1").arg(i).toStdString() << YAML::Value
+            << netlist.gate.at(i).cell.toStdString();
+    out << YAML::EndMap;
+    out << YAML::Key << "hazard" << YAML::Value
+        << (clean ? "free for " + hazardScope(role) : QString("check failed")).toStdString();
+    out << YAML::EndMap;
+}
+
 QString modelHeader(const QString &name)
 {
     return QString(
@@ -187,6 +238,8 @@ QSocCellBinding QSocCellBinding::resolve(const YAML::Node &project, const YAML::
     if (!result.problems.isEmpty())
         return result;
     result.bind();
+    if (result.isAsic() && result.problems.isEmpty())
+        result.synthesize();
     result.compose();
     if (!result.isAsic()) {
         result.notices.clear();
@@ -221,8 +274,19 @@ void QSocCellBinding::readTarget(const YAML::Node &project)
         return;
     }
     for (const auto &entry : cell) {
-        if (scalar(entry.first) != "target")
-            problems.append(QString("project cell.%1: unknown key").arg(scalar(entry.first)));
+        const QString key = scalar(entry.first);
+        if (key != "target" && key != "synth_rlimit")
+            problems.append(QString("project cell.%1: unknown key").arg(key));
+    }
+    if (cell["synth_rlimit"]) {
+        const QString limit  = scalar(cell["synth_rlimit"]);
+        bool          number = false;
+        budget               = limit.toUInt(&number);
+        if (!number)
+            problems.append(
+                QString("project cell.synth_rlimit: must be an integer from 0 to %1, not '%2'")
+                    .arg(std::numeric_limits<unsigned>::max())
+                    .arg(limit));
     }
     if (!cell["target"])
         return;
@@ -448,6 +512,107 @@ void QSocCellBinding::claim(
                         .arg(role, names.join(" and ")));
 }
 
+QList<QSocCellSynthCell> QSocCellBinding::basis() const
+{
+    QList<QSocCellSynthCell> result;
+    for (const Cell &cell : declared) {
+        if (!cell.type.isEmpty() || cell.table.outputs().size() != 1)
+            continue;
+        const QSocCellTable tied   = cell.table.tied(cell.tie);
+        const QString       output = tied.outputs().first();
+        const auto          truth  = tied.truth(output);
+        const int           inputs = static_cast<int>(tied.inputs().size());
+        if (inputs < 1 || inputs > 3)
+            continue;
+        quint8 table = 0;
+        for (int m = 0; m < (1 << inputs); ++m)
+            table |= quint8(truth.test(m) ? 1 << m : 0);
+        result.append({cell.name, tied.inputs(), output, table});
+    }
+    return result;
+}
+
+void QSocCellBinding::synthesize()
+{
+    const QList<QSocCellSynthCell> cells = basis();
+    if (cells.isEmpty())
+        return;
+    for (const QString &role : roleNames()) {
+        if (bound.contains(role) || !kSynthRole.contains(role))
+            continue;
+        QSocCellSynthRequest request;
+        request.role                     = kSynthRole.value(role);
+        request.basis                    = cells;
+        request.resourceLimit            = budget;
+        const QSocCellSynthResult result = QSocCellSynth::synthesize(request);
+        switch (result.status) {
+        case QSocCellSynthStatus::Found:
+            bound.insert(role, {-1, {}, {}, result.netlist});
+            notices.append(QString("cell role %1: composed from declared cells as %2, depth %3")
+                               .arg(role, networkInstances(result.netlist.gate.size()))
+                               .arg(result.netlist.depth));
+            continue;
+        case QSocCellSynthStatus::NoSolution:
+            failed.insert(
+                role,
+                QString(
+                    "proven impossible, no hazard-free network of at most %1 declared "
+                    "cells exists")
+                    .arg(request.maxCells));
+            break;
+        case QSocCellSynthStatus::BudgetExceeded:
+            failed.insert(
+                role,
+                QString("the solver budget of %1 ran out, raise cell.synth_rlimit").arg(budget));
+            break;
+        case QSocCellSynthStatus::Cancelled:
+        case QSocCellSynthStatus::Invalid:
+            failed.insert(role, result.reason);
+            break;
+        }
+        notices.append(QString("cell role %1 not composed: %2").arg(role, failed.value(role)));
+    }
+}
+
+QString QSocCellBinding::network(const QString &role, const QSocCellSynthNetlist &netlist) const
+{
+    QStringList inputs = rolePorts(role);
+    inputs.removeAll("clk_out");
+    QMap<QString, QSocCellSynthCell> solverCell;
+    for (const QSocCellSynthCell &cell : basis())
+        solverCell.insert(cell.name, cell);
+    QMap<QString, const Cell *> declaredCell;
+    for (const Cell &cell : declared)
+        declaredCell.insert(cell.name, &cell);
+    const auto wire = [&](int gate) {
+        return gate + 1 == netlist.gate.size() ? QString("clk_out") : QString("n_g%1").arg(gate);
+    };
+    QString text;
+    for (int i = 0; i + 1 < netlist.gate.size(); ++i)
+        text += QString("    wire %1;\n").arg(wire(i));
+    for (int i = 0; i < netlist.gate.size(); ++i) {
+        const QSocCellSynthGate &gate = netlist.gate.at(i);
+        const QSocCellSynthCell  cell = solverCell.value(gate.cell);
+        QMap<QString, QString>   connect{{cell.output, wire(i)}};
+        for (int j = 0; j < gate.pin.size() && j < cell.input.size(); ++j) {
+            const QSocCellSynthSource &source = gate.pin.at(j);
+            if (source.kind == QSocCellSynthSource::Kind::Constant)
+                connect.insert(cell.input.at(j), source.index ? "1'b1" : "1'b0");
+            else if (source.kind == QSocCellSynthSource::Kind::Input)
+                connect.insert(cell.input.at(j), inputs.value(source.index));
+            else
+                connect.insert(cell.input.at(j), wire(source.index));
+        }
+        text += instance(
+            gate.cell,
+            QString("u_cell_g%1").arg(i),
+            withTies(*declaredCell.value(gate.cell), connect),
+            "    ",
+            true);
+    }
+    return text;
+}
+
 void QSocCellBinding::compose()
 {
     const auto gate = [this](const QString &missing, const QString &other) {
@@ -483,6 +648,8 @@ QString QSocCellBinding::body(const QString &role) const
             connect.insert(port, port);
         return instance("qsoc_role_unresolved_" + role.mid(5), "u_cell", connect, "    ", false);
     }
+    if (!it->network.gate.isEmpty())
+        return network(role, it->network);
     if (!it->via.isEmpty())
         return composedGate(it->via.at(1));
     const Cell &cell = declared.at(it->cell);
@@ -497,8 +664,21 @@ QString QSocCellBinding::body(const QString &role) const
 QString QSocCellBinding::detail(const QString &role) const
 {
     const auto it = bound.constFind(role);
+    if (it == bound.constEnd() && failed.contains(role))
+        return QString(
+                   "No declared cell implements this role, and it was not composed:\n"
+                   " *          %1. Elaboration fails where it is used.")
+            .arg(failed.value(role));
     if (it == bound.constEnd())
         return "No declared cell implements this role, elaboration fails where it is used.";
+    if (!it->network.gate.isEmpty())
+        return QString(
+                   "Composed from declared cells as %1, depth %2.\n"
+                   " *          u_cell_g%3 drives clk_out. Hazard free for %4.")
+            .arg(networkInstances(it->network.gate.size()))
+            .arg(it->network.depth)
+            .arg(it->network.gate.size() - 1)
+            .arg(hazardScope(role));
     if (!it->via.isEmpty())
         return QString("Composed as %1, two extra inverter delays.").arg(it->via.join(", "));
     const Cell &cell = declared.at(it->cell);
@@ -553,6 +733,8 @@ QString QSocCellBinding::report() const
     YAML::Emitter out;
     out << YAML::BeginMap << YAML::Key << "target" << YAML::Value
         << (isAsic() ? "asic" : "generic");
+    if (isAsic())
+        out << YAML::Key << "synth_rlimit" << YAML::Value << budget;
     out << YAML::Key << "role" << YAML::Value << YAML::BeginMap;
     for (const QString &role : roleNames()) {
         out << YAML::Key << role.toStdString() << YAML::Value << YAML::BeginMap;
@@ -560,6 +742,10 @@ QString QSocCellBinding::report() const
         if (it == bound.constEnd()) {
             out << YAML::Key << "unresolved" << YAML::Value
                 << ("qsoc_role_unresolved_" + role.mid(5)).toStdString();
+            if (failed.contains(role))
+                out << YAML::Key << "synthesis" << YAML::Value << failed.value(role).toStdString();
+        } else if (!it->network.gate.isEmpty()) {
+            reportNetwork(out, role, it->network, basis());
         } else if (!it->via.isEmpty()) {
             out << YAML::Key << "composed" << YAML::Value << YAML::Flow << YAML::BeginSeq;
             for (const QString &step : it->via)

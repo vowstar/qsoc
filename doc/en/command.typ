@@ -519,11 +519,13 @@ inverter delays, and generation reports it. A `qsoc_sync` of `STAGES` flops
 uses `STAGES / stages` whole cells, then plain flops with the same reset up to
 `STAGES`. `RESET_VALUE` 1 inverts the chain input and output.
 
-*Target.* The optional project key selects the role bodies.
+*Target.* The optional project keys select the role bodies and bound the
+composition search.
 
 ```yaml
 cell:
-  target: asic   # generic (default) or asic
+  target: asic              # generic (default) or asic
+  synth_rlimit: 200000000   # solver budget per composed role, 0 for none
 ```
 
 #figure(
@@ -534,7 +536,7 @@ cell:
     table.hline(),
     [`generic`], [Behavioral bodies. Declarations are checked, and models written],
     [`asic`],
-    [Every role, with `(* keep_hierarchy = "yes" *)`. A bound role instantiates its cell with `(* dont_touch = "true" *)` and ties. An unresolved role instantiates `qsoc_role_unresolved_<role>`, a module that does not exist],
+    [Every role, with `(* keep_hierarchy = "yes" *)`. A bound or composed role instantiates its cells with `(* dont_touch = "true" *)` and ties. An unresolved role instantiates `qsoc_role_unresolved_<role>`, a module that does not exist],
   )],
   caption: [CELL TARGETS],
   kind: table,
@@ -555,11 +557,64 @@ Declared cells sit at fixed instance paths for SDC:
     table.hline(),
     [Combinational, gate], [`<role instance>/u_cell`],
     [Composed gate], [`<role instance>/u_icg/u_cell`, inverters `u_inv_in/u_cell` and `u_inv_out/u_cell`],
+    [Composed combinational], [`<role instance>/u_cell_g0` to `u_cell_g<n-1>`, the last one drives `clk_out`],
     [`qsoc_sync`], [`<role instance>/g_cell[<i>].u_cell`, plain flops `g_extra.tail`],
   )],
   caption: [DECLARED CELL PATHS],
   kind: table,
 )
+
+*Composition.* With `asic`, each of `qsoc_ck_buf`, `qsoc_ck_inv`,
+`qsoc_ck_or2`, `qsoc_ck_xor2` and `qsoc_ck_mux2` that no cell binds is composed
+from the declared combinational cells on every run, before gate roles are
+composed. Cells with one output and one to three inputs left after their ties
+take part, and nothing is written back to the library. An exact search with the
+z3 solver takes the least depth, then the fewest cells, up to 8 cells. A cell
+pin connects to a role input, an earlier cell output, `1'b0` or `1'b1`, and one
+signal drives at most one pin of a cell. Among networks of equal depth and
+size, the search keeps the one with the fewest pins tied to a constant, then
+the fewest cell inputs, then the first by cell name. The output does not depend
+on declaration order.
+
+Each network must pass a hazard check before it is used. The check assumes:
+
+- every cell is one gate that computes its declared function
+- every cell and wire has its own fixed transport delay of any length
+- inputs change one at a time and the network settles between changes, but
+  `qsoc_ck_mux2` data inputs may change together while `clk_sel` holds
+
+Under these assumptions, every allowed input change moves `clk_out` exactly as
+often as the role function does, zero or one time: no static or dynamic
+hazard. For example, a NAND2-only library composes `qsoc_ck_xor2` from five
+cells, since the four-NAND form fails the check. Not checked: a change of
+`clk_sel` on a composed `qsoc_ck_mux2`, two inputs of `qsoc_ck_or2` or
+`qsoc_ck_xor2` changing together, glitches inside a cell, inertial delays,
+and all timing, which is left to STA.
+
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Search result], [Role]),
+    table.hline(),
+    [Found], [Instantiates the network as `u_cell_g<i>`. Generation warns with the depth and instances],
+    [No network], [Stays unresolved. The warning says the role is proven impossible to compose within 8 cells],
+    [Budget spent], [Stays unresolved. The warning gives the budget and names `cell.synth_rlimit`],
+  )],
+  caption: [ROLE COMPOSITION],
+  kind: table,
+)
+
+`cell.synth_rlimit` is the z3 resource limit (`rlimit`) for each composed role,
+an integer from 0 to 4294967295, default 200000000. It counts solver steps,
+not time, so the result does not depend on machine load. 0 removes the limit.
+
+*Report.* `qsoc_cell_role.rpt` gives `target`, `synth_rlimit`, and per role:
+`cell`, `instance` and `pin` for a bound cell; `composed` for a gate built
+from other roles; `synthesized` with `depth`, `cells`, `use` (count per cell),
+`instance` (instance to cell) and `hazard` (what the check covers) for a
+composed network; `unresolved`, plus `synthesis` with the reason when a search
+failed.
 
 *Models.* Each declared cell gets a behavioral model in
 `output/qsoc_cell/model/<cell>.v`, listed by `qsoc_cell_model.fl`, for
@@ -567,7 +622,7 @@ simulation and formal only. Neither `qsoc_cell.fl` nor `qsoc.fl` lists them. A
 sequential model ignores its tied pins.
 
 *Contracts.* With `--with-formal` and `asic`, `output/qsoc_cell/formal/contract/`
-holds one `<role>_contract.sv` per bound role and `contract.sby`. Each task
+holds one `<role>_contract.sv` per bound or composed role and `contract.sby`. Each task
 proves the role file with the cell models equal to the generic role: for every
 input of a combinational role, once the latch has loaded for a gate role, and
 after reset for `qsoc_sync` with `STAGES` 1, 2, 3 and 5 and both reset values.
