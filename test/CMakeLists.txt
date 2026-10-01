@@ -365,6 +365,8 @@ qt_add_test_target("test_qsocsessionrecovery")
 qt_add_test_target("test_qsocsessiontranscript")
 qt_add_test_target("test_qsocagentlazystorage")
 add_dependencies(test_qsocagentlazystorage qsoc)
+qt_add_test_target("test_qsocagentcompactcancel")
+add_dependencies(test_qsocagentcompactcancel qsoc)
 qt_add_test_target("test_qsocfilehistory")
 qt_add_test_target("test_qsocfilehistoryfence")
 qt_add_test_target("test_qsocrewind")
@@ -426,6 +428,7 @@ qt_add_test_target("test_qsocmemoryaftercompaction")
 qt_add_test_target("test_qsocmemorydream")
 qt_add_test_target("test_qsocsftpstranded" LOCK qsoc_loopback_sshd)
 foreach(_mock_test
+    test_qsocagentcompactcancel
     test_qsocagentlazystorage
     test_qsocagentremoterecovery
     test_qsocremotecwdowner

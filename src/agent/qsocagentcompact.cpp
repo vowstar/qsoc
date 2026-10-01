@@ -343,19 +343,28 @@ int QSocAgent::performCompaction(bool force, bool manual)
         return 0;
     }
     const QPointer<QSocAgent> owner(this);
-    const ActiveRunPtr        run     = activeRun_;
-    const auto                stopped = [owner, run] {
-        return owner.isNull()
+    const ActiveRunPtr        run = activeRun_;
+    if (!run) {
+        maintenanceStop_ = std::stop_source();
+    }
+    const std::stop_token maintenance = run ? std::stop_token{} : maintenanceStop_.get_token();
+    const auto            stopped     = [owner, run, maintenance] {
+        return owner.isNull() || maintenance.stop_requested()
                || (run && (!owner->isCurrentRun(run) || run->stopSource.stop_requested()));
     };
-    compactionInFlight_   = true;
-    const auto release    = qScopeGuard([owner] {
+    compactionInFlight_                 = true;
+    const QByteArray previousNoProgress = lastNoProgressVersion_;
+    const auto       release            = qScopeGuard([owner, previousNoProgress] {
         if (owner) {
             owner->compactionInFlight_   = false;
             owner->compactionCommitting_ = false;
+            /* A cancelled attempt says nothing about progress. */
+            if (owner->lastCompactionStatus_ == CompactionStatus::Cancelled) {
+                owner->lastNoProgressVersion_ = previousNoProgress;
+            }
         }
     });
-    lastCompactionStatus_ = CompactionStatus::NoProgress;
+    lastCompactionStatus_               = CompactionStatus::NoProgress;
     if (stopped()) {
         lastCompactionStatus_ = CompactionStatus::Cancelled;
         return 0;
@@ -600,8 +609,9 @@ std::optional<json> QSocAgent::summarizeHistory(
 {
     const ActiveRunPtr        run = activeRun_;
     const QPointer<QSocAgent> owner(this);
-    const auto                stopped = [owner, run]() {
-        return owner.isNull()
+    const std::stop_token     maintenance = run ? std::stop_token{} : maintenanceStop_.get_token();
+    const auto                stopped     = [owner, run, maintenance]() {
+        return owner.isNull() || maintenance.stop_requested()
                || (run && (!owner->isCurrentRun(run) || run->stopSource.stop_requested()));
     };
     if (stopped()) {
@@ -767,7 +777,7 @@ std::optional<json> QSocAgent::summarizeHistory(
         if (oldContent && QSocRequestUsage::estimateRequest(summaryRequest) <= inputBudget) {
             const auto generation = summaryRequestUsage_.begin(std::move(summaryRequest));
             ++summaryAttempts_;
-            const std::stop_token stopToken = run ? run->stopSource.get_token() : std::stop_token{};
+            const std::stop_token stopToken = run ? run->stopSource.get_token() : maintenance;
             const json            response  = compactLlm->sendChatCompletionTo(
                 *endpoint, summaryMessages, json::array(), 0.1, stopToken, effort);
             if (!owner) {

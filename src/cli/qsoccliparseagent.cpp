@@ -3484,13 +3484,40 @@ bool QSocCliWorker::runAgentLoop(
             break;
         case QSocAgent::CompactionStatus::Cancelled:
             compositor.printContent(
-                "Compaction cancelled: the session changed or stopped.\n", QTuiScrollView::Dim);
+                "Compaction cancelled. The history is unchanged.\n", QTuiScrollView::Dim);
             break;
         case QSocAgent::CompactionStatus::Failed:
             compositor
                 .printContent("Compaction failed. The history is unchanged.\n", QTuiScrollView::Dim);
             break;
         }
+    };
+    /* Compaction outside a run: ESC or Ctrl+C reach agent->abort(), which
+     * cancels it. The status bar shows elapsed time like other waits. */
+    auto runCompaction = [&](const std::function<int()> &compact) {
+        statusBarWidget.setStatus("Compacting");
+        statusBarWidget.startTimers();
+        compositor.render();
+        const int saved = compact();
+        statusBarWidget.stopTimers();
+        statusBarWidget.setStatus("Ready");
+        statusBarWidget.setContextUsage(
+            agent->estimateTotalTokens(),
+            agent->effectiveContextTokens(),
+            agent->getConfig().compactThreshold);
+        reportCompaction(saved);
+        compositor.render();
+    };
+    /* Input submitted while no run is active waits for the prompt loop. */
+    auto queueIdleInput = [&](const QString &text) {
+        pendingAutoInputs.append(text);
+        queueWidget.addRequest(text);
+        compositor.render();
+    };
+    auto takePendingInput = [&]() {
+        const QString text = pendingAutoInputs.takeFirst();
+        queueWidget.removeRequest(text);
+        return text;
     };
     auto compactIdleHistory = [&]() {
         const int tokens    = agent->estimateTotalTokens();
@@ -3499,11 +3526,7 @@ bool QSocCliWorker::runAgentLoop(
         if (tokens <= threshold) {
             return;
         }
-        statusBarWidget.setStatus("Compacting");
-        compositor.render();
-        const int saved = agent->compactIfNeeded();
-        statusBarWidget.setStatus("Ready");
-        reportCompaction(saved);
+        runCompaction([agent] { return agent->compactIfNeeded(); });
     };
 
     /* Generate a short session title once, after the first turn, when the
@@ -5159,7 +5182,9 @@ bool QSocCliWorker::runAgentLoop(
 
         /* Show prompt hint in status bar */
         statusBarWidget.setStatus("Ready");
-        inputWidget.clear();
+        /* Keep text typed while the turn ended: completion reads the widget. */
+        inputWidget.setText(inputMonitor.getInputBuffer());
+        inputWidget.setCursorPos(inputMonitor.getCursorPos());
         compositor.render();
 
         auto connInput = connect(
@@ -5551,7 +5576,7 @@ bool QSocCliWorker::runAgentLoop(
                                              : QStringLiteral("resume interrupted run");
             pendingRecoveryInput.clear();
         } else if (!recoveryRequiresUserInput && !pendingAutoInputs.isEmpty()) {
-            input = pendingAutoInputs.takeFirst();
+            input = takePendingInput();
         } else {
             /* Idle at the prompt: predict the user's likely next input and
              * offer it as ghost text while we wait. Guards inside dedupe and
@@ -5565,7 +5590,7 @@ bool QSocCliWorker::runAgentLoop(
              * user typed at the same time, their `input` wins and the
              * queued prompts get drained on subsequent iterations. */
             if (input.isEmpty() && !recoveryRequiresUserInput && !pendingAutoInputs.isEmpty()) {
-                input = pendingAutoInputs.takeFirst();
+                input = takePendingInput();
             }
         }
 
@@ -6772,11 +6797,24 @@ bool QSocCliWorker::runAgentLoop(
         }
         if (cmd == "/compact") {
             compositor.printContent("Compacting...\n", QTuiScrollView::Dim);
-            statusBarWidget.setStatus("Compacting");
-            compositor.render();
-            const int saved = agent->compact();
-            reportCompaction(saved);
-            statusBarWidget.setStatus("Ready");
+            QObject compactScope;
+            connect(&inputMonitor, &QAgentInputMonitor::escPressed, &compactScope, [agent]() {
+                agent->abort();
+            });
+            connect(
+                &inputMonitor,
+                &QAgentInputMonitor::ctrlCPressed,
+                &compactScope,
+                [agent, &exitRequested, &compositor]() {
+                    if (checkDoubleInterrupt()) {
+                        exitRequested = true;
+                    } else {
+                        compositor.printContent("\n^C\n");
+                    }
+                    agent->abort();
+                });
+            connect(&inputMonitor, &QAgentInputMonitor::inputReady, &compactScope, queueIdleInput);
+            runCompaction([agent] { return agent->compact(); });
             continue;
         }
         if (cmd == "/btw" || cmd.startsWith(QStringLiteral("/btw "))) {
@@ -8994,8 +9032,15 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &escMonitor,
                  &qout,
+                 &queueIdleInput,
                  remoteConn,
                  llm = this->llmService](const QString &text) {
+                    /* The turn has ended: memory upkeep or compaction is
+                     * running, so the prompt loop takes this input next. */
+                    if (!agent->isRunning()) {
+                        queueIdleInput(text);
+                        return;
+                    }
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {
@@ -9664,8 +9709,15 @@ bool QSocCliWorker::runAgentLoop(
                  &inputWidget,
                  &escMonitor,
                  &qout,
+                 &queueIdleInput,
                  remoteConn,
                  llm = this->llmService](const QString &text) {
+                    /* The turn has ended: memory upkeep or compaction is
+                     * running, so the prompt loop takes this input next. */
+                    if (!agent->isRunning()) {
+                        queueIdleInput(text);
+                        return;
+                    }
                     if (text.startsWith("!")) {
                         QString shellCmd = text.mid(1).trimmed();
                         if (!shellCmd.isEmpty()) {

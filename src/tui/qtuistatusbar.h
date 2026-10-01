@@ -27,7 +27,7 @@ public:
      * @param used            Estimated tokens the next request would carry.
      * @param budget          Effective input budget (window minus reply room).
      * @param compactFraction Auto-compact threshold as a fraction of budget;
-     *                        drives the "N% to compact" / "compacting" hint.
+     *                        drives the "N% to compact" / "over threshold" hint.
      *                        Pass used <= 0 or budget <= 0 to hide the chip.
      */
     void setContextUsage(int used, int budget, double compactFraction);
@@ -37,7 +37,7 @@ public:
      * @details Static and side-effect free so it can be unit-tested. Returns
      *          an empty string when there is nothing to show (no budget or no
      *          usage). Near the compaction threshold it appends a
-     *          "N% to compact" hint; at or above it, "compacting".
+     *          "N% to compact" hint; at or above it, "over threshold".
      */
     static QString formatContextChip(int used, int budget, double compactFraction);
     void           setEffortLevel(const QString &level);

@@ -53,6 +53,8 @@ struct MockConfig
     int         toolMax = 1;
     QString     toolGate;
     QString     requestLog;
+    QByteArray  hold;
+    int         holdMax = 0;
     QJsonArray  script;
     QString     failMode = QStringLiteral("none");
 };
@@ -65,6 +67,7 @@ QHash<QByteArray, int> hits{
     {"200_toolcalls", 0},
     {"200_text", 0},
     {"200_sync", 0},
+    {"held", 0},
     {"alpn_h2", 0},
     {"alpn_http1", 0},
     {"alpn_none", 0},
@@ -116,6 +119,8 @@ bool loadConfig(QString *error)
     config.toolMax           = envInt("MOCK_TOOL_MAX", 1);
     config.toolGate          = QString::fromLocal8Bit(qgetenv("MOCK_TOOL_GATE"));
     config.requestLog        = QString::fromLocal8Bit(qgetenv("MOCK_REQUEST_LOG"));
+    config.hold              = qgetenv("MOCK_HOLD");
+    config.holdMax           = envInt("MOCK_HOLD_MAX", 0);
     const QString scriptPath = QString::fromLocal8Bit(qgetenv("MOCK_SCRIPT"));
     if (!scriptPath.isEmpty()) {
         QFile file(scriptPath);
@@ -373,6 +378,14 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
     const QJsonObject request = parseBody(body);
     const bool streaming = request.value("stream").isBool() && request.value("stream").toBool();
     appendRequestLog(request);
+
+    /* MOCK_HOLD stalls matching requests: the connection stays open and no
+     * reply is ever sent, so only a client timeout or cancel ends it. */
+    if (!config.hold.isEmpty() && body.contains(config.hold)
+        && (config.holdMax <= 0 || hits["held"] < config.holdMax)) {
+        ++hits["held"];
+        return;
+    }
 
     if (shouldFail()) {
         ++hits["fail"];

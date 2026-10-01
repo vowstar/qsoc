@@ -3221,6 +3221,7 @@ void QSocAgent::abort()
     if (compactionCommitting_) {
         return;
     }
+    maintenanceStop_.request_stop();
     const ActiveRunPtr               run = activeRun_;
     const QPointer<QSocAgent>        owner(this);
     const QPointer<QLongTaskMonitor> monitor(streamMonitor);

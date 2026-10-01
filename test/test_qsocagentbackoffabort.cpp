@@ -1088,6 +1088,75 @@ private slots:
         QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
     }
 
+    void abortCancelsCompactionOutsideARun_data()
+    {
+        QTest::addColumn<bool>("manual");
+        QTest::newRow("manual") << true;
+        QTest::newRow("automatic") << false;
+    }
+
+    void abortCancelsCompactionOutsideARun()
+    {
+        QFETCH(bool, manual);
+        MockServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.maxContextTokens     = 10000;
+        config.compactThreshold     = 0;
+        config.keepRecentMessages   = 1;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < 8; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(800, 'x')}});
+        }
+        agent.setMessages(history);
+        int commits = 0;
+        agent.setCompactionCommitter([&commits](const QSocAgent::CompactionCandidate &) {
+            ++commits;
+            return true;
+        });
+        QSignalSpy compacted(&agent, &QSocAgent::compacting);
+        server.setRequestObserver(
+            [&agent](int) { QTimer::singleShot(50, &agent, [&agent]() { agent.abort(); }); });
+        const auto run = [&agent, manual]() {
+            return manual ? agent.compact() : agent.compactIfNeeded();
+        };
+
+        /* The endpoint never answers, so only the abort can end each attempt
+         * before the 10 s request timeout. */
+        for (int attempt = 1; attempt <= 2; ++attempt) {
+            const quint64 revision = agent.historyRevision();
+            server.enqueueHeldRequest();
+            QElapsedTimer clock;
+            clock.start();
+            QCOMPARE(run(), 0);
+            QVERIFY2(clock.elapsed() < 5000, "abort did not end the summary request");
+            QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Cancelled);
+            QCOMPARE(server.requestCount(), attempt);
+            QVERIFY(agent.getMessages() == history);
+            /* run() reaches the agent through a captured reference. */
+            // cppcheck-suppress knownConditionTrueFalse
+            QCOMPARE(agent.historyRevision(), revision);
+            QCOMPARE(commits, 0);
+            QCOMPARE(compacted.count(), 0);
+        }
+
+        server.setRequestObserver({});
+        history.push_back({{"role", "user"}, {"content", "A new task detail"}});
+        agent.setMessages(history);
+        server.enqueueCompletion(QStringLiteral("Compact summary"));
+        QVERIFY(run() > 0);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+        QCOMPARE(server.requestCount(), 3);
+        QCOMPARE(commits, 1);
+        QCOMPARE(compacted.count(), 1);
+    }
+
     void failedOrOversizedSummaryLeavesHistory_data()
     {
         QTest::addColumn<QString>("kind");

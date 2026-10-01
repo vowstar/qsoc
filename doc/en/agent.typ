@@ -398,7 +398,7 @@ and disabled with `agent.away_summary: false`.
 
 The status bar also shows a `[ctx N%]` chip tracking how full the context
 window is against the effective budget; as auto-compaction nears it reads
-`N% to compact`, then `compacting`.
+`N% to compact`, then `over threshold` while the context stays above it.
 
 In remote mode the bar carries an `[SSH:<target>]` chip, which gains a `✗`
 once the link can no longer serve calls. It refreshes when a tool call
@@ -787,6 +787,10 @@ After a successful compaction during a turn, the agent resumes that task.
 Use `/compact` to trigger compaction manually, and `/context` to inspect the
 per-category token breakdown. The context total includes the final system
 prompt, allowed tool definitions, message arrays, images, and tool arguments.
+
+*Esc* or *Ctrl+C* cancels a running compaction, manual or automatic, and
+leaves the history unchanged. Input submitted during compaction runs after it
+ends.
 
 A reported input-token count calibrates the next estimate only while the
 request prefix, tools, model route, and effort remain unchanged. Restored

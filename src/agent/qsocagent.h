@@ -24,6 +24,7 @@ class QSocAgentMailbox;
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <stop_token>
 #include <utility>
 #include <QElapsedTimer>
 #include <QList>
@@ -220,7 +221,8 @@ public:
 
     /**
      * @brief Abort the current operation
-     * @details Requests a soft stop for the current run
+     * @details Requests a soft stop for the current run, or cancels a
+     *          compaction running outside a run.
      */
     void abort();
 
@@ -255,6 +257,7 @@ public:
     using CompactionCommitter = std::function<bool(const CompactionCandidate &)>;
     void             setCompactionCommitter(CompactionCommitter committer);
     CompactionStatus lastCompactionStatus() const { return lastCompactionStatus_; }
+    quint64          historyRevision() const { return historyRevision_; }
     void             setCandidateRestoreProvider(
         std::function<QSocContextRestore(const json &, qint64)> provider);
 
@@ -832,6 +835,8 @@ private:
     bool               compactionCommitting_      = false;
     QByteArray         lastNoProgressVersion_;
     QSocContextRestore lastApplied_;
+    /* Cancels a compaction started while no run is active. */
+    std::stop_source maintenanceStop_;
 
     /* Streaming state */
     bool    isStreaming     = false;

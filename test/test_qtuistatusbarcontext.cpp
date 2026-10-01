@@ -36,9 +36,10 @@ private slots:
 
     void testAtOrOverThreshold()
     {
-        /* At or above the threshold: compaction is imminent. */
+        /* At or above the threshold: the chip states the fact, since an idle
+         * chip this full means the last compaction did not shrink it. */
         const QString chip = QTuiStatusBar::formatContextChip(65000, 100000, 0.6);
-        QCOMPARE(chip, QStringLiteral(" [ctx 65%, compacting]"));
+        QCOMPARE(chip, QStringLiteral(" [ctx 65%, over threshold]"));
     }
 
     void testLowThresholdNoPrematureWarning()

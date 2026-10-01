@@ -229,7 +229,7 @@ QString QTuiStatusBar::formatContextChip(int used, int budget, double compactFra
     const int pct        = qBound(0, qRound(100.0 * used / budget), 999);
     const int compactPct = compactFraction > 0.0 ? qRound(100.0 * compactFraction) : 0;
     if (compactPct > 0 && pct >= compactPct) {
-        return QStringLiteral(" [ctx %1%, compacting]").arg(pct);
+        return QStringLiteral(" [ctx %1%, over threshold]").arg(pct);
     }
     /* Show the countdown only in the home stretch: the last 15 points, but
      * never below half the threshold, so a low threshold does not make a
