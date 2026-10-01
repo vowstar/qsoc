@@ -22,6 +22,7 @@
 #include <cstdint>
 
 #ifndef Q_OS_WIN
+#include <csignal>
 #include <pwd.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -170,10 +171,22 @@ public:
          * the re-exec requirement. */
         m_logPath = root + QStringLiteral("/sshd.err");
         m_sshd.setStandardErrorFile(m_logPath);
-        m_sshd
-            .start(sshd, {QStringLiteral("-D"), QStringLiteral("-e"), QStringLiteral("-f"), cfgPath});
+        m_sshd.start(
+            QStringLiteral("/bin/sh"),
+            {QStringLiteral("-c"),
+             QString::fromLatin1(kSentinel),
+             QStringLiteral("qsoc-sshd-sentinel"),
+             sshd,
+             cfgPath,
+             root});
         if (!m_sshd.waitForStarted(5000)) {
             return fail(QStringLiteral("sshd did not start: %1").arg(m_sshd.errorString()));
+        }
+        while (!m_sshd.canReadLine() && m_sshd.waitForReadyRead(5000)) {
+        }
+        m_sshdPid = m_sshd.readLine().trimmed().toLongLong();
+        if (m_sshdPid <= 0) {
+            return fail(QStringLiteral("sshd did not report a pid:\n%1").arg(log()));
         }
 
         for (int attempt = 0; attempt < 50; ++attempt) {
@@ -195,13 +208,23 @@ public:
     /** @brief Terminate sshd. Safe to call more than once. */
     void stop()
     {
-        if (m_sshd.state() != QProcess::NotRunning) {
-            m_sshd.terminate();
-            if (!m_sshd.waitForFinished(3000)) {
-                m_sshd.kill();
-                m_sshd.waitForFinished(2000);
-            }
+        if (m_sshd.state() == QProcess::NotRunning) {
+            return;
         }
+        /* A line, then EOF: the sentinel stops sshd and leaves the root to
+         * removeRoot(), which a bare EOF from a dead test would not. */
+        m_sshd.write("stop\n");
+        m_sshd.closeWriteChannel();
+        if (m_sshd.waitForFinished(5000)) {
+            return;
+        }
+#ifndef Q_OS_WIN
+        if (m_sshdPid > 0) {
+            ::kill(static_cast<pid_t>(m_sshdPid), SIGKILL);
+        }
+#endif
+        m_sshd.kill();
+        m_sshd.waitForFinished(2000);
     }
 
     /**
@@ -260,6 +283,23 @@ public:
     }
 
 private:
+    /*
+     * sshd runs under a shell blocked reading a pipe only this process writes.
+     * The kernel closes it however the test ends, _exit(), abort() and SIGKILL
+     * included. EOF without a "stop" line means the test died, so the shell
+     * also removes the root. It ignores terminal signals to outlive a Ctrl-C;
+     * sshd starts before the trap and keeps its own handlers.
+     */
+    static constexpr const char *kSentinel = "\"$1\" -D -e -f \"$2\" </dev/null >&2 &\n"
+                                             "pid=$!\n"
+                                             "trap '' HUP INT TERM\n"
+                                             "echo \"$pid\"\n"
+                                             "orphaned=\n"
+                                             "read -r _ || orphaned=1\n"
+                                             "kill \"$pid\" 2>/dev/null\n"
+                                             "wait \"$pid\"\n"
+                                             "if [ -n \"$orphaned\" ]; then rm -rf \"$3\"; fi\n";
+
     /* $USER is unset in CI non-login shells, so resolve through the password
      * database and fall back to the environment only off-POSIX. */
     static QString loginName()
@@ -354,6 +394,7 @@ private:
     QStringList   m_extraConfig;
     bool          m_hostCertificate = false;
     int           m_port            = 0;
+    qint64        m_sshdPid         = 0;
 };
 
 /**

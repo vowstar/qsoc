@@ -11,7 +11,6 @@
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTcpSocket>
-#include <QTemporaryDir>
 #include <QtTest>
 
 /*
@@ -101,7 +100,7 @@ private:
     /** @brief Everything the agent printed, as one blob. */
     QByteArray agentOutput() const
     {
-        QFile file(m_dir.path() + QStringLiteral("/agent.out"));
+        QFile file(m_root + QStringLiteral("/agent.out"));
         return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
     }
 
@@ -138,20 +137,20 @@ private:
         return false;
     }
 
-    QSocTestSshd  m_fixture;
-    QTemporaryDir m_dir;
-    QProcess      m_mock;
-    QProcess      m_agent;
-    int           m_mockPort = 0;
-    bool          m_ready    = false;
-    QString       m_missing;
-    QString       m_failure;
-    QString       m_qsoc;
-    QString       m_mockBinary;
-    QString       m_workspace;
-    QString       m_requestLog;
-    QString       m_home;
-    QString       m_xdg;
+    QSocTestSshd m_fixture;
+    QString      m_root;
+    QProcess     m_mock;
+    QProcess     m_agent;
+    int          m_mockPort = 0;
+    bool         m_ready    = false;
+    QString      m_missing;
+    QString      m_failure;
+    QString      m_qsoc;
+    QString      m_mockBinary;
+    QString      m_workspace;
+    QString      m_requestLog;
+    QString      m_home;
+    QString      m_xdg;
 
     std::unique_ptr<QSocTestRelay> m_relay;
 };
@@ -198,10 +197,10 @@ void Test::initTestCase()
 
 bool Test::prepare()
 {
-    if (!m_dir.isValid()) {
-        return fail(QStringLiteral("temporary directory: %1").arg(m_dir.errorString()));
-    }
-    const QString root = m_dir.path();
+    /* Under the fixture root, which the sshd sentinel removes even when the
+     * test is killed before cleanupTestCase. */
+    m_root             = m_fixture.root() + QStringLiteral("/client");
+    const QString root = m_root;
     m_home             = root + QStringLiteral("/home");
     m_xdg              = root + QStringLiteral("/xdg");
     m_workspace        = root + QStringLiteral("/work");
@@ -274,11 +273,6 @@ void Test::cleanupTestCase()
         m_relay.reset();
     }
     m_fixture.stop();
-    /* QSOC_TEST_MAIN calls _exit(), so QTemporaryDir's destructor never runs
-     * and the keys, work tree and logs would be left behind on every run. */
-    if (m_dir.isValid()) {
-        QVERIFY2(m_dir.remove(), qPrintable(m_dir.errorString()));
-    }
     QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
 }
 
@@ -324,8 +318,8 @@ void Test::startAgent(const QString &query, int toolCallCap)
     mockEnv.insert(QStringLiteral("MOCK_REQUEST_LOG"), m_requestLog);
 
     m_mock.setProcessEnvironment(mockEnv);
-    m_mock.setStandardOutputFile(m_dir.path() + QStringLiteral("/mock.log"));
-    m_mock.setStandardErrorFile(m_dir.path() + QStringLiteral("/mock.err"));
+    m_mock.setStandardOutputFile(m_root + QStringLiteral("/mock.log"));
+    m_mock.setStandardErrorFile(m_root + QStringLiteral("/mock.err"));
     m_mock.start(m_mockBinary, {QString::number(m_mockPort), QStringLiteral("none")});
     QVERIFY(m_mock.waitForStarted(5000));
     QVERIFY(waitFor(
@@ -337,9 +331,9 @@ void Test::startAgent(const QString &query, int toolCallCap)
         8000));
 
     m_agent.setProcessEnvironment(env);
-    m_agent.setWorkingDirectory(m_dir.path());
-    m_agent.setStandardOutputFile(m_dir.path() + QStringLiteral("/agent.out"));
-    m_agent.setStandardErrorFile(m_dir.path() + QStringLiteral("/agent.err"));
+    m_agent.setWorkingDirectory(m_root);
+    m_agent.setStandardOutputFile(m_root + QStringLiteral("/agent.out"));
+    m_agent.setStandardErrorFile(m_root + QStringLiteral("/agent.err"));
     m_agent.start(
         m_qsoc,
         {QStringLiteral("agent"),

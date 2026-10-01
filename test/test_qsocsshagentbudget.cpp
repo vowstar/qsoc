@@ -96,6 +96,7 @@ private slots:
     void cleanupTestCase()
     {
         m_stall.close();
+        m_stallDir.remove();
         m_sshd.stop();
         m_sshd.removeRoot();
     }
