@@ -786,8 +786,16 @@ std::optional<json> QSocAgent::summarizeHistory(
             "- Do not mention the summary process or that context was compacted.\n\n"
             "## Conversation to summarize:\n%1\n\n");
 
+        const QString detailBlock = QStringLiteral(
+            "This summary will replace the entire conversation; anything left out is lost. "
+            "Before writing, go back over the conversation from the start, including every tool "
+            "call and tool result. Keep each todo item with its id and latest status, every "
+            "concrete value the user set or the files showed (numbers, addresses, names, paths, "
+            "commands) with where it came from, each user requirement in its latest form, each "
+            "constraint the user added or lifted, and each decision with its reason.\n");
+
         const QString summaryPrompt
-            = noToolsPreamble + anchorBlock
+            = noToolsPreamble + anchorBlock + detailBlock
               + QStringLiteral("Keep the summary within %1 estimated tokens.\n").arg(summaryBudget)
               + templateBlock.arg(oldContent.value_or(QString())) + noToolsPreamble;
 

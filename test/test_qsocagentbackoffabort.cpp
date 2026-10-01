@@ -1515,6 +1515,13 @@ private slots:
             body.at("model").get<std::string>(),
             explicitModel ? std::string("test-model") : std::string("temporary-model"));
         QCOMPARE(body.at("max_tokens").get<int>(), explicitModel ? 512 : 4096);
+        QVERIFY(
+            body.at("messages")
+                .back()
+                .at("content")
+                .get<std::string>()
+                .find("Keep each todo item with its id and latest status")
+            != std::string::npos);
         QSocRequestSnapshot summaryRequest;
         summaryRequest.messages = body.at("messages");
         QVERIFY(

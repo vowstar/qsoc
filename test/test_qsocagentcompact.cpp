@@ -129,6 +129,58 @@ std::optional<QString> readSavedText(QSocToolRegistry &registry, QSocAgent &agen
     return std::nullopt;
 }
 
+class BulkTool final : public QSocTool
+{
+public:
+    explicit BulkTool(QObject *parent = nullptr)
+        : QSocTool(parent)
+    {}
+    QString getName() const override { return QStringLiteral("bulk_read"); }
+    QString getDescription() const override { return QStringLiteral("Return bulk text."); }
+    json    getParametersSchema() const override
+    {
+        return json{{"type", "object"}, {"properties", json::object()}};
+    }
+    QString execute(const json &) override
+    {
+        return QStringLiteral("bulk_result ") + QString(24000, QLatin1Char('r'));
+    }
+};
+
+json textChoice(const char *content)
+{
+    return json{
+        {"choices",
+         json::array(
+             {{{"finish_reason", "stop"},
+               {"message", {{"role", "assistant"}, {"content", content}}}}})}};
+}
+
+/* Asserts a bounded summary request whose instruction states the detail contract. */
+void verifyContract(const json &request)
+{
+    const json &messages = request.at("messages");
+    QCOMPARE(messages.size(), json::size_type(2));
+    QVERIFY(
+        messages.front().at("content").get<std::string>().find("precise conversation summarizer")
+        != std::string::npos);
+    QVERIFY(!request.contains("tools") || request.at("tools").empty());
+    const std::string prompt = messages.back().at("content");
+    const auto        budget = prompt.find("Keep the summary within");
+    QVERIFY(budget != std::string::npos);
+    for (const char *clause :
+         {"anything left out is lost",
+          "including every tool call and tool result",
+          "Keep each todo item with its id and latest status",
+          "with where it came from",
+          "each user requirement in its latest form",
+          "each constraint the user added or lifted",
+          "each decision with its reason"}) {
+        const auto position = prompt.find(clause);
+        QVERIFY2(position != std::string::npos && position < budget, clause);
+    }
+}
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -1231,6 +1283,94 @@ private slots:
         QCOMPARE(summary.reported.requests, quint64(1));
         QCOMPARE(summary.reported.inputTokens, qint64(303));
         QCOMPARE(summary.reported.outputTokens, qint64(29));
+    }
+
+    void testSummaryRequestCarriesContract_data()
+    {
+        QTest::addColumn<QString>("trigger");
+        QTest::newRow("mid-turn") << QStringLiteral("mid-turn");
+        QTest::newRow("idle") << QStringLiteral("idle");
+        QTest::newRow("manual") << QStringLiteral("manual");
+    }
+
+    void testSummaryRequestCarriesContract()
+    {
+        QFETCH(QString, trigger);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        CaptureServer server;
+        QVERIFY(server.listen());
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.model           = QStringLiteral("contract-model");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = 40000;
+        endpoint.maxOutputTokens = 4000;
+        endpoint.timeout         = 3000;
+        service.setModel(endpoint);
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.autoLoadMemory       = false;
+        config.memoryRecallEnabled  = false;
+        config.memoryExtractEnabled = false;
+        config.memoryDreamEnabled   = false;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        QSocToolRegistry registry;
+        registry.registerTool(new BulkTool(&registry));
+        registry.registerTool(new QSocToolOutputRead(&registry));
+        QSocAgent agent(nullptr, &service, &registry, config);
+        QVERIFY(agent.bindToolResultStore(
+            directory.filePath(QStringLiteral("artifacts")), QSocSession::generateId()));
+        const int size    = trigger == QStringLiteral("idle") ? 12000 : 6000;
+        json      history = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content",
+                  QStringLiteral("turn_%1 constraint K-42 ").arg(index).toStdString()
+                      + std::string(size, static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(history);
+        int summaryIndex = 0;
+        if (trigger == QStringLiteral("mid-turn")) {
+            server.response = {
+                {"choices",
+                 json::array(
+                     {{{"finish_reason", "tool_calls"},
+                       {"message",
+                        {{"role", "assistant"},
+                         {"content", nullptr},
+                         {"tool_calls",
+                          json::array(
+                              {{{"id", "call_bulk"},
+                                {"type", "function"},
+                                {"function", {{"name", "bulk_read"}, {"arguments", "{}"}}}}})}}}}})}};
+            server.observer = [&] {
+                server.response = server.requestCount() == 1 ? textChoice("Summary: keep K-42.")
+                                                             : textChoice("done");
+            };
+            QCOMPARE(agent.run(QStringLiteral("read the bulk data")), QStringLiteral("done"));
+            QCOMPARE(server.requestCount(), 3);
+            summaryIndex = 1;
+        } else {
+            server.response = textChoice("Summary: keep K-42.");
+            QVERIFY(
+                (trigger == QStringLiteral("idle") ? agent.compactIfNeeded() : agent.compact()) > 0);
+            QCOMPARE(server.requestCount(), 1);
+        }
+        verifyContract(server.request(summaryIndex));
+        QVERIFY(
+            server.request(summaryIndex)
+                .at("messages")
+                .back()
+                .at("content")
+                .get<std::string>()
+                .find("turn_0 constraint K-42")
+            != std::string::npos);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Committed);
+        QVERIFY(
+            agent.getMessages().at(0).at("content").get<std::string>().find("K-42")
+            != std::string::npos);
     }
 
     void testSummaryRequestBudget_data()
