@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsoccelllibrary.h"
 #include "common/qsocprcmcomposition.h"
 #include "common/qsocprcmformal.h"
 #include "common/qsocprcmshared.h"
@@ -503,7 +504,11 @@ private slots:
         QVERIFY(result.circuit);
         const auto &circuit = *result.circuit;
         QCOMPARE(circuit.rtl.size(), 6);
-        QCOMPARE(circuit.cell.keys(), (QStringList{"qsoc_cell_clock.v", "qsoc_cell_reset.v"}));
+        QStringList cells{"qsoc_cell_clock.v", "qsoc_cell_reset.v"};
+        for (const QSocCellLibrary::Cell &role : QSocCellLibrary::roles())
+            cells.append(role.file);
+        cells.sort();
+        QCOMPARE(circuit.cell.keys(), cells);
         const QStringList names{
             "CHIP_REQUEST",
             "CHIP_STATUS",

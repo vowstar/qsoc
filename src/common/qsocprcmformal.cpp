@@ -412,7 +412,8 @@ endmodule
                  "depth 160\nmulticlock on\nprove: aigsmt z3\n[engines]\n"
                  "prove: abc pdr\ncover: smtbmc z3\n[script]\nread -sv -noautowire "
                  + rtl.join(' ') + "\nread -formal -noautowire " + top
-                 + ".sv\ncover: chparam -set COVER 1 " + top + "\nprep -top " + top
+                 + ".sv\ncover: chparam -set COVER 1 " + top + "\nhierarchy -top " + top
+                 + "\nsetattr -mod -unset keep_hierarchy\nprep -top " + top
                  + " -flatten\ncheck -assert\n[files]\n" + files.join('\n') + '\n';
     return result;
 }

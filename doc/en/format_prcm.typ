@@ -144,7 +144,7 @@ For `prcm.soc_net`, output paths depend on the selected configuration:
   [`prcm/formal/check.sby`, `prcm/formal/prcm_formal.fl`], [Optional proof job and file list],
 )
 
-Ordinary outputs are regenerated. The clock and reset cells come from the shared `output/qsoc_cell/` unit, which `output/qsoc.fl` lists before this unit (@verilog-output-layout). `check.sby` references them as `../../qsoc_cell/rtl/`. File lists use paths relative to `output/`. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
+Ordinary outputs are regenerated. The clock and reset cells and the roles they use come from the shared `output/qsoc_cell/` unit, which `output/qsoc.fl` lists before this unit (@verilog-output-layout). `check.sby` references them as `../../qsoc_cell/rtl/` and `../../qsoc_cell/rtl/role/`. File lists use paths relative to `output/`. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
 
 For a single-domain circuit, REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains the raw request, done, invalid_mode, and fault. The mode code and three status bits must fit one data word. EVENT records power loss and uses write-one-to-clear semantics.
 
@@ -164,7 +164,7 @@ Progress requires a stable target and eventual feedback. Customer logic and cell
 
 `binding` records top-level instances and port connections. Receiver entries identify registers, inputs, clock edges, resets, and stage counts. Names are relative to the top module. Map them to the actual cell and netlist before applying physical constraints.
 
-`--with-formal` emits RTL checks under `formal/`, separate from the synthesis file list. It does not run them. The integration report records not_run.
+`--with-formal` emits RTL checks under `formal/`, separate from the synthesis file list, and the cell checks under `output/qsoc_cell/formal/`. It does not run them. The integration report records not_run.
 
 #table(
   columns: (auto, 1fr),

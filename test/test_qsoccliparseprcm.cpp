@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocconsole.h"
 #include "qsoc_prcm_fixture.h"
 #include "qsoc_test.h"
@@ -158,9 +159,9 @@ private slots:
         QVERIFY(save(clockPath, clock + "\n// Custom cell boundary.\n"));
         QCOMPARE(run(), 0);
         QCOMPARE(read(clockPath), clock);
-        auto top = QByteArray(
-            "qsoc_cell/rtl/qsoc_cell_clock.v\nqsoc_cell/rtl/qsoc_cell_reset.v\n"
-            "qsoc_cell/rtl/qsoc_cell_power.v\n");
+        QByteArray top;
+        for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells())
+            top += QSocCellLibrary::path(cell.file).toUtf8() + '\n';
         for (const auto &leaf : list) {
             if (!leaf.isEmpty())
                 top += leaf + '\n';
@@ -168,7 +169,7 @@ private slots:
         QCOMPARE(read(root.filePath("qsoc.fl")), top);
         QCOMPARE(run({"--with-formal"}), 0);
         const auto formalList = read(output.filePath("formal/controller_formal.fl")).split('\n');
-        QCOMPARE(formalList.size(), 9);
+        QCOMPARE(formalList.size(), 9 + QSocCellLibrary::roles().size());
         for (const auto &file : formalList) {
             if (!file.isEmpty())
                 QVERIFY(QFile::exists(root.filePath(QString::fromUtf8(file))));
@@ -176,12 +177,17 @@ private slots:
         QVERIFY(read(output.filePath("formal/check.sby"))
                     .contains("\n../../qsoc_cell/rtl/qsoc_cell_clock.v\n"));
         QVERIFY(read(output.filePath("formal/controller_formal.sv")).contains("power_off: assert"));
+        QVERIFY(read(output.filePath("formal/check.sby"))
+                    .contains("\n../../qsoc_cell/rtl/role/qsoc_sync.v\n"));
+        QVERIFY(QFile::exists(root.filePath("qsoc_cell/formal/check.sby")));
+        QVERIFY(read(root.filePath("qsoc_cell/formal/qsoc_cell_formal.fl"))
+                    .contains("qsoc_cell/formal/qsoc_cell_clock_formal.sv\n"));
         const auto formalReport
             = QJsonDocument::fromJson(read(output.filePath("integration/controller.json"))).object();
         QCOMPARE(formalReport["check"].toObject()["rtl"].toString(), "not_run");
         const auto scan = qsocScanTimescale(root.path());
         QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
-        QCOMPARE(scan.checked.size(), 9);
+        QCOMPARE(scan.checked.size(), 20);
         QVERIFY(scan.checked.contains("controller/formal/controller_formal.sv"));
         QCOMPARE(run(), 0);
 
@@ -250,9 +256,14 @@ private slots:
         }
         if (!QStandardPaths::findExecutable("verible-verilog-format").isEmpty())
             QCOMPARE(run({"--format"}), 0);
-        QVERIFY(save(path, "instance: {unused: {module: other}}\n"));
-        QCOMPARE(run({"--with-formal"}), 1);
-        QVERIFY(messages.join('\n').contains("PRCM_REQUIRED"));
+        /* Without PRCM, --with-formal still writes the cell checks */
+        QVERIFY(save(
+            path,
+            "port:\n  a: {direction: input, type: logic}\n"
+            "  y: {direction: output, type: logic}\ncomb:\n  - {out: y, expr: a}\n"));
+        QVERIFY(QDir(root.filePath("qsoc_cell/formal")).removeRecursively());
+        QCOMPARE(run({"--with-formal"}), 0);
+        QVERIFY(QFile::exists(root.filePath("qsoc_cell/formal/check.sby")));
     }
 
     void generateShared()

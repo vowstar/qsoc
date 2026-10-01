@@ -139,6 +139,7 @@ public:
 
     /* Emit parsed configuration without file output. */
     QString generateControllerVerilog(const ResetControllerConfig &config);
+    /* Emit qsoc_cell_reset.v without file output. */
     QString generateCellVerilog();
 
     /**
@@ -200,12 +201,6 @@ private:
      * @param out Output text stream
      */
     void generateOutputAssignments(const ResetControllerConfig &config, QTextStream &out);
-
-    /**
-     * @brief Generate reset cell template file
-     * @param out Output text stream for qsoc_cell_reset.v
-     */
-    void generateResetCellFile(QTextStream &out);
 
     /**
      * @brief Generate single reset component instance

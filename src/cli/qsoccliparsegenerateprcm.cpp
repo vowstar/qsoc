@@ -282,11 +282,8 @@ bool QSocCliWorker::checkPrcmNetlists(const QStringList &filePathList)
 
 std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files)
 {
-    if (!containsPrcm(files)) {
-        if (parser.isSet("with-formal"))
-            return showError(1, "PRCM_REQUIRED: --with-formal requires a PRCM declaration.");
+    if (!containsPrcm(files))
         return std::nullopt;
-    }
     const auto unit = QFileInfo(files.first()).baseName();
     if (QSocCellLibrary::isReserved(unit))
         return showError(1, "PRCM_NAME: The name is reserved for QSoC output: " + unit);
@@ -429,4 +426,17 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
     } catch (const QSocPrcmDiagnostic &diagnostic) {
         return showError(1, describe({diagnostic}));
     }
+}
+
+bool QSocCliWorker::writeCellFormal()
+{
+    if (!parser.isSet("with-formal"))
+        return true;
+    const QString error = QSocCellLibrary::publishFormal(projectManager->getOutputPath());
+    if (!error.isEmpty())
+        return showError(1, error);
+    return showInfo(
+        0,
+        "Generated cell formal checks: "
+            + QDir(projectManager->getOutputPath()).filePath(QSocCellLibrary::unit() + "/formal"));
 }

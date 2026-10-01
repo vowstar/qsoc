@@ -161,6 +161,8 @@ Adds synchronous delay to reset release (active-low):
 - Adds STAGE cycle release delay to a synchronous reset
 - Test bypass when test_enable=1
 - Parameters: STAGE (>=1)
+- Contract: `rst_in_n` must already be synchronous to `clock`, for example the
+  output of an `async` stage on the same clock. The cell has no synchronizer
 
 Configuration:
 ```yaml
@@ -172,9 +174,11 @@ sync:
 === qsoc_rst_count - Counter-based Reset Release
 <soc-net-reset-count>
 Provides counter-based reset timing (active-low):
-- After rst_in_n deasserts, count CYCLE cycles then release
+- Asserts at once; releases on the CYCLE-th rising edge of `clock` after
+  rst_in_n deasserts. The first two edges pass a `qsoc_sync`, so the output
+  never goes metastable, and `cycle: 1` releases on the second edge
 - Test bypass when test_enable=1
-- Parameters: CYCLE (number of cycles before release)
+- Parameters: CYCLE (release edge, at least 1; 1 and 2 behave the same)
 
 Configuration:
 ```yaml
@@ -185,8 +189,10 @@ count:
 
 === Test Bypass Behavior
 <soc-net-reset-test-bypass>
-All three cells implement the bypass as
-`rst_out_n = test_enable ? rst_in_n : core_rst_n`. In test mode the raw
+All three cells implement the bypass with a `qsoc_ck_mux2` role instance
+`u_test_mux`: `clk_in0` is the processed reset, `clk_in1` is `rst_in_n` and
+`clk_sel` is `test_enable`. `qsoc_rst_sync` synchronizes with a `qsoc_sync`
+instance `u_sync` (@cell-roles). In test mode the raw
 asynchronous reset input propagates combinationally to every consumer, and for
 `qsoc_rst_count` the entire counter delay is skipped. Three consequences that
 DFT and STA have to cover:
@@ -359,17 +365,24 @@ normalized to active-low. POR release or a software clear pulse starts a
 two-cycle clear window; `valid` gates the output during initialization.
 Use an always-on `reason.clock` and specify `reason.root_reset` explicitly.
 
+`root_reset` asserts the recorder at once and releases it on the second rising
+edge of `reason.clock` (`qsoc_sync` instance `u_root_sync`). Each source sets
+its flag at once, and the set releases on the second rising edge after the
+source releases (`u_event_sync` in `gen_reason`). A flag is cleared only by a
+clear window edge after its set has released, so an event that releases
+inside the window is cleared or kept on a clock edge, never on a race.
+
 Integration constraints:
 
-- Each reset source becomes the asynchronous set pin of its own flag flop, so a
-  design with N recorded sources gains N asynchronous set paths that need STA
-  exceptions
+- Each reset source becomes the asynchronous reset of its own `qsoc_sync`,
+  whose output sets its flag flop, so a design with N recorded sources gains N
+  asynchronous assertion paths that need STA exceptions
 - These flops carry no `test_enable` bypass, unlike every other cell in
   `qsoc_cell_reset.v`. They are not controllable from scan and the reason register
   cannot be initialized by a scan pattern
-- `reason.clear` is captured by a single flop before edge detection. Drive it
-  from a source synchronous to `reason.clock`, or add synchronization outside
-  the controller
+- `reason.clear` passes a two-stage `qsoc_sync` instance `u_swc_sync` on
+  `reason.clock` before edge detection. Hold it for at least one cycle of
+  `reason.clock`
 
 === Generated Logic Example
 <soc-net-reset-reason-logic>
@@ -508,9 +521,10 @@ The reset controller uses three standard component modules:
 - Parameters: STAGE (>=1)
 
 *qsoc_rst_count*: Counter-based reset release (active-low)
-- After rst_in_n deasserts, count CYCLE then release
+- Release on the CYCLE-th rising edge after rst_in_n deasserts, at least the
+  second, through a `qsoc_sync`
 - Test bypass when test_enable=1
-- Parameters: CYCLE (number of cycles before release)
+- Parameters: CYCLE (release edge, at least 1)
 
 === Auto-generated Template File: qsoc_cell_reset.v
 <soc-net-reset-template-file>
@@ -521,37 +535,9 @@ existing file (@verilog-output-layout). It holds all required template cells:
 - `qsoc_rst_pipe` - Synchronous reset pipeline with test enable
 - `qsoc_rst_count` - Counter-based reset release with test enable
 
-The generated file includes header comments and a timescale directive.
-
-Example template structure:
-```verilog
-/**
- * @file qsoc_cell_reset.v
- * @brief Template reset cells for QSoC reset primitives
- *
- * CAUTION: Please replace the templates in this file
- *          with your technology's standard-cell implementations
- *          before using in production.
- */
-
-`timescale 1ns / 1ps
-
-`ifndef DEF_QSOC_RST_SYNC
-`define DEF_QSOC_RST_SYNC
-module qsoc_rst_sync #(
-  parameter [31:0] STAGE = 32'h3
-)(
-  input  wire clk,
-  input  wire rst_in_n,
-  input  wire test_enable,
-  output wire rst_out_n
-);
-  // Template implementation
-endmodule
-`endif
-
-// Additional modules: qsoc_rst_pipe, qsoc_rst_count...
-```
+The file begins with a header comment and a `timescale 1ns / 1ps` directive, like
+the role files and generated tops. The cells instantiate the `qsoc_sync` and
+`qsoc_ck_mux2` roles.
 
 === Diagram Output
 <soc-net-reset-diagram>

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsoccelllibrary.h"
 #include "common/qsocprcmgenerator.h"
 #include "qsoc_prcm_fixture.h"
 #include "qsoc_test.h"
@@ -290,7 +291,8 @@ private slots:
               "qsoc_cell_reset",
               "qsoc_clk_div",
               "qsoc_rst_sync",
-              "qsoc_tc_clk_gate",
+              "qsoc_clk_gate",
+              "qsoc_sync",
               "bad-name"}) {
             const auto result = QSocPrcmGenerator::generate(*bound.plan, name, 2);
             QVERIFY2(!result.circuit, name);
@@ -351,7 +353,11 @@ private slots:
         QVERIFY2(generated.circuit.has_value(), qPrintable(error.join('\n')));
         const auto &circuit = *generated.circuit;
         QCOMPARE(circuit.rtl.size(), 5);
-        QCOMPARE(circuit.cell.keys(), (QStringList{"qsoc_cell_clock.v", "qsoc_cell_reset.v"}));
+        QStringList cells{"qsoc_cell_clock.v", "qsoc_cell_reset.v"};
+        for (const QSocCellLibrary::Cell &role : QSocCellLibrary::roles())
+            cells.append(role.file);
+        cells.sort();
+        QCOMPARE(circuit.cell.keys(), cells);
         QCOMPARE(circuit.binding["module"].toString(), "controller");
         const auto instance = circuit.binding["instance"].toObject();
         QCOMPARE(instance.size(), 5);

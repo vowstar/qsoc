@@ -18,19 +18,20 @@
 namespace QSocCellFormal {
 
 /**
- * @brief Harnesses, SymbiYosys job and file list for some cell files.
- * @param cellFiles Cell file names, any of qsoc_cell_clock.v, qsoc_cell_reset.v and
- *                  qsoc_cell_power.v. Others are ignored.
- * @param cellDir   Directory of the cell files, relative to the output.
- * @return Output file name to content: one <cell>_formal.sv per cell file,
- *         check.sby and cell_formal.fl. Empty when no cell file is known.
+ * @brief Harnesses and SymbiYosys job for some cell files.
+ * @param sources Paths of the cell and role files, relative to the job
+ *                directory. The harness of qsoc_cell_clock.v, qsoc_cell_reset.v
+ *                or qsoc_cell_power.v is included when its file is listed.
+ *                The cells build on the roles, so list every role too.
+ * @return Output file name to content: one <cell>_formal.sv per listed cell
+ *         file and check.sby. Empty when no cell file is listed.
  */
-QMap<QString, QString> generate(const QStringList &cellFiles, const QString &cellDir);
+QMap<QString, QString> generate(const QStringList &sources);
 
 /**
- * @brief Tasks of the job generate() writes for these cell files.
+ * @brief Tasks of the job generate() writes for these files.
  */
-QStringList tasks(const QStringList &cellFiles);
+QStringList tasks(const QStringList &sources);
 
 } // namespace QSocCellFormal
 

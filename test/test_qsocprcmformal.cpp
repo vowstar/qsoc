@@ -112,7 +112,7 @@ private slots:
         }
         if (run)
             return;
-        const auto    cell       = generated.circuit->cell["qsoc_cell_clock.v"];
+        const auto    cell       = generated.circuit->cell["qsoc_ck_icg_pos.v"];
         const QString assignment = "assign clk_out = iq & clk;";
         QCOMPARE(cell.count(assignment), 1);
         auto fault = cell;
@@ -121,7 +121,7 @@ private slots:
             "`ifdef SYNTHESIS\n`ifdef FORMAL\n" + assignment
                 + "\n`else\nassign clk_out = clk;\n`endif\n`else\n" + assignment + "\n`endif");
         for (const bool corrupt : {true, false}) {
-            QVERIFY(save(directory.filePath("qsoc_cell_clock.v"), corrupt ? fault : cell));
+            QVERIFY(save(directory.filePath("qsoc_ck_icg_pos.v"), corrupt ? fault : cell));
             process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", "prove"});
             QVERIFY(process.waitForStarted());
             QVERIFY(process.waitForFinished(-1));

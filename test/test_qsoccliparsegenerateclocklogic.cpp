@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
 #include "common/qslangdriver.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
@@ -94,6 +95,16 @@ private slots:
         return normalizedVerilog.contains(normalizedContentToVerify);
     }
 
+    /* Role files the cells instantiate, then the given files. */
+    QStringList withRoles(const QStringList &files)
+    {
+        QStringList list;
+        for (const QSocCellLibrary::Cell &role : QSocCellLibrary::roles())
+            list.append(
+                QDir(projectManager.getOutputPath()).filePath(QSocCellLibrary::path(role.file)));
+        return list + files;
+    }
+
     bool verifyClockCellFileComplete()
     {
         const QString clockCellPath
@@ -112,11 +123,7 @@ private slots:
         file.close();
 
         const QStringList requiredCells
-            = {"qsoc_tc_clk_gate",
-               "qsoc_tc_clk_inv",
-               "qsoc_tc_clk_or2",
-               "qsoc_tc_clk_mux2",
-               "qsoc_tc_clk_xor2",
+            = {"qsoc_clk_gate",
                "qsoc_clk_div",
                "qsoc_clk_mux_gf",
                "qsoc_clk_mux_raw",
@@ -426,7 +433,11 @@ clock:
             = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
     }
 
     void test_mux_dft_enable_matrix()
@@ -707,11 +718,11 @@ clock:
                                        "        .clk_in(gated_clock),\n"
                                        "        .clk_out(output_clock)\n"
                                        "    );";
-        const QByteArray dftMuxBlock = "    qsoc_tc_clk_mux2 i_test_clk_mux (\n"
-                                       "        .CLK_IN0(output_clock),\n"
-                                       "        .CLK_IN1(test_clk),\n"
-                                       "        .CLK_SEL(test_en),\n"
-                                       "        .CLK_OUT(clk_out)\n"
+        const QByteArray dftMuxBlock = "    qsoc_ck_mux2 i_test_clk_mux (\n"
+                                       "        .clk_in0(output_clock),\n"
+                                       "        .clk_in1(test_clk),\n"
+                                       "        .clk_sel(test_en),\n"
+                                       "        .clk_out(clk_out)\n"
                                        "    );";
         const QByteArray orToDft     = orTreeBlock
                                        + "\n    \n"
@@ -722,7 +733,11 @@ clock:
 
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
 
         QFile fallbackTypstFile(QDir(projectManager.getOutputPath())
                                     .filePath("test_dft_enable_matrix/doc/dft_fallback.typ"));
@@ -997,7 +1012,11 @@ clock:
                                         .filePath("test_dft_constants/rtl/test_dft_constants.v");
         QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
     }
 
     void test_one_bit_select_may_share_dft_enable()
@@ -1038,7 +1057,11 @@ clock:
                                             "test_shared_scalar_dft/rtl/test_shared_scalar_dft.v");
         QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
     }
 
     /* Exact-ABI input reuse is the only legal name collision: a scalar
@@ -1112,7 +1135,11 @@ clock:
                   .filePath("test_divider_control_ports/rtl/test_divider_control_ports.v");
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -1370,7 +1397,11 @@ clock:
                                         .filePath("test_shared_en_ten/rtl/test_shared_en_ten.v");
         QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -1416,7 +1447,11 @@ clock:
                                         .filePath("test_unused_valid/rtl/test_unused_valid.v");
         QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -1471,7 +1506,11 @@ clock:
                                         .filePath("test_const_control/rtl/test_const_control.v");
         QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -1521,7 +1560,11 @@ clock:
                                         .filePath("test_static_valid/rtl/test_static_valid.v");
         QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -1708,7 +1751,11 @@ clock:
                   .filePath("test_unity_divider_ports/rtl/test_unity_divider_ports.v");
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -2192,7 +2239,7 @@ clock:
         verilogFile.close();
 
         /* Verify the generated content contains expected clock logic */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_gate"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".POLARITY(1'b1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_dbg_clk_from_pll_800m)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(dbg_clk_en)"));
@@ -2334,7 +2381,7 @@ clock:
         /* Verify the generated content contains expected clock logic */
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(2'd2)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_ck_inv"));
 
         // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
@@ -2697,7 +2744,11 @@ clock:
             = QDir(projectManager.getOutputPath()).filePath("test_dup_div/rtl/test_dup_div.v");
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
-            "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+            "",
+            withRoles({clockCellPath, verilogPath}),
+            {},
+            {},
+            QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
         for (const QString &message : messageList) {
             cleanElaboration |= message.contains("Build succeeded: 0 errors, 0 warnings");
@@ -2715,11 +2766,11 @@ clock:
 
         /* One cell instance carries the inversion, so a behavioral `~` beside
            it would invert the clock twice and cancel out. */
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_IN("));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_OUT("));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_ck_inv"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_in("));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_out("));
         QVERIFY(!verilogContent.contains("= ~"));
-        QCOMPARE(verilogContent.count("qsoc_tc_clk_inv"), 1);
+        QCOMPARE(verilogContent.count("qsoc_ck_inv"), 1);
     }
 
     void test_inverter_accepts_the_compact_scalar_form()
@@ -2727,7 +2778,7 @@ clock:
         const QString verilogContent
             = generateInverterCase("test_inv_scalar", "          pll_800m: inv\n");
         QVERIFY(!verilogContent.isEmpty());
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_ck_inv"));
     }
 
     void test_inverter_disabled_by_an_explicit_false()
@@ -2737,7 +2788,7 @@ clock:
             "          pll_800m:\n"
             "            inv: false\n");
         QVERIFY(!verilogContent.isEmpty());
-        QVERIFY(!verilogContent.contains("qsoc_tc_clk_inv"));
+        QVERIFY(!verilogContent.contains("qsoc_ck_inv"));
     }
 
     void test_inverter_sta_guide_requires_cell_in_and_out()
@@ -3253,7 +3304,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(4'd10)"));
 
         // Should have cpu_clk ICG instance
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_gate"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".POLARITY(1'b1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(sys_clk_en)"));
 
@@ -3398,7 +3449,7 @@ clock:
 
         /* Verify the generated content contains processing chain with STA guide */
         // Should have ICG
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_gate"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".POLARITY(1'b1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
 
@@ -3407,7 +3458,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(3'd4)"));
 
         // Should have inverter
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_ck_inv"));
 
         // No automatic STA guide in new architecture - must be explicitly specified per stage
         // Verify direct assignment from link processing chain
@@ -3604,7 +3655,7 @@ clock:
 
         /* Verify the generated content contains proper POLARITY parameters */
         // CPU clock should have POLARITY(1'b1) for high polarity
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_gate"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_gate"));
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "POLARITY(1'b1)")); // High polarity for clk_cpu
         QVERIFY(
@@ -3630,10 +3681,10 @@ clock:
         QString cellContent = cellFile.readAll();
         cellFile.close();
 
-        // Verify POLARITY parameter in qsoc_tc_clk_gate
+        // Verify POLARITY parameter in qsoc_clk_gate
         QVERIFY(verifyVerilogContentNormalized(cellContent, "parameter POLARITY = 1'b1"));
-        QVERIFY(verifyVerilogContentNormalized(cellContent, "qsoc_tc_clk_gate_pos"));
-        QVERIFY(verifyVerilogContentNormalized(cellContent, "qsoc_tc_clk_gate_neg"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "qsoc_ck_icg_pos u_icg"));
+        QVERIFY(verifyVerilogContentNormalized(cellContent, "qsoc_ck_icg_neg u_icg"));
         QVERIFY(verifyVerilogContentNormalized(cellContent, "if (POLARITY == 1'b1)"));
     }
 
@@ -3749,7 +3800,7 @@ clock:
         QString cellContent = cellFile.readAll();
         cellFile.close();
 
-        // Verify CLOCK_DURING_RESET parameter in qsoc_tc_clk_gate
+        // Verify CLOCK_DURING_RESET parameter in qsoc_clk_gate
         QVERIFY(verifyVerilogContentNormalized(cellContent, "parameter CLOCK_DURING_RESET = 1'b0"));
         QVERIFY(verifyVerilogContentNormalized(cellContent, "CLOCK_DURING_RESET"));
     }
@@ -5130,9 +5181,9 @@ clock:
         // ICG output feeds DIV input
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_out_icg_out)"));
         // DIV output feeds INV input (through INV module instance)
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_IN(clk_out_div_out)"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".CLK_OUT(clk_out_inv_out)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_ck_inv"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_in(clk_out_div_out)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_out(clk_out_inv_out)"));
     }
 
     /* Divider width contracts reject instead of silently rewriting. */

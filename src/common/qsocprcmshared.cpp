@@ -342,6 +342,8 @@ private:
             QSocVerilogUtils::withTimescale(r.generateControllerVerilog(reset)));
         addCell(QSocCellLibrary::clockFile(), c.generateCellVerilog());
         addCell(QSocCellLibrary::resetFile(), r.generateCellVerilog());
+        for (const auto &role : QSocCellLibrary::roles())
+            addCell(role.file, role.text);
         addRtl(
             unit("_domain_service") + ".v",
             QSocPrcmSequenceRtl::generateService(unit("_domain_service")));

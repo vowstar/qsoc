@@ -35,6 +35,18 @@ private:
         messageList << msg;
     }
 
+    /* Cell and role files of the flat list, in list order */
+    static QStringList cellFiles(const QDir &outputDir)
+    {
+        QFile list(outputDir.filePath("qsoc_cell/rtl/qsoc_cell.fl"));
+        if (!list.open(QIODevice::ReadOnly | QIODevice::Text))
+            return {};
+        QStringList files;
+        for (const QString &line : QString::fromUtf8(list.readAll()).split('\n', Qt::SkipEmptyParts))
+            files.append(outputDir.filePath(line.trimmed()));
+        return files;
+    }
+
     QString createTempFile(const QString &fileName, const QString &content)
     {
         QString filePath = QDir(projectManager.getCurrentPath()).filePath(fileName);
@@ -772,7 +784,9 @@ reset:
         /* Verify SW clear synchronizer */
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "Synchronize software clear and generate pulse"));
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg swc_d1, swc_d2, swc_d3"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_sync #("));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ") u_swc_sync ("));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, "reg swc_d3"));
         QVERIFY(
             verifyVerilogContentNormalized(verilogContent, "wire sw_clear_pulse = swc_d2 & ~swc_d3"));
 
@@ -801,7 +815,11 @@ reset:
             "for (reason_idx = 0; reason_idx < 3; reason_idx = reason_idx + 1) begin : "
             "gen_reason"));
         QVERIFY(verifyVerilogContentNormalized(
-            verilogContent, "always @(posedge clk_32k or negedge src_event_n[reason_idx])"));
+            verilogContent, "always @(posedge clk_32k or negedge set_n)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n(src_event_n[reason_idx])"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ") u_root_sync ("));
+        QVERIFY(verifyVerilogContentNormalized(
+            verilogContent, "always @(posedge clk_32k or negedge root_sync_n)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "endgenerate"));
 
         /* Verify pure async-set + sync-clear logic within generate block (no else clause) */
@@ -934,14 +952,15 @@ reset:
         process.setProcessChannelMode(QProcess::MergedChannels);
         process.start(
             compiler,
-            {"-g2005",
-             "-s",
-             "reason_only_ctrl",
-             "-o",
-             QDir(directory.path()).filePath("a.out"),
-             nettypePath,
-             verilogPath,
-             cellPath});
+            QStringList{
+                "-g2005",
+                "-s",
+                "reason_only_ctrl",
+                "-o",
+                QDir(directory.path()).filePath("a.out"),
+                nettypePath,
+                verilogPath}
+                + cellFiles(outputDir));
         QVERIFY(process.waitForStarted());
         QVERIFY(process.waitForFinished());
         const QByteArray compilerOutput = process.readAll();
@@ -1654,14 +1673,8 @@ reset:
         build.setProcessChannelMode(QProcess::MergedChannels);
         build.start(
             compiler,
-            {"-g2005",
-             "-s",
-             "tb",
-             "-o",
-             imagePath,
-             verilogPath,
-             outputDir.filePath("qsoc_cell/rtl/qsoc_cell_reset.v"),
-             benchPath});
+            QStringList{"-g2005", "-s", "tb", "-o", imagePath, verilogPath} + cellFiles(outputDir)
+                + QStringList{benchPath});
         QVERIFY(build.waitForStarted());
         QVERIFY(build.waitForFinished());
         const QByteArray buildLog = build.readAll();

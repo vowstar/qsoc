@@ -860,7 +860,7 @@ power:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire icg_en_ao"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_enable (icg_en_ao)"));
         /* Verify no ICG instantiation */
-        QVERIFY(!verilogContent.contains("qsoc_tc_clk_gate"));
+        QVERIFY(!verilogContent.contains("qsoc_clk_gate"));
     }
 
     void test_follow_entries_generation()
@@ -1057,7 +1057,15 @@ power:
                 {"cells_top/rtl/cells_top.v",
                  "qsoc_cell/rtl/qsoc_cell_clock.v",
                  "qsoc_cell/rtl/qsoc_cell_power.v",
-                 "qsoc_cell/rtl/qsoc_cell_reset.v"}));
+                 "qsoc_cell/rtl/qsoc_cell_reset.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_buf.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_icg_neg.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_icg_pos.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_inv.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_mux2.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_or2.v",
+                 "qsoc_cell/rtl/role/qsoc_ck_xor2.v",
+                 "qsoc_cell/rtl/role/qsoc_sync.v"}));
     }
 
     void test_malformed_power_shape_is_reported_not_fatal()

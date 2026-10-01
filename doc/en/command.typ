@@ -352,7 +352,7 @@ input format is documented in @soc-net-format. PRCM input and controller generat
     [`--check`],
     [Check PRCM resource binding and stable modes without a project or RTL output],
     [`--with-formal`],
-    [Generate PRCM RTL checks alongside the controller],
+    [Also write the cell formal checks, and PRCM RTL checks for a PRCM circuit],
     [`--format`],
     [Run `verible-verilog-format` from `PATH` on each generated top-level Verilog file],
     [files], [The netlist files to be processed],
@@ -380,10 +380,12 @@ writes the design independent cell unit and the top file list.
     [`output/<top>/rtl/<top>.fl`], [Unit file list],
     [`output/<top>/doc/<controller>.typ`], [Clock, reset, and power controller diagrams],
     [`output/<top>/reports/<top>.nc.rpt`], [Unconnected port report, when ports are left open],
+    [`output/qsoc_cell/rtl/role/<role>.v`], [One role module per file (@cell-roles)],
     [`output/qsoc_cell/rtl/qsoc_cell_clock.v`], [Clock template cells],
     [`output/qsoc_cell/rtl/qsoc_cell_reset.v`], [Reset template cells],
     [`output/qsoc_cell/rtl/qsoc_cell_power.v`], [Power template cells],
-    [`output/qsoc_cell/rtl/qsoc_cell.fl`], [Cell file list],
+    [`output/qsoc_cell/rtl/qsoc_cell.fl`], [Cell file list: the roles, then clock, reset, power],
+    [`output/qsoc_cell/formal/`], [Cell formal checks, with `--with-formal`],
     [`output/qsoc.fl`],
     [Concatenation of every unit file list],
   )],
@@ -400,9 +402,50 @@ Rebuilding fails when a list holds an entry that is not a plain relative path
 inside `output/`, or when two listed files define the same module.
 
 A unit directory is created only when its top is written, so a failed run adds
-no unit. The `qsoc_cell` files are regenerated on every run. A top, PRCM
+no unit. The `qsoc_cell` RTL files are regenerated on every run. A top, PRCM
 circuit, or controller whose name is `qsoc` or starts with `qsoc_`, in any case,
 is rejected.
+
+With `--with-formal`, every run also writes `output/qsoc_cell/formal/`: one
+harness per cell file (`qsoc_cell_clock_formal.sv`, `qsoc_cell_reset_formal.sv`,
+`qsoc_cell_power_formal.sv`), `check.sby` with every task, and
+`qsoc_cell_formal.fl` listing the cell RTL and the harnesses relative to
+`output/`. Run `sby -f check.sby [task]` in that directory. The job unsets
+`keep_hierarchy` before SymbiYosys flattens the design. Without `--with-formal`
+an existing `formal/` directory is left untouched.
+
+===== Cell Roles
+<cell-roles>
+A role is one module with a frozen port interface. The cells and the clock,
+reset and power controllers instantiate a role for every clock path gate and
+every synchronizer. Each file holds a
+generic behavioral body with no `keep` or `dont_touch` attribute. A declared
+technology cell replaces the body with one instance named `u_cell`, so its
+path is `<role instance>/u_cell`.
+
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Role], [Ports and function]),
+    table.hline(),
+    [`qsoc_ck_buf`], [`clk_in`, `clk_out`: buffer],
+    [`qsoc_ck_inv`], [`clk_in`, `clk_out`: inverter],
+    [`qsoc_ck_or2`], [`clk_in0`, `clk_in1`, `clk_out`: OR],
+    [`qsoc_ck_xor2`], [`clk_in0`, `clk_in1`, `clk_out`: XOR],
+    [`qsoc_ck_mux2`], [`clk_in0`, `clk_in1`, `clk_sel`, `clk_out`: `clk_sel ? clk_in1 : clk_in0`],
+    [`qsoc_ck_icg_pos`],
+    [`clk`, `en`, `test_en`, `clk_out`: latch `en | test_en` while `clk` is low, output low while disabled],
+    [`qsoc_ck_icg_neg`],
+    [`clk`, `en`, `test_en`, `clk_out`: latch `en | test_en` while `clk` is high, output high while disabled],
+    [`qsoc_sync`],
+    [`#(STAGES, RESET_VALUE)` with `clk`, `rst_n`, `d`, `q`: `STAGES` flops on `clk`, reset asynchronously to `RESET_VALUE`],
+  )],
+  caption: [CELL ROLES],
+  kind: table,
+)
+
+`STAGES` defaults to 2 and must be at least 1. `RESET_VALUE` is one bit.
 
 ==== Netlist Merge Semantics (`-m` / `--merge`)
 <netlist-merge-semantics>

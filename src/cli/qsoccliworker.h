@@ -364,6 +364,8 @@ private:
     bool                parseGenerateVerilog(const QStringList &appArguments);
     bool                checkPrcmNetlists(const QStringList &filePathList);
     std::optional<bool> generatePrcmNetlists(const QStringList &files);
+    /* With --with-formal, write the cell formal checks; false on error. */
+    bool writeCellFormal();
 
     /**
      * @brief Process multiple netlist files by merging them.

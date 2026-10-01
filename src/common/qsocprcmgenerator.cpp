@@ -432,6 +432,8 @@ QSocPrcmGenerateResult QSocPrcmGenerator::generate(
         };
         cell(QSocCellLibrary::clockFile(), clockGenerator.generateCellVerilog());
         cell(QSocCellLibrary::resetFile(), resetGenerator.generateCellVerilog());
+        for (const auto &role : QSocCellLibrary::roles())
+            cell(role.file, role.text);
         add(moduleName + "_domain.v", QSocPrcmSequenceRtl::generate(moduleName + "_domain"));
         add(circuit.mmio.moduleName + ".v", QSocMmioGenerator::generateVerilog(circuit.mmio));
         Assembly assembly(binding, *sequence.plan, circuit.mmio, moduleName, sampleStage);

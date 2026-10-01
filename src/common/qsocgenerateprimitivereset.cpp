@@ -1,4 +1,5 @@
 #include "qsocgenerateprimitivereset.h"
+#include "common/qsoccelltext.h"
 #include "common/qsocconsole.h"
 #include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
@@ -687,37 +688,53 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     }
     out << "\n";
 
+    const QString rootSync = "root_sync_n";
+    out << "    /* Root reset released on the second rising edge of " << config.reason.clock
+        << " */\n";
+    out << "    wire " << rootSync << ";\n";
+    out << "    qsoc_sync #(\n";
+    out << "        .STAGES(2),\n";
+    out << "        .RESET_VALUE(1'b0)\n";
+    out << "    ) u_root_sync (\n";
+    out << "        .clk  (" << config.reason.clock << "),\n";
+    out << "        .rst_n(" << config.reason.rootReset << "),\n";
+    out << "        .d    (1'b1),\n";
+    out << "        .q    (" << rootSync << ")\n";
+    out << "    );\n\n";
+
     // Generate SW clear synchronizer and pulse generator
     if (!config.reason.clear.isEmpty()) {
         out << "    /* Synchronize software clear and generate pulse */\n";
-        out << "    reg swc_d1, swc_d2, swc_d3;\n";
-        out << "    always @(posedge " << config.reason.clock << " or negedge "
-            << config.reason.rootReset << ") begin\n";
-        out << "        if (!" << config.reason.rootReset << ") begin\n";
-        out << "            swc_d1 <= 1'b0;\n";
-        out << "            swc_d2 <= 1'b0;\n";
-        out << "            swc_d3 <= 1'b0;\n";
-        out << "        end else begin\n";
-        out << "            swc_d1 <= " << config.reason.clear << ";\n";
-        out << "            swc_d2 <= swc_d1;\n";
-        out << "            swc_d3 <= swc_d2;\n";
-        out << "        end\n";
+        out << "    wire swc_d2;\n";
+        out << "    qsoc_sync #(\n";
+        out << "        .STAGES(2),\n";
+        out << "        .RESET_VALUE(1'b0)\n";
+        out << "    ) u_swc_sync (\n";
+        out << "        .clk  (" << config.reason.clock << "),\n";
+        out << "        .rst_n(" << rootSync << "),\n";
+        out << "        .d    (" << config.reason.clear << "),\n";
+        out << "        .q    (swc_d2)\n";
+        out << "    );\n";
+        out << "    reg swc_d3;\n";
+        out << "    always @(posedge " << config.reason.clock << " or negedge " << rootSync
+            << ") begin\n";
+        out << "        if (!" << rootSync << ") swc_d3 <= 1'b0;\n";
+        out << "        else swc_d3 <= swc_d2;\n";
         out << "    end\n";
         out << "    wire sw_clear_pulse = swc_d2 & ~swc_d3;  // Rising-edge pulse\n\n";
     }
 
     // Generate fixed 2-cycle clear controller (no configurable parameters)
     out << "    /* Fixed 2-cycle clear controller and valid signal generation */\n";
-    out << "    /* Design rationale: 2-cycle clear ensures clean removal of async events */\n";
     out << "    reg        init_done;   /* Set after first post-POR action */\n";
     out << "    reg [1:0]  clr_sr;      /* Fixed 2-cycle clear shift register */\n";
     out << "    reg        valid_q;     /* " << config.reason.valid << " register */\n\n";
 
     out << "    wire clr_en = |clr_sr;  /* Clear enable (active during 2-cycle window) */\n\n";
 
-    out << "    always @(posedge " << config.reason.clock << " or negedge "
-        << config.reason.rootReset << ") begin\n";
-    out << "        if (!" << config.reason.rootReset << ") begin\n";
+    out << "    always @(posedge " << config.reason.clock << " or negedge " << rootSync
+        << ") begin\n";
+    out << "        if (!" << rootSync << ") begin\n";
     out << "            init_done <= 1'b0;\n";
     out << "            clr_sr    <= 2'b00;\n";
     out << "            valid_q   <= 1'b0;\n";
@@ -768,9 +785,20 @@ void QSocResetPrimitive::generateResetReason(const ResetControllerConfig &config
     out << "    generate\n";
     out << "        for (reason_idx = 0; reason_idx < " << config.reason.vectorWidth
         << "; reason_idx = reason_idx + 1) begin : gen_reason\n";
-    out << "            always @(posedge " << config.reason.clock
-        << " or negedge src_event_n[reason_idx]) begin\n";
-    out << "                if (!src_event_n[reason_idx]) begin\n";
+    out << "            /* Event release synchronized, so the set never releases between\n";
+    out << "             * clock edges or races the clear window */\n";
+    out << "            wire set_n;\n";
+    out << "            qsoc_sync #(\n";
+    out << "                .STAGES(2),\n";
+    out << "                .RESET_VALUE(1'b0)\n";
+    out << "            ) u_event_sync (\n";
+    out << "                .clk  (" << config.reason.clock << "),\n";
+    out << "                .rst_n(src_event_n[reason_idx]),\n";
+    out << "                .d    (1'b1),\n";
+    out << "                .q    (set_n)\n";
+    out << "            );\n";
+    out << "            always @(posedge " << config.reason.clock << " or negedge set_n) begin\n";
+    out << "                if (!set_n) begin\n";
     out << "                    flags[reason_idx] <= 1'b1;      /* Async set on event assert (low) "
            "*/\n";
     out << "                end else if (clr_en) begin\n";
@@ -855,163 +883,9 @@ void QSocResetPrimitive::generateOutputAssignments(
     out << "\n";
 }
 
-void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
-{
-    out << "/**\n";
-    out << " * @file qsoc_cell_reset.v\n";
-    out << " * @brief Template reset cells for QSoC reset primitives\n";
-    out << " *\n";
-    out << " * @details This file contains template reset cell modules for reset primitives.\n";
-    out << " *          Auto-generated template file. Generated by qsoc.\n";
-    out << " * CAUTION: Please replace the templates in this file\n";
-    out << " *          with your technology's standard-cell implementations\n";
-    out << " *          before using in production.\n";
-    out << " */\n\n";
-    out << "`timescale 1ns / 1ps\n";
-
-    // qsoc_rst_sync - Asynchronous reset synchronizer
-    out << "/**\n";
-    out << " * @brief Asynchronous reset synchronizer (active-low)\n";
-    out << " * @param STAGE Number of sync stages (>=2 recommended)\n";
-    out << " */\n";
-    out << "module qsoc_rst_sync\n";
-    out << "#(\n";
-    out << "    parameter integer STAGE = 3\n";
-    out << ")\n";
-    out << "(\n";
-    out << "    input  wire clk,        /**< Clock input */\n";
-    out << "    input  wire rst_in_n,   /**< Reset input (active-low) */\n";
-    out << "    input  wire test_enable, /**< Test enable signal */\n";
-    out << "    output wire rst_out_n   /**< Reset output (active-low) */\n";
-    out << ");\n\n";
-    out << "    /* Elaboration fails when STAGE is below 1. */\n";
-    out << "    generate\n";
-    out << "        if (STAGE < 1) begin : g_bad_stage\n";
-    out << "            qsoc_param_error_stage_below_one u_error ();\n";
-    out << "        end\n";
-    out << "    endgenerate\n\n";
-    out << "    reg  [STAGE-1:0] sync_reg;\n";
-    out << "    wire         core_rst_n;\n\n";
-    out << "    generate\n";
-    out << "        if (STAGE == 1) begin : g_st1\n";
-    out << "            always @(posedge clk or negedge rst_in_n) begin\n";
-    out << "                if (!rst_in_n) sync_reg <= 1'b0;\n";
-    out << "                else           sync_reg <= 1'b1;\n";
-    out << "            end\n";
-    out << "        end else begin : g_stN\n";
-    out << "            always @(posedge clk or negedge rst_in_n) begin\n";
-    out << "                if (!rst_in_n) sync_reg <= {STAGE{1'b0}};\n";
-    out << "                else           sync_reg <= {sync_reg[STAGE-2:0], 1'b1};\n";
-    out << "            end\n";
-    out << "        end\n";
-    out << "    endgenerate\n\n";
-    out << "    assign core_rst_n = sync_reg[STAGE-1];\n";
-    out << "    assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
-    out << "endmodule\n\n";
-
-    // qsoc_rst_pipe - Synchronous reset pipeline
-    out << "/**\n";
-    out << " * @brief Synchronous reset pipeline (active-low)\n";
-    out << " * @param STAGE Number of pipeline stages (>=1)\n";
-    out << " */\n";
-    out << "module qsoc_rst_pipe\n";
-    out << "#(\n";
-    out << "    parameter integer STAGE = 4\n";
-    out << ")\n";
-    out << "(\n";
-    out << "    input  wire clk,        /**< Clock input */\n";
-    out << "    input  wire rst_in_n,   /**< Reset input (active-low) */\n";
-    out << "    input  wire test_enable, /**< Test enable signal */\n";
-    out << "    output wire rst_out_n   /**< Reset output (active-low) */\n";
-    out << ");\n\n";
-    out << "    /* Elaboration fails when STAGE is below 1. */\n";
-    out << "    generate\n";
-    out << "        if (STAGE < 1) begin : g_bad_stage\n";
-    out << "            qsoc_param_error_stage_below_one u_error ();\n";
-    out << "        end\n";
-    out << "    endgenerate\n\n";
-    out << "    reg  [STAGE-1:0] pipe_reg;\n";
-    out << "    wire         core_rst_n;\n\n";
-    out << "    generate\n";
-    out << "        if (STAGE == 1) begin : g_st1\n";
-    out << "            always @(posedge clk) begin\n";
-    out << "                if (!rst_in_n) pipe_reg <= 1'b0;\n";
-    out << "                else           pipe_reg <= 1'b1;\n";
-    out << "            end\n";
-    out << "        end else begin : g_stN\n";
-    out << "            always @(posedge clk) begin\n";
-    out << "                if (!rst_in_n) pipe_reg <= {STAGE{1'b0}};\n";
-    out << "                else           pipe_reg <= {pipe_reg[STAGE-2:0], 1'b1};\n";
-    out << "            end\n";
-    out << "        end\n";
-    out << "    endgenerate\n\n";
-    out << "    assign core_rst_n = pipe_reg[STAGE-1];\n";
-    out << "    assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
-    out << "endmodule\n\n";
-
-    // qsoc_rst_count - Counter-based reset release
-    out << "/**\n";
-    out << " * @brief Counter-based reset release (active-low)\n";
-    out << " * @param CYCLE Number of cycles before release\n";
-    out << " */\n";
-    out << "module qsoc_rst_count\n";
-    out << "#(\n";
-    out << "    parameter integer CYCLE = 16\n";
-    out << ")\n";
-    out << "(\n";
-    out << "    input  wire clk,        /**< Clock input */\n";
-    out << "    input  wire rst_in_n,   /**< Reset input (active-low) */\n";
-    out << "    input  wire test_enable, /**< Test enable signal */\n";
-    out << "    output wire rst_out_n   /**< Reset output (active-low) */\n";
-    out << ");\n\n";
-    out << "    /* ceil(log2(n)) for n>=1 */\n";
-    out << "    function integer clog2;\n";
-    out << "        input integer n;\n";
-    out << "        integer v;\n";
-    out << "        begin\n";
-    out << "            v = (n < 1) ? 1 : n - 1;\n";
-    out << "            clog2 = 0;\n";
-    out << "            while (v > 0) begin\n";
-    out << "                v = v >> 1;\n";
-    out << "                clog2 = clog2 + 1;\n";
-    out << "            end\n";
-    out << "            if (clog2 == 0) clog2 = 1;\n";
-    out << "        end\n";
-    out << "    endfunction\n\n";
-    out << "    /* Elaboration fails when CYCLE is below 1. */\n";
-    out << "    generate\n";
-    out << "        if (CYCLE < 1) begin : g_bad_cycle\n";
-    out << "            qsoc_param_error_cycle_below_one u_error ();\n";
-    out << "        end\n";
-    out << "    endgenerate\n\n";
-    out << "    localparam integer CNT_WIDTH = clog2(CYCLE);\n";
-    out << "    localparam [CNT_WIDTH-1:0] C_M1 = CYCLE - 1;\n\n";
-    out << "    reg [CNT_WIDTH-1:0] cnt;\n";
-    out << "    reg                 core_rst_n;\n\n";
-    out << "    always @(posedge clk or negedge rst_in_n) begin\n";
-    out << "        if (!rst_in_n) begin\n";
-    out << "            cnt        <= {CNT_WIDTH{1'b0}};\n";
-    out << "            core_rst_n <= 1'b0;\n";
-    out << "        end else if (!core_rst_n) begin\n";
-    out << "            if (cnt == C_M1) begin\n";
-    out << "                core_rst_n <= 1'b1;             /* Keep exactly CYCLE cycles */\n";
-    out << "            end else begin\n";
-    out << "                cnt <= cnt + {{(CNT_WIDTH-1){1'b0}}, 1'b1};\n";
-    out << "            end\n";
-    out << "        end\n";
-    out << "    end\n\n";
-    out << "    assign rst_out_n = test_enable ? rst_in_n : core_rst_n;\n\n";
-    out << "endmodule\n\n";
-}
-
 QString QSocResetPrimitive::generateCellVerilog()
 {
-    QString     canonical;
-    QTextStream out(&canonical);
-    generateResetCellFile(out);
-    out.flush();
-
-    return canonical;
+    return QSocCellText::reset();
 }
 
 void QSocResetPrimitive::generateResetComponentInstance(

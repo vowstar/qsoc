@@ -557,7 +557,9 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         {"check",
          QCoreApplication::translate(
              "main", "Check PRCM resource binding and stable modes without writing RTL.")},
-        {"with-formal", QCoreApplication::translate("main", "Generate PRCM formal checks.")},
+        {"with-formal",
+         QCoreApplication::translate(
+             "main", "Also generate the cell formal checks, and PRCM checks for a PRCM circuit.")},
     });
 
     parser.addPositionalArgument(
@@ -647,7 +649,7 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
 bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
 {
     if (const auto result = generatePrcmNetlists(filePathList))
-        return *result;
+        return *result && writeCellFormal();
     /* Validate all files exist first */
     for (const QString &netlistFilePath : filePathList) {
         if (!QFile::exists(netlistFilePath)) {
@@ -768,7 +770,7 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
             .arg(QDir(projectManager->getOutputPath())
                      .filePath(outputFileName + "/rtl/" + outputFileName + ".v")));
 
-    return true;
+    return writeCellFormal();
 }
 
 bool QSocCliWorker::processIndividualNetlists(const QStringList &filePathList)
@@ -824,7 +826,7 @@ bool QSocCliWorker::processIndividualNetlists(const QStringList &filePathList)
                          .filePath(outputFileName + "/rtl/" + outputFileName + ".v")));
     }
 
-    return true;
+    return writeCellFormal();
 }
 
 bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)

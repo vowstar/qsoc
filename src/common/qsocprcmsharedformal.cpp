@@ -226,7 +226,8 @@ public:
                 "[script]\nread -sv -noautowire "
               + rtl.join(' ') + "\nread -formal -noautowire " + file
               + "\nerror: chparam -set @FAULT@ 1 " + name + "_formal"
-              + "\nreach: chparam -set @COVER@ 1 " + name + "_formal" + "\nprep -top " + name
+              + "\nreach: chparam -set @COVER@ 1 " + name + "_formal" + "\nhierarchy -top " + name
+              + "_formal\nsetattr -mod -unset keep_hierarchy\nprep -top " + name
               + "_formal -flatten\ncheck -assert\n[files]\n" + rtl.join('\n') + '\n' + file + '\n';
         const QMap<QString, QString> token{
             {"@D@", prefix + "data_width"},

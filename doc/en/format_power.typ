@@ -132,8 +132,8 @@ Power-up sequence timing: switch → pgood/settle → clock enable → reset rel
 Power-down sequence timing: reset assert → clock disable → switch off → pgood drop/settle
 
 `pgood` must rise within `settle_on` cycles of the switch turning on and fall
-within `settle_off` cycles of it turning off. Otherwise the domain enters
-`S_FAULT`.
+within `settle_off` cycles of it turning off, counting the two synchronizer
+cycles. Otherwise the domain enters `S_FAULT`.
 
 The qsoc_power_fsm module provides the core sequencing logic:
 ```verilog
@@ -156,25 +156,43 @@ module qsoc_power_fsm
     input  wire dep_soft_all,     /**< AND of all soft-depend ready inputs  */
     input  wire pgood,            /**< power good of this domain            */
 
-    output reg  clk_enable,       /**< ICG enable for this domain clock     */
-    output reg  rst_gate_n,       /**< reset gate to synchronizer, active-low */
-    output reg  pwr_switch,       /**< power switch control                 */
+    output wire clk_enable,       /**< ICG enable for this domain clock     */
+    output wire rst_gate_n,       /**< reset gate to synchronizer, active-low */
+    output wire pwr_switch,       /**< power switch control                 */
 
-    output reg  ready,            /**< domain usable clock on reset off     */
-    output reg  valid,            /**< voltage stable                       */
+    output wire ready,            /**< domain usable clock on reset off     */
+    output wire valid,            /**< voltage stable                       */
     output reg  fault             /**< sticky fault indicator               */
 );
 ```
 
 Key behaviors:
+- Reset: `host_reset` asserts the FSM at once and releases it on the second
+  rising edge of `host_clock` through a `qsoc_sync`, so it needs no external
+  synchronization
+- Input synchronization: `pgood`, `ctrl_enable` and `fault_clear` each pass a
+  two-stage `qsoc_sync` on `clk`, so the FSM sees them two cycles late.
+  `dep_hard_all` and `dep_soft_all` come from FSMs on the same host clock and
+  are used directly
+- Registered outputs: `clk_enable`, `rst_gate_n`, `pwr_switch`, `ready` and
+  `valid` are flops loaded from the decode of the next state, reset to the
+  `S_OFF` values (all low). They change on the same edge as the state, never
+  between edges
+- `valid` outside `S_ON` follows `pgood` three cycles late: two in the
+  synchronizer, one in its output flop
 - Counter load: N-1 (zero means no wait)
 - Hard timeout: enter FAULT state, block until auto-heal
 - Soft timeout: set fault flag, continue operation
 - Clock-reset sequencing: S_CLK_ON provides one cycle for clock stability before reset release
 - Reset-clock sequencing: S_RST_ASSERT provides one cycle for reset assertion before clock disable
-- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_gate_n=1, ready=1, valid=1) while preserving FSM state
+- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_gate_n=1, ready=1, valid=1) while preserving FSM state. The override is an OR after the output flops, so it holds while scan shifts through them
 - With test_en=1, ready=1 for all domains, so dep_hard_all/dep_soft_all evaluate to 1 and dependency checks are bypassed
 - Auto-heal works without fault_clear; fault remains sticky until cleared or reset
+- Fault clear: `fault_clear` clears `fault` in any state. Entering `S_FAULT` or
+  a soft timeout sets it, and a set on the same edge wins. A write that lowers
+  `ctrl_enable` and pulses `fault_clear` together ends in the same state
+  whichever synchronizer passes its bit first; the cell formal job proves this
+  with each bit on time or one cycle late
 - Auto-heal: automatic retry after cooldown when dependencies ready
 - Cooldown source: auto-heal cooldown uses WAIT_DEP_CYCLES
 - All cycle parameters are counted on host_clock (AO clock domain)
@@ -193,11 +211,7 @@ module qsoc_power_rst_sync #(parameter integer STAGE=4)(
 Every run writes `output/qsoc_cell/rtl/qsoc_cell_power.v`, replacing any
 existing file (@verilog-output-layout).
 
-qsoc_power_rst_sync provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection.
-
-`STAGE` must be at least 2. The shift register is declared as `reg [STAGE-1:0]`
-and is not guarded against `STAGE=1`, which elaborates to an illegal part
-select.
+qsoc_power_rst_sync provides async assert, sync deassert reset synchronization with a `qsoc_sync` instance `u_sync`. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection. `STAGE` must be at least 1. The `test_en` override is a `qsoc_ck_or2` instance `u_test_or` (@cell-roles).
 
 *Warning*: `test_en` here forces `rst_dom_n` permanently released, so a domain
 reset cannot be applied while test mode is active. This is the opposite of the
@@ -205,10 +219,15 @@ reset controller cells (@soc-net-reset-components), where `test_en` bypasses
 the synchronizer but leaves the reset controllable. Scan patterns that rely on
 a reset-based initialization of domain flops are not possible under this cell.
 
-`rst_gate_n` is a combinational decode of the FSM state ORed with `test_en`,
-and it drives the asynchronous reset pin of this synchronizer. Treat it as a
-glitch-sensitive path in synthesis and STA, and keep `test_en` static while the
+`rst_gate_n` is a flop output ORed with `test_en`, and it drives the
+asynchronous reset pin of this synchronizer. Keep `test_en` static while the
 domain is live.
+
+`clk_enable` leaves the controller as `icg_en_<domain>` in the host clock
+domain and reaches the domain clock gate with no synchronizer. It changes only
+while `rst_gate_n` is low on both sides of the change, so the domain is held in
+reset whenever its gate enable moves; the cell formal job proves this
+(`icg_in_reset`).
 
 == Generated Interfaces
 <soc-net-power-interfaces>
@@ -226,11 +245,14 @@ and for no AO domain: an AO domain gets `ctrl_enable` tied to `1'b1` and
 `fault_clear` tied to `1'b0` inside the controller. `sw_<domain>` is likewise
 absent for AO domains.
 
-*Note*: `test_en`, `en_<domain>`, `clr_<domain>`, and `pgood_<domain>` must be synchronized into host_clock domain
+*Note*: `pgood_<domain>`, `en_<domain>` and `clr_<domain>` are synchronized to
+`host_clock` inside the FSM. Hold a `clr_<domain>` pulse for at least one host
+clock cycle. `test_en` must be static
 
 Signal semantics:
 - `ready`: Asserted when FSM state = S_ON, equivalent to domain fully operational
-- `valid`: Equals 1 in S_ON; equals pgood in S_TURN_ON/S_TURN_OFF; 0 otherwise.
+- `valid`: Equals 1 in S_ON; equals the synchronized pgood in
+  S_TURN_ON, S_CLK_ON, S_RST_ASSERT and S_TURN_OFF; 0 otherwise.
   The controller leaves this port unconnected, so it is observable only inside
   the FSM instance
 - `rst_gate_n`: active-low reset gate, an internal wire rather than a
@@ -266,12 +288,15 @@ follow:                          # Reset synchronizer array (optional)
 Key characteristics:
 - Direct array format eliminates ambiguous clock/reset pairing from previous versions
 - Each entry becomes one qsoc_power_rst_sync instance with dedicated ports
-- Reset gate signal: `rst_sys_n & rst_gate_domain_n` (async assert, sync deassert)
+- Reset gate signal: `rst_sys_n & rst_gate_domain_n` (async assert, sync
+  deassert). This AND is a reset network gate: `rst_sys_n` holds the domain
+  resets asserted without changing the FSM, so a system reset does not power
+  the domain down
 - FSM outputs `rst_gate_n` (internal permission), the synchronizer output is
   named by the entry's `reset` key verbatim
 - Test enable forces the domain reset released; it does not preserve
   reset controllability in test mode
-- Stage parameter controls synchronizer depth (2-16; 1 is invalid)
+- Stage parameter controls synchronizer depth (at least 1)
 - Empty follow array generates no synchronizers (common for AO/root domains)
 
 Generated RTL pattern per entry:

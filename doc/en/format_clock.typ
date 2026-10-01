@@ -286,7 +286,13 @@ input port, at either level.
 
 === ICG with Clock During Reset
 <soc-net-clock-icg-clock-during-reset>
-The `clock_on_reset` parameter controls whether the ICG outputs clock during reset. When enabled, the clock passes through during reset regardless of the enable signal state:
+The `clock_on_reset` parameter keeps the ICG open during reset, whatever the
+enable. `reset` is sampled on two rising edges of the source clock by
+`qsoc_sync` and ORed into the enable, so the gate opens two edges after reset
+asserts and stays open until two edges after it releases. The enable changes
+only on source clock edges and the gate latch takes every change, so opening
+and closing are glitch free. The source clock must run for reset to take
+effect:
 
 ```yaml
 # ICG with clock enabled during reset
@@ -314,7 +320,7 @@ target:
 
 Generated Verilog uses the `CLOCK_DURING_RESET` parameter:
 ```verilog
-qsoc_tc_clk_gate #(
+qsoc_clk_gate #(
     .CLOCK_DURING_RESET(1'b1),      // Clock enabled during reset
     .POLARITY(1'b1)
 ) u_boot_clk_target_icg (
@@ -326,14 +332,10 @@ qsoc_tc_clk_gate #(
 );
 ```
 
-*Warning*: the ICG routes both the `test_en` bypass and the
-`CLOCK_DURING_RESET` path through a plain combinational 2:1 mux, not a
-glitch-free one. Toggling `test_en`, or releasing `rst_n` while the clock is
-high, can produce a runt pulse on the gated clock. The divide-by-1 bypass in
-`qsoc_clk_div` uses the same plain mux with `test_en` in its select term. Change
-`test_en` or `clock_on_reset` only while the source clock is stopped. Note also
-that with `test_en` high the ICG output is the raw clock, so the gating latch
-itself gets no toggle coverage.
+`test_en` enters the gate latch like `en`, so it opens the gate at the next
+idle phase of the clock. The divide-by-1 bypass in `qsoc_clk_div` is a plain
+`qsoc_ck_mux2` with `test_en` in its select term: change `test_en` only while
+the source clock is stopped.
 
 == Divider Configuration
 <soc-net-clock-divider-config>
@@ -429,7 +431,9 @@ qsoc_clk_div #(
 
 === Dynamic Mode (Runtime Control)
 <soc-net-clock-divider-dynamic>
-When a `value` signal is specified, the divider accepts runtime division control:
+When a `value` signal is specified, the divider accepts runtime division control.
+With `valid`, `value` and `valid` feed the load logic directly: drive both from
+the divider source clock domain. Only auto mode synchronizes `value`:
 
 ```yaml
 # Dynamic divider example
@@ -465,12 +469,20 @@ qsoc_clk_div #(
 === Auto Mode (Simplified Dynamic Control)
 <soc-net-clock-divider-auto>
 When `value` is specified but `valid` is omitted, the divider sets `AUTO_UPDATE`.
-It synchronizes `value` through two flops and requests a load whenever the
-synchronized value differs from the current ratio. The request stays active
-until the load happens, so the last value written is always the one loaded,
-even when it changes during a previous load. `div_valid` is tied low and
-ignored. `ready` may still be connected. Target-level and link-level dividers
-behave the same.
+Each bit of `value` passes a two-stage `qsoc_sync`. The synchronized value is
+accepted once it is equal on two consecutive cycles of the divider clock, and
+only an accepted value is loaded. A load is requested whenever the accepted
+value differs from the current ratio. The request stays active until the load
+happens, so the last value written is always the one loaded, even when it
+changes during a previous load. `div_valid` is tied low and ignored. `ready`
+may still be connected. Target-level and link-level dividers behave the same.
+
+Contract: drive `value` from a register in the source domain and hold each
+value for at least three cycles of the divider clock. Then a code seen while
+bits resolve on different cycles is never loaded, and the last value is. The
+cell formal job checks this with each bit arriving on time or one cycle late.
+Without metastability, a new value raises the load request on the fifth
+rising edge of the divider clock after it arrives.
 
 ```yaml
 # Auto mode divider example
@@ -504,7 +516,12 @@ qsoc_clk_div #(
 
 === Mode Behaviors
 <soc-net-clock-divider-mode-rules>
-- *Reset Behavior*: All modes use `default` value during reset condition
+- *Reset Behavior*: All modes use `default` value during reset condition. The
+  cell samples `reset` on two rising edges of the source clock, so reset takes
+  effect and releases on the second edge after `reset` moves, the output only
+  changes on source clock edges, and reset needs the source clock running.
+  With `clock_on_reset` off, the output stops within one output period after
+  reset takes effect
 - *Bypass Operation*: Division by 1 automatically enables bypass mode in the primitive
 - *Enable*: `enable` low stops the output low after its current high phase
 - *Handshake*: with `valid`, hold `value` and `valid` until `ready`
@@ -512,7 +529,7 @@ qsoc_clk_div #(
   the new ratio
 - *Clock During Reset*: `clock_on_reset` passes the source clock during reset
   only when `default` is 1; with a larger `default` the output stays low until
-  reset releases
+  reset releases. No ratio change starts while the gate is held open
 
 === Width Calculation and Validation
 <soc-net-clock-divider-width-validation>
@@ -583,6 +600,20 @@ A `GF_MUX` is glitch-free when `select` changes only after the output runs
 from the previously selected source, and its reset is held for several cycles
 of every linked clock. With `clock_on_reset`, also keep `select` stable during
 reset and assert reset only after a switch has completed.
+
+Each linked clock has its own two-stage reset synchronizer (`qsoc_sync`).
+After reset release, a source drives the output no earlier than its seventh
+rising edge: two for the reset synchronizer, two for the glitch filter, two
+for the enable synchronizer and one for the gate latch. With
+`clock_on_reset`, the selected source stays enabled in reset: `reset` and
+`select` are each sampled on two rising edges of that source, and only the
+source they select opens. Keep `select` stable while in reset.
+
+A source's enable synchronizer has no reset. After reset asserts it empties on
+`NUM_SYNC_STAGES` rising edges of that source, so every gate enable changes on
+its own clock edge; without `clock_on_reset` the output stops within
+`NUM_SYNC_STAGES + 1` edges of the running source. A stopped source holds its
+gate state until it runs again.
 
 For `STD_MUX`, `select` is the zero-based ordinal of each source in `link`.
 Unused binary encodings drive the output low. A standard mux accepts at most
@@ -802,7 +833,7 @@ STA guide buffers generate direct foundry cell instantiations in *serial configu
 // ICG with STA guide (serial connection)
 wire cpu_clk_icg_pre_sta;        // Temporary signal: ICG output
 wire cpu_clk_icg_out;            // Final signal: STA guide output
-qsoc_tc_clk_gate u_cpu_clk_icg (
+qsoc_clk_gate u_cpu_clk_icg (
     .clk(clk_source),
     .en(clk_en),
     .clk_out(cpu_clk_icg_pre_sta)   // ICG outputs to temporary signal
@@ -837,19 +868,17 @@ FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
 
 == Template RTL Cells
 <soc-net-clock-templates>
-QSoC generates these templates:
-- `qsoc_tc_clk_buf` - Test-controllable clock buffer
-- `qsoc_tc_clk_gate` - Test-controllable clock gate
-- `qsoc_tc_clk_gate_pos` - Positive-edge clock gate
-- `qsoc_tc_clk_gate_neg` - Negative-edge clock gate
-- `qsoc_tc_clk_inv` - Clock inverter
-- `qsoc_tc_clk_or2` - Two-input clock OR
-- `qsoc_tc_clk_mux2` - Two-input clock multiplexer
-- `qsoc_tc_clk_xor2` - Two-input clock XOR
+QSoC generates these templates in `qsoc_cell_clock.v`:
+- `qsoc_clk_gate` - Clock gate with polarity, `test_en` and `clock_on_reset`
+  policy, built on `qsoc_ck_icg_pos` or `qsoc_ck_icg_neg`
 - `qsoc_clk_div` - Clock divider with FSM control, explicit or automatic update
-- `qsoc_clk_or_tree` - Parameterized clock OR tree
+- `qsoc_clk_or_tree` - Parameterized clock OR tree of `qsoc_ck_or2`
 - `qsoc_clk_mux_gf` - Glitch-free clock multiplexer
-- `qsoc_clk_mux_raw` - Parameterized clock multiplexer
+- `qsoc_clk_mux_raw` - Parameterized clock multiplexer tree of `qsoc_ck_mux2`
+
+Every clock path gate and synchronizer in them, and in the generated
+controllers, is a role instance (@cell-roles). An inverter stage instantiates
+`qsoc_ck_inv`.
 
 Overriding `NUM_SYNC_STAGES`, `NUM_INPUTS` or `INPUT_COUNT` below 1 on these
 cells fails elaboration.

@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsoccelllibrary.h"
+#include "common/qsoccellformal.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitivereset.h"
 
+#include <algorithm>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -23,16 +25,106 @@ QString tr(const char *text)
 
 QString writeCells(const QString &outputDirectory)
 {
-    const QDir rtl(QDir(outputDirectory).filePath(QSocCellLibrary::unit() + "/rtl"));
+    const QDir                                  output(outputDirectory);
     std::vector<QSocGenerateArtifact::Artifact> artifacts;
     QByteArray                                  list;
-    for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells()) {
-        artifacts.push_back({rtl.filePath(cell.file), cell.text.toUtf8()});
+    /* A cell file first, so the artifact root is the unit directory */
+    QList<QSocCellLibrary::Cell> cells = QSocCellLibrary::cells();
+    std::stable_partition(cells.begin(), cells.end(), [](const QSocCellLibrary::Cell &cell) {
+        return !QSocCellLibrary::isRole(cell.file);
+    });
+    for (const QSocCellLibrary::Cell &cell : cells)
+        artifacts.push_back({output.filePath(QSocCellLibrary::path(cell.file)), cell.text.toUtf8()});
+    for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells())
         list += QSocCellLibrary::path(cell.file).toUtf8() + '\n';
-    }
-    artifacts.push_back({rtl.filePath(QSocCellLibrary::unit() + ".fl"), list});
+    artifacts.push_back(
+        {output.filePath(QSocCellLibrary::unit() + "/rtl/" + QSocCellLibrary::unit() + ".fl"),
+         list});
     return QSocGenerateArtifact::write(std::move(artifacts), true, outputDirectory);
 }
+
+/* A role file: one module with its frozen ports and a generic body. */
+QSocCellLibrary::Cell role(
+    const QString &name, const QString &brief, const QString &ports, const QString &body)
+{
+    return {
+        name + ".v",
+        QString(
+            "/**\n"
+            " * @file %1.v\n"
+            " * @brief %2\n"
+            " * @details Generic behavioral body. A declared technology cell replaces it\n"
+            " *          with one instance named u_cell.\n"
+            " */\n\n"
+            "`timescale 1ns / 1ps\n\n"
+            "module %1%3endmodule\n")
+            .arg(name, brief, ports + body)};
+}
+
+const char *const syncBody = R"v( #(
+    parameter integer STAGES      = 2,    /**< Flop stages, at least 1 */
+    parameter [0:0]   RESET_VALUE = 1'b0  /**< Every stage in reset */
+) (
+    input  wire clk,    /**< Destination clock */
+    input  wire rst_n,  /**< Asynchronous reset, active low */
+    input  wire d,      /**< Input from another clock domain */
+    output wire q       /**< d after STAGES rising edges of clk */
+);
+    /* Elaboration fails when STAGES is below 1. */
+    generate
+        if (STAGES < 1) begin : g_bad_stages
+            qsoc_param_error_stages_below_one u_error ();
+        end
+    endgenerate
+
+    /* The last stage may drive asynchronous resets */
+    /* verilator lint_off SYNCASYNCNET */
+    reg [STAGES-1:0] chain;
+    /* verilator lint_on SYNCASYNCNET */
+
+    generate
+        if (STAGES == 1) begin : g_one
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n) chain <= RESET_VALUE;
+                else        chain <= d;
+            end
+        end else begin : g_many
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n) chain <= {STAGES{RESET_VALUE}};
+                else        chain <= {chain[STAGES-2:0], d};
+            end
+        end
+    endgenerate
+
+    assign q = chain[STAGES-1];
+)v";
+
+const char *const gatePorts = R"v( (
+    input  wire clk,      /**< Clock input */
+    input  wire en,       /**< Enable, latched while clk is at its idle level */
+    input  wire test_en,  /**< Scan enable, ORed with en */
+    output wire clk_out   /**< Gated clock */
+);
+    reg iq;
+`ifndef SYNTHESIS
+    initial iq = 1'b0;  /* sim-only init to block X fanout */
+`endif
+    /* Level-sensitive latch, use blocking '=' here */
+    always @(clk or en or test_en) begin
+)v";
+
+const char *const unaryPorts = R"v( (
+    input  wire clk_in,   /**< Clock input */
+    output wire clk_out   /**< Clock output */
+);
+)v";
+
+const char *const binaryPorts = R"v( (
+    input  wire clk_in0,  /**< Clock input 0 */
+    input  wire clk_in1,  /**< Clock input 1 */
+    output wire clk_out   /**< Clock output */
+);
+)v";
 
 /* Unit lists relative to output: qsoc_cell, then <u> and <lib>/<module> in name order. */
 QStringList unitLists(const QDir &output)
@@ -131,18 +223,67 @@ private:
 
 } // namespace
 
-QList<QSocCellLibrary::Cell> QSocCellLibrary::cells()
+QList<QSocCellLibrary::Cell> QSocCellLibrary::roles()
 {
     return {
-        {clockFile(), QSocClockPrimitive().generateCellVerilog()},
-        {resetFile(), QSocResetPrimitive().generateCellVerilog()},
-        {powerFile(), QSocPowerPrimitive().generateCellVerilog()},
+        role("qsoc_ck_buf", "Clock buffer role.", unaryPorts, "    assign clk_out = clk_in;\n"),
+        role("qsoc_ck_inv", "Clock inverter role.", unaryPorts, "    assign clk_out = ~clk_in;\n"),
+        role(
+            "qsoc_ck_or2",
+            "Two-input clock OR role.",
+            binaryPorts,
+            "    assign clk_out = clk_in0 | clk_in1;\n"),
+        role(
+            "qsoc_ck_xor2",
+            "Two-input clock XOR role.",
+            binaryPorts,
+            "    assign clk_out = clk_in0 ^ clk_in1;\n"),
+        role(
+            "qsoc_ck_mux2",
+            "Two-input clock multiplexer role.",
+            " (\n"
+            "    input  wire clk_in0,  /**< Selected when clk_sel is 0 */\n"
+            "    input  wire clk_in1,  /**< Selected when clk_sel is 1 */\n"
+            "    input  wire clk_sel,  /**< Select */\n"
+            "    output wire clk_out   /**< Selected clock */\n"
+            ");\n",
+            "    assign clk_out = clk_sel ? clk_in1 : clk_in0;\n"),
+        role(
+            "qsoc_ck_icg_pos",
+            "Clock gate role: latch while clk is low, output low while disabled.",
+            gatePorts,
+            "        if (!clk) iq = (test_en | en);\n"
+            "    end\n"
+            "    assign clk_out = iq & clk;\n"),
+        role(
+            "qsoc_ck_icg_neg",
+            "Clock gate role: latch while clk is high, output high while disabled.",
+            gatePorts,
+            "        if (clk) iq = ~(test_en | en);\n"
+            "    end\n"
+            "    assign clk_out = iq | clk;\n"),
+        role("qsoc_sync", "Synchronizer role: a flop chain with asynchronous reset.", syncBody, ""),
     };
+}
+
+QList<QSocCellLibrary::Cell> QSocCellLibrary::cells()
+{
+    return roles()
+           + QList<Cell>{
+               {clockFile(), QSocClockPrimitive().generateCellVerilog()},
+               {resetFile(), QSocResetPrimitive().generateCellVerilog()},
+               {powerFile(), QSocPowerPrimitive().generateCellVerilog()},
+           };
+}
+
+bool QSocCellLibrary::isRole(const QString &file)
+{
+    return file == QStringLiteral("qsoc_sync.v") || file.startsWith(QStringLiteral("qsoc_ck_"));
 }
 
 QString QSocCellLibrary::path(const QString &file)
 {
-    return unit() + "/rtl/" + file;
+    return unit() + (isRole(file) ? "/rtl/role/" : "/rtl/") + file;
 }
 
 bool QSocCellLibrary::isReserved(const QString &name)
@@ -172,4 +313,25 @@ QString QSocCellLibrary::publish(const QString &outputDirectory)
 {
     const QString error = writeCells(outputDirectory);
     return error.isEmpty() ? writeFileList(outputDirectory) : error;
+}
+
+QString QSocCellLibrary::publishFormal(const QString &outputDirectory)
+{
+    const QDir  output(outputDirectory);
+    const QDir  formal(output.filePath(unit() + "/formal"));
+    QStringList sources;
+    QByteArray  list;
+    for (const Cell &cell : cells()) {
+        sources.append(formal.relativeFilePath(output.filePath(path(cell.file))));
+        list += path(cell.file).toUtf8() + '\n';
+    }
+    const QMap<QString, QString>                files = QSocCellFormal::generate(sources);
+    std::vector<QSocGenerateArtifact::Artifact> artifacts;
+    for (auto file = files.cbegin(); file != files.cend(); ++file) {
+        artifacts.push_back({formal.filePath(file.key()), file.value().toUtf8()});
+        if (file.key().endsWith(".sv"))
+            list += (unit() + "/formal/" + file.key()).toUtf8() + '\n';
+    }
+    artifacts.push_back({formal.filePath(unit() + "_formal.fl"), list});
+    return QSocGenerateArtifact::write(std::move(artifacts), true, outputDirectory);
 }

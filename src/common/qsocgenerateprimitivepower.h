@@ -148,18 +148,6 @@ private:
     void generateOutputAssignments(const PowerControllerConfig &config, QTextStream &out);
 
     /**
-     * @brief Generate qsoc_power_fsm module definition with 8-state FSM
-     * @return Module definition string
-     */
-    QString generatePowerFSMModule();
-
-    /**
-     * @brief Generate qsoc_rst_pipe reset synchronizer module
-     * @return Module definition string
-     */
-    QString generateResetPipeModule();
-
-    /**
      * @brief Determine if domain is AO (always-on)
      * @param domain Power domain configuration
      * @param yamlNode Original YAML node for this domain

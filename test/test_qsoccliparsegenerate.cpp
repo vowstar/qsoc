@@ -4,6 +4,7 @@
 #include "cli/qsoccliworker.h"
 #include "common/config.h"
 #include "common/qslangdriver.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
@@ -5728,9 +5729,12 @@ reset:
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
             "",
-            {outputDir.filePath("qsoc_cell/rtl/qsoc_cell_clock.v"),
-             outputDir.filePath("qsoc_cell/rtl/qsoc_cell_reset.v"),
-             outPath},
+            [&] {
+                QStringList files;
+                for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells())
+                    files.append(outputDir.filePath(QSocCellLibrary::path(cell.file)));
+                return files + QStringList{outPath};
+            }(),
             {},
             {},
             QSlangDriver::UnknownModulePolicy::Reject));

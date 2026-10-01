@@ -194,6 +194,7 @@ public:
 
     /* Emit parsed configuration without file output. */
     QString generateControllerVerilog(const ClockControllerConfig &config);
+    /* Emit qsoc_cell_clock.v without file output. */
     QString generateCellVerilog();
 
     /**
@@ -218,19 +219,6 @@ private:
      * @return Parsed configuration structure
      */
     ClockControllerConfig parseClockConfigUnguarded(const YAML::Node &clockNode);
-
-    /**
-     * @brief Get all required template cell names with QSOC_ prefix
-     * @return List of cell names
-     */
-    QStringList getRequiredTemplateCells();
-
-    /**
-     * @brief Generate single template cell definition
-     * @param cellName Cell name (with QSOC_ prefix)
-     * @return Cell definition string
-     */
-    QString generateTemplateCellDefinition(const QString &cellName);
 
     /**
      * @brief Generate module header and ports

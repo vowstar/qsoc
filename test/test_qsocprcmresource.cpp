@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsoccelllibrary.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivereset.h"
 #include "qsoc_prcm_fixture.h"
@@ -46,6 +47,11 @@ void checkCell(const QString &path, const QString &cell, const QString &contract
         }
     }
     QVERIFY(save(path + "/contract.sv", contract));
+    QStringList roles;
+    for (const QSocCellLibrary::Cell &role : QSocCellLibrary::roles()) {
+        QVERIFY(save(path + "/" + role.file, role.text));
+        roles.append(role.file);
+    }
     const QString job = QString(R"([tasks]
 prove
 cover
@@ -60,14 +66,15 @@ prove: aigsmt z3
 prove: abc pdr
 cover: smtbmc z3
 [script]
-read -formal -D SYNTHESIS dut.v %1 contract.sv
+read -formal -D SYNTHESIS dut.v %1 %2 contract.sv
 prep -top contract
 [files]
 dut.v
 %1
+%3
 contract.sv
 )")
-                            .arg(cell);
+                            .arg(cell, roles.join(' '), roles.join('\n'));
     QVERIFY(save(path + "/cell.sby", job));
     QProcess process;
     process.setWorkingDirectory(path);

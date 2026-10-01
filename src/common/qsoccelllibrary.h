@@ -10,12 +10,15 @@
 /**
  * @brief The design independent cell unit output/qsoc_cell and the
  *        top file list output/qsoc.fl.
+ * @details Roles are one module per file under rtl/role, each with a frozen
+ *          port interface. qsoc logic instantiates roles for every clock path
+ *          gate and synchronizer. The cell files build on them.
  */
 namespace QSocCellLibrary {
 
 struct Cell
 {
-    QString file;
+    QString file; /**< File name, unique in the unit */
     QString text;
 };
 
@@ -37,12 +40,22 @@ inline QString powerFile()
 }
 
 /**
- * @brief Cell files in file list order: clock, reset, power.
+ * @brief Role files, one module each, in file list order.
+ */
+QList<Cell> roles();
+
+/**
+ * @brief Cell files in file list order: the roles, then clock, reset, power.
  */
 QList<Cell> cells();
 
 /**
- * @brief Path of a cell file relative to the output directory.
+ * @brief True for the file name of a role.
+ */
+bool isRole(const QString &file);
+
+/**
+ * @brief Path of a cell or role file relative to the output directory.
  */
 QString path(const QString &file);
 
@@ -64,6 +77,14 @@ QString writeFileList(const QString &outputDirectory);
  * @return Error message, empty on success.
  */
 QString publish(const QString &outputDirectory);
+
+/**
+ * @brief Write the cell formal checks to qsoc_cell/formal.
+ * @details Harnesses, check.sby with every task, and qsoc_cell_formal.fl
+ *          relative to the output directory.
+ * @return Error message, empty on success.
+ */
+QString publishFormal(const QString &outputDirectory);
 
 } // namespace QSocCellLibrary
 
