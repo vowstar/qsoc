@@ -88,7 +88,7 @@ public:
         emitInstance(out, name + "_reset", prefix + "reset_inst", port);
         out << "endmodule\n";
         out.flush();
-        addRtl(name + ".v", text);
+        addRtl(name + ".v", QSocVerilogUtils::withTimescale(text));
         result.binding
             = {{"module", name},
                {"instance", instance},
@@ -325,8 +325,12 @@ private:
         reset.moduleName = name + "_reset";
         QSocClockPrimitive c;
         QSocResetPrimitive r;
-        addRtl(clock.moduleName + ".v", c.generateControllerVerilog(clock));
-        addRtl(reset.moduleName + ".v", r.generateControllerVerilog(reset));
+        addRtl(
+            clock.moduleName + ".v",
+            QSocVerilogUtils::withTimescale(c.generateControllerVerilog(clock)));
+        addRtl(
+            reset.moduleName + ".v",
+            QSocVerilogUtils::withTimescale(r.generateControllerVerilog(reset)));
         addRtl("clock_cell.v", c.generateCellVerilog());
         addRtl("reset_cell.v", r.generateCellVerilog());
         addRtl("qsoc_prcm_domain_service.v", QSocPrcmSequenceRtl::generateService());

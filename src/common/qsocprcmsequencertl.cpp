@@ -4,6 +4,7 @@
 #include "common/qsocprcmsequencertl.h"
 #include "common/qsocgenerateprimitivefsm.h"
 #include "common/qsocprcmsequence.h"
+#include "common/qsocverilogutils.h"
 
 #include <QMap>
 
@@ -130,7 +131,8 @@ QString buildRtl(bool service)
     QString          rtl;
     QTextStream      stream(&rtl);
     QSocFSMPrimitive generator;
-    return generator.generateFSMVerilog(node, stream) ? rtl : QString();
+    return generator.generateFSMVerilog(node, stream) ? QSocVerilogUtils::withTimescale(rtl)
+                                                      : QString();
 }
 
 } // namespace
@@ -172,5 +174,6 @@ QString QSocPrcmSequenceRtl::generateHandshake()
     QString          rtl;
     QTextStream      stream(&rtl);
     QSocFSMPrimitive generator;
-    return generator.generateFSMVerilog(node, stream) ? rtl : QString();
+    return generator.generateFSMVerilog(node, stream) ? QSocVerilogUtils::withTimescale(rtl)
+                                                      : QString();
 }

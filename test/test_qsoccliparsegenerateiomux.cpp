@@ -7,6 +7,7 @@
 #include "common/qsocprojectmanager.h"
 #include "qsoc_iomux_sim.h"
 #include "qsoc_test.h"
+#include "qsoc_test_timescale.h"
 
 #include <QDir>
 #include <QFile>
@@ -501,6 +502,7 @@ private slots:
     void padCellPortsAcceptLibraryDirectionSpelling();
     void ioRingCellsAreCheckedAndEmitted();
     void brokenSourceReportsItselfNotAMissingShell();
+    void everyGeneratedFileCarriesTheTimescale();
 };
 
 QStringList      Test::messages;
@@ -1184,6 +1186,78 @@ pvss:
         top.contains("input  wire [1:0] rst_trim") || top.contains("input wire [1:0] rst_trim"),
         qPrintable(top));
     QVERIFY2(!top.contains("FIXME"), qPrintable(top));
+}
+
+void Test::everyGeneratedFileCarriesTheTimescale()
+{
+    QString moduleText = moduleLibrary;
+    moduleText += R"(gpio_pad_ps:
+  port:
+    PAD: {type: logic, direction: inout}
+    C: {type: logic, direction: output}
+    IE: {type: logic, direction: input}
+    I: {type: logic, direction: input}
+    OE: {type: logic, direction: input}
+)";
+    const QString oldPad = R"(      pad:
+        input_value: pad_input_value
+        input_enable: pad_input_enable
+        output_value: pad_output_value
+        output_enable: pad_output_enable
+)";
+    QVERIFY(moduleText.contains(oldPad));
+    moduleText.replace(oldPad, "      pad:\n        io: chip_gpio\n");
+    moduleText.replace(
+        "    integration:\n",
+        R"yaml(    pad_cell:
+      cell: gpio_pad_ps
+      port:
+        pad: PAD
+        input_value: C
+        input_enable: IE
+        output_value: I
+        output_enable: OE
+      constraint:
+        - name: ie_oe_exclusive
+          expr: "!(IE && OE)"
+    integration:
+)yaml");
+    QTemporaryDir directory;
+    createProject(directory, moduleText);
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-formal", "--with-uvm", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("iomux0");
+    const CommandResult generated = runCommand(arguments);
+    QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
+
+    QString       base = baseNetlist;
+    const QString padPorts
+        = base.mid(base.indexOf("port:\n"), base.indexOf("  clk_iomux:") - base.indexOf("port:\n"));
+    base.replace(
+        padPorts,
+        "port:\n"
+        "  chip_gpio:\n    direction: inout\n    type: \"logic[3:0]\"\n    connect: chip_gpio\n");
+    writeTextFile(QDir(directory.path()).filePath("output/iomux_soc_top.soc_net"), base);
+    const CommandResult merged = mergeTop(directory);
+    QVERIFY2(merged.exitCode == 0, qPrintable(merged.output));
+
+    const QSocTimescaleScan scan = qsocScanTimescale(QDir(directory.path()).filePath("output"));
+    QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
+    for (const QString &file :
+         {"iomux_soc_top.v",
+          "peripheral/iomux0/rtl/iomux0.v",
+          "peripheral/iomux0/rtl/iomux0_regs.v",
+          "peripheral/iomux0/rtl/iomux0_conn.v",
+          "peripheral/iomux0/rtl/iomux0_io.v",
+          "peripheral/iomux0/formal/iomux0_regs_formal.sv",
+          "peripheral/iomux0/formal/iomux0_hs_formal.sv",
+          "peripheral/iomux0/formal/iomux0_io_formal.sv",
+          "peripheral/iomux0/uvm/iomux0_regs_uvm_if.sv",
+          "peripheral/iomux0/uvm/iomux0_regs_uvm_pkg.sv",
+          "peripheral/iomux0/uvm/iomux0_regs_uvm_tb.sv"}) {
+        QVERIFY2(scan.checked.contains(file), qPrintable(scan.checked.join('\n')));
+    }
 }
 
 } // namespace

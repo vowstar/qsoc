@@ -7,11 +7,13 @@
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
+#include "qsoc_test_timescale.h"
 
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTextStream>
 #include <QtCore>
@@ -991,6 +993,59 @@ power:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "wire dep_hard_all_gpu = rdy_ao;"));
     }
     /* A malformed scalar in the power shape used to abort the process. */
+    void test_every_generated_file_carries_the_timescale()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(directory.path());
+        QVERIFY(project.create("cells"));
+        const QString netlistPath = QDir(directory.path()).filePath("cells_top.soc_net");
+        QFile         netlist(netlistPath);
+        QVERIFY(netlist.open(QIODevice::WriteOnly));
+        netlist.write(R"(
+clock:
+  - name: clkctrl
+    input: {aon_clk: {}}
+    target:
+      periph_clk:
+        icg: {enable: gate_en, reset: por_n}
+        link: {aon_clk: {}}
+reset:
+  - name: rstctrl
+    source: {por_n: {active: low}}
+    target:
+      periph_n:
+        active: low
+        async: {clock: periph_clk, stage: 2}
+        link: {por_n: {}}
+power:
+  - name: pwrctrl
+    host_clock: clk_ao
+    host_reset: rst_ao_n
+    domain:
+      - name: ao
+        v_mv: 900
+        wait_dep: 0
+        settle_on: 0
+        settle_off: 0
+        follow: []
+)");
+        netlist.close();
+        {
+            QSocCliWorker     socCliWorker;
+            const QStringList args
+                = {"qsoc", "generate", "verilog", "-d", directory.path(), "-p", "cells", netlistPath};
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+        const QSocTimescaleScan scan = qsocScanTimescale(project.getOutputPath());
+        QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
+        QCOMPARE(
+            scan.checked,
+            QStringList({"cells_top.v", "clock_cell.v", "power_cell.v", "reset_cell.v"}));
+    }
+
     void test_malformed_power_shape_is_reported_not_fatal()
     {
         const QString netlistContent = R"(

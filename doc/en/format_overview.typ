@@ -36,6 +36,8 @@ When QSoC processes a SOC_NET file, it generates a single Verilog file with the 
  * NOTE: Auto-generated file, do not edit manually.
  */
 
+`timescale 1ns / 1ps
+
 /* 1. Reset controller modules (if reset primitives are defined) */
 module reset_ctrl (...);
   // Reset synchronization logic
@@ -65,6 +67,8 @@ module design (...);
   // Sequential logic (seq section)
 endmodule
 ```
+
+Every Verilog and SystemVerilog file QSoC generates, including cells, PRCM, IOMUX, MMIO, stub, formal, and UVM files, starts with #raw("`timescale 1ns / 1ps") after any header comment, so the files compile together without a time scale mismatch.
 
 *Note*: Users are responsible for manually instantiating the generated primitive modules (reset, clock, FSM) in their design or other modules as needed.
 

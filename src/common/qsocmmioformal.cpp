@@ -7,6 +7,7 @@
 #include "qsocmmioaxiverification.h"
 
 #include "common/qsocmmiogenerator.h"
+#include "common/qsocverilogutils.h"
 
 #include <algorithm>
 #include <QSet>
@@ -798,14 +799,14 @@ QSocMmioFormalCollateral QSocMmioFormal::generate(const QSocMmioPlan &plan)
 {
     if (!plan.clearPort.isEmpty())
         return {};
-    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
-        return {QSocMmioAhbVerification::formal(plan), buildSby(plan)};
-    }
-    if (plan.bus == QSocMmioBus::Apb4) {
-        return {QSocMmioApbVerification::formal(plan), buildSby(plan)};
-    }
-    if (plan.bus == QSocMmioBus::Axi4) {
-        return {QSocMmioAxiVerification::formal(plan), buildSby(plan)};
-    }
-    return {buildSystemVerilog(plan), buildSby(plan)};
+    const auto harness = [&] {
+        if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb)
+            return QSocMmioAhbVerification::formal(plan);
+        if (plan.bus == QSocMmioBus::Apb4)
+            return QSocMmioApbVerification::formal(plan);
+        if (plan.bus == QSocMmioBus::Axi4)
+            return QSocMmioAxiVerification::formal(plan);
+        return buildSystemVerilog(plan);
+    };
+    return {QSocVerilogUtils::withTimescale(harness()), buildSby(plan)};
 }

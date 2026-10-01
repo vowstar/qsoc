@@ -5,6 +5,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
+#include "qsoc_test_timescale.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -178,6 +179,8 @@ private slots:
     void formalAndUvmLockLeavesAllArtifactsUntouched();
     void generateRefusesLockedOutputWithoutChangingContent();
     void invalidGeneratorDoesNotReplaceOutput();
+    void everyGeneratedFileCarriesTheTimescale_data();
+    void everyGeneratedFileCarriesTheTimescale();
 };
 
 QStringList      Test::messages;
@@ -918,6 +921,42 @@ void Test::generateRejectsFormalBankForMmio()
     const QDir projectDirectory(directory.path());
     QVERIFY(
         !QFile::exists(projectDirectory.filePath("output/peripheral/timer_ctrl/rtl/timer_ctrl.v")));
+}
+
+void Test::everyGeneratedFileCarriesTheTimescale_data()
+{
+    QTest::addColumn<QString>("bus");
+    for (const char *bus : {"axi4_lite", "apb4", "ahb_lite", "ahb", "axi4"}) {
+        QTest::newRow(bus) << QString::fromLatin1(bus);
+    }
+}
+
+void Test::everyGeneratedFileCarriesTheTimescale()
+{
+    QFETCH(QString, bus);
+    QTemporaryDir directory;
+    createProject(directory);
+    QString moduleText = validModule;
+    moduleText.replace("bus: axi4_lite", "bus: " + bus);
+    writeTextFile(QDir(directory.path()).filePath("module/peripheral.soc_mod"), moduleText);
+    QStringList arguments
+        = {"qsoc", "generate", "module", "--with-formal", "--with-uvm", "-l", "peripheral"};
+    arguments.append(projectOptions(directory));
+    arguments.append("timer_ctrl");
+    const auto generated = runCommand(arguments);
+    QVERIFY2(generated.exitCode == 0, qPrintable(generated.output));
+
+    const QSocTimescaleScan scan = qsocScanTimescale(
+        QDir(directory.path()).filePath("output/peripheral/timer_ctrl"));
+    QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
+    QCOMPARE(
+        scan.checked,
+        QStringList(
+            {"formal/timer_ctrl_formal.sv",
+             "rtl/timer_ctrl.v",
+             "uvm/timer_ctrl_uvm_if.sv",
+             "uvm/timer_ctrl_uvm_pkg.sv",
+             "uvm/timer_ctrl_uvm_tb.sv"}));
 }
 
 QSOC_TEST_MAIN(Test)

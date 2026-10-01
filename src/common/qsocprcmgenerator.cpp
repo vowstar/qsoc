@@ -421,14 +421,16 @@ QSocPrcmGenerateResult QSocPrcmGenerator::generate(
             }
             circuit.rtl.insert(name, rtl);
         };
-        add(clock.moduleName + ".v", clockGenerator.generateControllerVerilog(clock));
-        add(reset.moduleName + ".v", resetGenerator.generateControllerVerilog(reset));
+        add(clock.moduleName + ".v",
+            QSocVerilogUtils::withTimescale(clockGenerator.generateControllerVerilog(clock)));
+        add(reset.moduleName + ".v",
+            QSocVerilogUtils::withTimescale(resetGenerator.generateControllerVerilog(reset)));
         add("clock_cell.v", clockGenerator.generateCellVerilog());
         add("reset_cell.v", resetGenerator.generateCellVerilog());
         add("qsoc_prcm_domain.v", QSocPrcmSequenceRtl::generate());
         add(circuit.mmio.moduleName + ".v", QSocMmioGenerator::generateVerilog(circuit.mmio));
         Assembly assembly(binding, *sequence.plan, circuit.mmio, moduleName, sampleStage);
-        add(moduleName + ".v", assembly.generate());
+        add(moduleName + ".v", QSocVerilogUtils::withTimescale(assembly.generate()));
         circuit.port    = assembly.ports();
         circuit.binding = assembly.bindings();
         result.circuit  = std::move(circuit);

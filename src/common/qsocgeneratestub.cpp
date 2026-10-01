@@ -112,6 +112,8 @@ bool QSocGenerateManager::generateVerilogStub(const QString &stubName, const QSt
     out << " * NOTE: Auto-generated file, do not edit manually.\n";
     out << " */\n\n";
 
+    out << "`timescale 1ns / 1ps\n\n";
+
     /* Generate stub for each module */
     for (const QString &moduleName : moduleNames) {
         if (!moduleManager->isModuleExist(moduleName)) {

@@ -78,6 +78,14 @@ public:
      *         input returns empty.
      */
     static QString sanitizeBitSelectInName(const QString &name);
+
+    /**
+     * @brief Put the timescale every generated RTL file carries in a source
+     * @param source Verilog source of one generated file
+     * @return The source with `timescale 1ns / 1ps and one blank line after
+     *         its leading `//` header lines. Empty input returns empty.
+     */
+    static QString withTimescale(const QString &source);
 };
 
 #endif // QSOCVERILOGUTILS_H

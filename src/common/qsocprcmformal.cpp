@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocprcmformal.h"
+#include "common/qsocverilogutils.h"
 
 namespace {
 
@@ -401,11 +402,11 @@ endmodule
     for (auto value = token.cbegin(); value != token.cend(); ++value)
         body.replace('@' + value.key() + '@', value.value());
     const auto top       = moduleName + "_formal";
-    result.systemVerilog = "module " + top + " #(parameter COVER = 0);\n" + declaration.join('\n')
-                           + '\n' + moduleName + " dut(\n" + connection.join(",\n") + "\n);\n"
-                           + body;
-    const auto rtl       = circuit.rtl.keys();
-    auto       files     = rtl;
+    result.systemVerilog = QSocVerilogUtils::withTimescale(
+        "module " + top + " #(parameter COVER = 0);\n" + declaration.join('\n') + '\n' + moduleName
+        + " dut(\n" + connection.join(",\n") + "\n);\n" + body);
+    const auto rtl   = circuit.rtl.keys();
+    auto       files = rtl;
     files.append(top + ".sv");
     result.sby = "[tasks]\nprove\ncover\n[options]\nprove: mode prove\ncover: mode cover\n"
                  "depth 160\nmulticlock on\nprove: aigsmt z3\n[engines]\n"

@@ -5327,7 +5327,7 @@ QString QSocIomuxGenerator::generateConnVerilog(const QSocIomuxPlan &plan)
     lines.append(QString());
     lines.append("endmodule");
     lines.append(QString());
-    return lines.join('\n');
+    return QSocVerilogUtils::withTimescale(lines.join('\n'));
 }
 
 QString QSocIomuxGenerator::generateRegsVerilog(const QSocIomuxPlan &plan)
@@ -5597,7 +5597,7 @@ QString QSocIomuxGenerator::generateTopVerilog(const QSocIomuxPlan &plan)
     lines.append("endmodule");
     lines.append(QString());
 
-    return generateCoreVerilog(plan) + "\n" + lines.join('\n');
+    return QSocVerilogUtils::withTimescale(generateCoreVerilog(plan) + "\n" + lines.join('\n'));
 }
 
 namespace {
@@ -5849,7 +5849,7 @@ QString QSocIomuxGenerator::generateIoVerilog(const QSocIomuxPlan &plan)
     }
     lines.append("endmodule");
     lines.append(QString());
-    return lines.join('\n');
+    return QSocVerilogUtils::withTimescale(lines.join('\n'));
 }
 
 namespace {

@@ -6,6 +6,7 @@
 #include <QRegularExpression>
 
 #include "common/qsociomuxgenerator.h"
+#include "common/qsocverilogutils.h"
 
 #include <algorithm>
 #include <utility>
@@ -742,7 +743,7 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generate(const QSocIomuxPlan &plan, q
     if (plan.pinCount == 0 || plan.hsSlots == 0 || bankPins == 0) {
         return collateral;
     }
-    collateral.systemVerilog = buildSystemVerilog(plan);
+    collateral.systemVerilog = QSocVerilogUtils::withTimescale(buildSystemVerilog(plan));
     collateral.sby           = buildSby(plan, bankPins);
     return collateral;
 }
@@ -976,5 +977,5 @@ QSocIomuxFormalCollateral QSocIomuxFormal::generatePad(const QSocIomuxPlan &plan
                             "%1.v\n"
                             "%1_formal.sv\n")
                             .arg(shell);
-    return {sv.join('\n'), sby};
+    return {QSocVerilogUtils::withTimescale(sv.join('\n')), sby};
 }

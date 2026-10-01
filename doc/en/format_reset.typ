@@ -538,7 +538,7 @@ Example template structure:
  *          before using in production.
  */
 
-`timescale 1ns/10ps
+`timescale 1ns / 1ps
 
 `ifndef DEF_QSOC_RST_SYNC
 `define DEF_QSOC_RST_SYNC

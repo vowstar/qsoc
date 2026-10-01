@@ -8,6 +8,7 @@
 #include "common/qsocmodulemanager.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
+#include "qsoc_test_timescale.h"
 
 #include <QDir>
 #include <QFile>
@@ -307,6 +308,9 @@ private slots:
         QVERIFY(verifyFileContent("test_stub.v", "output [DW-1:0] rdata"));
         QVERIFY(
             verifyFileContent("test_stub.v", "/* It is a stub, not a complete implementation */"));
+        QCOMPARE(
+            qsocFirstCodeLine(QDir(projectManager.getOutputPath()).filePath("test_stub.v")),
+            QStringLiteral("`timescale 1ns / 1ps"));
 
         /* Verify Liberty stub content */
         QVERIFY(verifyFileContent("test_stub.lib", "library (test_stub)"));

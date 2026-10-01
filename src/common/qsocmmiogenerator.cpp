@@ -1429,7 +1429,7 @@ void appendReadProcess(QStringList *lines, const QSocMmioPlan &plan)
     lines->append("endmodule");
 }
 
-QString buildVerilog(const QSocMmioPlan &plan)
+QString buildModule(const QSocMmioPlan &plan)
 {
     if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
         return QSocMmioAhb::generate(plan);
@@ -1450,6 +1450,11 @@ QString buildVerilog(const QSocMmioPlan &plan)
     appendWriteProcess(&lines, plan);
     appendReadProcess(&lines, plan);
     return lines.join('\n') + '\n';
+}
+
+QString buildVerilog(const QSocMmioPlan &plan)
+{
+    return QSocVerilogUtils::withTimescale(buildModule(plan));
 }
 
 } // namespace

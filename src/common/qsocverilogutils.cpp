@@ -259,6 +259,25 @@ QString QSocVerilogUtils::escapeVerilogComment(const QString &text)
     return escaped;
 }
 
+QString QSocVerilogUtils::withTimescale(const QString &source)
+{
+    if (source.isEmpty()) {
+        return source;
+    }
+    qsizetype at = 0;
+    while (QStringView(source).sliced(at).startsWith(QLatin1String("//"))) {
+        const qsizetype end = source.indexOf(QLatin1Char('\n'), at);
+        at                  = end < 0 ? source.size() : end + 1;
+    }
+    const bool spaced = QStringView(source).sliced(at).startsWith(QLatin1Char('\n'));
+    QString    result = source;
+    result.insert(
+        at,
+        spaced ? QStringLiteral("`timescale 1ns / 1ps\n")
+               : QStringLiteral("`timescale 1ns / 1ps\n\n"));
+    return result;
+}
+
 QString QSocVerilogUtils::normalizeBitSelect(const QString &bitSelect)
 {
     if (bitSelect.isEmpty()) {

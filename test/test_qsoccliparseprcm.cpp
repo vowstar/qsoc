@@ -5,6 +5,7 @@
 #include "common/qsocconsole.h"
 #include "qsoc_prcm_fixture.h"
 #include "qsoc_test.h"
+#include "qsoc_test_timescale.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -168,6 +169,10 @@ private slots:
         const auto formalReport
             = QJsonDocument::fromJson(read(output.filePath("integration/controller.json"))).object();
         QCOMPARE(formalReport["check"].toObject()["rtl"].toString(), "not_run");
+        const auto scan = qsocScanTimescale(output.path());
+        QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
+        QCOMPARE(scan.checked.size(), 8);
+        QVERIFY(scan.checked.contains("formal/controller_formal.sv"));
         QCOMPARE(run(), 0);
 
         QMap<QString, QByteArray> before;
@@ -336,6 +341,19 @@ mode:
         const auto formal = read(output.filePath("formal/controller_formal.sv"));
         QVERIFY(formal.contains("proof_d0_reset_output: assert"));
         QVERIFY(read(output.filePath("formal/check.sby")).contains("../rtl/qsoc_prcm_service.v"));
+        const auto scan = qsocScanTimescale(output.path());
+        QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
+        for (const auto &file :
+             {"rtl/controller.v",
+              "rtl/controller_clock.v",
+              "rtl/controller_reset.v",
+              "rtl/controller_register.v",
+              "rtl/clock_cell.v",
+              "rtl/reset_cell.v",
+              "rtl/qsoc_prcm_domain_service.v",
+              "rtl/qsoc_prcm_service.v",
+              "formal/controller_formal.sv"})
+            QVERIFY2(scan.checked.contains(file), qPrintable(scan.checked.join('\n')));
         const auto rtl = read(output.filePath("rtl/controller.v"));
         input["prcm"]["chip"]["mode"]["SLEEP"]["domain"]["client$port"] = YAML::Load(
             "{target: RUN}");

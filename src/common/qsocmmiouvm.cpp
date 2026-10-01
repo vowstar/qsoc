@@ -7,6 +7,7 @@
 #include "qsocmmioaxiverification.h"
 
 #include "common/qsocmmiogenerator.h"
+#include "common/qsocverilogutils.h"
 
 #include <limits>
 #include <optional>
@@ -1139,19 +1140,21 @@ QSocMmioUvmCollateral QSocMmioUvm::generate(const QSocMmioPlan &plan)
 {
     if (!plan.clearPort.isEmpty())
         return {};
-    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
-        return QSocMmioAhbVerification::uvm(plan);
-    }
-    if (plan.bus == QSocMmioBus::Apb4) {
-        return QSocMmioApbVerification::uvm(plan);
-    }
-    if (plan.bus == QSocMmioBus::Axi4) {
-        return QSocMmioAxiVerification::uvm(plan);
-    }
     QSocMmioUvmCollateral collateral;
-    collateral.interfaceSource = buildInterface(plan);
-    collateral.packageSource   = buildPackage(plan);
-    collateral.testbenchSource = buildTestbench(plan);
-    collateral.fileList        = buildFileList(plan);
+    if (plan.bus == QSocMmioBus::AhbLite || plan.bus == QSocMmioBus::Ahb) {
+        collateral = QSocMmioAhbVerification::uvm(plan);
+    } else if (plan.bus == QSocMmioBus::Apb4) {
+        collateral = QSocMmioApbVerification::uvm(plan);
+    } else if (plan.bus == QSocMmioBus::Axi4) {
+        collateral = QSocMmioAxiVerification::uvm(plan);
+    } else {
+        collateral.interfaceSource = buildInterface(plan);
+        collateral.packageSource   = buildPackage(plan);
+        collateral.testbenchSource = buildTestbench(plan);
+        collateral.fileList        = buildFileList(plan);
+    }
+    collateral.interfaceSource = QSocVerilogUtils::withTimescale(collateral.interfaceSource);
+    collateral.packageSource   = QSocVerilogUtils::withTimescale(collateral.packageSource);
+    collateral.testbenchSource = QSocVerilogUtils::withTimescale(collateral.testbenchSource);
     return collateral;
 }
