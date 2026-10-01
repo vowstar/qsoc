@@ -1611,7 +1611,10 @@ json QLLMService::sendChatCompletionTo(
     }
 
     if (reply->error() != QNetworkReply::NoError) {
-        const QString error = reply->errorString();
+        /* Only the wait timer aborts a reply that was not cancelled. */
+        const QString error = reply->error() == QNetworkReply::OperationCanceledError
+                                  ? QStringLiteral("timed out after %1 ms").arg(endpoint.timeout)
+                                  : reply->errorString();
         QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << error;
         reply->deleteLater();
         if (stopToken.stop_requested()) {

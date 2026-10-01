@@ -816,11 +816,13 @@ Compaction prepares a candidate without changing the active history. It installs
 
 Summary requests preserve text parts, assistant text, tool call identifiers, and original argument strings. Explicitly truncated, filtered, refused, or tool-producing summaries are rejected. A provided completion reason must be `stop`. Providers that omit the completion reason remain compatible, but completion cannot be verified from that field.
 
-A failed summary, failed save, cancellation, or session change leaves the active history intact. A failed save can retain candidate artifacts for recovery. Automatic compaction does not repeat a no-progress attempt until its history or request inputs change. `/compact` explicitly retries.
+A failed summary, failed save, cancellation, or session change leaves the active history intact, except for the context-length recovery described below. A failed save can retain candidate artifacts for recovery. Automatic compaction does not repeat a no-progress attempt until its history or request inputs change. `/compact` explicitly retries.
 
 The CLI saves one complete snapshot before installing compacted history. A resumed session reads either the prior history or the complete snapshot after a process exit. This does not guarantee recovery from power loss. SDK callers need persistent artifact storage and a session save callback for restart recovery.
 
 Explicit context-length errors can trigger compaction. Generic HTTP 413 responses and image-size errors do not trigger a compaction retry.
+
+During that context-length recovery, a summary request that fails, times out, or returns an empty, oversized, or tool-calling reply is replaced by a mechanical summary. It keeps the previous anchor, the latest user request when it falls outside the kept recent messages, and a truncated line per older message. The turn continues, and the CLI prints one dim line with the failure reason. Cancellation does not fall back. Automatic threshold compaction and `/compact` keep the history unchanged when the summary fails.
 
 Compaction inherits the current model and reasoning effort, including a
 temporary model selection. `agent.compaction_model` selects a different

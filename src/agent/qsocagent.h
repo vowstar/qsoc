@@ -726,6 +726,13 @@ signals:
     void compacting(int layer, int beforeTokens, int afterTokens);
 
     /**
+     * @brief Signal emitted when overflow recovery committed a mechanical
+     *        summary because the summary request failed
+     * @param reason Why the summary request failed
+     */
+    void compactionFellBack(const QString &reason);
+
+    /**
      * @brief Signal emitted after a compaction re-injects context (auto or
      *        overflow paths), so the CLI can render the restore lines. The
      *        payload is read via takeLastContextRestore(); the signal is a
@@ -982,9 +989,14 @@ private:
      * @param force Skip threshold check (for manual compact)
      * @return true if pruning saved enough tokens
      */
-    int                 performCompaction(bool force, bool manual);
+    int performCompaction(bool force, bool manual);
+    /* A non-null fallbackReason turns a failed summary request into a
+     * mechanical summary and receives the failure. */
     std::optional<json> summarizeHistory(
-        const json &summarySource, const json &retainedSource, json *recentTail);
+        const json &summarySource,
+        const json &retainedSource,
+        json       *recentTail,
+        QString    *fallbackReason = nullptr);
     QSocRequestSnapshot compactionRequest(const json &history) const;
     QByteArray          compactionRequestVersion(const QSocRequestSnapshot &request) const;
 

@@ -152,6 +152,26 @@ std::optional<QString> completedSummary(const json &response)
     return text.trimmed().isEmpty() ? std::nullopt : std::optional<QString>(text);
 }
 
+/* The last user message, when it falls before the kept tail. */
+QString summarizedUserRequest(const json &history, int start, int boundary)
+{
+    for (int i = static_cast<int>(history.size()) - 1; i >= start; --i) {
+        const auto &message = history[static_cast<size_t>(i)];
+        if (message.value("role", "") != "user") {
+            continue;
+        }
+        if (i >= boundary) {
+            return {};
+        }
+        const json content = summaryMessage(message).value("content", json());
+        return QStringLiteral("[latest user request]\n")
+               + QString::fromStdString(
+                   content.is_string() ? content.get<std::string>() : content.dump())
+               + QStringLiteral("\n[/latest user request]\n");
+    }
+    return {};
+}
+
 bool pruneHistory(json &history, const QSocAgentConfig &config)
 {
     qint64 protectedTokens = 0;
@@ -418,8 +438,12 @@ int QSocAgent::performCompaction(bool force, bool manual)
     const json prunedHistory = candidate.candidateMessages;
     bool       summarized    = false;
     json       recentTail    = candidate.candidateMessages;
+    /* Only overflow recovery forces without the user asking. */
+    QString    fallbackReason;
+    const bool overflow = force && !manual;
     if (force || prunedTokens > window * agentConfig.compactThreshold) {
-        const auto summary = summarizeHistory(source, candidate.candidateMessages, &recentTail);
+        const auto summary = summarizeHistory(
+            source, candidate.candidateMessages, &recentTail, overflow ? &fallbackReason : nullptr);
         if (!current()) {
             if (owner) {
                 owner->lastCompactionStatus_ = CompactionStatus::Cancelled;
@@ -587,6 +611,11 @@ int QSocAgent::performCompaction(bool force, bool manual)
     emit compacting(summarized ? 2 : 1, before, afterTokens);
     /* Signal handlers can destroy the agent. */
     // cppcheck-suppress knownConditionTrueFalse
+    if (owner && !fallbackReason.isEmpty()) {
+        emit compactionFellBack(fallbackReason);
+    }
+    /* Signal handlers can destroy the agent. */
+    // cppcheck-suppress knownConditionTrueFalse
     if (owner && !lastApplied_.isEmpty()) {
         emit contextRestored();
     }
@@ -605,7 +634,7 @@ void QSocAgent::compressHistoryIfNeeded(const ActiveRunPtr &run)
     }
 }
 std::optional<json> QSocAgent::summarizeHistory(
-    const json &summarySource, const json &retainedSource, json *recentTail)
+    const json &summarySource, const json &retainedSource, json *recentTail, QString *fallbackReason)
 {
     const ActiveRunPtr        run = activeRun_;
     const QPointer<QSocAgent> owner(this);
@@ -797,13 +826,24 @@ std::optional<json> QSocAgent::summarizeHistory(
                 return std::nullopt;
             }
             const auto completed = completedSummary(response);
-            if (completed) {
+            const auto error     = response.find("error");
+            QString    failure;
+            if (!completed) {
+                failure = error != response.end() && error->is_string()
+                              ? QString::fromStdString(error->get<std::string>())
+                              : QStringLiteral("empty or invalid summary");
+            } else if (fallbackReason && QSocRequestUsage::estimateText(*completed) > summaryBudget) {
+                failure = QStringLiteral("summary over budget");
+            } else {
                 summary    = *completed;
                 llmSuccess = true;
             }
-            if (!llmSuccess || summary.trimmed().isEmpty()) {
+            if (!llmSuccess && !fallbackReason) {
                 lastCompactionStatus_ = CompactionStatus::Failed;
                 return std::nullopt;
+            }
+            if (!llmSuccess) {
+                *fallbackReason = failure;
             }
         }
     }
@@ -821,6 +861,12 @@ std::optional<json> QSocAgent::summarizeHistory(
         if (QSocRequestUsage::estimateText(summary + truncated) > summaryBudget) {
             lastCompactionStatus_ = CompactionStatus::Failed;
             return std::nullopt;
+        }
+        const QString request = fallbackReason
+                                    ? summarizedUserRequest(summarySource, summarizeStart, boundary)
+                                    : QString();
+        if (QSocRequestUsage::estimateText(summary + request + truncated) <= summaryBudget) {
+            summary += request;
         }
         for (int i = summarizeStart; i < boundary; i++) {
             const auto extracted = summaryMessage(summarySource[static_cast<size_t>(i)]);

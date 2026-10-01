@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <set>
 #include <utility>
 
 using json = nlohmann::json;
@@ -988,11 +989,166 @@ private slots:
         MockServer server;
         QVERIFY(server.listen());
         server.enqueueError(400, QStringLiteral("maximum context length exceeded"));
-        server.enqueueCompletion(
-            shrinks ? QStringLiteral("Summary") : QString(400000, QLatin1Char('x')));
         if (shrinks) {
+            server.enqueueCompletion(QStringLiteral("Summary"));
             server.enqueueStream(QStringLiteral("Completed"));
         }
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.keepRecentMessages   = 1;
+        config.maxRetries           = 0;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        json      history = json::array();
+        for (int index = 0; index < (shrinks ? 8 : 2); ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'x')}});
+        }
+        agent.setMessages(history);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        QSignalSpy failed(&agent, &QSocAgent::runError);
+        QSignalSpy compacted(&agent, &QSocAgent::compacting);
+        agent.runStream(QStringLiteral("Continue"));
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count() + failed.count(), 1, 10000);
+        QCOMPARE(completed.count(), shrinks ? 1 : 0);
+        QCOMPARE(compacted.count(), shrinks ? 1 : 0);
+        QCOMPARE(server.requestCount(), shrinks ? 3 : 1);
+    }
+
+    void overflowFallsBackWhenTheSummaryFails_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("http-error") << QStringLiteral("http-error");
+        QTest::newRow("empty") << QStringLiteral("empty");
+        QTest::newRow("tool-call") << QStringLiteral("tool-call");
+        QTest::newRow("oversized") << QStringLiteral("oversized");
+        QTest::newRow("timeout") << QStringLiteral("timeout");
+    }
+
+    void overflowFallsBackWhenTheSummaryFails()
+    {
+        QFETCH(QString, kind);
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueError(400, QStringLiteral("maximum context length exceeded"));
+        if (kind == QStringLiteral("http-error")) {
+            server.enqueueError(500);
+        } else if (kind == QStringLiteral("empty")) {
+            server.enqueueCompletion(QStringLiteral("  "));
+        } else if (kind == QStringLiteral("tool-call")) {
+            server.enqueueToolCompletion({QStringLiteral("probe")});
+        } else if (kind == QStringLiteral("oversized")) {
+            server.enqueueCompletion(QString(400000, QLatin1Char('s')));
+        } else {
+            server.enqueueHeldRequest();
+        }
+        server.enqueueStream(QStringLiteral("Completed"));
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.name    = QStringLiteral("backoff-test");
+        endpoint.url     = server.url().toString();
+        endpoint.model   = QStringLiteral("test-model");
+        endpoint.timeout = 1000;
+        service.setModel(endpoint);
+        QSocToolRegistry registry;
+        auto             config     = testConfig();
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        config.keepRecentMessages   = 1;
+        config.maxRetries           = 0;
+        QSocAgent agent(nullptr, &service, &registry, config);
+
+        /* The request opens the turn and tool rounds follow, so the kept
+         * tail starts after it. */
+        const std::string request = "Rename parse_header in src/parse.cpp, keep the ABI";
+        json              history = json::array({{{"role", "user"}, {"content", request}}});
+        for (int index = 0; index < 6; ++index) {
+            const std::string id = "call_" + std::to_string(index);
+            history.push_back(
+                {{"role", "assistant"},
+                 {"content", nullptr},
+                 {"tool_calls",
+                  json::array(
+                      {{{"id", id},
+                        {"type", "function"},
+                        {"function", {{"name", "probe"}, {"arguments", "{}"}}}}})}});
+            history.push_back(
+                {{"role", "tool"}, {"tool_call_id", id}, {"content", std::string(3000, 'o')}});
+        }
+        agent.setMessages(history);
+
+        QSocMemoryExtractor::Cursor memory;
+        memory.index = 1;
+        json saved;
+        agent.setCompactionCommitter([&](const QSocAgent::CompactionCandidate &candidate) {
+            QSocMemoryExtractor::carryOver(
+                memory, agent.getMessages(), static_cast<int>(candidate.candidateMessages.size()));
+            saved = candidate.candidateMessages;
+            return true;
+        });
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        QSignalSpy failed(&agent, &QSocAgent::runError);
+        QSignalSpy fellBack(&agent, &QSocAgent::compactionFellBack);
+        agent.resumeStream();
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count() + failed.count(), 1, 10000);
+        QCOMPARE(failed.count(), 0);
+        QCOMPARE(completed.count(), 1);
+        QCOMPARE(fellBack.count(), 1);
+        QVERIFY(!fellBack.at(0).at(0).toString().isEmpty());
+        if (kind == QStringLiteral("timeout")) {
+            QVERIFY(fellBack.at(0).at(0).toString().startsWith(QStringLiteral("timed out")));
+        }
+        QCOMPARE(server.requestCount(), 3);
+
+        /* The retry is smaller, keeps the request verbatim, and pairs
+         * every tool result with its call. */
+        QVERIFY(server.requestBody(2).size() < server.requestBody(0).size());
+        const json  retry = json::parse(server.requestBody(2).toStdString());
+        const json &wire  = retry.at("messages");
+        QString     summary;
+        for (const auto &message : wire) {
+            const auto content = message.find("content");
+            if (message.value("role", "") == "user" && content != message.end()
+                && content->is_string()) {
+                const QString text = QString::fromStdString(content->get<std::string>());
+                summary = text.startsWith(QStringLiteral("[Conversation Summary]\n")) ? text
+                                                                                      : summary;
+            }
+        }
+        QVERIFY2(
+            summary.contains(
+                QStringLiteral("[latest user request]\n%1\n").arg(QString::fromStdString(request))),
+            qPrintable(summary.left(1500)));
+        std::set<std::string> open;
+        for (const auto &message : wire) {
+            if (message.value("role", "") == "tool") {
+                QCOMPARE(open.erase(message.at("tool_call_id").get<std::string>()), size_t(1));
+                continue;
+            }
+            QVERIFY(open.empty());
+            for (const auto &call : message.value("tool_calls", json::array())) {
+                open.insert(call.at("id").get<std::string>());
+            }
+        }
+        QVERIFY(open.empty());
+
+        /* What the summary dropped is still pending for memory, and the
+         * saved snapshot is the history the turn continued from. */
+        QCOMPARE(memory.pending.size(), history.size() - 1);
+        QVERIFY(memory.pending.back() == history.back());
+        const json final = agent.getMessages();
+        QCOMPARE(final.size(), saved.size() + 1);
+        QVERIFY(std::equal(saved.begin(), saved.end(), final.begin()));
+        QCOMPARE(final.back().value("content", std::string()), std::string("Completed"));
+    }
+
+    void cancelDuringOverflowSummaryDoesNotFallBack()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueError(400, QStringLiteral("maximum context length exceeded"));
+        server.enqueueHeldRequest();
         QLLMService service;
         configureService(service, server);
         QSocToolRegistry registry;
@@ -1007,14 +1163,23 @@ private slots:
                 {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'x')}});
         }
         agent.setMessages(history);
-        QSignalSpy completed(&agent, &QSocAgent::runComplete);
-        QSignalSpy failed(&agent, &QSocAgent::runError);
+        server.setRequestObserver([&](int requestIndex) {
+            if (requestIndex == 1) {
+                agent.abortAndDiscardPendingRequests();
+            }
+        });
+        QSignalSpy aborted(&agent, &QSocAgent::runAborted);
+        QSignalSpy fellBack(&agent, &QSocAgent::compactionFellBack);
         QSignalSpy compacted(&agent, &QSocAgent::compacting);
         agent.runStream(QStringLiteral("Continue"));
-        QTRY_COMPARE_WITH_TIMEOUT(completed.count() + failed.count(), 1, 10000);
-        QCOMPARE(completed.count(), shrinks ? 1 : 0);
-        QCOMPARE(compacted.count(), shrinks ? 1 : 0);
-        QCOMPARE(server.requestCount(), shrinks ? 3 : 2);
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 10000);
+        QCOMPARE(fellBack.count(), 0);
+        QCOMPARE(compacted.count(), 0);
+        QCOMPARE(server.requestCount(), 2);
+        QCOMPARE(agent.lastCompactionStatus(), QSocAgent::CompactionStatus::Cancelled);
+        QVERIFY(agent.getMessages().front() == history.front());
+        server.setRequestObserver({});
+        QVERIFY(server.releaseHeldRequest());
     }
 
     void compactionBenefitUsesTheSameLocalEstimator()

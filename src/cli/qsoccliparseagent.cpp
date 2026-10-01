@@ -8943,6 +8943,13 @@ bool QSocCliWorker::runAgentLoop(
                 agent, &QSocAgent::contextRestored, &loop, [&renderContextRestore, agent]() {
                     renderContextRestore(agent->takeLastContextRestore());
                 });
+            QObject::connect(
+                agent, &QSocAgent::compactionFellBack, &loop, [&compositor](const QString &reason) {
+                    compositor.printContent(
+                        QString("Summary request failed (%1): used a mechanical summary.\n")
+                            .arg(reason),
+                        QTuiScrollView::Dim);
+                });
 
             /* Connect abort signal */
             auto connAborted = QObject::connect(
@@ -9632,6 +9639,13 @@ bool QSocCliWorker::runAgentLoop(
             auto connRestore = QObject::connect(
                 agent, &QSocAgent::contextRestored, &loop, [&renderContextRestore, agent]() {
                     renderContextRestore(agent->takeLastContextRestore());
+                });
+            QObject::connect(
+                agent, &QSocAgent::compactionFellBack, &loop, [&compositor](const QString &reason) {
+                    compositor.printContent(
+                        QString("Summary request failed (%1): used a mechanical summary.\n")
+                            .arg(reason),
+                        QTuiScrollView::Dim);
                 });
 
             /* Connect abort signal */
