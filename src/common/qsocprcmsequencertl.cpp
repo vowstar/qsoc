@@ -99,10 +99,10 @@ YAML::Node transitions(Phase phase, bool service)
     return result;
 }
 
-QString buildRtl(bool service)
+QString buildRtl(const QString &moduleName, bool service)
 {
     YAML::Node node;
-    node["name"]      = service ? "qsoc_prcm_domain_service" : "qsoc_prcm_domain";
+    node["name"]      = moduleName.toStdString();
     node["clk"]       = "clk_i";
     node["rst"]       = "rst_ni";
     node["rst_state"] = "INIT";
@@ -137,20 +137,20 @@ QString buildRtl(bool service)
 
 } // namespace
 
-QString QSocPrcmSequenceRtl::generate()
+QString QSocPrcmSequenceRtl::generate(const QString &moduleName)
 {
-    return buildRtl(false);
+    return buildRtl(moduleName, false);
 }
 
-QString QSocPrcmSequenceRtl::generateService()
+QString QSocPrcmSequenceRtl::generateService(const QString &moduleName)
 {
-    return buildRtl(true);
+    return buildRtl(moduleName, true);
 }
 
-QString QSocPrcmSequenceRtl::generateHandshake()
+QString QSocPrcmSequenceRtl::generateHandshake(const QString &moduleName)
 {
     YAML::Node node;
-    node["name"]      = "qsoc_prcm_service";
+    node["name"]      = moduleName.toStdString();
     node["clk"]       = "clk_i";
     node["rst"]       = "rst_ni";
     node["rst_state"] = "IDLE";

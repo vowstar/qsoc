@@ -13,6 +13,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -124,11 +125,12 @@ private slots:
         QVERIFY(rtl.contains(axi ? ".STAGE(3)" : ".STAGE(2)"));
         QVERIFY(rtl.contains(axi ? "s_axi_awvalid" : "s_apb_psel"));
         const auto list = read(output.filePath("rtl/controller.fl")).split('\n');
-        QCOMPARE(list.size(), 8);
+        QCOMPARE(list.size(), 6);
         for (const auto &leaf : list) {
             if (!leaf.isEmpty()) {
-                QVERIFY(!leaf.contains('/') && leaf.endsWith(".v"));
-                QVERIFY(QFile::exists(output.filePath("rtl/" + QString::fromUtf8(leaf))));
+                QVERIFY(leaf.startsWith("controller/rtl/") && leaf.endsWith(".v"));
+                QVERIFY(
+                    QFile::exists(QDir(project.getOutputPath()).filePath(QString::fromUtf8(leaf))));
             }
         }
         const auto header = read(output.filePath("include/controller.h"));
@@ -149,30 +151,38 @@ private slots:
         const auto receiver = report["binding"].toObject()["receiver"].toObject();
         QCOMPARE(receiver["prcm_reset_sample"].toObject()["stage"].toInt(), axi ? 3 : 2);
         QCOMPARE(receiver["prcm_clear_sample"].toObject()["input"].toString(), "1'b0");
-        const auto clockPath = output.filePath("rtl/clock_cell.v");
+        const QDir root(project.getOutputPath());
+        const auto clockPath = root.filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
         const auto clock     = read(clockPath);
-        const auto custom    = clock + "\n// Custom cell boundary.\n";
-        QVERIFY(save(clockPath, custom));
+        QVERIFY(clock.contains("module qsoc_clk_div"));
+        QVERIFY(save(clockPath, clock + "\n// Custom cell boundary.\n"));
         QCOMPARE(run(), 0);
-        QCOMPARE(read(clockPath), custom);
-        QCOMPARE(run({"--force"}), 0);
         QCOMPARE(read(clockPath), clock);
+        auto top = QByteArray(
+            "qsoc_cell/rtl/qsoc_cell_clock.v\nqsoc_cell/rtl/qsoc_cell_reset.v\n"
+            "qsoc_cell/rtl/qsoc_cell_power.v\n");
+        for (const auto &leaf : list) {
+            if (!leaf.isEmpty())
+                top += leaf + '\n';
+        }
+        QCOMPARE(read(root.filePath("qsoc.fl")), top);
         QCOMPARE(run({"--with-formal"}), 0);
         const auto formalList = read(output.filePath("formal/controller_formal.fl")).split('\n');
         QCOMPARE(formalList.size(), 9);
         for (const auto &file : formalList) {
             if (!file.isEmpty())
-                QVERIFY(QFile::exists(output.filePath("formal/" + QString::fromUtf8(file))));
+                QVERIFY(QFile::exists(root.filePath(QString::fromUtf8(file))));
         }
-        QVERIFY(read(output.filePath("formal/check.sby")).contains("../rtl/clock_cell.v"));
+        QVERIFY(read(output.filePath("formal/check.sby"))
+                    .contains("\n../../qsoc_cell/rtl/qsoc_cell_clock.v\n"));
         QVERIFY(read(output.filePath("formal/controller_formal.sv")).contains("power_off: assert"));
         const auto formalReport
             = QJsonDocument::fromJson(read(output.filePath("integration/controller.json"))).object();
         QCOMPARE(formalReport["check"].toObject()["rtl"].toString(), "not_run");
-        const auto scan = qsocScanTimescale(output.path());
+        const auto scan = qsocScanTimescale(root.path());
         QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
-        QCOMPARE(scan.checked.size(), 8);
-        QVERIFY(scan.checked.contains("formal/controller_formal.sv"));
+        QCOMPARE(scan.checked.size(), 9);
+        QVERIFY(scan.checked.contains("controller/formal/controller_formal.sv"));
         QCOMPARE(run(), 0);
 
         QMap<QString, QByteArray> before;
@@ -340,19 +350,19 @@ mode:
         QCOMPARE(report["binding"].toObject()["service"].toArray().size(), 1);
         const auto formal = read(output.filePath("formal/controller_formal.sv"));
         QVERIFY(formal.contains("proof_d0_reset_output: assert"));
-        QVERIFY(read(output.filePath("formal/check.sby")).contains("../rtl/qsoc_prcm_service.v"));
-        const auto scan = qsocScanTimescale(output.path());
+        QVERIFY(read(output.filePath("formal/check.sby")).contains("../rtl/controller_service.v"));
+        const auto scan = qsocScanTimescale(project.getOutputPath());
         QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
         for (const auto &file :
-             {"rtl/controller.v",
-              "rtl/controller_clock.v",
-              "rtl/controller_reset.v",
-              "rtl/controller_register.v",
-              "rtl/clock_cell.v",
-              "rtl/reset_cell.v",
-              "rtl/qsoc_prcm_domain_service.v",
-              "rtl/qsoc_prcm_service.v",
-              "formal/controller_formal.sv"})
+             {"controller/rtl/controller.v",
+              "controller/rtl/controller_clock.v",
+              "controller/rtl/controller_reset.v",
+              "controller/rtl/controller_register.v",
+              "controller/rtl/controller_domain_service.v",
+              "controller/rtl/controller_service.v",
+              "controller/formal/controller_formal.sv",
+              "qsoc_cell/rtl/qsoc_cell_clock.v",
+              "qsoc_cell/rtl/qsoc_cell_reset.v"})
             QVERIFY2(scan.checked.contains(file), qPrintable(scan.checked.join('\n')));
         const auto rtl = read(output.filePath("rtl/controller.v"));
         input["prcm"]["chip"]["mode"]["SLEEP"]["domain"]["client$port"] = YAML::Load(
@@ -362,6 +372,79 @@ mode:
         QVERIFY(messages.join('\n').contains("PRCM_MODE_CONFLICT"));
         QCOMPARE(read(output.filePath("rtl/controller.v")), rtl);
         QCOMPARE(read(output.filePath("include/controller.h")), header);
+    }
+
+    void unitsDefineEachModuleOnce()
+    {
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_units-XXXXXX");
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(directory.path());
+        QVERIFY(project.create("control"));
+        auto node                                    = YAML::Load(qsocPrcmDeclaration());
+        node["prcm"]["controller"]["reset"]["stage"] = 2;
+        const auto data                              = QByteArray::fromStdString(YAML::Dump(node));
+        for (const QString &name : {"alpha", "beta"}) {
+            const auto path = directory.filePath(name + ".soc_net");
+            QFile      file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(data), data.size());
+            file.close();
+            QSocCliWorker worker;
+            QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+            worker.setup(
+                {"qsoc", "generate", "verilog", "-d", directory.path(), "-p", "control", path},
+                false);
+            worker.run();
+            QCOMPARE(exitSpy.size(), 1);
+            QCOMPARE(exitSpy[0][0].toInt(), 0);
+        }
+        const QDir output(project.getOutputPath());
+        QFile      list(output.filePath("qsoc.fl"));
+        QVERIFY(list.open(QIODevice::ReadOnly));
+        const QRegularExpression
+            module("^\\s*module\\s+([A-Za-z_][A-Za-z_0-9$]*)", QRegularExpression::MultilineOption);
+        QMap<QString, int> count;
+        for (const auto &entry : list.readAll().split('\n')) {
+            if (entry.isEmpty())
+                continue;
+            QFile file(output.filePath(QString::fromUtf8(entry)));
+            QVERIFY2(file.open(QIODevice::ReadOnly), entry.constData());
+            auto match = module.globalMatch(QString::fromUtf8(file.readAll()));
+            while (match.hasNext())
+                ++count[match.next().captured(1)];
+        }
+        QVERIFY(count.contains("alpha_domain"));
+        QVERIFY(count.contains("beta_domain"));
+        for (auto it = count.cbegin(); it != count.cend(); ++it)
+            QVERIFY2(it.value() == 1, qPrintable(it.key()));
+    }
+
+    void reservedName()
+    {
+        QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_reserved-XXXXXX");
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(directory.path());
+        QVERIFY(project.create("control"));
+        auto node                                    = YAML::Load(qsocPrcmDeclaration());
+        node["prcm"]["controller"]["reset"]["stage"] = 2;
+        const auto path                              = directory.filePath("Qsoc_ctl.soc_net");
+        QFile      file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const auto data = QByteArray::fromStdString(YAML::Dump(node));
+        QCOMPARE(file.write(data), data.size());
+        file.close();
+        messages.clear();
+        QSocCliWorker worker;
+        QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
+        worker.setup(
+            {"qsoc", "generate", "verilog", "-d", directory.path(), "-p", "control", path}, false);
+        worker.run();
+        QCOMPARE(exitSpy.size(), 1);
+        QCOMPARE(exitSpy[0][0].toInt(), 1);
+        QVERIFY(messages.join('\n').contains("PRCM_NAME"));
+        QVERIFY(!QFileInfo::exists(QDir(project.getOutputPath()).filePath("Qsoc_ctl")));
     }
 
     void generateMerged()

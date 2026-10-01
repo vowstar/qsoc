@@ -90,9 +90,10 @@ private slots:
         QVERIFY(!formal.systemVerilog.contains(QRegularExpression("@[A-Za-z_]+@")));
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_formal-XXXXXX");
         QVERIFY(directory.isValid());
-        for (auto file = generated.circuit->rtl.cbegin(); file != generated.circuit->rtl.cend();
-             ++file)
-            QVERIFY(save(directory.filePath(file.key()), file.value()));
+        for (const auto *files : {&generated.circuit->cell, &generated.circuit->rtl}) {
+            for (auto file = files->cbegin(); file != files->cend(); ++file)
+                QVERIFY(save(directory.filePath(file.key()), file.value()));
+        }
         QVERIFY(save(directory.filePath("control_formal.sv"), formal.systemVerilog));
         QVERIFY(save(directory.filePath("control.sby"), formal.sby));
         QProcess process;
@@ -111,7 +112,7 @@ private slots:
         }
         if (run)
             return;
-        const auto    cell       = generated.circuit->rtl["clock_cell.v"];
+        const auto    cell       = generated.circuit->cell["qsoc_cell_clock.v"];
         const QString assignment = "assign clk_out = iq & clk;";
         QCOMPARE(cell.count(assignment), 1);
         auto fault = cell;
@@ -120,7 +121,7 @@ private slots:
             "`ifdef SYNTHESIS\n`ifdef FORMAL\n" + assignment
                 + "\n`else\nassign clk_out = clk;\n`endif\n`else\n" + assignment + "\n`endif");
         for (const bool corrupt : {true, false}) {
-            QVERIFY(save(directory.filePath("clock_cell.v"), corrupt ? fault : cell));
+            QVERIFY(save(directory.filePath("qsoc_cell_clock.v"), corrupt ? fault : cell));
             process.start(QStandardPaths::findExecutable("sby"), {"-f", "control.sby", "prove"});
             QVERIFY(process.waitForStarted());
             QVERIFY(process.waitForFinished(-1));

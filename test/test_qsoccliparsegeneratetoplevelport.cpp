@@ -469,7 +469,8 @@ instance:
         // Basic validation only
 
         // Check generated Verilog file
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_link_uplink.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_link_uplink/rtl/test_link_uplink.v");
         QFile   verilogFile(verilogPath);
         QString verilogContent;
         if (verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -638,7 +639,8 @@ instance:
         worker.run();
 
         // Check generated Verilog file
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_link_types.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_link_types/rtl/test_link_types.v");
         QFile   verilogFile(verilogPath);
         QString verilogContent;
         if (verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -819,7 +821,8 @@ instance:
         worker.run();
 
         // Check generated Verilog file
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_mixed.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_mixed/rtl/test_mixed.v");
         QFile   verilogFile(verilogPath);
         QString verilogContent;
         if (verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -1086,7 +1089,8 @@ instance:
         worker.run();
 
         // Check generated Verilog file
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("io_top_test.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("io_top_test/rtl/io_top_test.v");
         QFile   verilogFile(verilogPath);
         QString verilogContent;
         if (verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)) {

@@ -45,7 +45,7 @@ qsoc project create mychip               # create a project in the current direc
 qsoc project show                        # check what was created
 qsoc module import rtl/*.v               # import Verilog modules into the library
 qsoc module list                         # confirm the modules landed
-qsoc generate verilog output/top.soc_net # generate output/top.v
+qsoc generate verilog output/top.soc_net # generate output/top/rtl/top.v
 ```
 
 Every command accepts `--help`.
@@ -84,8 +84,9 @@ directory. Every later command reads and writes inside that tree:
     [`module/`], [Module libraries filled by `module import`],
     [`schematic/`], [Schematic sources],
     [`output/`],
-    [Netlists (`.soc_net`) and generated output: `<netlist>.v` plus
-     `<netlist>.nc.rpt` when ports are left unconnected],
+    [Netlists (`.soc_net`) and generated units such as `<netlist>/rtl/<netlist>.v`,
+     plus the `qsoc_cell/` cells and the `qsoc.fl` file list
+     (@verilog-output-layout)],
     [`.qsoc.yml`],
     [Project-level configuration, overrides the user layer. Created when you
      add project settings],

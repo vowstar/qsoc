@@ -137,7 +137,8 @@ reset:
         QVERIFY(!netlistPath.isEmpty());
         /* A stale artifact from an earlier run would satisfy the existence
            check even if this generation failed. */
-        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_pure_reset.v"));
+        QFile::remove(
+            QDir(projectManager.getOutputPath()).filePath("test_pure_reset/rtl/test_pure_reset.v"));
         {
             QSocCliWorker socCliWorker;
             QStringList   args;
@@ -147,7 +148,7 @@ reset:
             socCliWorker.run();
         }
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_pure_reset.v");
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_reset/rtl/test_pure_reset.v");
         QVERIFY(QFile::exists(verilogPath));
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -213,7 +214,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_basic_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_basic_reset/rtl/test_basic_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -291,7 +293,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_sync_reset.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_sync_reset/rtl/test_sync_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -362,7 +365,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_counter_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_counter_reset/rtl/test_counter_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -460,7 +464,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_multi_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_multi_reset/rtl/test_multi_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -548,8 +553,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_sync_only_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_sync_only_reset/rtl/test_sync_only_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -624,7 +629,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_syncnt_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_syncnt_reset/rtl/test_syncnt_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -733,7 +739,8 @@ reset:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_reset_reason.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_reset_reason/rtl/test_reset_reason.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -893,8 +900,9 @@ reset:
         }
 
         const QDir    outputDir(projectManager.getOutputPath());
-        const QString verilogPath = outputDir.filePath("test_reset_reason_only.v");
-        const QString cellPath    = outputDir.filePath("reset_cell.v");
+        const QString verilogPath = outputDir.filePath(
+            "test_reset_reason_only/rtl/test_reset_reason_only.v");
+        const QString cellPath = outputDir.filePath("qsoc_cell/rtl/qsoc_cell_reset.v");
         QVERIFY(QFile::exists(verilogPath));
         QVERIFY(QFile::exists(cellPath));
 
@@ -944,7 +952,7 @@ reset:
     void testResetCellFileGeneration()
     {
         QString netlistContent = R"(
-# Test netlist for reset_cell.v file generation
+# Test netlist for qsoc_cell_reset.v file generation
 port:
   clk_sys:
     direction: input
@@ -1019,9 +1027,11 @@ reset:
             socCliWorker.run();
         }
 
-        /* Check if both Verilog file and reset_cell.v were generated */
-        QString verilogPath   = QDir(projectManager.getOutputPath()).filePath("test_reset_cell.v");
-        QString resetCellPath = QDir(projectManager.getOutputPath()).filePath("reset_cell.v");
+        /* Check if both Verilog file and qsoc_cell_reset.v were generated */
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_reset_cell/rtl/test_reset_cell.v");
+        QString resetCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_reset.v");
 
         qDebug() << "Checking files:" << verilogPath << resetCellPath;
         qDebug() << "Verilog exists:" << QFile::exists(verilogPath);
@@ -1035,13 +1045,13 @@ reset:
         QVERIFY(QFile::exists(verilogPath));
         QVERIFY(QFile::exists(resetCellPath));
 
-        /* Read reset_cell.v content */
+        /* Read qsoc_cell_reset.v content */
         QFile resetCellFile(resetCellPath);
         QVERIFY(resetCellFile.open(QIODevice::ReadOnly | QIODevice::Text));
         QString resetCellContent = resetCellFile.readAll();
 
-        /* Verify reset_cell.v header */
-        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "@file reset_cell.v"));
+        /* Verify qsoc_cell_reset.v header */
+        QVERIFY(verifyVerilogContentNormalized(resetCellContent, "@file qsoc_cell_reset.v"));
         QVERIFY(verifyVerilogContentNormalized(
             resetCellContent, "Template reset cells for QSoC reset primitives"));
         QVERIFY(verifyVerilogContentNormalized(
@@ -1120,8 +1130,9 @@ reset:
             socCliWorker.run();
         }
 
-        QString verilogPath1
-            = QDir(projectManager.getOutputPath()).filePath("test_reset_no_test_enable.v");
+        QString verilogPath1 = QDir(projectManager.getOutputPath())
+                                   .filePath(
+                                       "test_reset_no_test_enable/rtl/test_reset_no_test_enable.v");
         QVERIFY(QFile::exists(verilogPath1));
 
         QFile verilogFile1(verilogPath1);
@@ -1181,7 +1192,8 @@ reset:
         }
 
         QString verilogPath2
-            = QDir(projectManager.getOutputPath()).filePath("test_reset_with_test_enable.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_reset_with_test_enable/rtl/test_reset_with_test_enable.v");
         QVERIFY(QFile::exists(verilogPath2));
 
         QFile verilogFile2(verilogPath2);
@@ -1249,8 +1261,8 @@ reset:
             socCliWorker.run();
         }
 
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_reset_output_win.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_reset_output_win/rtl/test_reset_output_win.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -1334,8 +1346,8 @@ reset:
 )";
         const QString netlistPath    = createTempFile("test_reset_guard.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_reset_guard.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_reset_guard/rtl/test_reset_guard.v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;
@@ -1483,7 +1495,8 @@ reset:
         messageList.clear();
         const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;
@@ -1549,7 +1562,7 @@ reset:
         const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
         QVERIFY(!netlistPath.isEmpty());
         const QDir    outputDir(projectManager.getOutputPath());
-        const QString verilogPath = outputDir.filePath(stem + ".v");
+        const QString verilogPath = outputDir.filePath(stem + "/rtl/" + stem + ".v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;
@@ -1564,7 +1577,7 @@ reset:
         /* The diagram inverts a high-active source where the RTL does: at the
            link component input, not between the component and the AND gate. */
         if (kind == "async" || kind == "sync" || kind == "count") {
-            QFile typstFile(outputDir.filePath(stem + "_ctrl.typ"));
+            QFile typstFile(outputDir.filePath(stem + "/doc/" + stem + "_ctrl.typ"));
             QVERIFY(typstFile.open(QIODevice::ReadOnly | QIODevice::Text));
             const QStringList lines = QString::fromUtf8(typstFile.readAll()).split('\n');
             const QString     stub
@@ -1647,7 +1660,7 @@ reset:
              "-o",
              imagePath,
              verilogPath,
-             outputDir.filePath("reset_cell.v"),
+             outputDir.filePath("qsoc_cell/rtl/qsoc_cell_reset.v"),
              benchPath});
         QVERIFY(build.waitForStarted());
         QVERIFY(build.waitForFinished());

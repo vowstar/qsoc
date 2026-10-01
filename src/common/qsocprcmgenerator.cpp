@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocprcmgenerator.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocprcmsequenceplan.h"
 #include "common/qsocprcmsequencertl.h"
 #include "common/qsocverilogutils.h"
@@ -294,7 +295,7 @@ private:
             out << "wire " << prefix << name << ";\n";
         emitInstance(
             out,
-            "qsoc_prcm_domain",
+            moduleName + "_domain",
             prefix + "action_inst",
             {{"clk_i", plan.input.clockInput},
              {"rst_ni", prefix + "cold_n"},
@@ -410,7 +411,7 @@ QSocPrcmGenerateResult QSocPrcmGenerator::generate(
         const QRegularExpression module(
             "^\\s*module\\s+([A-Za-z_][A-Za-z_0-9$]*)\\s", QRegularExpression::MultilineOption);
         auto add = [&](const QString &name, const QString &rtl) {
-            if (rtl.isEmpty() || circuit.rtl.contains(name))
+            if (rtl.isEmpty() || circuit.rtl.contains(name) || circuit.cell.contains(name))
                 reject(binding.input, "prcm", "Cannot emit a unique RTL file: " + name);
             auto match = module.globalMatch(rtl);
             while (match.hasNext()) {
@@ -425,9 +426,13 @@ QSocPrcmGenerateResult QSocPrcmGenerator::generate(
             QSocVerilogUtils::withTimescale(clockGenerator.generateControllerVerilog(clock)));
         add(reset.moduleName + ".v",
             QSocVerilogUtils::withTimescale(resetGenerator.generateControllerVerilog(reset)));
-        add("clock_cell.v", clockGenerator.generateCellVerilog());
-        add("reset_cell.v", resetGenerator.generateCellVerilog());
-        add("qsoc_prcm_domain.v", QSocPrcmSequenceRtl::generate());
+        const auto cell = [&](const QString &name, const QString &rtl) {
+            add(name, rtl);
+            circuit.cell.insert(name, circuit.rtl.take(name));
+        };
+        cell(QSocCellLibrary::clockFile(), clockGenerator.generateCellVerilog());
+        cell(QSocCellLibrary::resetFile(), resetGenerator.generateCellVerilog());
+        add(moduleName + "_domain.v", QSocPrcmSequenceRtl::generate(moduleName + "_domain"));
         add(circuit.mmio.moduleName + ".v", QSocMmioGenerator::generateVerilog(circuit.mmio));
         Assembly assembly(binding, *sequence.plan, circuit.mmio, moduleName, sampleStage);
         add(moduleName + ".v", QSocVerilogUtils::withTimescale(assembly.generate()));

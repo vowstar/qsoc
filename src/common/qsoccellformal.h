@@ -19,8 +19,8 @@ namespace QSocCellFormal {
 
 /**
  * @brief Harnesses, SymbiYosys job and file list for some cell files.
- * @param cellFiles Cell file names, any of clock_cell.v, reset_cell.v and
- *                  power_cell.v. Others are ignored.
+ * @param cellFiles Cell file names, any of qsoc_cell_clock.v, qsoc_cell_reset.v and
+ *                  qsoc_cell_power.v. Others are ignored.
  * @param cellDir   Directory of the cell files, relative to the output.
  * @return Output file name to content: one <cell>_formal.sv per cell file,
  *         check.sby and cell_formal.fl. Empty when no cell file is known.

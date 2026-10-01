@@ -16,24 +16,12 @@ struct Artifact
     QByteArray contents;
 };
 
-QString write(std::vector<Artifact> artifacts, bool force);
-
-struct PrimitiveCellSpec
-{
-    QString    leafName;
-    QByteArray canonicalBytes;
-};
-
-struct PrimitiveCellResult
-{
-    bool    success = false;
-    bool    written = false;
-    QString path;
-    QString error;
-};
-
-PrimitiveCellResult ensurePrimitiveCell(
-    const QString &outputDirectory, const PrimitiveCellSpec &spec, bool force);
+/**
+ * @brief Write artifacts atomically.
+ * @details A .fl line naming another artifact becomes its path relative to
+ *          outputDirectory. A .sby [files] line becomes relative to the .sby.
+ */
+QString write(std::vector<Artifact> artifacts, bool force, const QString &outputDirectory);
 
 } // namespace QSocGenerateArtifact
 

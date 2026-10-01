@@ -434,6 +434,12 @@ public slots:
     QSocProjectManager *getProjectManager();
 
     /**
+     * @brief Directory that collects controller diagrams during generateVerilog().
+     * @return Staging path, empty outside generateVerilog().
+     */
+    QString getDiagramDirectory() const;
+
+    /**
      * @brief Get the module manager.
      * @details Retrieves the currently assigned module manager.
      * @return QSocModuleManager * Pointer to the current module manager.
@@ -453,14 +459,6 @@ public slots:
      * @return QLLMService * Pointer to the current LLM service.
      */
     QLLMService *getLLMService();
-
-    /**
-     * @brief Set force overwrite mode for primitive cell files.
-     * @details When enabled, existing clock, reset, and power primitive cell files
-     *          will be replaced during generation.
-     * @param force true to enable force overwrite, false to preserve existing files.
-     */
-    void setForceOverwrite(bool force);
 
     /**
      * @brief Load netlist file.
@@ -790,6 +788,8 @@ private:
     QSocSeqPrimitive   *seqPrimitive   = nullptr;
     /** Netlist data. */
     YAML::Node netlistData;
+    /** Diagram staging directory of the running generateVerilog(). */
+    QString diagramDirectory;
 };
 
 #endif // QSOCGENERATEMANAGER_H

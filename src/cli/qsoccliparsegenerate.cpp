@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocconfig.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocgeneratemanager.h"
@@ -348,7 +349,10 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
             artifacts.push_back({uvmFileListPath, collateral.fileList.toUtf8()});
         }
 
-        const QString writeError = QSocGenerateArtifact::write(artifacts, parser.isSet("force"));
+        QString writeError = QSocGenerateArtifact::write(
+            artifacts, parser.isSet("force"), projectManager->getOutputPath());
+        if (writeError.isEmpty())
+            writeError = QSocCellLibrary::writeFileList(projectManager->getOutputPath());
         if (!writeError.isEmpty()) {
             return showError(1, writeError);
         }
@@ -507,7 +511,10 @@ bool QSocCliWorker::parseGenerateModule(const QStringList &appArguments)
         artifacts.push_back({uvmFileListPath, uvmCollateral.fileList.toUtf8()});
     }
 
-    const QString writeError = QSocGenerateArtifact::write(artifacts, parser.isSet("force"));
+    QString writeError = QSocGenerateArtifact::write(
+        artifacts, parser.isSet("force"), projectManager->getOutputPath());
+    if (writeError.isEmpty())
+        writeError = QSocCellLibrary::writeFileList(projectManager->getOutputPath());
     if (!writeError.isEmpty()) {
         return showError(1, writeError);
     }
@@ -543,9 +550,6 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         {{"m", "merge"},
          QCoreApplication::translate(
              "main", "Merge multiple netlist files in order before processing.")},
-        {{"f", "force"},
-         QCoreApplication::translate(
-             "main", "Replace existing clock, reset, and power primitive cell files.")},
         {"format",
          QCoreApplication::translate(
              "main",
@@ -578,11 +582,11 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
     }
 
     if (parser.isSet("check")) {
-        if (parser.isSet("force") || parser.isSet("format") || parser.isSet("with-formal")) {
+        if (parser.isSet("format") || parser.isSet("with-formal")) {
             return showError(
                 1,
                 QCoreApplication::translate(
-                    "main", "Error: --check does not support --force, --format, or --with-formal."));
+                    "main", "Error: --check does not support --format or --with-formal."));
         }
         return checkPrcmNetlists(filePathList);
     }
@@ -631,11 +635,6 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
 
     /* Check if merge mode is enabled */
     const bool mergeMode = parser.isSet("merge");
-
-    /* Set force overwrite mode if enabled */
-    if (parser.isSet("force")) {
-        generateManager->setForceOverwrite(true);
-    }
 
     if (mergeMode && filePathList.size() > 1) {
         /* Merge mode: combine multiple netlist files */
@@ -766,7 +765,8 @@ bool QSocCliWorker::processMergedNetlists(const QStringList &filePathList)
         0,
         QCoreApplication::translate(
             "main", "Successfully generated Verilog code for merged netlist: %1")
-            .arg(QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v")));
+            .arg(QDir(projectManager->getOutputPath())
+                     .filePath(outputFileName + "/rtl/" + outputFileName + ".v")));
 
     return true;
 }
@@ -820,7 +820,8 @@ bool QSocCliWorker::processIndividualNetlists(const QStringList &filePathList)
         showInfo(
             0,
             QCoreApplication::translate("main", "Successfully generated Verilog code: %1")
-                .arg(QDir(projectManager->getOutputPath()).filePath(outputFileName + ".v")));
+                .arg(QDir(projectManager->getOutputPath())
+                         .filePath(outputFileName + "/rtl/" + outputFileName + ".v")));
     }
 
     return true;

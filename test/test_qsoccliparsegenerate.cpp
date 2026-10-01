@@ -60,7 +60,8 @@ private:
 
     QString verilogOutputPath(const QString &baseFileName)
     {
-        return QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v");
+        return QDir(projectManager.getOutputPath())
+            .filePath(baseFileName + "/rtl/" + baseFileName + ".v");
     }
 
     bool removeVerilogOutput(const QString &baseFileName)
@@ -151,7 +152,8 @@ c906:
     {
         QCOMPARE(messageList.filter(diagnostic).size(), 1);
         QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
-        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v")));
+        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath())
+                                   .filePath(baseFileName + "/rtl/" + baseFileName + ".v")));
     }
 
     /* Look for Verilog output file in typical locations */
@@ -159,7 +161,8 @@ c906:
     {
         /* Check the project output directory first (most reliable) */
         const QString projectOutputPath = projectManager.getOutputPath();
-        const QString projectFilePath   = QDir(projectOutputPath).filePath(baseFileName + ".v");
+        const QString projectFilePath
+            = QDir(projectOutputPath).filePath(baseFileName + "/rtl/" + baseFileName + ".v");
         if (QFile::exists(projectFilePath)) {
             return true;
         }
@@ -221,7 +224,8 @@ c906:
         if (verilogContent.isEmpty()) {
             const QString projectOutputPath = projectManager.getOutputPath();
             if (!projectOutputPath.isNull()) {
-                filePath = QDir(projectOutputPath).filePath(baseFileName + ".v");
+                filePath
+                    = QDir(projectOutputPath).filePath(baseFileName + "/rtl/" + baseFileName + ".v");
                 if (!filePath.isNull() && QFile::exists(filePath)) {
                     QFile file(filePath);
                     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -2750,8 +2754,10 @@ net:
 
         /* Check if the output file exists using direct file system check */
         const QString projectOutputPath = projectManager.getOutputPath();
-        const QString expectedFilePath
-            = QDir(projectOutputPath).filePath("test_bus_width_preservation_unique.v");
+        const QString expectedFilePath  = QDir(projectOutputPath)
+                                              .filePath(
+                                                  "test_bus_width_preservation_unique/rtl/"
+                                                  "test_bus_width_preservation_unique.v");
 
         /* Use the updated function name for verification */
         QVERIFY(verifyVerilogOutputExistence("test_bus_width_preservation_unique"));
@@ -3230,8 +3236,9 @@ instance:
         socCliWorker.run();
 
         /* Read Verilog file to check ordering */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_cond_multi.v");
-        QFile   file(verilogPath);
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_cond_multi/rtl/test_cond_multi.v");
+        QFile file(verilogPath);
         QVERIFY2(file.open(QIODevice::ReadOnly | QIODevice::Text), "File should exist");
         QString content = file.readAll();
         file.close();
@@ -3279,8 +3286,9 @@ instance:
         socCliWorker.run();
 
         /* Read Verilog file to check ordering */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_cond_mixed.v");
-        QFile   file(verilogPath);
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_cond_mixed/rtl/test_cond_mixed.v");
+        QFile file(verilogPath);
         QVERIFY2(file.open(QIODevice::ReadOnly | QIODevice::Text), "File should exist");
         QString content = file.readAll();
         file.close();
@@ -3433,9 +3441,10 @@ instance: {}
         QVERIFY(verifyVerilogOutputExistence("test_comb_seq_input_extraction"));
 
         /* Read generated Verilog content */
-        const QString verilogFile = projectManager.getCurrentPath()
-                                    + "/output/test_comb_seq_input_extraction.v";
-        QFile         file(verilogFile);
+        const QString verilogFile
+            = projectManager.getCurrentPath()
+              + "/output/test_comb_seq_input_extraction/rtl/test_comb_seq_input_extraction.v";
+        QFile file(verilogFile);
         QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
         QString verilogContent = file.readAll();
         file.close();
@@ -3949,8 +3958,8 @@ net:
 
         /* verifyVerilogContent collapses whitespace, so re-read the raw file
            to confirm canonical form is emitted byte-for-byte. */
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_bitsel_whitespace.v");
+        const QString outPath = QDir(projectManager.getOutputPath())
+                                    .filePath("test_bitsel_whitespace/rtl/test_bitsel_whitespace.v");
         QFile rawOut(outPath);
         QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray rawBytes = rawOut.readAll();
@@ -4157,8 +4166,8 @@ comb:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_comb_reversed_out.v");
+        const QString outPath = QDir(projectManager.getOutputPath())
+                                    .filePath("test_comb_reversed_out/rtl/test_comb_reversed_out.v");
         QFile rawOut(outPath);
         QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray rawBytes = rawOut.readAll();
@@ -4281,9 +4290,9 @@ seq:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_seq_reg_bitsel.v");
-        QFile rawOut(outPath);
+        const QString outPath = QDir(projectManager.getOutputPath())
+                                    .filePath("test_seq_reg_bitsel/rtl/test_seq_reg_bitsel.v");
+        QFile         rawOut(outPath);
         QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray rawBytes = rawOut.readAll();
         rawOut.close();
@@ -4643,7 +4652,8 @@ instance:
             const QString netPath = createTempFile("test_tie_maximum_decimal.soc_net", netContent);
             QVERIFY(!netPath.isEmpty());
             const QString outputPath
-                = QDir(projectManager.getOutputPath()).filePath("test_tie_maximum_decimal.v");
+                = QDir(projectManager.getOutputPath())
+                      .filePath("test_tie_maximum_decimal/rtl/test_tie_maximum_decimal.v");
 
             const auto generate = [&](QByteArray &bytes) {
                 if (QFile::exists(outputPath) && !QFile::remove(outputPath)) {
@@ -5154,7 +5164,8 @@ token_dut:
         QVERIFY(!filePath.isEmpty());
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_tie_token_classification.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_tie_token_classification/rtl/test_tie_token_classification.v");
         QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
         QVERIFY(!QFile::exists(verilogPath));
         messageList.clear();
@@ -5202,7 +5213,9 @@ token_dut:
         }
 
         const QString reportPath
-            = QDir(projectManager.getOutputPath()).filePath("test_tie_token_classification.nc.rpt");
+            = QDir(projectManager.getOutputPath())
+                  .filePath(
+                      "test_tie_token_classification/reports/test_tie_token_classification.nc.rpt");
         QFile reportFile(reportPath);
         QVERIFY(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray reportBytes = reportFile.readAll();
@@ -5293,9 +5306,9 @@ instance:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_empty_tie_link.v");
-        QFile rawOut(outPath);
+        const QString outPath = QDir(projectManager.getOutputPath())
+                                    .filePath("test_empty_tie_link/rtl/test_empty_tie_link.v");
+        QFile         rawOut(outPath);
         QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray rawBytes = rawOut.readAll();
         rawOut.close();
@@ -5436,8 +5449,8 @@ seq:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_seq_slice_coexist.v");
+        const QString outPath = QDir(projectManager.getOutputPath())
+                                    .filePath("test_seq_slice_coexist/rtl/test_seq_slice_coexist.v");
         QFile rawOut(outPath);
         QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray rawBytes = rawOut.readAll();
@@ -5697,9 +5710,9 @@ reset:
         QVERIFY(warnedClkTarget);
         QVERIFY(warnedRstTarget);
 
-        const QString outPath
-            = QDir(projectManager.getOutputPath()).filePath("test_clk_rst_sanitize.v");
-        QFile rawOut(outPath);
+        const QString outPath = QDir(projectManager.getOutputPath())
+                                    .filePath("test_clk_rst_sanitize/rtl/test_clk_rst_sanitize.v");
+        QFile         rawOut(outPath);
         QVERIFY(rawOut.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray rawBytes = rawOut.readAll();
         rawOut.close();
@@ -5715,7 +5728,9 @@ reset:
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
             "",
-            {outputDir.filePath("clock_cell.v"), outputDir.filePath("reset_cell.v"), outPath},
+            {outputDir.filePath("qsoc_cell/rtl/qsoc_cell_clock.v"),
+             outputDir.filePath("qsoc_cell/rtl/qsoc_cell_reset.v"),
+             outPath},
             {},
             {},
             QSlangDriver::UnknownModulePolicy::Reject));
@@ -6247,8 +6262,8 @@ net:
             {"qsoc", "generate", "verilog", "-d", projectManager.getCurrentPath(), filePath}, false);
         socCliWorker.run();
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_packed_width.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_packed_width/rtl/test_packed_width.v");
         QVERIFY(QFile::exists(verilogPath));
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -6260,7 +6275,7 @@ net:
 
     /**
      * A power section without host_clock cannot generate a controller. The
-     * command used to print the error, skip power_cell.v, and still report
+     * command used to print the error, skip the controller, and still report
      * success, so a build script saw a passing run with a missing controller.
      */
     void testGenerateFailsWhenPrimitiveFails()
@@ -6283,7 +6298,8 @@ power:
         QVERIFY(filePath != "");
 
         /* A stale partial file from an earlier run would defeat the check. */
-        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_power_no_host.v"));
+        QFile::remove(QDir(projectManager.getOutputPath())
+                          .filePath("test_power_no_host/rtl/test_power_no_host.v"));
 
         messageList.clear();
         QSocCliWorker socCliWorker;
@@ -6299,12 +6315,9 @@ power:
         }
         QVERIFY(reportedFailure);
 
-        /* The power cell is the artifact that never got written. */
-        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath("power_cell.v")));
-
-        /* And the failed run must not leave a partial top-level file. */
-        QVERIFY(
-            !QFile::exists(QDir(projectManager.getOutputPath()).filePath("test_power_no_host.v")));
+        /* And the failed run must not leave a partial unit. */
+        QVERIFY(!QFileInfo::exists(
+            QDir(projectManager.getOutputPath()).filePath("test_power_no_host")));
     }
 
     /* A failed regeneration must leave the previous complete RTL untouched
@@ -6335,8 +6348,8 @@ clock:
                 false);
             socCliWorker.run();
         }
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_atomic_keep.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_atomic_keep/rtl/test_atomic_keep.v");
         QVERIFY(QFile::exists(verilogPath));
         QFile goodFile(verilogPath);
         QVERIFY(goodFile.open(QIODevice::ReadOnly));
@@ -6391,14 +6404,13 @@ clock:
         QCOMPARE(keptFile.readAll(), goodBytes);
     }
 
-    /* A top-level output named after a primitive cell artifact would race the
-       cell generator for one path; the collision is refused up front. */
-    void testGenerateRejectsPrimitiveCellOutputCollision()
+    /* Names starting with qsoc_ belong to QSoC output units and cells. */
+    void testGenerateRejectsReservedTopName()
     {
         const QString netContent = R"(
 ---
 version: "1.0"
-module: "clock_cell"
+module: "qsoc_Top"
 clock:
   - name: cellname_ctrl
     input:
@@ -6410,7 +6422,7 @@ clock:
         link:
           osc:
 )";
-        const QString filePath   = createTempFile("clock_cell.soc_net", netContent);
+        const QString filePath   = createTempFile("QSOC_top.soc_net", netContent);
         QVERIFY(filePath != "");
         messageList.clear();
         {
@@ -6420,13 +6432,14 @@ clock:
                 false);
             socCliWorker.run();
         }
-        bool reportedCollision = false;
+        bool reportedReserved = false;
         for (const QString &msg : messageList) {
-            if (msg.contains("collides with a primitive cell artifact")) {
-                reportedCollision = true;
+            if (msg.contains("reserved for QSoC output")) {
+                reportedReserved = true;
             }
         }
-        QVERIFY(reportedCollision);
+        QVERIFY(reportedReserved);
+        QVERIFY(!QFileInfo::exists(QDir(projectManager.getOutputPath()).filePath("QSOC_top")));
     }
 
     void testGenerateRefusesResetWithNoSource()

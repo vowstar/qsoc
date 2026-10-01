@@ -353,8 +353,6 @@ input format is documented in @soc-net-format. PRCM input and controller generat
     [Check PRCM resource binding and stable modes without a project or RTL output],
     [`--with-formal`],
     [Generate PRCM RTL checks alongside the controller],
-    [`-f`, `--force`],
-    [Replace existing clock, reset, and power primitive cell files],
     [`--format`],
     [Run `verible-verilog-format` from `PATH` on each generated top-level Verilog file],
     [files], [The netlist files to be processed],
@@ -366,6 +364,45 @@ input format is documented in @soc-net-format. PRCM input and controller generat
 Default generation writes canonical QSoC output without consulting `PATH`.
 `--format` is an explicit post-processing step; its bytes depend on the
 installed `verible-verilog-format` and are not canonical.
+
+==== Output Layout
+<verilog-output-layout>
+Each top or PRCM circuit is a unit under `output/<unit>/`. Every run also
+writes the design independent cell unit and the top file list.
+
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Path], [Content]),
+    table.hline(),
+    [`output/<top>/rtl/<top>.v`], [Top-level Verilog, with its controllers],
+    [`output/<top>/rtl/<top>.fl`], [Unit file list],
+    [`output/<top>/doc/<controller>.typ`], [Clock, reset, and power controller diagrams],
+    [`output/<top>/reports/<top>.nc.rpt`], [Unconnected port report, when ports are left open],
+    [`output/qsoc_cell/rtl/qsoc_cell_clock.v`], [Clock template cells],
+    [`output/qsoc_cell/rtl/qsoc_cell_reset.v`], [Reset template cells],
+    [`output/qsoc_cell/rtl/qsoc_cell_power.v`], [Power template cells],
+    [`output/qsoc_cell/rtl/qsoc_cell.fl`], [Cell file list],
+    [`output/qsoc.fl`],
+    [Concatenation of every unit file list],
+  )],
+  caption: [VERILOG OUTPUT LAYOUT],
+  kind: table,
+)
+
+Every `.fl` entry is a plain file path relative to `output/`, so all lists work
+from that one directory. `qsoc.fl` lists `qsoc_cell` first, then every unit present
+under `output/` that has an `rtl/<unit>.fl`, both `output/<unit>/` and
+`output/<library>/<module>/`, in name order. It is rebuilt after every
+generation, so deleting a unit directory drops it from the next `qsoc.fl`.
+Rebuilding fails when a list holds an entry that is not a plain relative path
+inside `output/`, or when two listed files define the same module.
+
+A unit directory is created only when its top is written, so a failed run adds
+no unit. The `qsoc_cell` files are regenerated on every run. A top, PRCM
+circuit, or controller whose name is `qsoc` or starts with `qsoc_`, in any case,
+is rejected.
 
 ==== Netlist Merge Semantics (`-m` / `--merge`)
 <netlist-merge-semantics>
@@ -399,7 +436,7 @@ qsoc generate verilog --merge \
 
 ==== Unconnected Port Report
 <unconnected-port-report>
-The Verilog generation automatically creates an unconnected port report when unconnected ports are detected. The report is saved as `<module_name>.nc.rpt` in YAML format containing:
+The Verilog generation automatically creates an unconnected port report when unconnected ports are detected. The report is saved as `output/<top>/reports/<top>.nc.rpt` in YAML format containing:
 
 - Summary statistics (total instances and ports)
 - Detailed breakdown by instance and port

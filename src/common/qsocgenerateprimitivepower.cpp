@@ -3,7 +3,6 @@
 
 #include "qsocgenerateprimitivepower.h"
 #include "common/qsocconsole.h"
-#include "common/qsocgenerateartifact.h"
 #include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
@@ -17,11 +16,6 @@
 QSocPowerPrimitive::QSocPowerPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
-
-void QSocPowerPrimitive::setForceOverwrite(bool force)
-{
-    m_forceOverwrite = force;
-}
 
 bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QTextStream &out)
 {
@@ -68,15 +62,6 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
         }
     }
 
-    // Generate or update power_cell.v file
-    if (m_parent && m_parent->getProjectManager()) {
-        QString outputDir = m_parent->getProjectManager()->getOutputPath();
-        if (!generatePowerCellFile(outputDir)) {
-            QSocConsole::warn() << "Failed to generate power_cell.v file";
-            return false;
-        }
-    }
-
     // Generate Verilog code
     generateModuleHeader(config, out);
     generateWireDeclarations(config, out);
@@ -87,8 +72,8 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
     out << "\nendmodule\n\n";
 
     // Generate Typst power diagram (failure does not affect Verilog generation)
-    if (m_parent && m_parent->getProjectManager()) {
-        const QString outputDir = m_parent->getProjectManager()->getOutputPath();
+    if (m_parent && !m_parent->getDiagramDirectory().isEmpty()) {
+        const QString outputDir = m_parent->getDiagramDirectory();
         const QString typstName = config.moduleName + QStringLiteral(".typ");
         const auto    artifact  = QSocPaths::resolveArtifactPath(outputDir, typstName);
         if (!artifact.isValid()) {
@@ -590,27 +575,12 @@ QString QSocPowerPrimitive::generateCellVerilog()
     return canonical;
 }
 
-bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
-{
-    const QSocGenerateArtifact::PrimitiveCellSpec
-        spec{"power_cell.v", generateCellVerilog().toUtf8()};
-    const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
-    if (!result.success) {
-        QSocConsole::warn() << result.error;
-    } else if (result.written) {
-        QSocConsole::info() << "Generated power_cell.v at:" << result.path;
-    } else {
-        QSocConsole::info() << "power_cell.v already exists, skipping generation";
-    }
-    return result.success;
-}
-
 QString QSocPowerPrimitive::generatePowerFSMModule()
 {
     QString     code;
     QTextStream out(&code);
 
-    out << "/* power_cell.v\n";
+    out << "/* qsoc_cell_power.v\n";
     out << " * Module: qsoc_power_fsm\n";
     out << " * Minimal per-domain power controller with strict power sequencing\n";
     out << " * Power-up   : enable switch -> wait pgood+settle -> clock on -> release reset\n";

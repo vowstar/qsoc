@@ -197,7 +197,8 @@ comb:
         }
 
         /* Check if Verilog file was generated - uses first file's basename */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_merge1.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_merge1/rtl/test_merge1.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -314,7 +315,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_seq_merge1.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_seq_merge1/rtl/test_seq_merge1.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -451,7 +453,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_mixed_merge1.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_mixed_merge1/rtl/test_mixed_merge1.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -555,7 +558,8 @@ comb:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_three1.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_three1/rtl/test_three1.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -632,7 +636,8 @@ comb: []
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_inst1.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_inst1/rtl/test_inst1.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */

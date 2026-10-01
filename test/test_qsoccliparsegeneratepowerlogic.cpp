@@ -89,15 +89,16 @@ private:
 
     bool verifyPowerCellFileComplete()
     {
-        const QString powerCellPath = QDir(projectManager.getOutputPath()).filePath("power_cell.v");
+        const QString powerCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_power.v");
         if (!QFile::exists(powerCellPath)) {
-            qWarning() << "power_cell.v not found at" << powerCellPath;
+            qWarning() << "qsoc_cell_power.v not found at" << powerCellPath;
             return false;
         }
 
         QFile file(powerCellPath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            qWarning() << "Failed to open power_cell.v:" << file.errorString();
+            qWarning() << "Failed to open qsoc_cell_power.v:" << file.errorString();
             return false;
         }
         const QString content = file.readAll();
@@ -105,13 +106,13 @@ private:
 
         /* Check for qsoc_power_fsm module */
         if (!content.contains("module qsoc_power_fsm")) {
-            qWarning() << "Missing module in power_cell.v: qsoc_power_fsm";
+            qWarning() << "Missing module in qsoc_cell_power.v: qsoc_power_fsm";
             return false;
         }
 
         /* Check for qsoc_power_rst_sync module */
         if (!content.contains("module qsoc_power_rst_sync")) {
-            qWarning() << "Missing module in power_cell.v: qsoc_power_rst_sync";
+            qWarning() << "Missing module in qsoc_cell_power.v: qsoc_power_rst_sync";
             return false;
         }
 
@@ -161,7 +162,8 @@ power:
         QVERIFY(!netlistPath.isEmpty());
         /* A stale artifact from an earlier run would satisfy the existence
            check even if this generation failed. */
-        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_pure_power.v"));
+        QFile::remove(
+            QDir(projectManager.getOutputPath()).filePath("test_pure_power/rtl/test_pure_power.v"));
         {
             QSocCliWorker socCliWorker;
             QStringList   args;
@@ -171,7 +173,7 @@ power:
             socCliWorker.run();
         }
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_pure_power.v");
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_power/rtl/test_pure_power.v");
         QVERIFY(QFile::exists(verilogPath));
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -198,8 +200,8 @@ power:
         const QString netlistPath = createTempFile("test_pure_power_api.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
-        const QString outputPath
-            = QDir(projectManager.getOutputPath()).filePath("test_pure_power_api.v");
+        const QString outputPath = QDir(projectManager.getOutputPath())
+                                       .filePath("test_pure_power_api/rtl/test_pure_power_api.v");
         QVERIFY(QFile::remove(outputPath) || !QFile::exists(outputPath));
 
         QSocGenerateManager loadedManager(nullptr, &projectManager);
@@ -264,8 +266,9 @@ power:
             "test_pure_power_merge.soc_net", "power:\n" + firstController + secondController);
         QVERIFY(!firstPath.isEmpty());
 
-        const QString outputPath
-            = QDir(projectManager.getOutputPath()).filePath("test_pure_power_merge.v");
+        const QString outputPath = QDir(projectManager.getOutputPath())
+                                       .filePath(
+                                           "test_pure_power_merge/rtl/test_pure_power_merge.v");
         QVERIFY(QFile::remove(outputPath) || !QFile::exists(outputPath));
         {
             QSocCliWorker worker;
@@ -367,7 +370,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_ao_domain.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_ao_domain/rtl/test_ao_domain.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -382,7 +386,7 @@ power:
         QVERIFY(
             verifyVerilogContentNormalized(verilogContent, "/* ao: AO domain (no depend key) */"));
 
-        /* Verify power_cell.v was generated */
+        /* Verify qsoc_cell_power.v was generated */
         QVERIFY(verifyPowerCellFileComplete());
     }
 
@@ -452,7 +456,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_root_domain.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_root_domain/rtl/test_root_domain.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -560,7 +565,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_hard_dep.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_hard_dep/rtl/test_hard_dep.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -695,7 +701,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_soft_dep.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_soft_dep/rtl/test_soft_dep.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -767,7 +774,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_pgood_signal.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_pgood_signal/rtl/test_pgood_signal.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -838,7 +846,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_icg_enable.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_icg_enable/rtl/test_icg_enable.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -952,7 +961,8 @@ power:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_follow_entries.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_follow_entries/rtl/test_follow_entries.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -1043,7 +1053,11 @@ power:
         QVERIFY2(scan.missing.isEmpty(), qPrintable(scan.missing.join('\n')));
         QCOMPARE(
             scan.checked,
-            QStringList({"cells_top.v", "clock_cell.v", "power_cell.v", "reset_cell.v"}));
+            QStringList(
+                {"cells_top/rtl/cells_top.v",
+                 "qsoc_cell/rtl/qsoc_cell_clock.v",
+                 "qsoc_cell/rtl/qsoc_cell_power.v",
+                 "qsoc_cell/rtl/qsoc_cell_reset.v"}));
     }
 
     void test_malformed_power_shape_is_reported_not_fatal()
@@ -1059,8 +1073,8 @@ power:
 )";
         const QString netlistPath    = createTempFile("test_power_guard.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_power_guard.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_power_guard/rtl/test_power_guard.v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;
@@ -1114,7 +1128,8 @@ power:
         messageList.clear();
         const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;

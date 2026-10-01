@@ -211,7 +211,7 @@ public:
         model.replace("service_contract", prefix + "service_contract");
         QSocMmioFormalCollateral result;
         result.systemVerilog    = top + '\n' + model;
-        const auto rtl          = circuit.rtl.keys();
+        const auto rtl          = circuit.cell.keys() + circuit.rtl.keys();
         const auto file         = name + "_formal.sv";
         int        releaseStage = stage;
         for (const auto &target : binding.reset.targets)

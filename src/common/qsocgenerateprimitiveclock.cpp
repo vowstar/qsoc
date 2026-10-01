@@ -1,6 +1,5 @@
 #include "qsocgenerateprimitiveclock.h"
 #include "common/qsocconsole.h"
-#include "common/qsocgenerateartifact.h"
 #include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
@@ -467,11 +466,6 @@ QSocClockPrimitive::QSocClockPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
 
-void QSocClockPrimitive::setForceOverwrite(bool force)
-{
-    m_forceOverwrite = force;
-}
-
 bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QTextStream &out)
 {
     if (!clockNode || !clockNode.IsMap()) {
@@ -499,20 +493,11 @@ bool QSocClockPrimitive::generateClockController(const YAML::Node &clockNode, QT
        like `rst_sw_dcmi_n`). Do NOT warn about undeclared sources here;
        the typo case surfaces downstream as an unwired controller pin. */
 
-    // Generate or update clock_cell.v file
-    if (m_parent && m_parent->getProjectManager()) {
-        QString outputDir = m_parent->getProjectManager()->getOutputPath();
-        if (!generateClockCellFile(outputDir)) {
-            QSocConsole::warn() << "Failed to generate clock_cell.v file";
-            return false;
-        }
-    }
-
     out << generateControllerVerilog(config);
 
     // Generate Typst clock diagram (failure does not affect Verilog generation)
-    if (m_parent && m_parent->getProjectManager()) {
-        const QString outputDir = m_parent->getProjectManager()->getOutputPath();
+    if (m_parent && !m_parent->getDiagramDirectory().isEmpty()) {
+        const QString outputDir = m_parent->getDiagramDirectory();
         const QString typstName = config.moduleName + QStringLiteral(".typ");
         const auto    artifact  = QSocPaths::resolveArtifactPath(outputDir, typstName);
         if (!artifact.isValid()) {
@@ -1690,7 +1675,7 @@ QString QSocClockPrimitive::generateCellVerilog()
     QString     canonical;
     QTextStream out(&canonical);
     out << "/**\n";
-    out << " * @file clock_cell.v\n";
+    out << " * @file qsoc_cell_clock.v\n";
     out << " * @brief Template clock cells for QSoC clock primitives\n";
     out << " *\n";
     out << " * @details This file contains template clock cell modules for clock primitives.\n";
@@ -1709,17 +1694,6 @@ QString QSocClockPrimitive::generateCellVerilog()
     out.flush();
 
     return canonical;
-}
-
-bool QSocClockPrimitive::generateClockCellFile(const QString &outputDir)
-{
-    const QSocGenerateArtifact::PrimitiveCellSpec
-        spec{"clock_cell.v", generateCellVerilog().toUtf8()};
-    const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
-    if (!result.success) {
-        QSocConsole::warn() << result.error;
-    }
-    return result.success;
 }
 
 QStringList QSocClockPrimitive::getRequiredTemplateCells()

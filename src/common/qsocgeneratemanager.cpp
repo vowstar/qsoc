@@ -90,23 +90,14 @@ QSocBusManager *QSocGenerateManager::getBusManager()
     return busManager;
 }
 
+QString QSocGenerateManager::getDiagramDirectory() const
+{
+    return diagramDirectory;
+}
+
 QLLMService *QSocGenerateManager::getLLMService()
 {
     return llmService;
-}
-
-void QSocGenerateManager::setForceOverwrite(bool force)
-{
-    /* Propagate force setting to all primitive generators. */
-    if (clockPrimitive) {
-        clockPrimitive->setForceOverwrite(force);
-    }
-    if (resetPrimitive) {
-        resetPrimitive->setForceOverwrite(force);
-    }
-    if (powerPrimitive) {
-        powerPrimitive->setForceOverwrite(force);
-    }
 }
 
 QString QSocGenerateManager::cleanTypeForWireDeclaration(const QString &typeStr)

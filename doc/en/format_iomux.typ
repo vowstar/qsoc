@@ -761,7 +761,8 @@ and asserts slot 0 of each pool pin over its channels and every slow input
 over its pool's pads. A pad cell with constraints adds the pad proof
 described above. `<module>_formal.fl` lists the design files the proofs
 read, followed by the harnesses. Run the jobs from `formal/`; they reference
-the generated RTL in `../rtl/`.
+the generated RTL in `../rtl/`. File list paths are relative to `output/`
+(@verilog-output-layout).
 
 The job partitions pins into banks of `--formal-bank` pins, defaulting to 16. A design that fits one bank has the
 tasks `prove`, `bmc`, and `cover`. A larger one has `prove_bN` and `bmc_bN`
@@ -782,6 +783,6 @@ change to their routes.
 `<module>_regs_uvm_if.sv`, `<module>_regs_uvm_pkg.sv`,
 `<module>_regs_uvm_tb.sv`, and `<module>_regs_uvm.fl` under `uvm/`.
 `<module>_regs_uvm_standalone.fl` additionally includes the bundled UVM
-source in `uvm-core/`. Paths are relative to `uvm/`, with RTL in `../rtl/`.
+source in `uvm-core/`. Paths are relative to `output/`.
 The library selection follows @mmio-uvm-testbench. It covers the
 register slave only; routing, the connection fabric, and pads are outside its scope.

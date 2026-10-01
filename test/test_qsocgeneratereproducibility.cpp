@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocconsole.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocgeneratemanager.h"
@@ -42,83 +43,6 @@
 
 namespace {
 
-YAML::Node controllerFixture(const QString &kind, const QString &name)
-{
-    YAML::Node node;
-    if (kind == "clock") {
-        node = YAML::Load(R"(
-name: controller
-clock: clk_sys
-input:
-  osc_24m:
-    freq: 24MHz
-target:
-  adc_clk:
-    freq: 24MHz
-    link:
-      osc_24m:
-)");
-    } else if (kind == "reset") {
-        node = YAML::Load(R"(
-name: controller
-clock: clk_sys
-source:
-  por_rst_n:
-    active: low
-target:
-  cpu_rst_n:
-    active: low
-    link:
-      por_rst_n:
-)");
-    } else {
-        node = YAML::Load(R"(
-name: controller
-host_clock: clk_ao
-host_reset: rst_ao_n
-domain:
-  - name: ao
-    v_mv: 900
-    pgood: pgood_ao
-    wait_dep: 0
-    settle_on: 0
-    settle_off: 0
-    follow: []
-)");
-    }
-    node["name"] = name.toStdString();
-    return node;
-}
-
-bool generateController(
-    const QString       &kind,
-    const YAML::Node    &node,
-    QSocGenerateManager &manager,
-    bool                 force           = false,
-    QString             *generatedOutput = nullptr)
-{
-    QString     generated;
-    QTextStream out(&generated);
-    bool        result = false;
-    if (kind == "clock") {
-        QSocClockPrimitive primitive(&manager);
-        primitive.setForceOverwrite(force);
-        result = primitive.generateClockController(node, out);
-    } else if (kind == "reset") {
-        QSocResetPrimitive primitive(&manager);
-        primitive.setForceOverwrite(force);
-        result = primitive.generateResetController(node, out);
-    } else {
-        QSocPowerPrimitive primitive(&manager);
-        primitive.setForceOverwrite(force);
-        result = primitive.generatePowerController(node, out);
-    }
-    if (generatedOutput) {
-        *generatedOutput = generated;
-    }
-    return result;
-}
-
 bool generateDiagram(const QString &kind, const QString &path)
 {
     if (kind == "clock") {
@@ -131,6 +55,45 @@ bool generateDiagram(const QString &kind, const QString &path)
     }
     QSocPowerPrimitive primitive;
     return primitive.generateTypstDiagram({}, path);
+}
+
+QString cellFilePath(QSocProjectManager &project, const QString &kind)
+{
+    return QDir(project.getOutputPath()).filePath(QSocCellLibrary::path("qsoc_cell_" + kind + ".v"));
+}
+
+QByteArray cellBytes(const QString &kind)
+{
+    for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells()) {
+        if (cell.file == "qsoc_cell_" + kind + ".v")
+            return cell.text.toUtf8();
+    }
+    return {};
+}
+
+QByteArray readBytes(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+bool writeBytes(const QString &path, const QByteArray &bytes)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+}
+
+bool generateTop(QSocProjectManager &project, const QString &name)
+{
+    QSocGenerateManager manager(nullptr, &project);
+    return manager.setNetlistData(YAML::Load(R"(
+port:
+  source: {direction: input, type: logic}
+  result: {direction: output, type: logic}
+comb:
+  - {out: result, expr: source}
+)")) && manager.processNetlist()
+           && manager.generateVerilog(name);
 }
 
 YAML::Node sequentialOrderingFixture()
@@ -259,7 +222,12 @@ comb:
         }
 
         const QStringList fileNames{
-            "stable.v", "stable_stub.v", "stable.nc.rpt", "clock.typ", "reset.typ", "power.typ"};
+            "stable/rtl/stable.v",
+            "stable_stub.v",
+            "stable.nc.rpt",
+            "clock.typ",
+            "reset.typ",
+            "power.typ"};
         for (const QString &fileName : fileNames) {
             const QByteArray content = readOutput(fileName);
             if (content.isEmpty()) {
@@ -294,7 +262,7 @@ comb:
         QVERIFY(generator.setNetlistData(YAML::Clone(baseline)));
         QVERIFY(generator.processNetlist());
         QVERIFY(generator.generateVerilog("prcm_guard"));
-        const auto original = readOutput("prcm_guard.v");
+        const auto original = readOutput("prcm_guard/rtl/prcm_guard.v");
         QVERIFY(!original.isEmpty());
 
         QBuffer error;
@@ -313,12 +281,12 @@ comb:
             error.seek(0);
             QVERIFY(!generator.generateVerilog("prcm_guard"));
             QVERIFY(error.data().contains("PRCM_UNSUPPORTED"));
-            QCOMPARE(readOutput("prcm_guard.v"), original);
+            QCOMPARE(readOutput("prcm_guard/rtl/prcm_guard.v"), original);
         }
         QVERIFY(generator.setNetlistData(YAML::Clone(baseline)));
         QVERIFY(generator.processNetlist());
         QVERIFY(generator.generateVerilog("prcm_guard"));
-        QCOMPARE(readOutput("prcm_guard.v"), original);
+        QCOMPARE(readOutput("prcm_guard/rtl/prcm_guard.v"), original);
     }
 
     void applicationMetadataDoesNotChangeArtifacts()
@@ -409,7 +377,7 @@ comb:
                 child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
                 childOutput.constData());
 
-            QFile outputFile(QDir(projectPath).filePath("output/seq_order.v"));
+            QFile outputFile(QDir(projectPath).filePath("output/seq_order/rtl/seq_order.v"));
             QVERIFY(outputFile.open(QIODevice::ReadOnly));
             const QByteArray output = outputFile.readAll();
             QVERIFY(!output.isEmpty());
@@ -559,7 +527,10 @@ reset:
             QVERIFY(baselineGenerator.setNetlistData(netlist));
             QVERIFY(baselineGenerator.processNetlist());
             QVERIFY(baselineGenerator.generateVerilog("canonical"));
-            const QStringList fileNames{"canonical.v", "clock_cell.v", "reset_cell.v"};
+            const QStringList fileNames{
+                "canonical/rtl/canonical.v",
+                "qsoc_cell/rtl/qsoc_cell_clock.v",
+                "qsoc_cell/rtl/qsoc_cell_reset.v"};
             for (const QString &fileName : fileNames) {
                 QFile file(QDir(baselineManager.getOutputPath()).filePath(fileName));
                 QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(fileName));
@@ -578,7 +549,10 @@ reset:
         QVERIFY(generator.processNetlist());
         QVERIFY(generator.generateVerilog("canonical"));
 
-        const QStringList defaultFiles{"canonical.v", "clock_cell.v", "reset_cell.v"};
+        const QStringList defaultFiles{
+            "canonical/rtl/canonical.v",
+            "qsoc_cell/rtl/qsoc_cell_clock.v",
+            "qsoc_cell/rtl/qsoc_cell_reset.v"};
         for (const QString &fileName : defaultFiles) {
             QFile file(QDir(manager.getOutputPath()).filePath(fileName));
             QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(fileName));
@@ -587,6 +561,8 @@ reset:
             QCOMPARE(bytes, baselineFiles.value(fileName));
         }
         QVERIFY(!QFileInfo::exists(sentinelPath));
+        /* The next top declares the same controllers; qsoc.fl allows one definition each. */
+        QVERIFY(QDir(QDir(manager.getOutputPath()).filePath("canonical")).removeRecursively());
 
         const QString netlistPath = QDir(projectPath).filePath("formatted.soc_net");
         QFile         netlistFile(netlistPath);
@@ -603,7 +579,8 @@ reset:
         QCOMPARE(invalidExitSpy.count(), 1);
         QCOMPARE(invalidExitSpy.takeFirst().at(0).toInt(), 1);
         QVERIFY(!QFileInfo::exists(sentinelPath));
-        QVERIFY(!QFileInfo::exists(QDir(manager.getOutputPath()).filePath("formatted.v")));
+        QVERIFY(!QFileInfo::exists(
+            QDir(manager.getOutputPath()).filePath("formatted/rtl/formatted.v")));
 
         QSocCliWorker worker;
         QSignalSpy    exitSpy(&worker, &QSocCliWorker::exit);
@@ -614,8 +591,9 @@ reset:
         QCOMPARE(exitSpy.takeFirst().at(0).toInt(), 0);
 
         QVERIFY(QFileInfo::exists(sentinelPath));
-        const QString formattedPath = QDir(manager.getOutputPath()).filePath("formatted.v");
-        QFile         formattedFile(formattedPath);
+        const QString formattedPath
+            = QDir(manager.getOutputPath()).filePath("formatted/rtl/formatted.v");
+        QFile formattedFile(formattedPath);
         QVERIFY(formattedFile.open(QIODevice::ReadOnly));
         const QByteArray committedFormattedBytes = formattedFile.readAll();
         QVERIFY(committedFormattedBytes.contains("formatter probe"));
@@ -664,7 +642,7 @@ reset:
         QVERIFY(formattedFile.open(QIODevice::ReadOnly));
         QCOMPARE(formattedFile.readAll(), committedFormattedBytes);
         formattedFile.close();
-        QVERIFY(QDir(manager.getOutputPath())
+        QVERIFY(QDir(QDir(manager.getOutputPath()).filePath("formatted/rtl"))
                     .entryList(
                         {".formatted.v.qsoc-*.v"},
                         QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot)
@@ -674,7 +652,7 @@ reset:
         qputenv("QSOC_FORMATTER_PROBE_EXIT_CODE", "9");
         QSocTestCapture capture;
         QVERIFY(!QSocGenerateManager::formatVerilogFile(
-            QDir(manager.getOutputPath()).filePath("formatted.v")));
+            QDir(manager.getOutputPath()).filePath("formatted/rtl/formatted.v")));
         const QString diagnostic = capture.text();
         QVERIFY(diagnostic.contains("exit code 9"));
         QVERIFY(diagnostic.contains("formatter probe failure"));
@@ -834,7 +812,7 @@ comb:
         )")));
         QVERIFY(generator.processNetlist());
 
-        const QString linkPath   = QDir(manager.getOutputPath()).filePath("linked.v");
+        const QString linkPath   = QDir(manager.getOutputPath()).filePath("linked/rtl/linked.v");
         const QString targetPath = QDir(workDirectory.path()).filePath("linked-target.v");
         QVERIFY(generator.generateVerilog("linked"));
         QFile generatedFile(linkPath);
@@ -852,7 +830,7 @@ comb:
         QVERIFY(QFile::link(targetPath, linkPath));
 
         const auto verifyNoCandidate = [&]() {
-            QVERIFY(QDir(manager.getOutputPath())
+            QVERIFY(QDir(QDir(manager.getOutputPath()).filePath("linked/rtl"))
                         .entryList(
                             {".linked.v.qsoc-*.v"},
                             QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot)
@@ -1331,94 +1309,22 @@ extension: retained
         QTest::newRow("power") << QStringLiteral("power");
     }
 
-    void primitiveCellOwnership_data()
-    {
-        QTest::addColumn<QString>("kind");
-        QTest::addColumn<QString>("state");
-        QTest::addColumn<bool>("force");
-        for (const QString &kind : {"clock", "reset", "power"}) {
-            for (const QString &state : {"absent", "canonical", "opaque"}) {
-                for (const bool force : {false, true}) {
-                    const QString rowName
-                        = QString("%1-%2-%3").arg(kind, state, force ? "force" : "default");
-                    QTest::newRow(qPrintable(rowName)) << kind << state << force;
-                }
-            }
-        }
-    }
+    void cellUnitIsAlwaysReplaced_data() { primitiveCellLinkIsRejected_data(); }
 
-    void primitiveCellOwnership()
+    void cellUnitIsAlwaysReplaced()
     {
         QFETCH(QString, kind);
-        QFETCH(QString, state);
-        QFETCH(bool, force);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(QDir(directory.path()).filePath("project"));
+        QVERIFY(project.mkpath());
+        const QString cellPath = cellFilePath(project, kind);
+        QVERIFY(QDir().mkpath(QFileInfo(cellPath).path()));
+        QVERIFY(writeBytes(cellPath, "`include \"technology_cells.vh\"\n"));
 
-        QTemporaryDir canonicalDirectory;
-        QTemporaryDir targetDirectory;
-        QVERIFY(canonicalDirectory.isValid());
-        QVERIFY(targetDirectory.isValid());
-
-        QSocProjectManager canonicalProject;
-        canonicalProject.setCurrentPath(
-            QDir(canonicalDirectory.path()).filePath("canonical_project"));
-        QVERIFY(canonicalProject.mkpath());
-        QSocGenerateManager canonicalGenerator(nullptr, &canonicalProject);
-        QVERIFY(generateController(
-            kind, controllerFixture(kind, "canonical_controller"), canonicalGenerator));
-
-        const QString cellName = kind + "_cell.v";
-        QFile         canonicalFile(QDir(canonicalProject.getOutputPath()).filePath(cellName));
-        QVERIFY(canonicalFile.open(QIODevice::ReadOnly));
-        const QByteArray canonicalBytes = canonicalFile.readAll();
-        canonicalFile.close();
-        QVERIFY(!canonicalBytes.isEmpty());
-
-        QSocProjectManager targetProject;
-        targetProject.setCurrentPath(QDir(targetDirectory.path()).filePath("target_project"));
-        QVERIFY(targetProject.mkpath());
-        QSocGenerateManager targetGenerator(nullptr, &targetProject);
-        const QString       targetCellPath = QDir(targetProject.getOutputPath()).filePath(cellName);
-
-        QByteArray seededBytes;
-        if (state == "canonical") {
-            seededBytes = canonicalBytes + "// user-owned cell\n";
-        } else if (state == "opaque") {
-            seededBytes = "`include \"technology_cells.vh\"\n";
-        }
-        if (!seededBytes.isEmpty()) {
-            QFile targetCell(targetCellPath);
-            QVERIFY(targetCell.open(QIODevice::WriteOnly));
-            QCOMPARE(targetCell.write(seededBytes), seededBytes.size());
-            targetCell.close();
-        }
-
-        const QDir        outputDirectory(targetProject.getOutputPath());
-        const QStringList entriesBefore
-            = outputDirectory
-                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
-        const bool result = generateController(
-            kind, controllerFixture(kind, "ownership_controller"), targetGenerator, force);
-        const QStringList entriesAfter
-            = outputDirectory
-                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
-
-        QStringList expectedEntries = entriesBefore;
-        if (!expectedEntries.contains(cellName)) {
-            expectedEntries.append(cellName);
-        }
-        expectedEntries.append("ownership_controller.typ");
-        expectedEntries.sort();
-        QCOMPARE(entriesAfter, expectedEntries);
-
-        QFile targetCell(targetCellPath);
-        QVERIFY(targetCell.open(QIODevice::ReadOnly));
-        const QByteArray actualBytes = targetCell.readAll();
-        if (state != "absent" && !force) {
-            QCOMPARE(actualBytes, seededBytes);
-        } else {
-            QCOMPARE(actualBytes, canonicalBytes);
-        }
-        QVERIFY(result);
+        QVERIFY(generateTop(project, "owner"));
+        QCOMPARE(readBytes(cellPath), cellBytes(kind));
     }
 
     void primitiveCellForcedHardLinkReplacementIsIsolated_data()
@@ -1432,56 +1338,24 @@ extension: retained
         QSKIP("This platform does not provide POSIX hard-link semantics.");
 #else
         QFETCH(QString, kind);
-        QTemporaryDir canonicalDirectory;
-        QTemporaryDir targetDirectory;
-        QVERIFY(canonicalDirectory.isValid());
-        QVERIFY(targetDirectory.isValid());
-
-        QSocProjectManager canonicalProject;
-        canonicalProject.setCurrentPath(
-            QDir(canonicalDirectory.path()).filePath("canonical_project"));
-        QVERIFY(canonicalProject.mkpath());
-        QSocGenerateManager canonicalGenerator(nullptr, &canonicalProject);
-        QVERIFY(generateController(
-            kind, controllerFixture(kind, "canonical_controller"), canonicalGenerator));
-
-        const QString cellName = kind + "_cell.v";
-        QFile         canonicalFile(QDir(canonicalProject.getOutputPath()).filePath(cellName));
-        QVERIFY(canonicalFile.open(QIODevice::ReadOnly));
-        const QByteArray canonicalBytes = canonicalFile.readAll();
-        canonicalFile.close();
-
-        QSocProjectManager targetProject;
-        targetProject.setCurrentPath(QDir(targetDirectory.path()).filePath("target_project"));
-        QVERIFY(targetProject.mkpath());
-        QSocGenerateManager targetGenerator(nullptr, &targetProject);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocProjectManager project;
+        project.setCurrentPath(QDir(directory.path()).filePath("project"));
+        QVERIFY(project.mkpath());
 
         const QByteArray sentinelBytes("hard-link target sentinel\n");
-        const QString sentinelPath = QDir(targetProject.getCurrentPath()).filePath("cell_target");
-        const QString cellPath     = QDir(targetProject.getOutputPath()).filePath(cellName);
-        QFile         sentinel(sentinelPath);
-        QVERIFY(sentinel.open(QIODevice::WriteOnly));
-        QCOMPARE(sentinel.write(sentinelBytes), sentinelBytes.size());
-        sentinel.close();
+        const QString    sentinelPath = QDir(project.getCurrentPath()).filePath("cell_target");
+        const QString    cellPath     = cellFilePath(project, kind);
+        QVERIFY(writeBytes(sentinelPath, sentinelBytes));
+        QVERIFY(QDir().mkpath(QFileInfo(cellPath).path()));
         const QByteArray encodedSentinel = QFile::encodeName(sentinelPath);
         const QByteArray encodedCell     = QFile::encodeName(cellPath);
         QCOMPARE(::link(encodedSentinel.constData(), encodedCell.constData()), 0);
 
-        QVERIFY(generateController(
-            kind, controllerFixture(kind, "hard_link_controller"), targetGenerator, true));
-        QVERIFY(sentinel.open(QIODevice::ReadOnly));
-        QCOMPARE(sentinel.readAll(), sentinelBytes);
-        sentinel.close();
-
-        QFile generatedCell(cellPath);
-        QVERIFY(generatedCell.open(QIODevice::ReadOnly));
-        QCOMPARE(generatedCell.readAll(), canonicalBytes);
-        const QStringList entries
-            = QDir(targetProject.getOutputPath())
-                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
-        QStringList expectedEntries{".gitkeep", cellName, "hard_link_controller.typ"};
-        expectedEntries.sort();
-        QCOMPARE(entries, expectedEntries);
+        QVERIFY(generateTop(project, "hard_link"));
+        QCOMPARE(readBytes(sentinelPath), sentinelBytes);
+        QCOMPARE(readBytes(cellPath), cellBytes(kind));
 #endif
     }
 
@@ -1495,83 +1369,78 @@ extension: retained
         QFETCH(QString, kind);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-
         QSocProjectManager project;
         project.setCurrentPath(QDir(directory.path()).filePath("project"));
         QVERIFY(project.mkpath());
-        QSocGenerateManager generator(nullptr, &project);
-        QVERIFY(generateController(kind, controllerFixture(kind, "seed_controller"), generator));
+        QVERIFY(generateTop(project, "seed"));
 
-        const QString cellPath = QDir(project.getOutputPath()).filePath(kind + "_cell.v");
-        QFile         cell(cellPath);
-        QVERIFY(cell.open(QIODevice::Append));
-        const QByteArray sentinelBytes("// open failure sentinel\n");
-        QCOMPARE(cell.write(sentinelBytes), sentinelBytes.size());
-        cell.close();
-        QVERIFY(cell.open(QIODevice::ReadOnly));
-        const QByteArray bytesBefore = cell.readAll();
-        cell.close();
+        const QString cellPath = cellFilePath(project, kind);
+        QVERIFY(writeBytes(cellPath, cellBytes(kind) + "// open failure sentinel\n"));
+        const QByteArray bytesBefore = readBytes(cellPath);
 
-        const QDir        outputDirectory(project.getOutputPath());
-        const QStringList entriesBefore
-            = outputDirectory
-                  .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name);
-        const QFileDevice::Permissions originalPermissions = QFile::permissions(
-            project.getOutputPath());
-        const auto restorePermissions = qScopeGuard(
-            [&]() { QFile::setPermissions(project.getOutputPath(), originalPermissions); });
-        QVERIFY(
-            QFile::setPermissions(
-                project.getOutputPath(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        const QString     rtlPath       = QFileInfo(cellPath).path();
+        const QStringList entriesBefore = QDir(rtlPath).entryList(
+            QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
+        const QFileDevice::Permissions originalPermissions = QFile::permissions(rtlPath);
+        const auto                     restorePermissions  = qScopeGuard(
+            [&]() { QFile::setPermissions(rtlPath, originalPermissions); });
+        QVERIFY(QFile::setPermissions(rtlPath, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
 
-        const QString probePath = outputDirectory.filePath("permission_probe");
+        const QString probePath = QDir(rtlPath).filePath("permission_probe");
         QFile         probe(probePath);
         if (probe.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
             probe.close();
-            QVERIFY(QFile::setPermissions(project.getOutputPath(), originalPermissions));
+            QVERIFY(QFile::setPermissions(rtlPath, originalPermissions));
             QVERIFY(QFile::remove(probePath));
             QSKIP("Directory write permissions are not enforced for this test process.");
         }
 
-        const bool result
-            = generateController(kind, controllerFixture(kind, "failed_controller"), generator, true);
-        QVERIFY(cell.open(QIODevice::ReadOnly));
-        QCOMPARE(cell.readAll(), bytesBefore);
+        QVERIFY(!generateTop(project, "failed"));
+        QCOMPARE(readBytes(cellPath), bytesBefore);
         QCOMPARE(
-            outputDirectory
-                .entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDir::Name),
+            QDir(rtlPath).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
             entriesBefore);
-        QVERIFY(!result);
 #endif
     }
 
-    void primitiveCellEmptyCanonicalHonorsOwnership()
+    void topFileListCollectsUnitsAndRejectsConflicts()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
-        const QSocGenerateArtifact::PrimitiveCellSpec spec{"cell.v", {}};
-        const QString    cellPath = QDir(directory.path()).filePath("cell.v");
-        const QByteArray existingBytes("user-owned cell\n");
-        QFile            existing(cellPath);
-        QVERIFY(existing.open(QIODevice::WriteOnly));
-        QCOMPARE(existing.write(existingBytes), existingBytes.size());
-        existing.close();
+        const QDir output(directory.path());
+        const auto unit = [&](const QString &path, const QByteArray &list, const QByteArray &rtl) {
+            const QString name = QFileInfo(path).fileName();
+            return QDir().mkpath(output.filePath(path + "/rtl"))
+                   && writeBytes(output.filePath(path + "/rtl/" + name + ".fl"), list)
+                   && writeBytes(output.filePath(path + "/rtl/" + name + ".v"), rtl);
+        };
+        QVERIFY(unit("top", "top/rtl/top.v\n", "module top;\nendmodule\n"));
+        QVERIFY(unit("lib/pad", "lib/pad/rtl/pad.v\n", "module pad;\nendmodule\n"));
+        QCOMPARE(QSocCellLibrary::writeFileList(output.path()), QString());
+        QCOMPARE(
+            readBytes(output.filePath("qsoc.fl")), QByteArray("lib/pad/rtl/pad.v\ntop/rtl/top.v\n"));
 
-        const auto preserved
-            = QSocGenerateArtifact::ensurePrimitiveCell(directory.path(), spec, false);
-        QVERIFY(preserved.success);
-        QVERIFY(!preserved.written);
-        QVERIFY(existing.open(QIODevice::ReadOnly));
-        QCOMPARE(existing.readAll(), existingBytes);
-        existing.close();
+        QVERIFY(unit("twin", "twin/rtl/twin.v\n", "module top;\nendmodule\n"));
+        const QString twice = QSocCellLibrary::writeFileList(output.path());
+        QVERIFY2(
+            twice.contains("module top is defined in both top/rtl/top.v and twin/rtl/twin.v"),
+            qPrintable(twice));
+        QVERIFY(QDir(output.filePath("twin")).removeRecursively());
 
-        QVERIFY(QFile::remove(cellPath));
-        const auto missing
-            = QSocGenerateArtifact::ensurePrimitiveCell(directory.path(), spec, false);
-        QVERIFY(!missing.success);
-        QVERIFY(!missing.written);
-        QVERIFY(missing.error.contains("content is empty"));
-        QVERIFY(!QFileInfo::exists(cellPath));
+        for (const QByteArray &entry :
+             {QByteArray("+incdir+top/rtl"),
+              QByteArray("-y top/rtl"),
+              QByteArray("/top/rtl/top.v"),
+              QByteArray("../top.v"),
+              QByteArray("top/rtl/top.v\r"),
+              QByteArray("\ntop/rtl/top.v")}) {
+            QVERIFY(writeBytes(output.filePath("top/rtl/top.fl"), entry + "\n"));
+            const QString error = QSocCellLibrary::writeFileList(output.path());
+            QVERIFY2(error.contains("not a plain relative file"), entry.constData());
+        }
+        QVERIFY(QDir(output.filePath("top")).removeRecursively());
+        QCOMPARE(QSocCellLibrary::writeFileList(output.path()), QString());
+        QCOMPARE(readBytes(output.filePath("qsoc.fl")), QByteArray("lib/pad/rtl/pad.v\n"));
     }
 
     /* An artifact outside the first artifact's unit is refused, not walked to the filesystem root. */
@@ -1582,13 +1451,14 @@ extension: retained
         const QDir    root(directory.path());
         const QString inside  = root.filePath("unit/rtl/a.v");
         const QString outside = root.filePath("other.v");
-        const QString error = QSocGenerateArtifact::write({{inside, "a\n"}, {outside, "b\n"}}, true);
+        const QString error
+            = QSocGenerateArtifact::write({{inside, "a\n"}, {outside, "b\n"}}, true, root.path());
         QVERIFY2(error.contains("outside"), qPrintable(error));
         QVERIFY(!QFileInfo::exists(inside));
         QVERIFY(!QFileInfo::exists(outside));
         QCOMPARE(
             QSocGenerateArtifact::write(
-                {{inside, "a\n"}, {root.filePath("unit/formal/b.sv"), "b\n"}}, true),
+                {{inside, "a\n"}, {root.filePath("unit/formal/b.sv"), "b\n"}}, true, root.path()),
             QString());
         QVERIFY(QFileInfo::exists(inside));
     }
@@ -1676,11 +1546,11 @@ comb:
         QVERIFY(generator.generateVerilog("stable"));
 
         const QString expectedPath
-            = QDir(directory.path()).filePath("relative-project/output/stable.v");
+            = QDir(directory.path()).filePath("relative-project/output/stable/rtl/stable.v");
         const QString repeatedPath = QDir(directory.path())
                                          .filePath(
                                              "relative-project/output/"
-                                             "relative-project/output/stable.v");
+                                             "relative-project/output/stable/rtl/stable.v");
         QVERIFY(QFileInfo::exists(expectedPath));
         QVERIFY(!QFileInfo::exists(repeatedPath));
     }

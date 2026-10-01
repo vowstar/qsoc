@@ -286,9 +286,9 @@ private slots:
         for (const auto &name : {"controller$unit", "controller$"})
             QVERIFY2(QSocPrcmGenerator::generate(*bound.plan, name, 2).circuit, name);
         for (const auto &name :
-             {"clock_cell",
-              "reset_cell",
-              "qsoc_prcm_domain",
+             {"qsoc_cell_clock",
+              "qsoc_cell_reset",
+              "qsoc_clk_div",
               "qsoc_rst_sync",
               "qsoc_tc_clk_gate",
               "bad-name"}) {
@@ -350,7 +350,8 @@ private slots:
             error.append(item.message);
         QVERIFY2(generated.circuit.has_value(), qPrintable(error.join('\n')));
         const auto &circuit = *generated.circuit;
-        QCOMPARE(circuit.rtl.size(), 7);
+        QCOMPARE(circuit.rtl.size(), 5);
+        QCOMPARE(circuit.cell.keys(), (QStringList{"qsoc_cell_clock.v", "qsoc_cell_reset.v"}));
         QCOMPARE(circuit.binding["module"].toString(), "controller");
         const auto instance = circuit.binding["instance"].toObject();
         QCOMPARE(instance.size(), 5);
@@ -382,11 +383,13 @@ private slots:
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_circuit-XXXXXX");
         QVERIFY(directory.isValid());
         QStringList file;
-        for (auto it = circuit.rtl.cbegin(); it != circuit.rtl.cend(); ++it) {
-            QVERIFY(save(
-                directory.filePath(it.key()),
-                "`default_nettype none\n" + it.value() + "\n`default_nettype wire\n"));
-            file.append(it.key());
+        for (const auto *files : {&circuit.cell, &circuit.rtl}) {
+            for (auto it = files->cbegin(); it != files->cend(); ++it) {
+                QVERIFY(save(
+                    directory.filePath(it.key()),
+                    "`default_nettype none\n" + it.value() + "\n`default_nettype wire\n"));
+                file.append(it.key());
+            }
         }
         auto bench = commonBench() + (axi ? axiBench() : apbBench()) + operationBench();
         bench.replace("@WIDTH@", QString::number(width));

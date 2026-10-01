@@ -589,21 +589,22 @@ void Test::generatedTestbenchPassesVerilator()
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString relocated = QDir(directory.path()).filePath(QStringLiteral("module"));
+    const QString relocatedOutput = QDir(directory.path()).filePath(QStringLiteral("output"));
     QVERIFY(
         QDir().rename(
-            QDir(projectDirectory.path())
-                .filePath(QStringLiteral("output/peripheral/") + definition.moduleName),
-            relocated));
-    const QDir    outputDirectory(QDir(relocated).filePath(QStringLiteral("uvm")));
-    const QString workingDirectory = outputDirectory.absolutePath();
-    const QString verilogPath      = QDir(relocated).filePath(
+            QDir(projectDirectory.path()).filePath(QStringLiteral("output")), relocatedOutput));
+    const QString  unitPath  = QStringLiteral("peripheral/") + definition.moduleName;
+    const QString  relocated = QDir(relocatedOutput).filePath(unitPath);
+    const QDir     outputDirectory(QDir(relocated).filePath(QStringLiteral("uvm")));
+    const QString &workingDirectory = relocatedOutput;
+    const QString  verilogPath      = QDir(relocated).filePath(
         QStringLiteral("rtl/") + moduleName + QStringLiteral(".v"));
     QFile generatedRtl(verilogPath);
     QVERIFY(generatedRtl.open(QIODevice::ReadOnly));
     QCOMPARE(generatedRtl.readAll(), verilog.toUtf8());
     generatedRtl.close();
-    const QString fileListName = moduleName + QStringLiteral("_uvm_standalone.fl");
+    const QString fileListName = unitPath + QStringLiteral("/uvm/") + moduleName
+                                 + QStringLiteral("_uvm_standalone.fl");
 
     const QString     topName         = moduleName + QStringLiteral("_uvm_tb");
     const QString     objectDirectory = outputDirectory.filePath(QStringLiteral("obj_dir"));

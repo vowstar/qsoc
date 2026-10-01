@@ -158,12 +158,6 @@ public:
     ResetControllerConfig parseResetConfigUnguarded(const YAML::Node &resetNode);
 
     /**
-     * @brief Set force overwrite mode for reset_cell.v file
-     * @param force true to enable force overwrite, false to preserve existing files
-     */
-    void setForceOverwrite(bool force);
-
-    /**
      * @brief Generate Typst reset tree diagram from configuration
      * @param config Reset controller configuration
      * @param outputPath Output path for .typ file
@@ -209,16 +203,9 @@ private:
 
     /**
      * @brief Generate reset cell template file
-     * @param out Output text stream for reset_cell.v
+     * @param out Output text stream for qsoc_cell_reset.v
      */
     void generateResetCellFile(QTextStream &out);
-
-    /**
-     * @brief Generate or update reset_cell.v file with template cells
-     * @param outputDir Output directory path
-     * @return true if successful, false otherwise
-     */
-    bool generateResetCellFile(const QString &outputDir);
 
     /**
      * @brief Generate single reset component instance
@@ -281,8 +268,7 @@ private:
     QString escapeTypstId(const QString &str) const;
 
 private:
-    QSocGenerateManager *m_parent;                 // Parent manager for accessing utilities
-    bool                 m_forceOverwrite = false; // Force overwrite mode for reset_cell.v
+    QSocGenerateManager *m_parent; // Parent manager for accessing utilities
 };
 
 #endif // QSOCGENERATEPRIMITIVERESET_H

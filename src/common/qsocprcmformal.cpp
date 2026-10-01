@@ -405,7 +405,7 @@ endmodule
     result.systemVerilog = QSocVerilogUtils::withTimescale(
         "module " + top + " #(parameter COVER = 0);\n" + declaration.join('\n') + '\n' + moduleName
         + " dut(\n" + connection.join(",\n") + "\n);\n" + body);
-    const auto rtl   = circuit.rtl.keys();
+    const auto rtl   = circuit.cell.keys() + circuit.rtl.keys();
     auto       files = rtl;
     files.append(top + ".sv");
     result.sby = "[tasks]\nprove\ncover\n[options]\nprove: mode prove\ncover: mode cover\n"

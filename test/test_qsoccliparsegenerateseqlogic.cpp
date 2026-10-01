@@ -157,7 +157,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_simple_seq.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_simple_seq/rtl/test_simple_seq.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -226,7 +227,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_seq_enable.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_seq_enable/rtl/test_seq_enable.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -301,8 +303,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_seq_conditional.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_seq_conditional/rtl/test_seq_conditional.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -367,7 +369,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_seq_negedge.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_seq_negedge/rtl/test_seq_negedge.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -438,7 +441,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_multiple_seq.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_multiple_seq/rtl/test_multiple_seq.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -489,8 +493,8 @@ seq:
 
         QString netlistPath = createTempFile("test_invalid_seq.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_invalid_seq.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_invalid_seq/rtl/test_invalid_seq.v");
         QFile::remove(verilogPath);
 
         {
@@ -541,8 +545,9 @@ seq:
 
         const QString netlistPath = createTempFile("test_invalid_seq_alias.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_invalid_seq_alias.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath(
+                                            "test_invalid_seq_alias/rtl/test_invalid_seq_alias.v");
         QFile::remove(verilogPath);
 
         QSocCliWorker     socCliWorker;
@@ -624,7 +629,8 @@ seq:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_seq_nested.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_seq_nested/rtl/test_seq_nested.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -755,8 +761,9 @@ seq:
         const QString netlistPath = createTempFile("test_seq_signal_width.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_seq_signal_width.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath(
+                                            "test_seq_signal_width/rtl/test_seq_signal_width.v");
         QVERIFY(QFile::remove(verilogPath) || !QFile::exists(verilogPath));
 
         QSocCliWorker worker;
@@ -856,7 +863,8 @@ seq:
         QVERIFY(!netlistPath.isEmpty());
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_overlapping_seq_processes.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_overlapping_seq_processes/rtl/test_overlapping_seq_processes.v");
         QVERIFY(QFile::remove(verilogPath) || !QFile::exists(verilogPath));
 
         QSocCliWorker worker;
@@ -964,7 +972,8 @@ seq:
         messageList.clear();
         const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;

@@ -365,7 +365,7 @@ Integration constraints:
   design with N recorded sources gains N asynchronous set paths that need STA
   exceptions
 - These flops carry no `test_enable` bypass, unlike every other cell in
-  `reset_cell.v`. They are not controllable from scan and the reason register
+  `qsoc_cell_reset.v`. They are not controllable from scan and the reason register
   cannot be initialized by a scan pattern
 - `reason.clear` is captured by a single flop before edge detection. Drive it
   from a source synchronous to `reason.clock`, or add synchronization outside
@@ -420,7 +420,7 @@ Run the generator with `qsoc generate verilog` (@verilog-generation).
 Connectivity and width problems are reported as described in
 @validation-format.
 
-Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability. Additionally, QSoC automatically generates a `reset_cell.v` template file containing the required reset component modules (`qsoc_rst_sync`, `qsoc_rst_pipe`, `qsoc_rst_count`).
+Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability. Additionally, QSoC automatically generates a `qsoc_cell_reset.v` template file containing the required reset component modules (`qsoc_rst_sync`, `qsoc_rst_pipe`, `qsoc_rst_count`).
 
 === Generated Code Structure
 <soc-net-reset-code-structure>
@@ -512,9 +512,10 @@ The reset controller uses three standard component modules:
 - Test bypass when test_enable=1
 - Parameters: CYCLE (number of cycles before release)
 
-=== Auto-generated Template File: reset_cell.v
+=== Auto-generated Template File: qsoc_cell_reset.v
 <soc-net-reset-template-file>
-When `reset_cell.v` is missing, QSoC creates it with all required template cells:
+Every run writes `output/qsoc_cell/rtl/qsoc_cell_reset.v`, replacing any
+existing file (@verilog-output-layout). It holds all required template cells:
 
 - `qsoc_rst_sync` - Asynchronous reset synchronizer with test enable
 - `qsoc_rst_pipe` - Synchronous reset pipeline with test enable
@@ -522,17 +523,10 @@ When `reset_cell.v` is missing, QSoC creates it with all required template cells
 
 The generated file includes header comments and a timescale directive.
 
-File generation behavior:
-- Creates a missing file atomically
-- Preserves any existing file byte-for-byte
-- Replaces an existing file only when `--force` is explicit
-
-Users should replace these template implementations with their technology-specific standard cell implementations before using in production.
-
 Example template structure:
 ```verilog
 /**
- * @file reset_cell.v
+ * @file qsoc_cell_reset.v
  * @brief Template reset cells for QSoC reset primitives
  *
  * CAUTION: Please replace the templates in this file
@@ -561,13 +555,13 @@ endmodule
 
 === Diagram Output
 <soc-net-reset-diagram>
-Generates `.typ` circuit diagram alongside Verilog.
+Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
 
 *Elements*: Sources → AND → ASYNC/SYNC/COUNT → Targets (with active levels/parameters)
 
 *Note*: AND logic is used because reset signals are active-low. When any source asserts (goes low), the AND output goes low, asserting the target reset. This is equivalent to OR logic for the reset assertion semantic.
 
-*Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
+*Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
 
 == Choosing the Processing Level
 <soc-net-reset-level-selection>

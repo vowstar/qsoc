@@ -204,12 +204,6 @@ public:
     ClockControllerConfig parseClockConfig(const YAML::Node &clockNode);
 
     /**
-     * @brief Set force overwrite mode for clock_cell.v file
-     * @param force true to enable force overwrite, false to preserve existing files
-     */
-    void setForceOverwrite(bool force);
-
-    /**
      * @brief Generate Typst clock tree diagram from configuration
      * @param config Clock controller configuration
      * @param outputPath Output path for .typ file
@@ -224,19 +218,6 @@ private:
      * @return Parsed configuration structure
      */
     ClockControllerConfig parseClockConfigUnguarded(const YAML::Node &clockNode);
-
-    /**
-     * @brief Generate or update clock_cell.v file with template cells
-     * @param outputDir Output directory path
-     * @return true if successful, false otherwise
-     */
-    bool generateClockCellFile(const QString &outputDir);
-
-    /**
-     * @brief Check if clock_cell.v file exists and is complete
-     * @param filePath Path to clock_cell.v file
-     * @return true if file exists and contains all required cells
-     */
 
     /**
      * @brief Get all required template cell names with QSOC_ prefix
@@ -345,8 +326,7 @@ private:
     QString escapeTypstId(const QString &str) const;
 
 private:
-    QSocGenerateManager *m_parent;                 // Parent manager for accessing utilities
-    bool                 m_forceOverwrite = false; // Force overwrite mode for clock_cell.v
+    QSocGenerateManager *m_parent; // Parent manager for accessing utilities
 };
 
 #endif // QSOCGENERATEPRIMITIVECLOCK_H

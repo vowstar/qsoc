@@ -292,7 +292,11 @@ void Test::generateWritesArtifactsAndRequiresForce()
     QVERIFY(top.contains("module iomux0 ("));
     QVERIFY(top.contains("iomux0_regs u_regs ("));
     const QString fileList = readTextFile(QDir(outputDirectory).filePath("rtl/iomux0.fl"));
-    QCOMPARE(fileList, QString("iomux0_regs.v\niomux0_conn.v\niomux0.v\n"));
+    QCOMPARE(
+        fileList,
+        QString(
+            "peripheral/iomux0/rtl/iomux0_regs.v\nperipheral/iomux0/rtl/iomux0_conn.v\n"
+            "peripheral/iomux0/rtl/iomux0.v\n"));
     const QString report = readTextFile(QDir(outputDirectory).filePath("reports/iomux0.iomux.rpt"));
     QVERIFY(report.contains("IOMUX route report for iomux0"));
 

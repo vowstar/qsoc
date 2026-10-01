@@ -100,10 +100,10 @@ private slots:
         const auto rtl = generator.generateControllerVerilog(config);
         QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
-        QVERIFY(save(directory.filePath("clock_cell.v"), generator.generateCellVerilog()));
+        QVERIFY(save(directory.filePath("qsoc_cell_clock.v"), generator.generateCellVerilog()));
         checkCell(
             directory.path(),
-            "clock_cell.v",
+            "qsoc_cell_clock.v",
             R"(
 module contract(input clk, input en, input por_n);
 wire gated;
@@ -140,10 +140,10 @@ endmodule
         const auto         rtl    = generator.generateControllerVerilog(config);
         QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
-        QVERIFY(save(directory.filePath("reset_cell.v"), generator.generateCellVerilog()));
+        QVERIFY(save(directory.filePath("qsoc_cell_reset.v"), generator.generateCellVerilog()));
         checkCell(
             directory.path(),
-            "reset_cell.v",
+            "qsoc_cell_reset.v",
             QString(R"(
 module contract(input clk, input por_n, input hold_n);
 localparam STAGE = %1;

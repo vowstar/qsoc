@@ -502,7 +502,8 @@ private slots:
         const auto result = QSocPrcmShared::generate(*bound.plan, "control", 2);
         QVERIFY(result.circuit);
         const auto &circuit = *result.circuit;
-        QCOMPARE(circuit.rtl.size(), 8);
+        QCOMPARE(circuit.rtl.size(), 6);
+        QCOMPARE(circuit.cell.keys(), (QStringList{"qsoc_cell_clock.v", "qsoc_cell_reset.v"}));
         const QStringList names{
             "CHIP_REQUEST",
             "CHIP_STATUS",
@@ -534,13 +535,13 @@ private slots:
         const auto noStage = QSocPrcmShared::generate(*bound.plan, "control", 1);
         QVERIFY(!noStage.circuit);
         QCOMPARE(noStage.diagnostic[0].source[0].path, "prcm.controller");
-        QVERIFY(!QSocPrcmShared::generate(*bound.plan, "qsoc_prcm_service", 2).circuit);
+        QVERIFY(!QSocPrcmShared::generate(*bound.plan, "qsoc_clk_mux_gf", 2).circuit);
         auto unused = *bound.plan;
         unused.input.domain["client"].require.clear();
         unused.input.chipMode.clear();
         const auto standalone = QSocPrcmShared::generate(unused, "control", 2);
         QVERIFY(standalone.circuit);
-        QVERIFY(!standalone.circuit->rtl.contains("qsoc_prcm_service.v"));
+        QVERIFY(!standalone.circuit->rtl.contains("control_service.v"));
         QCOMPARE(standalone.circuit->mmio.registers.size(), 6);
         auto named = *bound.plan;
         named.input.domain.insert("CHIP", named.input.domain.take("client"));
@@ -610,9 +611,10 @@ private slots:
         QVERIFY(!formal.systemVerilog.contains(QRegularExpression("@[A-Za-z_]+@")));
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared_formal-XXXXXX");
         QVERIFY(directory.isValid());
-        for (auto file = generated.circuit->rtl.cbegin(); file != generated.circuit->rtl.cend();
-             ++file)
-            QVERIFY(save(directory.filePath(file.key()), file.value()));
+        for (const auto *files : {&generated.circuit->cell, &generated.circuit->rtl}) {
+            for (auto file = files->cbegin(); file != files->cend(); ++file)
+                QVERIFY(save(directory.filePath(file.key()), file.value()));
+        }
         QVERIFY(save(directory.filePath("control_formal.sv"), formal.systemVerilog));
         QVERIFY(save(directory.filePath("control.sby"), formal.sby));
         QProcess process;
@@ -655,9 +657,11 @@ private slots:
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared_v2005-XXXXXX");
         QVERIFY(directory.isValid());
         QStringList argument{"-g2005", "-s", "control", "-o", directory.filePath("control.vvp")};
-        for (auto it = generated.circuit->rtl.cbegin(); it != generated.circuit->rtl.cend(); ++it) {
-            QVERIFY(save(directory.filePath(it.key()), it.value()));
-            argument.append(directory.filePath(it.key()));
+        for (const auto *files : {&generated.circuit->cell, &generated.circuit->rtl}) {
+            for (auto file = files->cbegin(); file != files->cend(); ++file) {
+                QVERIFY(save(directory.filePath(file.key()), file.value()));
+                argument.append(directory.filePath(file.key()));
+            }
         }
         QProcess process;
         process.setProcessChannelMode(QProcess::MergedChannels);
@@ -698,11 +702,13 @@ private slots:
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_shared-XXXXXX");
         QVERIFY(directory.isValid());
         QStringList file;
-        for (auto it = generated.circuit->rtl.cbegin(); it != generated.circuit->rtl.cend(); ++it) {
-            QVERIFY(save(
-                directory.filePath(it.key()),
-                "`default_nettype none\n" + it.value() + "\n`default_nettype wire\n"));
-            file.append(it.key());
+        for (const auto *files : {&generated.circuit->cell, &generated.circuit->rtl}) {
+            for (auto it = files->cbegin(); it != files->cend(); ++it) {
+                QVERIFY(save(
+                    directory.filePath(it.key()),
+                    "`default_nettype none\n" + it.value() + "\n`default_nettype wire\n"));
+                file.append(it.key());
+            }
         }
         QVERIFY(
             save(directory.filePath("tb.sv"), bench(*generated.circuit, axi, shared, stage == 8)));

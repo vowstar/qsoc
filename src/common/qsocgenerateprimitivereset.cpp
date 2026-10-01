@@ -1,6 +1,5 @@
 #include "qsocgenerateprimitivereset.h"
 #include "common/qsocconsole.h"
-#include "common/qsocgenerateartifact.h"
 #include "common/qsocpaths.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
@@ -29,11 +28,6 @@ bool readCount(
 QSocResetPrimitive::QSocResetPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
-
-void QSocResetPrimitive::setForceOverwrite(bool force)
-{
-    m_forceOverwrite = force;
-}
 
 bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QTextStream &out)
 {
@@ -68,20 +62,11 @@ bool QSocResetPrimitive::generateResetController(const YAML::Node &resetNode, QT
        like `rst_sw_dcmi_n`). Do NOT warn about undeclared sources here;
        the typo case surfaces downstream as an unwired controller pin. */
 
-    // Generate or update reset_cell.v file
-    if (m_parent && m_parent->getProjectManager()) {
-        QString outputDir = m_parent->getProjectManager()->getOutputPath();
-        if (!generateResetCellFile(outputDir)) {
-            QSocConsole::warn() << "Failed to generate reset_cell.v file";
-            return false;
-        }
-    }
-
     out << generateControllerVerilog(config);
 
     // Generate Typst reset diagram (failure does not affect Verilog generation)
-    if (m_parent && m_parent->getProjectManager()) {
-        const QString outputDir = m_parent->getProjectManager()->getOutputPath();
+    if (m_parent && !m_parent->getDiagramDirectory().isEmpty()) {
+        const QString outputDir = m_parent->getDiagramDirectory();
         const QString typstName = config.moduleName + QStringLiteral(".typ");
         const auto    artifact  = QSocPaths::resolveArtifactPath(outputDir, typstName);
         if (!artifact.isValid()) {
@@ -873,7 +858,7 @@ void QSocResetPrimitive::generateOutputAssignments(
 void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
 {
     out << "/**\n";
-    out << " * @file reset_cell.v\n";
+    out << " * @file qsoc_cell_reset.v\n";
     out << " * @brief Template reset cells for QSoC reset primitives\n";
     out << " *\n";
     out << " * @details This file contains template reset cell modules for reset primitives.\n";
@@ -1027,17 +1012,6 @@ QString QSocResetPrimitive::generateCellVerilog()
     out.flush();
 
     return canonical;
-}
-
-bool QSocResetPrimitive::generateResetCellFile(const QString &outputDir)
-{
-    const QSocGenerateArtifact::PrimitiveCellSpec
-        spec{"reset_cell.v", generateCellVerilog().toUtf8()};
-    const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
-    if (!result.success) {
-        QSocConsole::warn() << result.error;
-    }
-    return result.success;
 }
 
 void QSocResetPrimitive::generateResetComponentInstance(

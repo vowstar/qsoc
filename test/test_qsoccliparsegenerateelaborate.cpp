@@ -114,7 +114,7 @@ reset:
 )";
         QVERIFY(!writeFile(projectManager.getOutputPath(), "elab_reset.soc_net", netlist).isEmpty());
         QVERIFY(generate("elab_reset.soc_net"));
-        QVERIFY(elaborates({"reset_cell.v", "elab_reset.v"}));
+        QVERIFY(elaborates({"qsoc_cell/rtl/qsoc_cell_reset.v", "elab_reset/rtl/elab_reset.v"}));
     }
 
     void clockControllerElaborates()
@@ -141,7 +141,7 @@ clock:
 )";
         QVERIFY(!writeFile(projectManager.getOutputPath(), "elab_clock.soc_net", netlist).isEmpty());
         QVERIFY(generate("elab_clock.soc_net"));
-        QVERIFY(elaborates({"clock_cell.v", "elab_clock.v"}));
+        QVERIFY(elaborates({"qsoc_cell/rtl/qsoc_cell_clock.v", "elab_clock/rtl/elab_clock.v"}));
     }
 
     void powerControllerElaborates()
@@ -169,7 +169,7 @@ power:
 )";
         QVERIFY(!writeFile(projectManager.getOutputPath(), "elab_power.soc_net", netlist).isEmpty());
         QVERIFY(generate("elab_power.soc_net"));
-        QVERIFY(elaborates({"power_cell.v", "elab_power.v"}));
+        QVERIFY(elaborates({"qsoc_cell/rtl/qsoc_cell_power.v", "elab_power/rtl/elab_power.v"}));
     }
 
     void packedArrayPortsElaborate()
@@ -208,7 +208,7 @@ net:
         QVERIFY(
             !writeFile(projectManager.getOutputPath(), "elab_packed.soc_net", netlist).isEmpty());
         QVERIFY(generate("elab_packed.soc_net"));
-        QVERIFY(elaborates({"elab_packed.v"}));
+        QVERIFY(elaborates({"elab_packed/rtl/elab_packed.v"}));
     }
 };
 

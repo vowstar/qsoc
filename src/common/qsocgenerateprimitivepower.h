@@ -107,14 +107,8 @@ public:
      */
     PowerControllerConfig parsePowerConfigUnguarded(const YAML::Node &powerNode);
 
-    /* Emit power_cell.v without file output. */
+    /* Emit qsoc_cell_power.v without file output. */
     QString generateCellVerilog();
-
-    /**
-     * @brief Set force overwrite mode for power_cell.v file
-     * @param force true to enable force overwrite, false to preserve existing files
-     */
-    void setForceOverwrite(bool force);
 
     /**
      * @brief Generate Typst power tree diagram from configuration
@@ -152,13 +146,6 @@ private:
      * @param out Output text stream
      */
     void generateOutputAssignments(const PowerControllerConfig &config, QTextStream &out);
-
-    /**
-     * @brief Generate or update power_cell.v file with template cells
-     * @param outputDir Output directory path
-     * @return true if successful, false otherwise
-     */
-    bool generatePowerCellFile(const QString &outputDir);
 
     /**
      * @brief Generate qsoc_power_fsm module definition with 8-state FSM
@@ -209,8 +196,7 @@ private:
     QString escapeTypstId(const QString &str) const;
 
 private:
-    QSocGenerateManager      *m_parent;                 // Parent manager for accessing utilities
-    bool                      m_forceOverwrite = false; // Force overwrite mode for power_cell.v
+    QSocGenerateManager      *m_parent;          // Parent manager for accessing utilities
     QMap<QString, YAML::Node> m_domainYamlCache; // Cache YAML nodes for domain type inference
 };
 

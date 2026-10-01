@@ -101,7 +101,7 @@ private slots:
             QSOC_TEST_MISSING_DEPENDENCY("verilator");
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_handshake-XXXXXX");
         QVERIFY(directory.isValid());
-        const auto rtl = QSocPrcmSequenceRtl::generateHandshake();
+        const auto rtl = QSocPrcmSequenceRtl::generateHandshake("qsoc_prcm_service");
         QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
         const QString bench = R"(
@@ -192,8 +192,8 @@ endmodule
             QSOC_TEST_MISSING_DEPENDENCY("verilator");
         QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_prcm_rtl-XXXXXX");
         QVERIFY(directory.isValid());
-        const auto rtl = service ? QSocPrcmSequenceRtl::generateService()
-                                 : QSocPrcmSequenceRtl::generate();
+        const auto rtl = service ? QSocPrcmSequenceRtl::generateService("qsoc_prcm_domain_service")
+                                 : QSocPrcmSequenceRtl::generate("qsoc_prcm_domain");
         QVERIFY(!rtl.isEmpty());
         QVERIFY(save(directory.filePath("dut.v"), rtl));
         const auto path = pathToPhase(service);

@@ -10,9 +10,9 @@ class QSocPrcmSequenceRtl
 {
 public:
     /* The caller supplies one decoded target and retains it for an invalid request. */
-    static QString generate();
-    static QString generateService();
-    static QString generateHandshake();
+    static QString generate(const QString &moduleName);
+    static QString generateService(const QString &moduleName);
+    static QString generateHandshake(const QString &moduleName);
 };
 
 #endif // QSOCPRCMSEQUENCERTL_H

@@ -32,7 +32,7 @@ Supported behavior:
 - Automatic fault recovery with cooldown and retry mechanisms
 - DFT test mode bypass for all domains (test_en intended for static scan/test operations; deassert only when system is quiescent)
 - FSM-based power sequencing with standardized timing
-- Template RTL cells replaceable with foundry-specific implementations
+- Template RTL cells in the regenerated `qsoc_cell` unit
 
 == Power Structure
 <soc-net-power-structure>
@@ -180,7 +180,7 @@ Key behaviors:
 - All cycle parameters are counted on host_clock (AO clock domain)
 - Reset release is synchronized to clock to meet recovery/removal timing requirements
 
-Also included in power_cell.v is qsoc_power_rst_sync for domain reset synchronization:
+Also included in `qsoc_cell_power.v` is qsoc_power_rst_sync for domain reset synchronization:
 ```verilog
 module qsoc_power_rst_sync #(parameter integer STAGE=4)(
     input  wire clk_dom,      /**< domain clock source                   */
@@ -190,9 +190,8 @@ module qsoc_power_rst_sync #(parameter integer STAGE=4)(
 );
 ```
 
-QSoC creates a missing `power_cell.v` atomically and preserves any existing
-file byte-for-byte. `--force` is required to replace an existing
-implementation.
+Every run writes `output/qsoc_cell/rtl/qsoc_cell_power.v`, replacing any
+existing file (@verilog-output-layout).
 
 qsoc_power_rst_sync provides async assert, sync deassert reset synchronization. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection.
 
@@ -294,11 +293,11 @@ Connectivity and width problems are reported as described in
 
 === Diagram Output
 <soc-net-power-diagram>
-Generates `.typ` circuit diagram alongside Verilog.
+Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
 
 *Elements*: Domains → FSM → SYNC → Ready (with dependencies/timing/parameters)
 
-*Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
+*Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
 
 == Properties
 <soc-net-power-properties>

@@ -7,7 +7,7 @@ PRCM generates MMIO control and power, reset, and clock sequences from domain mo
 qsoc generate verilog --check prcm.soc_net
 ```
 
-`--check` checks resource binding and stable modes without loading a project or writing RTL. It does not accept `--force`, `--format`, or `--with-formal`.
+`--check` checks resource binding and stable modes without loading a project or writing RTL. It does not accept `--format` or `--with-formal`.
 
 When resources use separate files, combine them with `--merge`:
 
@@ -134,18 +134,17 @@ For `prcm.soc_net`, output paths depend on the selected configuration:
   [`prcm/rtl/prcm_register.v`], [MMIO register bank],
   [`prcm/rtl/prcm_clock.v`], [Clock controller],
   [`prcm/rtl/prcm_reset.v`], [Reset controller],
-  [`prcm/rtl/qsoc_prcm_domain.v`], [Action FSM for a single domain without chip policy or services],
-  [`prcm/rtl/qsoc_prcm_domain_service.v`], [Action FSM for multiple domains, chip policy, or services],
-  [`prcm/rtl/qsoc_prcm_service.v`], [Service handshake, when required],
-  [`prcm/rtl/clock_cell.v`, `prcm/rtl/reset_cell.v`], [Replaceable resource cells],
-  [`prcm/rtl/prcm.fl`], [RTL file list, relative to its directory],
+  [`prcm/rtl/prcm_domain.v`], [Action FSM for a single domain without chip policy or services],
+  [`prcm/rtl/prcm_domain_service.v`], [Action FSM for multiple domains, chip policy, or services],
+  [`prcm/rtl/prcm_service.v`], [Service handshake, when required],
+  [`prcm/rtl/prcm.fl`], [RTL file list of this unit, relative to `output/`],
   [`prcm/include/prcm.h`], [Register offsets, field masks, and mode codes],
   [`prcm/integration/prcm.json`], [Circuit bindings, interface conditions, and check scope],
   [`prcm/formal/prcm_formal.sv`], [Optional RTL assertions and environment],
   [`prcm/formal/check.sby`, `prcm/formal/prcm_formal.fl`], [Optional proof job and file list],
 )
 
-Ordinary outputs are regenerated. Existing resource cells remain unchanged unless `--force` is set. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
+Ordinary outputs are regenerated. The clock and reset cells come from the shared `output/qsoc_cell/` unit, which `output/qsoc.fl` lists before this unit (@verilog-output-layout). `check.sby` references them as `../../qsoc_cell/rtl/`. File lists use paths relative to `output/`. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
 
 For a single-domain circuit, REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains the raw request, done, invalid_mode, and fault. The mode code and three status bits must fit one data word. EVENT records power loss and uses write-one-to-clear semantics.
 

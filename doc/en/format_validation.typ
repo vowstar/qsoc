@@ -193,7 +193,7 @@ them change or drop parts of the design rather than only warning:
 - *Reset controller without `source`*: generation is refused outright. Without a
   source every target would be tied inactive and the system would never reset
 
-The unconnected-port report (`<module>.nc.rpt`, see @verilog-generation) lists
+The unconnected-port report (`<top>/reports/<top>.nc.rpt`, see @verilog-generation) lists
 every port left unconnected after all of the above.
 
 == Known Limitations

@@ -858,18 +858,13 @@ cells fails elaboration.
 `NUM_INPUTS` up are unused. Generated controllers pad to a power of two with
 zero lanes.
 
-*Read the generated `clock_cell.v` file for actual interfaces.*
-Replace with foundry cells before production use.
+*Read the generated `qsoc_cell_clock.v` file for actual interfaces.*
 
-=== Auto-generated Template File: clock_cell.v
+=== Auto-generated Template File: qsoc_cell_clock.v
 <soc-net-clock-template-file>
-When missing, QSoC creates `clock_cell.v` with every template module listed in
-@soc-net-clock-templates.
-
-File generation behavior:
-- Creates a missing file atomically
-- Preserves any existing file byte-for-byte
-- Replaces an existing file only when `--force` is explicit
+Every run writes `output/qsoc_cell/rtl/qsoc_cell_clock.v` with every template
+module listed in @soc-net-clock-templates, replacing any existing file
+(@verilog-output-layout).
 
 == Port Sharing
 <soc-net-clock-signal-dedup>
@@ -927,7 +922,7 @@ The clock controller generates a dedicated `clkctrl` module with:
 === Generated Code Example
 <soc-net-clock-code-example>
 ```verilog
-// Clock controller module (template cells in separate clock_cell.v file)
+// Clock controller module (template cells in separate qsoc_cell_clock.v file)
 
 module clkctrl (
     /* Default clock */
@@ -977,11 +972,11 @@ endmodule
 
 === Diagram Output
 <soc-net-clock-diagram>
-Generates `.typ` circuit diagram alongside Verilog.
+Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
 
 *Elements*: Inputs → MUX → ICG/DIV/INV → Outputs (with frequencies/parameters)
 
-*Files*: `<module>.v`, `<module>.typ` (compile: `typst compile <module>.typ`)
+*Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
 
 === Syntax Summary
 <soc-net-clock-syntax-summary>

@@ -20,9 +20,9 @@ namespace {
 
 QString cellText(const QString &name)
 {
-    if (name == "clock_cell.v")
+    if (name == "qsoc_cell_clock.v")
         return QSocClockPrimitive().generateCellVerilog();
-    if (name == "reset_cell.v")
+    if (name == "qsoc_cell_reset.v")
         return QSocResetPrimitive().generateCellVerilog();
     return QSocPowerPrimitive().generateCellVerilog();
 }
@@ -51,7 +51,7 @@ bool run(
     return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
 }
 
-const QStringList allCells = {"clock_cell.v", "reset_cell.v", "power_cell.v"};
+const QStringList allCells = {"qsoc_cell_clock.v", "qsoc_cell_reset.v", "qsoc_cell_power.v"};
 
 /* Cells in root and their formal collateral in root/cell/formal. */
 bool writeFormal(const QString &root, const QMap<QString, QString> &cells)
@@ -111,7 +111,7 @@ private slots:
     {
         QTest::addColumn<QString>("cell");
         QTest::addColumn<QString>("tool");
-        for (const char *cell : {"clock_cell.v", "reset_cell.v", "power_cell.v"}) {
+        for (const char *cell : {"qsoc_cell_clock.v", "qsoc_cell_reset.v", "qsoc_cell_power.v"}) {
             for (const char *tool : {"iverilog", "yosys"})
                 QTest::newRow(qPrintable(QString("%1-%2").arg(cell, tool))) << cell << tool;
         }
@@ -148,14 +148,14 @@ private slots:
             const char *module;
             const char *parameter;
         } counts[] = {
-            {"reset_cell.v", "qsoc_rst_sync", "STAGE"},
-            {"reset_cell.v", "qsoc_rst_pipe", "STAGE"},
-            {"reset_cell.v", "qsoc_rst_count", "CYCLE"},
-            {"power_cell.v", "qsoc_power_rst_sync", "STAGE"},
-            {"clock_cell.v", "qsoc_clk_mux_gf", "NUM_INPUTS"},
-            {"clock_cell.v", "qsoc_clk_mux_gf", "NUM_SYNC_STAGES"},
-            {"clock_cell.v", "qsoc_clk_mux_raw", "NUM_INPUTS"},
-            {"clock_cell.v", "qsoc_clk_or_tree", "INPUT_COUNT"},
+            {"qsoc_cell_reset.v", "qsoc_rst_sync", "STAGE"},
+            {"qsoc_cell_reset.v", "qsoc_rst_pipe", "STAGE"},
+            {"qsoc_cell_reset.v", "qsoc_rst_count", "CYCLE"},
+            {"qsoc_cell_power.v", "qsoc_power_rst_sync", "STAGE"},
+            {"qsoc_cell_clock.v", "qsoc_clk_mux_gf", "NUM_INPUTS"},
+            {"qsoc_cell_clock.v", "qsoc_clk_mux_gf", "NUM_SYNC_STAGES"},
+            {"qsoc_cell_clock.v", "qsoc_clk_mux_raw", "NUM_INPUTS"},
+            {"qsoc_cell_clock.v", "qsoc_clk_or_tree", "INPUT_COUNT"},
         };
         for (const char *tool : {"iverilog", "yosys"}) {
             for (const auto &count : counts) {
@@ -272,52 +272,52 @@ private slots:
         QTest::addColumn<QString>("from");
         QTest::addColumn<QString>("to");
         QTest::newRow("div-gate-from-registered-enable")
-            << "clock_cell.v" << "clk_div_explicit" << ".en(gate_en_q & en),"
+            << "qsoc_cell_clock.v" << "clk_div_explicit" << ".en(gate_en_q & en),"
             << ".en(gate_is_open_q),";
         QTest::newRow("div-load-while-gate-open")
-            << "clock_cell.v" << "clk_div_explicit"
+            << "qsoc_cell_clock.v" << "clk_div_explicit"
             << "if ((gate_is_open_q == 1'b0) || clk_div_bypass_en_q) begin" << "if (1'b1) begin";
-        QTest::newRow("div-no-falling-edge-flop") << "clock_cell.v" << "clk_div_explicit"
+        QTest::newRow("div-no-falling-edge-flop") << "qsoc_cell_clock.v" << "clk_div_explicit"
                                                   << "t_ff2_q = !t_ff2_q;" << "t_ff2_q = t_ff2_q;";
-        QTest::newRow("div-update-as-pulse") << "clock_cell.v" << "clk_div_auto_live"
+        QTest::newRow("div-update-as-pulse") << "qsoc_cell_clock.v" << "clk_div_auto_live"
                                              << "load_req_q   <= (div_sync_normalized != div_q);"
                                              << "load_req_q   <= (div_sync_ff2 != div_sync_ff1);";
         QTest::newRow("mux-gf-no-exclusion")
-            << "clock_cell.v" << "clk_mux_gf"
+            << "qsoc_cell_clock.v" << "clk_mux_gf"
             << "= sel_onehot[i] & &(clock_disabled_q | ONEHOT_I);" << "= sel_onehot[i];";
         QTest::newRow("mux-gf-gate-reset-bypass")
-            << "clock_cell.v" << "clk_mux_gf_reset_clock"
+            << "qsoc_cell_clock.v" << "clk_mux_gf_reset_clock"
             << "            .CLOCK_DURING_RESET(1'b0)\n        ) i_clk_gate (\n"
                "            .clk(clk_in[i]),\n            .en(gate_enable[i]),\n"
                "            .test_en(1'b0),\n            .rst_n(1'b1),"
             << "            .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n        ) i_clk_gate (\n"
                "            .clk(clk_in[i]),\n            .en(gate_enable[i]),\n"
                "            .test_en(1'b0),\n            .rst_n(reset_synced[i]),";
-        QTest::newRow("mux-raw-half-split")
-            << "clock_cell.v" << "clk_mux_raw_3" << "localparam integer HALF = 1 << (WIDTH - 1);"
-            << "localparam integer HALF = NUM_INPUTS / 2;";
-        QTest::newRow("or-tree-drops-input")
-            << "clock_cell.v" << "clk_or_tree_5" << ".CLK_IN1(clk_in[1])," << ".CLK_IN1(1'b0),";
+        QTest::newRow("mux-raw-half-split") << "qsoc_cell_clock.v" << "clk_mux_raw_3"
+                                            << "localparam integer HALF = 1 << (WIDTH - 1);"
+                                            << "localparam integer HALF = NUM_INPUTS / 2;";
+        QTest::newRow("or-tree-drops-input") << "qsoc_cell_clock.v" << "clk_or_tree_5"
+                                             << ".CLK_IN1(clk_in[1])," << ".CLK_IN1(1'b0),";
         QTest::newRow("gate-latch-open-high")
-            << "clock_cell.v" << "clk_gate_pos" << "if (!clk) iq = (test_en | en);"
+            << "qsoc_cell_clock.v" << "clk_gate_pos" << "if (!clk) iq = (test_en | en);"
             << "if (clk) iq = (test_en | en);";
         QTest::newRow("xor-as-or")
-            << "clock_cell.v" << "clk_tc" << "assign CLK_OUT = CLK_IN0 ^ CLK_IN1;"
+            << "qsoc_cell_clock.v" << "clk_tc" << "assign CLK_OUT = CLK_IN0 ^ CLK_IN1;"
             << "assign CLK_OUT = CLK_IN0 | CLK_IN1;";
         QTest::newRow("rst-sync-short")
-            << "reset_cell.v" << "rst_sync_3" << "assign core_rst_n = sync_reg[STAGE-1];"
+            << "qsoc_cell_reset.v" << "rst_sync_3" << "assign core_rst_n = sync_reg[STAGE-1];"
             << "assign core_rst_n = sync_reg[STAGE-2];";
         QTest::newRow("rst-pipe-short")
-            << "reset_cell.v" << "rst_pipe_3" << "assign core_rst_n = pipe_reg[STAGE-1];"
+            << "qsoc_cell_reset.v" << "rst_pipe_3" << "assign core_rst_n = pipe_reg[STAGE-1];"
             << "assign core_rst_n = pipe_reg[STAGE-2];";
         QTest::newRow("rst-count-short")
-            << "reset_cell.v" << "rst_count_5" << "C_M1 = CYCLE - 1;" << "C_M1 = CYCLE - 2;";
+            << "qsoc_cell_reset.v" << "rst_count_5" << "C_M1 = CYCLE - 1;" << "C_M1 = CYCLE - 2;";
         QTest::newRow("power-stale-off-timer")
-            << "power_cell.v" << "power_fsm"
+            << "qsoc_cell_power.v" << "power_fsm"
             << "            state_n = S_TURN_OFF;\n            ld_off  = 1'b1;"
             << "            state_n = S_TURN_OFF;";
         QTest::newRow("power-rst-sync-short")
-            << "power_cell.v" << "power_rst_sync_3" << "sr[STAGE-1]" << "sr[STAGE-2]";
+            << "qsoc_cell_power.v" << "power_rst_sync_3" << "sr[STAGE-1]" << "sr[STAGE-2]";
     }
 
     /* Each fault, several of them bugs these cells once had, fails its task. */
@@ -350,11 +350,11 @@ private slots:
         }
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
-        QVERIFY(save(dir.filePath("clock_cell.v"), cellText("clock_cell.v")));
+        QVERIFY(save(dir.filePath("qsoc_cell_clock.v"), cellText("qsoc_cell_clock.v")));
         QVERIFY(save(dir.filePath("tb.v"), backToBackBench));
         QString log;
         QVERIFY2(
-            run("iverilog", {"-g2005", "-o", "sim", "tb.v", "clock_cell.v"}, dir.path(), &log),
+            run("iverilog", {"-g2005", "-o", "sim", "tb.v", "qsoc_cell_clock.v"}, dir.path(), &log),
             qPrintable(log));
         QVERIFY2(run("vvp", {"-n", "sim"}, dir.path(), &log), qPrintable(log));
         QVERIFY2(log.contains("div_q=3"), qPrintable(log));

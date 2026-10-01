@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsoccelllibrary.h"
 #include "common/qsocconsole.h"
+#include "common/qsocgenerateartifact.h"
 #include "common/qsocgeneratemanager.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivecomb.h"
@@ -21,7 +23,9 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QTextStream>
 
@@ -40,6 +44,38 @@
 #include <slang/util/BumpAllocator.h>
 
 namespace {
+
+/* Write the unit file list and staged diagrams of <top>, then the cell unit and qsoc.fl. */
+bool publishUnit(const QString &outputDirectory, const QString &top, const QString &diagrams)
+{
+    const QDir                                  unit(QDir(outputDirectory).filePath(top));
+    std::vector<QSocGenerateArtifact::Artifact> artifacts{
+        {unit.filePath("rtl/" + top + ".fl"), (top + "/rtl/" + top + ".v\n").toUtf8()}};
+    for (const QFileInfo &diagram : QDir(diagrams).entryInfoList({"*.typ"}, QDir::Files)) {
+        QFile file(diagram.filePath());
+        if (file.open(QIODevice::ReadOnly))
+            artifacts.push_back({unit.filePath("doc/" + diagram.fileName()), file.readAll()});
+    }
+    QString error = QSocGenerateArtifact::write(std::move(artifacts), true, outputDirectory);
+    if (error.isEmpty())
+        error = QSocCellLibrary::publish(outputDirectory);
+    if (!error.isEmpty())
+        QSocConsole::error() << error;
+    return error.isEmpty();
+}
+
+/* Controller module names share the namespace of the qsoc_ cells. */
+bool reservedController(const YAML::Node &node)
+{
+    const YAML::Node name = node.IsMap() ? node["name"] : YAML::Node();
+    if (!name || !name.IsScalar()
+        || !QSocCellLibrary::isReserved(QString::fromStdString(name.Scalar()))) {
+        return false;
+    }
+    QSocConsole::error() << "Controller name is reserved for QSoC cells:"
+                         << QString::fromStdString(name.Scalar());
+    return true;
+}
 
 QString verilogCandidateTemplate(const QString &filePath)
 {
@@ -328,6 +364,46 @@ bool isValidTieExpression(const QString &value)
            && invocation->arguments->closeParen.location().offset() == source.size() - 1;
 }
 
+/* Create <top>/rtl only now, so a rejected run leaves no unit behind. */
+bool commitTop(
+    const QString &outputDirectory, const QString &top, const QByteArray &text, bool formatOutput)
+{
+    const QString rtl = top + "/rtl";
+    if (!QDir(outputDirectory).mkpath(rtl)) {
+        QSocConsole::error() << "Failed to create output directory:" << rtl;
+        return false;
+    }
+    const auto artifact = QSocPaths::resolveArtifactPath(outputDirectory, rtl + "/" + top + ".v");
+    if (!artifact.isValid()) {
+        QSocConsole::error() << artifact.error;
+        return false;
+    }
+    if (!formatOutput) {
+        QSaveFile file(artifact.path);
+        file.setDirectWriteFallback(false);
+        if (!file.open(QIODevice::WriteOnly) || file.write(text) != text.size() || !file.commit()) {
+            QSocConsole::error() << "Failed to commit generated Verilog file:"
+                                 << file.errorString();
+            return false;
+        }
+        return true;
+    }
+    QTemporaryFile candidate(verilogCandidateTemplate(artifact.path));
+    if (!candidate.open() || candidate.write(text) != text.size() || !candidate.flush()) {
+        QSocConsole::error() << "Failed to write generated Verilog file:"
+                             << candidate.errorString();
+        return false;
+    }
+    const QString candidatePath = candidate.fileName();
+    candidate.close();
+    if (!QSocVerilogUtils::formatFile(candidatePath)
+        || !commitVerilogCandidate(candidatePath, artifact.path)) {
+        return false;
+    }
+    QSocConsole::info() << "Successfully formatted Verilog file";
+    return true;
+}
+
 } // namespace
 
 bool QSocGenerateManager::generateVerilog(const QString &outputFileName)
@@ -388,66 +464,32 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
         return false;
     }
 
-    const QString              outputLeaf = outputFileName + ".v";
-    static const QSet<QString> primitiveCellArtifacts{
-        QStringLiteral("clock_cell.v"),
-        QStringLiteral("power_cell.v"),
-        QStringLiteral("reset_cell.v"),
-    };
-    if (primitiveCellArtifacts.contains(outputLeaf.toCaseFolded())) {
-        QSocConsole::error() << "Top-level Verilog output collides with a primitive cell artifact:"
-                             << outputLeaf;
+    if (QSocCellLibrary::isReserved(outputFileName)) {
+        QSocConsole::error() << "Top-level name is reserved for QSoC output:" << outputFileName;
         return false;
     }
-
-    const auto outputArtifact
-        = QSocPaths::resolveArtifactPath(projectManager->getOutputPath(), outputLeaf);
-    if (!outputArtifact.isValid()) {
-        QSocConsole::error() << outputArtifact.error;
+    if (outputFileName.isEmpty() || outputFileName == "." || outputFileName == ".."
+        || outputFileName.contains('/') || outputFileName.contains('\\')) {
+        QSocConsole::error() << "Invalid top-level output name:" << outputFileName;
         return false;
     }
-    const QString outputFilePath = outputArtifact.path;
-
-    QSaveFile      outputFile(outputFilePath);
-    QTemporaryFile formattedCandidate(verilogCandidateTemplate(outputFilePath));
-    QFileDevice   *outputDevice = formatOutput ? static_cast<QFileDevice *>(&formattedCandidate)
-                                               : static_cast<QFileDevice *>(&outputFile);
-    outputFile.setDirectWriteFallback(false);
-    if (!outputDevice->open(QIODevice::WriteOnly)) {
-        QSocConsole::error() << "Failed to open output file for writing:" << outputFilePath;
+    const QString outputDirectory = projectManager->getOutputPath();
+    const QString outputFilePath
+        = QDir(outputDirectory).filePath(outputFileName + "/rtl/" + outputFileName + ".v");
+    QTemporaryDir diagrams;
+    if (!diagrams.isValid()) {
+        QSocConsole::error() << "Failed to create a diagram staging directory";
         return false;
     }
+    diagramDirectory         = diagrams.path();
+    const auto clearDiagrams = qScopeGuard([this]() { diagramDirectory.clear(); });
 
-    QTextStream out(outputDevice);
-    out.setEncoding(QStringConverter::Utf8);
-    const auto commitOutput = [&]() {
+    QString     text;
+    QTextStream out(&text);
+    const auto  commitOutput = [&]() {
         out.flush();
-        if (out.status() != QTextStream::Ok) {
-            QSocConsole::error() << "Failed to write generated Verilog file:"
-                                 << outputDevice->errorString();
-            return false;
-        }
-        if (formatOutput) {
-            if (!formattedCandidate.flush()) {
-                QSocConsole::error() << "Failed to flush generated Verilog file:"
-                                     << formattedCandidate.errorString();
-                return false;
-            }
-            const QString candidatePath = formattedCandidate.fileName();
-            formattedCandidate.close();
-            if (!QSocVerilogUtils::formatFile(candidatePath)
-                || !commitVerilogCandidate(candidatePath, outputFilePath)) {
-                return false;
-            }
-            QSocConsole::info() << "Successfully formatted Verilog file";
-            return true;
-        }
-        if (!outputFile.commit()) {
-            QSocConsole::error() << "Failed to commit generated Verilog file:"
-                                 << outputFile.errorString();
-            return false;
-        }
-        return true;
+        return commitTop(outputDirectory, outputFileName, text.toUtf8(), formatOutput)
+               && publishUnit(outputDirectory, outputFileName, diagrams.path());
     };
 
     /* Generate file header */
@@ -3046,8 +3088,9 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
 
     /* Generate unconnected port report if we have unconnected ports */
     if (unconnectedPortReporter.getUnconnectedPortCount() > 0) {
-        const QString reportOutputPath = projectManager->getOutputPath();
-        if (unconnectedPortReporter.generateReport(reportOutputPath, outputFileName)) {
+        const QString reportOutputPath = QDir(outputDirectory).filePath(outputFileName + "/reports");
+        if (QDir().mkpath(reportOutputPath)
+            && unconnectedPortReporter.generateReport(reportOutputPath, outputFileName)) {
             QSocConsole::info() << "Successfully generated unconnected port report:"
                                 << QDir(reportOutputPath).filePath(outputFileName + ".nc.rpt");
         } else {
@@ -3130,6 +3173,9 @@ bool QSocGenerateManager::generateResetPrimitive(const YAML::Node &resetNode, QT
         QSocConsole::warn() << "Reset primitive generator not initialized";
         return false;
     }
+    if (reservedController(resetNode)) {
+        return false;
+    }
 
     return resetPrimitive->generateResetController(resetNode, out);
 }
@@ -3140,6 +3186,9 @@ bool QSocGenerateManager::generateClockPrimitive(const YAML::Node &clockNode, QT
         QSocConsole::warn() << "Clock primitive generator not initialized";
         return false;
     }
+    if (reservedController(clockNode)) {
+        return false;
+    }
 
     return clockPrimitive->generateClockController(clockNode, out);
 }
@@ -3148,6 +3197,9 @@ bool QSocGenerateManager::generatePowerPrimitive(const YAML::Node &powerNode, QT
 {
     if (!powerPrimitive) {
         QSocConsole::warn() << "Power primitive generator not initialized";
+        return false;
+    }
+    if (reservedController(powerNode)) {
         return false;
     }
 

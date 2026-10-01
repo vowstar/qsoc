@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoccliworker.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocprcmbinding.h"
 #include "common/qsocprcmcomposition.h"
@@ -286,6 +287,9 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
             return showError(1, "PRCM_REQUIRED: --with-formal requires a PRCM declaration.");
         return std::nullopt;
     }
+    const auto unit = QFileInfo(files.first()).baseName();
+    if (QSocCellLibrary::isReserved(unit))
+        return showError(1, "PRCM_NAME: The name is reserved for QSoC output: " + unit);
     const auto loaded = QSocPrcmDocumentLoader::load(files);
     if (!loaded.document)
         return showError(1, describe(loaded.diagnostic));
@@ -382,15 +386,7 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
         QStringList                                 list;
         for (auto rtl = circuit.rtl.cbegin(); rtl != circuit.rtl.cend(); ++rtl) {
             list.append(rtl.key());
-            const auto      path = output.filePath("rtl/" + rtl.key());
-            const QFileInfo file(path);
-            const bool      cell = rtl.key() == "clock_cell.v" || rtl.key() == "reset_cell.v";
-            if (cell && file.exists() && !parser.isSet("force")) {
-                if (file.isSymLink() || !file.isFile())
-                    return showError(1, "PRCM_OUTPUT: Cell output is not a regular file: " + path);
-                continue;
-            }
-            artifact.push_back({path, rtl.value().toUtf8()});
+            artifact.push_back({output.filePath("rtl/" + rtl.key()), rtl.value().toUtf8()});
         }
         artifact.push_back(
             {output.filePath("rtl/" + name + ".fl"), (list.join('\n') + '\n').toUtf8()});
@@ -408,19 +404,25 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
                             plan, *composition, circuit, name, *plan.input.resetStage)
                       : QSocPrcmFormal::generate(plan, circuit, name, *plan.input.resetStage);
             QStringList formalList;
-            for (const auto &file : circuit.rtl.keys()) {
-                formal.sby.replace('\n' + file + '\n', "\n../rtl/" + file + '\n');
-                formalList.append("../rtl/" + file);
+            for (const auto &file : circuit.cell.keys() + circuit.rtl.keys()) {
+                const bool cell = circuit.cell.contains(file);
+                const auto path = cell ? QSocCellLibrary::path(file) : name + "/rtl/" + file;
+                formal.sby.replace(
+                    '\n' + file + '\n', (cell ? "\n../../" + path : "\n../rtl/" + file) + '\n');
+                formalList.append(path);
             }
             artifact.push_back(
                 {output.filePath("formal/" + name + "_formal.sv"), formal.systemVerilog.toUtf8()});
             artifact.push_back({output.filePath("formal/check.sby"), formal.sby.toUtf8()});
-            formalList.append(name + "_formal.sv");
+            formalList.append(name + "/formal/" + name + "_formal.sv");
             artifact.push_back(
                 {output.filePath("formal/" + name + "_formal.fl"),
                  (formalList.join('\n') + '\n').toUtf8()});
         }
-        const auto error = QSocGenerateArtifact::write(std::move(artifact), true);
+        auto error
+            = QSocGenerateArtifact::write(std::move(artifact), true, projectManager->getOutputPath());
+        if (error.isEmpty())
+            error = QSocCellLibrary::publish(projectManager->getOutputPath());
         if (!error.isEmpty())
             return showError(1, error);
         return showInfo(0, "Generated PRCM circuit: " + output.path());

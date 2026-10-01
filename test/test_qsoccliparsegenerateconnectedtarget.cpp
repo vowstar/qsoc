@@ -97,7 +97,8 @@ io_mod:
         if (netlistPath.isEmpty()) {
             return {};
         }
-        const QString outputPath = QDir(projectManager.getOutputPath()).filePath(name + ".v");
+        const QString outputPath
+            = QDir(projectManager.getOutputPath()).filePath(name + "/rtl/" + name + ".v");
         if (QFileInfo::exists(outputPath) && !QFile::remove(outputPath)) {
             return {};
         }

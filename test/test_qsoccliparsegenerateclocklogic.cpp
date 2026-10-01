@@ -96,15 +96,16 @@ private slots:
 
     bool verifyClockCellFileComplete()
     {
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
         if (!QFile::exists(clockCellPath)) {
-            qWarning() << "clock_cell.v not found at" << clockCellPath;
+            qWarning() << "qsoc_cell_clock.v not found at" << clockCellPath;
             return false;
         }
 
         QFile file(clockCellPath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            qWarning() << "Failed to open clock_cell.v:" << file.errorString();
+            qWarning() << "Failed to open qsoc_cell_clock.v:" << file.errorString();
             return false;
         }
         const QString content = file.readAll();
@@ -123,7 +124,7 @@ private slots:
 
         for (const QString &cell : requiredCells) {
             if (!content.contains(QString("module %1").arg(cell))) {
-                qWarning() << "Missing cell in clock_cell.v:" << cell;
+                qWarning() << "Missing cell in qsoc_cell_clock.v:" << cell;
                 return false;
             }
         }
@@ -157,9 +158,9 @@ clock:
 
         const QString netlistPath = createTempFile("test_dead_dft_path.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_dead_dft_path.v");
-        const QString typstPath = QDir(projectManager.getOutputPath()).filePath("bad_ctl.typ");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_dead_dft_path/rtl/test_dead_dft_path.v");
+        const QString typstPath   = QDir(projectManager.getOutputPath()).filePath("bad_ctl.typ");
         QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
         QVERIFY(!QFile::exists(typstPath) || QFile::remove(typstPath));
         {
@@ -358,10 +359,10 @@ clock:
 
         const QString netlistPath
             = QDir(projectManager.getCurrentPath()).filePath("test_ignored_dft.soc_net");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_ignored_dft.v");
-        const QString typstPath
-            = QDir(projectManager.getOutputPath()).filePath("ignored_dft_ctl.typ");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_ignored_dft/rtl/test_ignored_dft.v");
+        const QString typstPath   = QDir(projectManager.getOutputPath())
+                                        .filePath("test_ignored_dft/doc/ignored_dft_ctl.typ");
 
         const auto generate = [&](const QString &content, QByteArray &verilog, QByteArray &typst) {
             if (createTempFile("test_ignored_dft.soc_net", content).isEmpty()) {
@@ -421,8 +422,9 @@ clock:
         QCOMPARE(ignoredVerilog, baselineVerilog);
         QCOMPARE(ignoredTypst, baselineTypst);
 
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        QSlangDriver  driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        QSlangDriver driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
     }
@@ -575,8 +577,9 @@ clock:
             socCliWorker.run();
         }
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_dft_enable_matrix.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath(
+                                            "test_dft_enable_matrix/rtl/test_dft_enable_matrix.v");
         QVERIFY(QFile::exists(verilogPath));
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -687,8 +690,9 @@ clock:
             }
         }
 
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        QFile         clockCellFile(clockCellPath);
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        QFile clockCellFile(clockCellPath);
         QVERIFY(clockCellFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QByteArray clockCellBytes = clockCellFile.readAll();
         const qsizetype  gfBegin        = clockCellBytes.indexOf("module qsoc_clk_mux_gf #(");
@@ -720,9 +724,12 @@ clock:
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
 
-        QFile fallbackTypstFile(QDir(projectManager.getOutputPath()).filePath("dft_fallback.typ"));
-        QFile inheritedTypstFile(QDir(projectManager.getOutputPath()).filePath("dft_inherited.typ"));
-        QFile overrideTypstFile(QDir(projectManager.getOutputPath()).filePath("dft_override.typ"));
+        QFile fallbackTypstFile(QDir(projectManager.getOutputPath())
+                                    .filePath("test_dft_enable_matrix/doc/dft_fallback.typ"));
+        QFile inheritedTypstFile(QDir(projectManager.getOutputPath())
+                                     .filePath("test_dft_enable_matrix/doc/dft_inherited.typ"));
+        QFile overrideTypstFile(QDir(projectManager.getOutputPath())
+                                    .filePath("test_dft_enable_matrix/doc/dft_override.typ"));
         QVERIFY(fallbackTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
         QVERIFY(inheritedTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
         QVERIFY(overrideTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -819,7 +826,8 @@ clock:
         QVERIFY(!netlistPath.isEmpty());
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_invalid_dft_controls.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_invalid_dft_controls/rtl/test_invalid_dft_controls.v");
         const QString typstPath
             = QDir(projectManager.getOutputPath()).filePath("invalid_dft_ctl.typ");
         const QByteArray verilogSentinel("existing-verilog\n");
@@ -827,6 +835,7 @@ clock:
         {
             QFile verilogFile(verilogPath);
             QFile typstFile(typstPath);
+            QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
             QVERIFY(typstFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
@@ -982,10 +991,11 @@ clock:
             QCOMPARE(module.count(connection), qsizetype(1));
         }
 
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_dft_constants.v");
-        QSlangDriver driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_dft_constants/rtl/test_dft_constants.v");
+        QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
     }
@@ -1021,10 +1031,12 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(ctl)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(ctl)"));
 
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_shared_scalar_dft.v");
-        QSlangDriver driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath(
+                                            "test_shared_scalar_dft/rtl/test_shared_scalar_dft.v");
+        QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
     }
@@ -1093,9 +1105,11 @@ clock:
         QCOMPARE(verilog.count(".test_en(shared_link_valid)"), qsizetype(2));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_divider_control_ports.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_divider_control_ports/rtl/test_divider_control_ports.v");
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
@@ -1233,8 +1247,8 @@ clock:
         const QString netlistPath = createTempFile("test_port_collision.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_port_collision.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_port_collision/rtl/test_port_collision.v");
         const QString typstPath
             = QDir(projectManager.getOutputPath()).filePath("port_collision_ctl.typ");
         const QByteArray verilogSentinel("existing-verilog\n");
@@ -1242,6 +1256,7 @@ clock:
         {
             QFile verilogFile(verilogPath);
             QFile typstFile(typstPath);
+            QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
             QVERIFY(typstFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
@@ -1349,10 +1364,11 @@ clock:
         QCOMPARE(verilog.count(".test_en(shared_en)"), qsizetype(2));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_shared_en_ten.v");
-        QSlangDriver driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_shared_en_ten/rtl/test_shared_en_ten.v");
+        QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
@@ -1394,10 +1410,11 @@ clock:
         QCOMPARE(verilog.count(".div_valid(1'b0)"), qsizetype(1));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_unused_valid.v");
-        QSlangDriver driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_unused_valid/rtl/test_unused_valid.v");
+        QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
@@ -1448,10 +1465,11 @@ clock:
         QCOMPARE(verilog.count(".div_valid(1'b1)"), qsizetype(1));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_const_control.v");
-        QSlangDriver driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_const_control/rtl/test_const_control.v");
+        QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
@@ -1497,10 +1515,11 @@ clock:
         QCOMPARE(verilog.count(".div_valid(1'b0)"), qsizetype(2));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_static_valid.v");
-        QSlangDriver driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_static_valid/rtl/test_static_valid.v");
+        QSlangDriver  driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
@@ -1610,13 +1629,15 @@ clock:
         const QString netlistPath = createTempFile("test_bad_atom.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_bad_atom.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_bad_atom/rtl/test_bad_atom.v");
         const QString typstPath = QDir(projectManager.getOutputPath()).filePath("bad_atom_ctl.typ");
         const QByteArray verilogSentinel("existing-verilog\n");
         const QByteArray typstSentinel("existing-typst\n");
         {
             QFile verilogFile(verilogPath);
             QFile typstFile(typstPath);
+            QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
             QVERIFY(typstFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
@@ -1680,9 +1701,11 @@ clock:
         QCOMPARE(verilog.count("unused_vld"), qsizetype(0));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_unity_divider_ports.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_unity_divider_ports/rtl/test_unity_divider_ports.v");
         QSlangDriver driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
@@ -1742,7 +1765,8 @@ clock:
         QVERIFY(!netlistPath.isEmpty());
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_bad_divider_control.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_bad_divider_control/rtl/test_bad_divider_control.v");
         const QString typstPath
             = QDir(projectManager.getOutputPath()).filePath("bad_divider_control_ctl.typ");
         const QByteArray verilogSentinel("existing-verilog\n");
@@ -1750,6 +1774,7 @@ clock:
         {
             QFile verilogFile(verilogPath);
             QFile typstFile(typstPath);
+            QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
             QVERIFY(typstFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
@@ -1831,8 +1856,8 @@ clock:
         const QString netlistPath = createTempFile("test_icg_no_enable.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_icg_no_enable.v");
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_icg_no_enable/rtl/test_icg_no_enable.v");
         const QString typstPath
             = QDir(projectManager.getOutputPath()).filePath("icg_no_enable_ctl.typ");
         const QByteArray verilogSentinel("existing-verilog\n");
@@ -1840,6 +1865,7 @@ clock:
         {
             QFile verilogFile(verilogPath);
             QFile typstFile(typstPath);
+            QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
             QVERIFY(typstFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
@@ -1969,7 +1995,8 @@ clock:
             = createTempFile("test_input_target_collision.soc_net", netlistContent);
         QVERIFY(!netlistPath.isEmpty());
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_input_target_collision.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_input_target_collision/rtl/test_input_target_collision.v");
         const QString typstPath
             = QDir(projectManager.getOutputPath()).filePath("input_target_collision.typ");
         QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
@@ -2018,7 +2045,8 @@ clock:
         QVERIFY(!netlistPath.isEmpty());
         /* A stale artifact from an earlier run would satisfy the existence
            check even if this generation failed. */
-        QFile::remove(QDir(projectManager.getOutputPath()).filePath("test_pure_clock.v"));
+        QFile::remove(
+            QDir(projectManager.getOutputPath()).filePath("test_pure_clock/rtl/test_pure_clock.v"));
         {
             QSocCliWorker socCliWorker;
             QStringList   args;
@@ -2028,7 +2056,7 @@ clock:
             socCliWorker.run();
         }
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_pure_clock.v");
+            = QDir(projectManager.getOutputPath()).filePath("test_pure_clock/rtl/test_pure_clock.v");
         QVERIFY(QFile::exists(verilogPath));
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
@@ -2081,7 +2109,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_pass_thru.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_pass_thru/rtl/test_pass_thru.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -2100,7 +2129,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "assign adc_clk = clk_adc_clk_from_osc_24m"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -2152,7 +2181,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_gate_only.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_gate_only/rtl/test_gate_only.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -2167,7 +2197,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk(clk_dbg_clk_from_pll_800m)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(dbg_clk_en)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -2221,7 +2251,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_div_icg.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_div_icg/rtl/test_div_icg.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -2235,7 +2266,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".WIDTH(3)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".rst_n(rst_n)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -2290,7 +2321,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_div_dff.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_div_dff/rtl/test_div_dff.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -2304,7 +2336,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(2'd2)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_tc_clk_inv"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -2368,7 +2400,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_std_mux.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_std_mux/rtl/test_std_mux.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -2382,7 +2415,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".clk_sel(func_sel)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -2443,7 +2476,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_std_mux_pad.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_std_mux_pad/rtl/test_std_mux_pad.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -2657,9 +2691,11 @@ clock:
         QCOMPARE(verilogContent.count(".div(shared_div)"), qsizetype(2));
 
         messageList.clear();
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_dup_div.v");
-        QSlangDriver  driver;
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_dup_div/rtl/test_dup_div.v");
+        QSlangDriver driver;
         QVERIFY(driver.parseFileList(
             "", {clockCellPath, verilogPath}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
         bool cleanElaboration = false;
@@ -2798,7 +2834,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_shared_sel.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_shared_sel/rtl/test_shared_sel.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -2859,7 +2896,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_link_icg.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_link_icg/rtl/test_link_icg.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -2930,7 +2968,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_gf_mux.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_gf_mux/rtl/test_gf_mux.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -2944,7 +2983,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_rst_n(sys_rst_n)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(safe_sel)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -3013,8 +3052,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_gf_mux_custom_ref.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_gf_mux_custom_ref/rtl/test_gf_mux_custom_ref.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3032,7 +3071,7 @@ clock:
         QVERIFY(!verifyVerilogContentNormalized(verilogContent, ".test_en(1'b0)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_clk(test_clock)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -3109,8 +3148,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_mixed_ref_clock.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_mixed_ref_clock/rtl/test_mixed_ref_clock.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3127,7 +3166,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(sel1)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".async_sel(sel2)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -3198,7 +3237,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_same_name.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_same_name/rtl/test_same_name.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3221,7 +3261,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire sys_clk"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "output wire cpu_clk"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -3270,8 +3310,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_target_sta_guide.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_target_sta_guide/rtl/test_target_sta_guide.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3285,7 +3325,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(
             verilogContent, "assign cpu_clk = clk_cpu_clk_from_osc_24m;"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -3346,7 +3386,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_link_sta_guide.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_link_sta_guide/rtl/test_link_sta_guide.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3372,7 +3413,7 @@ clock:
         // Verify direct assignment from link processing chain
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "assign cpu_clk = "));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -3438,7 +3479,8 @@ net: {}
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_dedup.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_dedup/rtl/test_dedup.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -3550,7 +3592,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_polarity.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_polarity/rtl/test_polarity.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3576,12 +3619,13 @@ clock:
         // Verify internal signals use 1'b0 for test_enable
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".test_en(1'b0)"));
 
-        // clock_cell.v should be created and complete with POLARITY support
+        // qsoc_cell_clock.v should be created and complete with POLARITY support
         QVERIFY(verifyClockCellFileComplete());
 
-        // Verify clock_cell.v contains the POLARITY parameter system
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        QFile         cellFile(clockCellPath);
+        // Verify qsoc_cell_clock.v contains the POLARITY parameter system
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        QFile cellFile(clockCellPath);
         QVERIFY(cellFile.open(QIODevice::ReadOnly | QIODevice::Text));
         QString cellContent = cellFile.readAll();
         cellFile.close();
@@ -3674,8 +3718,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_icg_clock_on_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_icg_clock_on_reset/rtl/test_icg_clock_on_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3694,12 +3738,13 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(cpu_en)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".en(link_en)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
 
-        // Verify clock_cell.v contains the CLOCK_DURING_RESET parameter
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        QFile         cellFile(clockCellPath);
+        // Verify qsoc_cell_clock.v contains the CLOCK_DURING_RESET parameter
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        QFile cellFile(clockCellPath);
         QVERIFY(cellFile.open(QIODevice::ReadOnly | QIODevice::Text));
         QString cellContent = cellFile.readAll();
         cellFile.close();
@@ -3781,8 +3826,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_div_clock_on_reset.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_div_clock_on_reset/rtl/test_div_clock_on_reset.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -3802,12 +3847,13 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEFAULT_VAL(4)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "DEFAULT_VAL(10)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
 
-        // Verify clock_cell.v contains the CLOCK_DURING_RESET parameter for divider
-        const QString clockCellPath = QDir(projectManager.getOutputPath()).filePath("clock_cell.v");
-        QFile         cellFile(clockCellPath);
+        // Verify qsoc_cell_clock.v contains the CLOCK_DURING_RESET parameter for divider
+        const QString clockCellPath
+            = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
+        QFile cellFile(clockCellPath);
         QVERIFY(cellFile.open(QIODevice::ReadOnly | QIODevice::Text));
         QString cellContent = cellFile.readAll();
         cellFile.close();
@@ -3858,8 +3904,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath1
-            = QDir(projectManager.getOutputPath()).filePath("test_no_test_enable.v");
+        QString verilogPath1 = QDir(projectManager.getOutputPath())
+                                   .filePath("test_no_test_enable/rtl/test_no_test_enable.v");
         QVERIFY(QFile::exists(verilogPath1));
 
         QFile verilogFile1(verilogPath1);
@@ -3917,8 +3963,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath2
-            = QDir(projectManager.getOutputPath()).filePath("test_with_test_enable.v");
+        QString verilogPath2 = QDir(projectManager.getOutputPath())
+                                   .filePath("test_with_test_enable/rtl/test_with_test_enable.v");
         QVERIFY(QFile::exists(verilogPath2));
 
         QFile verilogFile2(verilogPath2);
@@ -3976,7 +4022,8 @@ net: {}
         // This test verifies the error checking code exists (defensive programming)
         // In normal YAML parsing, duplicates won't occur due to YAML constraints
         // But the error checking protects against programmatic errors
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_error_check.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_error_check/rtl/test_error_check.v");
         QVERIFY(QFile::exists(verilogPath));
 
         // Verify no duplicate error messages (should be clean for unique targets)
@@ -4052,7 +4099,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_sta_guide.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_sta_guide/rtl/test_sta_guide.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -4085,7 +4133,7 @@ clock:
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".A(gpu_clk_icg_pre_sta)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".X(gpu_clk_icg_out)"));
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -4201,7 +4249,8 @@ clock:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_sta_multi.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_sta_multi/rtl/test_sta_multi.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -4319,7 +4368,8 @@ clock:
         }
 
         // Check if Verilog file was generated successfully
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_clock_merge.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_clock_merge/rtl/test_clock_merge.v");
         QVERIFY(QFile::exists(verilogPath));
 
         // Read generated Verilog content
@@ -4362,7 +4412,7 @@ clock:
         }
         QVERIFY2(!foundPortError, "Should not have port duplication errors");
 
-        // clock_cell.v should be created and complete
+        // qsoc_cell_clock.v should be created and complete
         QVERIFY(verifyClockCellFileComplete());
     }
 
@@ -4414,7 +4464,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_static_div.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_static_div/rtl/test_static_div.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -4483,7 +4534,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_dynamic_auto.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_dynamic_auto/rtl/test_dynamic_auto.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -4560,7 +4612,8 @@ clock:
             socCliWorker.run();
         }
 
-        QFile verilogFile(QDir(projectManager.getOutputPath()).filePath("test_link_auto.v"));
+        QFile verilogFile(
+            QDir(projectManager.getOutputPath()).filePath("test_link_auto/rtl/test_link_auto.v"));
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString verilogContent = verilogFile.readAll();
 
@@ -4631,7 +4684,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_controlled_div.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_controlled_div/rtl/test_controlled_div.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -4763,8 +4817,8 @@ clock:
         }
 
         // Read generated Verilog files
-        QString baselineVerilog = readGeneratedVerilog("baseline_test.v");
-        QString staGuideVerilog = readGeneratedVerilog("sta_guide_test.v");
+        QString baselineVerilog = readGeneratedVerilog("baseline_test/rtl/baseline_test.v");
+        QString staGuideVerilog = readGeneratedVerilog("sta_guide_test/rtl/sta_guide_test.v");
 
         QVERIFY(!baselineVerilog.isEmpty());
         QVERIFY(!staGuideVerilog.isEmpty());
@@ -4925,8 +4979,8 @@ clock:
             socCliWorker.run();
         }
 
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_complete_chain_sta.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_complete_chain_sta/rtl/test_complete_chain_sta.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -5032,7 +5086,8 @@ clock:
         }
 
         QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_complete_chain_no_sta.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_complete_chain_no_sta/rtl/test_complete_chain_no_sta.v");
         QVERIFY(QFile::exists(verilogPath));
 
         QFile verilogFile(verilogPath);
@@ -5154,13 +5209,15 @@ clock:
         QVERIFY(!netlistPath.isEmpty());
 
         /* A rejection must leave existing artifacts byte-identical. */
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         const QString typstPath = QDir(projectManager.getOutputPath()).filePath(stem + "_ctrl.typ");
         const QByteArray verilogSentinel("existing-verilog\n");
         const QByteArray typstSentinel("existing-typst\n");
         {
             QFile verilogFile(verilogPath);
             QFile typstFile(typstPath);
+            QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
             QVERIFY(typstFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
@@ -5194,7 +5251,8 @@ private:
         if (netlistPath.isEmpty()) {
             return QString();
         }
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         if (QFile::exists(verilogPath) && !QFile::remove(verilogPath)) {
             return QString();
         }
@@ -5251,7 +5309,8 @@ clock:
         if (netlistPath.isEmpty()) {
             return QString();
         }
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         if (QFile::exists(verilogPath) && !QFile::remove(verilogPath)) {
             return QString();
         }

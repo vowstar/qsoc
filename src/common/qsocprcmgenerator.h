@@ -11,6 +11,7 @@ struct QSocPrcmCircuit
 {
     QSocMmioPlan                           mmio;
     QMap<QString, QString>                 rtl;
+    QMap<QString, QString>                 cell; /* qsoc_cell files, outside the unit */
     QMap<QString, QSocMmioPortDescription> port;
     QJsonObject                            binding;
 };

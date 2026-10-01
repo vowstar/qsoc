@@ -19,7 +19,7 @@
       [`chmod +x QSoC-*.AppImage`], [make it runnable],
       [`qsoc project create <name>`], [create a project],
       [`qsoc module import rtl/*.v`], [import modules],
-      [`qsoc generate verilog f.soc_net`], [write `output/f.v`],
+      [`qsoc generate verilog f.soc_net`], [write `output/f/rtl/f.v`],
       [`qsoc agent`], [drive the same tools by prompt],
     )
 
@@ -47,7 +47,7 @@
     #strip([Where things live], [@project-layout],
       [`<name>.soc_pro`], [project file],
       [`bus/` `module/`], [libraries],
-      [`output/`], [netlists in, `.v` and `.nc.rpt` out],
+      [`output/`], [netlists in, units and `qsoc.fl` out],
       [`.qsoc.yml`], [project configuration],
       [`.qsoc/`], [sessions, plans, skills, memory],
       [`~/.config/qsoc/`], [user configuration (@config-files)],

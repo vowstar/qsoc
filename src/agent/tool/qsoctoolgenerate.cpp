@@ -35,10 +35,7 @@ json QSocToolGenerateVerilog::getParametersSchema() const
          {{"netlist_file",
            {{"type", "string"}, {"description", "Path to the netlist YAML file to process"}}},
           {"output_name",
-           {{"type", "string"}, {"description", "Output file name (without .v extension)"}}},
-          {"force",
-           {{"type", "boolean"},
-            {"description", "Force overwrite existing primitive cell files (default: false)"}}}}},
+           {{"type", "string"}, {"description", "Output file name (without .v extension)"}}}}},
         {"required", json::array({"netlist_file", "output_name"})}};
 }
 
@@ -65,18 +62,12 @@ QString QSocToolGenerateVerilog::execute(const json &arguments)
         return QString("Error: Netlist file not found: %1").arg(netlistFile);
     }
 
-    if (arguments.contains("force") && !arguments["force"].is_boolean()) {
-        return "Error: force must be a boolean";
-    }
-    const bool force = arguments.contains("force") && arguments["force"].get<bool>();
-
     QSocGenerateManager callManager(
         nullptr,
         generateManager->getProjectManager(),
         generateManager->getModuleManager(),
         generateManager->getBusManager(),
         generateManager->getLLMService());
-    callManager.setForceOverwrite(force);
 
     if (!callManager.loadNetlist(netlistFile)) {
         return QString("Error: Failed to load netlist file: %1").arg(netlistFile);
@@ -90,7 +81,7 @@ QString QSocToolGenerateVerilog::execute(const json &arguments)
         return QString("Error: Failed to generate Verilog for: %1").arg(outputName);
     }
 
-    return QString("Successfully generated Verilog: %1.v").arg(outputName);
+    return QString("Successfully generated Verilog: %1/rtl/%1.v").arg(outputName);
 }
 
 void QSocToolGenerateVerilog::setGenerateManager(QSocGenerateManager *generateManager)

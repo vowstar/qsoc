@@ -780,7 +780,7 @@ private slots:
         QVERIFY(result.startsWith("Error:"));
     }
 
-    void testGenerateVerilogForceIsScopedAfterSuccess()
+    void testGenerateVerilogWritesUnitLayout()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -795,114 +795,24 @@ private slots:
         QVERIFY(writeFileBytes(netlistPath, agentResetNetlist()));
 
         QSocToolGenerateVerilog tool(this, &generator);
-        const json              forcedArguments{
-            {"netlist_file", netlistPath.toStdString()},
-            {"output_name", "forced_reset"},
-            {"force", true}};
-        QVERIFY(tool.execute(forcedArguments).startsWith("Successfully"));
+        const json
+            arguments{{"netlist_file", netlistPath.toStdString()}, {"output_name", "unit_reset"}};
+        QCOMPARE(
+            tool.execute(arguments),
+            QString("Successfully generated Verilog: unit_reset/rtl/unit_reset.v"));
+        const QDir output(manager.getOutputPath());
+        QVERIFY(QFileInfo::exists(output.filePath("unit_reset/rtl/unit_reset.v")));
 
-        const QString    cellPath = QDir(manager.getOutputPath()).filePath("reset_cell.v");
-        const QByteArray marker   = "// user reset cell\n";
-        QVERIFY(writeFileBytes(cellPath, marker, QIODevice::Append));
-        const QByteArray expectedCell = readFileBytes(cellPath);
-        QVERIFY(expectedCell.endsWith(marker));
+        const QString    cellPath = output.filePath("qsoc_cell/rtl/qsoc_cell_reset.v");
+        const QByteArray cell     = readFileBytes(cellPath);
+        QVERIFY(writeFileBytes(cellPath, "// user reset cell\n", QIODevice::Append));
+        QVERIFY(tool.execute(arguments).startsWith("Successfully"));
+        QCOMPARE(readFileBytes(cellPath), cell);
 
-        const json defaultArguments{
-            {"netlist_file", netlistPath.toStdString()}, {"output_name", "default_reset"}};
-        QVERIFY(tool.execute(defaultArguments).startsWith("Successfully"));
-        QCOMPARE(readFileBytes(cellPath), expectedCell);
-
-        const json falseArguments{
-            {"netlist_file", netlistPath.toStdString()},
-            {"output_name", "false_reset"},
-            {"force", false}};
-        QVERIFY(tool.execute(falseArguments).startsWith("Successfully"));
-        QCOMPARE(readFileBytes(cellPath), expectedCell);
-    }
-
-    void testGenerateVerilogForceIsScopedAfterFailure_data()
-    {
-        QTest::addColumn<QByteArray>("failedNetlist");
-        QTest::addColumn<QString>("failedOutput");
-        QTest::addColumn<QString>("expectedError");
-
-        QTest::newRow("load") << QByteArray("reset: [\n") << QString("load_failure")
-                              << QString("Failed to load netlist");
-        QTest::newRow("process") << QByteArray("comb: malformed\n") << QString("process_failure")
-                                 << QString("Failed to process netlist");
-        QTest::newRow("generate") << agentResetNetlist() << QString("../blocked")
-                                  << QString("Failed to generate Verilog");
-    }
-
-    void testGenerateVerilogForceIsScopedAfterFailure()
-    {
-        QFETCH(QByteArray, failedNetlist);
-        QFETCH(QString, failedOutput);
-        QFETCH(QString, expectedError);
-
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString projectPath = QDir(directory.path()).filePath("project");
-
-        QSocProjectManager  manager;
-        QSocGenerateManager generator(nullptr, &manager);
-        manager.setCurrentPath(projectPath);
-        QVERIFY(manager.mkpath());
-
-        const QString validNetlistPath = QDir(projectPath).filePath("valid_reset.soc_net");
-        QVERIFY(writeFileBytes(validNetlistPath, agentResetNetlist()));
-
-        QSocToolGenerateVerilog tool(this, &generator);
-        const json              seedArguments{
-            {"netlist_file", validNetlistPath.toStdString()}, {"output_name", "seed_reset"}};
-        QVERIFY(tool.execute(seedArguments).startsWith("Successfully"));
-
-        const QString    cellPath = QDir(manager.getOutputPath()).filePath("reset_cell.v");
-        const QByteArray marker   = "// preserved after failed force call\n";
-        QVERIFY(writeFileBytes(cellPath, marker, QIODevice::Append));
-        const QByteArray expectedCell = readFileBytes(cellPath);
-        QVERIFY(expectedCell.endsWith(marker));
-
-        const QString failedNetlistPath = QDir(projectPath).filePath("failed_reset.soc_net");
-        QVERIFY(writeFileBytes(failedNetlistPath, failedNetlist));
-        const json failedArguments{
-            {"netlist_file", failedNetlistPath.toStdString()},
-            {"output_name", failedOutput.toStdString()},
-            {"force", true}};
-        const QString failedResult = tool.execute(failedArguments);
-        QVERIFY2(failedResult.contains(expectedError), qPrintable(failedResult));
-
-        const json retryArguments{
-            {"netlist_file", validNetlistPath.toStdString()}, {"output_name", "retry_reset"}};
-        QVERIFY(tool.execute(retryArguments).startsWith("Successfully"));
-        QCOMPARE(readFileBytes(cellPath), expectedCell);
-    }
-
-    void testGenerateVerilogRejectsNonBooleanForce()
-    {
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString projectPath = QDir(directory.path()).filePath("project");
-
-        QSocProjectManager  manager;
-        QSocGenerateManager generator(nullptr, &manager);
-        manager.setCurrentPath(projectPath);
-        QVERIFY(manager.mkpath());
-
-        const QString netlistPath = QDir(projectPath).filePath("reset.soc_net");
-        QVERIFY(writeFileBytes(netlistPath, agentResetNetlist()));
-
-        QSocToolGenerateVerilog tool(this, &generator);
-        const QString           result = tool.execute(
-            {{"netlist_file", netlistPath.toStdString()},
-             {"output_name", "invalid_force"},
-             {"force", "true"}});
-
-        QVERIFY(result.startsWith("Error:"));
-        QVERIFY(result.contains("force"));
-        QVERIFY(result.contains("boolean"));
-        QVERIFY(!QFileInfo::exists(QDir(manager.getOutputPath()).filePath("invalid_force.v")));
-        QVERIFY(!QFileInfo::exists(QDir(manager.getOutputPath()).filePath("reset_cell.v")));
+        const json
+            escaping{{"netlist_file", netlistPath.toStdString()}, {"output_name", "../blocked"}};
+        QVERIFY(tool.execute(escaping).contains("Failed to generate Verilog"));
+        QVERIFY(!QFileInfo::exists(QDir(projectPath).filePath("blocked")));
     }
 
     void testGenerateTemplateMissingParams()

@@ -43,7 +43,8 @@ private:
 
     QString readVerilog(const QString &baseFileName)
     {
-        const QString filePath = QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v");
+        const QString filePath = QDir(projectManager.getOutputPath())
+                                     .filePath(baseFileName + "/rtl/" + baseFileName + ".v");
         QFile         file(filePath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             return {};
@@ -56,7 +57,8 @@ private:
 
     bool verilogExists(const QString &baseFileName)
     {
-        return QFile::exists(QDir(projectManager.getOutputPath()).filePath(baseFileName + ".v"));
+        return QFile::exists(QDir(projectManager.getOutputPath())
+                                 .filePath(baseFileName + "/rtl/" + baseFileName + ".v"));
     }
 
     void runGenerate(const QString &netlistPath)

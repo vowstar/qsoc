@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocprcmshared.h"
+#include "common/qsoccelllibrary.h"
 #include "common/qsocprcmcomposition.h"
 #include "common/qsocprcmsequencertl.h"
 #include "common/qsocverilogutils.h"
@@ -303,7 +304,7 @@ private:
 
     void addRtl(const QString &file, const QString &rtl)
     {
-        if (rtl.isEmpty() || result.rtl.contains(file))
+        if (rtl.isEmpty() || result.rtl.contains(file) || result.cell.contains(file))
             reject(input, "prcm", "Cannot emit a unique RTL file: " + file);
         const QRegularExpression module(
             "^\\s*module\\s+([A-Za-z_][A-Za-z_0-9$]*)\\s", QRegularExpression::MultilineOption);
@@ -315,6 +316,14 @@ private:
             declared.append(moduleName);
         }
         result.rtl.insert(file, rtl);
+    }
+
+    QString unit(const QString &suffix) const { return name + suffix; }
+
+    void addCell(const QString &file, const QString &rtl)
+    {
+        addRtl(file, rtl);
+        result.cell.insert(file, result.rtl.take(file));
     }
 
     void addResource()
@@ -331,11 +340,13 @@ private:
         addRtl(
             reset.moduleName + ".v",
             QSocVerilogUtils::withTimescale(r.generateControllerVerilog(reset)));
-        addRtl("clock_cell.v", c.generateCellVerilog());
-        addRtl("reset_cell.v", r.generateCellVerilog());
-        addRtl("qsoc_prcm_domain_service.v", QSocPrcmSequenceRtl::generateService());
+        addCell(QSocCellLibrary::clockFile(), c.generateCellVerilog());
+        addCell(QSocCellLibrary::resetFile(), r.generateCellVerilog());
+        addRtl(
+            unit("_domain_service") + ".v",
+            QSocPrcmSequenceRtl::generateService(unit("_domain_service")));
         if (!plan.service.isEmpty())
-            addRtl("qsoc_prcm_service.v", QSocPrcmSequenceRtl::generateHandshake());
+            addRtl(unit("_service") + ".v", QSocPrcmSequenceRtl::generateHandshake(unit("_service")));
         addRtl(result.mmio.moduleName + ".v", QSocMmioGenerator::generateVerilog(result.mmio));
     }
 
@@ -488,7 +499,7 @@ private:
             << supply.request << " ? 2'd1 : 2'd0) : " << p << "wanted;\n";
         emitInstance(
             out,
-            "qsoc_prcm_domain_service",
+            unit("_domain_service"),
             p + "action_inst",
             {{"clk_i", input.clockInput},
              {"rst_ni", prefix + "cold_n"},
@@ -560,7 +571,7 @@ private:
             << "    else " << s << "grant <= " << s << "request && " << p << "ready_run;\nend\n";
         emitInstance(
             out,
-            "qsoc_prcm_service",
+            unit("_service"),
             s + "handshake_inst",
             {{"clk_i", input.clockInput},
              {"rst_ni", prefix + "cold_n"},

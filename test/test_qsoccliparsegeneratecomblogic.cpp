@@ -169,7 +169,8 @@ comb:
         }
 
         /* Check if Verilog file was generated - use the base name without extension */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_simple_assign.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_simple_assign/rtl/test_simple_assign.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -225,7 +226,8 @@ comb:
 
         QCOMPARE(messageList.filter("carries more than one of expr, if, and case").size(), 1);
         QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
-        QVERIFY(!QFile::exists(QDir(projectManager.getOutputPath()).filePath("test_mixed_form.v")));
+        QVERIFY(!QFile::exists(
+            QDir(projectManager.getOutputPath()).filePath("test_mixed_form/rtl/test_mixed_form.v")));
     }
 
     void testConditionalComb()
@@ -274,7 +276,8 @@ comb:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_conditional.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_conditional/rtl/test_conditional.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -334,7 +337,8 @@ comb:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_case.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_case/rtl/test_case.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -405,7 +409,8 @@ comb:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_multiple.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_multiple/rtl/test_multiple.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -507,7 +512,8 @@ comb:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_nested.v");
+        QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath("test_nested/rtl/test_nested.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -588,9 +594,9 @@ comb:
             false);
         socCliWorker.run();
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_process_slices.v");
-        QFile verilogFile(verilogPath);
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_process_slices/rtl/test_process_slices.v");
+        QFile         verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString verilogContent = verilogFile.readAll();
 
@@ -661,7 +667,8 @@ comb:
         socCliWorker.run();
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_process_resolution.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_process_resolution/rtl/test_process_resolution.v");
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString verilogContent = verilogFile.readAll();
@@ -780,8 +787,9 @@ comb:
             QCOMPARE(hits, 1);
         }
         QCOMPARE(messageList.filter("Successfully generated Verilog code").size(), 0);
-        QVERIFY(!QFile::exists(
-            QDir(projectManager.getOutputPath()).filePath("test_process_rejection.v")));
+        QVERIFY(
+            !QFile::exists(QDir(projectManager.getOutputPath())
+                               .filePath("test_process_rejection/rtl/test_process_rejection.v")));
     }
 
     void testSharedConnectUsesFirstDeclaredPort()
@@ -833,9 +841,9 @@ comb:
             false);
         socCliWorker.run();
 
-        const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_shared_connect.v");
-        QFile verilogFile(verilogPath);
+        const QString verilogPath = QDir(projectManager.getOutputPath())
+                                        .filePath("test_shared_connect/rtl/test_shared_connect.v");
+        QFile         verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString verilogContent = verilogFile.readAll();
 
@@ -926,7 +934,8 @@ comb:
         QVERIFY(!netlistPath.isEmpty());
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_overlapping_processes.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_overlapping_processes/rtl/test_overlapping_processes.v");
         QVERIFY(QFile::remove(verilogPath) || !QFile::exists(verilogPath));
 
         QSocCliWorker worker;
@@ -1035,7 +1044,8 @@ comb:
         socCliWorker.run();
 
         const QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_internal_process_width.v");
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_internal_process_width/rtl/test_internal_process_width.v");
         QFile verilogFile(verilogPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
         const QString verilogContent = verilogFile.readAll();
@@ -1130,7 +1140,8 @@ comb:
         messageList.clear();
         const QString netlistPath = createTempFile(stem + ".soc_net", netlist);
         QVERIFY(!netlistPath.isEmpty());
-        const QString verilogPath = QDir(projectManager.getOutputPath()).filePath(stem + ".v");
+        const QString verilogPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
         QFile::remove(verilogPath);
         {
             QSocCliWorker socCliWorker;

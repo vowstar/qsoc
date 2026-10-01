@@ -499,10 +499,14 @@ void Test::embeddedUvmMatchesSubmodule()
     }
     QFile rtlList(output.filePath("rtl/timer_ctrl.fl"));
     QVERIFY(rtlList.open(QIODevice::ReadOnly));
-    QCOMPARE(rtlList.readAll(), QByteArray("timer_ctrl.v\n"));
+    QCOMPARE(rtlList.readAll(), QByteArray("peripheral/timer_ctrl/rtl/timer_ctrl.v\n"));
     QFile formalList(output.filePath("formal/timer_ctrl_formal.fl"));
     QVERIFY(formalList.open(QIODevice::ReadOnly));
-    QCOMPARE(formalList.readAll(), QByteArray("../rtl/timer_ctrl.v\ntimer_ctrl_formal.sv\n"));
+    QCOMPARE(
+        formalList.readAll(),
+        QByteArray(
+            "peripheral/timer_ctrl/rtl/timer_ctrl.v\n"
+            "peripheral/timer_ctrl/formal/timer_ctrl_formal.sv\n"));
     QFile job(output.filePath("formal/timer_ctrl_formal.sby"));
     QVERIFY(job.open(QIODevice::ReadOnly));
     const auto text = job.readAll();
@@ -513,8 +517,12 @@ void Test::embeddedUvmMatchesSubmodule()
     QCOMPARE(
         list.readAll(),
         QByteArray(
-            "+incdir+uvm-core/src\nuvm-core/src/uvm_pkg.sv\n../rtl/"
-            "timer_ctrl.v\ntimer_ctrl_uvm_if.sv\ntimer_ctrl_uvm_pkg.sv\ntimer_ctrl_uvm_tb.sv\n"));
+            "+incdir+peripheral/timer_ctrl/uvm/uvm-core/src\n"
+            "peripheral/timer_ctrl/uvm/uvm-core/src/uvm_pkg.sv\n"
+            "peripheral/timer_ctrl/rtl/timer_ctrl.v\n"
+            "peripheral/timer_ctrl/uvm/timer_ctrl_uvm_if.sv\n"
+            "peripheral/timer_ctrl/uvm/timer_ctrl_uvm_pkg.sv\n"
+            "peripheral/timer_ctrl/uvm/timer_ctrl_uvm_tb.sv\n"));
 }
 
 void Test::legacyLayoutIsRejected()

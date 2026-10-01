@@ -182,8 +182,8 @@ fsm:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_table_moore_fsm.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_table_moore_fsm/rtl/test_table_moore_fsm.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -304,8 +304,8 @@ fsm:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_table_mealy_fsm.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_table_mealy_fsm/rtl/test_table_mealy_fsm.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -397,8 +397,9 @@ fsm:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_microcode_fixed_fsm.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath(
+                                      "test_microcode_fixed_fsm/rtl/test_microcode_fixed_fsm.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -514,8 +515,8 @@ fsm:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath
-            = QDir(projectManager.getOutputPath()).filePath("test_microcode_prog_fsm.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_microcode_prog_fsm/rtl/test_microcode_prog_fsm.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -608,7 +609,8 @@ fsm:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_fsm_encodings.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_fsm_encodings/rtl/test_fsm_encodings.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */
@@ -699,7 +701,8 @@ fsm:
         }
 
         /* Check if Verilog file was generated */
-        QString verilogPath = QDir(projectManager.getOutputPath()).filePath("test_multiple_fsms.v");
+        QString verilogPath = QDir(projectManager.getOutputPath())
+                                  .filePath("test_multiple_fsms/rtl/test_multiple_fsms.v");
         QVERIFY(QFile::exists(verilogPath));
 
         /* Read generated Verilog content */

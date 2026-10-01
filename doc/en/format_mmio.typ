@@ -205,7 +205,8 @@ qsoc generate module --with-formal -l <library> <module>
 Under `output/<library>/<module>/`, `rtl/` contains `<module>.v` and
 its synthesis file list `<module>.fl`. The `formal/` directory contains
 `<module>_formal.sv`, `<module>_formal.sby`, and `<module>_formal.fl`.
-The verification files reference the single RTL copy in `../rtl/`. Generation checks
+The verification files reference the single RTL copy in `rtl/`. File list paths
+are relative to `output/` (@verilog-output-layout). Generation checks
 all selected targets before opening or replacing a selected output file. If any
 target exists, the command fails without replacing any selected file unless
 `-f` or `--force` is present.
@@ -226,8 +227,9 @@ qsoc generate module --with-uvm -l <library> <module>
 The `uvm/` directory contains `<module>_uvm_if.sv`, `<module>_uvm_pkg.sv`,
 `<module>_uvm_tb.sv`, and two file lists. `<module>_uvm.fl` uses an externally
 provided UVM library. `<module>_uvm_standalone.fl` includes the bundled
-source in `uvm-core/`, with its original license and notices. Both reference
-the RTL in `../rtl/`; source paths are relative to `uvm/`. Generation needs
+source in `uvm-core/`, with its original license and notices, and its single
+`+incdir+` names that directory. Both reference the RTL in `rtl/`, with paths
+relative to `output/`. Generation needs
 no external UVM installation or network access.
 
 Select `<module>_uvm_tb` as the top module. Generation does not run the

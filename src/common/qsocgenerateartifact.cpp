@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocgenerateartifact.h"
-#include "common/qsocpaths.h"
 #include "common/qsocuvmresources.h"
 
 #include <memory>
@@ -18,7 +17,7 @@ namespace {
 
 using GeneratedArtifact = QSocGenerateArtifact::Artifact;
 
-QString prepareGeneratedArtifacts(std::vector<GeneratedArtifact> *artifacts)
+QString prepareGeneratedArtifacts(std::vector<GeneratedArtifact> *artifacts, const QDir &output)
 {
     QMap<QString, QString> paths;
     for (const auto &artifact : *artifacts) {
@@ -49,7 +48,7 @@ QString prepareGeneratedArtifacts(std::vector<GeneratedArtifact> *artifacts)
                 files = line == QStringLiteral("[files]");
             }
             if (files && paths.contains(line)) {
-                line = directory.relativeFilePath(paths.value(line));
+                line = (fileList ? output : directory).relativeFilePath(paths.value(line));
             }
         }
         artifact.contents = lines.join(QLatin1Char('\n')).toUtf8();
@@ -68,57 +67,24 @@ QString prepareGeneratedArtifacts(std::vector<GeneratedArtifact> *artifacts)
         QString standalone = info.fileName();
         standalone.chop(3);
         standalone += QStringLiteral("_standalone.fl");
+        const QByteArray core = output.relativeFilePath(directory.filePath("uvm-core/src")).toUtf8();
         dependencies.push_back(
             {directory.filePath(standalone),
-             QByteArray("+incdir+uvm-core/src\nuvm-core/src/uvm_pkg.sv\n") + artifact.contents});
+             "+incdir+" + core + '\n' + core + "/uvm_pkg.sv\n" + artifact.contents});
     }
     artifacts->insert(artifacts->end(), dependencies.begin(), dependencies.end());
     return {};
-}
-
-QSocGenerateArtifact::PrimitiveCellResult writeAtomically(
-    const QString &path, const QByteArray &bytes)
-{
-    QSaveFile file(path);
-    file.setDirectWriteFallback(false);
-    if (!file.open(QIODevice::WriteOnly)) {
-        return {
-            false,
-            false,
-            path,
-            QStringLiteral("Cannot open primitive cell for writing: %1").arg(file.errorString())};
-    }
-
-    qsizetype offset = 0;
-    while (offset < bytes.size()) {
-        const qint64 written = file.write(bytes.constData() + offset, bytes.size() - offset);
-        if (written <= 0) {
-            const QString error = file.errorString();
-            file.cancelWriting();
-            return {false, false, path, QStringLiteral("Cannot write primitive cell: %1").arg(error)};
-        }
-        offset += written;
-    }
-
-    if (!file.commit()) {
-        return {
-            false,
-            false,
-            path,
-            QStringLiteral("Cannot commit primitive cell: %1").arg(file.errorString())};
-    }
-    return {true, true, path, {}};
 }
 
 } // namespace
 
 namespace QSocGenerateArtifact {
 
-QString write(std::vector<GeneratedArtifact> artifacts, bool force)
+QString write(std::vector<GeneratedArtifact> artifacts, bool force, const QString &outputDirectory)
 {
     if (artifacts.empty())
         return {};
-    const QString preparationError = prepareGeneratedArtifacts(&artifacts);
+    const QString preparationError = prepareGeneratedArtifacts(&artifacts, QDir(outputDirectory));
     if (!preparationError.isEmpty()) {
         return preparationError;
     }
@@ -195,37 +161,6 @@ QString write(std::vector<GeneratedArtifact> artifacts, bool force)
         }
     }
     return QString();
-}
-
-PrimitiveCellResult ensurePrimitiveCell(
-    const QString &outputDirectory, const PrimitiveCellSpec &spec, bool force)
-{
-    const auto artifact = QSocPaths::resolveArtifactPath(outputDirectory, spec.leafName);
-    if (!artifact.isValid()) {
-        return {false, false, {}, artifact.error};
-    }
-
-    QFile existing(artifact.path);
-    if (existing.exists() && !force) {
-        if (!existing.open(QIODevice::ReadOnly)) {
-            return {
-                false,
-                false,
-                artifact.path,
-                QStringLiteral("Cannot read existing primitive cell: %1")
-                    .arg(existing.errorString())};
-        }
-        return {true, false, artifact.path, {}};
-    }
-    if (spec.canonicalBytes.isEmpty()) {
-        return {
-            false,
-            false,
-            artifact.path,
-            QStringLiteral("Canonical primitive cell content is empty.")};
-    }
-
-    return writeAtomically(artifact.path, spec.canonicalBytes);
 }
 
 } // namespace QSocGenerateArtifact
