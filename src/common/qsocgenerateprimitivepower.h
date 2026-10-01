@@ -107,6 +107,9 @@ public:
      */
     PowerControllerConfig parsePowerConfigUnguarded(const YAML::Node &powerNode);
 
+    /* Emit power_cell.v without file output. */
+    QString generateCellVerilog();
+
     /**
      * @brief Set force overwrite mode for power_cell.v file
      * @param force true to enable force overwrite, false to preserve existing files

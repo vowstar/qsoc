@@ -2483,7 +2483,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    reg [NUM_INPUTS-1:0]        sel_onehot;\n";
         out << "    wire [NUM_INPUTS*2-1:0]   glitch_filter_d;\n";
         out << "    reg [NUM_INPUTS*2-1:0]   glitch_filter_q;\n";
-        out << "    reg [NUM_INPUTS-1:0]         gate_enable_unfiltered;\n";
+        out << "    wire [NUM_INPUTS-1:0]        gate_enable_unfiltered;\n";
         out << "    wire [NUM_INPUTS-1:0]        glitch_filter_output;\n";
         out << "    wire [NUM_INPUTS-1:0]        gate_enable_sync;\n";
         out << "    wire [NUM_INPUTS-1:0]        gate_enable;\n";

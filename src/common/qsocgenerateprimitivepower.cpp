@@ -571,7 +571,7 @@ void QSocPowerPrimitive::generateOutputAssignments(
     out << "    /* All outputs are directly connected from FSM instances */\n";
 }
 
-bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
+QString QSocPowerPrimitive::generateCellVerilog()
 {
     QString     canonical;
     QTextStream out(&canonical);
@@ -579,8 +579,13 @@ bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
     out << generatePowerFSMModule();
     out << "\n" << generateResetPipeModule();
     out.flush();
+    return canonical;
+}
 
-    const QSocGenerateArtifact::PrimitiveCellSpec spec{"power_cell.v", canonical.toUtf8()};
+bool QSocPowerPrimitive::generatePowerCellFile(const QString &outputDir)
+{
+    const QSocGenerateArtifact::PrimitiveCellSpec
+        spec{"power_cell.v", generateCellVerilog().toUtf8()};
     const auto result = QSocGenerateArtifact::ensurePrimitiveCell(outputDir, spec, m_forceOverwrite);
     if (!result.success) {
         QSocConsole::warn() << result.error;
