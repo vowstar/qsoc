@@ -200,7 +200,9 @@ DFT and STA have to cover:
   scan-observable; the bypass mux alone does not provide it
 
 `stage: 1` is accepted and elaborates to a single flop with no synchronization.
-Use it only when the source is already synchronous to `clock`.
+Use it only when the source is already synchronous to `clock`. A `stage` or
+`cycle` below 1 is an error, both in the netlist and as a parameter override
+on the cell, which then fails to elaborate.
 
 Note that the power controller uses the opposite convention: there `test_en`
 forces the domain reset permanently released (@soc-net-power-fsm).
@@ -274,15 +276,15 @@ Reset targets define output reset signals with optional target-level processing 
     [async.clock],
     [Clock for synchronization - *REQUIRED* when async specified],
     [async.stage],
-    [Number of synchronizer stages (default: 3, recommended: ≥2)],
+    [Number of synchronizer stages, at least 1 (default: 3, recommended: ≥2)],
     [sync],
     [Target-level sync reset pipeline. Applied after all links are combined.],
     [sync.clock], [Clock for pipeline - *REQUIRED* when sync specified],
-    [sync.stage], [Number of pipeline stages (default: 4)],
+    [sync.stage], [Number of pipeline stages, at least 1 (default: 4)],
     [count],
     [Target-level counter-based reset release. Applied after all links are combined.],
     [count.clock], [Clock for counter - *REQUIRED* when count specified],
-    [count.cycle], [Number of cycles before release (default: 16)],
+    [count.cycle], [Number of cycles before release, at least 1 (default: 16)],
     [link],
     [Map of source connections with optional link-level component attributes],
   )],
@@ -304,15 +306,15 @@ Link-level processing uses key existence for component selection:
     [Link-level async reset synchronizer configuration (map format)],
     [async.clock],
     [Clock for synchronization - *REQUIRED* when async specified],
-    [async.stage], [Number of synchronizer stages (default: 3)],
+    [async.stage], [Number of synchronizer stages, at least 1 (default: 3)],
     [sync],
     [Link-level sync reset pipeline configuration (map format)],
     [sync.clock], [Clock for pipeline - *REQUIRED* when sync specified],
-    [sync.stage], [Number of pipeline stages (default: 4)],
+    [sync.stage], [Number of pipeline stages, at least 1 (default: 4)],
     [count],
     [Link-level counter-based reset release configuration (map format)],
     [count.clock], [Clock for counter - *REQUIRED* when count specified],
-    [count.cycle], [Number of cycles before release (default: 16)],
+    [count.cycle], [Number of cycles before release, at least 1 (default: 16)],
     [(empty)],
     [Direct connection, no processing; source passes through to target AND],
   )],

@@ -1097,6 +1097,13 @@ power:
             << "rej_follow_host"
             << head + QString("          - clock: clk_ao\n            reset: rst_core_n\n")
             << "circular dependency";
+        QTest::newRow("follow-stage-zero")
+            << "rej_follow_stage"
+            << head
+                   + QString(
+                       "          - clock: clk_core\n            reset: rst_core_n\n"
+                       "            stage: 0\n")
+            << "Domain core follow stage must be at least 1, got 0";
     }
 
     void test_power_follow_contracts_are_rejected()

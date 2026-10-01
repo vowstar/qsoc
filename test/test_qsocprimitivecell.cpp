@@ -102,6 +102,68 @@ private slots:
         QVERIFY2(run(tool, args, dir.path(), &log), qPrintable(log));
     }
 
+    void countBelowOneFailsElaboration_data()
+    {
+        QTest::addColumn<QString>("tool");
+        QTest::addColumn<QString>("cell");
+        QTest::addColumn<QString>("module");
+        QTest::addColumn<QString>("parameter");
+        const struct
+        {
+            const char *cell;
+            const char *module;
+            const char *parameter;
+        } counts[] = {
+            {"reset_cell.v", "qsoc_rst_sync", "STAGE"},
+            {"reset_cell.v", "qsoc_rst_pipe", "STAGE"},
+            {"reset_cell.v", "qsoc_rst_count", "CYCLE"},
+            {"power_cell.v", "qsoc_power_rst_sync", "STAGE"},
+            {"clock_cell.v", "qsoc_clk_mux_gf", "NUM_INPUTS"},
+            {"clock_cell.v", "qsoc_clk_mux_gf", "NUM_SYNC_STAGES"},
+            {"clock_cell.v", "qsoc_clk_mux_raw", "NUM_INPUTS"},
+            {"clock_cell.v", "qsoc_clk_or_tree", "INPUT_COUNT"},
+        };
+        for (const char *tool : {"iverilog", "yosys"}) {
+            for (const auto &count : counts) {
+                QTest::newRow(qPrintable(QString("%1-%2-%3").arg(tool, count.module, count.parameter)))
+                    << tool << count.cell << count.module << count.parameter;
+            }
+        }
+    }
+
+    /* A stage or cycle count below one is an elaboration error, never clamped to one. */
+    void countBelowOneFailsElaboration()
+    {
+        QFETCH(QString, tool);
+        QFETCH(QString, cell);
+        QFETCH(QString, module);
+        QFETCH(QString, parameter);
+        if (QStandardPaths::findExecutable(tool).isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(tool);
+
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QVERIFY(save(dir.filePath(cell), cellText(cell)));
+        for (const int value : {0, 1}) {
+            QVERIFY(save(
+                dir.filePath("top.v"),
+                QString("module top;\n    %1 #(.%2(%3)) u_dut ();\nendmodule\n")
+                    .arg(module, parameter)
+                    .arg(value)));
+            const QStringList args
+                = tool == "iverilog"
+                      ? QStringList{"-g2005", "-s", "top", "-o", "a.out", "top.v", cell}
+                      : QStringList{
+                            "-q",
+                            "-p",
+                            "read_verilog top.v " + cell + "; hierarchy -check -top top"};
+            QString log;
+            QVERIFY2(run(tool, args, dir.path(), &log) == (value == 1), qPrintable(log));
+            if (value == 0)
+                QVERIFY2(log.contains("qsoc_param_error_"), qPrintable(log));
+        }
+    }
+
     /* The last div written is the one loaded, even when it arrives mid-load. */
     void autoUpdateKeepsLastChange()
     {

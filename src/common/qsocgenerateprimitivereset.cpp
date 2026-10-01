@@ -11,6 +11,21 @@
 #include <QRegularExpression>
 #include <QRegularExpressionMatch>
 
+namespace {
+
+/* Read a stage or cycle count; values below one are rejected, not clamped. */
+bool readCount(
+    const YAML::Node &node, const char *key, int fallback, const QString &where, int *value)
+{
+    *value = node[key] ? node[key].as<int>() : fallback;
+    if (*value >= 1)
+        return true;
+    QSocConsole::error() << QString("%1 %2 must be at least 1, got %3").arg(where, key).arg(*value);
+    return false;
+}
+
+} // namespace
+
 QSocResetPrimitive::QSocResetPrimitive(QSocGenerateManager *parent)
     : m_parent(parent)
 {}
@@ -213,7 +228,15 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                 }
                 target.async.clock = QString::fromStdString(asyncNode["clock"].as<std::string>());
                 target.async.test_enable = config.testEnable; // Use controller-level test_enable
-                target.async.stage       = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
+                if (!readCount(
+                        asyncNode,
+                        "stage",
+                        3,
+                        QString("Reset target '%1' async").arg(target.name),
+                        &target.async.stage)) {
+                    config.valid = false;
+                    return config;
+                }
             }
 
             if (tgtNode["sync"]) {
@@ -227,7 +250,15 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                 }
                 target.sync.clock = QString::fromStdString(syncNode["clock"].as<std::string>());
                 target.sync.test_enable = config.testEnable; // Use controller-level test_enable
-                target.sync.stage       = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
+                if (!readCount(
+                        syncNode,
+                        "stage",
+                        4,
+                        QString("Reset target '%1' sync").arg(target.name),
+                        &target.sync.stage)) {
+                    config.valid = false;
+                    return config;
+                }
             }
 
             if (tgtNode["count"]) {
@@ -241,7 +272,15 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                 }
                 target.count.clock = QString::fromStdString(countNode["clock"].as<std::string>());
                 target.count.test_enable = config.testEnable; // Use controller-level test_enable
-                target.count.cycle       = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
+                if (!readCount(
+                        countNode,
+                        "cycle",
+                        16,
+                        QString("Reset target '%1' count").arg(target.name),
+                        &target.count.cycle)) {
+                    config.valid = false;
+                    return config;
+                }
             }
 
             // Parse links for this target
@@ -294,7 +333,16 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                             asyncNode["clock"].as<std::string>());
                         link.async.test_enable
                             = config.testEnable; // Use controller-level test_enable
-                        link.async.stage = asyncNode["stage"] ? asyncNode["stage"].as<int>() : 3;
+                        if (!readCount(
+                                asyncNode,
+                                "stage",
+                                3,
+                                QString("Reset link '%1' of target '%2' async")
+                                    .arg(link.source, target.name),
+                                &link.async.stage)) {
+                            config.valid = false;
+                            return config;
+                        }
                     }
 
                     if (linkNode["sync"]) {
@@ -309,7 +357,16 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                         link.sync.clock = QString::fromStdString(
                             syncNode["clock"].as<std::string>());
                         link.sync.test_enable = config.testEnable; // Use controller-level test_enable
-                        link.sync.stage = syncNode["stage"] ? syncNode["stage"].as<int>() : 4;
+                        if (!readCount(
+                                syncNode,
+                                "stage",
+                                4,
+                                QString("Reset link '%1' of target '%2' sync")
+                                    .arg(link.source, target.name),
+                                &link.sync.stage)) {
+                            config.valid = false;
+                            return config;
+                        }
                     }
 
                     if (linkNode["count"]) {
@@ -325,7 +382,16 @@ QSocResetPrimitive::ResetControllerConfig QSocResetPrimitive::parseResetConfigUn
                             countNode["clock"].as<std::string>());
                         link.count.test_enable
                             = config.testEnable; // Use controller-level test_enable
-                        link.count.cycle = countNode["cycle"] ? countNode["cycle"].as<int>() : 16;
+                        if (!readCount(
+                                countNode,
+                                "cycle",
+                                16,
+                                QString("Reset link '%1' of target '%2' count")
+                                    .arg(link.source, target.name),
+                                &link.count.cycle)) {
+                            config.valid = false;
+                            return config;
+                        }
                     }
 
                     target.links.append(link);
@@ -833,23 +899,28 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "    input  wire test_enable, /**< Test enable signal */\n";
     out << "    output wire rst_out_n   /**< Reset output (active-low) */\n";
     out << ");\n\n";
-    out << "    localparam integer S = (STAGE < 1) ? 1 : STAGE;\n\n";
-    out << "    reg  [S-1:0] sync_reg;\n";
+    out << "    /* Elaboration fails when STAGE is below 1. */\n";
+    out << "    generate\n";
+    out << "        if (STAGE < 1) begin : g_bad_stage\n";
+    out << "            qsoc_param_error_stage_below_one u_error ();\n";
+    out << "        end\n";
+    out << "    endgenerate\n\n";
+    out << "    reg  [STAGE-1:0] sync_reg;\n";
     out << "    wire         core_rst_n;\n\n";
     out << "    generate\n";
-    out << "        if (S == 1) begin : g_st1\n";
+    out << "        if (STAGE == 1) begin : g_st1\n";
     out << "            always @(posedge clk or negedge rst_in_n) begin\n";
     out << "                if (!rst_in_n) sync_reg <= 1'b0;\n";
     out << "                else           sync_reg <= 1'b1;\n";
     out << "            end\n";
     out << "        end else begin : g_stN\n";
     out << "            always @(posedge clk or negedge rst_in_n) begin\n";
-    out << "                if (!rst_in_n) sync_reg <= {S{1'b0}};\n";
-    out << "                else           sync_reg <= {sync_reg[S-2:0], 1'b1};\n";
+    out << "                if (!rst_in_n) sync_reg <= {STAGE{1'b0}};\n";
+    out << "                else           sync_reg <= {sync_reg[STAGE-2:0], 1'b1};\n";
     out << "            end\n";
     out << "        end\n";
     out << "    endgenerate\n\n";
-    out << "    assign core_rst_n = sync_reg[S-1];\n";
+    out << "    assign core_rst_n = sync_reg[STAGE-1];\n";
     out << "    assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
     out << "endmodule\n\n";
 
@@ -868,23 +939,28 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "    input  wire test_enable, /**< Test enable signal */\n";
     out << "    output wire rst_out_n   /**< Reset output (active-low) */\n";
     out << ");\n\n";
-    out << "    localparam integer S = (STAGE < 1) ? 1 : STAGE;\n\n";
-    out << "    reg  [S-1:0] pipe_reg;\n";
+    out << "    /* Elaboration fails when STAGE is below 1. */\n";
+    out << "    generate\n";
+    out << "        if (STAGE < 1) begin : g_bad_stage\n";
+    out << "            qsoc_param_error_stage_below_one u_error ();\n";
+    out << "        end\n";
+    out << "    endgenerate\n\n";
+    out << "    reg  [STAGE-1:0] pipe_reg;\n";
     out << "    wire         core_rst_n;\n\n";
     out << "    generate\n";
-    out << "        if (S == 1) begin : g_st1\n";
+    out << "        if (STAGE == 1) begin : g_st1\n";
     out << "            always @(posedge clk) begin\n";
     out << "                if (!rst_in_n) pipe_reg <= 1'b0;\n";
     out << "                else           pipe_reg <= 1'b1;\n";
     out << "            end\n";
     out << "        end else begin : g_stN\n";
     out << "            always @(posedge clk) begin\n";
-    out << "                if (!rst_in_n) pipe_reg <= {S{1'b0}};\n";
-    out << "                else           pipe_reg <= {pipe_reg[S-2:0], 1'b1};\n";
+    out << "                if (!rst_in_n) pipe_reg <= {STAGE{1'b0}};\n";
+    out << "                else           pipe_reg <= {pipe_reg[STAGE-2:0], 1'b1};\n";
     out << "            end\n";
     out << "        end\n";
     out << "    endgenerate\n\n";
-    out << "    assign core_rst_n = pipe_reg[S-1];\n";
+    out << "    assign core_rst_n = pipe_reg[STAGE-1];\n";
     out << "    assign rst_out_n  = test_enable ? rst_in_n : core_rst_n;\n\n";
     out << "endmodule\n\n";
 
@@ -917,9 +993,14 @@ void QSocResetPrimitive::generateResetCellFile(QTextStream &out)
     out << "            if (clog2 == 0) clog2 = 1;\n";
     out << "        end\n";
     out << "    endfunction\n\n";
-    out << "    localparam integer C_INT     = (CYCLE < 1) ? 1 : CYCLE;\n";
-    out << "    localparam integer CNT_WIDTH = clog2(C_INT);\n";
-    out << "    localparam [CNT_WIDTH-1:0] C_M1 = C_INT - 1;\n\n";
+    out << "    /* Elaboration fails when CYCLE is below 1. */\n";
+    out << "    generate\n";
+    out << "        if (CYCLE < 1) begin : g_bad_cycle\n";
+    out << "            qsoc_param_error_cycle_below_one u_error ();\n";
+    out << "        end\n";
+    out << "    endgenerate\n\n";
+    out << "    localparam integer CNT_WIDTH = clog2(CYCLE);\n";
+    out << "    localparam [CNT_WIDTH-1:0] C_M1 = CYCLE - 1;\n\n";
     out << "    reg [CNT_WIDTH-1:0] cnt;\n";
     out << "    reg                 core_rst_n;\n\n";
     out << "    always @(posedge clk or negedge rst_in_n) begin\n";

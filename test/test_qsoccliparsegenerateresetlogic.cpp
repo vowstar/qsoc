@@ -1382,6 +1382,97 @@ reset:
       dead_rst_n:
         active: low
 )") << "requires at least one link";
+        QTest::newRow("target-async-stage-zero") << "rej_target_async_stage_zero" << QString(R"(
+reset:
+  - name: count_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      rst_o_n:
+        active: low
+        async:
+          clock: clk
+          stage: 0
+        link:
+          por_n: ~
+)") << "Reset target 'rst_o_n' async stage must be at least 1, got 0";
+        QTest::newRow("target-sync-stage-negative")
+            << "rej_target_sync_stage_negative" << QString(R"(
+reset:
+  - name: count_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      rst_o_n:
+        active: low
+        sync:
+          clock: clk
+          stage: -1
+        link:
+          por_n: ~
+)") << "Reset target 'rst_o_n' sync stage must be at least 1, got -1";
+        QTest::newRow("target-count-cycle-zero") << "rej_target_count_cycle_zero" << QString(R"(
+reset:
+  - name: count_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      rst_o_n:
+        active: low
+        count:
+          clock: clk
+          cycle: 0
+        link:
+          por_n: ~
+)") << "Reset target 'rst_o_n' count cycle must be at least 1, got 0";
+        QTest::newRow("link-async-stage-zero") << "rej_link_async_stage_zero" << QString(R"(
+reset:
+  - name: count_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      rst_o_n:
+        active: low
+        link:
+          por_n:
+            async:
+              clock: clk
+              stage: 0
+)") << "Reset link 'por_n' of target 'rst_o_n' async stage must be at least 1, got 0";
+        QTest::newRow("link-sync-stage-zero") << "rej_link_sync_stage_zero" << QString(R"(
+reset:
+  - name: count_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      rst_o_n:
+        active: low
+        link:
+          por_n:
+            sync:
+              clock: clk
+              stage: 0
+)") << "Reset link 'por_n' of target 'rst_o_n' sync stage must be at least 1, got 0";
+        QTest::newRow("link-count-cycle-negative") << "rej_link_count_cycle_negative" << QString(R"(
+reset:
+  - name: count_ctl
+    source:
+      por_n:
+        active: low
+    target:
+      rst_o_n:
+        active: low
+        link:
+          por_n:
+            count:
+              clock: clk
+              cycle: -3
+)") << "Reset link 'por_n' of target 'rst_o_n' count cycle must be at least 1, got -3";
     }
 
     void test_reset_structural_errors_are_rejected()

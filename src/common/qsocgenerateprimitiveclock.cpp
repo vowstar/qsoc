@@ -2276,14 +2276,24 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    // Note: NUM_INPUTS must be >= 2 for proper operation\n";
         out << "    \n";
         out << "    /* Integer alias to avoid signed/unsigned compare warnings */\n";
-        out << "    localparam integer NUM_INPUTS_I = (NUM_INPUTS < 1) ? 1 : NUM_INPUTS;\n";
+        out << "    localparam integer NUM_INPUTS_I = NUM_INPUTS;\n";
         out << "    \n";
         out << "    /* Vector-form upper bound for async_sel (same width as async_sel) */\n";
         out << "    localparam [WIDTH-1:0] NUM_INPUTS_M1 = NUM_INPUTS_I - 1;\n";
         out << "    \n";
-        out << "    /* Safe sync stages constant to avoid negative slice */\n";
-        out << "    localparam integer SYNC_S = (NUM_SYNC_STAGES < 1) ? 1 : NUM_SYNC_STAGES;\n";
-        out << "    \n";
+        out << "    /* Elaboration fails when NUM_INPUTS is below 1. */\n";
+        out << "    generate\n";
+        out << "        if (NUM_INPUTS < 1) begin : g_bad_num_inputs\n";
+        out << "            qsoc_param_error_num_inputs_below_one u_error ();\n";
+        out << "        end\n";
+        out << "    endgenerate\n\n";
+        out << "    /* Elaboration fails when NUM_SYNC_STAGES is below 1. */\n";
+        out << "    generate\n";
+        out << "        if (NUM_SYNC_STAGES < 1) begin : g_bad_num_sync_stages\n";
+        out << "            qsoc_param_error_num_sync_stages_below_one u_error ();\n";
+        out << "        end\n";
+        out << "    endgenerate\n\n";
+
         out << "    // Internal signals for glitch-free switching\n";
         out << "    reg [NUM_INPUTS-1:0]        sel_onehot;\n";
         out << "    wire [NUM_INPUTS*2-1:0]   glitch_filter_d;\n";
@@ -2351,31 +2361,33 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        // Synchronizer chain for enable signal (equivalent to sync module)\n";
         out << "        // Note: This implements the same functionality as sync "
                "#(.STAGES(NUM_SYNC_STAGES))\n";
-        out << "        /* Synchronizer chain for enable signal. Width-safe for SYNC_S. */\n";
-        out << "        /* Compile-time split to avoid nested generate and SYNC_S-2 when SYNC_S==1 "
+        out << "        /* Synchronizer chain for enable signal. Width-safe for NUM_SYNC_STAGES. "
                "*/\n";
-        out << "        reg  [SYNC_S-1:0] sync_chain;\n";
+        out << "        /* Compile-time split to avoid nested generate and NUM_SYNC_STAGES-2 when "
+               "NUM_SYNC_STAGES==1 "
+               "*/\n";
+        out << "        reg  [NUM_SYNC_STAGES-1:0] sync_chain;\n";
         out << "        \n";
-        out << "        if (SYNC_S == 1) begin : sync_single\n";
+        out << "        if (NUM_SYNC_STAGES == 1) begin : sync_single\n";
         out << "            always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
         out << "                if (!reset_synced[i]) begin\n";
-        out << "                    sync_chain <= {SYNC_S{1'b0}};\n";
+        out << "                    sync_chain <= {NUM_SYNC_STAGES{1'b0}};\n";
         out << "                end else begin\n";
         out << "                    // Replicate the single-bit input across the 1-wide vector\n";
-        out << "                    sync_chain <= {SYNC_S{glitch_filter_output[i]}};\n";
+        out << "                    sync_chain <= {NUM_SYNC_STAGES{glitch_filter_output[i]}};\n";
         out << "                end\n";
         out << "            end\n";
         out << "        end else begin : sync_multi\n";
         out << "            always @(posedge clk_in[i] or negedge reset_synced[i]) begin\n";
         out << "                if (!reset_synced[i]) begin\n";
-        out << "                    sync_chain <= {SYNC_S{1'b0}};\n";
+        out << "                    sync_chain <= {NUM_SYNC_STAGES{1'b0}};\n";
         out << "                end else begin\n";
-        out << "                    sync_chain <= {sync_chain[SYNC_S-2:0], "
+        out << "                    sync_chain <= {sync_chain[NUM_SYNC_STAGES-2:0], "
                "glitch_filter_output[i]};\n";
         out << "                end\n";
         out << "            end\n";
         out << "        end\n";
-        out << "        assign gate_enable_sync[i] = sync_chain[SYNC_S-1];\n";
+        out << "        assign gate_enable_sync[i] = sync_chain[NUM_SYNC_STAGES-1];\n";
         out << "        \n";
         out << "        // Optional clock during reset bypass\n";
         out << "        if (CLOCK_DURING_RESET) begin : gen_reset_bypass\n";
@@ -2466,12 +2478,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    /* Generate recursive binary tree multiplexer structure */\n";
         out << "    generate\n";
         out << "        if (NUM_INPUTS < 1) begin : gen_error\n";
-        out << "            /* Error condition - invalid parameter */\n";
-        out << "            initial begin\n";
-        out << "                $display(\"ERROR: qsoc_clk_mux_raw cannot be parametrized "
-               "with less than 1 input but was %0d\", NUM_INPUTS);\n";
-        out << "                $finish;\n";
-        out << "            end\n";
+        out << "            /* Elaboration fails when NUM_INPUTS is below 1 */\n";
+        out << "            qsoc_param_error_num_inputs_below_one u_error ();\n";
         out << "        end else if (NUM_INPUTS == 1) begin : gen_leaf_single\n";
         out << "            /* Single input - direct connection */\n";
         out << "            assign clk_out = clk_in[0];\n";
@@ -2549,12 +2557,8 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    /* Generate recursive binary tree structure */\n";
         out << "    generate\n";
         out << "        if (INPUT_COUNT < 1) begin : gen_error\n";
-        out << "            /* Error condition - invalid parameter */\n";
-        out << "            initial begin\n";
-        out << "                $display(\"ERROR: qsoc_clk_or_tree cannot be parametrized with "
-               "less than 1 input but was %0d\", INPUT_COUNT);\n";
-        out << "                $finish;\n";
-        out << "            end\n";
+        out << "            /* Elaboration fails when INPUT_COUNT is below 1 */\n";
+        out << "            qsoc_param_error_input_count_below_one u_error ();\n";
         out << "        end else if (INPUT_COUNT == 1) begin : gen_leaf_single\n";
         out << "            /* Single input - direct connection */\n";
         out << "            assign clk_out = clk_in[0];\n";

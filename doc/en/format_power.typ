@@ -254,7 +254,7 @@ Power controllers support domain-specific reset synchronization through follow e
 follow:                          # Reset synchronizer array (optional)
   - clock: clk_gpu               # Domain clock input (required)
     reset: rst_gpu_n             # Synchronized reset output (required)
-    stage: 4                     # Synchronizer stages (optional, default: 4)
+    stage: 4                     # Synchronizer stages, at least 1 (optional, default: 4)
   - clock: clk_gpu_dsp           # Additional synchronizers for same domain
     reset: rst_gpu_dsp_n
     stage: 6                     # Different stage count

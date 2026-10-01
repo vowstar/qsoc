@@ -227,6 +227,14 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
                     }
                     entry.stage = followNode["stage"] ? followNode["stage"].as<int>()
                                                       : 4; // Default to 4 stages
+                    if (entry.stage < 1) {
+                        QSocConsole::error()
+                            << QString("Domain %1 follow stage must be at least 1, got %2")
+                                   .arg(domain.name)
+                                   .arg(entry.stage);
+                        config.valid = false;
+                        continue;
+                    }
 
                     if (entry.clock.isEmpty() != entry.reset.isEmpty()) {
                         QSocConsole::error()
@@ -894,24 +902,29 @@ QString QSocPowerPrimitive::generateResetPipeModule()
     out << "    input  wire test_en,      /**< DFT force release                     */\n";
     out << "    output wire rst_dom_n     /**< synchronized domain reset, active-low */\n";
     out << ");\n";
-    out << "    localparam integer S = (STAGE < 1) ? 1 : STAGE;\n\n";
-    out << "    reg [S-1:0] sr;\n\n";
+    out << "    /* Elaboration fails when STAGE is below 1. */\n";
+    out << "    generate\n";
+    out << "        if (STAGE < 1) begin : g_bad_stage\n";
+    out << "            qsoc_param_error_stage_below_one u_error ();\n";
+    out << "        end\n";
+    out << "    endgenerate\n\n";
+    out << "    reg [STAGE-1:0] sr;\n\n";
     out << "    /* async assert on rst_gate_n low */\n";
     out << "    generate\n";
-    out << "        if (S == 1) begin : g_st1\n";
+    out << "        if (STAGE == 1) begin : g_st1\n";
     out << "            always @(posedge clk_dom or negedge rst_gate_n) begin\n";
     out << "                if (!rst_gate_n) sr <= 1'b0;\n";
     out << "                else             sr <= 1'b1;\n";
     out << "            end\n";
     out << "        end else begin : g_stN\n";
     out << "            always @(posedge clk_dom or negedge rst_gate_n) begin\n";
-    out << "                if (!rst_gate_n) sr <= {S{1'b0}};\n";
-    out << "                else             sr <= {sr[S-2:0], 1'b1};\n";
+    out << "                if (!rst_gate_n) sr <= {STAGE{1'b0}};\n";
+    out << "                else             sr <= {sr[STAGE-2:0], 1'b1};\n";
     out << "            end\n";
     out << "        end\n";
     out << "    endgenerate\n\n";
     out << "    /* test_en overrides to release reset */\n";
-    out << "    assign rst_dom_n = test_en ? 1'b1 : sr[S-1];\n";
+    out << "    assign rst_dom_n = test_en ? 1'b1 : sr[STAGE-1];\n";
     out << "endmodule\n";
 
     return code;

@@ -837,6 +837,9 @@ QSoC generates these templates:
 - `qsoc_clk_mux_gf` - Glitch-free clock multiplexer
 - `qsoc_clk_mux_raw` - Parameterized clock multiplexer
 
+Overriding `NUM_SYNC_STAGES`, `NUM_INPUTS` or `INPUT_COUNT` below 1 on these
+cells fails elaboration.
+
 `qsoc_clk_mux_raw.NUM_INPUTS` must be a power of two. Generated controllers
 pad unused high lanes with zero.
 
