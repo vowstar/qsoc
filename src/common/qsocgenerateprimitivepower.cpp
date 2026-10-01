@@ -692,8 +692,6 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
 
     out << "    /* One-cycle set for soft-timeout fault */\n";
     out << "    reg set_fault_soft;\n\n";
-    out << "    /* One-cycle pulse for entering S_TURN_OFF state */\n";
-    out << "    reg off_start;\n\n";
 
     out << "    /* 1) Sequential: state, timers, sticky fault */\n";
     out << "    always @(posedge clk or negedge rst_n) begin\n";
@@ -703,10 +701,8 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            t_on  <= {WIDTH{1'b0}};\n";
     out << "            t_off <= {WIDTH{1'b0}};\n";
     out << "            fault <= 1'b0;\n";
-    out << "            off_start <= 1'b0;\n";
     out << "        end else begin\n";
-    out << "            state <= state_n;\n";
-    out << "            off_start <= (state != S_TURN_OFF) && (state_n == S_TURN_OFF);\n\n";
+    out << "            state <= state_n;\n\n";
     out << "            /* Load N-1; zero means no wait */\n";
     out << "            if (ld_dep)\n";
     out << "                t_dep <= (WAIT_DEP_CYCLES == 0) ? {WIDTH{1'b0}}\n";
@@ -766,6 +762,7 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
            "until t_on==0 */\n";
     out << "            if (!ctrl_enable) begin\n";
     out << "                state_n = S_TURN_OFF;\n";
+    out << "                ld_off  = 1'b1;\n";
     out << "            end else if (pgood) begin\n";
     out << "                if (t_on == 0) state_n = S_CLK_ON; /* go to clock on state */\n";
     out << "                else           dec_on  = 1'b1;     /* settle countdown only when pgood "
@@ -785,8 +782,6 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            end\n";
     out << "        end\n\n";
     out << "        S_TURN_OFF: begin\n";
-    out << "            /* Load settle timer when first entering this state */\n";
-    out << "            if (off_start) ld_off = 1'b1;\n\n";
     out << "            if (!pgood) begin\n";
     out << "                if (t_off == 0) state_n = S_OFF;\n";
     out << "                else            dec_off = 1'b1;\n";
@@ -819,6 +814,7 @@ QString QSocPowerPrimitive::generatePowerFSMModule()
     out << "            /* Assert reset first while clock is still on, then proceed to turn off "
            "*/\n";
     out << "            state_n = S_TURN_OFF;\n";
+    out << "            ld_off  = 1'b1;\n";
     out << "        end\n\n";
     out << "        default: state_n = S_FAULT;\n";
     out << "        endcase\n";

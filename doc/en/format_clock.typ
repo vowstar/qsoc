@@ -342,7 +342,9 @@ Clock dividers support three operational modes determined by the presence of `va
 Odd division ratios keep a 50% duty cycle by toggling a second flop on the
 falling edge of the source clock. The generated divider therefore instantiates
 negative-edge flops whenever an odd ratio is reachable, which affects scan
-chain construction and mixed-edge timing closure.
+chain construction and mixed-edge timing closure. The output clock gate latches
+`enable` and a flop on the source clock, so STA must close the clock gating
+setup and hold checks on both.
 
 #figure(
   align(center)[#table(
@@ -504,6 +506,13 @@ qsoc_clk_div #(
 <soc-net-clock-divider-mode-rules>
 - *Reset Behavior*: All modes use `default` value during reset condition
 - *Bypass Operation*: Division by 1 automatically enables bypass mode in the primitive
+- *Enable*: `enable` low stops the output low after its current high phase
+- *Handshake*: with `valid`, hold `value` and `valid` until `ready`
+- *Ratio Change*: no output phase is shorter than the smaller of the old and
+  the new ratio
+- *Clock During Reset*: `clock_on_reset` passes the source clock during reset
+  only when `default` is 1; with a larger `default` the output stays low until
+  reset releases
 
 === Width Calculation and Validation
 <soc-net-clock-divider-width-validation>
@@ -569,6 +578,11 @@ Targets with multiple links (≥2) automatically generate multiplexers. Mux type
   caption: [AUTOMATIC MUX TYPE SELECTION],
   kind: table,
 )
+
+A `GF_MUX` is glitch-free when `select` changes only after the output runs
+from the previously selected source, and its reset is held for several cycles
+of every linked clock. With `clock_on_reset`, also keep `select` stable during
+reset and assert reset only after a switch has completed.
 
 For `STD_MUX`, `select` is the zero-based ordinal of each source in `link`.
 Unused binary encodings drive the output low. A standard mux accepts at most
@@ -840,8 +854,9 @@ QSoC generates these templates:
 Overriding `NUM_SYNC_STAGES`, `NUM_INPUTS` or `INPUT_COUNT` below 1 on these
 cells fails elaboration.
 
-`qsoc_clk_mux_raw.NUM_INPUTS` must be a power of two. Generated controllers
-pad unused high lanes with zero.
+`qsoc_clk_mux_raw` accepts any `NUM_INPUTS`; select values from
+`NUM_INPUTS` up are unused. Generated controllers pad to a power of two with
+zero lanes.
 
 *Read the generated `clock_cell.v` file for actual interfaces.*
 Replace with foundry cells before production use.

@@ -1606,9 +1606,7 @@ void QSocClockPrimitive::generateMuxInstance(
     const QString functionalSelect = clockSelectExpression(target);
 
     if (target.mux.type == STD_MUX) {
-        /* The raw mux halves NUM_INPUTS down the tree while passing the full
-           select to both branches, so a non-power-of-two width truncates the
-           select and breaks the source ordinal. Pad instead. */
+        /* Pad to a power of two so every unused select code picks a zero lane. */
         const int implementationInputs = 1 << selWidth;
 
         // Standard mux using qsoc_clk_mux_raw
@@ -1969,9 +1967,9 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    /* State registers */\n";
         out << "    reg [WIDTH-1:0] div_d, div_q;\n";
         out << "    reg toggle_ffs_en;\n";
-        out << "    reg t_ff1_d, t_ff1_q;\n";
+        out << "    reg t_ff1_q;\n";
         out << "    reg t_ff1_en;\n";
-        out << "    reg t_ff2_d, t_ff2_q;\n";
+        out << "    reg t_ff2_q;\n";
         out << "    reg t_ff2_en;\n";
         out << "    reg [WIDTH-1:0] cycle_cntr_d, cycle_cntr_q;\n";
         out << "    reg cycle_counter_en;\n";
@@ -1980,7 +1978,6 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    reg gate_en_d, gate_en_q;\n";
         out << "    reg gate_is_open_q;\n";
         out << "    reg clear_cycle_counter;\n";
-        out << "    reg clear_toggle_flops;\n";
         out << "    reg [1:0] clk_gate_state_d, clk_gate_state_q;\n";
         out << "\n";
         out << "    /* FSM state encoding */\n";
@@ -2045,7 +2042,6 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        clk_gate_state_d = clk_gate_state_q;\n";
         out << "        cycle_counter_en = 1'b1;\n";
         out << "        clear_cycle_counter = 1'b0;\n";
-        out << "        clear_toggle_flops = 1'b0;\n";
         out << "        toggle_ffs_en = 1'b1;\n";
         out << "        gate_en_d = 1'b0;\n";
         out << "\n";
@@ -2074,7 +2070,6 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "                    div_d = div_i_normalized;\n";
         out << "                    div_ready = 1'b1;\n";
         out << "                    clear_cycle_counter = 1'b1;\n";
-        out << "                    clear_toggle_flops = 1'b1;\n";
         out << "                    use_odd_division_d = div_i_normalized[0];\n";
         out << "                    clk_div_bypass_en_d = (div_i_normalized == {{(WIDTH-1){1'b0}}, "
                "1'b1});\n";
@@ -2148,30 +2143,22 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    wire [WIDTH:0]   div_plus1_ext_half = div_plus1_ext >> 1;\n";
         out << "    wire [WIDTH-1:0] div_plus1_half     = div_plus1_ext_half[WIDTH-1:0];\n";
         out << "\n";
-        out << "    /* T-Flip-Flops with non-blocking assignments for synthesis */\n";
+        out << "    /* T-Flip-Flops. Blocking on purpose: t_ff1_q and t_ff2_q are clocks, and a\n";
+        out << "     * nonblocking update lets flops on those clocks sample data changed by the\n";
+        out << "     * same clk edge in zero-delay simulation. */\n";
         out << "    always @(posedge clk or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
-        out << "            t_ff1_q <= 1'b0;\n";
+        out << "            t_ff1_q = 1'b0;\n";
         out << "        end else if (t_ff1_en) begin\n";
-        out << "            t_ff1_q <= t_ff1_d;\n";
+        out << "            t_ff1_q = !t_ff1_q;\n";
         out << "        end\n";
         out << "    end\n";
         out << "\n";
         out << "    always @(negedge clk or negedge rst_n) begin\n";
         out << "        if (!rst_n) begin\n";
-        out << "            t_ff2_q <= 1'b0;\n";
+        out << "            t_ff2_q = 1'b0;\n";
         out << "        end else if (t_ff2_en) begin\n";
-        out << "            t_ff2_q <= t_ff2_d;\n";
-        out << "        end\n";
-        out << "    end\n";
-        out << "\n";
-        out << "    always @(*) begin\n";
-        out << "        if (clear_toggle_flops) begin\n";
-        out << "            t_ff1_d = 1'b0;\n";
-        out << "            t_ff2_d = 1'b0;\n";
-        out << "        end else begin\n";
-        out << "            t_ff1_d = t_ff1_en ? !t_ff1_q : t_ff1_q;\n";
-        out << "            t_ff2_d = t_ff2_en ? !t_ff2_q : t_ff2_q;\n";
+        out << "            t_ff2_q = !t_ff2_q;\n";
         out << "        end\n";
         out << "    end\n";
         out << "\n";
@@ -2230,7 +2217,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
         out << "    ) i_clk_gate (\n";
         out << "        .clk(ungated_output_clock),\n";
-        out << "        .en(gate_is_open_q),\n";
+        out << "        .en(gate_en_q & en),\n";
         out << "        .test_en(test_en),\n";
         out << "        .rst_n(rst_n),\n";
         out << "        .clk_out(clk_out)\n";
@@ -2406,13 +2393,15 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        end\n";
         out << "        \n";
         out << "        // Clock gating using dedicated clock gate cell\n";
+        out << "        /* No reset bypass here: during reset the unfiltered enable\n";
+        out << "         * above opens only the selected input */\n";
         out << "        qsoc_tc_clk_gate #(\n";
-        out << "            .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
+        out << "            .CLOCK_DURING_RESET(1'b0)\n";
         out << "        ) i_clk_gate (\n";
         out << "            .clk(clk_in[i]),\n";
         out << "            .en(gate_enable[i]),\n";
         out << "            .test_en(1'b0),\n";
-        out << "            .rst_n(reset_synced[i]),\n";
+        out << "            .rst_n(1'b1),\n";
         out << "            .clk_out(gated_clock[i])\n";
         out << "        );\n";
         out << "        \n";
@@ -2505,21 +2494,35 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            assign msb_sel = clk_sel[WIDTH-1];\n";
         out << "            assign lower_sel = clk_sel[WIDTH-2:0];\n";
         out << "            \n";
-        out << "            /* First branch handles lower half of inputs */\n";
+        out << "            /* The MSB splits the inputs at a power of two */\n";
+        out << "            localparam integer HALF = 1 << (WIDTH - 1);\n";
+        out << "            /* Select width of the second branch, as its WIDTH default computes "
+               "*/\n";
+        out << "            localparam integer REST_WIDTH =\n";
+        out << "                (NUM_INPUTS - HALF <= 2) ? 1 : (NUM_INPUTS - HALF <= 4) ? 2 :\n";
+        out << "                (NUM_INPUTS - HALF <= 8) ? 3 : (NUM_INPUTS - HALF <= 16) ? 4 :\n";
+        out << "                (NUM_INPUTS - HALF <= 32) ? 5 : (NUM_INPUTS - HALF <= 64) ? 6 :\n";
+        out << "                (NUM_INPUTS - HALF <= 128) ? 7 : (NUM_INPUTS - HALF <= 256) ? 8 "
+               ":\n";
+        out << "                (NUM_INPUTS - HALF <= 512) ? 9 : (NUM_INPUTS - HALF <= 1024) ? 10 "
+               ":\n";
+        out << "                (NUM_INPUTS - HALF <= 2048) ? 11 : 12;\n";
+        out << "            \n";
+        out << "            /* First branch handles the HALF inputs with MSB clear */\n";
         out << "            qsoc_clk_mux_raw #(\n";
-        out << "                .NUM_INPUTS(NUM_INPUTS/2)\n";
+        out << "                .NUM_INPUTS(HALF)\n";
         out << "            ) i_mux_branch_a (\n";
-        out << "                .clk_in(clk_in[0+:NUM_INPUTS/2]),\n";
+        out << "                .clk_in(clk_in[0+:HALF]),\n";
         out << "                .clk_sel(lower_sel),\n";
         out << "                .clk_out(branch_a)\n";
         out << "            );\n";
         out << "            \n";
-        out << "            /* Second branch handles upper half plus any odd input */\n";
+        out << "            /* Second branch handles the rest, with MSB set */\n";
         out << "            qsoc_clk_mux_raw #(\n";
-        out << "                .NUM_INPUTS(NUM_INPUTS/2 + NUM_INPUTS%2)\n";
+        out << "                .NUM_INPUTS(NUM_INPUTS - HALF)\n";
         out << "            ) i_mux_branch_b (\n";
-        out << "                .clk_in(clk_in[NUM_INPUTS-1:NUM_INPUTS/2]),\n";
-        out << "                .clk_sel(lower_sel),\n";
+        out << "                .clk_in(clk_in[NUM_INPUTS-1:HALF]),\n";
+        out << "                .clk_sel(lower_sel[REST_WIDTH-1:0]),\n";
         out << "                .clk_out(branch_b)\n";
         out << "            );\n";
         out << "            \n";

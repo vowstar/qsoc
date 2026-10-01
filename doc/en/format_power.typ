@@ -131,6 +131,10 @@ Fault handling: any timeout → S_FAULT → auto-heal after cooldown
 Power-up sequence timing: switch → pgood/settle → clock enable → reset release
 Power-down sequence timing: reset assert → clock disable → switch off → pgood drop/settle
 
+`pgood` must rise within `settle_on` cycles of the switch turning on and fall
+within `settle_off` cycles of it turning off. Otherwise the domain enters
+`S_FAULT`.
+
 The qsoc_power_fsm module provides the core sequencing logic:
 ```verilog
 module qsoc_power_fsm

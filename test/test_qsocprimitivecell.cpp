@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsoccellformal.h"
 #include "common/qsocgenerateprimitiveclock.h"
 #include "common/qsocgenerateprimitivepower.h"
 #include "common/qsocgenerateprimitivereset.h"
 #include "qsoc_test.h"
 
+#include <QDir>
 #include <QFile>
+#include <QMap>
 #include <QProcess>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -45,6 +49,36 @@ bool run(
     const bool finished = process.waitForFinished(timeout);
     *log                = QString::fromUtf8(process.readAll());
     return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+const QStringList allCells = {"clock_cell.v", "reset_cell.v", "power_cell.v"};
+
+/* Cells in root and their formal collateral in root/cell/formal. */
+bool writeFormal(const QString &root, const QMap<QString, QString> &cells)
+{
+    if (!QDir(root).mkpath("cell/formal"))
+        return false;
+    for (auto cell = cells.cbegin(); cell != cells.cend(); ++cell) {
+        if (!save(QDir(root).filePath(cell.key()), cell.value()))
+            return false;
+    }
+    const auto files = QSocCellFormal::generate(cells.keys(), "../..");
+    for (auto file = files.cbegin(); file != files.cend(); ++file) {
+        if (!save(QDir(root).filePath("cell/formal/" + file.key()), file.value()))
+            return false;
+    }
+    return !files.isEmpty();
+}
+
+/* Run one task of the cell job; returns the status sby recorded. */
+QString sbyStatus(const QString &root, const QString &task, QString *log)
+{
+    const QString dir = QDir(root).filePath("cell/formal");
+    run("sby", {"-f", "check.sby", task}, dir, log, 1800000);
+    QFile status(QDir(dir).filePath("check_" + task + "/status"));
+    if (!status.open(QIODevice::ReadOnly))
+        return {};
+    return QString::fromUtf8(status.readAll()).section(' ', 0, 0).trimmed();
 }
 
 /* Two div changes 12 ns apart: the second lands while the first is loading. */
@@ -162,6 +196,149 @@ private slots:
             if (value == 0)
                 QVERIFY2(log.contains("qsoc_param_error_"), qPrintable(log));
         }
+    }
+
+    void formal_data()
+    {
+        QTest::addColumn<QString>("task");
+        for (const QString &task : QSocCellFormal::tasks(allCells))
+            QTest::newRow(qPrintable(task)) << task;
+    }
+
+    /* Every cell job task proves, or reaches all its covers. */
+    void formal()
+    {
+        QFETCH(QString, task);
+        for (const char *tool : {"sby", "yosys", "yosys-abc", "z3"}) {
+            if (QStandardPaths::findExecutable(tool).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(tool);
+        }
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QMap<QString, QString> cells;
+        for (const QString &cell : allCells)
+            cells.insert(cell, cellText(cell));
+        QVERIFY(writeFormal(dir.path(), cells));
+        QString log;
+        QCOMPARE(sbyStatus(dir.path(), task, &log), QString("PASS"));
+    }
+
+    /* Cover mode checks asserts only up to the depth where its covers are
+     * reached, so each cover task needs a prove task of the same setup. */
+    void coverTaskHasProveTwin()
+    {
+        const QString job = QSocCellFormal::generate(allCells, "../..").value("check.sby");
+        QVERIFY(!job.isEmpty());
+        const QStringList      lines = job.split('\n');
+        QMap<QString, QString> modes;
+        for (qsizetype i = lines.indexOf("[tasks]") + 1; i > 0 && i < lines.size(); ++i) {
+            const QStringList words = lines.at(i).split(' ', Qt::SkipEmptyParts);
+            if (words.size() != 2)
+                break;
+            modes.insert(words.at(0), words.at(1));
+        }
+        QMap<QString, QStringList> setup;
+        for (const QString &line : lines) {
+            const QStringList words = line.split(' ', Qt::SkipEmptyParts);
+            if (words.size() < 2 || !words.at(0).endsWith(':'))
+                continue;
+            const QString task = words.at(0).chopped(1);
+            if (words.at(1) == "prep" && words.size() == 4)
+                setup[task].append("top " + words.at(3));
+            for (qsizetype i = 2; words.at(1) == "chparam" && i + 2 < words.size(); i += 3)
+                setup[task].append(words.at(i + 1) + " " + words.at(i + 2));
+        }
+        QVERIFY(modes.values().contains("cover"));
+        QMap<QString, QString> keys;
+        QSet<QString>          proven;
+        for (auto task = modes.cbegin(); task != modes.cend(); ++task) {
+            QStringList key = setup.value(task.key());
+            QVERIFY2(!key.isEmpty(), qPrintable(task.key()));
+            key.sort();
+            keys.insert(task.key(), key.join(','));
+            if (task.value() == "prove")
+                proven.insert(key.join(','));
+        }
+        for (auto task = modes.cbegin(); task != modes.cend(); ++task) {
+            if (task.value() == "cover")
+                QVERIFY2(proven.contains(keys.value(task.key())), qPrintable(task.key()));
+        }
+    }
+
+    void formalCatchesFaults_data()
+    {
+        QTest::addColumn<QString>("cell");
+        QTest::addColumn<QString>("task");
+        QTest::addColumn<QString>("from");
+        QTest::addColumn<QString>("to");
+        QTest::newRow("div-gate-from-registered-enable")
+            << "clock_cell.v" << "clk_div_explicit" << ".en(gate_en_q & en),"
+            << ".en(gate_is_open_q),";
+        QTest::newRow("div-load-while-gate-open")
+            << "clock_cell.v" << "clk_div_explicit"
+            << "if ((gate_is_open_q == 1'b0) || clk_div_bypass_en_q) begin" << "if (1'b1) begin";
+        QTest::newRow("div-no-falling-edge-flop") << "clock_cell.v" << "clk_div_explicit"
+                                                  << "t_ff2_q = !t_ff2_q;" << "t_ff2_q = t_ff2_q;";
+        QTest::newRow("div-update-as-pulse") << "clock_cell.v" << "clk_div_auto_live"
+                                             << "load_req_q   <= (div_sync_normalized != div_q);"
+                                             << "load_req_q   <= (div_sync_ff2 != div_sync_ff1);";
+        QTest::newRow("mux-gf-no-exclusion")
+            << "clock_cell.v" << "clk_mux_gf"
+            << "= sel_onehot[i] & &(clock_disabled_q | ONEHOT_I);" << "= sel_onehot[i];";
+        QTest::newRow("mux-gf-gate-reset-bypass")
+            << "clock_cell.v" << "clk_mux_gf_reset_clock"
+            << "            .CLOCK_DURING_RESET(1'b0)\n        ) i_clk_gate (\n"
+               "            .clk(clk_in[i]),\n            .en(gate_enable[i]),\n"
+               "            .test_en(1'b0),\n            .rst_n(1'b1),"
+            << "            .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n        ) i_clk_gate (\n"
+               "            .clk(clk_in[i]),\n            .en(gate_enable[i]),\n"
+               "            .test_en(1'b0),\n            .rst_n(reset_synced[i]),";
+        QTest::newRow("mux-raw-half-split")
+            << "clock_cell.v" << "clk_mux_raw_3" << "localparam integer HALF = 1 << (WIDTH - 1);"
+            << "localparam integer HALF = NUM_INPUTS / 2;";
+        QTest::newRow("or-tree-drops-input")
+            << "clock_cell.v" << "clk_or_tree_5" << ".CLK_IN1(clk_in[1])," << ".CLK_IN1(1'b0),";
+        QTest::newRow("gate-latch-open-high")
+            << "clock_cell.v" << "clk_gate_pos" << "if (!clk) iq = (test_en | en);"
+            << "if (clk) iq = (test_en | en);";
+        QTest::newRow("xor-as-or")
+            << "clock_cell.v" << "clk_tc" << "assign CLK_OUT = CLK_IN0 ^ CLK_IN1;"
+            << "assign CLK_OUT = CLK_IN0 | CLK_IN1;";
+        QTest::newRow("rst-sync-short")
+            << "reset_cell.v" << "rst_sync_3" << "assign core_rst_n = sync_reg[STAGE-1];"
+            << "assign core_rst_n = sync_reg[STAGE-2];";
+        QTest::newRow("rst-pipe-short")
+            << "reset_cell.v" << "rst_pipe_3" << "assign core_rst_n = pipe_reg[STAGE-1];"
+            << "assign core_rst_n = pipe_reg[STAGE-2];";
+        QTest::newRow("rst-count-short")
+            << "reset_cell.v" << "rst_count_5" << "C_M1 = CYCLE - 1;" << "C_M1 = CYCLE - 2;";
+        QTest::newRow("power-stale-off-timer")
+            << "power_cell.v" << "power_fsm"
+            << "            state_n = S_TURN_OFF;\n            ld_off  = 1'b1;"
+            << "            state_n = S_TURN_OFF;";
+        QTest::newRow("power-rst-sync-short")
+            << "power_cell.v" << "power_rst_sync_3" << "sr[STAGE-1]" << "sr[STAGE-2]";
+    }
+
+    /* Each fault, several of them bugs these cells once had, fails its task. */
+    void formalCatchesFaults()
+    {
+        QFETCH(QString, cell);
+        QFETCH(QString, task);
+        QFETCH(QString, from);
+        QFETCH(QString, to);
+        for (const char *tool : {"sby", "yosys", "yosys-abc", "z3"}) {
+            if (QStandardPaths::findExecutable(tool).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(tool);
+        }
+        QString text = cellText(cell);
+        QVERIFY2(text.contains(from), qPrintable(from));
+        text.replace(from, to);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QVERIFY(writeFormal(dir.path(), {{cell, text}}));
+        QString log;
+        QCOMPARE(sbyStatus(dir.path(), task, &log), QString("FAIL"));
     }
 
     /* The last div written is the one loaded, even when it arrives mid-load. */

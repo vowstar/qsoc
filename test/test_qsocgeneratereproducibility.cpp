@@ -1574,6 +1574,25 @@ extension: retained
         QVERIFY(!QFileInfo::exists(cellPath));
     }
 
+    /* An artifact outside the first artifact's unit is refused, not walked to the filesystem root. */
+    void artifactOutsideUnitIsRefused()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QDir    root(directory.path());
+        const QString inside  = root.filePath("unit/rtl/a.v");
+        const QString outside = root.filePath("other.v");
+        const QString error = QSocGenerateArtifact::write({{inside, "a\n"}, {outside, "b\n"}}, true);
+        QVERIFY2(error.contains("outside"), qPrintable(error));
+        QVERIFY(!QFileInfo::exists(inside));
+        QVERIFY(!QFileInfo::exists(outside));
+        QCOMPARE(
+            QSocGenerateArtifact::write(
+                {{inside, "a\n"}, {root.filePath("unit/formal/b.sv"), "b\n"}}, true),
+            QString());
+        QVERIFY(QFileInfo::exists(inside));
+    }
+
     void directTypstWriterPreservesRelativePath()
     {
         QFETCH(QString, kind);

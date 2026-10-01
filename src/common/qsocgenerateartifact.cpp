@@ -143,7 +143,12 @@ QString write(std::vector<GeneratedArtifact> artifacts, bool force)
             if (parent == root) {
                 break;
             }
-            parent = entry.absolutePath();
+            const QString up = entry.absolutePath();
+            if (up == parent) {
+                return QCoreApplication::translate("main", "Error: output is outside %1: %2")
+                    .arg(root, artifact.path);
+            }
+            parent = up;
         }
     }
     for (const auto &artifact : artifacts) {
