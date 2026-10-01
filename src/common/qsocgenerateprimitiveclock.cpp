@@ -75,6 +75,24 @@ bool validateMapKeys(const YAML::Node &node, const QSet<QString> &allowedKeys, c
     return true;
 }
 
+/* An STA guide in series: the named foundry cell, or the qsoc_ck_buf role. */
+void emitStaGuide(
+    QTextStream                             &out,
+    const QSocClockPrimitive::ClockSTAGuide &guide,
+    const QString                           &instance,
+    const QString                           &input,
+    const QString                           &output)
+{
+    const bool    role = guide.cell.isEmpty();
+    const QString in   = role ? QStringLiteral("clk_in") : guide.in;
+    const QString to   = role ? QStringLiteral("clk_out") : guide.out;
+    out << "    " << (role ? QStringLiteral("qsoc_ck_buf") : guide.cell) << " " << instance
+        << " (\n";
+    out << "        ." << in << "(" << input << "),\n";
+    out << "        ." << to << "(" << output << ")\n";
+    out << "    );\n";
+}
+
 bool parseInverterStaGuide(
     const YAML::Node &node, QSocClockPrimitive::ClockSTAGuide &guide, const QString &context)
 {
@@ -86,7 +104,14 @@ bool parseInverterStaGuide(
         return false;
     }
 
-    const QStringList requiredKeys = {"cell", "in", "out"};
+    if (!node["cell"]) {
+        if (node["in"] || node["out"]) {
+            QSocConsole::error() << context << "in and out need cell";
+            return false;
+        }
+    }
+    const QStringList requiredKeys = node["cell"] ? QStringList{"cell", "in", "out"}
+                                                  : QStringList{};
     for (const QString &key : requiredKeys) {
         const YAML::Node value = node[key.toStdString()];
         if (!value || !value.IsScalar() || value.as<std::string>().empty()) {
@@ -111,9 +136,12 @@ bool parseInverterStaGuide(
         return false;
     }
 
-    guide.cell = QString::fromStdString(node["cell"].as<std::string>());
-    guide.in   = QString::fromStdString(node["in"].as<std::string>());
-    guide.out  = QString::fromStdString(node["out"].as<std::string>());
+    guide.configured = true;
+    if (node["cell"]) {
+        guide.cell = QString::fromStdString(node["cell"].as<std::string>());
+        guide.in   = QString::fromStdString(node["in"].as<std::string>());
+        guide.out  = QString::fromStdString(node["out"].as<std::string>());
+    }
     if (node["instance"]) {
         guide.instance = QString::fromStdString(node["instance"].as<std::string>());
     }
@@ -647,6 +675,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                 target.icg.clock_on_reset = it->second["icg"]["clock_on_reset"].as<bool>(false);
                 // Parse ICG sta_guide
                 if (it->second["icg"]["sta_guide"] && it->second["icg"]["sta_guide"].IsMap()) {
+                    target.icg.sta_guide.configured = true;
                     if (it->second["icg"]["sta_guide"]["cell"]) {
                         target.icg.sta_guide.cell = QString::fromStdString(
                             it->second["icg"]["sta_guide"]["cell"].as<std::string>());
@@ -741,6 +770,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                 }
                 // Parse DIV sta_guide
                 if (it->second["div"]["sta_guide"] && it->second["div"]["sta_guide"].IsMap()) {
+                    target.div.sta_guide.configured = true;
                     if (it->second["div"]["sta_guide"]["cell"]) {
                         target.div.sta_guide.cell = QString::fromStdString(
                             it->second["div"]["sta_guide"]["cell"].as<std::string>());
@@ -838,6 +868,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                         // Parse ICG sta_guide
                         if (linkIt->second["icg"]["sta_guide"]
                             && linkIt->second["icg"]["sta_guide"].IsMap()) {
+                            link.icg.sta_guide.configured = true;
                             if (linkIt->second["icg"]["sta_guide"]["cell"]) {
                                 link.icg.sta_guide.cell = QString::fromStdString(
                                     linkIt->second["icg"]["sta_guide"]["cell"].as<std::string>());
@@ -940,6 +971,7 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
                         // Parse DIV sta_guide
                         if (linkIt->second["div"]["sta_guide"]
                             && linkIt->second["div"]["sta_guide"].IsMap()) {
+                            link.div.sta_guide.configured = true;
                             if (linkIt->second["div"]["sta_guide"]["cell"]) {
                                 link.div.sta_guide.cell = QString::fromStdString(
                                     linkIt->second["div"]["sta_guide"]["cell"].as<std::string>());
@@ -1044,8 +1076,9 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
 
                 // Parse MUX sta_guide configuration
                 if (it->second["mux"] && it->second["mux"]["sta_guide"]) {
-                    const YAML::Node muxNode      = it->second["mux"];
-                    const YAML::Node staGuideNode = muxNode["sta_guide"];
+                    const YAML::Node muxNode        = it->second["mux"];
+                    const YAML::Node staGuideNode   = muxNode["sta_guide"];
+                    target.mux.sta_guide.configured = staGuideNode.IsMap();
 
                     if (staGuideNode["cell"]) {
                         target.mux.sta_guide.cell = QString::fromStdString(
@@ -1276,7 +1309,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             QString muxOutput = QString("%1_mux_out").arg(target.name);
 
             // If STA guide exists, use a temporary name for MUX output
-            QString muxTempOutput = !target.mux.sta_guide.cell.isEmpty()
+            QString muxTempOutput = target.mux.sta_guide.configured
                                         ? QString("%1_mux_pre_sta").arg(target.name)
                                         : muxOutput;
 
@@ -1284,15 +1317,12 @@ void QSocClockPrimitive::generateOutputAssignments(
             generateMuxInstance(target, config, out, muxTempOutput);
 
             // MUX sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!target.mux.sta_guide.cell.isEmpty()) {
+            if (target.mux.sta_guide.configured) {
                 out << "    wire " << muxOutput << ";\n"; // Final output wire
                 QString muxStaInstanceName = target.mux.sta_guide.instance.isEmpty()
                                                  ? QString("u_%1_mux_sta").arg(target.name)
                                                  : target.mux.sta_guide.instance;
-                out << "    " << target.mux.sta_guide.cell << " " << muxStaInstanceName << " (\n";
-                out << "        ." << target.mux.sta_guide.in << "(" << muxTempOutput << "),\n";
-                out << "        ." << target.mux.sta_guide.out << "(" << muxOutput << ")\n";
-                out << "    );\n";
+                emitStaGuide(out, target.mux.sta_guide, muxStaInstanceName, muxTempOutput, muxOutput);
             }
 
             currentSignal = muxOutput; // Always use the consistent final name
@@ -1306,7 +1336,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             QString icgOutput = QString("%1_icg_out").arg(target.name);
 
             // If STA guide exists, use a temporary name for ICG output
-            QString icgTempOutput = !target.icg.sta_guide.cell.isEmpty()
+            QString icgTempOutput = target.icg.sta_guide.configured
                                         ? QString("%1_icg_pre_sta").arg(target.name)
                                         : icgOutput;
 
@@ -1327,15 +1357,12 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "    );\n";
 
             // ICG sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!target.icg.sta_guide.cell.isEmpty()) {
+            if (target.icg.sta_guide.configured) {
                 out << "    wire " << icgOutput << ";\n"; // Final output wire
                 QString icgStaInstanceName = target.icg.sta_guide.instance.isEmpty()
                                                  ? QString("u_%1_icg_sta").arg(target.name)
                                                  : target.icg.sta_guide.instance;
-                out << "    " << target.icg.sta_guide.cell << " " << icgStaInstanceName << " (\n";
-                out << "        ." << target.icg.sta_guide.in << "(" << icgTempOutput << "),\n";
-                out << "        ." << target.icg.sta_guide.out << "(" << icgOutput << ")\n";
-                out << "    );\n";
+                emitStaGuide(out, target.icg.sta_guide, icgStaInstanceName, icgTempOutput, icgOutput);
             }
 
             currentSignal = icgOutput; // Always use the consistent final name
@@ -1360,7 +1387,7 @@ void QSocClockPrimitive::generateOutputAssignments(
             QString invOutput = QString("%1_inv_out").arg(target.name);
 
             // If STA guide exists, use a temporary name for INV output
-            QString invTempOutput = !target.inv.sta_guide.cell.isEmpty()
+            QString invTempOutput = target.inv.sta_guide.configured
                                         ? QString("%1_inv_pre_sta").arg(target.name)
                                         : invOutput;
 
@@ -1371,15 +1398,12 @@ void QSocClockPrimitive::generateOutputAssignments(
             out << "    );\n";
 
             // INV sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!target.inv.sta_guide.cell.isEmpty()) {
+            if (target.inv.sta_guide.configured) {
                 out << "    wire " << invOutput << ";\n"; // Final output wire
                 QString invStaInstanceName = target.inv.sta_guide.instance.isEmpty()
                                                  ? QString("u_%1_inv_sta").arg(target.name)
                                                  : target.inv.sta_guide.instance;
-                out << "    " << target.inv.sta_guide.cell << " " << invStaInstanceName << " (\n";
-                out << "        ." << target.inv.sta_guide.in << "(" << invTempOutput << "),\n";
-                out << "        ." << target.inv.sta_guide.out << "(" << invOutput << ")\n";
-                out << "    );\n";
+                emitStaGuide(out, target.inv.sta_guide, invStaInstanceName, invTempOutput, invOutput);
             }
 
             currentSignal = invOutput; // Always use the consistent final name
@@ -1411,7 +1435,7 @@ void QSocClockPrimitive::generateDividerInstance(
 
     const bool    dynamic    = !div.value.isEmpty();
     const bool    autoUpdate = dynamic && div.valid.isEmpty();
-    const bool    staGuide   = !div.sta_guide.cell.isEmpty();
+    const bool    staGuide   = div.sta_guide.configured;
     const QString divOut     = staGuide ? preSta : output;
 
     out << "    wire " << divOut << ";\n";
@@ -1437,11 +1461,12 @@ void QSocClockPrimitive::generateDividerInstance(
 
     if (staGuide) {
         out << "    wire " << output << ";\n";
-        out << "    " << div.sta_guide.cell << " "
-            << (div.sta_guide.instance.isEmpty() ? staInstance : div.sta_guide.instance) << " (\n";
-        out << "        ." << div.sta_guide.in << "(" << preSta << "),\n";
-        out << "        ." << div.sta_guide.out << "(" << output << ")\n";
-        out << "    );\n";
+        emitStaGuide(
+            out,
+            div.sta_guide,
+            div.sta_guide.instance.isEmpty() ? staInstance : div.sta_guide.instance,
+            preSta,
+            output);
     }
 }
 
@@ -1479,8 +1504,8 @@ void QSocClockPrimitive::generateClockInstance(
             QString icgWire = wireName + "_preicg";
 
             // If STA guide exists, use a temporary name for ICG output
-            QString icgTempWire = !link.icg.sta_guide.cell.isEmpty() ? wireName + "_preicg_pre_sta"
-                                                                     : icgWire;
+            QString icgTempWire = link.icg.sta_guide.configured ? wireName + "_preicg_pre_sta"
+                                                                : icgWire;
 
             out << "    wire " << icgTempWire << ";\n";
             out << "    qsoc_clk_gate #(\n";
@@ -1498,15 +1523,12 @@ void QSocClockPrimitive::generateClockInstance(
             out << "    );\n";
 
             // ICG sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!link.icg.sta_guide.cell.isEmpty()) {
+            if (link.icg.sta_guide.configured) {
                 out << "    wire " << icgWire << ";\n"; // Final output wire
                 QString icgStaInstanceName = link.icg.sta_guide.instance.isEmpty()
                                                  ? instanceName + "_icg_sta"
                                                  : link.icg.sta_guide.instance;
-                out << "    " << link.icg.sta_guide.cell << " " << icgStaInstanceName << " (\n";
-                out << "        ." << link.icg.sta_guide.in << "(" << icgTempWire << "),\n";
-                out << "        ." << link.icg.sta_guide.out << "(" << icgWire << ")\n";
-                out << "    );\n";
+                emitStaGuide(out, link.icg.sta_guide, icgStaInstanceName, icgTempWire, icgWire);
             }
 
             currentWire = icgWire; // Always use the consistent final name
@@ -1531,7 +1553,7 @@ void QSocClockPrimitive::generateClockInstance(
             QString invWire = QString("%1_inv_wire").arg(instanceName);
 
             // If STA guide exists, use a temporary name for INV output
-            QString invTempWire = !link.inv.sta_guide.cell.isEmpty()
+            QString invTempWire = link.inv.sta_guide.configured
                                       ? QString("%1_inv_wire_pre_sta").arg(instanceName)
                                       : invWire;
 
@@ -1542,15 +1564,12 @@ void QSocClockPrimitive::generateClockInstance(
             out << "    );\n";
 
             // INV sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!link.inv.sta_guide.cell.isEmpty()) {
+            if (link.inv.sta_guide.configured) {
                 out << "    wire " << invWire << ";\n"; // Final output wire
                 QString invStaInstanceName = link.inv.sta_guide.instance.isEmpty()
                                                  ? instanceName + "_inv_sta"
                                                  : link.inv.sta_guide.instance;
-                out << "    " << link.inv.sta_guide.cell << " " << invStaInstanceName << " (\n";
-                out << "        ." << link.inv.sta_guide.in << "(" << invTempWire << "),\n";
-                out << "        ." << link.inv.sta_guide.out << "(" << invWire << ")\n";
-                out << "    );\n";
+                emitStaGuide(out, link.inv.sta_guide, invStaInstanceName, invTempWire, invWire);
             }
 
             currentWire = invWire; // Always use the consistent final name
@@ -1917,7 +1936,7 @@ QString QSocClockPrimitive::typstTarget(
                 s << "  )\n";
 
                 // STA marker if sta_guide configured
-                if (!link.icg.sta_guide.cell.isEmpty()) {
+                if (link.icg.sta_guide.configured) {
                     drawStaMarker(compX, compY, 1.0f, 0.9f);
                 }
 
@@ -1950,7 +1969,7 @@ QString QSocClockPrimitive::typstTarget(
                 s << "  )\n";
 
                 // STA marker if sta_guide configured
-                if (!link.div.sta_guide.cell.isEmpty()) {
+                if (link.div.sta_guide.configured) {
                     drawStaMarker(compX, compY, 1.0f, 0.9f);
                 }
 
@@ -1987,7 +2006,7 @@ QString QSocClockPrimitive::typstTarget(
                 s << "  )\n";
 
                 // STA marker if sta_guide configured
-                if (!link.inv.sta_guide.cell.isEmpty()) {
+                if (link.inv.sta_guide.configured) {
                     drawStaMarker(compX, compY, 1.0f, 0.9f);
                 }
 
@@ -2025,7 +2044,7 @@ QString QSocClockPrimitive::typstTarget(
               << "), text(size: 8pt)[" << target.select << "])\n";
 
         // STA marker if mux.sta_guide configured (inside top-right corner)
-        if (!target.mux.sta_guide.cell.isEmpty()) {
+        if (target.mux.sta_guide.configured) {
             float mtx = muxX + 1.0f - 0.35f;            // Right edge - margin
             float mty = muxBottomY + muxHeight - 0.35f; // Top edge - margin
             s << "  draw.line((" << mtx << ", " << mty << "), (" << (mtx + 0.25f) << ", " << mty
@@ -2124,7 +2143,7 @@ QString QSocClockPrimitive::typstTarget(
         s << "  )\n";
 
         // STA marker if sta_guide configured
-        if (!target.icg.sta_guide.cell.isEmpty()) {
+        if (target.icg.sta_guide.configured) {
             drawStaMarkerTarget(currentX, targetCompY, 1.2f, targetCompH);
         }
 
@@ -2153,7 +2172,7 @@ QString QSocClockPrimitive::typstTarget(
         s << "  )\n";
 
         // STA marker if sta_guide configured
-        if (!target.div.sta_guide.cell.isEmpty()) {
+        if (target.div.sta_guide.configured) {
             drawStaMarkerTarget(currentX, targetCompY, 1.2f, targetCompH);
         }
 
@@ -2187,7 +2206,7 @@ QString QSocClockPrimitive::typstTarget(
         s << "  )\n";
 
         // STA marker if sta_guide configured
-        if (!target.inv.sta_guide.cell.isEmpty()) {
+        if (target.inv.sta_guide.configured) {
             drawStaMarkerTarget(currentX, targetCompY, 1.2f, targetCompH);
         }
 

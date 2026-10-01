@@ -1346,22 +1346,6 @@ QString QSocModuleManager::iomuxShellBase(const QString &moduleName)
     return generator["pad_cell"] || generator["pad_cells"] ? base : QString();
 }
 
-/* Bits of a library port type such as `logic[7:0]` or `logic[1:0][3:0]`. */
-quint32 cellPortWidth(const QString &type)
-{
-    static const QRegularExpression range(R"(\[\s*(\d+)\s*:\s*(\d+)\s*\])");
-    quint32                         width = 0;
-    QRegularExpressionMatchIterator it    = range.globalMatch(type);
-    while (it.hasNext()) {
-        const QRegularExpressionMatch match     = it.next();
-        const int                     msb       = match.captured(1).toInt();
-        const int                     lsb       = match.captured(2).toInt();
-        const quint32                 dimension = quint32(qAbs(msb - lsb)) + 1;
-        width                                   = width == 0 ? dimension : width * dimension;
-    }
-    return width == 0 ? 1 : width;
-}
-
 bool QSocModuleManager::resolveIomuxCells(QSocIomuxPlan *plan, QStringList *errors)
 {
     QStringList local;
@@ -1370,26 +1354,7 @@ bool QSocModuleManager::resolveIomuxCells(QSocIomuxPlan *plan, QStringList *erro
             && (!load(QRegularExpression(".*")) || !isModuleExist(cellName))) {
             return false;
         }
-        const YAML::Node cellPortNode = getModuleYaml(cellName)["port"];
-        if (cellPortNode && cellPortNode.IsMap()) {
-            for (const auto &entry : cellPortNode) {
-                const QString name = QString::fromStdString(entry.first.Scalar());
-                QString       direction;
-                QString       type;
-                if (entry.second["direction"]) {
-                    direction = QString::fromStdString(entry.second["direction"].Scalar());
-                }
-                if (entry.second["type"]) {
-                    type = QString::fromStdString(entry.second["type"].Scalar());
-                }
-                if (direction == "input") {
-                    direction = "in";
-                } else if (direction == "output") {
-                    direction = "out";
-                }
-                ports->insert(name, QSocCellPort(direction, cellPortWidth(type)));
-            }
-        }
+        ports->insert(QSocCellTable::portsOf(getModuleYaml(cellName)["port"]));
         return true;
     };
     /* A cell drawn once per axis lends its name to two modules. */

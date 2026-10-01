@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsoccellformal.h"
+#include "common/qsoccellbinding.h"
 #include "common/qsocverilogutils.h"
 
 #include <QDir>
@@ -1492,6 +1493,184 @@ QMap<QString, QString> QSocCellFormal::generate(const QStringList &sources)
               "read -formal -D SYNTHESIS "
             + reads.join(' ') + "\nread -formal " + harnesses.join(' ') + "\n" + script
             + "setattr -mod -unset keep_hierarchy\nsetattr -unset keep_hierarchy\n" + "\n[files]\n"
+            + (sources + harnesses).join('\n') + "\n");
+    return files;
+}
+
+namespace {
+
+const int kSyncStages[] = {1, 2, 3, 5};
+
+QString combinationalContract(const QString &role, const QStringList &inputs)
+{
+    QStringList ports;
+    QStringList connect;
+    for (const QString &input : inputs) {
+        ports.append("    input wire " + input);
+        connect.append(QString(".%1(%1)").arg(input));
+    }
+    return QString(
+               "\n/* %1 with its declared cell equals the generic role for every input */\n"
+               "module %1_contract (\n"
+               "%2\n"
+               ");\n"
+               "    wire got;\n"
+               "    wire want;\n"
+               "    %1 u_dut (%3, .clk_out(got));\n"
+               "    %1_ref u_ref (%3, .clk_out(want));\n"
+               "    always @* contract: assert (got == want);\n"
+               "endmodule\n")
+        .arg(role, ports.join(",\n"), connect.join(", "));
+}
+
+/* Inputs move only while clk holds, as in the clock gate harness. */
+QString gateContract(const QString &role, bool positive)
+{
+    return QString(
+               "\n/* %1 with its declared cell equals the generic role once both latches\n"
+               " * have loaded, that is after clk has rested at its idle level */\n"
+               "module %1_contract (\n"
+               "    input wire fclk,\n"
+               "    input wire in_tick,\n"
+               "    input wire in_en,\n"
+               "    input wire in_test_en\n"
+               ");\n"
+               "    reg clk;\n"
+               "    reg en;\n"
+               "    reg test_en;\n"
+               "    always @(`QSOC_FORMAL_STEP) begin\n"
+               "        if (in_tick) clk <= ~clk;\n"
+               "        else begin\n"
+               "            en      <= in_en;\n"
+               "            test_en <= in_test_en;\n"
+               "        end\n"
+               "    end\n"
+               "\n"
+               "    wire got;\n"
+               "    wire want;\n"
+               "    %1 u_dut (.clk(clk), .en(en), .test_en(test_en), .clk_out(got));\n"
+               "    %1_ref u_ref (.clk(clk), .en(en), .test_en(test_en), .clk_out(want));\n"
+               "\n"
+               "    reg loaded = 1'b0;\n"
+               "    always @(`QSOC_FORMAL_STEP) if (%2clk) loaded <= 1'b1;\n"
+               "    always @* if (loaded) contract: assert (got == want);\n"
+               "endmodule\n")
+        .arg(role, positive ? "!" : "");
+}
+
+/* Both chains start in reset, then d and rst_n move only while clk holds. */
+const char *const syncContract = R"sv(
+/* qsoc_sync with its declared cell equals the generic role after reset:
+ * same latency and same reset value */
+module qsoc_sync_contract #(
+    parameter integer STAGES      = 2,
+    parameter [0:0]   RESET_VALUE = 1'b0
+) (
+    input wire fclk,
+    input wire in_tick,
+    input wire in_d,
+    input wire in_rst_n
+);
+    reg [1:0] boot = 2'b00;
+    reg       clk;
+    reg       d;
+    reg       rst_n;
+    always @(`QSOC_FORMAL_STEP) begin
+        if (boot != 2'b11) boot <= boot + 2'b01;
+        if (in_tick) clk <= ~clk;
+        else d <= in_d;
+        if (boot != 2'b11) rst_n <= 1'b0;
+        else if (!in_tick) rst_n <= in_rst_n;
+    end
+
+    wire got;
+    wire want;
+    qsoc_sync #(.STAGES(STAGES), .RESET_VALUE(RESET_VALUE)) u_dut (
+        .clk(clk), .rst_n(rst_n), .d(d), .q(got));
+    qsoc_sync_ref #(.STAGES(STAGES), .RESET_VALUE(RESET_VALUE)) u_ref (
+        .clk(clk), .rst_n(rst_n), .d(d), .q(want));
+
+    always @* if (boot == 2'b11) contract: assert (got == want);
+endmodule
+)sv";
+
+QString contractHarness(const QString &role)
+{
+    if (role == "qsoc_sync")
+        return syncContract;
+    if (role.startsWith("qsoc_ck_icg_"))
+        return gateContract(role, role.endsWith("_pos"));
+    QStringList inputs = QSocCellBinding::rolePorts(role);
+    inputs.removeAll("clk_out");
+    return combinationalContract(role, inputs);
+}
+
+} // namespace
+
+QStringList QSocCellFormal::contractTasks(const QStringList &roles)
+{
+    QStringList names;
+    for (const QString &role : QSocCellBinding::roleNames()) {
+        if (!roles.contains(role))
+            continue;
+        if (role != "qsoc_sync") {
+            names.append(role);
+            continue;
+        }
+        for (const int stages : kSyncStages) {
+            for (const int level : {0, 1})
+                names.append(QString("qsoc_sync_%1_%2").arg(stages).arg(level));
+        }
+    }
+    return names;
+}
+
+QMap<QString, QString> QSocCellFormal::contracts(
+    const QMap<QString, QString> &generic, const QStringList &sources)
+{
+    QMap<QString, QString> files;
+    if (generic.isEmpty())
+        return files;
+    QStringList reads;
+    for (const QString &source : sources)
+        reads.append(QFileInfo(source).fileName());
+    QStringList harnesses;
+    for (auto role = generic.cbegin(); role != generic.cend(); ++role) {
+        const QString reference
+            = QString(role.value())
+                  .replace("module " + role.key() + " ", "module " + role.key() + "_ref ");
+        files.insert(
+            role.key() + "_contract.sv", join(prelude) + reference + contractHarness(role.key()));
+        harnesses.append(role.key() + "_contract.sv");
+    }
+    QString tasks;
+    QString script;
+    for (const QString &task : contractTasks(generic.keys())) {
+        tasks += task + "\n";
+        if (!task.startsWith("qsoc_sync_")) {
+            script += QString("%1: prep -top %1_contract\n").arg(task);
+            continue;
+        }
+        script += QString("%1: chparam -set STAGES %2 -set RESET_VALUE %3 qsoc_sync_contract\n")
+                      .arg(task, task.section('_', 2, 2), task.section('_', 3, 3));
+        script += QString("%1: prep -top qsoc_sync_contract\n").arg(task);
+    }
+    files.insert(
+        "contract.sby",
+        "# Role contracts of the declared cells: sby -f contract.sby [task]\n"
+        "[tasks]\n"
+            + tasks
+            + "\n[options]\n"
+              "mode prove\n"
+              "aigsmt z3\n"
+              "multiclock on\n"
+              "\n[engines]\n"
+              "abc pdr\n"
+              "\n[script]\n"
+              "read -formal -D SYNTHESIS "
+            + (reads + harnesses).join(' ') + "\n" + script
+            + "setattr -mod -unset keep_hierarchy\n"
+              "\n[files]\n"
             + (sources + harnesses).join('\n') + "\n");
     return files;
 }

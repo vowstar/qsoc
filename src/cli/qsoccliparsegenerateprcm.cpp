@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/qsoccelllibrary.h"
+#include "common/qsocconsole.h"
 #include "common/qsocgenerateartifact.h"
 #include "common/qsocprcmbinding.h"
 #include "common/qsocprcmcomposition.h"
@@ -290,6 +291,11 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
     const auto loaded = QSocPrcmDocumentLoader::load(files);
     if (!loaded.document)
         return showError(1, describe(loaded.diagnostic));
+    const auto cells = QSocCellBinding::fromProject(projectManager, moduleManager);
+    if (!cells.isValid())
+        return showError(1, cells.errors().join('\n'));
+    for (const QString &warning : cells.warnings())
+        QSocConsole::warn() << warning;
     const auto &document = *loaded.document;
     try {
         QSocPrcmDetail::Context      context{document.file, {}, document.origin};
@@ -403,7 +409,8 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
             QStringList formalList;
             for (const auto &file : circuit.cell.keys() + circuit.rtl.keys()) {
                 const bool cell = circuit.cell.contains(file);
-                const auto path = cell ? QSocCellLibrary::path(file) : name + "/rtl/" + file;
+                const auto path = cell ? QSocCellLibrary::formalPath(file, cells)
+                                       : name + "/rtl/" + file;
                 formal.sby.replace(
                     '\n' + file + '\n', (cell ? "\n../../" + path : "\n../rtl/" + file) + '\n');
                 formalList.append(path);
@@ -419,7 +426,7 @@ std::optional<bool> QSocCliWorker::generatePrcmNetlists(const QStringList &files
         auto error
             = QSocGenerateArtifact::write(std::move(artifact), true, projectManager->getOutputPath());
         if (error.isEmpty())
-            error = QSocCellLibrary::publish(projectManager->getOutputPath());
+            error = QSocCellLibrary::publish(projectManager->getOutputPath(), cells);
         if (!error.isEmpty())
             return showError(1, error);
         return showInfo(0, "Generated PRCM circuit: " + output.path());
@@ -432,7 +439,10 @@ bool QSocCliWorker::writeCellFormal()
 {
     if (!parser.isSet("with-formal"))
         return true;
-    const QString error = QSocCellLibrary::publishFormal(projectManager->getOutputPath());
+    const auto cells = QSocCellBinding::fromProject(projectManager, moduleManager);
+    if (!cells.isValid())
+        return showError(1, cells.errors().join('\n'));
+    const QString error = QSocCellLibrary::publishFormal(projectManager->getOutputPath(), cells);
     if (!error.isEmpty())
         return showError(1, error);
     return showInfo(

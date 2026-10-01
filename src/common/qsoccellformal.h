@@ -33,6 +33,23 @@ QMap<QString, QString> generate(const QStringList &sources);
  */
 QStringList tasks(const QStringList &sources);
 
+/**
+ * @brief Role contract checks: each bound role module against its generic body.
+ * @param generic Bound role module name to its generic file text.
+ * @param sources Paths of the bound role files and the cell models, relative
+ *                to the job directory.
+ * @return One <role>_contract.sv per role and contract.sby. A combinational
+ *         role is proven equal for every input, a gate role equal once its
+ *         latch has loaded, qsoc_sync equal after reset for several STAGES
+ *         and both RESET_VALUE levels.
+ */
+QMap<QString, QString> contracts(const QMap<QString, QString> &generic, const QStringList &sources);
+
+/**
+ * @brief Tasks of the job contracts() writes for these roles.
+ */
+QStringList contractTasks(const QStringList &roles);
+
 } // namespace QSocCellFormal
 
 #endif // QSOCCELLFORMAL_H

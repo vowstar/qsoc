@@ -99,6 +99,8 @@ Project names are file names, not paths.
   kind: table,
 )
 
+The project file also accepts `cell.target`, set by hand (@cell-declare).
+
 === Project Update, Remove, List and Show
 <project-other>
 `project update` takes the same options as `project create` and rewrites the
@@ -386,6 +388,9 @@ writes the design independent cell unit and the top file list.
     [`output/qsoc_cell/rtl/qsoc_cell_power.v`], [Power template cells],
     [`output/qsoc_cell/rtl/qsoc_cell.fl`], [Cell file list: the roles, then clock, reset, power],
     [`output/qsoc_cell/formal/`], [Cell formal checks, with `--with-formal`],
+    [`output/qsoc_cell/model/<cell>.v`], [Model of each declared cell (@cell-declare)],
+    [`output/qsoc_cell/model/qsoc_cell_model.fl`], [Model file list],
+    [`output/qsoc_cell/qsoc_cell_role.rpt`], [Role binding report, `asic` target only],
     [`output/qsoc.fl`],
     [Concatenation of every unit file list],
   )],
@@ -419,9 +424,8 @@ an existing `formal/` directory is left untouched.
 A role is one module with a frozen port interface. The cells and the clock,
 reset and power controllers instantiate a role for every clock path gate and
 every synchronizer. Each file holds a
-generic behavioral body with no `keep` or `dont_touch` attribute. A declared
-technology cell replaces the body with one instance named `u_cell`, so its
-path is `<role instance>/u_cell`.
+generic behavioral body with no `keep` or `dont_touch` attribute. In the `asic`
+target a declared technology cell replaces the body (@cell-declare).
 
 #figure(
   align(center)[#table(
@@ -446,6 +450,129 @@ path is `<role instance>/u_cell`.
 )
 
 `STAGES` defaults to 2 and must be at least 1. `RESET_VALUE` is one bit.
+
+===== Declaring Cells
+<cell-declare>
+A module library entry (`module/<library>.soc_mod`, as `module import` writes
+it) declares a technology clock cell with a `function` truth table or a
+`sequential` template. `tie` holds input pins at constants. A later
+`module import` merges into the file, so these keys survive a re-import.
+
+```yaml
+CKND2D2:
+  port: {...}
+  function: [{A1: 0, ZN: 1}, {A2: 0, ZN: 1}, {A1: 1, A2: 1, ZN: 0}]
+CKND4:
+  port: {...}
+  function: {ZN: "!I"}              # one row, the output an expression
+CKMUX2D2:
+  port: {...}
+  function: [{S: 0, Z: I0}, {S: 1, Z: I1}]
+CKLNQD4:
+  port: {...}
+  sequential: {type: icg_pos, clock: CP, enable: E, test: TE, output: Q}
+SDFSYNC2:
+  port: {...}
+  sequential: {type: sync, stages: 2, clock: CP, data: D, output: Q, reset: CDN}
+  tie: {SI: 0, SE: 0}
+```
+A `function` is one row or a list of rows. A row maps input pins to 0 or 1
+(an absent pin is x) and output pins to 0, 1 or an expression over input pins
+with `! ~ & | ^ && || ?:`. A `sequential` template names pins by role.
+
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([`type`], [Keys and behavior]),
+    table.hline(),
+    [`icg_pos`],
+    [`clock`, `enable`, optional `test`, `output`: latch `enable | test` while `clock` is low, output low while disabled],
+    [`icg_neg`],
+    [`clock`, `enable`, optional `test`, `output`: latch `enable | test` while `clock` is high, output high while disabled],
+    [`sync`],
+    [`stages`, `clock`, `data`, `output`, `reset`: `stages` flops, `reset` an active-low asynchronous clear],
+  )],
+  caption: [SEQUENTIAL CELL TEMPLATES],
+  kind: table,
+)
+
+Generation rejects a declaration when:
+
+- a pin is missing, has the wrong direction, is wider than 1 bit, or is inout
+- two rows that overlap disagree, or an output is undefined for some inputs
+- an input appears in no function, template key or `tie`, or an output has no function
+- `type` is not one of the three above, a `sync` cell has no `reset` or `stages`
+- a `tie` names an output or a value other than 0 or 1
+- the name is `qsoc` or starts with `qsoc_`
+- two declared cells match the same role, and the error names both
+
+A gate cell without `test` is allowed: its role drives `enable` with
+`en | test_en`.
+
+*Binding.* A combinational cell binds a role when its function, with its ties
+applied, equals the role function under some pin correspondence. `icg_pos`,
+`icg_neg` and `sync` cells bind the role of the same kind. When only one gate
+role is bound and `qsoc_ck_inv` is bound, the other gate role is composed as
+`qsoc_ck_inv`, the bound gate, `qsoc_ck_inv`. The composed gate adds two
+inverter delays, and generation reports it. A `qsoc_sync` of `STAGES` flops
+uses `STAGES / stages` whole cells, then plain flops with the same reset up to
+`STAGES`. `RESET_VALUE` 1 inverts the chain input and output.
+
+*Target.* The optional project key selects the role bodies.
+
+```yaml
+cell:
+  target: asic   # generic (default) or asic
+```
+
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Target], [Role files]),
+    table.hline(),
+    [`generic`], [Behavioral bodies. Declarations are checked, and models written],
+    [`asic`],
+    [Every role, with `(* keep_hierarchy = "yes" *)`. A bound role instantiates its cell with `(* dont_touch = "true" *)` and ties. An unresolved role instantiates `qsoc_role_unresolved_<role>`, a module that does not exist],
+  )],
+  caption: [CELL TARGETS],
+  kind: table,
+)
+
+With `asic`, generation warns with the list of unresolved roles. Elaboration
+with the top set, such as `iverilog -s <top>`, fails only where such a role is
+used. A project without any `icg_pos` or `icg_neg` binding is rejected, since
+every clock controller uses a gate.
+
+Declared cells sit at fixed instance paths for SDC:
+
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Role], [Cell instance]),
+    table.hline(),
+    [Combinational, gate], [`<role instance>/u_cell`],
+    [Composed gate], [`<role instance>/u_icg/u_cell`, inverters `u_inv_in/u_cell` and `u_inv_out/u_cell`],
+    [`qsoc_sync`], [`<role instance>/g_cell[<i>].u_cell`, plain flops `g_extra.tail`],
+  )],
+  caption: [DECLARED CELL PATHS],
+  kind: table,
+)
+
+*Models.* Each declared cell gets a behavioral model in
+`output/qsoc_cell/model/<cell>.v`, listed by `qsoc_cell_model.fl`, for
+simulation and formal only. Neither `qsoc_cell.fl` nor `qsoc.fl` lists them. A
+sequential model ignores its tied pins.
+
+*Contracts.* With `--with-formal` and `asic`, `output/qsoc_cell/formal/contract/`
+holds one `<role>_contract.sv` per bound role and `contract.sby`. Each task
+proves the role file with the cell models equal to the generic role: for every
+input of a combinational role, once the latch has loaded for a gate role, and
+after reset for `qsoc_sync` with `STAGES` 1, 2, 3 and 5 and both reset values.
+Run `sby -f contract.sby [task]` in that directory. In `asic` mode the cell job
+in `formal/` reads generic role copies from `formal/role/`, as do PRCM checks.
 
 ==== Netlist Merge Semantics (`-m` / `--merge`)
 <netlist-merge-semantics>

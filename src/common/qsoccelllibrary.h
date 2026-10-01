@@ -4,6 +4,8 @@
 #ifndef QSOCCELLLIBRARY_H
 #define QSOCCELLLIBRARY_H
 
+#include "common/qsoccellbinding.h"
+
 #include <QList>
 #include <QString>
 
@@ -41,13 +43,19 @@ inline QString powerFile()
 
 /**
  * @brief Role files, one module each, in file list order.
+ * @details Generic bodies, or in asic mode the declared cell bindings.
  */
-QList<Cell> roles();
+QList<Cell> roles(const QSocCellBinding &binding = {});
 
 /**
  * @brief Cell files in file list order: the roles, then clock, reset, power.
  */
-QList<Cell> cells();
+QList<Cell> cells(const QSocCellBinding &binding = {});
+
+/**
+ * @brief Behavioral models of the declared cells, one <cell>.v each.
+ */
+QList<Cell> models(const QSocCellBinding &binding);
 
 /**
  * @brief True for the file name of a role.
@@ -58,6 +66,12 @@ bool isRole(const QString &file);
  * @brief Path of a cell or role file relative to the output directory.
  */
 QString path(const QString &file);
+
+/**
+ * @brief Path a formal job reads for a cell or role file, relative to the output directory.
+ * @details In asic mode a role is read from its generic copy in qsoc_cell/formal/role.
+ */
+QString formalPath(const QString &file, const QSocCellBinding &binding);
 
 /**
  * @brief True for names starting with qsoc_ or equal to qsoc, any case.
@@ -74,17 +88,19 @@ QString writeFileList(const QString &outputDirectory);
 
 /**
  * @brief Write the cell unit, then rebuild qsoc.fl.
+ * @details Declared cells add qsoc_cell/model, asic mode adds qsoc_cell_role.rpt.
  * @return Error message, empty on success.
  */
-QString publish(const QString &outputDirectory);
+QString publish(const QString &outputDirectory, const QSocCellBinding &binding = {});
 
 /**
  * @brief Write the cell formal checks to qsoc_cell/formal.
  * @details Harnesses, check.sby with every task, and qsoc_cell_formal.fl
- *          relative to the output directory.
+ *          relative to the output directory. In asic mode the cell job reads
+ *          generic role copies, and formal/contract checks every bound role.
  * @return Error message, empty on success.
  */
-QString publishFormal(const QString &outputDirectory);
+QString publishFormal(const QString &outputDirectory, const QSocCellBinding &binding = {});
 
 } // namespace QSocCellLibrary
 

@@ -49,10 +49,11 @@ public:
      */
     struct ClockSTAGuide
     {
-        QString cell;     // Foundry cell name (e.g., TSMC_CKBUF)
-        QString in;       // Input port name (e.g., I)
-        QString out;      // Output port name (e.g., Z)
-        QString instance; // Instance name (e.g., u_cpu_clk_sta_guide)
+        bool    configured = false; // YAML sta_guide: map exists
+        QString cell;               // Foundry cell name, empty for the qsoc_ck_buf role
+        QString in;                 // Input port name of cell (e.g., I)
+        QString out;                // Output port name of cell (e.g., Z)
+        QString instance;           // Instance name (e.g., u_cpu_clk_sta_guide)
     };
 
     /**

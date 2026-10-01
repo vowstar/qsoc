@@ -748,7 +748,10 @@ Each MUX, ICG, DIV, or INV stage can insert an STA guide buffer in series with i
 
 === Configuration Parameters
 <soc-net-clock-sta-config>
-STA guide buffer configuration requires four parameters:
+A guide with `cell` instantiates that cell and needs `in` and `out`. A guide
+without `cell`, `in` or `out` instantiates the `qsoc_ck_buf` role
+(@cell-roles) under the same instance name, so a declared buffer sits at
+`<instance>/u_cell` in the `asic` target (@cell-declare).
 
 #figure(
   align(center)[#table(
@@ -757,7 +760,7 @@ STA guide buffer configuration requires four parameters:
     table.header([Parameter], [Description]),
     table.hline(),
     [cell],
-    [Foundry-specific cell name (e.g., "TSMC_CKBUF_X2", "FOUNDRY_GUIDE_BUF")],
+    [Foundry-specific cell name (e.g., "TSMC_CKBUF_X2", "FOUNDRY_GUIDE_BUF"), or absent for `qsoc_ck_buf`],
     [in], [Input port name of the foundry cell (e.g., "I", "A", "CK")],
     [out], [Output port name of the foundry cell (e.g., "Z", "Y", "Q")],
     [instance],
@@ -826,7 +829,8 @@ target:
 
 === Generated Verilog
 <soc-net-clock-sta-verilog>
-STA guide buffers generate direct foundry cell instantiations in *serial configuration*:
+STA guide buffers generate direct foundry cell instantiations in *serial configuration*.
+A guide without `cell` writes `qsoc_ck_buf <instance> (.clk_in(...), .clk_out(...))` instead:
 
 ```verilog
 // Serial STA guide architecture - inserted in main signal path

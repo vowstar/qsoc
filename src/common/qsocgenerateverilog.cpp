@@ -46,7 +46,11 @@
 namespace {
 
 /* Write the unit file list and staged diagrams of <top>, then the cell unit and qsoc.fl. */
-bool publishUnit(const QString &outputDirectory, const QString &top, const QString &diagrams)
+bool publishUnit(
+    const QString         &outputDirectory,
+    const QString         &top,
+    const QString         &diagrams,
+    const QSocCellBinding &binding)
 {
     const QDir                                  unit(QDir(outputDirectory).filePath(top));
     std::vector<QSocGenerateArtifact::Artifact> artifacts{
@@ -58,7 +62,7 @@ bool publishUnit(const QString &outputDirectory, const QString &top, const QStri
     }
     QString error = QSocGenerateArtifact::write(std::move(artifacts), true, outputDirectory);
     if (error.isEmpty())
-        error = QSocCellLibrary::publish(outputDirectory);
+        error = QSocCellLibrary::publish(outputDirectory, binding);
     if (!error.isEmpty())
         QSocConsole::error() << error;
     return error.isEmpty();
@@ -473,6 +477,13 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
         QSocConsole::error() << "Invalid top-level output name:" << outputFileName;
         return false;
     }
+    const QSocCellBinding binding = QSocCellBinding::fromProject(projectManager, moduleManager);
+    for (const QString &error : binding.errors())
+        QSocConsole::error() << error;
+    if (!binding.isValid())
+        return false;
+    for (const QString &warning : binding.warnings())
+        QSocConsole::warn() << warning;
     const QString outputDirectory = projectManager->getOutputPath();
     const QString outputFilePath
         = QDir(outputDirectory).filePath(outputFileName + "/rtl/" + outputFileName + ".v");
@@ -489,7 +500,7 @@ bool QSocGenerateManager::generateVerilog(const QString &outputFileName, bool fo
     const auto  commitOutput = [&]() {
         out.flush();
         return commitTop(outputDirectory, outputFileName, text.toUtf8(), formatOutput)
-               && publishUnit(outputDirectory, outputFileName, diagrams.path());
+               && publishUnit(outputDirectory, outputFileName, diagrams.path(), binding);
     };
 
     /* Generate file header */

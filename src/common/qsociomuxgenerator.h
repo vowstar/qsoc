@@ -4,6 +4,7 @@
 #ifndef QSOCIOMUXGENERATOR_H
 #define QSOCIOMUXGENERATOR_H
 
+#include "common/qsoccelltable.h"
 #include "common/qsocmmiogenerator.h"
 
 #include <optional>
@@ -177,32 +178,6 @@ struct QSocPadSafePlan
 
     bool operator==(const QSocPadSafePlan &) const = default;
 };
-
-/**
- * @brief One port of a library cell, as the module library declares it.
- */
-struct QSocCellPort
-{
-    QString direction; /**< "in", "out" or "inout" */
-    quint32 width = 1;
-
-    QSocCellPort() = default;
-    /* Implicit on purpose: a port table reads `{"PAD", "inout"}`. */
-    // cppcheck-suppress noExplicitConstructor
-    QSocCellPort(const char *dir)
-        : direction(QString::fromUtf8(dir))
-    {}
-    // cppcheck-suppress noExplicitConstructor
-    QSocCellPort(const QString &dir, quint32 bits = 1)
-        : direction(dir)
-        , width(bits)
-    {}
-
-    bool operator==(const QSocCellPort &) const = default;
-};
-
-/** Port name to its declaration, from the module library. */
-using QSocCellPorts = QMap<QString, QSocCellPort>;
 
 /**
  * @brief The pad cell this design instantiates.

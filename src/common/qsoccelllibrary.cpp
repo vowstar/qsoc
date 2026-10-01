@@ -12,6 +12,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QMap>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -23,30 +24,65 @@ QString tr(const char *text)
     return QCoreApplication::translate("main", text);
 }
 
-QString writeCells(const QString &outputDirectory)
+QString writeCells(const QString &outputDirectory, const QSocCellBinding &binding)
 {
     const QDir                                  output(outputDirectory);
     std::vector<QSocGenerateArtifact::Artifact> artifacts;
     QByteArray                                  list;
     /* A cell file first, so the artifact root is the unit directory */
-    QList<QSocCellLibrary::Cell> cells = QSocCellLibrary::cells();
+    QList<QSocCellLibrary::Cell> cells = QSocCellLibrary::cells(binding);
     std::stable_partition(cells.begin(), cells.end(), [](const QSocCellLibrary::Cell &cell) {
         return !QSocCellLibrary::isRole(cell.file);
     });
     for (const QSocCellLibrary::Cell &cell : cells)
         artifacts.push_back({output.filePath(QSocCellLibrary::path(cell.file)), cell.text.toUtf8()});
-    for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells())
+    for (const QSocCellLibrary::Cell &cell : QSocCellLibrary::cells(binding))
         list += QSocCellLibrary::path(cell.file).toUtf8() + '\n';
     artifacts.push_back(
         {output.filePath(QSocCellLibrary::unit() + "/rtl/" + QSocCellLibrary::unit() + ".fl"),
          list});
+    QByteArray models;
+    for (const QSocCellLibrary::Cell &model : QSocCellLibrary::models(binding)) {
+        const QString path = QSocCellLibrary::unit() + "/model/" + model.file;
+        artifacts.push_back({output.filePath(path), model.text.toUtf8()});
+        models += path.toUtf8() + '\n';
+    }
+    if (!models.isEmpty()) {
+        artifacts.push_back(
+            {output.filePath(
+                 QSocCellLibrary::unit() + "/model/" + QSocCellLibrary::unit() + "_model.fl"),
+             models});
+    }
+    if (binding.isAsic()) {
+        artifacts.push_back(
+            {output.filePath(QSocCellLibrary::unit() + "/" + QSocCellLibrary::unit() + "_role.rpt"),
+             binding.report().toUtf8()});
+    }
     return QSocGenerateArtifact::write(std::move(artifacts), true, outputDirectory);
 }
 
-/* A role file: one module with its frozen ports and a generic body. */
+/* A role file: one module with its frozen ports, and a generic or asic body. */
 QSocCellLibrary::Cell role(
-    const QString &name, const QString &brief, const QString &ports, const QString &body)
+    const QSocCellBinding &binding,
+    const QString         &name,
+    const QString         &brief,
+    const QString         &ports,
+    const QString         &body)
 {
+    if (binding.isAsic()) {
+        return {
+            name + ".v",
+            QString(
+                "/**\n"
+                " * @file %1.v\n"
+                " * @brief %2\n"
+                " * @details %3\n"
+                " */\n\n"
+                "`timescale 1ns / 1ps\n\n"
+                "(* keep_hierarchy = \"yes\" *)\n"
+                "module %1%4endmodule\n")
+                .arg(name, brief, binding.detail(name), ports + binding.body(name))};
+    }
     return {
         name + ".v",
         QString(
@@ -61,7 +97,7 @@ QSocCellLibrary::Cell role(
             .arg(name, brief, ports + body)};
 }
 
-const char *const syncBody = R"v( #(
+const char *const syncPorts = R"v( #(
     parameter integer STAGES      = 2,    /**< Flop stages, at least 1 */
     parameter [0:0]   RESET_VALUE = 1'b0  /**< Every stage in reset */
 ) (
@@ -76,7 +112,9 @@ const char *const syncBody = R"v( #(
             qsoc_param_error_stages_below_one u_error ();
         end
     endgenerate
+)v";
 
+const char *const syncBody = R"v(
     /* The last stage may drive asynchronous resets */
     /* verilator lint_off SYNCASYNCNET */
     reg [STAGES-1:0] chain;
@@ -105,7 +143,9 @@ const char *const gatePorts = R"v( (
     input  wire test_en,  /**< Scan enable, ORed with en */
     output wire clk_out   /**< Gated clock */
 );
-    reg iq;
+)v";
+
+const char *const gateLatch = R"v(    reg iq;
 `ifndef SYNTHESIS
     initial iq = 1'b0;  /* sim-only init to block X fanout */
 `endif
@@ -223,22 +263,30 @@ private:
 
 } // namespace
 
-QList<QSocCellLibrary::Cell> QSocCellLibrary::roles()
+QList<QSocCellLibrary::Cell> QSocCellLibrary::roles(const QSocCellBinding &binding)
 {
     return {
-        role("qsoc_ck_buf", "Clock buffer role.", unaryPorts, "    assign clk_out = clk_in;\n"),
-        role("qsoc_ck_inv", "Clock inverter role.", unaryPorts, "    assign clk_out = ~clk_in;\n"),
+        role(binding, "qsoc_ck_buf", "Clock buffer role.", unaryPorts, "    assign clk_out = clk_in;\n"),
         role(
+            binding,
+            "qsoc_ck_inv",
+            "Clock inverter role.",
+            unaryPorts,
+            "    assign clk_out = ~clk_in;\n"),
+        role(
+            binding,
             "qsoc_ck_or2",
             "Two-input clock OR role.",
             binaryPorts,
             "    assign clk_out = clk_in0 | clk_in1;\n"),
         role(
+            binding,
             "qsoc_ck_xor2",
             "Two-input clock XOR role.",
             binaryPorts,
             "    assign clk_out = clk_in0 ^ clk_in1;\n"),
         role(
+            binding,
             "qsoc_ck_mux2",
             "Two-input clock multiplexer role.",
             " (\n"
@@ -249,26 +297,37 @@ QList<QSocCellLibrary::Cell> QSocCellLibrary::roles()
             ");\n",
             "    assign clk_out = clk_sel ? clk_in1 : clk_in0;\n"),
         role(
+            binding,
             "qsoc_ck_icg_pos",
             "Clock gate role: latch while clk is low, output low while disabled.",
             gatePorts,
-            "        if (!clk) iq = (test_en | en);\n"
-            "    end\n"
-            "    assign clk_out = iq & clk;\n"),
+            gateLatch
+                + QString(
+                    "        if (!clk) iq = (test_en | en);\n"
+                    "    end\n"
+                    "    assign clk_out = iq & clk;\n")),
         role(
+            binding,
             "qsoc_ck_icg_neg",
             "Clock gate role: latch while clk is high, output high while disabled.",
             gatePorts,
-            "        if (clk) iq = ~(test_en | en);\n"
-            "    end\n"
-            "    assign clk_out = iq | clk;\n"),
-        role("qsoc_sync", "Synchronizer role: a flop chain with asynchronous reset.", syncBody, ""),
+            gateLatch
+                + QString(
+                    "        if (clk) iq = ~(test_en | en);\n"
+                    "    end\n"
+                    "    assign clk_out = iq | clk;\n")),
+        role(
+            binding,
+            "qsoc_sync",
+            "Synchronizer role: a flop chain with asynchronous reset.",
+            syncPorts,
+            syncBody),
     };
 }
 
-QList<QSocCellLibrary::Cell> QSocCellLibrary::cells()
+QList<QSocCellLibrary::Cell> QSocCellLibrary::cells(const QSocCellBinding &binding)
 {
-    return roles()
+    return roles(binding)
            + QList<Cell>{
                {clockFile(), QSocClockPrimitive().generateCellVerilog()},
                {resetFile(), QSocResetPrimitive().generateCellVerilog()},
@@ -309,29 +368,73 @@ QString QSocCellLibrary::writeFileList(const QString &outputDirectory)
     return {};
 }
 
-QString QSocCellLibrary::publish(const QString &outputDirectory)
+QList<QSocCellLibrary::Cell> QSocCellLibrary::models(const QSocCellBinding &binding)
 {
-    const QString error = writeCells(outputDirectory);
+    QList<Cell> result;
+    for (const QSocCellBinding::Cell &cell : binding.cells())
+        result.append({cell.name + ".v", QSocCellBinding::model(cell)});
+    return result;
+}
+
+QString QSocCellLibrary::formalPath(const QString &file, const QSocCellBinding &binding)
+{
+    return binding.isAsic() && isRole(file) ? unit() + "/formal/role/" + file : path(file);
+}
+
+QString QSocCellLibrary::publish(const QString &outputDirectory, const QSocCellBinding &binding)
+{
+    const QString error = writeCells(outputDirectory, binding);
     return error.isEmpty() ? writeFileList(outputDirectory) : error;
 }
 
-QString QSocCellLibrary::publishFormal(const QString &outputDirectory)
+QString QSocCellLibrary::publishFormal(const QString &outputDirectory, const QSocCellBinding &binding)
 {
-    const QDir  output(outputDirectory);
-    const QDir  formal(output.filePath(unit() + "/formal"));
-    QStringList sources;
-    QByteArray  list;
-    for (const Cell &cell : cells()) {
-        sources.append(formal.relativeFilePath(output.filePath(path(cell.file))));
-        list += path(cell.file).toUtf8() + '\n';
-    }
-    const QMap<QString, QString>                files = QSocCellFormal::generate(sources);
+    const QDir                                  output(outputDirectory);
+    const QDir                                  formal(output.filePath(unit() + "/formal"));
     std::vector<QSocGenerateArtifact::Artifact> artifacts;
+    std::vector<QSocGenerateArtifact::Artifact> references;
+    QStringList                                 sources;
+    QByteArray                                  list;
+    for (const Cell &cell : cells()) {
+        const QString source = formalPath(cell.file, binding);
+        if (source != path(cell.file))
+            references.push_back({output.filePath(source), cell.text.toUtf8()});
+        sources.append(formal.relativeFilePath(output.filePath(source)));
+        list += source.toUtf8() + '\n';
+    }
+    const QMap<QString, QString> files = QSocCellFormal::generate(sources);
     for (auto file = files.cbegin(); file != files.cend(); ++file) {
         artifacts.push_back({formal.filePath(file.key()), file.value().toUtf8()});
         if (file.key().endsWith(".sv"))
             list += (unit() + "/formal/" + file.key()).toUtf8() + '\n';
     }
     artifacts.push_back({formal.filePath(unit() + "_formal.fl"), list});
+    artifacts.insert(artifacts.end(), references.begin(), references.end());
+    if (binding.isAsic() && !binding.roles().isEmpty()) {
+        const QDir             contract(formal.filePath("contract"));
+        QMap<QString, QString> generic;
+        QStringList            contractSources;
+        QByteArray             contractList;
+        for (const Cell &role : roles()) {
+            const QString name = QFileInfo(role.file).completeBaseName();
+            if (!binding.roles().contains(name))
+                continue;
+            generic.insert(name, role.text);
+            contractSources.append(contract.relativeFilePath(output.filePath(path(role.file))));
+            contractList += path(role.file).toUtf8() + '\n';
+        }
+        for (const Cell &model : models(binding)) {
+            const QString modelPath = unit() + "/model/" + model.file;
+            contractSources.append(contract.relativeFilePath(output.filePath(modelPath)));
+            contractList += modelPath.toUtf8() + '\n';
+        }
+        const QMap<QString, QString> checks = QSocCellFormal::contracts(generic, contractSources);
+        for (auto file = checks.cbegin(); file != checks.cend(); ++file) {
+            artifacts.push_back({contract.filePath(file.key()), file.value().toUtf8()});
+            if (file.key().endsWith(".sv"))
+                contractList += (unit() + "/formal/contract/" + file.key()).toUtf8() + '\n';
+        }
+        artifacts.push_back({contract.filePath(unit() + "_contract.fl"), contractList});
+    }
     return QSocGenerateArtifact::write(std::move(artifacts), true, outputDirectory);
 }
