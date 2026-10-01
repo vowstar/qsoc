@@ -1099,18 +1099,6 @@ QSocClockPrimitive::ClockControllerConfig QSocClockPrimitive::parseClockConfigUn
         }
     }
 
-    /* The auto divider (dynamic value without valid) has no ready handshake
-       to give; a requested ready would be a floating output port. */
-    for (const auto &target : config.targets) {
-        if (!target.div.value.isEmpty() && target.div.valid.isEmpty()
-            && !target.div.ready.isEmpty()) {
-            QSocConsole::error() << "Clock target" << target.name
-                                 << "divider ready requires valid; the auto divider has no "
-                                    "ready handshake";
-            config.valid = false;
-        }
-    }
-
     // One select port serves every target that names it, at the widest width
     QHash<QString, int> selectPortWidths;
     for (auto &target : config.targets) {
@@ -1369,116 +1357,16 @@ void QSocClockPrimitive::generateOutputAssignments(
 
         // Target-level DIV
         if (target.div.configured) {
-            // Validate width parameter
-            if (target.div.width <= 0) {
-                throw std::runtime_error(
-                    QString("Clock divider for target '%1' requires explicit width specification")
-                        .arg(target.name)
-                        .toStdString());
-            }
-
-            QString divOutput = QString("%1_div_out").arg(target.name);
-
-            // If STA guide exists, use a temporary name for DIV output
-            QString divTempOutput = !target.div.sta_guide.cell.isEmpty()
-                                        ? QString("%1_div_pre_sta").arg(target.name)
-                                        : divOutput;
-
-            out << "    wire " << divTempOutput << ";\n";
-
-            // Conditional divider module selection based on dynamic vs static configuration
-            if (target.div.valid.isEmpty() && !target.div.value.isEmpty()) {
-                // Use qsoc_clk_div_auto for dynamic dividers without explicit div_valid
-                out << "    qsoc_clk_div_auto #(\n";
-                out << "        .WIDTH(" << target.div.width << "),\n";
-                out << "        .DEFAULT_VAL(" << target.div.default_value << "),\n";
-                out << "        .CLOCK_DURING_RESET("
-                    << (target.div.clock_on_reset ? "1'b1" : "1'b0") << ")\n";
-                out << "    ) " << instanceName << "_div (\n";
-                out << "        .clk(" << currentSignal << "),\n";
-                out << "        .rst_n(" << (target.div.reset.isEmpty() ? "1'b1" : target.div.reset)
-                    << "),\n";
-                out << "        .en(" << (target.div.enable.isEmpty() ? "1'b1" : target.div.enable)
-                    << "),\n";
-
-                QString testEn = target.div.test_enable.isEmpty() ? "1'b0" : target.div.test_enable;
-                out << "        .test_en(" << testEn << "),\n";
-
-                // Auto module handles div value automatically (auto-sync & self-strobe div_valid)
-                out << "        .div(" << target.div.value << "),\n";
-
-                out << "        .clk_out(" << divTempOutput << "),\n";
-
-                if (!target.div.count.isEmpty()) {
-                    out << "        .count(" << target.div.count << ")\n";
-                } else {
-                    out << "        .count()\n";
-                }
-                out << "    );\n";
-            } else {
-                // Use original qsoc_clk_div for static dividers or when div_valid is explicitly specified
-                out << "    qsoc_clk_div #(\n";
-                out << "        .WIDTH(" << target.div.width << "),\n";
-                out << "        .DEFAULT_VAL(" << target.div.default_value << "),\n";
-                out << "        .CLOCK_DURING_RESET("
-                    << (target.div.clock_on_reset ? "1'b1" : "1'b0") << ")\n";
-                out << "    ) " << instanceName << "_div (\n";
-                out << "        .clk(" << currentSignal << "),\n";
-                out << "        .rst_n(" << (target.div.reset.isEmpty() ? "1'b1" : target.div.reset)
-                    << "),\n";
-                out << "        .en(" << (target.div.enable.isEmpty() ? "1'b1" : target.div.enable)
-                    << "),\n";
-
-                QString testEn = target.div.test_enable.isEmpty() ? "1'b0" : target.div.test_enable;
-                out << "        .test_en(" << testEn << "),\n";
-
-                // Dynamic or static division value
-                if (!target.div.value.isEmpty()) {
-                    // Dynamic mode: connect to value signal
-                    out << "        .div(" << target.div.value << "),\n";
-                } else {
-                    // Static mode: tie to default constant
-                    out << "        .div(" << target.div.width << "'d" << target.div.default_value
-                        << "),\n";
-                }
-
-                // Static mode: div_valid = 1'b0 (no dynamic loading)
-                // Dynamic mode: div_valid = specified signal
-                if (target.div.value.isEmpty()) {
-                    out << "        .div_valid(1'b0),\n";
-                } else {
-                    out << "        .div_valid(" << target.div.valid << "),\n";
-                }
-
-                if (!target.div.ready.isEmpty()) {
-                    out << "        .div_ready(" << target.div.ready << "),\n";
-                } else {
-                    out << "        .div_ready(),\n";
-                }
-
-                out << "        .clk_out(" << divTempOutput << "),\n";
-
-                if (!target.div.count.isEmpty()) {
-                    out << "        .count(" << target.div.count << ")\n";
-                } else {
-                    out << "        .count()\n";
-                }
-                out << "    );\n";
-            }
-
-            // DIV sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!target.div.sta_guide.cell.isEmpty()) {
-                out << "    wire " << divOutput << ";\n"; // Final output wire
-                QString divStaInstanceName = target.div.sta_guide.instance.isEmpty()
-                                                 ? QString("u_%1_div_sta").arg(target.name)
-                                                 : target.div.sta_guide.instance;
-                out << "    " << target.div.sta_guide.cell << " " << divStaInstanceName << " (\n";
-                out << "        ." << target.div.sta_guide.in << "(" << divTempOutput << "),\n";
-                out << "        ." << target.div.sta_guide.out << "(" << divOutput << ")\n";
-                out << "    );\n";
-            }
-
-            currentSignal = divOutput; // Always use the consistent final name
+            generateDividerInstance(
+                target.div,
+                QString("target '%1'").arg(target.name),
+                instanceName + "_div",
+                currentSignal,
+                QString("%1_div_out").arg(target.name),
+                QString("%1_div_pre_sta").arg(target.name),
+                QString("u_%1_div_sta").arg(target.name),
+                out);
+            currentSignal = QString("%1_div_out").arg(target.name);
         }
 
         // Target-level INV
@@ -1516,6 +1404,59 @@ void QSocClockPrimitive::generateOutputAssignments(
     }
 
     out << "\n";
+}
+
+void QSocClockPrimitive::generateDividerInstance(
+    const ClockDivider &div,
+    const QString      &owner,
+    const QString      &instance,
+    const QString      &input,
+    const QString      &output,
+    const QString      &preSta,
+    const QString      &staInstance,
+    QTextStream        &out)
+{
+    if (div.width <= 0) {
+        throw std::runtime_error(
+            QString("Clock divider for %1 requires explicit width specification")
+                .arg(owner)
+                .toStdString());
+    }
+
+    const bool    dynamic    = !div.value.isEmpty();
+    const bool    autoUpdate = dynamic && div.valid.isEmpty();
+    const bool    staGuide   = !div.sta_guide.cell.isEmpty();
+    const QString divOut     = staGuide ? preSta : output;
+
+    out << "    wire " << divOut << ";\n";
+    out << "    qsoc_clk_div #(\n";
+    out << "        .WIDTH(" << div.width << "),\n";
+    out << "        .DEFAULT_VAL(" << div.default_value << "),\n";
+    out << "        .CLOCK_DURING_RESET(" << (div.clock_on_reset ? "1'b1" : "1'b0") << "),\n";
+    out << "        .AUTO_UPDATE(" << (autoUpdate ? "1'b1" : "1'b0") << ")\n";
+    out << "    ) " << instance << " (\n";
+    out << "        .clk(" << input << "),\n";
+    out << "        .rst_n(" << (div.reset.isEmpty() ? "1'b1" : div.reset) << "),\n";
+    out << "        .en(" << (div.enable.isEmpty() ? "1'b1" : div.enable) << "),\n";
+    out << "        .test_en(" << (div.test_enable.isEmpty() ? "1'b0" : div.test_enable) << "),\n";
+    if (dynamic)
+        out << "        .div(" << div.value << "),\n";
+    else
+        out << "        .div(" << div.width << "'d" << div.default_value << "),\n";
+    out << "        .div_valid(" << (dynamic && !autoUpdate ? div.valid : "1'b0") << "),\n";
+    out << "        .div_ready(" << div.ready << "),\n";
+    out << "        .clk_out(" << divOut << "),\n";
+    out << "        .count(" << div.count << ")\n";
+    out << "    );\n";
+
+    if (staGuide) {
+        out << "    wire " << output << ";\n";
+        out << "    " << div.sta_guide.cell << " "
+            << (div.sta_guide.instance.isEmpty() ? staInstance : div.sta_guide.instance) << " (\n";
+        out << "        ." << div.sta_guide.in << "(" << preSta << "),\n";
+        out << "        ." << div.sta_guide.out << "(" << output << ")\n";
+        out << "    );\n";
+    }
 }
 
 void QSocClockPrimitive::generateClockInstance(
@@ -1587,82 +1528,16 @@ void QSocClockPrimitive::generateClockInstance(
 
         // Step 2: Link-level divider
         if (link.div.default_value > 1 || !link.div.value.isEmpty()) {
-            // Validate width parameter
-            if (link.div.width <= 0) {
-                throw std::runtime_error(
-                    QString("Clock divider for link '%1' requires explicit width specification")
-                        .arg(wireName)
-                        .toStdString());
-            }
-
-            QString divWire = wireName + "_prediv";
-
-            // If STA guide exists, use a temporary name for DIV output
-            QString divTempWire = !link.div.sta_guide.cell.isEmpty() ? wireName + "_prediv_pre_sta"
-                                                                     : divWire;
-
-            out << "    wire " << divTempWire << ";\n";
-            out << "    qsoc_clk_div #(\n";
-            out << "        .WIDTH(" << link.div.width << "),\n";
-            out << "        .DEFAULT_VAL(" << link.div.default_value << "),\n";
-            out << "        .CLOCK_DURING_RESET(" << (link.div.clock_on_reset ? "1'b1" : "1'b0")
-                << ")\n";
-            out << "    ) " << instanceName << "_div (\n";
-            out << "        .clk(" << currentWire << "),\n";
-            out << "        .rst_n(" << (link.div.reset.isEmpty() ? "1'b1" : link.div.reset)
-                << "),\n";
-            out << "        .en(" << (link.div.enable.isEmpty() ? "1'b1" : link.div.enable)
-                << "),\n";
-
-            QString testEn = link.div.test_enable.isEmpty() ? "1'b0" : link.div.test_enable;
-            out << "        .test_en(" << testEn << "),\n";
-
-            // Dynamic or static division value -  design
-            if (!link.div.value.isEmpty()) {
-                // Dynamic mode: connect to value signal
-                out << "        .div(" << link.div.value << "),\n";
-            } else {
-                // Static mode: tie to default constant
-                out << "        .div(" << link.div.width << "'d" << link.div.default_value
-                    << "),\n";
-            }
-
-            // Static mode: div_valid = 1'b0 (no dynamic loading)
-            // Dynamic mode: div_valid = specified signal
-            if (link.div.value.isEmpty()) {
-                out << "        .div_valid(1'b0),\n";
-            } else {
-                out << "        .div_valid(" << link.div.valid << "),\n";
-            }
-
-            if (!link.div.ready.isEmpty()) {
-                out << "        .div_ready(" << link.div.ready << "),\n";
-            } else {
-                out << "        .div_ready(),\n";
-            }
-
-            out << "        .clk_out(" << divTempWire << "),\n";
-
-            if (!link.div.count.isEmpty()) {
-                out << "        .count(" << link.div.count << ")\n";
-            } else {
-                out << "        .count()\n";
-            }
-            out << "    );\n";
-
-            // DIV sta_guide (if specified) - serial insertion, keeps final signal name consistent
-            if (!link.div.sta_guide.cell.isEmpty()) {
-                out << "    wire " << divWire << ";\n"; // Final output wire
-                QString divStaInstanceName = link.div.sta_guide.instance.isEmpty()
-                                                 ? instanceName + "_div_sta"
-                                                 : link.div.sta_guide.instance;
-                out << "    " << link.div.sta_guide.cell << " " << divStaInstanceName << " (\n";
-                out << "        ." << link.div.sta_guide.in << "(" << divTempWire << "),\n";
-                out << "        ." << link.div.sta_guide.out << "(" << divWire << ")\n";
-                out << "    );\n";
-            }
-
-            currentWire = divWire; // Always use the consistent final name
+            generateDividerInstance(
+                link.div,
+                QString("link '%1'").arg(wireName),
+                instanceName + "_div",
+                currentWire,
+                wireName + "_prediv",
+                wireName + "_prediv_pre_sta",
+                instanceName + "_div_sta",
+                out);
+            currentWire = wireName + "_prediv";
         }
 
         // Step 3: Link-level inverter
@@ -1861,7 +1736,6 @@ QStringList QSocClockPrimitive::getRequiredTemplateCells()
         "qsoc_tc_clk_mux2",
         "qsoc_tc_clk_xor2",
         "qsoc_clk_div",
-        "qsoc_clk_div_auto",
         "qsoc_clk_or_tree",
         "qsoc_clk_mux_gf",
         "qsoc_clk_mux_raw"};
@@ -2053,8 +1927,10 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    parameter integer WIDTH = 4,           /**< Division value width */\n";
         out << "    parameter integer DEFAULT_VAL = 0,     /**< Default divider value after reset "
                "*/\n";
-        out << "    parameter CLOCK_DURING_RESET = 1'b0          /**< Enable clock during reset "
+        out << "    parameter CLOCK_DURING_RESET = 1'b0,         /**< Enable clock during reset "
                "*/\n";
+        out << "    parameter AUTO_UPDATE = 1'b0                 /**< Load div on change, ignore "
+               "div_valid */\n";
         out << ")(\n";
         out << "    input  wire                clk,        /**< Clock input */\n";
         out << "    input  wire                rst_n,      /**< Reset (active low) */\n";
@@ -2062,7 +1938,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    input  wire                test_en,    /**< Test mode enable */\n";
         out << "    input  wire [WIDTH-1:0]    div,        /**< Division value */\n";
         out << "    input  wire                div_valid,  /**< Division value valid */\n";
-        out << "    output reg                 div_ready,  /**< Division ready */\n";
+        out << "    output reg                 div_ready,  /**< Division loaded */\n";
         out << "    output wire                clk_out,    /**< Clock output */\n";
         out << "    output wire [WIDTH-1:0]    count       /**< Cycle counter */\n";
         out << ");\n";
@@ -2122,9 +1998,43 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "    localparam use_odd_division_reset_value = DEFAULT_VAL[0];\n";
         out << "    localparam clk_div_bypass_en_reset_value = (DEFAULT_VAL < 2) ? 1'b1 : 1'b0;\n";
         out << "\n";
+        out << "    /* Load request: div_valid, or a two-flop synchronized div that differs\n";
+        out << "     * from div_q. The request is a level, so a change arriving while a load\n";
+        out << "     * is in progress is taken once the divider returns to IDLE. */\n";
+        out << "    wire [WIDTH-1:0] div_src;\n";
+        out << "    wire             load_req;\n";
+        out << "\n";
+        out << "    generate\n";
+        out << "        if (AUTO_UPDATE) begin : g_auto\n";
+        out << "            reg  [WIDTH-1:0] div_sync_ff1, div_sync_ff2;\n";
+        out << "            reg              load_req_q;\n";
+        out << "            wire [WIDTH-1:0] div_sync_normalized =\n";
+        out << "                (div_sync_ff2 != {WIDTH{1'b0}}) ? div_sync_ff2 : "
+               "{{(WIDTH-1){1'b0}}, 1'b1};\n";
+        out << "\n";
+        out << "            always @(posedge clk or negedge rst_n) begin\n";
+        out << "                if (!rst_n) begin\n";
+        out << "                    div_sync_ff1 <= div_reset_value;\n";
+        out << "                    div_sync_ff2 <= div_reset_value;\n";
+        out << "                    load_req_q   <= 1'b0;\n";
+        out << "                end else begin\n";
+        out << "                    div_sync_ff1 <= div;\n";
+        out << "                    div_sync_ff2 <= div_sync_ff1;\n";
+        out << "                    load_req_q   <= (div_sync_normalized != div_q);\n";
+        out << "                end\n";
+        out << "            end\n";
+        out << "\n";
+        out << "            assign div_src  = div_sync_ff2;\n";
+        out << "            assign load_req = load_req_q;\n";
+        out << "        end else begin : g_explicit\n";
+        out << "            assign div_src  = div;\n";
+        out << "            assign load_req = div_valid;\n";
+        out << "        end\n";
+        out << "    endgenerate\n";
+        out << "\n";
         out << "    /* Normalize div input - avoid div=0 issues */\n";
-        out << "    assign div_i_normalized = (div != {WIDTH{1'b0}}) ? div : {{(WIDTH-1){1'b0}}, "
-               "1'b1};\n";
+        out << "    assign div_i_normalized = (div_src != {WIDTH{1'b0}}) ? div_src : "
+               "{{(WIDTH-1){1'b0}}, 1'b1};\n";
         out << "\n";
         out << "    /* Divider Load FSM */\n";
         out << "    always @(*) begin\n";
@@ -2143,7 +2053,7 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "            IDLE: begin\n";
         out << "                gate_en_d = 1'b1;\n";
         out << "                toggle_ffs_en = 1'b1;\n";
-        out << "                if (div_valid) begin\n";
+        out << "                if (load_req) begin\n";
         out << "                    if (div_i_normalized == div_q) begin\n";
         out << "                        div_ready = 1'b1;\n";
         out << "                    end else begin\n";
@@ -2324,111 +2234,6 @@ QString QSocClockPrimitive::generateTemplateCellDefinition(const QString &cellNa
         out << "        .test_en(test_en),\n";
         out << "        .rst_n(rst_n),\n";
         out << "        .clk_out(clk_out)\n";
-        out << "    );\n";
-        out << "\n";
-        out << "endmodule\n";
-
-    } else if (cellName == "qsoc_clk_div_auto") {
-        out << "/**\n";
-        out << " * @brief Configurable clock divider with automatic handshake control\n";
-        out << " *\n";
-        out << " * @details Auto-sync & self-strobe div_valid implementation with CDC.\n";
-        out << " *          Automatically handles division value loading with last-change-wins "
-               "semantics.\n";
-        out << " *          Supports both odd and even division with 50% duty cycle output.\n";
-        out << " */\n";
-        out << "module qsoc_clk_div_auto #(\n";
-        out << "    parameter integer WIDTH = 4,           /**< Division value width */\n";
-        out << "    parameter integer DEFAULT_VAL = 0,     /**< Default divider value after reset "
-               "*/\n";
-        out << "    parameter CLOCK_DURING_RESET = 1'b0          /**< Enable clock during reset "
-               "*/\n";
-        out << ")(\n";
-        out << "    input  wire                clk,        /**< Clock input */\n";
-        out << "    input  wire                rst_n,      /**< Reset (active low) */\n";
-        out << "    input  wire                en,         /**< Enable */\n";
-        out << "    input  wire                test_en,    /**< Test mode enable */\n";
-        out << "    input  wire [WIDTH-1:0]    div,        /**< Division value (auto-sync & "
-               "self-strobe div_valid) */\n";
-        out << "    output wire                clk_out,    /**< Clock output */\n";
-        out << "    output wire [WIDTH-1:0]    count       /**< Cycle counter */\n";
-        out << ");\n";
-        out << "\n";
-        out << "    /* Parameter validation - equivalent to $clog2 check for Verilog 2005 */\n";
-        out << "    function integer clog2;\n";
-        out << "        input integer value;\n";
-        out << "        begin\n";
-        out << "            clog2 = 0;\n";
-        out << "            while ((1 << clog2) < value) begin\n";
-        out << "                clog2 = clog2 + 1;\n";
-        out << "            end\n";
-        out << "        end\n";
-        out << "    endfunction\n";
-        out << "    \n";
-        out << "    initial begin\n";
-        out << "        if (clog2(DEFAULT_VAL + 1) > WIDTH) begin\n";
-        out << "            $display(\"ERROR: Default divider value %0d is not representable with "
-               "the configured div value width of %0d bits.\", DEFAULT_VAL, WIDTH);\n";
-        out << "            $finish;\n";
-        out << "        end\n";
-        out << "    end\n";
-        out << "\n";
-        out << "    /* Reset value calculation */\n";
-        out << "    localparam [WIDTH-1:0] div_reset_value =\n";
-        out << "        (DEFAULT_VAL != 0) ? DEFAULT_VAL : {{(WIDTH-1){1'b0}}, 1'b1};\n";
-        out << "    \n";
-        out << "    /* CDC synchronizer for div value with last-change-wins semantics */\n";
-        out << "    reg [WIDTH-1:0] div_sync_ff1, div_sync_ff2;\n";
-        out << "    reg div_change_detect_ff1, div_change_detect_ff2;\n";
-        out << "    wire div_changed_sync;\n";
-        out << "    wire div_valid_internal;\n";
-        out << "    \n";
-        out << "    /* One-flop delay for change detection to align with div_sync_ff2 */\n";
-        out << "    always @(posedge clk or negedge rst_n) begin\n";
-        out << "        if (!rst_n) begin\n";
-        out << "            div_change_detect_ff1 <= 1'b0;\n";
-        out << "            div_change_detect_ff2 <= 1'b0;\n";
-        out << "        end else begin\n";
-        out << "            /* Delay div_changed_sync by one clock to align with div_sync_ff2 "
-               "update */\n";
-        out << "            div_change_detect_ff1 <= div_changed_sync;\n";
-        out << "            div_change_detect_ff2 <= div_change_detect_ff1;\n";
-        out << "        end\n";
-        out << "    end\n";
-        out << "    \n";
-        out << "    /* Generate div_valid pulse when div_sync_ff2 is stable and changed */\n";
-        out << "    assign div_valid_internal = div_change_detect_ff2;\n";
-        out << "    \n";
-        out << "    /* Synchronized div value register */\n";
-        out << "    always @(posedge clk or negedge rst_n) begin\n";
-        out << "        if (!rst_n) begin\n";
-        out << "            div_sync_ff1 <= div_reset_value;\n";
-        out << "            div_sync_ff2 <= div_reset_value;\n";
-        out << "        end else begin\n";
-        out << "            /* Last-change-wins: always capture the latest div value */\n";
-        out << "            div_sync_ff1 <= div;\n";
-        out << "            div_sync_ff2 <= div_sync_ff1;\n";
-        out << "        end\n";
-        out << "    end\n";
-        out << "    \n";
-        out << "    /* Detect changes in synchronized div value - aligned with div_sync_ff2 */\n";
-        out << "    assign div_changed_sync = (div_sync_ff2 != div_sync_ff1);\n";
-        out << "    \n";
-        out << "    /* Instantiate core divider with automatic handshake */\n";
-        out << "    qsoc_clk_div #(\n";
-        out << "        .WIDTH(WIDTH),\n";
-        out << "        .DEFAULT_VAL(DEFAULT_VAL),\n";
-        out << "        .CLOCK_DURING_RESET(CLOCK_DURING_RESET)\n";
-        out << "    ) u_core_div (\n";
-        out << "        .clk(clk),\n";
-        out << "        .rst_n(rst_n),\n";
-        out << "        .en(en),\n";
-        out << "        .test_en(test_en),\n";
-        out << "        .div(div_sync_ff2),\n";
-        out << "        .div_valid(div_valid_internal),\n";
-        out << "        .div_ready(), // Unconnected - auto-handled\n";
-        out << "        .clk_out(clk_out),\n";
-        out << "        .count(count)\n";
         out << "    );\n";
         out << "\n";
         out << "endmodule\n";

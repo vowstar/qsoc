@@ -4422,9 +4422,8 @@ clock:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        // Should use original qsoc_clk_div (not qsoc_clk_div_auto) for static dividers
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
-        QVERIFY(!verilogContent.contains("qsoc_clk_div_auto"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".AUTO_UPDATE(1'b0)"));
         // Static mode: div_valid should be 1'b0 (no dynamic loading needed)
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_valid(1'b0)"));
         // Static mode: div value same as DEFAULT_VAL parameter
@@ -4433,9 +4432,8 @@ clock:
         QVERIFY(verifyClockCellFileComplete());
     }
 
-    void test_dynamic_divider_without_valid_uses_qsoc_clk_div_auto()
+    void test_dynamic_divider_without_valid_uses_auto_update()
     {
-        // Test dynamic divider without div_valid should use qsoc_clk_div_auto
         QString netlistContent = R"(
 port:
   clk_in:
@@ -4493,13 +4491,84 @@ clock:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        // Should use qsoc_clk_div_auto for dynamic dividers without explicit div_valid
-        QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div_auto"));
-        QVERIFY(
-            !verilogContent.contains("qsoc_clk_div_auto") || !verilogContent.contains("div_valid"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".AUTO_UPDATE(1'b1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_valid(1'b0)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(div_value)"));
 
         QVERIFY(verifyClockCellFileComplete());
+    }
+
+    void test_link_divider_without_valid_uses_auto_update()
+    {
+        QString netlistContent = R"(
+port:
+  clk_a:
+    direction: input
+    type: logic
+  clk_b:
+    direction: input
+    type: logic
+  sel:
+    direction: input
+    type: logic
+  ratio:
+    direction: input
+    type: logic[3:0]
+  rdy:
+    direction: output
+    type: logic
+  clk_out:
+    direction: output
+    type: logic
+
+instance: {}
+
+net: {}
+
+clock:
+  - name: link_auto_ctrl
+    clock: clk_a
+    input:
+      clk_a:
+        freq: 200MHz
+      clk_b:
+        freq: 100MHz
+    target:
+      clk_out:
+        freq: 50MHz
+        select: sel
+        link:
+          clk_a:
+            div:
+              default: 4
+              width: 4
+              value: ratio
+              ready: rdy
+          clk_b:
+)";
+
+        QString netlistPath = createTempFile("test_link_auto.soc_net", netlistContent);
+        QVERIFY(!netlistPath.isEmpty());
+
+        {
+            QSocCliWorker socCliWorker;
+            QStringList   args;
+            args << "qsoc" << "generate" << "verilog" << "-d" << projectManager.getCurrentPath()
+                 << netlistPath;
+
+            socCliWorker.setup(args, false);
+            socCliWorker.run();
+        }
+
+        QFile verilogFile(QDir(projectManager.getOutputPath()).filePath("test_link_auto.v"));
+        QVERIFY(verilogFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString verilogContent = verilogFile.readAll();
+
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".AUTO_UPDATE(1'b1)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(ratio)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_valid(1'b0)"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_ready(rdy)"));
+        QVERIFY(!verilogContent.contains(".div_valid()"));
     }
 
     void test_dynamic_divider_with_valid_uses_original_qsoc_clk_div()
@@ -4570,9 +4639,8 @@ clock:
         QString verilogContent = verilogFile.readAll();
         verilogFile.close();
 
-        // Should use original qsoc_clk_div when div_valid is explicitly specified
         QVERIFY(verifyVerilogContentNormalized(verilogContent, "qsoc_clk_div"));
-        QVERIFY(!verilogContent.contains("qsoc_clk_div_auto"));
+        QVERIFY(verifyVerilogContentNormalized(verilogContent, ".AUTO_UPDATE(1'b0)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_valid(div_valid)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div_ready(div_ready)"));
         QVERIFY(verifyVerilogContentNormalized(verilogContent, ".div(div_value)"));
@@ -5041,15 +5109,6 @@ clock:
                                                 "              width: 4\n"
                                                 "              reset: rst_n\n")
                                          << "exceeds maximum value";
-        QTest::newRow("auto-ready") << "rej_div_autoready"
-                                    << QString(
-                                           "        div:\n"
-                                           "          default: 2\n"
-                                           "          width: 4\n"
-                                           "          value: ratio\n"
-                                           "          ready: rdy\n"
-                                           "          reset: rst_n\n")
-                                    << "divider ready requires valid";
     }
 
     void test_divider_width_contracts_are_rejected()

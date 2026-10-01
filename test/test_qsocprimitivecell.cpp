@@ -47,6 +47,27 @@ bool run(
     return finished && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
 }
 
+/* Two div changes 12 ns apart: the second lands while the first is loading. */
+const char *const backToBackBench = R"(`timescale 1ns / 1ps
+module tb;
+    reg        clk   = 1'b0;
+    reg        rst_n = 1'b0;
+    reg  [3:0] div   = 4'd4;
+    wire       clk_out;
+    always #1 clk = ~clk;
+    qsoc_clk_div #(.WIDTH(4), .DEFAULT_VAL(4), .AUTO_UPDATE(1'b1)) dut (
+        .clk(clk), .rst_n(rst_n), .en(1'b1), .test_en(1'b0), .div(div),
+        .div_valid(1'b0), .div_ready(), .clk_out(clk_out), .count());
+    initial begin
+        #10 rst_n = 1'b1;
+        #40 div   = 4'd8;
+        #12 div   = 4'd3;
+        #400 $display("div_q=%0d", dut.div_q);
+        $finish;
+    end
+endmodule
+)";
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -79,6 +100,25 @@ private slots:
                   : QStringList{"-q", "-p", "read_verilog " + cell + "; hierarchy; proc"};
         QString log;
         QVERIFY2(run(tool, args, dir.path(), &log), qPrintable(log));
+    }
+
+    /* The last div written is the one loaded, even when it arrives mid-load. */
+    void autoUpdateKeepsLastChange()
+    {
+        for (const char *tool : {"iverilog", "vvp"}) {
+            if (QStandardPaths::findExecutable(tool).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(tool);
+        }
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QVERIFY(save(dir.filePath("clock_cell.v"), cellText("clock_cell.v")));
+        QVERIFY(save(dir.filePath("tb.v"), backToBackBench));
+        QString log;
+        QVERIFY2(
+            run("iverilog", {"-g2005", "-o", "sim", "tb.v", "clock_cell.v"}, dir.path(), &log),
+            qPrintable(log));
+        QVERIFY2(run("vvp", {"-n", "sim"}, dir.path(), &log), qPrintable(log));
+        QVERIFY2(log.contains("div_q=3"), qPrintable(log));
     }
 };
 

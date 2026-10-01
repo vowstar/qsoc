@@ -354,11 +354,11 @@ chain construction and mixed-edge timing closure.
     [Auto],
     [present],
     [absent],
-    [Automatic handshake control via `qsoc_clk_div_auto`],
+    [`qsoc_clk_div` with `AUTO_UPDATE` set: loads each new `value` itself],
     [Dynamic],
     [present],
     [present],
-    [Manual handshake control via `qsoc_clk_div`],
+    [`qsoc_clk_div` loads `value` when `valid` is high],
   )],
   caption: [DIVIDER MODE SELECTION],
   kind: table,
@@ -387,8 +387,8 @@ chain construction and mixed-edge timing closure.
     [value], [No], [Dynamic division input signal (empty = static mode)],
     [valid],
     [],
-    [Division value valid strobe signal (auto-generated for static mode)],
-    [ready], [No], [Division ready output status signal],
+    [Division value valid signal. Omit it for auto mode],
+    [ready], [No], [High when the requested value is loaded or already in use],
     [count], [No], [Division counter output for debugging],
   )],
   caption: [DIVIDER CONFIGURATION PARAMETERS],
@@ -462,7 +462,13 @@ qsoc_clk_div #(
 
 === Auto Mode (Simplified Dynamic Control)
 <soc-net-clock-divider-auto>
-When `value` is specified but `valid` is omitted, the divider automatically uses `qsoc_clk_div_auto` for simplified control:
+When `value` is specified but `valid` is omitted, the divider sets `AUTO_UPDATE`.
+It synchronizes `value` through two flops and requests a load whenever the
+synchronized value differs from the current ratio. The request stays active
+until the load happens, so the last value written is always the one loaded,
+even when it changes during a previous load. `div_valid` is tied low and
+ignored. `ready` may still be connected. Target-level and link-level dividers
+behave the same.
 
 ```yaml
 # Auto mode divider example
@@ -472,22 +478,24 @@ target:
     div:
       default: 4                    # Reset default: 800MHz / 4 = 200MHz
       width: 4                      # 4-bit divider (max value 15)
-      value: gpu_div_ratio          # Runtime division control (auto-sync & self-strobe div_valid)
+      value: gpu_div_ratio          # Runtime division control, loaded on change
       reset: rst_n
     link:
       pll_800m:                     # Variable: 800MHz / gpu_div_ratio
 ```
 
-Generated Verilog uses the automatic handshake module:
+Generated Verilog:
 ```verilog
-qsoc_clk_div_auto #(
+qsoc_clk_div #(
     .WIDTH(4),
-    .DEFAULT_VAL(4)
+    .DEFAULT_VAL(4),
+    .CLOCK_DURING_RESET(1'b0),
+    .AUTO_UPDATE(1'b1)
 ) u_gpu_clk_target_div (
     .clk(source_clock),
     .rst_n(rst_n),
-    .div(gpu_div_ratio),          // Auto-sync & self-strobe div_valid
-    // Note: No div_valid/div_ready ports - handled internally
+    .div(gpu_div_ratio),          // Synchronized inside the cell
+    .div_valid(1'b0),             // Ignored in auto mode
     // ...
 );
 ```
@@ -824,8 +832,7 @@ QSoC generates these templates:
 - `qsoc_tc_clk_or2` - Two-input clock OR
 - `qsoc_tc_clk_mux2` - Two-input clock multiplexer
 - `qsoc_tc_clk_xor2` - Two-input clock XOR
-- `qsoc_clk_div` - Clock divider with FSM control
-- `qsoc_clk_div_auto` - Auto-width clock divider
+- `qsoc_clk_div` - Clock divider with FSM control, explicit or automatic update
 - `qsoc_clk_or_tree` - Parameterized clock OR tree
 - `qsoc_clk_mux_gf` - Glitch-free clock multiplexer
 - `qsoc_clk_mux_raw` - Parameterized clock multiplexer
@@ -929,13 +936,15 @@ module clkctrl (
     qsoc_clk_div #(
         .WIDTH(8),
         .DEFAULT_VAL(4),
-        .CLOCK_DURING_RESET(1'b0)
+        .CLOCK_DURING_RESET(1'b0),
+        .AUTO_UPDATE(1'b0)
     ) u_uart_clk_target_div (
         .clk(pll_800m),
         .rst_n(rst_n),
         .en(1'b1),
         .test_en(test_en),
         .div(8'd4),                     // Static mode: tied to constant
+        .div_valid(1'b0),
         .div_ready(),
         .clk_out(clk_uart_clk_from_pll_800m),
         .count()

@@ -289,6 +289,17 @@ private:
     void generateClockInstance(
         const ClockLink &link, const QString &targetName, int linkIndex, QTextStream &out);
 
+    /* Emit one qsoc_clk_div driving `output`, with its optional STA guide. */
+    void generateDividerInstance(
+        const ClockDivider &div,
+        const QString      &owner,
+        const QString      &instance,
+        const QString      &input,
+        const QString      &output,
+        const QString      &preSta,
+        const QString      &staInstance,
+        QTextStream        &out);
+
     /**
      * @brief Generate clock multiplexer instance
      * @param target Clock target with multiplexer
