@@ -143,9 +143,9 @@ bool QSlangDriver::parseArgsImpl(const QString &args, bool silent, QString *diag
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();
-        driver.reportMacros();
-        if (!silent) {
-            QSocConsole::infoPlain() << slang::OS::capturedStdout.c_str();
+        if (!silent && QSocConsole::level() >= QSocConsole::Level::Debug) {
+            driver.reportMacros();
+            QSocConsole::debugPlain() << slang::OS::capturedStdout.c_str();
         }
         slang::OS::capturedStdout.clear();
         slang::OS::capturedStderr.clear();

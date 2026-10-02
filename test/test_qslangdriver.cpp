@@ -45,6 +45,7 @@ private slots:
     void parseFileList_emptyList();
     void parseFileList_failureClearsState();
     void parseFileList_unknownModulePolicy();
+    void parseFileList_macroListOnlyAtDebug();
 
     /* Test utility functions */
     void contentCleanComment_singleLine();
@@ -339,6 +340,47 @@ void Test::parseFileList_unknownModulePolicy()
     QVERIFY(!stubFile.isEmpty());
     QVERIFY(driver.parseFileList(
         "", {topFile, stubFile}, {}, {}, QSlangDriver::UnknownModulePolicy::Reject));
+}
+
+void Test::parseFileList_macroListOnlyAtDebug()
+{
+    const QString verilogFile = createTemporaryVerilogFile(R"(
+        module macro_quiet_top(input wire clk, output reg q);
+            always @(posedge clk) q <= ~q;
+        endmodule
+    )");
+    QVERIFY(!verilogFile.isEmpty());
+
+    const QSocConsole::Level savedLevel = QSocConsole::level();
+    const QStringList        defines    = {"QSOC_MACRO_PROBE=1"};
+    QSlangDriver             driver;
+    QSocTestCapture          capture;
+
+    QSocConsole::setLevel(QSocConsole::Level::Info);
+    QVERIFY(driver.parseFileList(QString(), {verilogFile}, defines, {}));
+    const QString infoText = capture.text();
+    QVERIFY2(infoText.contains("macro_quiet_top"), qPrintable(infoText));
+    QVERIFY2(!infoText.contains("SV_COV_"), qPrintable(infoText));
+    QVERIFY2(!infoText.contains("__slang_major__"), qPrintable(infoText));
+    QVERIFY2(!infoText.contains("QSOC_MACRO_PROBE"), qPrintable(infoText));
+
+    capture.clear();
+    QSocConsole::setLevel(QSocConsole::Level::Debug);
+    QVERIFY(driver.parseFileList(QString(), {verilogFile}, defines, {}));
+    const QString debugText = capture.text();
+    QSocConsole::setLevel(savedLevel);
+    QVERIFY(debugText.contains("SV_COV_"));
+    QVERIFY(debugText.contains("__slang_major__"));
+    QVERIFY(debugText.contains("QSOC_MACRO_PROBE"));
+
+    capture.clear();
+    QSocConsole::setLevel(QSocConsole::Level::Debug);
+    const bool silentResult
+        = driver.parseArgs(QString("slang --single-unit %1").arg(verilogFile), true);
+    const QString silentText = capture.text();
+    QSocConsole::setLevel(savedLevel);
+    QVERIFY(silentResult);
+    QVERIFY2(silentText.isEmpty(), qPrintable(silentText));
 }
 
 void Test::contentCleanComment_singleLine()
