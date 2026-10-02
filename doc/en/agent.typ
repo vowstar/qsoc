@@ -393,10 +393,6 @@ you left off on return. It is generated once per away period using your
 configured model (`agent.away_summary_model` overrides; empty = primary),
 and disabled with `agent.away_summary: false`.
 
-The status bar also shows a `[ctx N%]` chip tracking how full the context
-window is against the effective budget; as auto-compaction nears it reads
-`N% to compact`, then `over threshold` while the context stays above it.
-
 In remote mode the bar carries an `[SSH:<target>]` chip, which gains a `✗`
 once the link can no longer serve calls. It refreshes when a tool call
 checks the workspace, not on a timer, so a link that dies while the agent is
@@ -773,75 +769,89 @@ automatically after a capture failure.
 
 == Context Compaction
 <agent-context-compaction>
-Long conversations use two compaction steps:
+The context budget is the smaller of `agent.max_tokens` and the model's context window, minus the model's output limit. When the conversation passes a share of that budget, qsoc shrinks it in the two steps below.
 
-+ *Tool Output Pruning* (40% threshold): Older, unbounded tool outputs can be
-  replaced with `[output pruned]`. Fixed result previews keep their saved references.
-+ *LLM Compaction* (60% threshold): The LLM summarizes older messages.
+qsoc checks the thresholds before each model request in a turn and again at the prompt after a turn. A turn continues its task after a compaction.
 
-After a successful compaction during a turn, the agent resumes that task.
+The status bar shows the context use as `[ctx N%]`. In the last 15 points before the summary threshold it reads `N% to compact`. It reads `over threshold` while the context stays above the threshold, for example when no compaction could make the history smaller.
 
-Use `/compact` to trigger compaction manually, and `/context` to inspect the
-per-category token breakdown. The context total includes the final system
-prompt, allowed tool definitions, message arrays, images, and tool arguments.
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (auto, left),
+    table.header([Step], [Effect]),
+    table.hline(),
+    [Tool output pruning],
+    [Above `agent.prune_threshold` (default 0.4), older tool outputs become `[output pruned]`. Saved results keep their `artifact_id`.],
+    [Summary],
+    [Above `agent.compact_threshold` (default 0.6), the model replaces older messages with one summary. Recent messages stay unchanged.],
+  )],
+  caption: [Compaction steps],
+  kind: table,
+)
 
-*Esc* or *Ctrl+C* cancels a running compaction, manual or automatic, and
-leaves the history unchanged. Input submitted during compaction runs after it
-ends.
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (auto, left),
+    table.header([Action], [Effect]),
+    table.hline(),
+    [`/compact`], [Compact now, also below the thresholds. It also retries after a failure.],
+    [*Esc* or *Ctrl+C*],
+    [Cancel a running compaction, manual or automatic. The history is unchanged. Input typed meanwhile runs after it ends.],
+    [`/context`], [Show the token use per category.],
+    [`/clear`], [Start a fresh session. `/resume` returns to the old one.],
+    [`agent.compaction_model`],
+    [Use another `llm.models` key for summaries. Empty uses the current model and effort. An unknown key makes compaction fail.],
+  )],
+  caption: [Compaction controls],
+  kind: table,
+)
 
-A reported input-token count calibrates the next estimate only while the
-request prefix, tools, model route, and effort remain unchanged. Restored
-history uses local estimates until a new request reports usage. Images use
-the configured per-image token allowance when no matching request count
-is available.
+=== What the Summary Keeps
 
-`/context` also shows provider cache usage for completed requests in the
-current agent instance. The ratio includes only requests that report both
-input and cached tokens. Reports with only separate uncached-input and cache
-components cannot calibrate the full input. Missing reports display unavailable.
-Cached tokens still occupy the context window. The status script receives these counts
-in `provider_usage`, separately from the existing estimated token totals.
-`reported_requests` counts completed requests with valid input usage.
+Each summary builds on the previous summary. The model is asked to keep each todo item with its ID and latest status, concrete values such as numbers, addresses, names, paths, and commands with their source, each user requirement in its latest form, each added or removed constraint, and each decision with its reason. The summary does not keep every message word for word and can omit details.
 
-Summary requests have separate counters in `/context` and the status script’s `summary_usage` object. Attempts include rejected or discarded summary candidates. Valid usage is counted before candidate acceptance. Missing usage and missing completion reasons remain distinguishable from reported zero values. Cancellation can leave usage unavailable. `output_reported_requests` identifies reports with an output count. Summary usage does not change foreground context calibration or estimated goal token accounting.
+qsoc saves the removed messages as read-only artifacts and lists their IDs with the summary. The agent can read them with `tool_output_read` when that tool is allowed. Background memory extraction still reads messages that compaction removed before extraction ran.
 
-Each summary uses the previous summary as an anchor and merges active requirements. The summary request asks the model to keep each todo item with its ID and latest status, concrete values such as numbers, addresses, names, paths, and commands with their source, each user requirement in its latest form, each added or removed constraint, and each decision with its reason. It does not retain every user message verbatim. The agent saves removed messages as read-only text artifacts and lists their IDs. The index states whether `tool_output_read` is exposed to this agent. Missing or denied tools stay unavailable. Local storage does not grant tool access. Summaries can omit details.
+qsoc uses the new history only when it is smaller and fits within 90% of the context budget. Otherwise the history stays unchanged. The CLI saves the session before it switches, so `--resume` after an exit finds either the old or the new history. This does not cover power loss.
 
-Artifacts preserve captured message and tool text. They cannot recover text that an upstream tool truncated before returning it. Artifact byte quotas and the model context budget are separate limits.
+=== Context-Length Recovery
 
-Compaction prepares a candidate without changing the active history. It installs the candidate only if the full local request estimate decreases and fits within 90% of the effective input budget. An explicit endpoint output allowance is subtracted from the smaller agent and endpoint window. Restored files, skills, task descriptions, and artifact references count toward that limit.
+When the provider rejects a request as too long, qsoc compacts and sends the request again. A generic HTTP 413 or an image-size error does not start this. If the summary request fails here, qsoc uses a mechanical summary: the previous summary, the latest user request, and one shortened line per older message. It prints the reason in one dim line and the turn continues. A cancelled compaction does not fall back. At the thresholds and with `/compact`, a failed summary leaves the history unchanged. A conversation too large for one summary request always gets the mechanical summary.
 
-Summary requests preserve text parts, assistant text, tool call identifiers, and original argument strings. Explicitly truncated, filtered, refused, or tool-producing summaries are rejected. A provided completion reason must be `stop`. Providers that omit the completion reason remain compatible, but completion cannot be verified from that field.
+#figure(
+  align(center)[#table(
+    columns: (1fr, 0.6fr),
+    align: (left, left),
+    table.header([Message], [Meaning]),
+    table.hline(),
+    [`Compacted: saved N estimated input tokens.`], [The new history is in use.],
+    [`Compaction kept the history: no smaller candidate fits the context budget.`],
+    [Nothing changed. Automatic compaction waits until the history changes.],
+    [`Compaction cancelled. The history is unchanged.`], [*Esc* or *Ctrl+C* stopped it.],
+    [`Compaction failed. The history is unchanged.`], [A summary request or a save failed.],
+    [`Summary request failed (<reason>): used a mechanical summary.`],
+    [See the context-length recovery above.],
+  )],
+  caption: [Compaction messages],
+  kind: table,
+)
 
-A failed summary, failed save, cancellation, or session change leaves the active history intact, except for the context-length recovery described below. A failed save can retain candidate artifacts for recovery. Automatic compaction does not repeat a no-progress attempt until its history or request inputs change. `/compact` explicitly retries.
+During a turn the status bar reads `Compacting L1` after pruning or `Compacting L2` after a summary, with the token counts before and after.
 
-The CLI saves one complete snapshot before installing compacted history. A resumed session reads either the prior history or the complete snapshot after a process exit. This does not guarantee recovery from power loss. SDK callers need persistent artifact storage and a session save callback for restart recovery.
+=== Restored Context
 
-Explicit context-length errors can trigger compaction. Generic HTTP 413 responses and image-size errors do not trigger a compaction retry.
-
-During that context-length recovery, a summary request that fails, times out, or returns an empty, oversized, or tool-calling reply is replaced by a mechanical summary. It keeps the previous anchor, the latest user request when it falls outside the kept recent messages, and a truncated line per older message. The turn continues, and the CLI prints one dim line with the failure reason. Cancellation does not fall back. Automatic threshold compaction and `/compact` keep the history unchanged when the summary fails.
-
-Compaction inherits the current model and reasoning effort, including a
-temporary model selection. `agent.compaction_model` selects a different
-configured model for the summary only. An unknown model ID reports an error.
-The summary request does not change the model selected for normal turns.
-
-Summary requests use the selected endpoint’s context window and configured output limit. A missing output limit keeps the provider default and uses the local reservation estimate. Recent messages count complete tool groups, text parts, and arguments toward their budget. The summary text is capped at one quarter of the effective input budget. Oversized model summaries are rejected. The mechanical fallback preserves an existing anchor only when it fits. The full candidate is checked again before installation.
-
-After a summary commits, qsoc restores bounded context and prints these entries:
+After a summary, qsoc restores bounded context and prints these entries:
 
 + `Read <path> (N lines)` for the most recently read files small enough to
   re-inline their current content.
-+ `Referenced file <path>` for a recently read file too large to re-inline
-  (a path-only pointer; re-read it with `read_file` if needed).
++ `Referenced file <path>` for a recently read file too large to re-inline. Re-read it with `read_file` when needed.
 + `Skills restored (...)` for the skills invoked this session, whose bodies
   are put back.
 + a running-background-agent line for each sub-agent still executing.
 
-At most `agent.context_restore_max_files` files (most recent first) and the
-recently invoked skills are restored, each capped per item and by an
-overall token budget. File and skill reads stop at a byte limit before loading their full contents. Oversized inputs remain references. Files in the candidate’s retained messages are excluded. Memory is supplied separately on each request. Disable with
-`agent.context_restore: false`.
+At most `agent.context_restore_max_files` files (most recent first) and the recently invoked skills are restored, each capped per item and by an overall token budget. Files still present in the kept messages are not restored. Memory is supplied separately on each request. Disable with `agent.context_restore: false`.
 
 == Memory System
 <agent-memory-system>
@@ -1178,6 +1188,9 @@ non-empty stdout line is displayed; ANSI SGR colors are honored. A
 non-zero exit, empty output, or timeout clears the row. Refreshes fire
 at startup, after each turn, and on `/model` or `/effort`, debounced so
 rapid changes run the command once.
+`provider_usage` and `summary_usage` carry the token counts that the provider
+reported for normal and summary requests. A count the provider did not report
+is `null`.
 
 The key is read from the user and system configuration layers only. A
 project `.qsoc.yml` cannot supply it: checking out a repository must
