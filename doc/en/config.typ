@@ -159,6 +159,9 @@ Every key under an entry is optional except `url`.
     [`effort`],
     [Effort applied when this entry is selected: `low`, `medium`, `high`;
      empty means off],
+    [`reasoning`],
+    [`false` marks a model without reasoning: no effort is sent, whatever
+     `effort` or `/effort` says. Default `true`],
     [`modalities.image`], [`true` opts the model into image input],
     [`modalities.image_max_tokens`],
     [Reject the image when the client-side estimate exceeds this],

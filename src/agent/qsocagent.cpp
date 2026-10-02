@@ -13,6 +13,8 @@
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
 
+#include <algorithm>
+#include <array>
 #include <utility>
 
 #include <QElapsedTimer>
@@ -1586,9 +1588,12 @@ void QSocAgent::handleStreamComplete(const json &response)
         finishReason = QString::fromStdString(
             response["choices"][0]["finish_reason"].get<std::string>());
     }
-    const bool hasReasoning = message.contains("reasoning_content")
-                              && message["reasoning_content"].is_string()
-                              && !message["reasoning_content"].get<std::string>().empty();
+    const bool hasReasoning = std::ranges::any_of(
+        std::array{"reasoning_content", "reasoning", "reasoning_text"}, [&message](const char *key) {
+            const auto field = message.find(key);
+            return field != message.end() && field->is_string()
+                   && !field->get_ref<const std::string &>().empty();
+        });
 
     QString diag;
     bool    retryable = false;

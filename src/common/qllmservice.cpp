@@ -22,6 +22,7 @@ struct QLLMService::StreamState
     QString                 content;
     QMap<int, json>         toolCalls;
     QString                 reasoning;
+    QString                 reasoningField;
     QString                 finishReason;
     QString                 terminalError;
     quint64                 generation         = 0;
@@ -607,6 +608,9 @@ void QLLMService::loadConfigSettings()
                 if (node["effort"]) {
                     modelCfg.effort = QString::fromStdString(node["effort"].as<std::string>());
                 }
+                if (node["reasoning"]) {
+                    modelCfg.reasoning = node["reasoning"].as<bool>();
+                }
 
                 /* Modality block: opt-in only. Absent or non-map -> all
                  * defaults (text-only). The block's keys are flat
@@ -887,7 +891,8 @@ void QLLMService::sendChatCompletionStream(
      * instead of recomputing from scratch each turn. */
     payload["stream_options"] = {{"include_usage", true}};
 
-    applyReasoningEffort(payload, reasoningEffort);
+    const QString effort = endpoint.reasoning ? reasoningEffort : QString();
+    applyReasoningEffort(payload, effort);
 
     if (!endpoint.model.isEmpty()) {
         payload["model"] = endpoint.model.toStdString();
@@ -913,7 +918,7 @@ void QLLMService::sendChatCompletionStream(
     }
     auto state           = std::make_shared<StreamState>();
     state->reply         = reply;
-    state->reasoningMode = !reasoningEffort.isEmpty();
+    state->reasoningMode = !effort.isEmpty();
     state->generation    = generation;
     currentStream        = state;
 
@@ -1286,27 +1291,38 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
         }
     }
 
-    /* Direct API format: delta.reasoning_content (DeepSeek R1) */
-    if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
-        QString reasoning = QString::fromStdString(delta["reasoning_content"].get<std::string>());
+    /* Servers name the reasoning delta differently. The first non-empty
+     * alias wins, so a chunk carrying two aliases is shown once. The text
+     * of reasoning_details is the fallback. */
+    QStringList reasoningParts;
+    QString     reasoningField;
+    for (const char *field : {"reasoning_content", "reasoning", "reasoning_text"}) {
+        const auto value = delta.find(field);
+        if (value != delta.end() && value->is_string()
+            && !value->get_ref<const std::string &>().empty()) {
+            reasoningField = QString::fromLatin1(field);
+            reasoningParts.append(QString::fromStdString(value->get<std::string>()));
+            break;
+        }
+    }
+    if (reasoningField.isEmpty() && delta.contains("reasoning_details")
+        && delta["reasoning_details"].is_array()) {
+        reasoningField = QStringLiteral("reasoning_content");
+        for (const auto &detail : delta["reasoning_details"]) {
+            if (detail.contains("text") && detail["text"].is_string()
+                && !detail["text"].get_ref<const std::string &>().empty()) {
+                reasoningParts.append(QString::fromStdString(detail["text"].get<std::string>()));
+            }
+        }
+    }
+    for (const QString &reasoning : reasoningParts) {
+        if (state->reasoningField.isEmpty()) {
+            state->reasoningField = reasoningField;
+        }
         state->reasoning += reasoning;
         emit owner->streamReasoningChunk(reasoning);
         if (!isStreamActive(owner, state)) {
             return ParseResult::Stopped;
-        }
-    }
-
-    /* OpenRouter format: delta.reasoning_details (array) */
-    if (delta.contains("reasoning_details") && delta["reasoning_details"].is_array()) {
-        for (const auto &detail : delta["reasoning_details"]) {
-            if (detail.contains("text") && detail["text"].is_string()) {
-                QString reasoning = QString::fromStdString(detail["text"].get<std::string>());
-                state->reasoning += reasoning;
-                emit owner->streamReasoningChunk(reasoning);
-                if (!isStreamActive(owner, state)) {
-                    return ParseResult::Stopped;
-                }
-            }
         }
     }
 
@@ -1410,11 +1426,14 @@ json QLLMService::buildStreamResponse(const StreamStatePtr &state)
         message["content"] = "";
     }
 
-    /* DeepSeek R1 requires reasoning_content in ALL assistant messages when thinking
-     * mode is active. Without this, subsequent API calls fail with
-     * "Missing reasoning_content field". Always include the field. */
+    /* Replay reasoning under the field the server streamed it in. DeepSeek
+     * requires reasoning_content on every assistant message in thinking
+     * mode, so an empty one is kept when effort was requested. */
     if (!state->reasoning.isEmpty()) {
-        message["reasoning_content"] = state->reasoning.toStdString();
+        const std::string field = state->reasoningField.isEmpty()
+                                      ? std::string("reasoning_content")
+                                      : state->reasoningField.toStdString();
+        message[field]          = state->reasoning.toStdString();
     } else if (state->reasoningMode) {
         message["reasoning_content"] = "";
     }
@@ -1570,7 +1589,7 @@ json QLLMService::sendChatCompletionTo(
     payload["messages"]    = messages;
     payload["temperature"] = temperature;
     payload["stream"]      = false;
-    applyReasoningEffort(payload, reasoningEffort);
+    applyReasoningEffort(payload, endpoint.reasoning ? reasoningEffort : QString());
 
     if (!endpoint.model.isEmpty()) {
         payload["model"] = endpoint.model.toStdString();

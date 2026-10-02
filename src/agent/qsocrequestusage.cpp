@@ -62,7 +62,8 @@ qint64 messageTokens(const json &message, qint64 imageTokens, bool history = fal
     const auto savedImageTokens = history ? count(message, "_img_tokens") : std::nullopt;
     total                       = add(
         total, images > 0 && savedImageTokens && *savedImageTokens > 0 ? *savedImageTokens : images);
-    for (const char *field : {"reasoning_content", "name", "tool_call_id"}) {
+    for (const char *field :
+         {"reasoning_content", "reasoning", "reasoning_text", "name", "tool_call_id"}) {
         total = add(total, textField(message, field));
     }
     for (const char *field : {"tool_calls", "reasoning_details"}) {

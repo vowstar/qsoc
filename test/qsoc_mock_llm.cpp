@@ -58,6 +58,8 @@ struct MockConfig
     qsizetype   overflowBytes = 0;
     QJsonArray  script;
     QString     failMode = QStringLiteral("none");
+    QString     reasoning;
+    QStringList reasoningFields;
 };
 
 MockConfig config;
@@ -124,6 +126,9 @@ bool loadConfig(QString *error)
     config.hold              = qgetenv("MOCK_HOLD");
     config.holdMax           = envInt("MOCK_HOLD_MAX", 0);
     config.overflowBytes     = envInt("MOCK_OVERFLOW_BYTES", 0);
+    config.reasoning         = QString::fromUtf8(qgetenv("MOCK_REASONING"));
+    config.reasoningFields   = QString::fromLatin1(envBytes("MOCK_REASONING_FIELD", "reasoning"))
+                                   .split(QLatin1Char(','), Qt::SkipEmptyParts);
     const QString scriptPath = QString::fromLocal8Bit(qgetenv("MOCK_SCRIPT"));
     if (!scriptPath.isEmpty()) {
         QFile file(scriptPath);
@@ -444,8 +449,9 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
         = scripted.value(QStringLiteral("content")).toString(QString::fromUtf8(config.reply));
     const int delayMs = scripted.value(QStringLiteral("delay_ms"))
                             .toInt(static_cast<int>(config.delaySeconds * 1000));
+    const QString reasoning = scripted.value(QStringLiteral("reasoning")).toString(config.reasoning);
 
-    auto send = [socket, streaming, emitTools, toolCalls, reply]() {
+    auto send = [socket, streaming, emitTools, toolCalls, reply, reasoning]() {
         if (socket->state() != QAbstractSocket::ConnectedState) {
             return;
         }
@@ -453,6 +459,11 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
             QJsonObject message;
             message["role"]      = QStringLiteral("assistant");
             QString finishReason = QStringLiteral("stop");
+            if (!reasoning.isEmpty()) {
+                for (const QString &field : config.reasoningFields) {
+                    message[field] = reasoning;
+                }
+            }
             if (emitTools) {
                 message["content"]    = QJsonValue();
                 message["tool_calls"] = toolCalls;
@@ -476,20 +487,29 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
             writeBody(socket, 200, "application/json", compactJson(payload));
             return;
         }
+        /* Thinking streams first, under every configured alias at once,
+         * the way some servers mirror one text into two fields. */
+        QList<QJsonObject> chunks;
+        if (!reasoning.isEmpty()) {
+            QJsonObject thinking;
+            thinking["role"] = QStringLiteral("assistant");
+            for (const QString &field : config.reasoningFields) {
+                thinking[field] = reasoning;
+            }
+            chunks.append(deltaChunk(thinking, QString()));
+        }
         QJsonObject delta;
         delta["role"] = QStringLiteral("assistant");
         if (emitTools) {
             delta["tool_calls"] = toolCalls;
-            writeSse(
-                socket,
-                {deltaChunk(delta, QString()),
-                 deltaChunk(QJsonObject(), QStringLiteral("tool_calls"))});
+            chunks.append(deltaChunk(delta, QString()));
+            chunks.append(deltaChunk(QJsonObject(), QStringLiteral("tool_calls")));
         } else {
             delta["content"] = reply;
-            writeSse(
-                socket,
-                {deltaChunk(delta, QString()), deltaChunk(QJsonObject(), QStringLiteral("stop"))});
+            chunks.append(deltaChunk(delta, QString()));
+            chunks.append(deltaChunk(QJsonObject(), QStringLiteral("stop")));
         }
+        writeSse(socket, chunks);
     };
 
     if (delayMs > 0) {

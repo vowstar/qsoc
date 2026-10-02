@@ -727,9 +727,13 @@ Switching models with `/model` resets the level to that entry's `effort`
 default. To pair a fast model with a reasoning model, declare both under
 `llm.models` and switch between them.
 
-The receiving side always parses `reasoning_content` and `reasoning_details`
-fields from the SSE stream, regardless of the `--effort` setting. Reasoning
-output is displayed in dim text.
+The receiving side always reads reasoning from the SSE stream, regardless of
+the `--effort` setting. The first non-empty field of `reasoning_content`,
+`reasoning`, and `reasoning_text` is used, then the text of
+`reasoning_details`. Reasoning output is displayed in dim text. The history
+keeps the reasoning under the field name the server used, so the next
+request of a tool loop sends it back unchanged. A model entry with
+`reasoning: false` never receives an effort.
 
 == Saved Tool Results
 
