@@ -6,9 +6,17 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# A newer push to a pull request cancels its running checks. A push to main
+# gets a group of its own, so it is never cancelled or held as pending.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   BUILD_TYPE: Release
   QT_VERSION: '6.6.2'
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPILERCHECK: content
 
 jobs:
   build-linux:
@@ -26,6 +34,7 @@ jobs:
         sudo apt-get install -y
         '^libxcb.*-dev'
         catch
+        ccache
         libfmt-dev
         libgl-dev
         libgl1-mesa-dev
@@ -39,6 +48,7 @@ jobs:
         libxkbcommon-x11-dev
         libxrender-dev
         iverilog
+        lld
         linguist-qt6
         make
         ninja-build
@@ -46,6 +56,14 @@ jobs:
         p7zip-full
         python3
         python3-py7zr
+    # Only pushes to main save the cache, so a pull request reads main's.
+    - name: Compiler cache
+      uses: hendrikmuhs/ccache-action@v1.2.24
+      with:
+        key: build-linux
+        max-size: 2G
+        evict-old-files: job
+        save: ${{ github.event_name == 'push' }}
     - name: Install formal tools
       if: github.event_name == 'pull_request'
       run: |
@@ -86,13 +104,18 @@ jobs:
         py7zrversion: '==0.20.*'
         extra: '--external 7z'
 
-    - name: Configure CMake (push - no tests)
-      if: github.event_name == 'push'
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_UNIT_TEST=OFF -DENABLE_CLANG_TIDY=OFF -DENABLE_DOXYGEN=OFF
-
-    - name: Configure CMake (PR - with tests)
-      if: github.event_name == 'pull_request'
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_CLANG_TIDY=OFF -DENABLE_DOXYGEN=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    # Tests are built on a push too, so the saved cache holds their objects.
+    # A push still runs only the smoke test.
+    - name: Configure CMake
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        -DCMAKE_LINKER_TYPE=LLD
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
     - name: Build
       run: cmake --build build --config ${{env.BUILD_TYPE}}
@@ -145,6 +168,7 @@ jobs:
         sudo apt-get install -y
         '^libxcb.*-dev'
         catch
+        ccache
         libfmt-dev
         libgl-dev
         libgl1-mesa-dev
@@ -157,12 +181,20 @@ jobs:
         libxkbcommon-x11-0
         libxkbcommon-x11-dev
         libxrender-dev
+        lld
         linguist-qt6
         ninja-build
         openssh-server
         p7zip-full
         python3
         python3-py7zr
+    # Same compile flags as build-linux, so read its cache and never save one.
+    - name: Compiler cache
+      uses: hendrikmuhs/ccache-action@v1.2.24
+      with:
+        key: build-linux
+        max-size: 2G
+        save: false
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
@@ -182,7 +214,14 @@ jobs:
         extra: '--external 7z'
 
     - name: Configure CMake
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_CLANG_TIDY=OFF -DENABLE_DOXYGEN=OFF
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        -DCMAKE_LINKER_TYPE=LLD
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
 
     # The recovery fixture drives the real binary, so qsoc itself is part of
     # the coverage and has to be built here.
@@ -240,21 +279,21 @@ jobs:
     - name: Install tools
       run: choco install ninja pkgconfiglite -y
 
-    - name: Configure CMake (push - no tests)
-      if: github.event_name == 'push'
-      run: >-
-        cmake -B build -G Ninja
-        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-        -DSLANG_USE_MIMALLOC=OFF
-        -DENABLE_UNIT_TEST=OFF
-        -DENABLE_CLANG_TIDY=OFF
-        -DENABLE_DOXYGEN=OFF
+    # The action recommends sccache over ccache for MSVC.
+    - name: Compiler cache
+      uses: hendrikmuhs/ccache-action@v1.2.24
+      with:
+        variant: sccache
+        key: build-windows
+        max-size: 2G
+        save: ${{ github.event_name == 'push' }}
 
-    - name: Configure CMake (PR - with tests)
-      if: github.event_name == 'pull_request'
+    - name: Configure CMake
       run: >-
         cmake -B build -G Ninja
         -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_C_COMPILER_LAUNCHER=sccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
         -DSLANG_USE_MIMALLOC=OFF
         -DENABLE_CLANG_TIDY=OFF
         -DENABLE_DOXYGEN=OFF
@@ -342,23 +381,24 @@ jobs:
     - name: Install tools
       run: brew install ninja pkg-config
 
-    - name: Configure CMake (push - no tests)
-      if: github.event_name == 'push'
-      run: >-
-        cmake -B build -G Ninja
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-        -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
-        -DSLANG_USE_MIMALLOC=OFF
-        -DENABLE_UNIT_TEST=OFF
-        -DENABLE_CLANG_TIDY=OFF
-        -DENABLE_DOXYGEN=OFF
+    # brew's ccache pulls in brew's fmt, which slang then finds and cannot
+    # build against, so take the action's checksummed binary instead.
+    - name: Compiler cache
+      uses: hendrikmuhs/ccache-action@v1.2.24
+      with:
+        install: binary
+        key: build-macos
+        max-size: 2G
+        evict-old-files: job
+        save: ${{ github.event_name == 'push' }}
 
-    - name: Configure CMake (PR - with tests)
-      if: github.event_name == 'pull_request'
+    - name: Configure CMake
       run: >-
         cmake -B build -G Ninja
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         -DSLANG_USE_MIMALLOC=OFF
         -DENABLE_CLANG_TIDY=OFF
         -DENABLE_DOXYGEN=OFF
@@ -443,7 +483,17 @@ jobs:
     - name: Nix build (with submodules)
       run: nix build ".?submodules=1" --print-build-logs
 
+    # A pull request only proves the archive resolves its submodules. The full
+    # build from the archive repeats the one above, so it runs on main only.
+    - name: Nix source from GitHub archive
+      if: github.event_name == 'pull_request'
+      run: |
+        src="$(nix eval --raw "github:$GITHUB_REPOSITORY/$GITHUB_SHA#qsoc.src")"
+        echo "$src"
+        test -f "$src/external/slang/CMakeLists.txt"
+
     - name: Nix shell from GitHub archive
+      if: github.event_name == 'push'
       run: |
         QSOC_SMOKE_DIR="$(mktemp -d)"
         trap 'rm -rf "$QSOC_SMOKE_DIR"' EXIT
@@ -510,11 +560,19 @@ jobs:
         cmake --install "$RUNNER_TEMP/cppcheck-build"
         echo "$RUNNER_TEMP/cppcheck/bin" >> "$GITHUB_PATH"
         "$RUNNER_TEMP/cppcheck/bin/cppcheck" --version
+    # cppcheck reads sources only. It needs the moc and uic headers, and origin
+    # depends off stops autogen from waiting for the linked libraries to build.
     - name: Configure CMake
-      run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DENABLE_CLANG_TIDY=OFF -DENABLE_DOXYGEN=OFF -DENABLE_UNIT_TEST=OFF
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
+        -DENABLE_UNIT_TEST=OFF
+        -DCMAKE_AUTOGEN_ORIGIN_DEPENDS=OFF
 
-    - name: Build
-      run: cmake --build build --config ${{env.BUILD_TYPE}}
+    - name: Generate moc and uic headers
+      run: cmake --build build --target qsoc_core_autogen qsoc_autogen
 
     - name: Static Analysis (cppcheck)
       run: cmake --build build --target cppcheck
