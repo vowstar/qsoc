@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
+#include "common/config.h"
 #include "common/qsocconsole.h"
+#include "gui/mainwindow/licensedialog.h"
 #include "gui/mainwindow/mainwindow.h"
 
 #include "./ui_mainwindow.h"
@@ -13,6 +15,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QProcess>
+#include <QPushButton>
 #include <QScopeGuard>
 #include <QStandardItemModel>
 #include <QStatusBar>
@@ -20,6 +23,31 @@
 void MainWindow::on_actionQuit_triggered()
 {
     close();
+}
+
+void MainWindow::on_actionAbout_triggered()
+{
+    QMessageBox box(this);
+    box.setWindowTitle(tr("About QSoC"));
+    box.setIconPixmap(windowIcon().pixmap(64, 64));
+    box.setTextFormat(Qt::RichText);
+    box.setText(tr("<h3>QSoC %1</h3>"
+                   "<p>Quick System on Chip Studio.</p>"
+                   "<p>Licensed under the Apache License 2.0.</p>"
+                   "<p><a href=\"https://github.com/vowstar/qsoc\">github.com/vowstar/qsoc</a></p>")
+                    .arg(QStringLiteral(QSOC_VERSION)));
+    QPushButton *licenses = box.addButton(tr("Third-Party Licenses"), QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Close);
+    box.exec();
+    if (box.clickedButton() == licenses) {
+        LicenseDialog dialog(this);
+        dialog.exec();
+    }
+}
+
+void MainWindow::on_actionAboutQt_triggered()
+{
+    QMessageBox::aboutQt(this);
 }
 
 void MainWindow::on_actionSchematicEditor_triggered()

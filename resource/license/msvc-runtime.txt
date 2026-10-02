@@ -1,0 +1,2 @@
+The Windows package ships vc_redist.x64.exe unmodified. It is distributed
+under the Microsoft Software License Terms shown by the installer.

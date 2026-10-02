@@ -465,6 +465,16 @@ private:
     bool showVersion(int exitCode);
 
     /**
+     * @brief Show third-party licenses.
+     * @details Lists every distributed third-party component when names is
+     *          empty, otherwise prints the full license text of each named
+     *          component.
+     * @param names component names.
+     * @return bool true on success, false on an unknown name.
+     */
+    bool showLicenses(const QStringList &names);
+
+    /**
      * @brief Show help message and emit exit with exitCode.
      * @details This function will show help message and emit exit with
      *          exitCode.

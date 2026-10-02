@@ -1,5 +1,38 @@
 <RCC>
     <qresource prefix="/license">
+        <file alias="antlr4.txt">../external/antlr4/LICENSE.txt</file>
+        <file alias="apache-2.0.txt">license/apache-2.0.txt</file>
+        <file alias="bigint.txt">license/bigint.txt</file>
+        <file alias="cmark-gfm.txt">../external/cmark-gfm/COPYING</file>
+        <file alias="csv.txt">../external/csv/LICENSE</file>
+        <file alias="fmt.txt">../external/fmt/LICENSE</file>
+        <file alias="gcc-exception-3.1.txt">license/gcc-exception-3.1.txt</file>
+        <file alias="gpds.txt">../external/gpds/license.txt</file>
+        <file alias="gpl-2.0.txt">license/gpl-2.0.txt</file>
+        <file alias="gpl-3.0.txt">license/gpl-3.0.txt</file>
+        <file alias="icu.txt">license/icu.txt</file>
+        <file alias="inja.txt">../external/inja/LICENSE</file>
+        <file alias="json.txt">../external/json/LICENSE.MIT</file>
+        <file alias="lexbor-notice.txt">../external/lexbor/NOTICE</file>
+        <file alias="lexbor.txt">../external/lexbor/LICENSE</file>
+        <file alias="lgpl-2.1.txt">license/lgpl-2.1.txt</file>
+        <file alias="lgpl-3.0.txt">license/lgpl-3.0.txt</file>
+        <file alias="libssh2.txt">../external/libssh2/COPYING</file>
+        <file alias="linux-runtime.txt">license/linux-runtime.txt</file>
+        <file alias="material-icons.txt">license/material-icons.txt</file>
+        <file alias="mbedtls.txt">../external/mbedtls/LICENSE</file>
+        <file alias="mimalloc.txt">license/mimalloc.txt</file>
+        <file alias="msvc-runtime.txt">license/msvc-runtime.txt</file>
+        <file alias="openssl-1.1.1.txt">license/openssl-1.1.1.txt</file>
+        <file alias="qschematic.txt">../external/qschematic/license.txt</file>
+        <file alias="qt.txt">license/qt.txt</file>
+        <file alias="replxx.txt">../external/replxx/LICENSE.md</file>
+        <file alias="slang-bsl-1.0.txt">../external/slang/LICENSES/BSL-1.0.txt</file>
+        <file alias="slang.txt">../external/slang/LICENSE</file>
+        <file alias="systemrdl.txt">../external/systemrdl/LICENSE</file>
+        <file alias="uvm-core-notice.txt">../external/uvm-core/NOTICE.txt</file>
+        <file alias="uvm-core.txt">../external/uvm-core/LICENSE.txt</file>
+        <file alias="yaml.txt">../external/yaml/LICENSE</file>
         <file alias="z3.txt">../external/z3/LICENSE.txt</file>
     </qresource>
 </RCC>

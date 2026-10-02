@@ -1,0 +1,58 @@
+The Linux AppImage is built on AlmaLinux 8 and ships the following system
+libraries unmodified from the AlmaLinux 8 binary packages. The source
+packages, with the full license texts of each library, are available at
+https://vault.almalinux.org/8/ under BaseOS/Source and AppStream/Source.
+The LGPL-2.1, GPL-2.0, GCC Runtime Library Exception and OpenSSL texts
+follow this notice. The LGPL-3.0 and GPL-3.0 texts are shown under qt.
+
+Package               Libraries                        License
+audit-libs            libaudit                         LGPL-2.1-or-later
+avahi-libs            libavahi-client, libavahi-common LGPL-2.1-or-later
+bzip2-libs            libbz2                           bzip2-1.0.6
+cups-libs             libcups                          LGPL-2.0-only AND Zlib
+dbus-libs             libdbus-1                        AFL-2.1 OR GPL-2.0-or-later
+glib2                 libglib, libgio, libgobject,     LGPL-2.1-or-later
+                      libgmodule, libgthread
+gnutls                libgnutls                        LGPL-2.1-or-later
+keyutils-libs         libkeyutils                      LGPL-2.1-or-later
+krb5-libs             libkrb5, libk5crypto,            MIT
+                      libgssapi_krb5, libkrb5support
+libblkid, libmount    libblkid, libmount               LGPL-2.1-or-later
+libcap                libcap                           BSD-3-Clause OR GPL-2.0-only
+libcap-ng             libcap-ng                        LGPL-2.1-or-later
+libffi                libffi                           MIT
+libgcc, libstdc++     libgcc_s, libstdc++              GPL-3.0-or-later WITH
+                                                       GCC-exception-3.1
+libgcrypt             libgcrypt                        LGPL-2.1-or-later
+libidn2               libidn2                          LGPL-3.0-or-later OR
+                                                       GPL-2.0-or-later
+libpng                libpng16                         Libpng
+libselinux            libselinux                       Public domain
+libtasn1              libtasn1                         LGPL-2.1-or-later
+libunistring          libunistring                     LGPL-3.0-or-later OR
+                                                       GPL-2.0-or-later
+libxcrypt             libcrypt                         LGPL-2.1-or-later AND
+                                                       BSD-3-Clause
+libXau, libXext       libXau, libXext                  MIT
+libxcb, xcb-util,     libxcb-*                         MIT
+xcb-util-cursor,
+xcb-util-image,
+xcb-util-keysyms,
+xcb-util-renderutil,
+xcb-util-wm
+libxkbcommon,         libxkbcommon, libxkbcommon-x11   MIT
+libxkbcommon-x11
+libzstd               libzstd                          BSD-3-Clause
+lz4-libs              liblz4                           BSD-2-Clause
+nettle                libnettle, libhogweed            LGPL-3.0-or-later OR
+                                                       GPL-2.0-or-later
+openssl-libs          libcrypto (OpenSSL 1.1.1)        OpenSSL
+p11-kit               libp11-kit                       BSD-3-Clause
+pcre, pcre2           libpcre, libpcre2-8              BSD-3-Clause
+systemd-libs          libsystemd                       LGPL-2.1-or-later
+xz-libs               liblzma                          Public domain
+
+The AppImage also embeds the AppImage type 2 runtime
+(https://github.com/AppImage/type2-runtime, MIT). It is statically linked
+with libfuse (LGPL-2.1-only), squashfuse (BSD-2-Clause), zstd
+(BSD-3-Clause), zlib (Zlib), mimalloc (MIT) and the musl C library (MIT).

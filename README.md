@@ -59,3 +59,9 @@ cmake --build build -j16
 cmake --build build --target test
 cmake --build build --target clang-format
 ```
+
+## Third-party licenses
+
+QSoC ships third-party components under their own licenses.
+`qsoc --licenses` lists them, `qsoc --licenses <name>` prints a full
+text, and the GUI shows them under Help, About QSoC.

@@ -6,6 +6,7 @@
 #include "common/config.h"
 #include "common/qslangdriver.h"
 #include "common/qsocconsole.h"
+#include "common/qsoclicense.h"
 
 #include <QRegularExpression>
 #include <QString>
@@ -120,6 +121,42 @@ bool QSocCliWorker::showVersion(int exitCode)
     return true;
 }
 
+bool QSocCliWorker::showLicenses(const QStringList &names)
+{
+    QTextStream &out = QSocConsole::out();
+    if (names.isEmpty()) {
+        out << QCoreApplication::translate("main", "Third-party components distributed with QSoC:")
+            << "\n\n";
+        for (const QSocLicense::Component &component : QSocLicense::components()) {
+            out << "  " << component.name.leftJustified(16) << component.license.leftJustified(34)
+                << component.url << '\n';
+        }
+        out << '\n'
+            << QCoreApplication::translate(
+                   "main", "Run 'qsoc --licenses <name>' to print the full license text.")
+            << Qt::endl;
+        exitCode = 0;
+        return true;
+    }
+    QList<const QSocLicense::Component *> selected;
+    for (const QString &name : names) {
+        const QSocLicense::Component *component = QSocLicense::find(name);
+        if (!component) {
+            return showError(
+                1, QCoreApplication::translate("main", "Error: unknown component: %1.").arg(name));
+        }
+        selected.append(component);
+    }
+    for (const QSocLicense::Component *component : selected) {
+        out << component->name << " (" << component->license << ")\n"
+            << component->url << "\n\n"
+            << QSocLicense::text(*component) << '\n';
+    }
+    out.flush();
+    exitCode = 0;
+    return true;
+}
+
 bool QSocCliWorker::showHelp(int exitCode)
 {
     QSocConsole::out() << parser.helpText() << Qt::endl;
@@ -182,6 +219,11 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
          "when",
          "auto"},
         {{"v", "version"}, QCoreApplication::translate("main", "Displays version information.")},
+        {"licenses",
+         QCoreApplication::translate(
+             "main",
+             "Lists third-party licenses.\n"
+             "Add component names to print their full texts.")},
     });
     parser.addPositionalArgument(
         "command",
@@ -232,6 +274,9 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     /* version options have higher priority */
     if (parser.isSet("version")) {
         return showVersion(0);
+    }
+    if (parser.isSet("licenses")) {
+        return showLicenses(parser.positionalArguments());
     }
     const QStringList positionalArgs = parser.positionalArguments();
     if (positionalArgs.isEmpty()) {

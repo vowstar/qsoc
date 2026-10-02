@@ -1,0 +1,3 @@
+Toolbar and menu icons under resource/icon are based on Material Icons by
+Google, licensed under the Apache License, Version 2.0. The license text
+follows.

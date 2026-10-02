@@ -52,6 +52,19 @@ private slots:
      */
     void on_actionQuit_triggered();
 
+    /**
+     * @brief About action.
+     * @details Shows the version, the QSoC license, and a button that opens
+     *          the third-party license viewer.
+     */
+    void on_actionAbout_triggered();
+
+    /**
+     * @brief About Qt action.
+     * @details Shows the Qt version and license.
+     */
+    void on_actionAboutQt_triggered();
+
     /* Project Management Actions (Qt Auto-connected) */
 
     /**

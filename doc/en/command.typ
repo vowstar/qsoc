@@ -69,6 +69,9 @@ The following global options are available for all commands:
     [Colorize output: `auto` (default), `always`, `never`. `auto` honors
      `NO_COLOR` / `FORCE_COLOR` and whether the stream is a terminal],
     [`-v`, `--version`], [Display version information],
+    [`--licenses [<name>...]`],
+    [List the third-party components QSoC distributes and their licenses.
+     With component names, print their full license texts],
   )],
   caption: [GLOBAL OPTIONS],
   kind: table,

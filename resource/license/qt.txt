@@ -1,0 +1,17 @@
+QSoC uses the Qt libraries, plugins and translations under the GNU Lesser
+General Public License, version 3 (LGPL-3.0-only). The LGPL-3.0 and GPL-3.0
+texts follow this notice.
+
+QSoC links to Qt dynamically. The release packages ship the Qt shared
+libraries and plugins unmodified as separate files, and you may replace them
+with your own compatible build of Qt. The Qt source code is available at
+https://download.qt.io/official_releases/qt/ and https://code.qt.io. The QSoC
+source code is available at https://github.com/vowstar/qsoc.
+
+The Qt libraries contain third-party code under their own licenses, among
+them double-conversion (BSD-3-Clause), Easing Equations (BSD-3-Clause),
+forkfd (MIT), FreeType (FTL), HarfBuzz (MIT), libjpeg-turbo (IJG AND
+BSD-3-Clause AND Zlib), libpng (libpng-2.0), md4c (MIT), PCRE2
+(BSD-3-Clause), TinyCBOR (MIT), Unicode data (Unicode-DFS-2016) and zlib
+(Zlib). Their notices are listed at
+https://doc.qt.io/qt-6/licenses-used-in-qt.html.
