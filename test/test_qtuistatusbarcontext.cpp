@@ -53,6 +53,16 @@ private slots:
             QStringLiteral(" [ctx 8%, 2% to compact]"));
     }
 
+    void testApproximateUsageIsMarked()
+    {
+        QCOMPARE(
+            QTuiStatusBar::formatContextChip(10000, 100000, 0.6, true),
+            QString::fromUtf8(" [ctx \u224810%]"));
+        QCOMPARE(
+            QTuiStatusBar::formatContextChip(65000, 100000, 0.6, true),
+            QString::fromUtf8(" [ctx \u224865%, over threshold]"));
+    }
+
     void testNoThresholdGivesPlainPercent()
     {
         /* A zero compaction fraction yields a plain percentage, no hint. */

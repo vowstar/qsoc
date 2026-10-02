@@ -1331,14 +1331,17 @@ private slots:
         QSocAgent agent(nullptr, &service, &registry, config);
         QVERIFY(agent.bindToolResultStore(
             directory.filePath(QStringLiteral("artifacts")), QSocSession::generateId()));
+        /* Mid-turn: only the bulk result lifts the estimate over the threshold. */
         const int size    = trigger == QStringLiteral("idle") ? 12000 : 6000;
         json      history = json::array();
         for (int index = 0; index < 12; ++index) {
+            const char lead = static_cast<char>('a' + index);
             history.push_back(
                 {{"role", index % 2 ? "assistant" : "user"},
                  {"content",
                   QStringLiteral("turn_%1 constraint K-42 ").arg(index).toStdString()
-                      + std::string(size, static_cast<char>('a' + index))}});
+                      + (trigger == QStringLiteral("mid-turn") ? prose(4800, lead)
+                                                               : std::string(size, lead))}});
         }
         agent.setMessages(history);
         int summaryIndex = 0;
@@ -1381,6 +1384,56 @@ private slots:
         QVERIFY(
             agent.getMessages().at(0).at("content").get<std::string>().find("K-42")
             != std::string::npos);
+    }
+
+    void testUpperBoundDecidesTheGate_data()
+    {
+        QTest::addColumn<int>("characters");
+        QTest::addColumn<int>("requests");
+        QTest::newRow("within-margin") << 3800 << 1;
+        QTest::newRow("below-margin") << 2800 << 0;
+    }
+
+    void testUpperBoundDecidesTheGate()
+    {
+        QFETCH(int, characters);
+        QFETCH(int, requests);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.response = textChoice("Summary: keep K-42.");
+        QLLMService    service;
+        LLMModelConfig endpoint;
+        endpoint.model           = QStringLiteral("gate-model");
+        endpoint.url             = server.url();
+        endpoint.contextTokens   = 20000;
+        endpoint.maxOutputTokens = 2000;
+        endpoint.timeout         = 3000;
+        service.setModel(endpoint);
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.autoLoadMemory       = false;
+        config.memoryRecallEnabled  = false;
+        config.memoryExtractEnabled = false;
+        config.memoryDreamEnabled   = false;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        QSocToolRegistry registry;
+        QSocAgent        agent(nullptr, &service, &registry, config);
+        QVERIFY(agent.bindToolResultStore(
+            directory.filePath(QStringLiteral("artifacts")), QSocSession::generateId()));
+        json history = json::array();
+        for (int index = 0; index < 10; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", prose(size_t(characters), static_cast<char>('a' + index))}});
+        }
+        agent.setMessages(history);
+        const qint64 threshold = qint64(agent.effectiveContextTokens() * config.compactThreshold);
+        QVERIFY(agent.contextEstimate().point() < threshold);
+        QCOMPARE(agent.contextEstimate().upper() > threshold, requests > 0);
+        agent.compactIfNeeded();
+        QCOMPARE(server.requestCount(), requests);
     }
 
     void testSummaryRequestBudget_data()

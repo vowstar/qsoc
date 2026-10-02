@@ -520,6 +520,16 @@ public:
     int estimateTotalTokens() const;
 
     /**
+     * @brief Next request size from the last reported usage and local counts.
+     */
+    QSocTokenEstimate contextEstimate() const;
+
+    /**
+     * @brief Local counter of the selected model.
+     */
+    QSocTokenizer::Mode tokenCounter() const;
+
+    /**
      * @brief Estimate tokens in the message history only.
      */
     int estimateMessagesTokens() const;
@@ -912,6 +922,7 @@ private:
     quint64             summaryMissingFinishReasons_ = 0;
     QSocRequestSnapshot requestSnapshot(
         const json &wire, const json &tools, const QLLMService *service) const;
+    bool requestExceeds(const QSocRequestSnapshot &request, qint64 threshold);
     json wireMessages(const QString &systemPrompt) const;
 
     /* Token tracking */
@@ -1130,9 +1141,9 @@ private:
     void         startStream(const std::optional<QString> &userQuery, bool restoredSession);
     bool         isCurrentRun(const ActiveRunPtr &run) const;
     bool runPersistenceBarrier(PersistencePoint point, const QString &toolCallId = QString());
-    CheckpointAction checkpointRun(const ActiveRunPtr &run);
-    int  estimateTotalTokensFromSnapshot(const QString &systemPrompt, const json &tools) const;
-    void finishToolBatch(const ActiveRunPtr &run);
+    CheckpointAction  checkpointRun(const ActiveRunPtr &run);
+    QSocTokenEstimate estimateFromSnapshot(const QString &systemPrompt, const json &tools) const;
+    void              finishToolBatch(const ActiveRunPtr &run);
     void finishStreamRun(const ActiveRunPtr &run, RunOutcome outcome, const QString &payload);
     void finishSynchronousRun(const ActiveRunPtr &run, RunOutcome outcome);
     void requestStop(StopMode mode);

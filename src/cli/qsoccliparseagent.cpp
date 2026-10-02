@@ -367,6 +367,19 @@ void bindRemoteConnectionToAgent(QSocRemoteConnection *conn, QSocAgent *agent)
 }
 
 /**
+ * @brief Refresh the status bar context chip from the agent's estimate.
+ */
+void showContextUsage(QTuiStatusBar &statusBar, const QSocAgent *agent)
+{
+    const auto estimate = agent->contextEstimate();
+    statusBar.setContextUsage(
+        static_cast<int>(qMin<qint64>(estimate.point(), std::numeric_limits<int>::max())),
+        agent->effectiveContextTokens(),
+        agent->getConfig().compactThreshold,
+        estimate.approximate());
+}
+
+/**
  * @brief Apply model switch: update endpoint + sync agent context budget
  */
 void applyModelSwitch(
@@ -3506,10 +3519,7 @@ bool QSocCliWorker::runAgentLoop(
         const int saved = compact();
         statusBarWidget.stopTimers();
         statusBarWidget.setStatus("Ready");
-        statusBarWidget.setContextUsage(
-            agent->estimateTotalTokens(),
-            agent->effectiveContextTokens(),
-            agent->getConfig().compactThreshold);
+        showContextUsage(statusBarWidget, agent);
         reportCompaction(saved);
         compositor.render();
     };
@@ -3525,8 +3535,8 @@ bool QSocCliWorker::runAgentLoop(
         return text;
     };
     auto compactIdleHistory = [&]() {
-        const int tokens    = agent->estimateTotalTokens();
-        const int threshold = static_cast<int>(
+        const qint64 tokens    = agent->contextEstimate().upper();
+        const qint64 threshold = static_cast<qint64>(
             agent->effectiveContextTokens() * agent->getConfig().compactThreshold);
         if (tokens <= threshold) {
             return;
@@ -5830,17 +5840,17 @@ bool QSocCliWorker::runAgentLoop(
         if (cmd == "/context") {
             const json   allMsgs          = agent->getMessages();
             const int    maxCtx           = agent->getConfig().maxContextTokens;
-            const qint64 basePromptTokens = QSocRequestUsage::estimateText(
-                agent->requestSystemPrompt());
-            const json   definitions   = agent->getEffectiveToolDefinitions();
-            const qint64 toolDefTokens = definitions.empty()
-                                             ? 0
-                                             : QSocRequestUsage::estimateText(
-                                                   QString::fromStdString(definitions.dump()));
+            const qint64 basePromptTokens = agent->estimateTokens(agent->requestSystemPrompt());
+            const json   definitions      = agent->getEffectiveToolDefinitions();
+            const qint64 toolDefTokens    = definitions.empty()
+                                                ? 0
+                                                : agent->estimateTokens(
+                                                      QString::fromStdString(definitions.dump()));
 
-            const auto estimateMessage = [](const json &message) {
+            const auto counter         = agent->tokenCounter();
+            const auto estimateMessage = [counter](const json &message) {
                 return qMin<qint64>(
-                    QSocRequestUsage::estimateHistory(json::array({message})),
+                    QSocRequestUsage::estimateHistory(json::array({message}), counter),
                     std::numeric_limits<int>::max());
             };
 
@@ -5872,7 +5882,7 @@ bool QSocCliWorker::runAgentLoop(
                     asstTokens += estimateMessage(textMessage);
                     if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
                         for (const auto &tc : msg["tool_calls"]) {
-                            const qint64 tcTokens = QSocRequestUsage::estimateText(
+                            const qint64 tcTokens = agent->estimateTokens(
                                 QString::fromStdString(tc.dump()));
                             callTokens += tcTokens;
                             if (tc.contains("id") && tc["id"].is_string() && tc.contains("function")
@@ -5899,9 +5909,10 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
 
-            const qint64 usedTokens = agent->estimateTotalTokens();
-            const qint64 freeTokens = qMax<qint64>(0, maxCtx - usedTokens);
-            const qint64 pct        = maxCtx > 0 ? (usedTokens * 100 / maxCtx) : 0;
+            const auto   usedEstimate = agent->contextEstimate();
+            const qint64 usedTokens   = usedEstimate.point();
+            const qint64 freeTokens   = qMax<qint64>(0, maxCtx - usedTokens);
+            const qint64 pct          = maxCtx > 0 ? (usedTokens * 100 / maxCtx) : 0;
 
             /* --- format bar helper --- */
             constexpr int BAR_WIDTH = 20;
@@ -5926,9 +5937,13 @@ bool QSocCliWorker::runAgentLoop(
             /* --- render --- */
             compositor.printContent("\n");
             compositor.printContent("Context Usage\n", QTuiScrollView::Bold);
-            compositor.printContent(QString("  %1 / %2 tokens (%3%)\n\n")
-                                        .arg(fmtTokens(usedTokens), fmtTokens(maxCtx))
-                                        .arg(pct));
+            compositor.printContent(
+                QString("  %1%2 / %3 tokens (%4%)\n\n")
+                    .arg(
+                        usedEstimate.approximate() ? QStringLiteral("\u2248") : QString(),
+                        fmtTokens(usedTokens),
+                        fmtTokens(maxCtx))
+                    .arg(pct));
 
             const auto observed = agent->observedUsage();
             if (observed.cacheReportedRequests > 0 && observed.cacheEligibleInputTokens > 0) {
@@ -6704,10 +6719,7 @@ bool QSocCliWorker::runAgentLoop(
             skillSeq = 1;
             compositor.contentView().clear();
             restoreSessionHistory(true);
-            statusBarWidget.setContextUsage(
-                agent->estimateTotalTokens(),
-                agent->effectiveContextTokens(),
-                agent->getConfig().compactThreshold);
+            showContextUsage(statusBarWidget, agent);
             compositor.invalidate();
             compositor.render();
             continue;
@@ -9256,10 +9268,7 @@ bool QSocCliWorker::runAgentLoop(
 
             /* Refresh the context-usage chip so the idle status bar shows how
              * full the window is and how close auto-compact is. */
-            statusBarWidget.setContextUsage(
-                agent->estimateTotalTokens(),
-                agent->effectiveContextTokens(),
-                agent->getConfig().compactThreshold);
+            showContextUsage(statusBarWidget, agent);
 
             /* Turn settled: refresh the user status line with the new
              * token and context numbers. */
@@ -9920,10 +9929,7 @@ bool QSocCliWorker::runAgentLoop(
 
             /* Refresh the context-usage chip so the idle status bar shows how
              * full the window is and how close auto-compact is. */
-            statusBarWidget.setContextUsage(
-                agent->estimateTotalTokens(),
-                agent->effectiveContextTokens(),
-                agent->getConfig().compactThreshold);
+            showContextUsage(statusBarWidget, agent);
 
             /* Display complete result at once */
             if (!finalResult.isEmpty()) {

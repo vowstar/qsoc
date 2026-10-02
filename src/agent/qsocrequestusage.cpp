@@ -4,6 +4,7 @@
 #include "agent/qsocrequestusage.h"
 #include "common/qsoctokenizer.h"
 
+#include <cmath>
 #include <limits>
 
 using json = nlohmann::json;
@@ -30,15 +31,17 @@ std::optional<qint64> count(const json &object, const char *key)
     return value >= 0 ? std::optional<qint64>(value) : std::nullopt;
 }
 
-qint64 textField(const json &object, const char *key)
+qint64 textField(const json &object, const char *key, QSocTokenizer::Mode counter)
 {
     const auto value = object.find(key);
     return value != object.end() && value->is_string()
-               ? QSocRequestUsage::estimateText(QString::fromStdString(value->get<std::string>()))
+               ? QSocRequestUsage::estimateText(
+                     QString::fromStdString(value->get<std::string>()), counter)
                : 0;
 }
 
-qint64 messageTokens(const json &message, qint64 imageTokens, bool history = false)
+qint64 messageTokens(
+    const json &message, qint64 imageTokens, QSocTokenizer::Mode counter, bool history = false)
 {
     qint64 total = 10;
     if (!message.is_object()) {
@@ -51,55 +54,68 @@ qint64 messageTokens(const json &message, qint64 imageTokens, bool history = fal
             if (!part.is_object()) {
                 continue;
             }
-            total           = add(total, textField(part, "text"));
+            total           = add(total, textField(part, "text", counter));
             const auto type = part.find("type");
             if (type != part.end() && *type == "image_url") {
                 images = add(images, qMax<qint64>(1, imageTokens));
             }
         }
     } else {
-        total = add(total, textField(message, "content"));
+        total = add(total, textField(message, "content", counter));
     }
     const auto savedImageTokens = history ? count(message, "_img_tokens") : std::nullopt;
     total                       = add(
         total, images > 0 && savedImageTokens && *savedImageTokens > 0 ? *savedImageTokens : images);
     for (const char *field :
          {"reasoning_content", "reasoning", "reasoning_text", "name", "tool_call_id"}) {
-        total = add(total, textField(message, field));
+        total = add(total, textField(message, field, counter));
     }
     for (const char *field : {"tool_calls", "reasoning_details"}) {
         const auto value = message.find(field);
         if (value != message.end() && !value->is_null()) {
-            total
-                = add(total, QSocRequestUsage::estimateText(QString::fromStdString(value->dump())));
+            total = add(
+                total,
+                QSocRequestUsage::estimateText(QString::fromStdString(value->dump()), counter));
         }
     }
     return total;
 }
 } // namespace
 
-qint64 QSocRequestUsage::estimateText(const QString &text)
+qint64 QSocTokenEstimate::point() const
 {
-    return QSocTokenizer::count(text);
+    return add(reported, counted);
 }
 
-qint64 QSocRequestUsage::estimateMessages(const json &messages, qint64 imageTokens)
+qint64 QSocTokenEstimate::upper() const
+{
+    const double scaled = std::ceil(double(counted) * margin);
+    return add(reported, scaled >= double(maximum) ? maximum : qint64(scaled));
+}
+
+qint64 QSocRequestUsage::estimateText(const QString &text, QSocTokenizer::Mode counter)
+{
+    return QSocTokenizer::count(text, counter);
+}
+
+qint64 QSocRequestUsage::estimateMessages(
+    const json &messages, qint64 imageTokens, QSocTokenizer::Mode counter)
 {
     qint64 total = 0;
     if (messages.is_array()) {
         for (const auto &message : messages) {
-            total = add(total, messageTokens(message, imageTokens));
+            total = add(total, messageTokens(message, imageTokens, counter));
         }
     }
     return total;
 }
 
-qint64 QSocRequestUsage::estimateHistory(const json &messages)
+qint64 QSocRequestUsage::estimateHistory(const json &messages, QSocTokenizer::Mode counter)
 {
     qint64 total = 0;
     if (messages.is_array()) {
         for (const auto &message : messages) {
-            total = add(total, messageTokens(message, 5000, true));
+            total = add(total, messageTokens(message, 5000, counter, true));
         }
     }
     return total;
@@ -107,34 +123,56 @@ qint64 QSocRequestUsage::estimateHistory(const json &messages)
 
 qint64 QSocRequestUsage::estimateRequest(const QSocRequestSnapshot &request)
 {
-    qint64 total = estimateMessages(request.messages, request.imageTokens);
+    qint64 total = estimateMessages(request.messages, request.imageTokens, request.counter);
     if (!request.tools.empty()) {
-        total = add(total, estimateText(QString::fromStdString(request.tools.dump())));
+        total
+            = add(total, estimateText(QString::fromStdString(request.tools.dump()), request.counter));
     }
     return total;
 }
 
-qint64 QSocRequestUsage::estimateNext(const QSocRequestSnapshot &request) const
+QSocTokenizer::Mode QSocRequestUsage::counterFor(const QString &tokenizer)
 {
+    return tokenizer == QStringLiteral("bytes") ? QSocTokenizer::Mode::Bytes
+                                                : QSocTokenizer::Mode::O200k;
+}
+
+double QSocRequestUsage::margin(QSocTokenizer::Mode counter)
+{
+    return counter == QSocTokenizer::Mode::Bytes || !QSocTokenizer::available() ? 1.5 : 1.3;
+}
+
+QSocTokenEstimate QSocRequestUsage::estimate(const QSocRequestSnapshot &request) const
+{
+    const auto local = [&request] {
+        return QSocTokenEstimate{0, estimateRequest(request), margin(request.counter)};
+    };
     if (!anchor_ || anchor_->request.route != request.route
         || anchor_->request.effort != request.effort
         || anchor_->request.tools.dump() != request.tools.dump()
         || anchor_->request.imageTokens != request.imageTokens
         || !anchor_->request.messages.is_array() || !request.messages.is_array()
         || anchor_->request.messages.size() > request.messages.size()) {
-        return estimateRequest(request);
+        return local();
     }
     const auto &prefix = anchor_->request.messages;
     for (json::size_type i = 0; i < prefix.size(); ++i) {
         if (prefix[i].dump() != request.messages[i].dump()) {
-            return estimateRequest(request);
+            return local();
         }
     }
-    qint64 total = anchor_->inputTokens;
+    QSocTokenEstimate result{anchor_->inputTokens, 0, margin(request.counter)};
     for (json::size_type i = prefix.size(); i < request.messages.size(); ++i) {
-        total = add(total, messageTokens(request.messages[i], request.imageTokens));
+        result.counted = add(
+            result.counted,
+            messageTokens(request.messages[i], request.imageTokens, request.counter));
     }
-    return total;
+    return result;
+}
+
+qint64 QSocRequestUsage::estimateNext(const QSocRequestSnapshot &request) const
+{
+    return estimate(request).point();
 }
 
 quint64 QSocRequestUsage::begin(QSocRequestSnapshot request)

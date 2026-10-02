@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
-#include "common/qsoctokenizer.h"
 
 #include <QSet>
 
@@ -126,7 +125,7 @@ void QSocAgent::appendBoundedToolMessage(
     const qint64 budget = toolResultBudgetTokens();
     QString      view   = content;
     json         refs   = json::array();
-    if (QSocRequestUsage::estimateText(content) > budget) {
+    if (QSocRequestUsage::estimateText(content, tokenCounter()) > budget) {
         QString                                       error;
         std::optional<QSocToolResultStore::Reference> saved;
         const auto status     = run && run->executingToolStatus ? *run->executingToolStatus
@@ -155,8 +154,11 @@ void QSocAgent::appendBoundedToolMessage(
                                        "\n[Captured tool return saved locally: %1. Use "
                                        "tool_output_read when available.]")
                                        .arg(QString::fromStdString(refs.front().dump()));
-            view                 = QSocTokenizer::truncate(
-                                       content, std::max(qint64(0), budget - QSocRequestUsage::estimateText(notice)))
+            view                 = truncateTokens(
+                                       content,
+                                       std::max(
+                                           qint64(0),
+                                           budget - QSocRequestUsage::estimateText(notice, tokenCounter())))
                                    + notice;
         } else {
             const QString notice
@@ -167,8 +169,11 @@ void QSocAgent::appendBoundedToolMessage(
                           completion,
                           error.isEmpty() ? QStringLiteral("Result storage is unavailable.")
                                           : error);
-            view = QSocTokenizer::truncate(
-                       content, std::max(qint64(0), budget - QSocRequestUsage::estimateText(notice)))
+            view = truncateTokens(
+                       content,
+                       std::max(
+                           qint64(0),
+                           budget - QSocRequestUsage::estimateText(notice, tokenCounter())))
                    + notice;
         }
     }

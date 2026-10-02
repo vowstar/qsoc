@@ -214,36 +214,40 @@ void QTuiStatusBar::setGoalIndicator(const QString &text, const QString &statusT
     goalStatusTag_ = statusTag;
 }
 
-void QTuiStatusBar::setContextUsage(int used, int budget, double compactFraction)
+void QTuiStatusBar::setContextUsage(int used, int budget, double compactFraction, bool approximate)
 {
     ctxUsed_            = used;
     ctxBudget_          = budget;
     ctxCompactFraction_ = compactFraction;
+    ctxApproximate_     = approximate;
 }
 
-QString QTuiStatusBar::formatContextChip(int used, int budget, double compactFraction)
+QString QTuiStatusBar::formatContextChip(
+    int used, int budget, double compactFraction, bool approximate)
 {
     if (budget <= 0 || used <= 0) {
         return {};
     }
-    const int pct        = qBound(0, qRound(100.0 * used / budget), 999);
-    const int compactPct = compactFraction > 0.0 ? qRound(100.0 * compactFraction) : 0;
+    const int     pct        = qBound(0, qRound(100.0 * used / budget), 999);
+    const int     compactPct = compactFraction > 0.0 ? qRound(100.0 * compactFraction) : 0;
+    const QString shown      = (approximate ? QStringLiteral("\u2248") : QString())
+                               + QString::number(pct);
     if (compactPct > 0 && pct >= compactPct) {
-        return QStringLiteral(" [ctx %1%, over threshold]").arg(pct);
+        return QStringLiteral(" [ctx %1%, over threshold]").arg(shown);
     }
     /* Show the countdown only in the home stretch: the last 15 points, but
      * never below half the threshold, so a low threshold does not make a
      * near-empty context read as "about to compact". */
     const int warnFloor = qMax(compactPct - 15, compactPct / 2);
     if (compactPct > 0 && pct >= warnFloor) {
-        return QStringLiteral(" [ctx %1%, %2% to compact]").arg(pct).arg(compactPct - pct);
+        return QStringLiteral(" [ctx %1%, %2% to compact]").arg(shown).arg(compactPct - pct);
     }
-    return QStringLiteral(" [ctx %1%]").arg(pct);
+    return QStringLiteral(" [ctx %1%]").arg(shown);
 }
 
 QString QTuiStatusBar::contextChip() const
 {
-    return formatContextChip(ctxUsed_, ctxBudget_, ctxCompactFraction_);
+    return formatContextChip(ctxUsed_, ctxBudget_, ctxCompactFraction_, ctxApproximate_);
 }
 
 void QTuiStatusBar::toolCalled(const QString &toolName, const QString &detail)

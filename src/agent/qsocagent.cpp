@@ -3714,13 +3714,26 @@ QSocContextRestore QSocAgent::takeLastContextRestore()
 
 int QSocAgent::estimateTokens(const QString &text) const
 {
-    return static_cast<int>(
-        qMin<qint64>(QSocRequestUsage::estimateText(text), std::numeric_limits<int>::max()));
+    return static_cast<int>(qMin<qint64>(
+        QSocRequestUsage::estimateText(text, tokenCounter()), std::numeric_limits<int>::max()));
 }
 
 QString QSocAgent::truncateTokens(const QString &text, qint64 maxTokens) const
 {
-    return QSocTokenizer::truncate(text, maxTokens);
+    return QSocTokenizer::truncate(text, maxTokens, tokenCounter());
+}
+
+QSocTokenizer::Mode QSocAgent::tokenCounter() const
+{
+    const QPointer<QLLMService> service = activeRun_ ? activeRun_->llm : llmService;
+    return service && service->hasEndpoint()
+               ? QSocRequestUsage::counterFor(service->getCurrentModelConfig().tokenizer)
+               : QSocTokenizer::Mode::O200k;
+}
+
+bool QSocAgent::requestExceeds(const QSocRequestSnapshot &request, qint64 threshold)
+{
+    return requestUsage_.estimate(request).upper() > threshold;
 }
 
 int QSocAgent::effectiveContextTokens() const
@@ -3743,8 +3756,9 @@ int QSocAgent::effectiveContextTokens() const
 
 int QSocAgent::estimateMessagesTokens() const
 {
-    return static_cast<int>(
-        qMin<qint64>(QSocRequestUsage::estimateHistory(messages), std::numeric_limits<int>::max()));
+    return static_cast<int>(qMin<qint64>(
+        QSocRequestUsage::estimateHistory(messages, tokenCounter()),
+        std::numeric_limits<int>::max()));
 }
 
 json QSocAgent::wireMessages(const QString &systemPrompt) const
@@ -3776,25 +3790,31 @@ QSocRequestSnapshot QSocAgent::requestSnapshot(
                 QByteArray::fromStdString(route.dump()), QCryptographicHash::Sha256)
                 .toHex());
         snapshot.imageTokens = endpoint.imageMaxTokens > 0 ? endpoint.imageMaxTokens : 5000;
+        snapshot.counter     = QSocRequestUsage::counterFor(endpoint.tokenizer);
     }
     return snapshot;
 }
 
 int QSocAgent::estimateTotalTokens() const
 {
+    return static_cast<int>(
+        qMin<qint64>(contextEstimate().point(), std::numeric_limits<int>::max()));
+}
+
+QSocTokenEstimate QSocAgent::contextEstimate() const
+{
     const QString systemPrompt = requestSystemPrompt();
     json          tools        = json::array();
     if (toolRegistry) {
         tools = presentedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());
     }
-    return estimateTotalTokensFromSnapshot(systemPrompt, tools);
+    return estimateFromSnapshot(systemPrompt, tools);
 }
 
-int QSocAgent::estimateTotalTokensFromSnapshot(const QString &systemPrompt, const json &tools) const
+QSocTokenEstimate QSocAgent::estimateFromSnapshot(const QString &systemPrompt, const json &tools) const
 {
-    const auto snapshot = requestSnapshot(wireMessages(systemPrompt), tools, llmService.data());
-    return static_cast<int>(
-        qMin<qint64>(requestUsage_.estimateNext(snapshot), std::numeric_limits<int>::max()));
+    return requestUsage_.estimate(
+        requestSnapshot(wireMessages(systemPrompt), tools, llmService.data()));
 }
 
 #include "moc_qsocagent.cpp"

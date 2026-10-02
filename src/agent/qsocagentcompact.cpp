@@ -101,7 +101,11 @@ json summaryMessage(const json &message)
 }
 
 std::optional<QString> formatSummary(
-    const json &history, int start, int end, qint64 budget = std::numeric_limits<qint64>::max())
+    const json         &history,
+    int                 start,
+    int                 end,
+    qint64              budget  = std::numeric_limits<qint64>::max(),
+    QSocTokenizer::Mode counter = QSocTokenizer::Mode::O200k)
 {
     QString   result;
     qint64    tokens = 0;
@@ -115,7 +119,7 @@ std::optional<QString> formatSummary(
                                        QSocMessageAuthority::toWire(history[static_cast<size_t>(i)]))
                                        .dump())
                                + QLatin1Char('\n');
-        const qint64  needed = QSocRequestUsage::estimateText(line);
+        const qint64  needed = QSocRequestUsage::estimateText(line, counter);
         if (needed > budget - tokens) {
             return std::nullopt;
         }
@@ -179,7 +183,7 @@ QString summarizedUserRequest(const json &history, int start, int boundary)
     return {};
 }
 
-bool pruneHistory(json &history, const QSocAgentConfig &config)
+bool pruneHistory(json &history, const QSocAgentConfig &config, QSocTokenizer::Mode counter)
 {
     qint64 protectedTokens = 0;
     int    boundary        = 0;
@@ -190,7 +194,7 @@ bool pruneHistory(json &history, const QSocAgentConfig &config)
             continue;
         }
         protectedTokens += QSocRequestUsage::estimateText(
-            QString::fromStdString(message["content"].get<std::string>()));
+            QString::fromStdString(message["content"].get<std::string>()), counter);
         if (protectedTokens >= config.pruneProtectTokens) {
             boundary = i;
             break;
@@ -205,11 +209,12 @@ bool pruneHistory(json &history, const QSocAgentConfig &config)
             continue;
         }
         const auto tokens = QSocRequestUsage::estimateText(
-            QString::fromStdString(message["content"].get<std::string>()));
+            QString::fromStdString(message["content"].get<std::string>()), counter);
         if (tokens <= 100) {
             continue;
         }
-        saved += tokens - QSocRequestUsage::estimateText(QStringLiteral("[output pruned]"));
+        saved += tokens
+                 - QSocRequestUsage::estimateText(QStringLiteral("[output pruned]"), counter);
         message["content"] = "[output pruned]";
     }
     if (saved <= 0 || saved < config.pruneMinimumSavings) {
@@ -418,16 +423,19 @@ int QSocAgent::performCompaction(bool force, bool manual)
     const qint64 window         = effectiveContextTokens();
     const qint64 capacityLimit  = window - window / 10;
     if (!force
-        && requestUsage_.estimateNext(request)
-               <= window * qMin(agentConfig.pruneThreshold, agentConfig.compactThreshold)) {
+        && !requestExceeds(
+            request,
+            qint64(window * qMin(agentConfig.pruneThreshold, agentConfig.compactThreshold)))) {
         return 0;
     }
     lastNoProgressVersion_ = candidate.sourceRequestVersion;
-    if (force || requestUsage_.estimateNext(request) > window * agentConfig.pruneThreshold) {
-        pruneHistory(candidate.candidateMessages, agentConfig);
+    if (force || requestExceeds(request, qint64(window * agentConfig.pruneThreshold))) {
+        pruneHistory(candidate.candidateMessages, agentConfig, request.counter);
     }
-    const qint64 prunedTokens = QSocRequestUsage::estimateRequest(
-        requestWithHistory(request, candidate.candidateMessages));
+    const bool summarize = force
+                           || requestExceeds(
+                               requestWithHistory(request, candidate.candidateMessages),
+                               qint64(window * agentConfig.compactThreshold));
     if (!current()) {
         if (owner) {
             owner->lastCompactionStatus_ = CompactionStatus::Cancelled;
@@ -440,7 +448,7 @@ int QSocAgent::performCompaction(bool force, bool manual)
     /* Only overflow recovery forces without the user asking. */
     QString    fallbackReason;
     const bool overflow = force && !manual;
-    if (force || prunedTokens > window * agentConfig.compactThreshold) {
+    if (summarize) {
         const auto summary = summarizeHistory(
             source, candidate.candidateMessages, &recentTail, overflow ? &fallbackReason : nullptr);
         if (!current()) {
@@ -452,7 +460,8 @@ int QSocAgent::performCompaction(bool force, bool manual)
         if (summary) {
             const QString text = QString::fromStdString(summary->front().at("content"));
             const QString body = text.mid(QStringLiteral("[Conversation Summary]\n").size());
-            if (QSocRequestUsage::estimateText(body) > qMax<qint64>(1, window / 4)) {
+            if (QSocRequestUsage::estimateText(body, request.counter)
+                > qMax<qint64>(1, window / 4)) {
                 return 0;
             }
             candidate.candidateMessages = *summary;
@@ -472,11 +481,14 @@ int QSocAgent::performCompaction(bool force, bool manual)
         }
         return 0;
     }
+    /* Restored context must keep the upper bound under the capacity limit. */
+    const qint64 restoreBudget
+        = qint64(double(capacityLimit) / QSocRequestUsage::margin(request.counter)) - after;
     if (summarized && agentConfig.contextRestoreEnabled && contextRestoreProvider_
-        && after < capacityLimit) {
+        && restoreBudget > 0) {
         const auto provider = contextRestoreProvider_;
         try {
-            candidate.restoreNotice = provider(recentTail, capacityLimit - after);
+            candidate.restoreNotice = provider(recentTail, restoreBudget);
         } catch (...) {
             if (owner) {
                 owner->lastCompactionStatus_ = CompactionStatus::Failed;
@@ -506,8 +518,8 @@ int QSocAgent::performCompaction(bool force, bool manual)
         }
         return 0;
     }
-    if (candidate.afterTokens >= candidate.beforeTokens
-        || qMax(candidate.afterTokens, requestUsage_.estimateNext(candidateRequest)) > capacityLimit
+    if (candidate.afterTokens >= candidate.beforeTokens || candidate.afterTokens > capacityLimit
+        || requestExceeds(candidateRequest, capacityLimit)
         || !completeToolPairs(candidate.candidateMessages)) {
         lastNoProgressVersion_ = candidate.sourceRequestVersion;
         return 0;
@@ -566,9 +578,8 @@ int QSocAgent::performCompaction(bool force, bool manual)
         return 0;
     }
     candidate.afterTokens = QSocRequestUsage::estimateRequest(archivedRequest);
-    if (candidate.afterTokens >= candidate.beforeTokens
-        || qMax(candidate.afterTokens, requestUsage_.estimateNext(archivedRequest))
-               > capacityLimit) {
+    if (candidate.afterTokens >= candidate.beforeTokens || candidate.afterTokens > capacityLimit
+        || requestExceeds(archivedRequest, capacityLimit)) {
         lastNoProgressVersion_ = candidate.sourceRequestVersion;
         return 0;
     }
@@ -704,7 +715,7 @@ std::optional<json> QSocAgent::summarizeHistory(
         for (int index = groupStart; index < boundary; ++index) {
             group.push_back(retainedSource[static_cast<size_t>(index)]);
         }
-        const qint64 groupTokens = QSocRequestUsage::estimateHistory(group);
+        const qint64 groupTokens = QSocRequestUsage::estimateHistory(group, tokenCounter());
         if (boundary < msgCount && groupTokens > tailBudget - tailTokens) {
             break;
         }
@@ -739,7 +750,8 @@ std::optional<json> QSocAgent::summarizeHistory(
                   ? endpoint->maxOutputTokens
                   : qBound(qint64(0), qint64(agentConfig.reservedOutputTokens), summaryWindow / 2);
         const qint64 inputBudget = qMax<qint64>(0, summaryWindow - outputReserve);
-        const auto oldContent = formatSummary(summarySource, summarizeStart, boundary, inputBudget);
+        const auto   oldContent
+            = formatSummary(summarySource, summarizeStart, boundary, inputBudget, tokenCounter());
         const QString noToolsPreamble = QStringLiteral(
             "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n"
             "You already have all context above. Tool calls will be rejected\n"
@@ -816,6 +828,7 @@ std::optional<json> QSocAgent::summarizeHistory(
         QSocRequestSnapshot summaryRequest;
         summaryRequest.messages = summaryMessages;
         summaryRequest.effort   = effort;
+        summaryRequest.counter  = QSocRequestUsage::counterFor(endpoint->tokenizer);
         if (oldContent && QSocRequestUsage::estimateRequest(summaryRequest) <= inputBudget) {
             const auto generation = summaryRequestUsage_.begin(std::move(summaryRequest));
             ++summaryAttempts_;
@@ -845,7 +858,9 @@ std::optional<json> QSocAgent::summarizeHistory(
                 failure = error != response.end() && error->is_string()
                               ? QString::fromStdString(error->get<std::string>())
                               : QStringLiteral("empty or invalid summary");
-            } else if (fallbackReason && QSocRequestUsage::estimateText(*completed) > summaryBudget) {
+            } else if (
+                fallbackReason
+                && QSocRequestUsage::estimateText(*completed, tokenCounter()) > summaryBudget) {
                 failure = QStringLiteral("summary over budget");
             } else {
                 summary    = *completed;
@@ -871,14 +886,15 @@ std::optional<json> QSocAgent::summarizeHistory(
         }
         summary                 = "[Previous conversation summary: " + carryAnchor;
         const QString truncated = QStringLiteral("...(truncated)]");
-        if (QSocRequestUsage::estimateText(summary + truncated) > summaryBudget) {
+        if (QSocRequestUsage::estimateText(summary + truncated, tokenCounter()) > summaryBudget) {
             lastCompactionStatus_ = CompactionStatus::Failed;
             return std::nullopt;
         }
         const QString request = fallbackReason
                                     ? summarizedUserRequest(summarySource, summarizeStart, boundary)
                                     : QString();
-        if (QSocRequestUsage::estimateText(summary + request + truncated) <= summaryBudget) {
+        if (QSocRequestUsage::estimateText(summary + request + truncated, tokenCounter())
+            <= summaryBudget) {
             summary += request;
         }
         for (int i = summarizeStart; i < boundary; i++) {
@@ -897,7 +913,8 @@ std::optional<json> QSocAgent::summarizeHistory(
             if (content.length() > 400) {
                 content = content.left(280) + QStringLiteral(" ... ") + content.right(80);
             }
-            if (QSocRequestUsage::estimateText(summary + content + truncated) > summaryBudget) {
+            if (QSocRequestUsage::estimateText(summary + content + truncated, tokenCounter())
+                > summaryBudget) {
                 summary += QStringLiteral("...(truncated)");
                 break;
             }

@@ -173,6 +173,9 @@ Every key under an entry is optional except `url`.
     [Map sent unchanged as `chat_template_kwargs` in every `openai-chat`
      request to this entry. Servers that render a chat template (vLLM,
      SGLang) pass it to the template. Absent by default],
+    [`tokenizer`],
+    [How prompt tokens are counted between responses: `auto` (default),
+     `o200k` or `bytes`, see @llm-token-counting],
     [`modalities.image`], [`true` opts the model into image input],
     [`modalities.image_max_tokens`],
     [Reject the image when the client-side estimate exceeds this],
@@ -289,6 +292,33 @@ llm:
       context: 200000
       max_output_tokens: 64000
 ```
+
+=== Token Counting
+<llm-token-counting>
+After each response qsoc uses the input token count the server reports.
+Content added after that response is counted locally. The status bar and
+`/context` show `≈` before a number that includes locally counted tokens.
+
+#figure(
+  align(center)[#table(
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([`tokenizer`], [Local count]),
+    table.hline(),
+    [`auto`], [The o200k tokenizer (default)],
+    [`o200k`], [The o200k tokenizer],
+    [`bytes`], [One token per four UTF-8 bytes],
+  )],
+  caption: [TOKENIZER VALUES],
+  kind: table,
+)
+
+An invalid value prints a warning and uses `auto`. Compaction thresholds
+allow a margin for locally counted tokens, so compaction can start before
+the status bar reaches the threshold.
+
+Earlier versions estimated tokens from character counts. Set
+`tokenizer: bytes` to keep a rough estimate of that kind.
 
 == LSP Configuration
 <lsp-config>

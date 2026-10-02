@@ -782,7 +782,7 @@ The context budget is the smaller of `agent.max_tokens` and the model's context 
 
 qsoc checks the thresholds before each model request in a turn and again at the prompt after a turn. A turn continues its task after a compaction.
 
-The status bar shows the context use as `[ctx N%]`. In the last 15 points before the summary threshold it reads `N% to compact`. It reads `over threshold` while the context stays above the threshold, for example when no compaction could make the history smaller.
+The status bar shows the context use as `[ctx N%]`. In the last 15 points before the summary threshold it reads `N% to compact`. It reads `over threshold` while the context stays above the threshold, for example when no compaction could make the history smaller. `≈` before the percentage marks a value that includes tokens counted locally with the model's `tokenizer` setting (@llm-token-counting). Compaction can start before the chip reaches a threshold.
 
 #figure(
   align(center)[#table(

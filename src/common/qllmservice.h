@@ -61,6 +61,7 @@ struct LLMModelConfig
     bool    reasoning = true;         /* False: the model cannot reason, effort is never sent */
     /* Sent as chat_template_kwargs on openai-chat requests when not empty. */
     nlohmann::json chatTemplateKwargs = nlohmann::json::object();
+    QString tokenizer = QStringLiteral("auto"); /* Prompt token counter: auto, o200k, bytes */
 
     /* Multimodal capability flags. Default text-only so a misconfigured
      * model never receives an image content block it cannot parse: the

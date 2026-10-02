@@ -29,8 +29,9 @@ public:
      * @param compactFraction Auto-compact threshold as a fraction of budget;
      *                        drives the "N% to compact" / "over threshold" hint.
      *                        Pass used <= 0 or budget <= 0 to hide the chip.
+     * @param approximate     Prefix the percentage with an approximation mark.
      */
-    void setContextUsage(int used, int budget, double compactFraction);
+    void setContextUsage(int used, int budget, double compactFraction, bool approximate = false);
 
     /**
      * @brief Pure formatter for the context-usage chip text.
@@ -39,9 +40,10 @@ public:
      *          usage). Near the compaction threshold it appends a
      *          "N% to compact" hint; at or above it, "over threshold".
      */
-    static QString formatContextChip(int used, int budget, double compactFraction);
-    void           setEffortLevel(const QString &level);
-    void           setModel(const QString &model);
+    static QString formatContextChip(
+        int used, int budget, double compactFraction, bool approximate = false);
+    void setEffortLevel(const QString &level);
+    void setModel(const QString &model);
     /** @brief Toggle the read-only plan-mode chip (paused indicator). */
     void setPlanMode(bool active);
 
@@ -125,6 +127,7 @@ private:
     int    ctxUsed_            = 0;
     int    ctxBudget_          = 0;
     double ctxCompactFraction_ = 0.0;
+    bool   ctxApproximate_     = false;
 
     QString userLine_;
 

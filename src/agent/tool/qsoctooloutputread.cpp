@@ -3,7 +3,6 @@
 
 #include "agent/tool/qsoctooloutputread.h"
 #include "agent/qsocagent.h"
-#include "common/qsoctokenizer.h"
 
 QString QSocToolOutputRead::getName() const
 {
@@ -66,17 +65,17 @@ QString QSocToolOutputRead::execute(const json &arguments)
     QString      result = encoded();
     const qint64 budget = agent->toolResultBudgetTokens();
     /* JSON escaping can inflate the text, so shrink by the measured excess. */
-    qint64 textBudget = QSocRequestUsage::estimateText(page->text);
-    for (qint64 used = QSocRequestUsage::estimateText(result); used > budget && textBudget > 0;
-         used        = QSocRequestUsage::estimateText(result)) {
+    qint64 textBudget = agent->estimateTokens(page->text);
+    for (qint64 used = agent->estimateTokens(result); used > budget && textBudget > 0;
+         used        = agent->estimateTokens(result)) {
         textBudget       = qMin(textBudget - 1, textBudget - (used - budget));
-        page->text       = QSocTokenizer::truncate(page->text, textBudget);
+        page->text       = agent->truncateTokens(page->text, textBudget);
         const auto end   = page->text.toUtf8().size();
         page->nextOffset = page->offset + end;
         page->eof        = page->nextOffset == page->reference.capturedBytes;
         result           = encoded();
     }
-    if (QSocRequestUsage::estimateText(result) > budget || (!page->eof && page->text.isEmpty())) {
+    if (agent->estimateTokens(result) > budget || (!page->eof && page->text.isEmpty())) {
         agent->stopForToolResultBudget();
         return QStringLiteral(
             "Error: remaining context cannot hold an artifact page. Stop this turn.");

@@ -106,6 +106,16 @@ void applyReasoningEffort(json &payload, const QString &effort)
     }
 }
 
+std::optional<QString> tokenizerSetting(const QString &value)
+{
+    const QString keyword = value.toLower();
+    if (keyword == QStringLiteral("auto") || keyword == QStringLiteral("o200k")
+        || keyword == QStringLiteral("bytes")) {
+        return keyword;
+    }
+    return std::nullopt;
+}
+
 struct AsyncRequestState
 {
     QPointer<QNetworkReply> reply;
@@ -703,6 +713,17 @@ void QLLMService::loadConfigSettings()
                 }
                 if (node["chat_template_kwargs"] && node["chat_template_kwargs"].IsMap()) {
                     modelCfg.chatTemplateKwargs = yamlToJson(node["chat_template_kwargs"]);
+                }
+                if (node["tokenizer"]) {
+                    const QString value
+                        = QString::fromStdString(node["tokenizer"].as<std::string>()).trimmed();
+                    if (const auto setting = tokenizerSetting(value)) {
+                        modelCfg.tokenizer = *setting;
+                    } else {
+                        QSocConsole::warn()
+                            << "Model" << modelCfg.id << "has invalid tokenizer" << value
+                            << "(expected auto, o200k or bytes); using auto";
+                    }
                 }
 
                 /* Modality block: opt-in only. Absent or non-map -> all
