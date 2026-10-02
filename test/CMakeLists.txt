@@ -481,3 +481,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         "-Wl,--wrap=libssh2_session_free"
     )
 endif()
+
+# Real Unix socket + terminal lifecycle checks use only Python's standard library.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME test_agent_daemon_lifecycle
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/agent_daemon_lifecycle.py
+                    $<TARGET_FILE_DIR:qsoc> -v)
+        set_tests_properties(test_agent_daemon_lifecycle PROPERTIES TIMEOUT 90)
+    endif()
+endif()

@@ -18,10 +18,36 @@ nix shell github:vowstar/qsoc#qsoc
 
 ```bash
 qsoc agent -q "list the modules in this project"        # one-shot query
-qsoc agent                                              # interactive REPL
+qsoc agent                                              # TUI + owned daemon child
 qsoc agent --workspace /tmp/scratch                     # tools run in a different cwd
 qsoc agent --ssh user@host --workspace /home/u/proj     # remote workspace via SSH
+
+# Daemon mode: all agent infrastructure in one process, any frontend
+qsoc-agentd                                             # listen on $XDG_RUNTIME_DIR/qsoc/agentd.sock
+qsoc-agentd -s /tmp/agent.sock                          # ... or an explicit socket
+qsoc agent --connect /tmp/agent.sock                    # TUI frontend over the socket
 ```
+
+## Architecture
+
+The agent is split along a clean boundary:
+
+- **`qsoc_agent` library** (`src/agent/runtime/`): the agent runtime.
+  `QSocAgentRuntime` assembles every piece of agent infrastructure
+  (managers, tools, MCP, LSP, scheduler, session persistence, recovery,
+  background memory) and exposes a structured event stream plus a small
+  API for turns, commands, sessions and remote workspaces. Frontends
+  provide presentation and user interaction only.
+- **`qsoc` TUI**: the interactive frontend. It drives the runtime
+  over a Unix socket in both modes. `qsoc agent` launches a private daemon
+  child and opens the input prompt immediately; closing the TUI stops that
+  child. `qsoc agent --connect /path/to/socket` attaches to a separately
+  started daemon; closing this TUI leaves the daemon running. Each connection
+  owns its agent session, and disconnecting aborts that connection's work;
+  session history remains available through `--resume` / `--continue`.
+- **`qsoc-agentd` daemon** (`src/agent/daemon/`): hosts agent sessions
+  behind a unix socket with a length-prefixed JSON protocol, so any GUI,
+  web, or TUI frontend can drive the same agent infrastructure.
 
 ## Features
 
