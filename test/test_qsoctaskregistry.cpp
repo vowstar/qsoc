@@ -6,7 +6,7 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskregistry.h"
 #include "agent/qsoctasksource.h"
-#include "cli/qsocloopscheduler.h"
+#include "agent/services/qsocloopscheduler.h"
 #include "qsoc_test.h"
 #include "tui/qtuitaskoverlay.h"
 
