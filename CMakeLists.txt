@@ -883,6 +883,7 @@ if(CPPCHECK_COMMAND)
             -I${CMAKE_BINARY_DIR}
             -I${CMAKE_BINARY_DIR}/qsoc_core_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_agent_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc-agentd_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_autogen/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/test
