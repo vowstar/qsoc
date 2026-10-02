@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/tokenizer">
+        <file compress="19" threshold="10" alias="o200k_base.tiktoken">../external/tiktoken/o200k_base.tiktoken</file>
+    </qresource>
+</RCC>

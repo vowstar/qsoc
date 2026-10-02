@@ -487,6 +487,13 @@ endif()
 
 include(cmake/UvmResources.cmake)
 
+# The o200k_base table ships as published; the hash is tiktoken's expected_hash.
+set(QSOC_O200K_TABLE "${CMAKE_CURRENT_SOURCE_DIR}/external/tiktoken/o200k_base.tiktoken")
+file(SHA256 "${QSOC_O200K_TABLE}" QSOC_O200K_SHA256)
+if(NOT QSOC_O200K_SHA256 STREQUAL "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d")
+    message(FATAL_ERROR "${QSOC_O200K_TABLE} does not match the published o200k_base SHA-256.")
+endif()
+
 target_include_directories(qsoc_core PUBLIC
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/src"
@@ -668,6 +675,9 @@ install(TARGETS ${PROJECT_NAME}
 install(FILES external/z3/LICENSE.txt
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc"
     RENAME z3.txt)
+install(FILES external/tiktoken/LICENSE
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc"
+    RENAME tiktoken.txt)
 
 if(UNIX AND NOT APPLE)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.desktop"

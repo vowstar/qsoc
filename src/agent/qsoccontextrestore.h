@@ -124,6 +124,9 @@ public:
         /* Token estimator (bind to QSocAgent::estimateTokens). */
         std::function<int(const QString &)> estimateTokens;
 
+        /* Token boundary cut (bind to QSocAgent::truncateTokens); optional. */
+        std::function<QString(const QString &, int)> truncateTokens;
+
         /* Budgets / counts (default to the constants above). */
         int totalBudget       = 75000;
         int maxFiles          = kMaxFilesToRestore;
@@ -147,10 +150,14 @@ public:
 
     /**
      * @brief Truncate @p text to at most @p maxTokens using the injected
-     *        estimator (truncate-then-remeasure). Appends a marker when cut.
+     *        estimator, first cutting with @p cut when given. Appends a
+     *        marker when cut.
      */
     static QString truncateToTokens(
-        const QString &text, int maxTokens, const std::function<int(const QString &)> &estimate);
+        const QString                                      &text,
+        int                                                 maxTokens,
+        const std::function<int(const QString &)>          &estimate,
+        const std::function<QString(const QString &, int)> &cut = {});
 };
 
 #endif // QSOCCONTEXTRESTORE_H

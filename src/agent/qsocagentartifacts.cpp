@@ -2,27 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "common/qsoctokenizer.h"
 
 #include <QSet>
-
-namespace {
-QString boundedText(const QString &text, qint64 tokens)
-{
-    const QByteArray bytes = text.toUtf8();
-    qint64           low   = 0;
-    qint64           high  = bytes.size();
-    while (low < high) {
-        const qint64 middle = low + (high - low + 1) / 2;
-        const auto   prefix = QString::fromUtf8(
-            bytes.first(QSocToolResultStore::utf8End(bytes, 0, middle)));
-        if (QSocRequestUsage::estimateText(prefix) <= tokens)
-            low = middle;
-        else
-            high = middle - 1;
-    }
-    return QString::fromUtf8(bytes.first(QSocToolResultStore::utf8End(bytes, 0, low)));
-}
-} // namespace
 
 void QSocAgent::unbindToolResultStore()
 {
@@ -173,7 +155,7 @@ void QSocAgent::appendBoundedToolMessage(
                                        "\n[Captured tool return saved locally: %1. Use "
                                        "tool_output_read when available.]")
                                        .arg(QString::fromStdString(refs.front().dump()));
-            view                 = boundedText(
+            view                 = QSocTokenizer::truncate(
                                        content, std::max(qint64(0), budget - QSocRequestUsage::estimateText(notice)))
                                    + notice;
         } else {
@@ -185,7 +167,7 @@ void QSocAgent::appendBoundedToolMessage(
                           completion,
                           error.isEmpty() ? QStringLiteral("Result storage is unavailable.")
                                           : error);
-            view = boundedText(
+            view = QSocTokenizer::truncate(
                        content, std::max(qint64(0), budget - QSocRequestUsage::estimateText(notice)))
                    + notice;
         }

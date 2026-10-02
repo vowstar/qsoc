@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocrequestusage.h"
+#include "common/qsoctokenizer.h"
 
 #include <limits>
 
@@ -79,23 +80,7 @@ qint64 messageTokens(const json &message, qint64 imageTokens, bool history = fal
 
 qint64 QSocRequestUsage::estimateText(const QString &text)
 {
-    qint64 units = 0;
-    for (const QChar character : text) {
-        const ushort code   = character.unicode();
-        qint64       weight = 10;
-        if (code < 0x80) {
-            weight = 5;
-        } else if (code >= 0x4E00 && code <= 0x9FFF) {
-            weight = 20;
-        } else if ((code >= 0x3040 && code <= 0x30FF) || (code >= 0xAC00 && code <= 0xD7AF)) {
-            weight = 16;
-        }
-        if (weight > maximum - units) {
-            return maximum;
-        }
-        units += weight;
-    }
-    return units / 20 + 1;
+    return QSocTokenizer::count(text);
 }
 
 qint64 QSocRequestUsage::estimateMessages(const json &messages, qint64 imageTokens)

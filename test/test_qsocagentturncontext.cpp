@@ -289,8 +289,12 @@ private slots:
         QSocAgent agent(nullptr, &service, &registry, config);
         agent.setApprovedPlan(QStringLiteral("1. Rename the port."));
 
+        /* Turns long enough that a summary and its archive index are smaller. */
         for (const char *reply : {"one", "two", "three"}) {
-            server.text(reply);
+            server.text(
+                (QString::fromLatin1(reply) + QStringLiteral(" renamed the port.").repeated(80))
+                    .toUtf8()
+                    .constData());
             agent.run(QStringLiteral("next step please"));
         }
         QList<json> told = reminders(agent.getMessages());

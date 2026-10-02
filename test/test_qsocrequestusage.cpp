@@ -64,15 +64,22 @@ private slots:
                json::array(
                    {{{"type", "text"}, {"text", "abcd"}},
                     {{"type", "image_url"}, {"image_url", {{"url", imageUrl.toStdString()}}}}})}}});
-        QCOMPARE(QSocRequestUsage::estimateMessages(messages, 1000), qint64(1012));
+        const auto text = [](const std::string &value) {
+            return QSocRequestUsage::estimateText(QString::fromStdString(value));
+        };
+        QCOMPARE(QSocRequestUsage::estimateMessages(messages, 1000), 1010 + text("abcd"));
         messages[0]["_usage"] = {{"prompt_tokens", 999999}};
-        QCOMPARE(QSocRequestUsage::estimateMessages(messages, 1000), qint64(1012));
+        QCOMPARE(QSocRequestUsage::estimateMessages(messages, 1000), 1010 + text("abcd"));
         messages[0]["content"][0]["text"] = std::string(404, 'a');
-        QCOMPARE(QSocRequestUsage::estimateMessages(messages, 1000), qint64(1112));
-        messages[0]["tool_calls"] = json::array(
+        QCOMPARE(
+            QSocRequestUsage::estimateMessages(messages, 1000), 1010 + text(std::string(404, 'a')));
+        const json calls = json::array(
             {{{"id", "call"},
               {"function", {{"name", "probe"}, {"arguments", std::string(400, 'x')}}}}});
-        QVERIFY(QSocRequestUsage::estimateMessages(messages, 1000) > 1212);
+        messages[0]["tool_calls"] = calls;
+        QCOMPARE(
+            QSocRequestUsage::estimateMessages(messages, 1000),
+            1010 + text(std::string(404, 'a')) + text(calls.dump()));
     }
 
     void zeroUsageDoesNotReplaceTheRequestEstimate()

@@ -3,6 +3,7 @@
 
 #include "agent/tool/qsoctooloutputread.h"
 #include "agent/qsocagent.h"
+#include "common/qsoctokenizer.h"
 
 QString QSocToolOutputRead::getName() const
 {
@@ -64,10 +65,13 @@ QString QSocToolOutputRead::execute(const json &arguments)
     };
     QString      result = encoded();
     const qint64 budget = agent->toolResultBudgetTokens();
-    while (QSocRequestUsage::estimateText(result) > budget && !page->text.isEmpty()) {
-        const auto bytes = page->text.toUtf8();
-        const auto end   = QSocToolResultStore::utf8End(bytes, 0, bytes.size() / 2);
-        page->text       = QString::fromUtf8(bytes.first(end));
+    /* JSON escaping can inflate the text, so shrink by the measured excess. */
+    qint64 textBudget = QSocRequestUsage::estimateText(page->text);
+    for (qint64 used = QSocRequestUsage::estimateText(result); used > budget && textBudget > 0;
+         used        = QSocRequestUsage::estimateText(result)) {
+        textBudget       = qMin(textBudget - 1, textBudget - (used - budget));
+        page->text       = QSocTokenizer::truncate(page->text, textBudget);
+        const auto end   = page->text.toUtf8().size();
         page->nextOffset = page->offset + end;
         page->eof        = page->nextOffset == page->reference.capturedBytes;
         result           = encoded();

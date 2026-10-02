@@ -59,6 +59,12 @@ const QList<QSocLicense::Component> &QSocLicense::components()
          "slang bundles boost_unordered and expected-lite under BSL-1.0, and "
          "BS_thread_pool under MIT, Copyright (c) 2021-2026 Barak Shoshany."},
         {"systemrdl", "MIT", "https://github.com/vowstar/systemrdl-toolkit", {"systemrdl.txt"}, {}},
+        {"tiktoken",
+         "MIT",
+         "https://github.com/openai/tiktoken",
+         {"tiktoken.txt"},
+         "The o200k_base table. The same table ships under Apache-2.0 in the "
+         "gpt-oss tokenizer."},
         {"uvm-core",
          "Apache-2.0",
          "https://github.com/accellera-official/uvm-core",

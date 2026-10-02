@@ -30,6 +30,7 @@
         <file alias="slang-bsl-1.0.txt">../external/slang/LICENSES/BSL-1.0.txt</file>
         <file alias="slang.txt">../external/slang/LICENSE</file>
         <file alias="systemrdl.txt">../external/systemrdl/LICENSE</file>
+        <file alias="tiktoken.txt">../external/tiktoken/LICENSE</file>
         <file alias="uvm-core-notice.txt">../external/uvm-core/NOTICE.txt</file>
         <file alias="uvm-core.txt">../external/uvm-core/LICENSE.txt</file>
         <file alias="yaml.txt">../external/yaml/LICENSE</file>

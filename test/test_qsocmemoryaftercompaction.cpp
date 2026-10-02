@@ -143,7 +143,8 @@ public:
     bool    isReadOnly() const override { return true; }
     QString execute(const json &) override
     {
-        return QStringLiteral("READ_RESULT_%1 ").arg(++reads_) + QString(12000, QLatin1Char('x'));
+        return QStringLiteral("READ_RESULT_%1").arg(++reads_)
+               + QStringLiteral(" the").repeated(3000);
     }
 
 private:

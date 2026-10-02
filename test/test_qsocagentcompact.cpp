@@ -147,6 +147,16 @@ public:
     }
 };
 
+/* About one o200k token per four characters, like typical prose. */
+std::string prose(size_t characters, char lead)
+{
+    std::string text(1, lead);
+    while (text.size() + 4 <= characters) {
+        text += " the";
+    }
+    return text;
+}
+
 json textChoice(const char *content)
 {
     return json{
@@ -1506,7 +1516,7 @@ private slots:
         for (int index = 0; index < 12; ++index) {
             history.push_back(
                 {{"role", index % 2 ? "assistant" : "user"},
-                 {"content", std::string(2000, static_cast<char>('a' + index))}});
+                 {"content", prose(2000, static_cast<char>('a' + index))}});
         }
         if (toolGroup) {
             history.push_back(
@@ -1517,14 +1527,15 @@ private slots:
                       {{{"id", "large-call"},
                         {"type", "function"},
                         {"function",
-                         {{"name", "read_file"}, {"arguments", std::string(characters, 'x')}}}}})}});
+                         {{"name", "read_file"},
+                          {"arguments", prose(size_t(characters), 'x')}}}}})}});
             history.push_back(
                 {{"role", "tool"}, {"tool_call_id", "large-call"}, {"content", "done"}});
         } else {
             history.push_back(
                 {{"role", "user"},
                  {"content",
-                  json::array({{{"type", "text"}, {"text", std::string(characters, 'x')}}})}});
+                  json::array({{{"type", "text"}, {"text", prose(size_t(characters), 'x')}}})}});
         }
         agent->setMessages(history);
         const int saved = agent->compact();
@@ -1552,10 +1563,10 @@ private slots:
         config.systemPromptOverride = QStringLiteral("Follow the task.");
         auto *agent                 = createAgent(config);
         json  history               = json::array(
-            {{{"role", "user"}, {"content", "[Conversation Summary]\n" + std::string(8000, 'x')}}});
+            {{{"role", "user"}, {"content", "[Conversation Summary]\n" + prose(8000, 'x')}}});
         for (int index = 0; index < 12; ++index) {
             history.push_back(
-                {{"role", index % 2 ? "assistant" : "user"}, {"content", std::string(2000, 'y')}});
+                {{"role", index % 2 ? "assistant" : "user"}, {"content", prose(2000, 'y')}});
         }
         agent->setMessages(history);
         QCOMPARE(agent->compact(), 0);

@@ -99,16 +99,24 @@ QStringList QSocContextRestore::agentLabels() const
 }
 
 QString QSocContextRestoreBuilder::truncateToTokens(
-    const QString &text, int maxTokens, const std::function<int(const QString &)> &estimate)
+    const QString                                      &text,
+    int                                                 maxTokens,
+    const std::function<int(const QString &)>          &estimate,
+    const std::function<QString(const QString &, int)> &cut)
 {
     if (maxTokens <= 0 || !estimate || estimate(text) <= maxTokens) {
         return text;
     }
     static const QString marker = QStringLiteral("\n...(truncated)");
-    /* Proportional first cut, then shrink until the marked text fits. */
-    const int total = qMax(1, estimate(text));
-    int     chars = qMax(1, static_cast<int>(static_cast<qint64>(text.size()) * maxTokens / total));
-    QString out   = text.left(chars);
+    QString              out;
+    if (cut) {
+        out = cut(text, qMax(0, maxTokens - estimate(marker)));
+    } else {
+        /* Proportional first cut, then shrink until the marked text fits. */
+        const int total = qMax(1, estimate(text));
+        out             = text.left(
+            qMax(1, static_cast<int>(static_cast<qint64>(text.size()) * maxTokens / total)));
+    }
     while (out.size() > 0 && estimate(out + marker) > maxTokens) {
         out.chop(qMax(1, out.size() / 10));
     }
@@ -189,8 +197,8 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
         if (!body.has_value()) {
             continue;
         }
-        const QString truncated
-            = truncateToTokens(*body, inputs.maxTokensPerSkill, inputs.estimateTokens);
+        const QString truncated = truncateToTokens(
+            *body, inputs.maxTokensPerSkill, inputs.estimateTokens, inputs.truncateTokens);
         QSocContextRestore::SkillItem item;
         item.name = name;
         item.attachmentText

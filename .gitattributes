@@ -1,0 +1,2 @@
+# Checked against a SHA-256 at configure time: keep the bytes exact.
+external/tiktoken/o200k_base.tiktoken binary

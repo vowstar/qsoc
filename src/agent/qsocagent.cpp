@@ -13,6 +13,7 @@
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
+#include "common/qsoctokenizer.h"
 
 #include <algorithm>
 #include <array>
@@ -3715,6 +3716,11 @@ int QSocAgent::estimateTokens(const QString &text) const
 {
     return static_cast<int>(
         qMin<qint64>(QSocRequestUsage::estimateText(text), std::numeric_limits<int>::max()));
+}
+
+QString QSocAgent::truncateTokens(const QString &text, qint64 maxTokens) const
+{
+    return QSocTokenizer::truncate(text, maxTokens);
 }
 
 int QSocAgent::effectiveContextTokens() const

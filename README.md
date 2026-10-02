@@ -65,3 +65,8 @@ cmake --build build --target clang-format
 QSoC ships third-party components under their own licenses.
 `qsoc --licenses` lists them, `qsoc --licenses <name>` prints a full
 text, and the GUI shows them under Help, About QSoC.
+
+The embedded o200k_base table comes from OpenAI
+[tiktoken](https://github.com/openai/tiktoken) (MIT). The same table ships
+under Apache-2.0 in the [gpt-oss](https://huggingface.co/openai/gpt-oss-20b)
+tokenizer.

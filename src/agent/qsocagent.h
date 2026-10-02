@@ -504,10 +504,14 @@ public:
     QSocContextRestore takeLastContextRestore();
 
     /**
-     * @brief Estimate the number of tokens in a text.
-     * @return Estimated token count (approximately 4 characters per token).
+     * @brief Estimate the number of tokens in a text with the local counter.
      */
     int estimateTokens(const QString &text) const;
+
+    /**
+     * @brief Prefix of @p text cut at a token boundary, at most @p maxTokens.
+     */
+    QString truncateTokens(const QString &text, qint64 maxTokens) const;
 
     /**
      * @brief Estimate total tokens for the next API call (system prompt +
