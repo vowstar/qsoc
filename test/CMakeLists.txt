@@ -47,8 +47,9 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
 
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
 
-    # GUI tests need the offscreen platform plugin.
-    if(${TARGET_NAME} MATCHES "^test_qsocgui")
+    # GUI tests and the agent-runtime tests (which drive the full Qt
+    # stack) need the offscreen platform plugin.
+    if(${TARGET_NAME} MATCHES "^test_qsocgui|^test_qsocagentruntime")
         set_tests_properties(${TARGET_NAME} PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -314,6 +315,7 @@ qt_add_test_target("test_qsoctoolagentstatus")
 qt_add_test_target("test_qllmserviceclone")
 qt_add_test_target("test_qsoctoolsendmessage")
 qt_add_test_target("test_qsocagentmailbox" LABELS "agent-messaging")
+qt_add_test_target("test_qsocagentruntime" LABELS "agent-runtime")
 qt_add_test_target("test_qsoctoolagentresume")
 qt_add_test_target("test_qsocagentinputmonitor")
 qt_add_test_target("test_qtuiinputlinewrap")

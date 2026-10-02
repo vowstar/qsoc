@@ -673,6 +673,9 @@ signals:
         const QString       &result,
         QSocToolResultStatus status);
     void toolCallOutput(const QString &callId, const QString &text);
+    /** Image already admitted by a tool; frontends need no filesystem access. */
+    void imageAttachment(
+        const QString &source, const QString &mime, const QString &base64, int width, int height);
     /**
      * @brief Signal emitted when a tool is called
      * @param toolName Name of the tool being called

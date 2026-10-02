@@ -5,6 +5,8 @@
 #define QSOCTOOLLSP_H
 
 #include "agent/qsoctool.h"
+#include <functional>
+class QLspService;
 
 /**
  * @brief Agent tool for LSP code intelligence operations.
@@ -19,6 +21,11 @@ class QSocToolLsp : public QSocTool
 public:
     explicit QSocToolLsp(QObject *parent = nullptr);
     ~QSocToolLsp() override;
+    void setService(QLspService *service) { service_ = service; }
+    void setWorkingDirectoryProvider(std::function<QString()> provider)
+    {
+        workingDirectory_ = std::move(provider);
+    }
 
     QString getName() const override;
     QString getDescription() const override;
@@ -27,11 +34,13 @@ public:
     bool    isReadOnly() const override { return true; }
 
 private:
-    QString formatDiagnostics(const QString &filePath);
-    QString formatDefinition(const QString &filePath, int line, int character);
-    QString formatHover(const QString &filePath, int line, int character);
-    QString formatReferences(const QString &filePath, int line, int character);
-    QString formatDocumentSymbol(const QString &filePath);
+    QLspService             *service_ = nullptr;
+    std::function<QString()> workingDirectory_;
+    QString                  formatDiagnostics(const QString &filePath);
+    QString                  formatDefinition(const QString &filePath, int line, int character);
+    QString                  formatHover(const QString &filePath, int line, int character);
+    QString                  formatReferences(const QString &filePath, int line, int character);
+    QString                  formatDocumentSymbol(const QString &filePath);
 };
 
 #endif // QSOCTOOLLSP_H

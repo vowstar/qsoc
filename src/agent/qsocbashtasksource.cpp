@@ -28,7 +28,7 @@ QSocBashTaskSource::QSocBashTaskSource(QSocToolShellBash *bashTool, QObject *par
 QList<QSocTask::Row> QSocBashTaskSource::listTasks() const
 {
     QList<QSocTask::Row> out;
-    for (const auto &snap : QSocToolShellBash::snapshotActive()) {
+    for (const auto &snap : QSocToolShellBash::snapshotActive(bashTool_)) {
         QSocTask::Row row;
         row.id      = QString::number(snap.id);
         row.label   = snap.command;
@@ -52,7 +52,7 @@ QString QSocBashTaskSource::tailFor(const QString &id, int maxBytes) const
 {
     bool      ok        = false;
     const int processId = id.toInt(&ok);
-    if (!ok)
+    if (!ok || !bashTool_ || !bashTool_->ownsProcess(processId))
         return QString();
     const QString tail = QSocToolShellBash::tailActive(processId, maxBytes);
     if (tail.isEmpty())
@@ -64,7 +64,7 @@ bool QSocBashTaskSource::killTask(const QString &id)
 {
     bool      ok        = false;
     const int processId = id.toInt(&ok);
-    if (!ok)
+    if (!ok || !bashTool_ || !bashTool_->ownsProcess(processId))
         return false;
     const bool result = QSocToolShellBash::killActive(processId);
     if (result)

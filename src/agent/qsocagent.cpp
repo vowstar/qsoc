@@ -2474,6 +2474,16 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         }
 
         publishResult(result);
+        for (const auto &attachment : attachments) {
+            if (stopBatch())
+                return false;
+            emit owner->imageAttachment(
+                attachment.sourceUrl,
+                attachment.mime,
+                attachment.dataB64,
+                attachment.width,
+                attachment.height);
+        }
         if (stopBatch()) {
             return false;
         }

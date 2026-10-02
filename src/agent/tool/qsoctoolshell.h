@@ -7,6 +7,7 @@
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
+#include <functional>
 #include <QEventLoop>
 #include <QMap>
 #include <QPointer>
@@ -69,6 +70,10 @@ public:
     void    abort() override;
 
     void setProjectManager(QSocProjectManager *projectManager);
+    void setWorkingDirectoryProvider(std::function<QString()> provider)
+    {
+        workingDirectoryProvider = std::move(provider);
+    }
 
     /**
      * @brief Stop background processes tracked by bash_manage.
@@ -78,6 +83,8 @@ public:
      *          wait unwinds.
      */
     static void killAllActive();
+    void        killOwned() { killTracked(this); }
+    bool        ownsProcess(int processId) const;
 
     /**
      * @brief Match a tail of bash output against common interactive prompts.
@@ -108,7 +115,7 @@ public:
         bool    crashed;
         bool    stopRequested;
     };
-    static QList<BackgroundSnapshot> snapshotActive();
+    static QList<BackgroundSnapshot> snapshotActive(const QSocToolShellBash *owner = nullptr);
     static int                       activeProcessCount();
     static bool                      killActive(int processId);
     static QString                   tailActive(int processId, int maxBytes);
@@ -133,6 +140,7 @@ signals:
     void processStuckDetected(int processId, const QString &reason, const QString &tailHint);
 
 private:
+    std::function<QString()> workingDirectoryProvider;
     struct ForegroundWaitContext
     {
         QPointer<QProcess> process;
@@ -174,6 +182,11 @@ class QSocToolBashManage : public QSocTool
 public:
     explicit QSocToolBashManage(QObject *parent = nullptr);
     ~QSocToolBashManage() override;
+    void setOwner(QSocToolShellBash *owner)
+    {
+        owner_      = owner;
+        ownerBound_ = true;
+    }
 
     QString getName() const override;
     QString getDescription() const override;
@@ -191,7 +204,9 @@ private:
     static void    cancelWait(WaitContext *wait);
     static QString collectOutput(const QSocBashProcessInfo &info, int exitCode);
 
-    QSet<WaitContext *> activeWaits_;
+    QSet<WaitContext *>         activeWaits_;
+    QPointer<QSocToolShellBash> owner_;
+    bool                        ownerBound_ = false;
 };
 
 #endif // QSOCTOOLSHELL_H

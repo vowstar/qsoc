@@ -50,22 +50,22 @@ public:
      * @details Sort order: Running > Stuck > Pending > Idle > others;
      *          within a status bucket, newer (larger startedAtMs) first.
      */
-    QList<TaggedRow> listAll() const;
+    virtual QList<TaggedRow> listAll() const;
 
     /** @brief Total active rows across sources. */
-    int activeCount() const;
+    virtual int activeCount() const;
 
     /**
      * @brief Tail content for (tag, id); empty if tag not registered or
      *        task missing.
      */
-    QString tailFor(const QString &tag, const QString &id, int maxBytes) const;
+    virtual QString tailFor(const QString &tag, const QString &id, int maxBytes) const;
 
     /** @brief Kill the (tag, id) task. False if tag unknown or kill failed. */
-    bool killTask(const QString &tag, const QString &id);
+    virtual bool killTask(const QString &tag, const QString &id);
     void setEstimate(const QString &tag, const QString &id, const QSocTask::Estimate &estimate);
     void clearEstimates();
-    QSocTask::Estimate estimateFor(const QString &tag, const QString &id) const;
+    virtual QSocTask::Estimate estimateFor(const QString &tag, const QString &id) const;
 
 signals:
     /** @brief Any underlying source emitted tasksChanged. */

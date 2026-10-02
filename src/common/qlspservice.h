@@ -25,6 +25,8 @@ public:
      * @brief Get the global singleton instance.
      */
     static QLspService *instance();
+    explicit QLspService(QObject *parent = nullptr);
+    ~QLspService() override;
 
     /**
      * @brief Register a backend. The service takes ownership.
@@ -92,9 +94,6 @@ signals:
     void diagnosticsUpdated(const QString &filePath, const QJsonArray &diags);
 
 private:
-    explicit QLspService(QObject *parent = nullptr);
-    ~QLspService() override;
-
     /* Ensure a file is open on its backend before sending requests. */
     void ensureFileOpen(const QString &filePath);
 

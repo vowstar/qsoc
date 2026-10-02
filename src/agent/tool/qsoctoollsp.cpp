@@ -60,13 +60,14 @@ QString QSocToolLsp::execute(const json &arguments)
     /* Make path absolute. */
     QFileInfo fileInfo(filePath);
     if (!fileInfo.isAbsolute())
-        filePath = QDir::currentPath() + "/" + filePath;
+        filePath
+            = QDir(workingDirectory_ ? workingDirectory_() : QDir::currentPath()).filePath(filePath);
     filePath = QFileInfo(filePath).absoluteFilePath();
 
     if (!QFileInfo::exists(filePath))
         return QString("Error: file does not exist: %1").arg(filePath);
 
-    QLspService *service = QLspService::instance();
+    QLspService *service = (service_ ? service_ : QLspService::instance());
     if (!service->isAvailable())
         return "Error: no LSP backend available for this file type";
 
@@ -139,7 +140,7 @@ static QString locationString(const QString &uri, const QJsonObject &range)
 
 QString QSocToolLsp::formatDiagnostics(const QString &filePath)
 {
-    QLspService *service = QLspService::instance();
+    QLspService *service = (service_ ? service_ : QLspService::instance());
 
     /* Trigger file open/reparse if not already tracked. */
     service->didSave(filePath);
@@ -180,7 +181,7 @@ QString QSocToolLsp::formatDiagnostics(const QString &filePath)
 
 QString QSocToolLsp::formatDefinition(const QString &filePath, int line, int character)
 {
-    QLspService *service = QLspService::instance();
+    QLspService *service = (service_ ? service_ : QLspService::instance());
     QJsonValue   result  = service->definition(filePath, line, character);
 
     if (result.isNull())
@@ -223,7 +224,7 @@ QString QSocToolLsp::formatDefinition(const QString &filePath, int line, int cha
 
 QString QSocToolLsp::formatHover(const QString &filePath, int line, int character)
 {
-    QLspService *service = QLspService::instance();
+    QLspService *service = (service_ ? service_ : QLspService::instance());
     QJsonValue   result  = service->hover(filePath, line, character);
 
     if (result.isNull() || !result.isObject())
@@ -258,7 +259,7 @@ QString QSocToolLsp::formatHover(const QString &filePath, int line, int characte
 
 QString QSocToolLsp::formatReferences(const QString &filePath, int line, int character)
 {
-    QLspService *service   = QLspService::instance();
+    QLspService *service   = (service_ ? service_ : QLspService::instance());
     QJsonArray   locations = service->references(filePath, line, character);
 
     if (locations.isEmpty())
@@ -344,7 +345,7 @@ static void formatSymbolNode(
 
 QString QSocToolLsp::formatDocumentSymbol(const QString &filePath)
 {
-    QLspService *service = QLspService::instance();
+    QLspService *service = (service_ ? service_ : QLspService::instance());
     QJsonArray   symbols = service->documentSymbol(filePath);
 
     if (symbols.isEmpty())

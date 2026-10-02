@@ -5,6 +5,7 @@
 #define QSOCTOOLFILE_H
 
 #include "agent/qsoctool.h"
+class QLspService;
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
 
@@ -99,10 +100,12 @@ public:
      *          overwriting. The store can be nullptr to disable tracking.
      */
     void setFileHistory(QSocFileHistory *history);
+    void setLspService(QLspService *service) { lspService = service; }
 
 private:
     QSocPathContext *pathContext = nullptr;
     QSocFileHistory *fileHistory = nullptr;
+    QLspService     *lspService  = nullptr;
 };
 
 /**
@@ -130,10 +133,12 @@ public:
      *          replacement. The store can be nullptr to disable tracking.
      */
     void setFileHistory(QSocFileHistory *history);
+    void setLspService(QLspService *service) { lspService = service; }
 
 private:
     QSocPathContext *pathContext = nullptr;
     QSocFileHistory *fileHistory = nullptr;
+    QLspService     *lspService  = nullptr;
 };
 
 #endif // QSOCTOOLFILE_H
