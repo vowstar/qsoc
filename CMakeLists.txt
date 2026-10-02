@@ -538,6 +538,7 @@ add_executable(qsoc-smt-worker
     src/common/qsocsmtengine.cpp
     src/common/qsocsmtinput.cpp
     src/common/qsocsmtservice.cpp
+    src/common/qsocsibling.cpp
 )
 target_include_directories(qsoc-smt-worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(qsoc-smt-worker PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)

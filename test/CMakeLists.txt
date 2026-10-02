@@ -142,12 +142,14 @@ add_executable(qsoc_smt_worker_probe
     ../src/common/qsocsmtengine.cpp
     ../src/common/qsocsmtinput.cpp
     ../src/common/qsocsmtservice.cpp
+    ../src/common/qsocsibling.cpp
 )
 target_include_directories(qsoc_smt_worker_probe PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
 target_link_libraries(qsoc_smt_worker_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(qsoc_smt_worker_probe PRIVATE -fexperimental-library)
 endif()
+qt_add_test_target("test_qsocsibling")
 qt_add_test_target("test_qsocsmtservice" LABELS "smt")
 add_dependencies(test_qsocsmtservice qsoc-smt-worker qsoc_smt_worker_probe)
 target_compile_definitions(test_qsocsmtservice PRIVATE
@@ -319,6 +321,7 @@ qt_add_test_target("test_qsocagentmailbox" LABELS "agent-messaging")
 qt_add_test_target("test_qsocagentruntime" LABELS "agent-runtime")
 qt_add_test_target("test_qsocagentdaemon" LABELS "agent-runtime")
 add_dependencies(test_qsocagentdaemon qsoc-agentd)
+target_compile_definitions(test_qsocagentdaemon PRIVATE QSOC_AGENTD_PATH="$<TARGET_FILE:qsoc-agentd>")
 qt_add_test_target("test_qsoctoolagentresume")
 qt_add_test_target("test_qsocagentinputmonitor")
 qt_add_test_target("test_qtuiinputlinewrap")

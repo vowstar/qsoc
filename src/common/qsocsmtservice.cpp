@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "qsocsmtservice.h"
+#include "common/qsocsibling.h"
 
 #include <cmath>
 #include <condition_variable>
@@ -137,7 +138,10 @@ QJsonObject collect(QProcess &process, int timeout, std::stop_token stop, QElaps
 
 QString QSocSmtService::workerPath()
 {
-    return QCoreApplication::applicationDirPath() + QStringLiteral("/qsoc-smt-worker");
+    const QString found = QSocSibling::path(QStringLiteral("qsoc-smt-worker"));
+    return found.isEmpty()
+               ? QCoreApplication::applicationDirPath() + QStringLiteral("/qsoc-smt-worker")
+               : found;
 }
 
 bool QSocSmtService::supported()

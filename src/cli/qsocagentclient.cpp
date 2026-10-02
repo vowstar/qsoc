@@ -29,6 +29,7 @@
 #include "cli/qterminalcapability.h"
 #include "common/qsocconsole.h"
 #include "common/qsoclinediff.h"
+#include "common/qsocsibling.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuidiffblock.h"
 #include "tui/qtuilineinput.h"
@@ -313,6 +314,9 @@ bool QSocCliWorker::runAgentClientLoop(
         }
     });
     if (owned) {
+        const QString daemonPath = QSocSibling::path(QStringLiteral("qsoc-agentd"));
+        if (daemonPath.isEmpty())
+            return showError(1, QSocSibling::missingMessage(QStringLiteral("qsoc-agentd")));
         if (!privateDirectory.isValid())
             return showError(1, "Could not create daemon socket directory.");
         socketPath = privateDirectory.filePath("agent.sock");
@@ -320,7 +324,7 @@ bool QSocCliWorker::runAgentClientLoop(
         child.setStandardOutputFile(QProcess::nullDevice());
         child.setStandardErrorFile(privateDirectory.filePath("daemon.log"));
         child.start(
-            QCoreApplication::applicationDirPath() + "/qsoc-agentd",
+            daemonPath,
             {"--socket",
              socketPath,
              "--parent-pid",

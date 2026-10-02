@@ -141,12 +141,7 @@ private slots:
 
     void initTestCase()
     {
-        /* The daemon lands in the build root; tests run from test/. */
-        const QDir binaryDir(QCoreApplication::applicationDirPath());
-        m_daemonPath = binaryDir.filePath(QStringLiteral("../qsoc-agentd"));
-        if (!QFile::exists(m_daemonPath)) {
-            m_daemonPath = binaryDir.filePath(QStringLiteral("qsoc-agentd"));
-        }
+        m_daemonPath = QStringLiteral(QSOC_AGENTD_PATH);
         QVERIFY2(QFile::exists(m_daemonPath), "qsoc-agentd was not built");
     }
 
