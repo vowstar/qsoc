@@ -59,11 +59,11 @@ The following global options are available for all commands:
     [`--verbose <level>`],
     [Set verbosity level (0-5): \
       - 0=Silent - No output \
-      - 1=Error - Only error messages (default) \
+      - 1=Error - Only error messages \
       - 2=Warning - Error and warning messages \
-      - 3=Info - Error, warning, and informational messages \
+      - 3=Info - Error, warning, and informational messages (default) \
       - 4=Debug - All messages including debug information \
-      - 5=Verbose - Maximum detail for all operations
+      - 5 - Same as 4
     ],
     [`--color <when>`],
     [Colorize output: `auto` (default), `always`, `never`. `auto` honors
@@ -124,11 +124,13 @@ take only `-d, --directory` plus a project name or regex.
 
 == Module Command Options
 <module-options>
-=== MMIO Module Lifecycle
+=== Generated Module Lifecycle
 <module-mmio>
-MMIO source management uses exact library and module names. `create` writes an
-empty draft; edit the `.soc_mod` file before validation and generation. The
-source format is documented in @mmio-source-format.
+`module create` and `module validate` manage the source of a generated module,
+by exact library and module name. The generator is `mmio` or `iomux`. `create`
+writes an empty draft. Edit the `.soc_mod` file before validation and
+generation. The source formats are in @mmio-source-format and
+@iomux-source-format.
 
 #figure(
   align(center)[#table(
@@ -136,14 +138,14 @@ source format is documented in @mmio-source-format.
     align: (auto, left),
     table.header([Command or option], [Effect]),
     table.hline(),
-    [`module create --generator mmio -l <library> <module>`],
-    [Creates an empty MMIO draft without replacing an existing module],
+    [`module create --generator <mmio|iomux> -l <library> <module>`],
+    [Creates an empty draft without replacing an existing module],
     [`module validate -l <library> <module>`],
-    [Validates the current MMIO source structure without writing files],
+    [Validates the current source without writing files],
     [`-d`, `--directory <path>`], [Selects the project directory],
     [`-p`, `--project <name>`], [Selects the project],
   )],
-  caption: [MMIO MODULE COMMANDS],
+  caption: [GENERATED MODULE COMMANDS],
   kind: table,
 )
 

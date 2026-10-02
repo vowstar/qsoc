@@ -15,19 +15,19 @@
   ]
 
   #columns(2, gutter: 18pt)[
-    #strip([First build], [@getting-started],
-      [`chmod +x QSoC-*.AppImage`], [make it runnable],
-      [`qsoc project create <name>`], [create a project],
-      [`qsoc module import rtl/*.v`], [import modules],
-      [`qsoc generate verilog f.soc_net`], [write `output/f/rtl/f.v`],
-      [`qsoc agent`], [drive the same tools by prompt],
+    #strip([First run], [@first-run],
+      [`project create <name>`], [new project],
+      [`module import -l <lib> *.v`], [import modules],
+      [`generate verilog t.soc_net`], [`output/t/rtl/t.v`],
+      [`agent`], [work by prompt],
     )
 
     #strip([Commands], [@cli-overview],
       [`project`], [`create` `update` `remove` `list` `show`],
-      [`module`], [`import` `remove` `list` `show` `bus`],
+      [`module`], [`import` `remove` `list` `show`],
+      [], [`create` `validate` `bus`],
       [`bus`], [`import` `remove` `list` `show`],
-      [`generate`], [`verilog` `template` `stub`],
+      [`generate`], [`verilog` `module` `template` `stub`],
       [`gui`], [schematic, module, bus, PRC editors],
       [`agent`], [interactive agent],
     )
@@ -36,8 +36,10 @@
       [`-d, --directory`], [project directory],
       [`-p, --project`], [project name],
       [`-l, --library`], [module or bus library],
-      [`-m, --merge`], [fold netlists; first name wins],
-      [`--format`], [post-process with `verible-verilog-format`],
+      [`-m, --merge`], [merge netlists in order],
+      [`--with-formal`], [also write formal checks],
+      [`--with-uvm`], [also write a UVM testbench],
+      [`--format`], [run the Verible formatter],
       [`--verbose 0..5`], [silent … verbose],
       [`--color`], [`auto`, `always`, `never`],
     )
@@ -47,7 +49,7 @@
     #strip([Where things live], [@project-layout],
       [`<name>.soc_pro`], [project file],
       [`bus/` `module/`], [libraries],
-      [`output/`], [netlists in, units and `qsoc.fl` out],
+      [`output/`], [netlists and generated units],
       [`.qsoc.yml`], [project configuration],
       [`.qsoc/`], [sessions, plans, skills, memory],
       [`~/.config/qsoc/`], [user configuration (@config-files)],
@@ -60,7 +62,7 @@
       [`/plan`], [read-only mode (*Shift+Tab*)],
       [`/clear` `/compact`], [reset or shrink the context],
       [`/resume [id]`], [switch to a saved session],
-      [`/btw <question>`], [side question, not saved to history],
+      [`/btw <question>`], [side question, not saved],
       [`/cwd` `/project`], [move the working root],
       [`/ssh` `/local`], [remote or local workspace],
       [`/memory` `#<fact>`], [inspect or add a memory],
@@ -69,7 +71,7 @@
 
     #strip([Keys], [@agent-keyboard],
       [*ESC*], [cancel the running operation],
-      [*Ctrl+J*], [newline (*Shift+Enter* where supported)],
+      [*Ctrl+J*], [newline in the prompt],
       [*Ctrl+R*], [search prompt history],
       [*Ctrl+X Ctrl+E*], [edit the prompt in `$EDITOR`],
       [*Ctrl+T* / *Ctrl+B*], [TODO list / background tasks],
@@ -77,7 +79,7 @@
 
     #strip([Netlist sections], [@soc-net-format],
       [`port` `instance` `net`], [structure (@netlist-format)],
-      [`bus`], [protocol connections (@soc-net-bus)],
+      [`bus`], [buses (@soc-net-bus)],
       [`comb` `seq` `fsm`], [behavior (@soc-net-comb)],
       [`reset` `clock` `power`], [controllers (@soc-net-reset-overview)],
     )

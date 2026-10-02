@@ -12,39 +12,37 @@
     publish_date: [2025-09-15],
   ),
   features: [
-    - GUI, CLI, and interactive terminal agent in one tool
-    - Project, Verilog module library, and bus interface management
-    - Netlist-driven RTL generation with connection validation
-    - Clock, reset, power, FSM, and combinational logic generators
-    - SystemRDL register templates and stub generation
-    - Schematic import with automatic layout
-    - LLM agent with sub-agents, skills, hooks, and MCP servers
-    - Persistent agent memory with selective recall
-    - Remote SSH workspaces and layered configuration
+    - Verilog-2001 top levels from a YAML netlist
+    - Connection checks: drivers, undriven nets, widths
+    - Clock, reset, and power controllers, FSMs, and glue logic
+    - PRCM controllers with APB4 or AXI4-Lite control
+    - MMIO register block and IOMUX pin multiplexer generators
+    - Optional formal (SymbiYosys) and UVM collateral
+    - Clock-path cell roles bound to declared technology cells
+    - Module libraries from Verilog, bus libraries from CSV
+    - Jinja2 templates fed by SystemRDL, RCSV, CSV, YAML, and JSON
+    - GUI schematic, module, bus, and controller editors
+    - Terminal LLM agent with local or SSH workspaces and saved sessions
   ],
   applications: [
-    - System-on-Chip (SoC) design
-    - Hardware description and verification
-    - RTL development and management
-    - Bus interface design and implementation
-    - Clock tree, reset tree, and power sequence generation
-    - Register map and firmware header generation
-    - AI-assisted RTL authoring and code review
-    - SoC project organization and documentation
+    - SoC top-level integration
+    - Clock, reset, and power controller generation
+    - Register blocks and pin multiplexers
+    - Formal and UVM starting points for generated blocks
+    - Prompt-driven project work in a terminal
   ],
   description: [
-    QSoC turns a declarative netlist into synthesizable RTL. Modules are imported
-    from Verilog, bus interfaces are matched by definition, and generators emit
-    clock trees, reset trees, power sequencers, state machines, and register maps
-    that stay consistent with the source description.
+    QSoC writes SoC integration RTL from YAML descriptions. You import Verilog
+    modules into a project library, describe the top level in a netlist, and
+    QSoC writes the instances, the wiring, and the controllers that the netlist
+    declares.
 
-    The GUI drives interactive editing; the CLI drives scripted and batch flows.
-    Both read the same project files, so a design can move between them at any
-    point.
+    Generated RTL is plain Verilog-2001 with file lists for your simulator and
+    synthesis flow. QSoC does not simulate, lint, or synthesize it. Check the
+    output in your own flow.
 
-    The terminal agent adds an LLM-driven workflow on top of the same tools: it
-    reads the project, runs commands, and edits files under the same
-    configuration, extended by MCP servers, sub-agents, and persistent memory.
+    The CLI, the GUI, and the terminal agent work on the same project files.
+    The generators need no LLM.
   ],
   quickref: include "quick_reference.typ",
   document: [

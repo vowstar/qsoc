@@ -1,58 +1,166 @@
 = Overview
 <overview>
-QSoC is a System-on-Chip (SoC) design tool with three front ends over one
-project format: a GUI for interactive editing, a CLI for scripted and batch
-flows, and a terminal agent for LLM-driven work. All three read and write the
-same project files, so a design can move between them at any point.
+QSoC writes SoC integration RTL from YAML descriptions. You import Verilog
+modules into a project library and describe the top level in a netlist
+(`.soc_net`). QSoC then writes Verilog-2001 with the instances, the wiring, and
+the clock, reset, and power controllers that the netlist declares. The same
+project opens in the CLI, the GUI, and a terminal LLM agent.
 
-A project holds module and bus libraries, netlists, and generated output.
-Commands create and manage projects, import and update Verilog modules, manage
-bus interfaces, and generate RTL, register maps, and stub files. Verbosity is
-set per invocation, so the same command serves both interactive use and build
-scripts.
+#figure(
+  align(center)[#table(
+    columns: (1fr, auto, auto),
+    align: (left, left, left),
+    table.header([Task], [Command], [Chapter]),
+    table.hline(),
+    [Wire modules and buses into a top level], [`generate verilog`], [@netlist-format],
+    [Add combinational, sequential, and FSM logic], [`generate verilog`], [@soc-net-comb],
+    [Add clock, reset, and power controllers], [`generate verilog`], [@soc-net-reset-overview],
+    [Generate a PRCM controller with APB4 or AXI4-Lite control], [`generate verilog`], [@prcm-check],
+    [Map clock-path cells to your technology cells], [`generate verilog`], [@cell-declare],
+    [Generate an MMIO register block], [`generate module`], [@mmio-generator],
+    [Generate an IOMUX pin multiplexer], [`generate module`], [@iomux-generator],
+    [Write formal or UVM collateral], [`--with-formal` \ `--with-uvm`], [@generated-module-options],
+    [Render files from Jinja2 templates and register data], [`generate template`], [@template-generation],
+    [Write Verilog and Liberty stubs of library modules], [`generate stub`], [@stub-generation],
+    [Edit schematics and controller diagrams], [`gui`], [@gui-overview],
+    [Drive these tools by prompt, local or over SSH], [`agent`], [@agent-overview],
+  )],
+  caption: [WHAT QSOC DOES],
+  kind: table,
+)
+
+Generation reports multiple drivers, undriven nets, and width mismatches
+(@validation-format). It does not simulate, lint, or synthesize the output, and
+it writes formal and UVM collateral without running it. Check the generated RTL
+in your own flow (@soc-net-generated-rtl).
 
 == Getting Started
 <getting-started>
-Prebuilt binaries are attached to every release: an AppImage for Linux, a
-`.dmg` for macOS, and a `.zip` for Windows. They are published at
-#link("https://github.com/vowstar/qsoc/releases") together with this manual.
+Each release at #link("https://github.com/vowstar/qsoc/releases") has a binary
+for three platforms and this manual as a PDF:
 
-On Linux the AppImage needs the executable bit before it runs:
+#figure(
+  align(center)[#table(
+    columns: (auto, 1fr),
+    align: (left, left),
+    table.header([Platform], [Release file]),
+    table.hline(),
+    [Linux x86-64], [`QSoC-*-x86_64.AppImage`. Run `chmod +x` on it first],
+    [macOS Apple silicon], [`QSoC-*-macos-arm64.dmg`],
+    [Windows x64], [`QSoC-*-windows-x64.zip`],
+  )],
+  caption: [RELEASE BINARIES],
+  kind: table,
+)
 
-```bash
-chmod +x QSoC-*.AppImage
-./QSoC-*.AppImage --version
-```
-
-With Nix, enter a shell that provides QSoC:
-
-```bash
-nix shell github:vowstar/qsoc#qsoc
-```
-
-To build from a local checkout:
+With Nix, `nix shell github:vowstar/qsoc#qsoc` gives a shell with `qsoc` on
+the `PATH`. To build from a clone of the repository:
 
 ```bash
 nix develop
 cmake -B build -G Ninja
-cmake --build build -j16
+cmake --build build
 ```
 
-A first session runs the commands described in @cli-overview:
+Every command and subcommand accepts `--help`.
+
+== First Run
+<first-run>
+This example builds a two-module top level from an empty directory. Create the
+project and two Verilog sources:
 
 ```bash
-qsoc project create mychip               # create a project in the current directory
-qsoc project show                        # check what was created
-qsoc module import rtl/*.v               # import Verilog modules into the library
-qsoc module list                         # confirm the modules landed
-qsoc generate verilog output/top.soc_net # generate output/top/rtl/top.v
+mkdir demo && cd demo
+qsoc project create demo
+mkdir rtl
 ```
 
-Every command accepts `--help`.
+```verilog
+// rtl/counter.v
+module counter (input clk, input rst_n, output reg [7:0] count);
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) count <= 8'd0;
+    else        count <= count + 8'd1;
+endmodule
 
-The generators need no LLM configuration. The agent does: declare one
-entry under `llm.models` and point `llm.model` at it before running
-`qsoc agent`. QSoC writes a template user configuration on first start:
+// rtl/sink.v
+module sink (input clk, input [7:0] din, output reg [7:0] dout);
+  always @(posedge clk) dout <= din;
+endmodule
+```
+
+Import both modules into a library named `demo`:
+
+```bash
+qsoc module import -l demo rtl/counter.v rtl/sink.v
+qsoc module list
+```
+
+Save this netlist as `output/top.soc_net`:
+
+```yaml
+port:
+  clk:
+    direction: input
+    connect: clk        # tie this top-level port to the net named clk
+  rst_n:
+    direction: input
+    connect: rst_n
+  data_out:
+    direction: output
+    type: logic[7:0]
+    connect: data_q
+
+instance:
+  u_counter:
+    module: counter
+  u_sink:
+    module: sink
+
+net:
+  clk:
+    - { instance: u_counter, port: clk }
+    - { instance: u_sink, port: clk }
+  rst_n:
+    - { instance: u_counter, port: rst_n }
+  data:
+    - { instance: u_counter, port: count }
+    - { instance: u_sink, port: din }
+  data_q:
+    - { instance: u_sink, port: dout }
+```
+
+`connect:` joins a top-level port to a net. A net that no port names stays
+internal and becomes a wire. Generate the top level:
+
+```bash
+qsoc generate verilog output/top.soc_net
+```
+
+The run writes these files:
+
+```text
+output/top/rtl/top.v        the top level
+output/top/rtl/top.fl       its file list
+output/qsoc_cell/           shared cells that controllers use
+output/qsoc.fl              the list of every generated file
+```
+
+`qsoc.fl` lists generated files only, with paths relative to `output/`. Add
+your own module sources when you compile:
+
+```bash
+cd output && iverilog -g2005 -s top -c qsoc.fl ../rtl/counter.v ../rtl/sink.v
+```
+
+@netlist-format documents every netlist section, and @verilog-output-layout
+lists every output file.
+
+== Agent Setup
+<agent-setup>
+The generators need no LLM. The agent needs one model entry. QSoC writes a
+commented template to `~/.config/qsoc/qsoc.yml` on the first start. Declare an
+entry under `llm.models` and point `llm.model` at it:
 
 ```yaml
 llm:
@@ -64,13 +172,13 @@ llm:
       model: your-model-id
 ```
 
-@llm-config lists every per-model field and @config-files explains which
-configuration layer wins.
+Then run `qsoc agent` in the project directory. @llm-config lists every model
+field, and @config-files shows which configuration layer wins.
 
 == Project Layout
 <project-layout>
-`project create` writes a project file and four directories into the target
-directory. Every later command reads and writes inside that tree:
+`project create` writes a project file and four directories. Every later
+command reads and writes inside this tree:
 
 #figure(
   align(center)[#table(
@@ -78,141 +186,41 @@ directory. Every later command reads and writes inside that tree:
     align: (auto, left),
     table.header([Path], [Contents]),
     table.hline(),
-    [`<name>.soc_pro`],
-    [Project file: directory paths and extension fields, without a tool version],
-    [`bus/`], [Bus definition libraries],
-    [`module/`], [Module libraries filled by `module import`],
-    [`schematic/`], [Schematic sources],
-    [`output/`],
-    [Netlists (`.soc_net`) and generated units such as `<netlist>/rtl/<netlist>.v`,
-     plus the `qsoc_cell/` cells and the `qsoc.fl` file list
-     (@verilog-output-layout)],
-    [`.qsoc.yml`],
-    [Project-level configuration, overrides the user layer. Created when you
-     add project settings],
+    [`<name>.soc_pro`], [Project file: the directory paths],
+    [`bus/`], [Bus definition libraries (`.soc_bus`)],
+    [`module/`], [Module libraries (`.soc_mod`)],
+    [`schematic/`], [GUI drawings (`.soc_sch`, `.soc_prc`)],
+    [`output/`], [Netlists, generated units, and `qsoc.fl` (@verilog-output-layout)],
+    [`.qsoc.yml`], [Project configuration. Created by the first project setting],
     [`.qsoc/`],
-    [Agent state: sessions, plans, sub-agent definitions, skills, memory, and
-     the remote workspace binding. Created on the first durable state write;
-     opening and exiting the agent leaves an unused project untouched],
+    [Agent sessions, plans, sub-agents, skills, memory, and remote workspace
+     binding. Created when the agent first saves state],
   )],
   caption: [PROJECT LAYOUT],
   kind: table,
 )
 
 The `project create` options in @project-creation move any of the four
-directories elsewhere.
-
-== Your First Netlist
-<first-netlist>
-A netlist declares top-level ports, instantiates modules, and lists the nets
-between them. This one is complete and generates:
-
-```yaml
-# output/top.soc_net
-port:
-  clk:
-    direction: input
-    type: logic
-    connect: clk           # tie this top-level port to the net named clk
-  rst_n:
-    direction: input
-    type: logic
-    connect: rst_n
-  data_out:
-    direction: output
-    type: logic[7:0]
-    connect: data_bus
-
-instance:
-  u_src:
-    module: source
-  u_sink:
-    module: sink
-
-net:
-  clk:
-    - instance: u_src
-      port: clk
-    - instance: u_sink
-      port: clk
-  rst_n:
-    - instance: u_src
-      port: rst_n
-    - instance: u_sink
-      port: rst_n
-  data_bus:
-    - instance: u_src
-      port: dout
-    - instance: u_sink
-      port: din
-```
-
-The `connect:` attribute is what joins a top-level port to a net. A net whose
-name happens to match a port name is also wired to that port, but the generator
-warns about it, so state the link explicitly. Nets with no `connect:` reference
-stay internal and are declared as wires.
-
-Then:
-
-```bash
-qsoc generate verilog output/top.soc_net
-```
-
-The modules named under `instance:` must already be in the module library, so
-run `module import` on their Verilog sources first. @netlist-format documents
-every section, and @soc-net-example shows a larger design.
+directories.
 
 == Terminology
 <terminology>
-The following terms are used in system descriptions.
-
 #figure(
   align(center)[#table(
     columns: (0.25fr, 1fr),
     align: (auto, left),
-    table.header([Terminology], [Description]),
+    table.header([Term], [Meaning]),
     table.hline(),
-    [SoC],
-    [System-on-Chip, an integrated circuit that integrates all components of a computer or other electronic system],
-    [RTL],
-    [Register Transfer Level, a design abstraction which models a synchronous digital circuit in terms of the flow of digital signals between hardware registers],
-    [GUI],
-    [Graphical User Interface, a form of user interface that allows users to interact with electronic devices through graphical icons and visual indicators],
-    [CLI],
-    [Command Line Interface, a means of interacting with a computer program where the user issues commands to the program in the form of successive lines of text],
-    [Verilog],
-    [A hardware description language used to model electronic systems],
-    [Bus],
-    [A communication system that transfers data between components inside a computer or between computers],
-    [SystemRDL],
-    [A standard language for describing and specifying the behavior of register and memory structures within semiconductor IP],
-    [RCSV],
-    [Register-CSV format, a CSV-based approach for describing register structures following RCSV v0.3 specification],
-    [Unit],
-    [One generated block with its own directory under `output/`: a top, a PRCM circuit, a generated module, or the shared `qsoc_cell` (@verilog-output-layout)],
+    [Netlist], [A `.soc_net` YAML file: top-level ports, instances, nets, and controller sections (@netlist-format)],
+    [Unit], [One generated block with its own directory under `output/`: a top, a PRCM circuit, a generated module, or the shared `qsoc_cell` (@verilog-output-layout)],
+    [Generated module], [A module that QSoC writes from a `.soc_mod` generator source, such as MMIO or IOMUX (@generated-module-options)],
     [Cell role],
     [A clock-path module with fixed ports, such as a clock gate or a synchronizer, that the generated controllers instantiate (@cell-roles)],
     [Cell target],
     [`generic` for behavioral roles, `asic` for roles that instantiate declared technology cells (@cell-declare)],
+    [PRCM], [Power, reset, and clock management: a controller that sequences domains under register control (@prcm-check)],
+    [SystemRDL, RCSV], [Register description formats that `generate template` reads (@template-generation)],
   )],
-  caption: [TERMINOLOGY OF SYSTEM],
-  kind: table,
-)
-
-The following terms are used in command descriptions.
-
-#figure(
-  align(center)[#table(
-    columns: (0.25fr, 1fr),
-    align: (auto, left),
-    table.header([Terminology], [Description]),
-    table.hline(),
-    [Command], [A primary operation in QSoC CLI],
-    [Subcommand], [A secondary operation under a main command],
-    [Option], [A parameter that modifies the behavior of a command],
-    [Argument], [A value provided to a command or option],
-    [Verbose], [Detailed output level for debugging and monitoring],
-  )],
-  caption: [TERMINOLOGY OF COMMANDS],
+  caption: [TERMINOLOGY],
   kind: table,
 )
