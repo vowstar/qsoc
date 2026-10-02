@@ -531,9 +531,6 @@ module test_mixed_merge1 (
     output [7:0] shift_reg
 );
 
-    /* Wire declarations */
-    /* Module instantiations */
-
     /* Internal reg declarations for combinational logic */
     reg [7:0] mux_out_reg;
 
@@ -567,13 +564,7 @@ module test_mixed_merge1 (
         end
     end
 
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            shift_reg_reg <= 8'hAA;
-        end else begin
-            shift_reg_reg <= shift_reg << 1;
-        end
-    end
+    /* ... shift_reg_reg in the same form, reset to 8'hAA ... */
 
 endmodule
 ```

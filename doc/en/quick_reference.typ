@@ -3,25 +3,25 @@
 
 #[
   /* Plain key/value strips: no rules, no header shading */
-  #set table(stroke: none, fill: none, inset: (x: 2pt, y: 1.6pt))
+  #set table(stroke: none, fill: none, inset: (x: 2pt, y: 4.2pt))
   #show table.cell: set text(weight: "regular")
   #set text(9pt)
 
-  #let strip(title, note, ..rows) = block(breakable: false, width: 100%)[
-    #text(9.5pt, weight: "bold")[#title] #h(0.4em) #text(8pt)[#note]
+  #let strip(title, note, key: 9.2em, ..rows) = block(breakable: false, width: 100%)[
+    #text(10pt, weight: "bold")[#title] #h(0.4em) #text(8.5pt)[#note]
     #v(1pt)
-    #table(columns: (auto, 1fr), align: (left + top, left + top), ..rows)
-    #v(5pt)
+    #table(columns: (key, 1fr), align: (left + top, left + top), ..rows)
+    #v(10pt)
   ]
 
-  #columns(2, gutter: 18pt)[
-    #strip([First run], [@first-run],
-      [`project create <name>`], [new project],
-      [`module import -l <lib> *.v`], [import modules],
-      [`generate verilog t.soc_net`], [`output/t/rtl/t.v`],
-      [`agent`], [work by prompt],
-    )
+  #strip([First run], [@first-run], key: 14em,
+    [`project create <name>`], [new project],
+    [`module import -l <lib> *.v`], [import modules],
+    [`generate verilog t.soc_net`], [`output/t/rtl/t.v`],
+    [`agent`], [work by prompt],
+  )
 
+  #columns(2, gutter: 18pt)[
     #strip([Commands], [@cli-overview],
       [`project`], [`create` `update` `remove` `list` `show`],
       [`module`], [`import` `remove` `list` `show`],
@@ -42,6 +42,13 @@
       [`--format`], [run the Verible formatter],
       [`--verbose 0..5`], [silent … verbose],
       [`--color`], [`auto`, `always`, `never`],
+    )
+
+    #strip([Netlist sections], [@soc-net-format],
+      [`port` `instance` `net`], [structure (@netlist-format)],
+      [`bus`], [buses (@soc-net-bus)],
+      [`comb` `seq` `fsm`], [behavior (@soc-net-comb)],
+      [`reset` `clock` `power`], [controllers (@soc-net-reset-overview)],
     )
 
     #colbreak()
@@ -75,13 +82,6 @@
       [*Ctrl+R*], [search prompt history],
       [*Ctrl+X Ctrl+E*], [edit the prompt in `$EDITOR`],
       [*Ctrl+T* / *Ctrl+B*], [TODO list / background tasks],
-    )
-
-    #strip([Netlist sections], [@soc-net-format],
-      [`port` `instance` `net`], [structure (@netlist-format)],
-      [`bus`], [buses (@soc-net-bus)],
-      [`comb` `seq` `fsm`], [behavior (@soc-net-comb)],
-      [`reset` `clock` `power`], [controllers (@soc-net-reset-overview)],
     )
   ]
 ]

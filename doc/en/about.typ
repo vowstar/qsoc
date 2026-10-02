@@ -1,6 +1,6 @@
 = About This Guide
 <about>
-This guide documents the QSoC version in the page header. Start with the row
+This guide documents the QSoC version in the page footer. Start with the row
 that fits you:
 
 #figure(

@@ -40,6 +40,38 @@
   /* Figures default to unbreakable, which drops rows of page-tall tables */
   show figure: set block(breakable: true)
 
+  /* Short tables stay whole with their caption; long ones may break */
+  let find_table(c) = {
+    if c.func() == table { return c }
+    if c.has("body") { return find_table(c.body) }
+    if c.has("children") {
+      for child in c.children {
+        let t = find_table(child)
+        if t != none { return t }
+      }
+    }
+    none
+  }
+  let table_rows(t) = {
+    let cols = if type(t.columns) == int { t.columns } else { t.columns.len() }
+    let cells = 0
+    for child in t.children {
+      if child.func() in (table.hline, table.vline) { continue }
+      if child.func() in (table.header, table.footer) {
+        cells += calc.ceil(child.children.len() / cols) * cols
+      } else if child.func() == table.cell and child.has("colspan") {
+        cells += child.colspan
+      } else {
+        cells += 1
+      }
+    }
+    calc.ceil(cells / cols)
+  }
+  show figure.where(kind: table): it => {
+    let t = find_table(it.body)
+    if t != none and table_rows(t) <= 12 { block(breakable: false, it) } else { it }
+  }
+
   set table(
     stroke: 0.5pt,
     fill: (_, y) => if y == 0 { gray.lighten(75%) },
@@ -50,9 +82,15 @@
   show table.header: strong
   show table.cell.where(y: 0): set text(weight: "semibold")
 
-  /* Chapter the reader is currently in, for the running head */
+  /* Chapter the reader is currently in, for the running head. A chapter
+     that opens on this page wins over the one before it */
   let running_chapter = () => context {
-    let prev = query(selector(heading.where(level: 1)).before(here()))
+    let opening = query(heading.where(level: 1)).filter(h => (
+      h.location().page() == here().page()
+    ))
+    let prev = if opening.len() > 0 { opening.slice(0, 1) } else {
+      query(selector(heading.where(level: 1)).before(here()))
+    }
     if prev.len() > 0 and prev.last().numbering != none {
       [#counter(heading).at(prev.last().location()).at(0). #prev.last().body]
     } else {
@@ -185,18 +223,17 @@
       line(length: 100%, stroke: 1pt)
       v(0.3em)
     }))
-    columns(2, gutter: 30pt)[
+    set heading(numbering: none, outlined: false)
+    set par(leading: 0.9em)
+    [
+      = Description
+      #description
+
       = Features
-      <TitlePageFeatures>
       #features
 
       = Applications
-      <TitlePageApplications>
       #applications
-
-      = Description
-      <Description>
-      #description
     ]
   }
 
@@ -206,8 +243,7 @@
     [
       #block([
         #columns(1, gutter: 30pt)[
-          = Contents
-          <Directory>
+          #heading(outlined: false)[Contents]
           #outline(title: none, depth: 3)
         ]
       ])

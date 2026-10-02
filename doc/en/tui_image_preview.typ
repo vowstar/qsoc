@@ -46,8 +46,3 @@ set to any non-empty value.
 A preview appears only when its metadata and full image rectangle fit
 inside the content viewport. Shrinking, scrolling, or folding removes
 its previous placement. The preview returns when it fits again.
-
-Kitty retains uploaded image data while a preview is temporarily hidden.
-iTerm2 resends the image when its rectangle moves, changes size, or its
-rows are repainted. Input changes outside the image do not resend it.
-Returning from a paused TUI uploads images into the new alternate screen.

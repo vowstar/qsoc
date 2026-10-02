@@ -975,8 +975,6 @@ Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
 
 === Syntax Summary
 <soc-net-clock-syntax-summary>
-Clock format supports two processing levels with distinct syntax patterns:
-
 *Target Level* (key existence determines operation):
 - `icg` - Map format with enable/polarity/reset/clock_on_reset and optional sta_guide
 - `div` - Map format with default/reset/clock_on_reset (width auto-calculated for static mode) and optional sta_guide
@@ -986,12 +984,7 @@ Clock format supports two processing levels with distinct syntax patterns:
 - `test_enable` - Identifier or exact `1'b0`/`1'b1` constant
 - `test_clock` - Identifier (GF_MUX DFT clock)
 
-*Link Level* (key existence determines operation):
-- `icg` - Map format with enable/polarity/reset/clock_on_reset and optional sta_guide
-- `div` - Map format with default/reset/clock_on_reset (width auto-calculated for static mode) and optional sta_guide
-- `inv` - Map format with enabled flag and optional sta_guide (or boolean for compatibility)
-- Pass-through: No attributes specified
-
-A link accepts only `icg`, `div`, and `inv`, or the scalar `inv`. `inv: false`
-and `enabled: false` disable the inverter; a present inverter is one cell, so
-its `sta_guide` requires `cell`, `in`, and `out` together.
+*Link Level*: `icg`, `div`, and `inv` in the target-level forms, or the scalar
+`inv`. A link without them is a pass-through. `inv: false` and
+`enabled: false` disable the inverter; a present inverter is one cell, so its
+`sta_guide` requires `cell`, `in`, and `out` together.

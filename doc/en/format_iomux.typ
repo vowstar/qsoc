@@ -733,9 +733,8 @@ gates `irq_o` alone, so a bit that latched while its enable was clear raises
 the line the moment the enable is written; clear it first when that event is
 stale. Software clears a pending bit by writing one to it,
 and a set that lands on the same cycle as that write wins, so an event
-cannot vanish into its own acknowledgement. Edge detection compares the
-second synchronizer stage against a third, so the pad must hold a level for
-one bus cycle to register as an edge.
+cannot vanish into its own acknowledgement. The pad must hold a level for one
+bus cycle to register as an edge.
 
 The synchronizer and pending bits reset to zero. Low-level pending can set
 after reset before a high external pad level reaches the second stage.
@@ -766,8 +765,7 @@ code. `include/<module>_regs.h` contains the software address constants.
 `reports/` holds the route and ring reports. `integration/` holds
 `<module>_integration.soc_net` and any generated ring DEF. Verification
 lives in `formal/`, in the `_formal.sv` files and their `.sby` jobs,
-listed by `<module>_formal.fl`, and never enters `<module>.fl`. Selector
-sidebands stay inside the wrapper and never reach the public interface. Each
+listed by `<module>_formal.fl`, and never enters `<module>.fl`. Each
 endpoint port carries a `function.signal` comment in the wrapper header. The
 report shows each selector location and lists unused slots per pin.
 Generation refuses a library that already holds a module named
@@ -792,7 +790,7 @@ uplinks `pad_io` and every `inout` net of a direct cell, and links the other
 direct nets. The merge flow derives `<module>_io` from the source and the
 cells it names in the module library, so nothing has to be imported. The control link must carry exactly one master before the merge
 and exactly one master and one slave after it. An invalid generator source
-blocks the whole netlist instead of falling back to a stale module view. A
+fails the whole netlist. A
 generated IOMUX instance name may not already exist in another merged input.
 Any failed generated-module check leaves an existing top-level output untouched.
 Routes may cover individual bits of a wider vector; unlisted bits remain outside
@@ -805,13 +803,9 @@ read as `z` in simulation.
 `--with-formal` writes two jobs: the register slave proof
 (`<module>_regs_formal.sv`, `<module>_regs_formal.sby`) and a routing proof
 (`<module>_hs_formal.sv`, `<module>_hs_formal.sby`). The routing proof leaves
-every option register free and asserts, per slot and for invalid codes, the
-pad bundle after source selection, inversion, and the safe row under
-`pad_force_i`, the pull mode, strength selects, and every control row after
-their source bits and the same force, and every receive sink after
-substitution and inversion. With pools it also leaves every slow lane free
-and asserts slot 0 of each pool pin over its channels and every slow input
-over its pool's pads. A pad cell with constraints adds the pad proof
+every option register free and checks every pad, control, and receive output
+of every slot, invalid codes and `pad_force_i` included, and with pools every
+slow lane. A pad cell with constraints adds the pad proof
 described above. `<module>_formal.fl` lists the design files the proofs
 read, followed by the harnesses. Run the jobs from `formal/`; they reference
 the generated RTL in `../rtl/`. File list paths are relative to `output/`
@@ -827,8 +821,7 @@ sby -f iomux0_hs_formal.sby            # every task, in parallel
 sby -f iomux0_hs_formal.sby bmc_b3     # one bank
 ```
 
-`--formal-bank 1` makes one task per pin, for proving a few pins after a
-change to their routes.
+`--formal-bank 1` makes one task per pin.
 
 == UVM Collateral
 <iomux-uvm-collateral>
@@ -838,4 +831,4 @@ change to their routes.
 `<module>_regs_uvm_standalone.fl` additionally includes the bundled UVM
 source in `uvm-core/`. Paths are relative to `output/`.
 The library selection follows @mmio-uvm-testbench. It covers the
-register slave only; routing, the connection fabric, and pads are outside its scope.
+register slave only.
