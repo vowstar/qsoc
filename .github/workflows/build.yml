@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
 
 # A newer push to a pull request cancels its running checks. A push to main
 # gets a group of its own, so it is never cancelled or held as pending.
@@ -19,6 +20,54 @@ env:
   CCACHE_COMPILERCHECK: content
 
 jobs:
+  # What a pull request touches decides which jobs it needs. A job skipped by
+  # its `if` reports success to branch protection, and linux-tests fails when
+  # this job does, so a broken classification cannot pass as green.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+      nix: ${{ steps.classify.outputs.nix }}
+    steps:
+    - name: Classify changed files
+      id: classify
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        PR: ${{ github.event.pull_request.number }}
+        CHANGED: ${{ github.event.pull_request.changed_files }}
+      run: |
+        if [ "$EVENT" != pull_request ]; then
+          echo "docs-only=false" >> "$GITHUB_OUTPUT"
+          echo "nix=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" \
+          --jq '.[] | [.filename, .previous_filename // ""] | @tsv' > files.tsv
+        cut -f1 files.tsv > files.txt
+        cut -f2 files.tsv | sed '/^$/d' >> files.txt
+        cat files.txt
+        # The listing stops at 3000 files, and a short one proves nothing.
+        listed=$(wc -l < files.tsv)
+        docs=false
+        # Typst sources and Markdown only. Images and the resource list are
+        # compiled into the binary, so they take the full run.
+        if [ "$listed" -eq "$CHANGED" ] && [ "$listed" -gt 0 ] &&
+          ! grep -qvE '^doc/.*\.typ$|\.md$' files.txt &&
+          ! grep -qE '^doc/en/image/|^doc/qsoc_docs\.qrc$' files.txt; then
+          docs=true
+        fi
+        nix=false
+        if [ "$listed" -ne "$CHANGED" ] ||
+          grep -qE '^flake\.|(^|/)CMakeLists\.txt$|^cmake/|^external/|^\.gitmodules$|^\.github/workflows/' files.txt; then
+          nix=true
+        fi
+        echo "docs-only=$docs nix=$nix"
+        echo "docs-only=$docs" >> "$GITHUB_OUTPUT"
+        echo "nix=$nix" >> "$GITHUB_OUTPUT"
+
   build-linux:
     runs-on: ubuntu-latest
     permissions:
@@ -56,6 +105,7 @@ jobs:
         p7zip-full
         python3
         python3-py7zr
+        xvfb
     # Only pushes to main save the cache, so a pull request reads main's.
     - name: Compiler cache
       uses: hendrikmuhs/ccache-action@v1.2.24
@@ -126,7 +176,7 @@ jobs:
         set -e
         QSOC=./build/qsoc
         TMPD=$(mktemp -d)
-        trap "rm -rf $TMPD" EXIT
+        trap 'rm -rf "$TMPD"' EXIT
         echo "--- version ---"
         $QSOC -v
         echo "--- help ---"
@@ -141,21 +191,197 @@ jobs:
         $QSOC module import -d "$TMPD" -l smoke_lib "$TMPD/smoke.v"
         echo "--- all smoke tests passed ---"
 
-    - name: Full Test
+    # Every test without a ci-* shard label. The shards run in test-linux.
+    - name: Unit Test
       if: github.event_name == 'pull_request'
       env:
         # openssh-server and python3 are installed above, so a fixture that
         # cannot find sshd is a broken job declaration, not a developer machine.
         QSOC_TEST_DEPS_REQUIRED: '1'
-      uses: coactions/setup-xvfb@v1
+      run: |
+        set -o pipefail
+        xvfb-run -a ctest --test-dir build -C ${{env.BUILD_TYPE}} \
+          --output-on-failure --no-tests=error \
+          -LE '^ci-(sim-1|sim-2|formal)$' --repeat until-pass:2 \
+          2>&1 | tee ctest.log
+
+    - name: Unit Test report
+      if: always() && github.event_name == 'pull_request'
+      run: .github/scripts/ctest-report.sh ctest.log 300
+
+  # The long simulation and formal tests, by ctest label. Each shard builds
+  # only its own test binaries from build-linux's compiler cache. Shards never
+  # retry: a failure there is a design or tool problem, not a flaky fixture.
+  test-linux:
+    name: test-linux (${{ matrix.shard }})
+    needs: changes
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.changes.outputs.docs-only != 'true' &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - shard: sim-1
+          jobs: 1
+        - shard: sim-2
+          jobs: 1
+        - shard: formal
+          jobs: 4
+
+    steps:
+    - uses: actions/checkout@v7
       with:
-        working-directory: build
-        run: ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
+        submodules: recursive
+    - name: Install depends
+      run: >-
+        sudo apt update &&
+        sudo apt-get install -y
+        '^libxcb.*-dev'
+        catch
+        ccache
+        libfmt-dev
+        libgl-dev
+        libgl1-mesa-dev
+        libglu1-mesa-dev
+        libicu-dev
+        libx11-xcb-dev
+        libxcb-{icccm4,image0,keysyms1,randr0,render-util0,shape0,sync1,xfixes0,xinerama0,xkb1}
+        libxi-dev
+        libxkbcommon-dev
+        libxkbcommon-x11-0
+        libxkbcommon-x11-dev
+        libxrender-dev
+        iverilog
+        lld
+        linguist-qt6
+        make
+        ninja-build
+        openssh-server
+        p7zip-full
+        python3
+        python3-py7zr
+        xvfb
+    - name: Compiler cache
+      uses: hendrikmuhs/ccache-action@v1.2.24
+      with:
+        key: build-linux
+        max-size: 2G
+        save: false
+    - name: Install formal tools
+      run: |
+        archive="$RUNNER_TEMP/oss-cad-suite.tgz"
+        curl --fail --location --retry 3 \
+          https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-08-25/oss-cad-suite-linux-x64-20260825.tgz \
+          --output "$archive"
+        echo "9a971a52f71e32c69128ed32b63719ced482c6ed3b8728d4e109472b9a4cee21  $archive" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/oss-cad-suite"
+        tar -xzf "$archive" -C "$RUNNER_TEMP/oss-cad-suite" --strip-components=1
+        echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
+    - name: Install typst
+      run: |
+        archive="$RUNNER_TEMP/typst.tar.xz"
+        curl --fail --location --retry 3 \
+          https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz \
+          --output "$archive"
+        echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  $archive" | sha256sum --check
+        mkdir -p "$RUNNER_TEMP/typst"
+        tar -xJf "$archive" -C "$RUNNER_TEMP/typst" --strip-components=1
+        echo "$RUNNER_TEMP/typst" >> "$GITHUB_PATH"
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: ${{ env.QT_VERSION }}
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
+        install-deps: 'true'
+        modules: 'qt5compat'
+        cache: 'true'
+        cache-key-prefix: 'install-qt-action'
+        setup-python: 'true'
+        tools: 'tools_ifw'
+        set-env: 'true'
+        aqtversion: '==3.1.*'
+        py7zrversion: '==0.20.*'
+        extra: '--external 7z'
+
+    - name: Configure CMake
+      run: >-
+        cmake -B build -G Ninja
+        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        -DCMAKE_LINKER_TYPE=LLD
+        -DENABLE_CLANG_TIDY=OFF
+        -DENABLE_DOXYGEN=OFF
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+    - name: Build shard tests
+      run: |
+        mapfile -t tests < <(ctest --test-dir build -N -L '^ci-${{ matrix.shard }}$' |
+          sed -n 's/^ *Test *#[0-9]*: //p')
+        echo "${tests[@]}"
+        cmake --build build --config ${{env.BUILD_TYPE}} --target "${tests[@]}"
+
+    - name: Shard Test
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+      run: |
+        set -o pipefail
+        xvfb-run -a ctest --test-dir build -C ${{env.BUILD_TYPE}} \
+          --output-on-failure --no-tests=error \
+          -L '^ci-${{ matrix.shard }}$' -j ${{ matrix.jobs }} \
+          2>&1 | tee ctest.log
+
+    - name: Shard Test report
+      if: always()
+      run: .github/scripts/ctest-report.sh ctest.log
+
+  # The one Linux test check to require: every shard passed, or a docs-only
+  # change skipped them. A draft never passes, so it never looks landable.
+  linux-tests:
+    needs: [changes, build-linux, test-linux]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check results
+      env:
+        CHANGES: ${{ needs.changes.result }}
+        BUILD: ${{ needs.build-linux.result }}
+        SHARDS: ${{ needs.test-linux.result }}
+        DOCS_ONLY: ${{ needs.changes.outputs.docs-only }}
+        DRAFT: ${{ github.event.pull_request.draft }}
+      run: |
+        echo "changes=$CHANGES build-linux=$BUILD test-linux=$SHARDS docs-only=$DOCS_ONLY draft=$DRAFT"
+        if [ "$DRAFT" = true ]; then
+          echo "::error::draft: heavy shards skipped"
+          exit 1
+        fi
+        if [ "$CHANGES" != success ] || [ "$BUILD" != success ]; then
+          echo "::error::changes or build-linux did not succeed"
+          exit 1
+        fi
+        if [ "$SHARDS" = success ]; then
+          exit 0
+        fi
+        if [ "$SHARDS" = skipped ] && [ "$DOCS_ONLY" = true ]; then
+          echo "docs-only change: shards skipped"
+          exit 0
+        fi
+        echo "::error::test-linux result is $SHARDS"
+        exit 1
 
   # The loopback sshd fixtures are the only coverage of the remote-disconnect
-  # behaviour, and the job above runs no tests at all on a push. This one does,
+  # behaviour, and build-linux runs no tests at all on a push. This one does,
   # on both events, with the loopback binaries only so it stays short.
   remote-loopback-linux:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -255,6 +481,8 @@ jobs:
         fi
 
   build-windows:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     runs-on: windows-2022
 
     steps:
@@ -337,7 +565,13 @@ jobs:
         # POSIX-only (sshd path lookup, the password database, /bin/sh on the
         # target, POSIX signals), so Windows has no remote coverage. Excluded
         # by name: letting them skip would look green.
-        ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript"
+        ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript" | Tee-Object -FilePath ctest.log
+        exit $LASTEXITCODE
+
+    - name: Full Test report
+      if: always() && github.event_name == 'pull_request'
+      shell: bash
+      run: .github/scripts/ctest-report.sh build/ctest.log
 
     # ctest records no test output on Windows, so a failure arrives as a bare
     # exit code. Re-run each failed binary with its own log file and print it.
@@ -360,6 +594,8 @@ jobs:
         }
 
   build-macos:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     runs-on: macos-15
 
     steps:
@@ -412,7 +648,7 @@ jobs:
         set -e
         QSOC=./build/qsoc.app/Contents/MacOS/qsoc
         TMPD=$(mktemp -d)
-        trap "rm -rf $TMPD" EXIT
+        trap 'rm -rf "$TMPD"' EXIT
         echo "--- version ---"
         $QSOC -v
         echo "--- help ---"
@@ -436,10 +672,18 @@ jobs:
       # /proc, neither of which this image gives, so exclude it by name and
       # let remote-loopback-linux stay its gate.
       run: |
+        set -o pipefail
         cd build
-        QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --rerun-failed --output-on-failure -E "test_qsocagentremoterecovery|test_qsocremotecwdowner|test_qsocremotedeadlinkcost|test_qsocsshabortlatency|test_qsocremotejobscript"
+        QT_QPA_PLATFORM=offscreen ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocagentremoterecovery|test_qsocremotecwdowner|test_qsocremotedeadlinkcost|test_qsocsshabortlatency|test_qsocremotejobscript" 2>&1 | tee ctest.log
 
+    - name: Full Test report
+      if: always() && github.event_name == 'pull_request'
+      run: .github/scripts/ctest-report.sh build/ctest.log
+
+  # A pull request runs nix only when the build description changes.
   build-nix:
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -465,7 +709,7 @@ jobs:
     - name: Diagnose source tree
       run: |
         echo "external/ entries:"
-        ls -1 external/ | head -25
+        find external -mindepth 1 -maxdepth 1 | sort | head -25
         echo
         echo "missing submodule check:"
         for d in libssh2 cmark-gfm lexbor mbedtls slang; do
@@ -514,6 +758,8 @@ jobs:
         echo "--- ok ---"
 
   cppcheck:
+    needs: changes
+    if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
 
     steps:

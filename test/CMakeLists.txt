@@ -69,7 +69,9 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     endif()
 
     # Labels group a feature that spans several files. A test may carry more
-    # than one, which a filename or a directory cannot express.
+    # than one, which a filename or a directory cannot express. A ci-sim-1,
+    # ci-sim-2 or ci-formal label runs the test on that CI runner, and a test
+    # with none of them runs on the unit runner.
     if(T_LABELS)
         set_tests_properties(${TARGET_NAME} PROPERTIES LABELS "${T_LABELS}")
     endif()
@@ -165,9 +167,9 @@ qt_add_test_target("test_qsocprcmsequence" LABELS "prcm")
 qt_add_test_target("test_qsocprcmsequenceplan" LABELS "prcm")
 qt_add_test_target("test_qsocprcmsequencertl" LABELS "prcm")
 qt_add_test_target("test_qsocprcmgenerator" LABELS "prcm")
-qt_add_test_target("test_qsocprcmshared" LABELS "prcm")
+qt_add_test_target("test_qsocprcmshared" LABELS "prcm;ci-formal")
 qt_add_test_target("test_qsocprcmservicecheck" LABELS "prcm")
-qt_add_test_target("test_qsocprcmformal" LABELS "prcm")
+qt_add_test_target("test_qsocprcmformal" LABELS "prcm;ci-formal")
 # The generated sby jobs carry no wall-clock limit, so ctest bounds the run.
 set_tests_properties(
     test_qsocprcmshared test_qsocprcmformal
@@ -181,12 +183,12 @@ qt_add_test_target("test_qsocbusmanagerphase0")
 qt_add_test_target("test_qsoccliparsegenerate")
 qt_add_test_target("test_qsoccliparsegenerateelaborate")
 qt_add_test_target("test_qsoccliparsegenerateclocklogic")
-qt_add_test_target("test_qsocprimitivecell")
+qt_add_test_target("test_qsocprimitivecell" LABELS "ci-formal")
 set_tests_properties(test_qsocprimitivecell PROPERTIES TIMEOUT 3600
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")
 qt_add_test_target("test_qsoccelltable")
 qt_add_test_target("test_qsoccellsynth" LABELS "cell")
-qt_add_test_target("test_qsoccellbinding")
+qt_add_test_target("test_qsoccellbinding" LABELS "ci-formal")
 set_tests_properties(test_qsoccellbinding PROPERTIES TIMEOUT 3600
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")
 qt_add_test_target("test_qsoccliparsegeneratecomblogic")
@@ -216,29 +218,29 @@ qt_add_test_target("test_qsocgeneratetypstcompile")
 qt_add_test_target("test_qsoccliparsemodule")
 qt_add_test_target("test_qsoccliparsemmio" LABELS "mmio")
 qt_add_test_target("test_qsocmmiogenerator" LABELS "mmio")
-qt_add_test_target("test_qsocaxi" LABELS "mmio;iomux")
+qt_add_test_target("test_qsocaxi" LABELS "mmio;iomux;ci-sim-1")
 set_tests_properties(test_qsocaxi PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=3100000")
-qt_add_test_target("test_qsocahb" LABELS "mmio;iomux")
+qt_add_test_target("test_qsocahb" LABELS "mmio;iomux;ci-sim-1")
 set_tests_properties(test_qsocahb PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=3100000")
-qt_add_test_target("test_qsocapb" LABELS "mmio;iomux")
+qt_add_test_target("test_qsocapb" LABELS "mmio;iomux;ci-sim-2")
 set_tests_properties(test_qsocapb PROPERTIES TIMEOUT 3000 RUN_SERIAL TRUE
     ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")
-qt_add_test_target("test_qsociomuxgenerator" LABELS "iomux")
+qt_add_test_target("test_qsociomuxgenerator" LABELS "iomux;ci-sim-2")
 qt_add_test_target("test_qsoccliparseiomux" LABELS "iomux")
-qt_add_test_target("test_qsoccliparsegenerateiomux" LABELS "iomux")
+qt_add_test_target("test_qsoccliparsegenerateiomux" LABELS "iomux;ci-sim-2")
 # Native simulator compilation uses 16 jobs and has its own per-run budget.
 set_tests_properties(
     test_qsociomuxgenerator test_qsoccliparsegenerateiomux
     PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=900000")
 qt_add_test_target("test_qsociomuxformal" LABELS "iomux")
-qt_add_test_target("test_qsocmmioformal" LABELS "mmio")
+qt_add_test_target("test_qsocmmioformal" LABELS "mmio;ci-formal")
 # A row runs three 600s jobs; the function watchdog must allow all three.
 set_tests_properties(
     test_qsocmmioformal
     PROPERTIES TIMEOUT 3600 RUN_SERIAL TRUE ENVIRONMENT "QTEST_FUNCTION_TIMEOUT=1900000")
-qt_add_test_target("test_qsocmmiouvm" LABELS "mmio;iomux")
+qt_add_test_target("test_qsocmmiouvm" LABELS "mmio;iomux;ci-sim-2")
 # UVM compilation and simulation can exceed QtTest's default 300s function watchdog.
 set_tests_properties(
     test_qsocmmiouvm
