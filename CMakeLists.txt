@@ -518,6 +518,21 @@ if(WIN32)
 endif()
 
 
+# The daemon: one process hosting agent sessions behind a unix socket.
+qt_add_executable(qsoc-agentd
+    MANUAL_FINALIZATION
+    src/agent/daemon/main.cpp
+    src/agent/daemon/qsocagentdaemon.cpp
+    src/agent/daemon/qsocagentdaemon.h
+)
+target_include_directories(qsoc-agentd PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+)
+target_link_libraries(qsoc-agentd PRIVATE qsoc_agent)
+install(TARGETS qsoc-agentd RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
 add_executable(qsoc-smt-worker
     src/smtworker.cpp
     src/common/qsocsmtengine.cpp
@@ -679,7 +694,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     qsoc_core
 )
-add_dependencies(${PROJECT_NAME} qsoc-smt-worker)
+add_dependencies(${PROJECT_NAME} qsoc-smt-worker qsoc-agentd)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER com.vowstar.${PROJECT_NAME}
