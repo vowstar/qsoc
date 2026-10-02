@@ -104,9 +104,10 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
 
 == LLM Configuration
 <llm-config>
-Every provider speaks the OpenAI Chat Completions format. Each model is
-an entry under `llm.models`; `llm.model` names the entry in use, and
-`/model` switches between entries and writes the choice back.
+Each model is an entry under `llm.models` and speaks the OpenAI Chat
+Completions API or the Anthropic Messages API, chosen by its `api` field.
+`llm.model` names the entry in use, and `/model` switches between entries
+and writes the choice back.
 
 An entry has three names. The key is the handle you type in `/model`
 and see in the status bar. `name` is the label in pickers. `model` is
@@ -146,8 +147,12 @@ Every key under an entry is optional except `url`.
     [`name`], [Label shown in pickers; defaults to the key],
     [`model`], [Name sent in the request body; defaults to the key],
     [`url`],
-    [Chat Completions URL (required). Cloud providers publish theirs;
-     Ollama serves `http://localhost:11434/v1/chat/completions`],
+    [Endpoint URL of the selected `api` (required). Cloud providers
+     publish theirs; Ollama serves
+     `http://localhost:11434/v1/chat/completions`],
+    [`api`],
+    [Wire API: `openai-chat` (default) or `anthropic-messages`, see
+     @llm-anthropic],
     [`key`], [API key; empty for keyless local services],
     [`auth_header`],
     [Auth header name. Empty or `Authorization` sends
@@ -155,7 +160,9 @@ Every key under an entry is optional except `url`.
     under that header],
     [`timeout`], [Request timeout in milliseconds],
     [`context`], [Context window in tokens],
-    [`max_output_tokens`], [Reply cap; `0` defers to the backend],
+    [`max_output_tokens`],
+    [Reply cap; `0` defers to the backend (`anthropic-messages`: see
+     @llm-anthropic)],
     [`effort`],
     [Effort applied when this entry is selected: `low`, `medium`, `high`;
      empty means off],
@@ -170,8 +177,7 @@ Every key under an entry is optional except `url`.
     [`modalities.image_max_bytes`],
     [On-wire byte cap; `0` means no byte limit],
     [`modalities.image_provider_hint`],
-    [Token-cost formula hint; the wire payload still uses the
-    OpenAI `image_url` shape],
+    [Token-cost formula hint; it does not change the wire payload],
   )],
   caption: [PER-MODEL CONFIGURATION FIELDS],
   kind: table,
@@ -211,6 +217,69 @@ llm:
 
 `omni` and `omni-lab` are the same served model on two servers; `/model`
 picks the server, the request body carries `vendor-omni-2026` either way.
+
+=== Anthropic Messages API
+<llm-anthropic>
+`api: anthropic-messages` sends requests to a Messages endpoint, such as
+the Anthropic API or a vLLM or SGLang server. `url` is the full
+`/v1/messages` URL. Sessions, compaction and tools work as with
+`openai-chat`.
+
+#figure(
+  align(center)[#table(
+    columns: (0.55fr, 1fr),
+    align: (auto, left),
+    table.header([Item], [Behavior]),
+    table.hline(),
+    [Headers],
+    [`anthropic-version: 2023-06-01` on every request. The key goes in
+     `Authorization: Bearer`, which vLLM and SGLang accept. The
+     Anthropic API needs `auth_header: x-api-key`],
+    [`max_tokens`],
+    [`max_output_tokens` when set. Otherwise the context window minus
+     the request size, counted as one token per byte of the request body
+     and `image_max_tokens` per image, and at least 1024. Servers with a
+     lower output limit, such as the Anthropic API, need
+     `max_output_tokens`],
+    [Effort],
+    [With an effort: `thinking: {type: adaptive}` and
+     `output_config.effort` set to the effort, and no `temperature`.
+     Without an effort: no thinking fields, and `temperature`],
+    [Thinking],
+    [Shown as reasoning and stored with its signature. Signed and
+     redacted thinking is sent back unchanged in later requests],
+    [Prompt cache],
+    [`cache_control` breakpoints on the last system block and on the
+     last block of the last message],
+    [JSON replies],
+    [A system instruction asks for one JSON object; the API has no
+     JSON mode],
+    [Images],
+    [Sent as `base64` image sources],
+  )],
+  caption: [ANTHROPIC MESSAGES API],
+  kind: table,
+)
+
+```yaml
+llm:
+  models:
+    lab-messages:
+      name: Lab server (Messages API)
+      model: vendor-omni-2026
+      url: http://gpu-box.lab:8000/v1/messages
+      api: anthropic-messages
+      context: 1048576
+      effort: high
+    claude:
+      model: claude-model-id
+      url: https://api.anthropic.com/v1/messages
+      api: anthropic-messages
+      key: sk-xxx
+      auth_header: x-api-key
+      context: 200000
+      max_output_tokens: 64000
+```
 
 == LSP Configuration
 <lsp-config>

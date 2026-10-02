@@ -314,6 +314,7 @@ qt_add_test_target("test_qsocimagetokens")
 qt_add_test_target("test_qllmservicemodalities")
 qt_add_test_target("test_qllmservicewiremodel")
 qt_add_test_target("test_qllmservicereasoning")
+qt_add_test_target("test_qllmanthropic")
 qt_add_test_target("test_qsoctoolagentmodel")
 qt_add_test_target("test_qsoctoolwebimage")
 qt_add_test_target("test_qsoctoolwebhtml")
@@ -429,6 +430,7 @@ qt_add_test_target("test_qsocmemoryaftercompaction")
 qt_add_test_target("test_qsocmemorydream")
 qt_add_test_target("test_qsocsftpstranded" LOCK qsoc_loopback_sshd)
 foreach(_mock_test
+    test_qllmanthropic
     test_qllmservicereasoning
     test_qsocagentcompactcancel
     test_qsocagentlazystorage

@@ -1073,9 +1073,18 @@ void QSocAgent::handleStreamError(const QString &error)
 
     /* Only explicit context-window errors permit a compaction retry. */
     static constexpr int maxCompactRetries = 2;
-    const bool hasContextPhrase  = error.contains("context_length_exceeded", Qt::CaseInsensitive)
-                                   || error.contains("maximum context length", Qt::CaseInsensitive)
-                                   || error.contains("prompt is too long", Qt::CaseInsensitive);
+    const bool           hasContextPhrase  = std::ranges::any_of(
+        std::array{
+            "context_length_exceeded",
+            "maximum context length",
+            "prompt is too long",
+            "exceeds the context window",
+            "model_context_window_exceeded",
+            "context window exceeds limit",
+            "exceeded model token limit"},
+        [&error](const char *phrase) {
+            return error.contains(QLatin1String(phrase), Qt::CaseInsensitive);
+        });
     const bool isHttp413         = error.startsWith("[HTTP 413]");
     const bool isHttp400         = error.startsWith("[HTTP 400]");
     const bool isContextOverflow = hasContextPhrase

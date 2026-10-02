@@ -722,7 +722,9 @@ Input replay waits for confirmation when pre-tool hooks are configured, because 
 == Reasoning Effort
 <agent-effort>
 The `--effort` option and the `/effort` command set the reasoning effort
-sent to the current model as `reasoning_effort`. `off` sends nothing.
+sent to the current model as `reasoning_effort`, or as
+`output_config.effort` with adaptive thinking for an `anthropic-messages`
+entry. `off` sends nothing.
 Switching models with `/model` resets the level to that entry's `effort`
 default. To pair a fast model with a reasoning model, declare both under
 `llm.models` and switch between them.

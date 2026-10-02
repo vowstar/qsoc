@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qllmservice.h"
+#include "common/qllmanthropic.h"
 #include "common/qsocconsole.h"
 #include "common/qsocproxy.h"
 
@@ -34,9 +35,30 @@ struct QLLMService::StreamState
     bool                    sawAssistantChoice = false;
     json                    usage              = json::object();
     StreamOutcome           outcome            = StreamOutcome::Active;
+    /* Set for an anthropic-messages entry; owns the reply state then. */
+    std::optional<QLLMAnthropic::StreamDecoder> anthropic;
 };
 
 namespace {
+
+/* Every spelling of the `api` key lives here. */
+const QList<QPair<LLMApi, QString>> &apiNames()
+{
+    static const QList<QPair<LLMApi, QString>> names
+        = {{LLMApi::OpenAIChat, QStringLiteral("openai-chat")},
+           {LLMApi::AnthropicMessages, QStringLiteral("anthropic-messages")}};
+    return names;
+}
+
+/* Echoed error bodies stop here so one bad reply cannot flood the screen. */
+QString capErrorText(const QString &error)
+{
+    constexpr qsizetype limit = 64 * 1024;
+    if (error.size() <= limit) {
+        return error;
+    }
+    return error.left(limit) + QStringLiteral("\n[Response body truncated after 64 KiB]");
+}
 
 void applyReasoningEffort(json &payload, const QString &effort)
 {
@@ -236,6 +258,26 @@ NetworkWaitResult waitForNetworkReply(
 
 } // namespace
 
+std::optional<LLMApi> llmApiFromName(const QString &name)
+{
+    for (const auto &[api, spelling] : apiNames()) {
+        if (spelling == name) {
+            return api;
+        }
+    }
+    return std::nullopt;
+}
+
+QString llmApiName(LLMApi api)
+{
+    for (const auto &[value, spelling] : apiNames()) {
+        if (value == api) {
+            return spelling;
+        }
+    }
+    return {};
+}
+
 /* Constructor and Destructor */
 
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
@@ -398,7 +440,7 @@ void QLLMService::sendRequestAsync(
     const LLMModelConfig endpoint = *active;
 
     QNetworkRequest request = prepareRequest(endpoint);
-    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
+    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint);
 
     if (networkManager.isNull()) {
         LLMResponse response;
@@ -461,11 +503,11 @@ void QLLMService::sendRequestAsync(
         });
     };
 
-    const auto handleFinished = [this, state, complete]() {
+    const auto handleFinished = [state, complete, api = endpoint.api]() {
         if (state->terminal || state->reply.isNull()) {
             return;
         }
-        LLMResponse response = parseResponse(state->reply.data());
+        LLMResponse response = parseResponse(state->reply.data(), api);
         complete(response, false);
     };
 
@@ -589,6 +631,17 @@ void QLLMService::loadConfigSettings()
                 if (node["url"]) {
                     modelCfg.url = QString::fromStdString(node["url"].as<std::string>());
                 }
+                if (node["api"]) {
+                    const QString name = QString::fromStdString(node["api"].as<std::string>());
+                    const auto    api  = llmApiFromName(name);
+                    if (!api) {
+                        QSocConsole::warn()
+                            << "Skipping model" << modelCfg.id << ": unknown api" << name
+                            << "(expected openai-chat or anthropic-messages)";
+                        continue;
+                    }
+                    modelCfg.api = *api;
+                }
                 if (node["key"]) {
                     modelCfg.key = QString::fromStdString(node["key"].as<std::string>());
                 }
@@ -679,6 +732,9 @@ QNetworkRequest QLLMService::prepareRequest(const LLMModelConfig &endpoint) cons
     /* Qt may read from a closed TLS socket while retiring an HTTP/2 connection. */
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    if (endpoint.api == LLMApi::AnthropicMessages) {
+        request.setRawHeader("anthropic-version", QLLMAnthropic::apiVersion);
+    }
 
     /* Auth header dispatch: empty or "Authorization" sends the
      * "Bearer <key>" pattern; any other value sends the bare key
@@ -698,12 +754,13 @@ QNetworkRequest QLLMService::prepareRequest(const LLMModelConfig &endpoint) cons
 }
 
 json QLLMService::buildRequestPayload(
-    const QString &prompt,
-    const QString &systemPrompt,
-    double         temperature,
-    bool           jsonMode,
-    const QString &model) const
+    const QString        &prompt,
+    const QString        &systemPrompt,
+    double                temperature,
+    bool                  jsonMode,
+    const LLMModelConfig &endpoint)
 {
+    const QString &model = endpoint.model;
     /* Build messages array (OpenAI Chat Completions format) */
     json messages = json::array();
 
@@ -720,6 +777,13 @@ json QLLMService::buildRequestPayload(
     userMessage["role"]    = "user";
     userMessage["content"] = prompt.toStdString();
     messages.push_back(userMessage);
+
+    if (endpoint.api == LLMApi::AnthropicMessages) {
+        QLLMAnthropic::RequestOptions options;
+        options.temperature = temperature;
+        options.jsonMode    = jsonMode;
+        return QLLMAnthropic::buildRequest(messages, json::array(), endpoint, options);
+    }
 
     /* Build payload */
     json payload;
@@ -740,7 +804,7 @@ json QLLMService::buildRequestPayload(
     return payload;
 }
 
-LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
+LLMResponse QLLMService::parseResponse(QNetworkReply *reply, LLMApi api)
 {
     LLMResponse response;
 
@@ -757,6 +821,15 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply) const
 
     try {
         json jsonResponse = json::parse(responseData.toStdString());
+        if (api == LLMApi::AnthropicMessages) {
+            jsonResponse = QLLMAnthropic::toChatResponse(jsonResponse);
+            if (jsonResponse.contains("error")) {
+                response.success      = false;
+                response.errorMessage = QString::fromStdString(
+                    jsonResponse["error"].get<std::string>());
+                return response;
+            }
+        }
         response.success  = true;
         response.jsonData = jsonResponse;
 
@@ -808,7 +881,7 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     bool                  jsonMode)
 {
     QNetworkRequest request = prepareRequest(endpoint);
-    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint.model);
+    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint);
 
     const QPointer<QLLMService> owner(this);
     if (networkManager.isNull()) {
@@ -840,7 +913,7 @@ LLMResponse QLLMService::sendRequestToEndpoint(
         return response;
     }
 
-    LLMResponse response = owner->parseResponse(reply.data());
+    LLMResponse response = parseResponse(reply.data(), endpoint.api);
     reply->deleteLater();
 
     return response;
@@ -881,30 +954,40 @@ void QLLMService::sendChatCompletionStream(
     const LLMModelConfig endpoint = *active;
     QNetworkRequest      request  = prepareRequest(endpoint);
 
+    const QString effort    = endpoint.reasoning ? reasoningEffort : QString();
+    const bool    anthropic = endpoint.api == LLMApi::AnthropicMessages;
+
     /* Build payload with streaming enabled */
     json payload;
-    payload["messages"]    = messages;
-    payload["temperature"] = temperature;
-    payload["stream"]      = true;
-    /* Ask the server to emit a final chunk carrying token usage so
-     * downstream code can anchor estimates on the real prompt size
-     * instead of recomputing from scratch each turn. */
-    payload["stream_options"] = {{"include_usage", true}};
+    if (anthropic) {
+        QLLMAnthropic::RequestOptions options;
+        options.temperature = temperature;
+        options.effort      = effort;
+        options.stream      = true;
+        payload             = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
+    } else {
+        payload["messages"]    = messages;
+        payload["temperature"] = temperature;
+        payload["stream"]      = true;
+        /* Ask the server to emit a final chunk carrying token usage so
+         * downstream code can anchor estimates on the real prompt size
+         * instead of recomputing from scratch each turn. */
+        payload["stream_options"] = {{"include_usage", true}};
 
-    const QString effort = endpoint.reasoning ? reasoningEffort : QString();
-    applyReasoningEffort(payload, effort);
+        applyReasoningEffort(payload, effort);
 
-    if (!endpoint.model.isEmpty()) {
-        payload["model"] = endpoint.model.toStdString();
-    }
+        if (!endpoint.model.isEmpty()) {
+            payload["model"] = endpoint.model.toStdString();
+        }
 
-    if (!tools.empty()) {
-        payload["tools"] = tools;
-    }
+        if (!tools.empty()) {
+            payload["tools"] = tools;
+        }
 
-    /* Set max output tokens from endpoint config */
-    if (endpoint.maxOutputTokens > 0) {
-        payload["max_tokens"] = endpoint.maxOutputTokens;
+        /* Set max output tokens from endpoint config */
+        if (endpoint.maxOutputTokens > 0) {
+            payload["max_tokens"] = endpoint.maxOutputTokens;
+        }
     }
 
     if (networkManager.isNull()) {
@@ -920,7 +1003,10 @@ void QLLMService::sendChatCompletionStream(
     state->reply         = reply;
     state->reasoningMode = !effort.isEmpty();
     state->generation    = generation;
-    currentStream        = state;
+    if (anthropic) {
+        state->anthropic.emplace();
+    }
+    currentStream = state;
 
     /* Set timeout */
     auto *timer = new QTimer(reply);
@@ -1106,7 +1192,7 @@ void QLLMService::failStream(
     }
     stopStreamReply(owner, state);
     if (!owner.isNull()) {
-        emit owner->streamError(error);
+        emit owner->streamError(capErrorText(error));
     }
 }
 
@@ -1248,6 +1334,10 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
     } catch (const json::exception &error) {
         QSocConsole::warn() << "Failed to parse stream chunk:" << error.what();
         return ParseResult::Malformed;
+    }
+
+    if (state->anthropic) {
+        return parseAnthropicEvent(owner, state, chunk);
     }
 
     if (chunk.is_object() && chunk.contains("error") && !chunk["error"].is_null()) {
@@ -1409,8 +1499,48 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
     return ParseResult::NeedMore;
 }
 
+QLLMService::ParseResult QLLMService::parseAnthropicEvent(
+    const QPointer<QLLMService> &owner, const StreamStatePtr &state, const json &event)
+{
+    QLLMAnthropic::StreamDecoder::Delta delta;
+    QString                             error;
+    const auto                          status = state->anthropic->feed(event, &delta, &error);
+    state->sawAssistantChoice                  = state->anthropic->started();
+    if (status == QLLMAnthropic::StreamDecoder::Status::Error) {
+        state->terminalError = error;
+        return ParseResult::ProviderError;
+    }
+    if (status == QLLMAnthropic::StreamDecoder::Status::Malformed) {
+        QSocConsole::warn() << "Malformed stream event";
+        return ParseResult::Malformed;
+    }
+    if (!delta.reasoning.isEmpty()) {
+        emit owner->streamReasoningChunk(delta.reasoning);
+        if (!isStreamActive(owner, state)) {
+            return ParseResult::Stopped;
+        }
+    }
+    if (!delta.text.isEmpty()) {
+        emit owner->streamChunk(delta.text);
+        if (!isStreamActive(owner, state)) {
+            return ParseResult::Stopped;
+        }
+    }
+    if (delta.tool) {
+        emit owner->streamToolCall(delta.toolId, delta.toolName, delta.toolArguments);
+        if (!isStreamActive(owner, state)) {
+            return ParseResult::Stopped;
+        }
+    }
+    return status == QLLMAnthropic::StreamDecoder::Status::Done ? ParseResult::Done
+                                                                : ParseResult::NeedMore;
+}
+
 json QLLMService::buildStreamResponse(const StreamStatePtr &state)
 {
+    if (state->anthropic) {
+        return state->anthropic->response();
+    }
     json message;
     message["role"] = "assistant";
 
@@ -1584,25 +1714,35 @@ json QLLMService::sendChatCompletionTo(
 
     QNetworkRequest request = prepareRequest(endpoint);
 
+    const QString effort    = endpoint.reasoning ? reasoningEffort : QString();
+    const bool    anthropic = endpoint.api == LLMApi::AnthropicMessages;
+
     /* Build payload with messages and tools */
     json payload;
-    payload["messages"]    = messages;
-    payload["temperature"] = temperature;
-    payload["stream"]      = false;
-    applyReasoningEffort(payload, endpoint.reasoning ? reasoningEffort : QString());
+    if (anthropic) {
+        QLLMAnthropic::RequestOptions options;
+        options.temperature = temperature;
+        options.effort      = effort;
+        payload             = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
+    } else {
+        payload["messages"]    = messages;
+        payload["temperature"] = temperature;
+        payload["stream"]      = false;
+        applyReasoningEffort(payload, effort);
 
-    if (!endpoint.model.isEmpty()) {
-        payload["model"] = endpoint.model.toStdString();
-    }
+        if (!endpoint.model.isEmpty()) {
+            payload["model"] = endpoint.model.toStdString();
+        }
 
-    /* Add tools if provided */
-    if (!tools.empty()) {
-        payload["tools"] = tools;
-    }
+        /* Add tools if provided */
+        if (!tools.empty()) {
+            payload["tools"] = tools;
+        }
 
-    /* Set max output tokens from endpoint config */
-    if (endpoint.maxOutputTokens > 0) {
-        payload["max_tokens"] = endpoint.maxOutputTokens;
+        /* Set max output tokens from endpoint config */
+        if (endpoint.maxOutputTokens > 0) {
+            payload["max_tokens"] = endpoint.maxOutputTokens;
+        }
     }
 
     if (networkManager.isNull()) {
@@ -1646,7 +1786,10 @@ json QLLMService::sendChatCompletionTo(
     reply->deleteLater();
 
     try {
-        json    response = json::parse(responseData.toStdString());
+        json response = json::parse(responseData.toStdString());
+        if (anthropic) {
+            response = QLLMAnthropic::toChatResponse(response);
+        }
         QString validationError;
         if (!extractAssistantMessage(response, nullptr, &validationError)) {
             QSocConsole::warn() << "Endpoint" << endpoint.name

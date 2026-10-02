@@ -979,16 +979,27 @@ private slots:
     void contextOverflowRetriesOnlyAfterCommit_data()
     {
         QTest::addColumn<bool>("shrinks");
-        QTest::newRow("committed") << true;
-        QTest::newRow("no-progress") << false;
+        QTest::addColumn<QString>("message");
+        const QString openai = QStringLiteral("maximum context length exceeded");
+        QTest::newRow("committed") << true << openai;
+        QTest::newRow("no-progress") << false << openai;
+        for (const char *phrase :
+             {"prompt is too long: 9 tokens > 8 maximum",
+              "input exceeds the context window",
+              "model_context_window_exceeded",
+              "context window exceeds limit",
+              "exceeded model token limit"}) {
+            QTest::newRow(phrase) << true << QString::fromLatin1(phrase);
+        }
     }
 
     void contextOverflowRetriesOnlyAfterCommit()
     {
         QFETCH(bool, shrinks);
+        QFETCH(QString, message);
         MockServer server;
         QVERIFY(server.listen());
-        server.enqueueError(400, QStringLiteral("maximum context length exceeded"));
+        server.enqueueError(400, message);
         if (shrinks) {
             server.enqueueCompletion(QStringLiteral("Summary"));
             server.enqueueStream(QStringLiteral("Completed"));

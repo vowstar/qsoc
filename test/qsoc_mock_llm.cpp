@@ -60,6 +60,7 @@ struct MockConfig
     QString     failMode = QStringLiteral("none");
     QString     reasoning;
     QStringList reasoningFields;
+    QByteArray  streamError;
 };
 
 MockConfig config;
@@ -129,6 +130,7 @@ bool loadConfig(QString *error)
     config.reasoning         = QString::fromUtf8(qgetenv("MOCK_REASONING"));
     config.reasoningFields   = QString::fromLatin1(envBytes("MOCK_REASONING_FIELD", "reasoning"))
                                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    config.streamError       = qgetenv("MOCK_STREAM_ERROR");
     const QString scriptPath = QString::fromLocal8Bit(qgetenv("MOCK_SCRIPT"));
     if (!scriptPath.isEmpty()) {
         QFile file(scriptPath);
@@ -367,7 +369,7 @@ void respondFailure(
 {
     QJsonObject error;
     error["message"] = message;
-    error["type"]    = type;
+    error["type"]    = code == 529 ? QStringLiteral("overloaded_error") : type;
     QJsonObject payload;
     payload["error"] = error;
     if (wire == Wire::Anthropic) {
@@ -541,6 +543,15 @@ QJsonObject anthropicUsage(int outputTokens)
     return usage;
 }
 
+QJsonObject anthropicEvent(const char *type, int index, const char *key, const QJsonObject &value)
+{
+    QJsonObject event;
+    event["type"]                   = QString::fromLatin1(type);
+    event["index"]                  = index;
+    event[QString::fromLatin1(key)] = value;
+    return event;
+}
+
 void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bool streaming)
 {
     /* max_tokens is required on every Messages request; a naive port omits it. */
@@ -556,23 +567,37 @@ void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bo
         return;
     }
     const QString model    = request.value("model").toString(QStringLiteral("claude-mock"));
-    const bool    emitTool = !config.toolName.isEmpty();
-
-    QJsonObject block;
+    const bool    emitTool = !config.toolName.isEmpty()
+                             && (config.toolMax <= 0 || emitted < config.toolMax);
     if (emitTool) {
-        block["type"]  = QStringLiteral("tool_use");
-        block["id"]    = QStringLiteral("toolu_0");
-        block["name"]  = QString::fromUtf8(config.toolName);
-        block["input"] = config.toolArgs;
+        ++emitted;
+    }
+    ++hits[emitTool ? "200_toolcalls" : "200_text"];
+
+    /* Thinking first, signed, then the answer or the tool call. */
+    QList<QJsonObject> blocks;
+    if (!config.reasoning.isEmpty()) {
+        blocks.append(
+            {{"type", "thinking"},
+             {"thinking", config.reasoning},
+             {"signature", QStringLiteral("mock-signature-%1").arg(emitted)}});
+    }
+    if (emitTool) {
+        blocks.append(
+            {{"type", "tool_use"},
+             {"id", QStringLiteral("toolu_%1").arg(emitted)},
+             {"name", QString::fromUtf8(config.toolName)},
+             {"input", config.toolArgs}});
     } else {
-        block["type"] = QStringLiteral("text");
-        block["text"] = QString::fromUtf8(config.reply);
+        blocks.append({{"type", "text"}, {"text", QString::fromUtf8(config.reply)}});
     }
     const QString stopReason = emitTool ? QStringLiteral("tool_use") : QStringLiteral("end_turn");
 
     if (!streaming) {
         QJsonArray content;
-        content.append(block);
+        for (const QJsonObject &block : blocks) {
+            content.append(block);
+        }
         QJsonObject payload;
         payload["id"]            = QStringLiteral("msg_mock");
         payload["type"]          = QStringLiteral("message");
@@ -595,36 +620,81 @@ void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bo
     opening["stop_reason"]   = QJsonValue();
     opening["stop_sequence"] = QJsonValue();
     opening["usage"]         = anthropicUsage(1);
-
     QJsonObject start;
     start["type"]    = QStringLiteral("message_start");
     start["message"] = opening;
 
-    QJsonObject emptyBlock = block;
-    QJsonObject delta;
-    if (emitTool) {
-        emptyBlock["input"]   = QJsonObject();
-        delta["type"]         = QStringLiteral("input_json_delta");
-        delta["partial_json"] = QString::fromUtf8(compactJson(config.toolArgs));
-    } else {
-        emptyBlock["text"] = QString();
-        delta["type"]      = QStringLiteral("text_delta");
-        delta["text"]      = QString::fromUtf8(config.reply);
+    QList<QPair<QByteArray, QJsonObject>> events{{"message_start", start}};
+    if (!config.streamError.isEmpty()) {
+        /* A mid-stream failure arrives as an error event on a 200 reply. */
+        QJsonObject error;
+        error["type"]    = QString::fromUtf8(config.streamError);
+        error["message"] = QStringLiteral("Overloaded");
+        QJsonObject event;
+        event["type"]  = QStringLiteral("error");
+        event["error"] = error;
+        events.append({"error", event});
+        writeNamedSse(socket, events);
+        return;
     }
 
-    QJsonObject blockStart;
-    blockStart["type"]          = QStringLiteral("content_block_start");
-    blockStart["index"]         = 0;
-    blockStart["content_block"] = emptyBlock;
-
-    QJsonObject blockDelta;
-    blockDelta["type"]  = QStringLiteral("content_block_delta");
-    blockDelta["index"] = 0;
-    blockDelta["delta"] = delta;
-
-    QJsonObject blockStop;
-    blockStop["type"]  = QStringLiteral("content_block_stop");
-    blockStop["index"] = 0;
+    /* Every delta arrives in two halves, the way servers split them. */
+    const auto halves = [](const QString &text) {
+        return QStringList{text.left(text.size() / 2), text.mid(text.size() / 2)};
+    };
+    for (int index = 0; index < blocks.size(); ++index) {
+        const QJsonObject &block = blocks.at(index);
+        const QString      type  = block.value("type").toString();
+        QJsonObject        empty = block;
+        if (type == QLatin1String("thinking")) {
+            empty["thinking"]  = QString();
+            empty["signature"] = QString();
+        } else if (type == QLatin1String("tool_use")) {
+            empty["input"] = QJsonObject();
+        } else {
+            empty["text"] = QString();
+        }
+        events.append(
+            {"content_block_start",
+             anthropicEvent("content_block_start", index, "content_block", empty)});
+        QStringList parts;
+        QString     deltaType;
+        QString     field;
+        if (type == QLatin1String("thinking")) {
+            parts     = halves(block.value("thinking").toString());
+            deltaType = QStringLiteral("thinking_delta");
+            field     = QStringLiteral("thinking");
+        } else if (type == QLatin1String("tool_use")) {
+            parts     = halves(QString::fromUtf8(compactJson(block.value("input").toObject())));
+            deltaType = QStringLiteral("input_json_delta");
+            field     = QStringLiteral("partial_json");
+        } else {
+            parts     = halves(block.value("text").toString());
+            deltaType = QStringLiteral("text_delta");
+            field     = QStringLiteral("text");
+        }
+        for (const QString &part : parts) {
+            const QJsonObject delta{{"type", deltaType}, {field, part}};
+            events.append(
+                {"content_block_delta",
+                 anthropicEvent("content_block_delta", index, "delta", delta)});
+        }
+        if (type == QLatin1String("thinking")) {
+            const QJsonObject delta{
+                {"type", QStringLiteral("signature_delta")},
+                {"signature", block.value("signature")}};
+            events.append(
+                {"content_block_delta",
+                 anthropicEvent("content_block_delta", index, "delta", delta)});
+        }
+        QJsonObject stop;
+        stop["type"]  = QStringLiteral("content_block_stop");
+        stop["index"] = index;
+        events.append({"content_block_stop", stop});
+        QJsonObject ping;
+        ping["type"] = QStringLiteral("ping");
+        events.append({"ping", ping});
+    }
 
     QJsonObject stopDelta;
     stopDelta["stop_reason"]   = stopReason;
@@ -634,18 +704,11 @@ void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bo
     messageDelta["delta"] = stopDelta;
     /* Cumulative, not incremental. */
     messageDelta["usage"] = anthropicUsage(1);
-
+    events.append({"message_delta", messageDelta});
     QJsonObject messageStop;
     messageStop["type"] = QStringLiteral("message_stop");
-
-    writeNamedSse(
-        socket,
-        {{"message_start", start},
-         {"content_block_start", blockStart},
-         {"content_block_delta", blockDelta},
-         {"content_block_stop", blockStop},
-         {"message_delta", messageDelta},
-         {"message_stop", messageStop}});
+    events.append({"message_stop", messageStop});
+    writeNamedSse(socket, events);
 }
 
 void respondCountTokens(QTcpSocket *socket, const QJsonObject &request)
@@ -739,12 +802,32 @@ void serve(QTcpSocket *socket, Connection *connection)
         } else if (path.startsWith("/v1/messages")) {
             const QJsonObject request = parseBody(body.left(contentLength));
             appendRequestLog(request);
+            if (wire != Wire::Anthropic) {
+                respondFailure(
+                    socket,
+                    Wire::Anthropic,
+                    400,
+                    QStringLiteral("anthropic-version: header required"),
+                    QStringLiteral("invalid_request_error"));
+                return;
+            }
+            if (config.overflowBytes > 0 && contentLength > config.overflowBytes) {
+                ++hits["overflow"];
+                respondFailure(
+                    socket,
+                    Wire::Anthropic,
+                    400,
+                    QStringLiteral("prompt is too long: %1 tokens > %2 maximum")
+                        .arg(contentLength)
+                        .arg(config.overflowBytes),
+                    QStringLiteral("invalid_request_error"));
+                return;
+            }
             if (shouldFail()) {
                 ++hits["fail"];
                 respondFailure(socket, Wire::Anthropic);
                 return;
             }
-            ++hits["200_text"];
             const bool streaming = request.value("stream").toBool();
             if (!streaming) {
                 ++hits["200_sync"];

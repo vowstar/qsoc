@@ -23,6 +23,24 @@
 using json = nlohmann::json;
 
 /**
+ * @brief Wire API of a model entry, chosen by its `api` key.
+ */
+enum class LLMApi : std::uint8_t {
+    OpenAIChat,       /* "openai-chat": Chat Completions, the default */
+    AnthropicMessages /* "anthropic-messages": Messages */
+};
+
+/**
+ * @brief Read an `api` value.
+ * @param name Config spelling.
+ * @return The API, or nothing for an unknown spelling.
+ */
+std::optional<LLMApi> llmApiFromName(const QString &name);
+
+/** @brief Config spelling of an API. */
+QString llmApiName(LLMApi api);
+
+/**
  * @brief One entry of llm.models: where requests go and how the model behaves
  */
 struct LLMModelConfig
@@ -30,8 +48,9 @@ struct LLMModelConfig
     QString id;    /* Config key; the handle users select */
     QString name;  /* Display name (defaults to id) */
     QString model; /* Name sent on the wire (defaults to id) */
-    QString url;   /* Chat Completions endpoint URL */
-    QString key;   /* API key (empty = no auth) */
+    QString url;   /* Endpoint URL of the selected API */
+    LLMApi  api = LLMApi::OpenAIChat;
+    QString key; /* API key (empty = no auth) */
     /* Auth header name. Empty or "Authorization" sends "Bearer <key>";
      * any other value sends the bare key under that header name. */
     QString authHeader;
@@ -70,7 +89,9 @@ struct LLMResponse
 
 /**
  * @brief The QLLMService class provides a unified interface for LLM API services
- * @details This class handles API communication using OpenAI Chat Completions format.
+ * @details Callers speak the OpenAI Chat Completions format. Entries with
+ *          `api: anthropic-messages` are translated to and from the
+ *          Anthropic Messages API on the wire.
  */
 class QLLMService : public QObject
 {
@@ -375,27 +396,28 @@ private:
     QNetworkRequest prepareRequest(const LLMModelConfig &endpoint) const;
 
     /**
-     * @brief Build the request payload (OpenAI Chat Completions format)
+     * @brief Build the request payload for one prompt
      * @param prompt User prompt content
      * @param systemPrompt System prompt content
      * @param temperature Temperature parameter
      * @param jsonMode Whether to request JSON format output
-     * @param model Model name to use
+     * @param endpoint Model entry the payload is for
      * @return JSON payload for the request
      */
-    json buildRequestPayload(
-        const QString &prompt,
-        const QString &systemPrompt,
-        double         temperature,
-        bool           jsonMode,
-        const QString &model) const;
+    static json buildRequestPayload(
+        const QString        &prompt,
+        const QString        &systemPrompt,
+        double                temperature,
+        bool                  jsonMode,
+        const LLMModelConfig &endpoint);
 
     /**
-     * @brief Parse the API response (OpenAI Chat Completions format)
+     * @brief Parse the API response
      * @param reply Network response
+     * @param api Wire API the reply is in
      * @return Parsed LLM response struct
      */
-    LLMResponse parseResponse(QNetworkReply *reply) const;
+    static LLMResponse parseResponse(QNetworkReply *reply, LLMApi api);
 
     /**
      * @brief Send request to a specific endpoint
@@ -426,6 +448,8 @@ private:
         const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static ParseResult parseStreamLine(
         const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QByteArray &line);
+    static ParseResult parseAnthropicEvent(
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state, const json &event);
     static json buildStreamResponse(const StreamStatePtr &state);
 
     StreamStatePtr currentStream;
