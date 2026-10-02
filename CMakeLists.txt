@@ -418,6 +418,105 @@ file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/a
 set(PROJECT_CORE_CPP_FILES "${PROJECT_CPP_FILES}")
 list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/main\\.cpp$")
 list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/smtworker\\.cpp$")
+list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/agent/daemon/.*")
+
+# qsoc_agent: headless agent infrastructure (src/agent, src/common, services)
+# without terminal or GUI code. Frontends link it and add presentation.
+set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/main\\.cpp$")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/smtworker\\.cpp$")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/daemon/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/gui/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/tui/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/cli/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/common/qsoc(codehighlighter|markdownrenderer|mathparser).*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/common/qstaticicontheme\\.cpp")
+
+set(QSOC_AGENT_HEADERS "${PROJECT_H_FILES}")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/daemon/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/gui/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/tui/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/cli/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/common/qsoc(codehighlighter|markdownrenderer|mathparser).*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/common/qstaticicontheme\\.h")
+
+list(REMOVE_ITEM PROJECT_CORE_CPP_FILES ${QSOC_AGENT_CPP})
+
+include(GenerateExportHeader)
+if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+    qt_add_library(qsoc_agent STATIC ${QSOC_AGENT_CPP} ${QSOC_AGENT_HEADERS})
+else()
+    add_library(qsoc_agent STATIC ${QSOC_AGENT_CPP} ${QSOC_AGENT_HEADERS})
+endif()
+generate_export_header(qsoc_agent
+    BASE_NAME QSOC_AGENT
+    EXPORT_MACRO_NAME QSOC_AGENT_API
+    EXPORT_FILE_NAME qsocagent_export.h
+    STATIC_DEFINE QSOC_AGENT_STATIC_DEFINE
+)
+target_include_directories(qsoc_agent PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+)
+
+target_include_directories(qsoc_agent SYSTEM PUBLIC
+    "${SVLANG_INCLUDE_DIRS}"
+    "${JSON_INCLUDE_DIRS}"
+    "${INJA_INCLUDE_DIRS}"
+    "${YAML_INCLUDE_DIRS}"
+    "${CSV_INCLUDE_DIRS}"
+    "${GPDS_INCLUDE_DIRS}"
+    "${BIGINT_INCLUDE_DIRS}"
+    "${ANTLR4_INCLUDE_DIRS}"
+    "${SYSTEMRDL_INCLUDE_DIRS}"
+    "${FMT_INCLUDE_DIRS}"
+    "${REPLXX_INCLUDE_DIRS}"
+    "${MBEDTLS_INCLUDE_DIRS}"
+    "${LIBSSH2_INCLUDE_DIRS}"
+    "${CMARK_GFM_INCLUDE_DIRS}"
+    "${LEXBOR_INCLUDE_DIRS}"
+)
+
+# The runtime library needs the same dependency surface as the old
+# in-process wiring: every subsystem it assembles. Gui is required by the
+# image attachment pipeline (QImage-based token estimation for
+# multimodal models), which is part of the agent's request path.
+set(QSOC_AGENT_LINK_LIBRARIES
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Gui
+    ${SVLANG_LIBRARIES}
+    ${JSON_LIBRARIES}
+    ${INJA_LIBRARIES}
+    ${YAML_LIBRARIES}
+    ${CSV_LIBRARIES}
+    ${GPDS_LIBRARIES}
+    ${BIGINT_LIBRARIES}
+    ${ANTLR4_LIBRARIES}
+    ${SYSTEMRDL_LIBRARIES}
+    ${FMT_LIBRARIES}
+    ${REPLXX_LIBRARIES}
+    ${LIBSSH2_LIBRARIES}
+    ${CMARK_GFM_LIBRARIES}
+    ${LEXBOR_LIBRARIES}
+)
+target_link_libraries(qsoc_agent PUBLIC ${QSOC_AGENT_LINK_LIBRARIES})
+target_link_libraries(qsoc_agent PRIVATE libz3)
+target_compile_definitions(qsoc_agent PUBLIC
+    CMARK_GFM_STATIC_DEFINE
+    CMARK_GFM_EXTENSIONS_STATIC_DEFINE
+    LEXBOR_STATIC
+    QSOC_AGENT_STATIC_DEFINE
+)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(qsoc_agent PUBLIC -fexperimental-library)
+endif()
+if(WIN32)
+    target_link_libraries(qsoc_agent PUBLIC ws2_32)
+    target_compile_definitions(qsoc_agent PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 
 add_executable(qsoc-smt-worker
     src/smtworker.cpp
@@ -436,9 +535,14 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+    # The daemon header belongs to the qsoc-agentd target only; keeping it
+    # out of qsoc_core avoids duplicate moc output for QSocAgentDaemon.
+    set(PROJECT_CORE_H_FILES "${PROJECT_H_FILES}")
+    list(REMOVE_ITEM PROJECT_CORE_H_FILES ${QSOC_AGENT_HEADERS})
+    list(FILTER PROJECT_CORE_H_FILES EXCLUDE REGEX "src/agent/daemon/.*")
     qt_add_library(qsoc_core STATIC
         "${PROJECT_CORE_CPP_FILES}"
-        "${PROJECT_H_FILES}"
+        "${PROJECT_CORE_H_FILES}"
         "${PROJECT_UI_FILES}"
     )
 
@@ -457,9 +561,12 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_lrelease(${PROJECT_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
     qt_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 else()
+    set(PROJECT_CORE_H_FILES "${PROJECT_H_FILES}")
+    list(REMOVE_ITEM PROJECT_CORE_H_FILES ${QSOC_AGENT_HEADERS})
+    list(FILTER PROJECT_CORE_H_FILES EXCLUDE REGEX "src/agent/daemon/.*")
     add_library(qsoc_core STATIC
         "${PROJECT_CORE_CPP_FILES}"
-        "${PROJECT_H_FILES}"
+        "${PROJECT_CORE_H_FILES}"
         "${PROJECT_UI_FILES}"
     )
 
@@ -520,6 +627,7 @@ target_include_directories(qsoc_core SYSTEM PUBLIC
 )
 
 target_link_libraries(qsoc_core PUBLIC
+    qsoc_agent
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
     Qt${QT_VERSION_MAJOR}::Network
@@ -759,6 +867,7 @@ if(CPPCHECK_COMMAND)
             -I${CMAKE_CURRENT_SOURCE_DIR}/test
             -I${CMAKE_BINARY_DIR}
             -I${CMAKE_BINARY_DIR}/qsoc_core_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_agent_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_autogen/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/test
