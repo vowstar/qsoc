@@ -8,18 +8,13 @@ The `clock` section defines clock sources, targets, and processing stages.
   radius: 4pt,
   stroke: rgb("#a08410") + 0.5pt,
 )[
-  *Standalone module:* a `clock:` block generates a self-contained
-  Verilog module named after `clock.name`. The generated module is NOT
-  auto-instantiated by any parent netlist: the user instantiates it
-  manually (or via `qsoc module import` followed by an `_inst.soc_net`
-  entry) at the top level.
+  *Standalone module:* each `clock:` entry generates a module named by
+  `name`, and you instantiate it yourself (@soc-net-verilog-structure).
 
-  *Auto-input pattern:* a target's `link:` source that is neither a
-  declared input nor another target gets auto-promoted to a fresh
-  input port on the controller. This is how you wire software
-  controlled signals (e.g. `*_sw_en`, `pll_lockout`) from outside the
-  controller. A typo in the source name surfaces downstream as an
-  unwired controller pin, not as a qsoc warning.
+  *Auto-input:* a `link` source that is neither a declared input nor a
+  target becomes an input port, which is how software controls such as
+  `pll_lockout` enter. A misspelled source therefore shows up as an extra
+  unconnected port, not as an error.
 ]
 
 == Clock Overview
@@ -287,12 +282,10 @@ input port, at either level.
 === ICG with Clock During Reset
 <soc-net-clock-icg-clock-during-reset>
 The `clock_on_reset` parameter keeps the ICG open during reset, whatever the
-enable. `reset` is sampled on two rising edges of the source clock by
-`qsoc_sync` and ORed into the enable, so the gate opens two edges after reset
-asserts and stays open until two edges after it releases. The enable changes
-only on source clock edges and the gate latch takes every change, so opening
-and closing are glitch free. The source clock must run for reset to take
-effect:
+enable. The gate opens on the second rising edge of the source clock after
+reset asserts and follows `enable` again from the second edge after reset
+releases. Opening and closing are glitch free. The source clock must run for
+reset to take effect:
 
 ```yaml
 # ICG with clock enabled during reset
@@ -333,20 +326,14 @@ qsoc_clk_gate #(
 ```
 
 `test_en` enters the gate latch like `en`, so it opens the gate at the next
-idle phase of the clock. The divide-by-1 bypass in `qsoc_clk_div` is a plain
-`qsoc_ck_mux2` with `test_en` in its select term: change `test_en` only while
-the source clock is stopped.
+idle phase of the clock.
+
+*Contract:* the divide-by-1 bypass of `qsoc_clk_div` is a plain clock mux
+selected by `test_en`. Change `test_en` only while the source clock is stopped.
 
 == Divider Configuration
 <soc-net-clock-divider-config>
-Clock dividers support three operational modes determined by the presence of `value` and `valid` signals:
-
-Odd division ratios keep a 50% duty cycle by toggling a second flop on the
-falling edge of the source clock. The generated divider therefore instantiates
-negative-edge flops whenever an odd ratio is reachable, which affects scan
-chain construction and mixed-edge timing closure. The output clock gate latches
-`enable` and a flop on the source clock, so STA must close the clock gating
-setup and hold checks on both.
+The presence of `value` and `valid` selects one of three modes:
 
 #figure(
   align(center)[#table(
@@ -399,6 +386,11 @@ setup and hold checks on both.
   kind: table,
 )
 
+An odd ratio keeps a 50% duty cycle with a flop on the falling edge of the
+source clock, so a divider that can reach an odd ratio has negative-edge flops
+for scan and timing closure. The output clock gate latches `enable` and a
+flop on the source clock, so STA must close the clock gating checks on both.
+
 === Static Mode (Constant Division)
 <soc-net-clock-divider-static>
 When no `value` signal is specified, the divider operates in static mode with constant division:
@@ -432,8 +424,9 @@ qsoc_clk_div #(
 === Dynamic Mode (Runtime Control)
 <soc-net-clock-divider-dynamic>
 When a `value` signal is specified, the divider accepts runtime division control.
-With `valid`, `value` and `valid` feed the load logic directly: drive both from
-the divider source clock domain. Only auto mode synchronizes `value`:
+
+*Contract:* with `valid`, drive `value` and `valid` from the divider source
+clock domain, and hold both until `ready`. Only auto mode synchronizes `value`.
 
 ```yaml
 # Dynamic divider example
@@ -468,21 +461,16 @@ qsoc_clk_div #(
 
 === Auto Mode (Simplified Dynamic Control)
 <soc-net-clock-divider-auto>
-When `value` is specified but `valid` is omitted, the divider sets `AUTO_UPDATE`.
-Each bit of `value` passes a two-stage `qsoc_sync`. The synchronized value is
-accepted once it is equal on two consecutive cycles of the divider clock, and
-only an accepted value is loaded. A load is requested whenever the accepted
-value differs from the current ratio. The request stays active until the load
-happens, so the last value written is always the one loaded, even when it
-changes during a previous load. `div_valid` is tied low and ignored. `ready`
-may still be connected. Target-level and link-level dividers behave the same.
+When `value` is specified but `valid` is omitted, the divider sets
+`AUTO_UPDATE`: it synchronizes `value` itself and loads each new value, and
+the last value written is always the one loaded. `div_valid` is tied low,
+`ready` can still be connected, and target-level and link-level dividers
+behave the same. A new value requests its load on the fifth rising edge of
+the divider clock after it arrives, when no flop goes metastable.
 
-Contract: drive `value` from a register in the source domain and hold each
-value for at least three cycles of the divider clock. Then a code seen while
-bits resolve on different cycles is never loaded, and the last value is. The
-cell formal job checks this with each bit arriving on time or one cycle late.
-Without metastability, a new value raises the load request on the fifth
-rising edge of the divider clock after it arrives.
+*Contract:* drive `value` from a register and hold each value for at least
+three cycles of the divider clock. Then a mix of old and new bits is never
+loaded.
 
 ```yaml
 # Auto mode divider example
@@ -524,7 +512,6 @@ qsoc_clk_div #(
   reset takes effect
 - *Bypass Operation*: Division by 1 automatically enables bypass mode in the primitive
 - *Enable*: `enable` low stops the output low after its current high phase
-- *Handshake*: with `valid`, hold `value` and `valid` until `ready`
 - *Ratio Change*: no output phase is shorter than the smaller of the old and
   the new ratio
 - *Clock During Reset*: `clock_on_reset` passes the source clock during reset
@@ -596,23 +583,16 @@ Targets with multiple links (≥2) automatically generate multiplexers. Mux type
   kind: table,
 )
 
-A `GF_MUX` is glitch-free when `select` changes only after the output runs
-from the previously selected source, and its reset is held for several cycles
-of every linked clock. With `clock_on_reset`, also keep `select` stable during
-reset and assert reset only after a switch has completed.
+*Contract:* a `GF_MUX` is glitch free when `select` changes only after the
+output runs from the previously selected source, and its reset is held for
+several cycles of every linked clock. With `clock_on_reset`, also keep
+`select` stable during reset and assert reset only after a switch has
+completed.
 
-Each linked clock has its own two-stage reset synchronizer (`qsoc_sync`).
 After reset release, a source drives the output no earlier than its seventh
-rising edge: two for the reset synchronizer, two for the glitch filter, two
-for the enable synchronizer and one for the gate latch. With
-`clock_on_reset`, the selected source stays enabled in reset: `reset` and
-`select` are each sampled on two rising edges of that source, and only the
-source they select opens. Keep `select` stable while in reset.
-
-A source's enable synchronizer has no reset. After reset asserts it empties on
-`NUM_SYNC_STAGES` rising edges of that source, so every gate enable changes on
-its own clock edge; without `clock_on_reset` the output stops within
-`NUM_SYNC_STAGES + 1` edges of the running source. A stopped source holds its
+rising edge. With `clock_on_reset`, the source that `select` names stays
+enabled in reset. Without it, the output stops within `NUM_SYNC_STAGES + 1`
+edges of the running source after reset asserts. A stopped source holds its
 gate state until it runs again.
 
 For `STD_MUX`, `select` is the zero-based ordinal of each source in `link`.
@@ -734,17 +714,9 @@ Link-level processing uses key existence for operations:
 
 == STA Guide Buffers
 <soc-net-clock-sta-guide>
-STA (Static Timing Analysis) guide buffers are foundry-specific cells inserted *serially* in clock processing chains to assist with timing constraints during physical design.
-
-=== Purpose and Usage
-<soc-net-clock-sta-purpose>
-STA guide buffers serve several purposes in physical design flows:
-- Provide insertion points for timing constraints during place and route
-- Help STA tools with accurate timing analysis at specific clock distribution points
-- Allow foundry-specific timing models to be applied at critical clock nodes
-- Enable better correlation between pre-layout and post-layout timing
-
-Each MUX, ICG, DIV, or INV stage can insert an STA guide buffer in series with its output.
+An STA guide buffer is a cell in series with the output of a MUX, ICG, DIV,
+or INV stage. It gives timing constraints a fixed point in the clock path. Add
+`sta_guide` under the stage whose output needs that point.
 
 === Configuration Parameters
 <soc-net-clock-sta-config>
@@ -761,11 +733,11 @@ without `cell`, `in` or `out` instantiates the `qsoc_ck_buf` role
     table.header([Parameter], [Description]),
     table.hline(),
     [cell],
-    [Foundry-specific cell name (e.g., "TSMC_CKBUF_X2", "FOUNDRY_GUIDE_BUF"), or absent for `qsoc_ck_buf`],
+    [Technology cell name, such as `CKBUF_X2`, or absent for `qsoc_ck_buf`],
     [in], [Input port name of the foundry cell (e.g., "I", "A", "CK")],
     [out], [Output port name of the foundry cell (e.g., "Z", "Y", "Q")],
     [instance],
-    [Instance name for the generated buffer. If empty, automatically generates `u_{target}_target_sta` for target-level or `u_{target}_{source}_sta` for link-level guides. Explicit names provide deterministic results for tools requiring specific instance references.],
+    [Instance name. Default `u_{target}_target_sta` for a target-level guide and `u_{target}_{source}_sta` for a link-level guide],
   )],
   caption: [STA GUIDE BUFFER PARAMETERS],
   kind: table,
@@ -774,14 +746,13 @@ without `cell`, `in` or `out` instantiates the `qsoc_ck_buf` role
 === Configuration Examples
 <soc-net-clock-sta-examples>
 ```yaml
-# New STA guide architecture - buffers can be placed after each stage
 target:
   cpu_clk:
     freq: 800MHz
     icg:
       enable: clk_en
       sta_guide:                    # STA guide after ICG
-        cell: TSMC_CKBUF_X2
+        cell: CKBUF_X2
         in: I
         out: Z
         instance: u_cpu_icg_buf
@@ -789,7 +760,7 @@ target:
       default: 2
       width: 2
       sta_guide:                    # STA guide after divider
-        cell: TSMC_CKBUF_X4
+        cell: CKBUF_X4
         in: CK
         out: CKO
     link:
@@ -834,7 +805,6 @@ STA guide buffers generate direct foundry cell instantiations in *serial configu
 A guide without `cell` writes `qsoc_ck_buf <instance> (.clk_in(...), .clk_out(...))` instead:
 
 ```verilog
-// Serial STA guide architecture - inserted in main signal path
 // ICG with STA guide (serial connection)
 wire cpu_clk_icg_pre_sta;        // Temporary signal: ICG output
 wire cpu_clk_icg_out;            // Final signal: STA guide output
@@ -843,7 +813,7 @@ qsoc_clk_gate u_cpu_clk_icg (
     .en(clk_en),
     .clk_out(cpu_clk_icg_pre_sta)   // ICG outputs to temporary signal
 );
-TSMC_CKBUF_X2 u_cpu_icg_buf (
+CKBUF_X2 u_cpu_icg_buf (
     .I(cpu_clk_icg_pre_sta),        // STA guide inputs from temporary
     .Z(cpu_clk_icg_out)             // STA guide outputs to final signal
 );
@@ -855,7 +825,7 @@ qsoc_clk_div u_cpu_clk_div (
     .clk(cpu_clk_icg_out),          // Input from previous stage
     .clk_out(cpu_clk_div_pre_sta)   // DIV outputs to temporary signal
 );
-TSMC_CKBUF_X4 u_cpu_clk_div_sta (
+CKBUF_X4 u_cpu_clk_div_sta (
     .CK(cpu_clk_div_pre_sta),       // STA guide inputs from temporary
     .CKO(cpu_clk_div_out)           // STA guide outputs to final signal
 );
@@ -873,7 +843,8 @@ FOUNDRY_GUIDE_BUF u_dsp_clk_pll_800m_sta (
 
 == Template RTL Cells
 <soc-net-clock-templates>
-QSoC generates these templates in `qsoc_cell_clock.v`:
+Every run rewrites `output/qsoc_cell/rtl/qsoc_cell_clock.v`
+(@verilog-output-layout) with these templates:
 - `qsoc_clk_gate` - Clock gate with polarity, `test_en` and `clock_on_reset`
   policy, built on `qsoc_ck_icg_pos` or `qsoc_ck_icg_neg`
 - `qsoc_clk_div` - Clock divider with FSM control, explicit or automatic update
@@ -892,13 +863,7 @@ cells fails elaboration.
 `NUM_INPUTS` up are unused. Generated controllers pad to a power of two with
 zero lanes.
 
-*Read the generated `qsoc_cell_clock.v` file for actual interfaces.*
-
-=== Auto-generated Template File: qsoc_cell_clock.v
-<soc-net-clock-template-file>
-Every run writes `output/qsoc_cell/rtl/qsoc_cell_clock.v` with every template
-module listed in @soc-net-clock-templates, replacing any existing file
-(@verilog-output-layout).
+The generated file documents each interface.
 
 == Port Sharing
 <soc-net-clock-signal-dedup>
@@ -923,11 +888,9 @@ port:
   a plain Verilog identifier, including `select`, `test_clock`, all
   outputs, and the divider `value`; anything else rejects the
   controller.
-- A divider `valid` only carries meaning together with a dynamic
-  `value`, but a static divider still declares the `valid` port it has
-  always declared, so parent connections keep working. A unity divider
-  (`default: 1` with no `value`) declares no `valid`; its other control
-  ports are unaffected.
+- A static divider still declares its `valid` port, although only a
+  dynamic `value` uses it. A unity divider (`default: 1` with no `value`)
+  declares no `valid`.
 - Different controllers are separate Verilog modules and may reuse
   names freely.
 
@@ -939,8 +902,6 @@ nothing; existing output files stay byte-identical.
 Run the generator with `qsoc generate verilog` (@verilog-generation).
 Connectivity and width problems are reported as described in
 @validation-format.
-
-Clock controllers generate standalone modules that provide clean clock management infrastructure.
 
 === Generated Code Structure
 <soc-net-clock-code-structure>

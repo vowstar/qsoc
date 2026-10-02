@@ -10,16 +10,12 @@ For MMIO control and checked domain sequencing, see @prcm-check.
   radius: 4pt,
   stroke: rgb("#a08410") + 0.5pt,
 )[
-  *Standalone module:* a `power:` block generates a self-contained
-  Verilog module named after `power.name`. The generated module is NOT
-  auto-instantiated by any parent netlist: the user instantiates it
-  manually (or via `qsoc module import` followed by an `_inst.soc_net`
-  entry) at the top level.
+  *Standalone module:* each `power:` entry generates a module named by
+  `name`, and you instantiate it yourself (@soc-net-verilog-structure).
 
-  Unlike clock/reset, the power controller's `depend:` field
-  references *only* domains declared in the same controller (no
-  auto-input pattern). A `depend` entry with a missing or undeclared
-  name is an error, and nothing is generated.
+  Unlike clock and reset, `depend` names only domains of the same
+  controller. A missing or undeclared name is an error, and nothing is
+  generated.
 ]
 
 == Power Overview
@@ -30,7 +26,7 @@ Supported behavior:
 - Three domain types with automatic inference from dependency configuration
 - Hard dependencies (block on timeout) and soft dependencies (warn on timeout)
 - Automatic fault recovery with cooldown and retry mechanisms
-- DFT test mode bypass for all domains (test_en intended for static scan/test operations; deassert only when system is quiescent)
+- DFT test mode bypass for all domains
 - FSM-based power sequencing with standardized timing
 - Template RTL cells in the regenerated `qsoc_cell` unit
 
@@ -96,12 +92,11 @@ Always-on domains have no dependency key and remain permanently active:
 - Used for essential infrastructure like AO power rails
 - If pgood signal absent, the generator ties the FSM input to `1'b1`
 
-*Warning*: a domain without `pgood` cannot complete a power-down. `S_TURN_OFF`
-leaves only through `!pgood`, so a tied-high input makes the FSM enter
-`S_FAULT` once `settle_off` expires and latch the sticky fault bit. Give every
-controllable domain a real `pgood`, or keep the domain permanently on. Nothing
-in the generator enforces this, and `wait_dep`, `settle_on` and `settle_off`
-all default to zero even though the property table marks them required.
+*Warning*: a controllable domain without `pgood` cannot complete a power-down.
+Its tied-high `pgood` never falls, so the FSM enters `S_FAULT` once
+`settle_off` expires and sets the sticky fault bit. Give every controllable
+domain a real `pgood`, or keep it permanently on. The generator does not check
+this.
 
 === Root Domain Type
 <soc-net-power-root>
@@ -185,18 +180,16 @@ Key behaviors:
 - Soft timeout: set fault flag, continue operation
 - Clock-reset sequencing: S_CLK_ON provides one cycle for clock stability before reset release
 - Reset-clock sequencing: S_RST_ASSERT provides one cycle for reset assertion before clock disable
-- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_gate_n=1, ready=1, valid=1) while preserving FSM state. The override is an OR after the output flops, so it holds while scan shifts through them
+- DFT override: test_en=1 forces outputs active (pwr_switch=1, clk_enable=1, rst_gate_n=1, ready=1, valid=1) while preserving FSM state, also while scan shifts through the output flops
 - With test_en=1, ready=1 for all domains, so dep_hard_all/dep_soft_all evaluate to 1 and dependency checks are bypassed
 - Auto-heal works without fault_clear; fault remains sticky until cleared or reset
 - Fault clear: `fault_clear` clears `fault` in any state. Entering `S_FAULT` or
-  a soft timeout sets it, and a set on the same edge wins. A write that lowers
-  `ctrl_enable` and pulses `fault_clear` together ends in the same state
-  whichever synchronizer passes its bit first; the cell formal job proves this
-  with each bit on time or one cycle late
+  a soft timeout sets it, and a set on the same edge wins. Lowering
+  `ctrl_enable` and pulsing `fault_clear` together gives the same result
+  whichever of the two the FSM sees first
 - Auto-heal: automatic retry after cooldown when dependencies ready
 - Cooldown source: auto-heal cooldown uses WAIT_DEP_CYCLES
 - All cycle parameters are counted on host_clock (AO clock domain)
-- Reset release is synchronized to clock to meet recovery/removal timing requirements
 
 Also included in `qsoc_cell_power.v` is qsoc_power_rst_sync for domain reset synchronization:
 ```verilog
@@ -211,7 +204,7 @@ module qsoc_power_rst_sync #(parameter integer STAGE=4)(
 Every run writes `output/qsoc_cell/rtl/qsoc_cell_power.v`, replacing any
 existing file (@verilog-output-layout).
 
-qsoc_power_rst_sync provides async assert, sync deassert reset synchronization with a `qsoc_sync` instance `u_sync`. Assert does not require clock, deassert requires STAGE edges on clk_dom. Default STAGE=4 provides better metastability protection. `STAGE` must be at least 1. The `test_en` override is a `qsoc_ck_or2` instance `u_test_or` (@cell-roles).
+qsoc_power_rst_sync asserts at once and releases after `STAGE` edges of `clk_dom`, through a `qsoc_sync` instance `u_sync`. `STAGE` defaults to 4 and must be at least 1. The `test_en` override is a `qsoc_ck_or2` instance `u_test_or` (@cell-roles).
 
 *Warning*: `test_en` here forces `rst_dom_n` permanently released, so a domain
 reset cannot be applied while test mode is active. This is the opposite of the
@@ -219,15 +212,13 @@ reset controller cells (@soc-net-reset-components), where `test_en` bypasses
 the synchronizer but leaves the reset controllable. Scan patterns that rely on
 a reset-based initialization of domain flops are not possible under this cell.
 
-`rst_gate_n` is a flop output ORed with `test_en`, and it drives the
-asynchronous reset pin of this synchronizer. Keep `test_en` static while the
-domain is live.
+*Contract:* `test_en` drives the asynchronous reset of this synchronizer
+through `rst_gate_n`. Keep `test_en` static while the domain is live.
 
 `clk_enable` leaves the controller as `icg_en_<domain>` in the host clock
 domain and reaches the domain clock gate with no synchronizer. It changes only
-while `rst_gate_n` is low on both sides of the change, so the domain is held in
-reset whenever its gate enable moves; the cell formal job proves this
-(`icg_in_reset`).
+while the domain is held in reset, so the gate enable never moves under a
+running domain.
 
 == Generated Interfaces
 <soc-net-power-interfaces>
@@ -245,9 +236,9 @@ and for no AO domain: an AO domain gets `ctrl_enable` tied to `1'b1` and
 `fault_clear` tied to `1'b0` inside the controller. `sw_<domain>` is likewise
 absent for AO domains.
 
-*Note*: `pgood_<domain>`, `en_<domain>` and `clr_<domain>` are synchronized to
+`pgood_<domain>`, `en_<domain>` and `clr_<domain>` are synchronized to
 `host_clock` inside the FSM. Hold a `clr_<domain>` pulse for at least one host
-clock cycle. `test_en` must be static
+clock cycle.
 
 Signal semantics:
 - `ready`: Asserted when FSM state = S_ON, equivalent to domain fully operational
@@ -273,7 +264,7 @@ wire dep_soft_all_gpu = rdy_vmem;            /**< Soft dependencies only */
 
 == Reset Synchronization
 <soc-net-power-reset-sync>
-Power controllers support domain-specific reset synchronization through follow entries. Each entry mechanically maps to a qsoc_power_rst_sync instance using KISS (Keep It Simple) principle:
+Each `follow` entry of a domain becomes one qsoc_power_rst_sync instance:
 
 ```yaml
 follow:                          # Reset synchronizer array (optional)
@@ -285,19 +276,10 @@ follow:                          # Reset synchronizer array (optional)
     stage: 6                     # Different stage count
 ```
 
-Key characteristics:
-- Direct array format eliminates ambiguous clock/reset pairing from previous versions
-- Each entry becomes one qsoc_power_rst_sync instance with dedicated ports
-- Reset gate signal: `rst_sys_n & rst_gate_domain_n` (async assert, sync
-  deassert). This AND is a reset network gate: `rst_sys_n` holds the domain
-  resets asserted without changing the FSM, so a system reset does not power
-  the domain down
-- FSM outputs `rst_gate_n` (internal permission), the synchronizer output is
-  named by the entry's `reset` key verbatim
-- Test enable forces the domain reset released; it does not preserve
-  reset controllability in test mode
-- Stage parameter controls synchronizer depth (at least 1)
-- Empty follow array generates no synchronizers (common for AO/root domains)
+The synchronizer resets on `rst_sys_n & rst_gate_<domain>_n`, so `rst_sys_n`
+holds the domain resets asserted without powering the domain down. Its output
+port is named by the entry's `reset` key. An empty `follow` generates no
+synchronizer.
 
 Generated RTL pattern per entry:
 ```verilog
@@ -353,9 +335,9 @@ Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
     [`depend`], [Array], [No], [Absent=AO, []=root, list=normal],
     [`v_mv`], [Integer], [No], [Voltage level in millivolts],
     [`pgood`], [String], [No], [Power good input signal (ties `1'b1` if absent)],
-    [`wait_dep`], [Integer], [Yes], [Dependency wait cycles],
-    [`settle_on`], [Integer], [Yes], [Power-on settle cycles],
-    [`settle_off`], [Integer], [Yes], [Power-off settle cycles],
+    [`wait_dep`], [Integer], [No], [Dependency wait cycles, default 0],
+    [`settle_on`], [Integer], [No], [Power-on settle cycles, default 0],
+    [`settle_off`], [Integer], [No], [Power-off settle cycles, default 0],
     [`follow`], [Array], [No], [Reset synchronizer entry array],
   )],
   caption: [DOMAIN PROPERTIES],

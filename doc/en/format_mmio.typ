@@ -128,7 +128,7 @@ generated entry may not also contain manual
 <mmio-generated-interface>
 Generation writes
 `output/<library>/<module>/rtl/<module>.v`. It refuses to replace the file unless
-`-f` or `--force` is present.
+`-f` or `--force` is present (@generated-module-options).
 
 `module validate` checks only the source structure and values. Generation
 writes RTL; neither command runs lint, simulation, synthesis, or formal proof.
@@ -206,10 +206,7 @@ Under `output/<library>/<module>/`, `rtl/` contains `<module>.v` and
 its synthesis file list `<module>.fl`. The `formal/` directory contains
 `<module>_formal.sv`, `<module>_formal.sby`, and `<module>_formal.fl`.
 The verification files reference the single RTL copy in `rtl/`. File list paths
-are relative to `output/` (@verilog-output-layout). Generation checks
-all selected targets before opening or replacing a selected output file. If any
-target exists, the command fails without replacing any selected file unless
-`-f` or `--force` is present.
+are relative to `output/` (@verilog-output-layout).
 
 Generation does not run the job. The generated tasks are `prove`, `bmc`, and
 `cover`. Define `FORMAL_EXTERNAL_RESET` to expose `formal_reset_ni` for an
@@ -236,9 +233,7 @@ Select `<module>_uvm_tb` as the top module. Generation does not run the
 testbench. It checks the selected register interface and reports mismatches
 as UVM errors. An error or fatal report makes the simulation fail.
 
-`--with-formal` and `--with-uvm` are independent and may be combined.
-Generation locks the module output directory and checks all selected targets
-before writing. `--force` replaces only the selected set.
+`--with-formal` and `--with-uvm` can be combined.
 
 == Current Limits
 <mmio-current-limits>

@@ -191,28 +191,73 @@ names only `io`, the net the shell's `pad_io` vector uplinks to. With a
 `safe` row the wrapper also takes `pad_force_i`, linked from
 `integration.force`.
 
+The pad cell is an entry of the module library, as `module import` writes it
+from the cell's Verilog model. This one is a made-up GPIO pad with a pull
+enable and select and a two-pin drive strength:
+
+```yaml
+IOPAD:
+  port:
+    PAD: {direction: inout, type: logic}
+    C: {direction: output, type: logic}
+    IE: {direction: input, type: logic}
+    I: {direction: input, type: logic}
+    OE: {direction: input, type: logic}
+    PE: {direction: input, type: logic}
+    PS: {direction: input, type: logic}
+    DS0: {direction: input, type: logic}
+    DS1: {direction: input, type: logic}
+```
+
+The IOMUX source names it under `generator`:
+
 ```yaml
 pad_cell:
-  cell: gpio_pad_ps
-  port:
-    pad: PAD
-    input_value: C
-    input_enable: IE
-    output_value: I
-    output_enable: OE
+  cell: IOPAD
+  port: {pad: PAD, input_value: C, input_enable: IE, output_value: I, output_enable: OE}
   pull:
     function:
-      - {PE: 0, pull: none}
+      - {PE: 0, pull: none}             # PS absent, so x
+      - {PE: 0, pull: float}            # same pattern as none
       - {PE: 1, PS: 1, pull: up}
       - {PE: 1, PS: 0, pull: down}
   control:
     drive:
       function:
-        - {DS: 0, drive: low}
-        - {DS: 1, drive: high}
+        - {DS0: 0, DS1: 0, drive: low}
+        - {DS0: 1, DS1: 0, drive: mid}
+        - {DS0: 1, DS1: 1, drive: high}
+      default: mid
   constraint:
     - name: pull_select_needs_enable
       expr: "!PS || PE"
+```
+
+A route then asks for rows by label, as in `pull: up` and
+`control: {drive: high}`. The report numbers the modes and rows:
+
+```text
+pull modes: 0 none, 1 up, 2 down, 3 keeper, 4 oscillator, 5 float
+control drive: 0 low, 1 mid, 2 high, default mid
+```
+
+`rtl/<module>_io.v` instantiates the cell once per pin and decodes each lane
+into its pins. An x pin is driven 0. For pin 0:
+
+```verilog
+wire PE_0_w = (pad_mode_eff_0 == 4'd1) ? 1'b1 : (pad_mode_eff_0 == 4'd2) ? 1'b1 : (pad_mode_eff_0 == 4'd5) ? 1'b0 : 1'b0;
+wire DS0_0_w = (pad_drive_select_i[3:0] == 4'd0) ? 1'b0 : (pad_drive_select_i[3:0] == 4'd2) ? 1'b1 : 1'b1;
+IOPAD u_pad_0 (
+    .PAD(pad_io[0]),
+    .C(pad_input_value_o[0]),
+    .IE(pad_input_enable_i[0]),
+    .I(pad_output_value_i[0]),
+    .OE(pad_output_enable_i[0]),
+    .PE(PE_0_w),
+    .PS(PS_0_w),
+    .DS0(DS0_0_w),
+    .DS1(DS1_0_w)
+);
 ```
 
 Every port named here must exist on the cell in the module library with a
@@ -355,8 +400,8 @@ several need a `default` or every pin named.
 
 ```yaml
 pad_cells:
-  gpio_33: {cell: PDDW33, port: {...}, pull: {...}, control: {...}}
-  gpio_18: {cell: PDDW18, port: {...}, pull: {...}}
+  gpio_33: {cell: IOPAD33, port: {...}, pull: {...}, control: {...}}
+  gpio_18: {cell: IOPAD18, port: {...}, pull: {...}}
 pin_cell:
   default: gpio_33
   "40-47": gpio_18
@@ -403,20 +448,20 @@ placement order and nothing else.
 
 ```yaml
 io_lib:
-  PDDW33:  {kind: signal, width: 40, variant: {west_east: PDDW33_H, north_south: PDDW33_V}}
-  PVSS:    {kind: power, width: 20, variant: rotate}
-  PVDD:    {kind: power, width: 20, variant: rotate}
-  PRCUT:   {kind: other, width: 5}
-  PCORNER: {kind: corner, width: 60}
+  IOPAD33:  {kind: signal, width: 40, variant: {west_east: IOPAD33_H, north_south: IOPAD33_V}}
+  IOVSS:    {kind: power, width: 20, variant: rotate}
+  IOVDD:    {kind: power, width: 20, variant: rotate}
+  IOCUT:    {kind: other, width: 5}
+  IOCORNER: {kind: corner, width: 60}
 io_ring:
   die: {width: 5100, height: 5200}
-  corner: PCORNER
-  power: {VSS: PVSS, VDDIO: PVDD}
+  corner: IOCORNER
+  power: {VSS: IOVSS, VDDIO: IOVDD}
   direct:
-    rst: {cell: PDDW33, port: {PAD: pad_rst_n, C: rst_n, IE: "1'b1", OE: "1'b0"}}
+    rst: {cell: IOPAD33, port: {PAD: pad_rst_n, C: rst_n, IE: "1'b1", OE: "1'b0"}}
   sides:
     west:  [{power: VSS}, {pin: 0}, {pin: 1}, {direct: rst}]
-    south: [{power: VDDIO}, {pin: 2}, {cell: PRCUT}]
+    south: [{power: VDDIO}, {pin: 2}, {cell: IOCUT}]
     east:  [{pin: 3}, {power: VSS, id: 7}]
     north: [{power: VDDIO}]
 ```

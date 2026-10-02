@@ -8,18 +8,13 @@ The `reset` section defines reset sources, targets, polarity, and release proces
   radius: 4pt,
   stroke: rgb("#a08410") + 0.5pt,
 )[
-  *Standalone module:* a `reset:` block generates a self-contained
-  Verilog module named after `reset.name`. The generated module is NOT
-  auto-instantiated by any parent netlist: the user instantiates it
-  manually (or via `qsoc module import` followed by an `_inst.soc_net`
-  entry) at the top level.
+  *Standalone module:* each `reset:` entry generates a module named by
+  `name`, and you instantiate it yourself (@soc-net-verilog-structure).
 
-  *Auto-input pattern:* a target's `link:` source that is neither a
-  declared `source:` nor another target gets auto-promoted to a fresh
-  input port on the controller. This is how you wire software
-  controlled resets (e.g. `rst_sw_*_n`) from outside the controller.
-  A typo in the source name surfaces downstream as an unwired
-  controller pin, not as a qsoc warning.
+  *Auto-input:* a `link` source that is neither a declared `source` nor a
+  target becomes an input port, which is how software resets such as
+  `rst_sw_cpu_n` enter. A misspelled source therefore shows up as an extra
+  unconnected port, not as an error.
 ]
 
 == Reset Overview
@@ -161,8 +156,10 @@ Adds synchronous delay to reset release (active-low):
 - Adds STAGE cycle release delay to a synchronous reset
 - Test bypass when test_enable=1
 - Parameters: STAGE (>=1)
-- Contract: `rst_in_n` must already be synchronous to `clock`, for example the
-  output of an `async` stage on the same clock. The cell has no synchronizer
+
+*Contract:* the `sync` input must already be synchronous to its `clock`, for
+example the output of an `async` stage on the same clock. `qsoc_rst_pipe` has
+no synchronizer.
 
 Configuration:
 ```yaml
@@ -189,13 +186,11 @@ count:
 
 === Test Bypass Behavior
 <soc-net-reset-test-bypass>
-All three cells implement the bypass with a `qsoc_ck_mux2` role instance
-`u_test_mux`: `clk_in0` is the processed reset, `clk_in1` is `rst_in_n` and
-`clk_sel` is `test_enable`. `qsoc_rst_sync` synchronizes with a `qsoc_sync`
-instance `u_sync` (@cell-roles). In test mode the raw
-asynchronous reset input propagates combinationally to every consumer, and for
-`qsoc_rst_count` the entire counter delay is skipped. Three consequences that
-DFT and STA have to cover:
+In each cell the bypass is a `qsoc_ck_mux2` role instance `u_test_mux`
+selected by `test_enable`, and `qsoc_rst_sync` synchronizes with a
+`qsoc_sync` instance `u_sync` (@cell-roles). In test mode the raw reset input
+reaches every consumer combinationally, and `qsoc_rst_count` skips its whole
+delay. DFT and STA have to cover three consequences:
 
 - The synchronizer flops themselves get no async-deassert protection while
   `test_enable` is high, so releasing `test_enable` and the reset in the wrong
@@ -359,18 +354,17 @@ reset:
 
 === Reset Reason Behavior
 <soc-net-reset-reason-implementation>
-Each non-POR source asynchronously sets its own sticky flag. Every declared
-source becomes a controller input, including one that feeds no target. Sources are
-normalized to active-low. POR release or a software clear pulse starts a
-two-cycle clear window; `valid` gates the output during initialization.
-Use an always-on `reason.clock` and specify `reason.root_reset` explicitly.
+Every source other than `root_reset` owns one flag, in declaration order, and
+every declared source becomes a controller input, even one that feeds no
+target. A source sets its flag at once when it asserts. Release of
+`root_reset` or a `reason.clear` pulse starts a two-cycle clear window, and
+`reason.output` reads zero until `reason.valid` rises after that window. Use
+an always-on `reason.clock`.
 
-`root_reset` asserts the recorder at once and releases it on the second rising
-edge of `reason.clock` (`qsoc_sync` instance `u_root_sync`). Each source sets
-its flag at once, and the set releases on the second rising edge after the
-source releases (`u_event_sync` in `gen_reason`). A flag is cleared only by a
-clear window edge after its set has released, so an event that releases
-inside the window is cleared or kept on a clock edge, never on a race.
+`root_reset` releases the recorder on the second rising edge of
+`reason.clock` (`qsoc_sync` instance `u_root_sync`). A flag set by an event
+that releases inside the clear window is cleared or kept on a clock edge,
+never on a race.
 
 Integration constraints:
 
@@ -384,93 +378,19 @@ Integration constraints:
   `reason.clock` before edge detection. Hold it for at least one cycle of
   `reason.clock`
 
-=== Generated Logic Example
-<soc-net-reset-reason-logic>
-```verilog
-// Event normalization: convert all sources to LOW-active format
-wire ext_rst_n_event_n = ext_rst_n;   // Already LOW-active
-wire wdt_rst_n_event_n = wdt_rst_n;   // Already LOW-active
-wire i3c_soc_rst_event_n = ~i3c_soc_rst;  // Convert HIGH-active to LOW-active
-
-// 2-cycle clear controller and valid signal generation
-reg        init_done;  // Set after first post-POR action
-reg [1:0]  clr_sr;     // 2-cycle clear shift register
-reg        valid_q;    // reason_valid register
-wire       clr_en = |clr_sr;  // Clear enable (any bit in shift register)
-
-// Sticky flags: async-set on event, sync-clear during clear window
-reg [2:0] flags;
-
-// Event vector for generate block
-wire [2:0] src_event_n = {
-    i3c_soc_rst_event_n,
-    wdt_rst_n_event_n,
-    ext_rst_n_event_n
-};
-
-// Reset reason flags generation using generate for loop
-genvar reason_idx;
-generate
-    for (reason_idx = 0; reason_idx < 3; reason_idx = reason_idx + 1) begin : gen_reason
-        always @(posedge clk_32k or negedge src_event_n[reason_idx]) begin
-            if (!src_event_n[reason_idx]) begin
-                flags[reason_idx] <= 1'b1;      // Async set on event assert
-            end else if (clr_en) begin
-                flags[reason_idx] <= 1'b0;      // Sync clear during clear window
-            end
-        end
-    end
-endgenerate
-
-// Output gating: zeros until valid
-assign reason_valid = valid_q;
-assign reason = reason_valid ? flags : 3'b0;
-```
-
 == Code Generation
 <soc-net-reset-generation>
 Run the generator with `qsoc generate verilog` (@verilog-generation).
 Connectivity and width problems are reported as described in
 @validation-format.
 
-Reset controllers generate standalone modules that are instantiated in the main design, providing clean separation and reusability. Additionally, QSoC automatically generates a `qsoc_cell_reset.v` template file containing the required reset component modules (`qsoc_rst_sync`, `qsoc_rst_pipe`, `qsoc_rst_count`).
 
-=== Generated Code Structure
-<soc-net-reset-code-structure>
-The reset controller generates a dedicated module with:
-+ Clock inputs (system clock and optional always-on clock for reason recording)
-+ Reset source signal inputs with polarity documentation
-+ Reset target signal outputs with polarity documentation
-+ Optional reset reason output bus (if recording enabled)
-+ Control signal inputs (test enable and optional reason clear signal)
-+ Internal wire declarations for signal normalization
-+ Reset logic using simplified DFF-based implementations
-+ Optional reset reason recording logic (Per-source sticky flags)
-+ Output assignment logic with proper signal combination
-
-=== Variable Naming Conventions
+=== Instance Names
 <soc-net-reset-naming>
-Reset logic uses simplified variable naming for improved readability:
-- *Wire names*: `{source}_{target}_sync` (e.g., `por_rst_n_cpu_rst_n_sync`)
-- *Generate blocks*: Use descriptive names for clarity:
-  - Genvar: `reason_idx` (not generic `i`)
-  - Block name: `gen_reason` (describes functionality)
-- *Register names*: `{type}_{source}_{target}_{suffix}` format:
-  - Flip-flops: `sync_por_rst_n_cpu_rst_n_ff`
-  - Counters: `count_wdt_rst_n_cpu_rst_n_counter`
-  - Count flags: `count_wdt_rst_n_cpu_rst_n_counting`
-  - Stage wires: `sync_count_trig_rst_dma_rst_n_sync_stage1`
-- *Component prefixes*: `sync` (qsoc_rst_sync), `count` (qsoc_rst_count), `pipe` (qsoc_rst_pipe)
-- *No controller prefixes*: Variables use only essential identifiers for conciseness
-
-=== Generated Modules
-<soc-net-reset-modules>
-The reset controller generates dedicated modules with component-based implementations:
-- Component instantiation using qsoc_rst_sync, qsoc_rst_pipe, and qsoc_rst_count modules
-- Async reset synchronizer (qsoc_rst_sync) when async attribute is specified
-- Sync reset pipeline (qsoc_rst_pipe) when sync attribute is specified
-- Counter-based reset release (qsoc_rst_count) when count attribute is specified
-- Custom combinational logic for signal routing and polarity handling
+Link `k` of a target drives the wire `<target>_link<k>_n` through the
+instance `i_<target>_link<k>_<async|sync|count>`. A target-level component is
+`i_<target>_target_<async|sync|count>`. `<target>` drops a trailing `_n`, so
+target `cpu_rst_n` gives `i_cpu_rst_link0_async`.
 
 === Generated Code Example
 <soc-net-reset-example>
@@ -506,38 +426,11 @@ module rstctrl (
 endmodule
 ```
 
-=== Reset Component Modules
-<soc-net-reset-component-modules>
-The reset controller uses three standard component modules:
-
-*qsoc_rst_sync*: Asynchronous reset synchronizer (active-low)
-- Async assert, sync deassert after STAGE clocks
-- Test bypass when test_enable=1
-- Parameters: STAGE (>=2 recommended)
-
-*qsoc_rst_pipe*: Synchronous reset pipeline (active-low)
-- Adds STAGE cycle release delay to a sync reset
-- Test bypass when test_enable=1
-- Parameters: STAGE (>=1)
-
-*qsoc_rst_count*: Counter-based reset release (active-low)
-- Release on the CYCLE-th rising edge after rst_in_n deasserts, at least the
-  second, through a `qsoc_sync`
-- Test bypass when test_enable=1
-- Parameters: CYCLE (release edge, at least 1)
-
 === Auto-generated Template File: qsoc_cell_reset.v
 <soc-net-reset-template-file>
-Every run writes `output/qsoc_cell/rtl/qsoc_cell_reset.v`, replacing any
-existing file (@verilog-output-layout). It holds all required template cells:
-
-- `qsoc_rst_sync` - Asynchronous reset synchronizer with test enable
-- `qsoc_rst_pipe` - Synchronous reset pipeline with test enable
-- `qsoc_rst_count` - Counter-based reset release with test enable
-
-The file begins with a header comment and a `timescale 1ns / 1ps` directive, like
-the role files and generated tops. The cells instantiate the `qsoc_sync` and
-`qsoc_ck_mux2` roles.
+Every run rewrites `output/qsoc_cell/rtl/qsoc_cell_reset.v`
+(@verilog-output-layout) with the three cells of @soc-net-reset-components.
+They instantiate the `qsoc_sync` and `qsoc_ck_mux2` roles.
 
 === Diagram Output
 <soc-net-reset-diagram>
@@ -545,37 +438,6 @@ Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
 
 *Elements*: Sources → AND → ASYNC/SYNC/COUNT → Targets (with active levels/parameters)
 
-*Note*: AND logic is used because reset signals are active-low. When any source asserts (goes low), the AND output goes low, asserting the target reset. This is equivalent to OR logic for the reset assertion semantic.
+The AND combines active-low resets, so any asserted source asserts the target.
 
 *Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
-
-== Choosing the Processing Level
-<soc-net-reset-level-selection>
-Target-level processing applies one stage after combining the sources.
-Link-level processing gives each source its own stage and parameters.
-
-```yaml
-# Target-level processing
-rst_peripheral_n:
-  active: low
-  async:                        # Single Post-AND synchronizer
-    clock: clk_apb
-    stage: 4
-  link:
-    rst_por_n:                  # All sources combined before sync
-    rst_n:
-    rst_sw_n:
-
-# When needed: Link-level for different requirements
-rst_mixed_n:
-  active: low
-  link:
-    rst_por_n:
-      async:                    # POR needs 4 stages
-        clock: clk_sys
-        stage: 4
-    rst_wdt_n:
-      count:                    # WDT needs delayed release
-        clock: clk_sys
-        cycle: 255
-```

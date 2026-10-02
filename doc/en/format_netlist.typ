@@ -118,7 +118,7 @@ instance:
   # ifdef + ifndef combination
   u_pad_asic:
     module: PAD_OUTER
-    ifdef: [TECH_TSMC28HK_9T]
+    ifdef: [TECH_28NM_9T]
     ifndef: [TECH_FPGA]
 ```
 
@@ -140,11 +140,11 @@ instance:
 `endif /*  USE_MIN_PADS */
 `endif /*  TECH_FPGA */
 
-`ifdef TECH_TSMC28HK_9T
+`ifdef TECH_28NM_9T
 `ifndef TECH_FPGA
     PAD_OUTER u_pad_asic ();
 `endif /*  !TECH_FPGA */
-`endif /*  TECH_TSMC28HK_9T */
+`endif /*  TECH_28NM_9T */
 ```
 
 Port attributes within an instance can include:

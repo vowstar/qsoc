@@ -300,15 +300,10 @@ or regex) and take a bus name or regex.
 <generate-options>
 === Generated Module Options
 <generated-module-options>
-`generate module` validates one generated module and writes its output under
-`output/<library>/<module>/`. Synthesizable sources and their file list go
-in `rtl/`; optional verification suites go in `formal/` and `uvm/`. IOMUX
-software headers, reports, and integration artifacts use `include/`,
-`reports/`, and `integration/`,
-as described in @iomux-generated-artifacts.
-
-Existing flat output directories must be moved aside before regeneration,
-including with `--force`. Unselected verification directories remain untouched.
+`generate module` validates one generated module and writes it under
+`output/<library>/<module>/`: the sources and their file list in `rtl/`, the
+optional verification collateral in `formal/` and `uvm/`. IOMUX adds
+`include/`, `reports/`, and `integration/` (@iomux-generated-artifacts).
 
 #figure(
   align(center)[#table(
@@ -320,6 +315,8 @@ including with `--force`. Unselected verification directories remain untouched.
     [Generates one module selected by exact name],
     [`--with-formal`],
     [Also generates the formal jobs supported by that generator],
+    [`--formal-bank <pins>`],
+    [Pins per IOMUX routing proof task, default 16 (@iomux-formal-collateral)],
     [`--with-uvm`],
     [Also generates the UVM interface, package, testbench, and file list],
     [`-f`, `--force`], [Replaces every selected output file],
@@ -330,11 +327,10 @@ including with `--force`. Unselected verification directories remain untouched.
   kind: table,
 )
 
-`--with-formal` and `--with-uvm` generate verification collateral but do not
-run it. The options are independent and may be combined. Before opening or
-replacing a selected output file, generation checks every selected target.
-Without `--force`, one existing target rejects the operation without replacing
-any selected file. `--force` replaces only the selected set.
+When one selected output file already exists, generation writes nothing,
+unless `--force` is given. `--force` replaces only the selected files, so an
+unselected `formal/` or `uvm/` stays as it is. Generation writes the
+verification collateral but does not run it.
 
 === Verilog Generation Options
 <verilog-generation>
@@ -363,6 +359,7 @@ input format is documented in @soc-net-format. PRCM input and controller generat
   kind: table,
 )
 
+`generate verilog` rewrites its outputs on every run and has no `--force`.
 Default generation writes canonical QSoC output without consulting `PATH`.
 `--format` is an explicit post-processing step; its bytes depend on the
 installed `verible-verilog-format` and are not canonical.
@@ -370,7 +367,8 @@ installed `verible-verilog-format` and are not canonical.
 ==== Output Layout
 <verilog-output-layout>
 Each top or PRCM circuit is a unit under `output/<unit>/`. Every run also
-writes the design independent cell unit and the top file list.
+writes the shared cell unit `output/qsoc_cell/` and the top file list
+`output/qsoc.fl`.
 
 #figure(
   align(center)[#table(
@@ -398,34 +396,41 @@ writes the design independent cell unit and the top file list.
   kind: table,
 )
 
-Every `.fl` entry is a plain file path relative to `output/`, so all lists work
-from that one directory. `qsoc.fl` lists `qsoc_cell` first, then every unit present
-under `output/` that has an `rtl/<unit>.fl`, both `output/<unit>/` and
-`output/<library>/<module>/`, in name order. It is rebuilt after every
-generation, so deleting a unit directory drops it from the next `qsoc.fl`.
-Rebuilding fails when a list holds an entry that is not a plain relative path
-inside `output/`, or when two listed files define the same module.
+Every `.fl` entry is a path relative to `output/`, so every list works from
+that directory:
 
-A unit directory is created only when its top is written, so a failed run adds
-no unit. The `qsoc_cell` RTL files are regenerated on every run. A top, PRCM
-circuit, or controller whose name is `qsoc` or starts with `qsoc_`, in any case,
+```bash
+cd output
+iverilog -g2005 -s top -c qsoc.fl                 # generic target
+iverilog -g2005 -s top -c qsoc.fl -c qsoc_cell/model/qsoc_cell_model.fl   # asic
+```
+
+`qsoc.fl` lists `qsoc_cell` first, then, in name order, every unit under
+`output/` that has an `rtl/<unit>.fl`, both `output/<unit>/` and
+`output/<library>/<module>/`. It is rebuilt after every generation, so a
+deleted unit directory drops out of the next `qsoc.fl`. Rebuilding fails when a
+list holds a path outside `output/`, or when two listed files define the same
+module.
+
+A failed run adds no unit. The `qsoc_cell` RTL is rewritten on every run, so
+edit the netlist or the cell declarations, not these files. A top, PRCM
+circuit, controller, or declared cell named `qsoc` or `qsoc_*`, in any case,
 is rejected.
 
-With `--with-formal`, every run also writes `output/qsoc_cell/formal/`: one
-harness per cell file (`qsoc_cell_clock_formal.sv`, `qsoc_cell_reset_formal.sv`,
-`qsoc_cell_power_formal.sv`), `check.sby` with every task, and
-`qsoc_cell_formal.fl` listing the cell RTL and the harnesses relative to
-`output/`. Run `sby -f check.sby [task]` in that directory. The job unsets
-`keep_hierarchy` before SymbiYosys flattens the design. Without `--with-formal`
-an existing `formal/` directory is left untouched.
+With `--with-formal`, every run also writes `output/qsoc_cell/formal/`: a
+harness per cell file, `check.sby` with every task, and `qsoc_cell_formal.fl`.
+Run `sby -f check.sby [task]` in that directory. Without `--with-formal`, an
+existing `formal/` directory is left as it is.
 
 ===== Cell Roles
 <cell-roles>
-A role is one module with a frozen port interface. The cells and the clock,
-reset and power controllers instantiate a role for every clock path gate and
-every synchronizer. Each file holds a
-generic behavioral body with no `keep` or `dont_touch` attribute. In the `asic`
-target a declared technology cell replaces the body (@cell-declare).
+A role is a small clock-path module with fixed ports: a clock buffer,
+inverter, logic gate, mux, clock gate, or synchronizer. Every such element in
+the generated cells and controllers is a role instance, and each role is one
+file in `output/qsoc_cell/rtl/role/`. In the default `generic` target the file
+holds behavioral RTL with no `keep` or `dont_touch` attribute. In the `asic`
+target it instantiates your technology cell instead (@cell-declare), so the
+rest of the RTL never changes.
 
 #figure(
   align(center)[#table(
@@ -453,32 +458,117 @@ target a declared technology cell replaces the body (@cell-declare).
 
 ===== Declaring Cells
 <cell-declare>
-A module library entry (`module/<library>.soc_mod`, as `module import` writes
-it) declares a technology clock cell with a `function` truth table or a
-`sequential` template. `tie` holds input pins at constants. A later
-`module import` merges into the file, so these keys survive a re-import.
+To use technology clock cells, describe them in a module library and select
+the `asic` target. This library declares a made-up clock cell set. Save it as
+`module/clkcells.soc_mod`, or add the keys to the entries that `module
+import` wrote for the cells. A later `module import` keeps them.
 
 ```yaml
-CKND2D2:
-  port: {...}
-  function: [{A1: 0, ZN: 1}, {A2: 0, ZN: 1}, {A1: 1, A2: 1, ZN: 0}]
-CKND4:
-  port: {...}
-  function: {ZN: "!I"}              # one row, the output an expression
-CKMUX2D2:
-  port: {...}
-  function: [{S: 0, Z: I0}, {S: 1, Z: I1}]
-CKLNQD4:
-  port: {...}
-  sequential: {type: icg_pos, clock: CP, enable: E, test: TE, output: Q}
-SDFSYNC2:
-  port: {...}
-  sequential: {type: sync, stages: 2, clock: CP, data: D, output: Q, reset: CDN}
-  tie: {SI: 0, SE: 0}
+CKINV:
+  port:
+    A: {direction: input, type: logic}
+    Y: {direction: output, type: logic}
+  function: {Y: "!A"}                   # one row, the output an expression
+CKBUF:
+  port: {...}                           # A in, Y out
+  function: {Y: A}
+CKMUX2:
+  port: {...}                           # D0, D1, S in, Y out
+  function: [{S: 0, Y: D0}, {S: 1, Y: D1}]    # an absent pin is x
+CKNAND2:
+  port: {...}                           # A, B in, Y out
+  function: [{A: 0, Y: 1}, {B: 0, Y: 1}, {A: 1, B: 1, Y: 0}]
+CKGATE:
+  port: {...}                           # CK, E, SE in, GCK out
+  sequential: {type: icg_pos, clock: CK, enable: E, test: SE, output: GCK}
+SYNC2:
+  port: {...}                           # CK, D, RN, SI, SE in, Q out
+  sequential: {type: sync, stages: 2, clock: CK, data: D, output: Q, reset: RN}
+  tie: {SI: 0, SE: 0}                   # scan pins held inactive
 ```
-A `function` is one row or a list of rows. A row maps input pins to 0 or 1
-(an absent pin is x) and output pins to 0, 1 or an expression over input pins
-with `! ~ & | ^ && || ?:`. A `sequential` template names pins by role.
+
+Then set the target in the project file:
+
+```yaml
+cell:
+  target: asic              # generic (default) or asic
+  synth_rlimit: 200000000   # optional, solver budget per composed role, 0 for none
+```
+
+`qsoc generate verilog` now binds every role it can to a cell, composes the
+others from the declared cells, and warns once for each composed role. The
+binding lands in `output/qsoc_cell/qsoc_cell_role.rpt`, here shortened:
+
+```yaml
+target: asic
+role:
+  qsoc_ck_inv:
+    cell: CKINV
+    instance: u_cell
+    pin: {A: clk_in, Y: clk_out}
+  qsoc_ck_or2:
+    synthesized:
+      depth: 1
+      cells: 1
+      use: {CKMUX2: 1}
+      instance: {u_cell_g0: CKMUX2}
+      hazard: free for one input change at a time
+  qsoc_ck_xor2:
+    synthesized:
+      depth: 2
+      cells: 2
+      use: {CKINV: 1, CKMUX2: 1}
+      instance: {u_cell_g0: CKINV, u_cell_g1: CKMUX2}
+      hazard: free for one input change at a time
+  qsoc_ck_icg_neg:
+    composed: [qsoc_ck_inv, qsoc_ck_icg_pos, qsoc_ck_inv]
+    note: two extra inverter delays
+  qsoc_sync:
+    cell: SYNC2
+    instance: g_cell[i].u_cell
+    pin: {CK: clk, D: d, Q: q, RN: rst_n, SE: 1'b0, SI: 1'b0}
+    stages: 2
+```
+
+No declared cell is an OR or an XOR, so QSoC builds them. The mux gives the
+smallest networks, so `CKNAND2` stays unused. The negative clock gate is the
+positive one between two inverters. A role bound to one cell wraps it, as in
+`output/qsoc_cell/rtl/role/qsoc_ck_mux2.v`:
+
+```verilog
+(* keep_hierarchy = "yes" *)
+module qsoc_ck_mux2 (
+    input  wire clk_in0,
+    input  wire clk_in1,
+    input  wire clk_sel,
+    output wire clk_out
+);
+    (* dont_touch = "true" *)
+    CKMUX2 u_cell (.D0(clk_in0), .D1(clk_in1), .S(clk_sel), .Y(clk_out));
+endmodule
+```
+
+*Unresolved roles.* A role that no cell binds and no network composes
+instantiates `qsoc_role_unresolved_<name>`, such as
+`qsoc_role_unresolved_ck_mux2`, a module that does not exist. With only
+`CKBUF`, `CKGATE`, and `SYNC2` declared, generation still succeeds and warns:
+
+```text
+warning: cell roles without a declared cell, elaboration fails where they are used: qsoc_ck_inv, qsoc_ck_or2, qsoc_ck_xor2, qsoc_ck_mux2, qsoc_ck_icg_neg
+warning: cell role qsoc_ck_mux2 not composed: proven impossible, no hazard-free network of at most 8 declared cells exists
+```
+
+Elaboration with the top set, such as `iverilog -s <top>`, fails only where
+the design uses such a role. Declare a cell for the role, or declare basic
+cells that QSoC can compose it from. Adding `CKINV` and `CKNAND2` to that
+library resolves all five roles. When the warning names the solver budget,
+raise `cell.synth_rlimit` or set it to 0. An `asic` project with no `icg_pos`
+or `icg_neg` cell is rejected, since every clock controller uses a gate.
+
+*Declaration rules.* A `function` is one row or a list of rows. A row maps
+input pins to 0 or 1, and an absent pin is x. It maps output pins to 0, 1, or
+an expression over input pins with `! ~ & | ^ && || ?:`. A `sequential`
+template names pins by their use:
 
 #figure(
   align(center)[#table(
@@ -497,7 +587,9 @@ with `! ~ & | ^ && || ?:`. A `sequential` template names pins by role.
   kind: table,
 )
 
-Generation rejects a declaration when:
+`tie` holds input pins at 0 or 1. A gate cell without `test` is allowed: its
+role drives `enable` with `en | test_en`. Generation rejects a declaration
+when:
 
 - a pin is missing, has the wrong direction, is wider than 1 bit, or is inout
 - two rows that overlap disagree, or an output is undefined for some inputs
@@ -507,26 +599,13 @@ Generation rejects a declaration when:
 - the name is `qsoc` or starts with `qsoc_`
 - two declared cells match the same role, and the error names both
 
-A gate cell without `test` is allowed: its role drives `enable` with
-`en | test_en`.
-
 *Binding.* A combinational cell binds a role when its function, with its ties
-applied, equals the role function under some pin correspondence. `icg_pos`,
-`icg_neg` and `sync` cells bind the role of the same kind. When only one gate
-role is bound and `qsoc_ck_inv` is bound, the other gate role is composed as
-`qsoc_ck_inv`, the bound gate, `qsoc_ck_inv`. The composed gate adds two
-inverter delays, and generation reports it. A `qsoc_sync` of `STAGES` flops
-uses `STAGES / stages` whole cells, then plain flops with the same reset up to
+applied, equals the role function under some pin mapping. A sequential cell
+binds the role of its `type`. When only one gate role is bound and
+`qsoc_ck_inv` is bound, the other gate is composed as inverter, gate,
+inverter, which adds two inverter delays. A `qsoc_sync` of `STAGES` flops uses
+`STAGES / stages` whole cells, then plain flops with the same reset up to
 `STAGES`. `RESET_VALUE` 1 inverts the chain input and output.
-
-*Target.* The optional project keys select the role bodies and bound the
-composition search.
-
-```yaml
-cell:
-  target: asic              # generic (default) or asic
-  synth_rlimit: 200000000   # solver budget per composed role, 0 for none
-```
 
 #figure(
   align(center)[#table(
@@ -536,18 +615,14 @@ cell:
     table.hline(),
     [`generic`], [Behavioral bodies. Declarations are checked, and models written],
     [`asic`],
-    [Every role, with `(* keep_hierarchy = "yes" *)`. A bound or composed role instantiates its cells with `(* dont_touch = "true" *)` and ties. An unresolved role instantiates `qsoc_role_unresolved_<role>`, a module that does not exist],
+    [Every role, with `(* keep_hierarchy = "yes" *)`. A bound or composed role instantiates its cells with `(* dont_touch = "true" *)` and ties. An unresolved role instantiates `qsoc_role_unresolved_<name>`],
   )],
   caption: [CELL TARGETS],
   kind: table,
 )
 
-With `asic`, generation warns with the list of unresolved roles. Elaboration
-with the top set, such as `iverilog -s <top>`, fails only where such a role is
-used. A project without any `icg_pos` or `icg_neg` binding is rejected, since
-every clock controller uses a gate.
-
-Declared cells sit at fixed instance paths for SDC:
+*Instance paths.* Declared cells sit at fixed paths below each role instance,
+for SDC:
 
 #figure(
   align(center)[#table(
@@ -564,32 +639,19 @@ Declared cells sit at fixed instance paths for SDC:
   kind: table,
 )
 
-*Composition.* With `asic`, each of `qsoc_ck_buf`, `qsoc_ck_inv`,
-`qsoc_ck_or2`, `qsoc_ck_xor2` and `qsoc_ck_mux2` that no cell binds is composed
-from the declared combinational cells on every run, before gate roles are
-composed. Cells with one output and one to three inputs left after their ties
-take part, and nothing is written back to the library. An exact search with the
-z3 solver takes the least depth, then the fewest cells, up to 8 cells. A cell
-pin connects to a role input, an earlier cell output, `1'b0` or `1'b1`, and one
-signal drives at most one pin of a cell. Among networks of equal depth and
-size, the search keeps the one with the fewest pins tied to a constant, then
-the fewest cell inputs, then the first by cell name. The output does not depend
-on declaration order.
+*Composition.* In the `asic` target, QSoC builds each of `qsoc_ck_buf`,
+`qsoc_ck_inv`, `qsoc_ck_or2`, `qsoc_ck_xor2`, and `qsoc_ck_mux2` that no cell
+binds from the declared combinational cells with one output and one to three
+inputs left after their ties. It takes the network with the least depth, then
+the fewest cells, up to 8 cells. The result does not depend on declaration
+order, and nothing is written back to the library.
 
-Each network must pass a hazard check before it is used. The check assumes:
-
-- every cell is one gate that computes its declared function
-- every cell and wire has its own fixed transport delay of any length
-- inputs change one at a time and the network settles between changes, but
-  `qsoc_ck_mux2` data inputs may change together while `clk_sel` holds
-
-Under these assumptions, every allowed input change moves `clk_out` exactly as
-often as the role function does, zero or one time: no static or dynamic
-hazard. For example, a NAND2-only library composes `qsoc_ck_xor2` from five
-cells, since the four-NAND form fails the check. Not checked: a change of
-`clk_sel` on a composed `qsoc_ck_mux2`, two inputs of `qsoc_ck_or2` or
-`qsoc_ck_xor2` changing together, glitches inside a cell, inertial delays,
-and all timing, which is left to STA.
+A composed network is free of static and dynamic hazards when one input
+changes at a time and the network settles between changes, for any fixed
+delay of each cell and wire. For `qsoc_ck_mux2` the data inputs can also
+change together while `clk_sel` holds. QSoC does not check a `clk_sel` change
+on a composed `qsoc_ck_mux2`, two inputs of `qsoc_ck_or2` or `qsoc_ck_xor2`
+changing together, glitches inside a cell, or timing, which is left to STA.
 
 #figure(
   align(center)[#table(
@@ -605,29 +667,56 @@ and all timing, which is left to STA.
   kind: table,
 )
 
-`cell.synth_rlimit` is the z3 resource limit (`rlimit`) for each composed role,
-an integer from 0 to 4294967295, default 200000000. It counts solver steps,
-not time, so the result does not depend on machine load. 0 removes the limit.
+`cell.synth_rlimit` is the solver budget for each composed role, an integer
+from 0 to 4294967295, default 200000000, and 0 removes the limit. It counts
+solver steps, not time, so the result does not depend on machine load.
 
-*Report.* `qsoc_cell_role.rpt` gives `target`, `synth_rlimit`, and per role:
-`cell`, `instance` and `pin` for a bound cell; `composed` for a gate built
-from other roles; `synthesized` with `depth`, `cells`, `use` (count per cell),
-`instance` (instance to cell) and `hazard` (what the check covers) for a
-composed network; `unresolved`, plus `synthesis` with the reason when a search
-failed.
+*Report.* Besides the keys shown above, `qsoc_cell_role.rpt` gives
+`synth_rlimit`, and for an unresolved role `unresolved` plus `synthesis` with
+the reason when composition failed.
 
 *Models.* Each declared cell gets a behavioral model in
 `output/qsoc_cell/model/<cell>.v`, listed by `qsoc_cell_model.fl`, for
-simulation and formal only. Neither `qsoc_cell.fl` nor `qsoc.fl` lists them. A
-sequential model ignores its tied pins.
+simulation and formal only. Neither `qsoc_cell.fl` nor `qsoc.fl` lists them,
+so synthesis reads your library instead. A sequential model ignores its tied
+pins.
 
-*Contracts.* With `--with-formal` and `asic`, `output/qsoc_cell/formal/contract/`
-holds one `<role>_contract.sv` per bound or composed role and `contract.sby`. Each task
-proves the role file with the cell models equal to the generic role: for every
-input of a combinational role, once the latch has loaded for a gate role, and
-after reset for `qsoc_sync` with `STAGES` 1, 2, 3 and 5 and both reset values.
-Run `sby -f contract.sby [task]` in that directory. In `asic` mode the cell job
-in `formal/` reads generic role copies from `formal/role/`, as do PRCM checks.
+*Contracts.* With `--with-formal` in the `asic` target,
+`output/qsoc_cell/formal/contract/` holds one `<role>_contract.sv` per bound or
+composed role, `qsoc_cell_contract.fl`, and `contract.sby`. Each task proves
+that the role file with the cell models behaves like the generic role: for
+every input of a combinational role, once the latch has loaded for a gate
+role, and after reset for `qsoc_sync` with `STAGES` 1, 2, 3, and 5 and both
+reset values. Run `sby -f contract.sby [task]` in that directory. The proof
+covers your declaration, not the cell itself, so check the declaration
+against the databook. In the `asic` target the cell checks in `formal/` and
+the PRCM checks read generic role copies from `formal/role/`.
+
+==== Upgrading Earlier Output
+<output-upgrade>
+Projects generated by QSoC 2.5.1 or earlier need these changes:
+
+#figure(
+  align(center)[#table(
+    columns: (0.9fr, 1fr),
+    align: (left, left),
+    table.header([Before], [Now]),
+    table.hline(),
+    [`output/<top>.v`, `<top>.nc.rpt`, and diagrams in `output/`],
+    [`output/<top>/rtl/`, `reports/`, and `doc/`. Delete the old files],
+    [`clock_cell.v`, `reset_cell.v`, `power_cell.v`, kept unless `--force`],
+    [`output/qsoc_cell/rtl/qsoc_cell_{clock,reset,power}.v`, rewritten on every run],
+    [`generate verilog -f`, `--force`], [Removed. Drop the option from scripts],
+    [`qsoc_tc_clk_*` cells], [Roles `qsoc_ck_*` and `qsoc_sync` (@cell-roles)],
+    [`qsoc_clk_div_auto`], [`qsoc_clk_div` with `AUTO_UPDATE` (@soc-net-clock-divider-auto)],
+    [`generate module` files directly in `output/<library>/<module>/`],
+    [Subdirectories `rtl/`, `formal/`, `uvm/`. Generation refuses while an old file remains there, so move the old directory aside],
+    [IOMUX `pull` and `control` with `port` and `table`],
+    [`function` rows (@iomux-pad-cell)],
+  )],
+  caption: [OUTPUT CHANGES AFTER 2.5.1],
+  kind: table,
+)
 
 ==== Netlist Merge Semantics (`-m` / `--merge`)
 <netlist-merge-semantics>
@@ -732,10 +821,8 @@ qsoc generate template --csv config.csv --rdl registers.rdl --rcsv peripherals.c
 ```
 
 ==== Data Source Namespacing
-Each data file creates an independent namespace in templates using the file's basename:
-- `registers.rdl` → accessible as `{{ registers.* }}` in templates
-- `config.csv` → accessible as `{{ config.* }}` in templates
-- `chip_regs.csv` → accessible as `{{ chip_regs.* }}` in templates
+Each data file is a namespace named after its basename: `registers.rdl` is
+`{{ registers.* }}` and `config.csv` is `{{ config.* }}` in a template.
 
 ==== SystemRDL Template Access Patterns
 SystemRDL files generate simplified JSON format accessible in templates:
@@ -751,6 +838,10 @@ SystemRDL files generate simplified JSON format accessible in templates:
   {% endfor %}
 {% endfor %}
 ```
+
+A field `reset` is a lowercase hex string such as `"0xff"`, and so is
+`reg.register_reset_value`. A field without a reset has no `reset` key, so
+test for it first: `{% if existsIn(field, "reset") %}{{ field.reset }}{% endif %}`.
 
 ==== RCSV Processing
 RCSV files expose the same template data structure as SystemRDL files.

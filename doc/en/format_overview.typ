@@ -108,6 +108,9 @@ A SOC_NET file consists of several key sections:
     [power],
     [Defines power controller primitives, generates standalone modules
      (@soc-net-power-overview)],
+    [prcm],
+    [Defines a checked power, reset, and clock manager with MMIO control
+     (@prcm-check)],
   )],
   caption: [SOC_NET FILE SECTIONS],
   kind: table,

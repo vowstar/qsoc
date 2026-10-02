@@ -144,7 +144,7 @@ For `prcm.soc_net`, output paths depend on the selected configuration:
   [`prcm/formal/check.sby`, `prcm/formal/prcm_formal.fl`], [Optional proof job and file list],
 )
 
-Ordinary outputs are regenerated. The clock and reset cells and the roles they use come from the shared `output/qsoc_cell/` unit, which `output/qsoc.fl` lists before this unit (@verilog-output-layout). `check.sby` references them as `../../qsoc_cell/rtl/` and `../../qsoc_cell/rtl/role/`. File lists use paths relative to `output/`. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
+Ordinary outputs are regenerated. File lists use paths relative to `output/`. `--format` formats the top module before publication. Input or model failures leave existing outputs unchanged.
 
 For a single-domain circuit, REQUEST, STATUS, and EVENT occupy three consecutive bus words. STATUS contains the raw request, done, invalid_mode, and fault. The mode code and three status bits must fit one data word. EVENT records power loss and uses write-one-to-clear semantics.
 
@@ -160,7 +160,7 @@ Management reset clears the software request to reset_mode and retains action st
 
 A new mode request waits for an active reset release to complete before it can reassert reset. Fault protection remains immediate.
 
-Progress requires a stable target and eventual feedback. Customer logic and cell replacements need separate checks.
+Progress requires a stable target and eventual feedback. Customer logic needs separate checks. The PRCM checks use the generic roles, and the contract proofs cover declared cells (@cell-declare).
 
 `binding` records top-level instances and port connections. Receiver entries identify registers, inputs, clock edges, resets, and stage counts. Names are relative to the top module. Map them to the actual cell and netlist before applying physical constraints.
 
@@ -175,8 +175,39 @@ Progress requires a stable target and eventual feedback. Customer logic and cell
   [Shared reachability], [Declared mode completion, software shutdown, invalid requests, management reset, service use and release, and faults after operation starts.],
 )
 
-RTL checks use the synthesis branch of resource cells and compare register values and control outputs with an independent phase model. Shared jobs separate normal operation from fault response.
-
 Safety checks allow arbitrary feedback delay, write data, byte masks, and sampled power loss. Reachability uses one cold start, full strobes, and one-cycle feedback. Fault cases permit power loss. RUN and management-reset goals require those features in the input. A domain without RUN uses its powered RESET state.
 
 A shutdown goal requires an OFF write while active and local request completion. Management reset cancels this observation. Chip policy can block a declared local mode. Cover failure means the goal is not reached within the search bound. Reachability does not prove eventual completion. Physical timing and synchronization reliability need separate checks.
+
+== Technology Cells
+<prcm-cells>
+A PRCM unit holds no copy of the clock and reset cells. They and the roles
+they use come from the shared `output/qsoc_cell/` unit, which `output/qsoc.fl`
+lists first (@verilog-output-layout). The cells declared in @cell-declare
+therefore apply to PRCM unchanged. Put that library in
+`module/clkcells.soc_mod`, set the target in the project file, and generate
+the example above:
+
+```yaml
+cell:
+  target: asic
+```
+
+The role report `output/qsoc_cell/qsoc_cell_role.rpt` then binds the domain
+clock gate to `CKGATE`:
+
+```yaml
+  qsoc_ck_icg_pos:
+    cell: CKGATE
+    instance: u_cell
+    pin: {CK: clk, E: en, GCK: clk_out, SE: test_en}
+```
+
+The gate of `periph_clk` is the cell instance
+`prcm_clock_inst/u_periph_clk_target_icg/g_pos.u_icg/u_cell`, and the
+controller reset receiver `prcm_cold_inst` holds a `SYNC2` at
+`u_sync/g_cell[0].u_cell`. For simulation add
+`qsoc_cell/model/qsoc_cell_model.fl` to `qsoc.fl`. `check.sby` reads the
+cells from `../../qsoc_cell/rtl/` and the roles from
+`../../qsoc_cell/rtl/role/`, or in the `asic` target from the generic copies
+in `../../qsoc_cell/formal/role/`.
