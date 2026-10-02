@@ -952,29 +952,59 @@ bool QLLMService::sameOrigin(const QUrl &left, const QUrl &right)
            && port(left) == port(right);
 }
 
+QString QLLMService::countUrl(const LLMModelConfig &endpoint)
+{
+    if (endpoint.tokenizer.contains(QStringLiteral("://"))) {
+        return endpoint.tokenizer;
+    }
+    if (endpoint.tokenizer == QStringLiteral("auto") && endpoint.api == LLMApi::AnthropicMessages
+        && !endpoint.url.isEmpty()) {
+        QUrl url(endpoint.url);
+        url.setPath(url.path() + QStringLiteral("/count_tokens"));
+        return url.toString();
+    }
+    return {};
+}
+
 std::optional<qint64> QLLMService::countTokens(
     const LLMModelConfig &endpoint,
     const json           &messages,
     const json           &tools,
+    const QString        &effort,
     std::stop_token       stopToken,
     QString              *error)
 {
-    const QUrl target(endpoint.tokenizer);
+    const QUrl target(countUrl(endpoint));
     if (!target.isValid() || target.host().isEmpty()) {
         *error = QStringLiteral("no count endpoint");
         return std::nullopt;
     }
-    QNetworkRequest request = sameOrigin(target, QUrl(endpoint.url)) ? prepareRequest(endpoint)
-                                                                     : QNetworkRequest();
+    const bool      anthropic = endpoint.api == LLMApi::AnthropicMessages;
+    QNetworkRequest request   = sameOrigin(target, QUrl(endpoint.url)) ? prepareRequest(endpoint)
+                                                                       : QNetworkRequest();
     request.setUrl(target);
     request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    json body = {{"messages", messages}, {"add_generation_prompt", true}};
-    if (!endpoint.model.isEmpty()) {
-        body["model"] = endpoint.model.toStdString();
-    }
-    if (!tools.empty()) {
-        body["tools"] = tools;
+    json body = json::object();
+    if (anthropic) {
+        request.setRawHeader("anthropic-version", QLLMAnthropic::apiVersion);
+        QLLMAnthropic::RequestOptions options;
+        options.effort   = effort;
+        const json whole = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
+        for (const char *field :
+             {"model", "system", "messages", "tools", "tool_choice", "thinking"}) {
+            if (whole.contains(field)) {
+                body[field] = whole.at(field);
+            }
+        }
+    } else {
+        body = {{"messages", messages}, {"add_generation_prompt", true}};
+        if (!endpoint.model.isEmpty()) {
+            body["model"] = endpoint.model.toStdString();
+        }
+        if (!tools.empty()) {
+            body["tools"] = tools;
+        }
     }
     if (endpoint.chatTemplateKwargs.is_object() && !endpoint.chatTemplateKwargs.empty()) {
         body["chat_template_kwargs"] = endpoint.chatTemplateKwargs;
@@ -1010,7 +1040,7 @@ std::optional<qint64> QLLMService::countTokens(
     }
     try {
         const json response = json::parse(reply->readAll().toStdString());
-        const auto count    = response.find("count");
+        const auto count    = response.find(anthropic ? "input_tokens" : "count");
         if (count != response.end() && count->is_number_integer() && count->get<qint64>() >= 0) {
             return count->get<qint64>();
         }

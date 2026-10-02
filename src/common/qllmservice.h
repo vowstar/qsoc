@@ -156,15 +156,24 @@ public:
         const QString  &reasoningEffort);
 
     /**
-     * @brief Count the prompt tokens of a request at the endpoint's tokenizer URL.
-     * @details Sends the vLLM /tokenize chat body. The API key goes only to a
-     *          URL with the same scheme, host and port as the chat URL.
+     * @brief Count endpoint of a model entry, empty when it has none.
+     * @details A tokenizer URL, or `url` + `/count_tokens` for `auto` on the
+     *          Messages API.
+     */
+    static QString countUrl(const LLMModelConfig &endpoint);
+
+    /**
+     * @brief Count the prompt tokens of a request at the entry's count endpoint.
+     * @details Sends the vLLM /tokenize chat body, or the Messages
+     *          count_tokens body on the Messages API. The API key goes only
+     *          to a URL with the same scheme, host and port as the chat URL.
      * @return Token count, or nullopt with @p error set
      */
     std::optional<qint64> countTokens(
         const LLMModelConfig &endpoint,
         const json           &messages,
         const json           &tools,
+        const QString        &effort,
         std::stop_token       stopToken,
         QString              *error);
 

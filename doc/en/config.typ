@@ -305,7 +305,9 @@ Content added after that response is counted locally. The status bar and
     align: (auto, left),
     table.header([`tokenizer`], [Local count]),
     table.hline(),
-    [`auto`], [The o200k tokenizer (default)],
+    [`auto`],
+    [The o200k tokenizer (default). With `api: anthropic-messages`, also
+     the `count_tokens` endpoint at `url` + `/count_tokens`],
     [`o200k`], [The o200k tokenizer],
     [`bytes`], [One token per four UTF-8 bytes],
     [URL], [The o200k tokenizer, plus the count endpoint at that URL],
@@ -318,10 +320,12 @@ An invalid value prints a warning and uses `auto`. Compaction thresholds
 allow a margin for locally counted tokens, so compaction can start before
 the status bar reaches the threshold.
 
-A URL value names a vLLM or SGLang `/tokenize` endpoint for the same served
-model. qsoc asks it only when the local count cannot tell whether a
-threshold is crossed. The request carries the same messages and tools as
-the chat request. If the endpoint fails, or its count disagrees with the
+A URL value names a count endpoint for the same served model: a vLLM or
+SGLang `/tokenize` endpoint, or a Messages `count_tokens` endpoint with
+`api: anthropic-messages`. qsoc asks a count endpoint only when the local
+count cannot tell whether a threshold is crossed. The request carries the
+same model, messages and tools as the chat request, and on the Messages API
+also its system prompt and thinking settings. If the endpoint fails, or its count disagrees with the
 usage the server then reports, qsoc prints one line and counts locally
 until `/model` selects a model again. The API key is sent only when the
 URL has the same scheme, host and port as `url`.

@@ -98,14 +98,16 @@ public:
         return int(json::parse(body.toStdString(), nullptr, false).value(counter, -1));
     }
 
-    QList<json> tokenizeBodies() const
+    /* Logged count requests: /tokenize bodies, or Messages bodies without max_tokens. */
+    QList<json> countBodies() const
     {
         QList<json> bodies;
         QFile       file(log.filePath(QStringLiteral("log")));
         if (file.open(QIODevice::ReadOnly)) {
             for (const QByteArray &line : file.readAll().split('\n')) {
                 const json body = json::parse(line.toStdString(), nullptr, false);
-                if (body.is_object() && body.contains("add_generation_prompt")) {
+                if (body.is_object() && body.contains("messages")
+                    && (body.contains("add_generation_prompt") || !body.contains("max_tokens"))) {
                     bodies.append(body);
                 }
             }
@@ -142,8 +144,8 @@ std::string prose(size_t characters, char lead)
 class Session
 {
 public:
-    Session(const Mock &mock, const QString &tokenizerHost, int characters = 2600)
-        : scope(configuration(mock, tokenizerHost))
+    explicit Session(const QByteArray &yaml, int characters = 2600)
+        : scope(yaml)
     {
         llm = std::make_unique<QLLMService>(nullptr, &config);
         registry.registerTool(new Probe(&registry));
@@ -166,27 +168,43 @@ public:
         agent->setMessages(history);
     }
 
-    static QByteArray configuration(const Mock &mock, const QString &tokenizerHost)
+    /* A Chat Completions entry whose tokenizer is the mock's /tokenize on host. */
+    static QByteArray chat(const Mock &mock, const QString &host)
     {
-        return QStringLiteral(
-                   "proxy:\n"
-                   "  type: none\n"
-                   "llm:\n"
-                   "  model: lab\n"
-                   "  models:\n"
-                   "    lab:\n"
-                   "      model: lab-served\n"
-                   "      url: %1\n"
-                   "      key: placeholder-key\n"
-                   "      timeout: 1500\n"
-                   "      context: 20000\n"
-                   "      max_output_tokens: 2000\n"
-                   "      chat_template_kwargs:\n"
-                   "        enable_thinking: false\n"
-                   "      tokenizer: %2\n")
-            .arg(
-                mock.url(QStringLiteral("127.0.0.1"), QStringLiteral("/v1/chat/completions")),
-                mock.url(tokenizerHost, QStringLiteral("/tokenize")))
+        return configuration(
+            mock.url(QStringLiteral("127.0.0.1"), QStringLiteral("/v1/chat/completions")),
+            QStringLiteral(
+                "      chat_template_kwargs:\n"
+                "        enable_thinking: false\n"
+                "      tokenizer: %1\n")
+                .arg(mock.url(host, QStringLiteral("/tokenize"))));
+    }
+
+    /* A Messages API entry with extra model keys. */
+    static QByteArray messages(const Mock &mock, const QString &extra)
+    {
+        return configuration(
+            mock.url(QStringLiteral("127.0.0.1"), QStringLiteral("/v1/messages")),
+            QStringLiteral("      api: anthropic-messages\n") + extra);
+    }
+
+    static QByteArray configuration(const QString &url, const QString &extra)
+    {
+        return (QStringLiteral(
+                    "proxy:\n"
+                    "  type: none\n"
+                    "llm:\n"
+                    "  model: lab\n"
+                    "  models:\n"
+                    "    lab:\n"
+                    "      model: lab-served\n"
+                    "      url: %1\n"
+                    "      key: placeholder-key\n"
+                    "      timeout: 1500\n"
+                    "      context: 20000\n"
+                    "      max_output_tokens: 2000\n")
+                    .arg(url)
+                + extra)
             .toUtf8();
     }
 
@@ -286,7 +304,7 @@ private slots:
     {
         Mock mock({{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")}});
         QVERIFY(mock.ready());
-        Session    session(mock, QStringLiteral("127.0.0.1"));
+        Session    session(Session::chat(mock, QStringLiteral("127.0.0.1")));
         const auto estimate = session.agent->contextEstimate();
         QVERIFY(estimate.point() <= session.gate() && estimate.upper() > session.gate());
         QCOMPARE(session.agent->compactIfNeeded(), 0);
@@ -297,7 +315,7 @@ private slots:
         QCOMPARE(session.agent->compactIfNeeded(), 0);
         QCOMPARE(mock.hits("tokenize"), 1);
 
-        const auto bodies = mock.tokenizeBodies();
+        const auto bodies = mock.countBodies();
         QCOMPARE(bodies.size(), 1);
         const json &body = bodies.front();
         QCOMPARE(body.value("model", std::string()), std::string("lab-served"));
@@ -314,7 +332,7 @@ private slots:
     {
         Mock mock({});
         QVERIFY(mock.ready());
-        Session session(mock, QStringLiteral("127.0.0.1"), 400);
+        Session session(Session::chat(mock, QStringLiteral("127.0.0.1")), 400);
         QVERIFY(session.agent->contextEstimate().upper() <= session.gate());
         QCOMPARE(session.agent->compactIfNeeded(), 0);
         QCOMPARE(mock.hits("tokenize"), 0);
@@ -324,7 +342,7 @@ private slots:
     {
         Mock mock({{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")}});
         QVERIFY(mock.ready());
-        Session session(mock, QStringLiteral("localhost"));
+        Session session(Session::chat(mock, QStringLiteral("localhost")));
         QCOMPARE(session.agent->compactIfNeeded(), 0);
         QCOMPARE(mock.hits("tokenize"), 1);
         QCOMPARE(mock.hits("tokenize_auth"), 0);
@@ -353,7 +371,7 @@ private slots:
         QFETCH(QString, mode);
         Mock mock({{QStringLiteral("MOCK_TOKENIZE"), mode}});
         QVERIFY(mock.ready());
-        Session    session(mock, QStringLiteral("127.0.0.1"));
+        Session    session(Session::chat(mock, QStringLiteral("127.0.0.1")));
         QSignalSpy fellBack(session.agent.get(), &QSocAgent::tokenCountFellBack);
         session.agent->compactIfNeeded();
         QCOMPARE(mock.hits("tokenize"), 1);
@@ -388,7 +406,7 @@ private slots:
             {{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")},
              {QStringLiteral("MOCK_PROMPT_TOKENS"), QString::number(reported)}});
         QVERIFY(mock.ready());
-        Session    session(mock, QStringLiteral("127.0.0.1"));
+        Session    session(Session::chat(mock, QStringLiteral("127.0.0.1")));
         QSignalSpy fellBack(session.agent.get(), &QSocAgent::tokenCountFellBack);
         session.agent->run(QStringLiteral("Count the registers."));
         QCOMPARE(mock.hits("tokenize"), 1);
@@ -397,6 +415,68 @@ private slots:
         session.agent->setMessages(session.history);
         session.agent->compactIfNeeded();
         QCOMPARE(mock.hits("tokenize"), 2 - fallbacks);
+    }
+
+    void messagesApiCountsWithCountTokens()
+    {
+        Mock mock({{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")}});
+        QVERIFY(mock.ready());
+        Session session(Session::messages(mock, QStringLiteral("      effort: high\n")));
+        auto    settings     = session.agent->getConfig();
+        settings.effortLevel = QStringLiteral("high");
+        session.agent->setConfig(settings);
+        QCOMPARE(session.agent->compactIfNeeded(), 0);
+        QCOMPARE(mock.hits("count_tokens"), 1);
+        QCOMPARE(mock.hits("count_tokens_auth"), 1);
+        QCOMPARE(mock.hits("tokenize"), 0);
+        QCOMPARE(session.agent->contextEstimate().point(), qint64(5000));
+
+        const auto bodies = mock.countBodies();
+        QCOMPARE(bodies.size(), 1);
+        const json &body = bodies.front();
+        for (const auto &[key, value] : body.items()) {
+            QVERIFY2(
+                QStringList({"model", "system", "messages", "tools", "tool_choice", "thinking"})
+                    .contains(QString::fromStdString(key)),
+                key.c_str());
+        }
+        QCOMPARE(body.value("model", std::string()), std::string("lab-served"));
+        for (const char *field : {"system", "messages", "tools", "thinking"}) {
+            QVERIFY2(body.contains(field), field);
+        }
+    }
+
+    void o200kOnTheMessagesApiNeverCounts()
+    {
+        Mock mock({});
+        QVERIFY(mock.ready());
+        Session session(Session::messages(mock, QStringLiteral("      tokenizer: o200k\n")));
+        QVERIFY(session.agent->contextEstimate().upper() > session.gate());
+        session.agent->compactIfNeeded();
+        QCOMPARE(mock.hits("count_tokens"), 0);
+    }
+
+    void messagesCountMustMatchTheReportedUsage_data()
+    {
+        QTest::addColumn<int>("reported");
+        QTest::addColumn<int>("fallbacks");
+        QTest::newRow("agrees") << 5100 << 0;
+        QTest::newRow("ten-percent-off") << 5500 << 1;
+    }
+
+    void messagesCountMustMatchTheReportedUsage()
+    {
+        QFETCH(int, reported);
+        QFETCH(int, fallbacks);
+        Mock mock(
+            {{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")},
+             {QStringLiteral("MOCK_PROMPT_TOKENS"), QString::number(reported)}});
+        QVERIFY(mock.ready());
+        Session    session(Session::messages(mock, QString()));
+        QSignalSpy fellBack(session.agent.get(), &QSocAgent::tokenCountFellBack);
+        session.agent->run(QStringLiteral("Count the registers."));
+        QCOMPARE(mock.hits("count_tokens"), 1);
+        QCOMPARE(fellBack.count(), fallbacks);
     }
 
     void unanchoredEstimateUsesTheCounterMargin()

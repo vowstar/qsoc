@@ -81,6 +81,8 @@ QHash<QByteArray, int> hits{
     {"alpn_none", 0},
     {"tokenize", 0},
     {"tokenize_auth", 0},
+    {"count_tokens", 0},
+    {"count_tokens_auth", 0},
 };
 
 int             emitted = 0;
@@ -552,7 +554,7 @@ void writeNamedSse(QTcpSocket *socket, const QList<QPair<QByteArray, QJsonObject
 QJsonObject anthropicUsage(int outputTokens)
 {
     QJsonObject usage;
-    usage["input_tokens"]                = 1;
+    usage["input_tokens"]                = config.promptTokens >= 0 ? config.promptTokens : 1;
     usage["output_tokens"]               = outputTokens;
     usage["cache_creation_input_tokens"] = 0;
     usage["cache_read_input_tokens"]     = 0;
@@ -727,25 +729,20 @@ void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bo
     writeNamedSse(socket, events);
 }
 
-void respondCountTokens(QTcpSocket *socket, const QJsonObject &request)
-{
-    const QByteArray encoded = compactJson(request);
-    QJsonObject      payload;
-    payload["input_tokens"] = int(encoded.size() / 4) + 1;
-    writeBody(socket, 200, "application/json", compactJson(payload));
-}
-
 /**
- * @brief vLLM /tokenize in chat form.
+ * @brief vLLM /tokenize in chat form, or Messages count_tokens.
  *
- * MOCK_TOKENIZE picks the reply: ok, 404, 500, 429, html or hold (never
- * answers). MOCK_TOKENIZE_COUNT fixes the count; otherwise bytes / 4.
+ * MOCK_TOKENIZE picks the reply for both: ok, 404, 500, 429, html or hold
+ * (never answers). MOCK_TOKENIZE_COUNT fixes the count; otherwise bytes / 4.
  */
-void respondTokenize(QTcpSocket *socket, const QByteArray &head, const QByteArray &body)
+void respondTokenize(
+    QTcpSocket *socket, const QByteArray &head, const QByteArray &body, bool anthropic = false)
 {
-    ++hits["tokenize"];
-    if (head.toLower().contains("\nauthorization:")) {
-        ++hits["tokenize_auth"];
+    const QByteArray counter = anthropic ? "count_tokens" : "tokenize";
+    const QByteArray lowered = head.toLower();
+    ++hits[counter];
+    if (lowered.contains("\nauthorization:") || lowered.contains("\nx-api-key:")) {
+        ++hits[counter + "_auth"];
     }
     appendRequestLog(parseBody(body));
     const QByteArray mode = config.tokenize;
@@ -760,10 +757,15 @@ void respondTokenize(QTcpSocket *socket, const QByteArray &head, const QByteArra
         writeBody(socket, mode.toInt(), "application/json", R"({"error":"unavailable"})");
         return;
     }
+    const int   count = config.tokenizeCount >= 0 ? config.tokenizeCount : int(body.size() / 4);
     QJsonObject payload;
-    payload["count"] = config.tokenizeCount >= 0 ? config.tokenizeCount : int(body.size() / 4);
-    payload["max_model_len"] = 131072;
-    payload["tokens"]        = QJsonArray();
+    if (anthropic) {
+        payload["input_tokens"] = count;
+    } else {
+        payload["count"]         = count;
+        payload["max_model_len"] = 131072;
+        payload["tokens"]        = QJsonArray();
+    }
     writeBody(socket, 200, "application/json", compactJson(payload));
 }
 
@@ -848,7 +850,7 @@ void serve(QTcpSocket *socket, Connection *connection)
         if (path.endsWith("/tokenize")) {
             respondTokenize(socket, head, body.left(contentLength));
         } else if (path.startsWith("/v1/messages/count_tokens")) {
-            respondCountTokens(socket, parseBody(body.left(contentLength)));
+            respondTokenize(socket, head, body.left(contentLength), true);
         } else if (path.startsWith("/v1/messages")) {
             const QJsonObject request = parseBody(body.left(contentLength));
             appendRequestLog(request);

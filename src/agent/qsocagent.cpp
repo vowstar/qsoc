@@ -3753,16 +3753,15 @@ std::optional<qint64> QSocAgent::countOnServer(const QSocRequestSnapshot &reques
         return std::nullopt;
     }
     const auto endpoint = service->getCurrentModelConfig();
-    if (!endpoint.tokenizer.contains(QStringLiteral("://"))
-        || serverCountDropped_.contains(endpoint.id)) {
+    if (QLLMService::countUrl(endpoint).isEmpty() || serverCountDropped_.contains(endpoint.id)) {
         return std::nullopt;
     }
     const QPointer<QSocAgent> owner(this);
     const std::stop_token     stop = activeRun_ ? activeRun_->stopSource.get_token()
                                                 : maintenanceStop_.get_token();
     QString                   error;
-    const auto                counted
-        = service->countTokens(endpoint, request.messages, request.tools, stop, &error);
+    const auto                counted = service->countTokens(
+        endpoint, request.messages, request.tools, request.effort, stop, &error);
     /* The count request runs an event loop that can destroy the agent. */
     // cppcheck-suppress knownConditionTrueFalse
     if (!owner) {

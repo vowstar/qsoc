@@ -200,14 +200,14 @@ bool QSocRequestUsage::complete(quint64 generation, const json &usage)
     if (!usage.is_object()) {
         return false;
     }
-    /* Split cache accounting does not establish the full request input count. */
-    if (!usage.contains("prompt_tokens")
-        && (usage.contains("cache_read_input_tokens")
-            || usage.contains("cache_creation_input_tokens"))) {
-        return false;
+    auto input = count(usage, usage.contains("prompt_tokens") ? "prompt_tokens" : "input_tokens");
+    /* Anthropic input_tokens leaves out cache reads and writes. */
+    for (const char *field : {"cache_read_input_tokens", "cache_creation_input_tokens"}) {
+        if (input && !usage.contains("prompt_tokens") && usage.contains(field)) {
+            const auto part = count(usage, field);
+            input           = part ? std::optional<qint64>(add(*input, *part)) : std::nullopt;
+        }
     }
-    const auto input
-        = count(usage, usage.contains("prompt_tokens") ? "prompt_tokens" : "input_tokens");
     const auto output
         = count(usage, usage.contains("completion_tokens") ? "completion_tokens" : "output_tokens");
     if (!input || (usage.contains("completion_tokens") && !output)

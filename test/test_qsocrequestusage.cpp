@@ -29,23 +29,25 @@ class Test final : public QObject
 {
     Q_OBJECT
 private slots:
-    void splitCacheCountsCannotAnchorTheFullInput()
+    void splitCacheCountsAnchorTheirSum()
     {
         QSocRequestUsage    usage;
         QSocRequestSnapshot request;
         request.messages = json::array({{{"role", "user"}, {"content", std::string(400, 'x')}}});
-        const auto generation = usage.begin(request);
-        QVERIFY(!usage.complete(
-            generation,
+        QVERIFY(usage.complete(
+            usage.begin(request),
             {{"input_tokens", 10},
              {"cache_read_input_tokens", 5},
              {"cache_creation_input_tokens", 20}}));
-        QCOMPARE(usage.observed().requests, quint64(0));
-        QCOMPARE(usage.estimateNext(request), QSocRequestUsage::estimateRequest(request));
-        QVERIFY(usage.complete(
-            usage.begin(request), {{"prompt_tokens", 35}, {"cache_read_input_tokens", 5}}));
         QCOMPARE(usage.observed().inputTokens, qint64(35));
         QCOMPARE(usage.observed().cachedTokens, qint64(5));
+        QCOMPARE(usage.estimateNext(request), qint64(35));
+        QVERIFY(!usage.complete(
+            usage.begin(request), {{"input_tokens", 10}, {"cache_read_input_tokens", -5}}));
+        QVERIFY(usage.complete(
+            usage.begin(request), {{"prompt_tokens", 35}, {"cache_read_input_tokens", 5}}));
+        QCOMPARE(usage.observed().inputTokens, qint64(70));
+        QCOMPARE(usage.observed().cachedTokens, qint64(10));
     }
 
     void arraysCountTextImagesAndCalls()
