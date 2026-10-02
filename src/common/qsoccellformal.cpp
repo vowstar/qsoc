@@ -51,7 +51,12 @@ module qsoc_clk_div_formal #(
      * an earlier value may still load ahead of the last one, and each load
      * waits out a phase of up to 2 * MAXN half periods */
     localparam integer BOUND = 4 * MAXN + 10;
-    localparam integer CW    = 8;
+    /* Each counter stops one past the largest value it is compared with, so
+     * every comparison reads as it would on an unbounded count */
+    localparam integer LEN_TOP    = 2 * MAXN + 3;
+    localparam integer STABLE_TOP = BOUND + 2 * MAXN + 3;
+    localparam integer OFF_TOP    = 4 * MAXN + 5;
+    localparam integer WAIT_TOP   = BOUND + 1;
 
     function [WIDTH-1:0] norm;
         input [WIDTH-1:0] value;
@@ -210,8 +215,8 @@ module qsoc_clk_div_formal #(
     reg             past_out;
     reg             phase_ok;
     reg             steady;
-    reg [CW-1:0]    len;
     reg [WIDTH-1:0] n_start;
+    reg [$clog2(LEN_TOP + 1)-1:0] len;
     wire            edge_out = clk_out != past_out;
     always @(`QSOC_FORMAL_STEP) past_out <= clk_out;
 
@@ -225,32 +230,32 @@ module qsoc_clk_div_formal #(
             len      <= in_tick ? 1 : 0;
             n_start  <= n_cur;
         end else begin
-            if (in_tick && len != {CW{1'b1}}) len <= len + 1'b1;
+            if (in_tick && len != LEN_TOP) len <= len + 1'b1;
             if (loading) steady <= 1'b0;
         end
     end
 
     /* Rising edges since the inputs last moved, for bounded liveness */
-    reg [CW-1:0] stable;
-    wire         settled = en && (AUTO_UPDATE ? div == past_div : !div_valid);
+    reg [$clog2(STABLE_TOP + 1)-1:0] stable;
+    wire settled = en && (AUTO_UPDATE ? div == past_div : !div_valid);
     always @(`QSOC_FORMAL_STEP) begin
         if (!drst_n || !past_valid || !settled) stable <= 0;
-        else if (rise && stable != {CW{1'b1}}) stable <= stable + 1'b1;
+        else if (rise && stable != STABLE_TOP) stable <= stable + 1'b1;
     end
     wire quiet = settled && stable > BOUND;
 
     /* Rising edges with the output disabled */
-    reg [CW-1:0] off;
+    reg [$clog2(OFF_TOP + 1)-1:0] off;
     always @(`QSOC_FORMAL_STEP) begin
         if (!drst_n || en) off <= 0;
-        else if (rise && off != {CW{1'b1}}) off <= off + 1'b1;
+        else if (rise && off != OFF_TOP) off <= off + 1'b1;
     end
 
     /* Rising edges a held request has waited */
-    reg [CW-1:0] waiting;
+    reg [$clog2(WAIT_TOP + 1)-1:0] waiting;
     always @(`QSOC_FORMAL_STEP) begin
         if (!drst_n || !div_valid || !en || (rise && div_ready)) waiting <= 0;
-        else if (rise && waiting != {CW{1'b1}}) waiting <= waiting + 1'b1;
+        else if (rise && waiting != WAIT_TOP) waiting <= waiting + 1'b1;
     end
 
     always @(`QSOC_FORMAL_STEP) begin
