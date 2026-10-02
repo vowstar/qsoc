@@ -64,6 +64,9 @@ void QSocAgentRuntime::wireContextRestore()
         inputs.totalBudget = static_cast<int>(
             qMin<qint64>(remainingTokens, std::numeric_limits<int>::max()));
         inputs.estimateTokens = [agent](const QString &text) { return agent->estimateTokens(text); };
+        inputs.truncateTokens = [agent](const QString &text, int maxTokens) {
+            return agent->truncateTokens(text, maxTokens);
+        };
         inputs.maxFiles          = cfg.contextRestoreMaxFiles;
         inputs.fileBudget        = cfg.contextRestoreFileBudget;
         inputs.maxTokensPerFile  = cfg.contextRestoreMaxTokensFile;

@@ -9,7 +9,6 @@
  *          delegated to an installed handler.
  */
 
-#include "agent/qsocmessageauthority.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "agent/runtime/qsocagentruntime_p.h"
 
@@ -21,6 +20,7 @@
 #include "agent/qsocgoal.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocmemoryrecall.h"
+#include "agent/qsocmessageauthority.h"
 #include "agent/qsocrewind.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsubagenttasksource.h"
@@ -294,9 +294,9 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         QStringList labels;
         for (int i = 0; i < static_cast<int>(messages.size()); ++i) {
             const auto &message = messages[i];
-            if (message.value("role", std::string()) == "user"
-                && !QSocMessageAuthority::isRuntimeReminder(message) && message.contains("content")
-                && message["content"].is_string()) {
+            if (message.value("role", std::string()) == "user" && message.contains("content")
+                && message["content"].is_string()
+                && !QSocMessageAuthority::isRuntimeReminder(message)) {
                 indexes.append(i);
                 labels.append(
                     QString::fromStdString(message["content"].get<std::string>()).left(100));
@@ -351,9 +351,8 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         json messages = json::array();
         messages.push_back(
             {{"role", "system"}, {"content", d->agent->requestSystemPrompt().toStdString()}});
-        for (const auto &message : d->agent->getMessages()) {
+        for (const auto &message : d->agent->getMessages())
             messages.push_back(QSocMessageAuthority::toWire(message));
-        }
         messages.push_back(
             {{"role", "user"},
              {"content",
@@ -426,7 +425,8 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
     if (cmd == QStringLiteral("/context")) {
         emitOutput(QStringLiteral("\nContext\n"), static_cast<int>(QSocAgentRuntimeStyle::Bold));
         const UsageSnapshot snapshot = usage();
-        emitOutput(QStringLiteral("  Used:      %1 / %2 tokens\n")
+        emitOutput(QStringLiteral("  Used:      %1%2 / %3 tokens\n")
+                       .arg(snapshot.approximate ? QStringLiteral("\u2248") : QString())
                        .arg(fmtTok(snapshot.usedTokens))
                        .arg(fmtTok(snapshot.maxTokens)));
         emitOutput(QStringLiteral("  Threshold: %1%\n\n").arg(int(snapshot.compactThreshold * 100)));

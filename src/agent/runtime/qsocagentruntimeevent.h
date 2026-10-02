@@ -74,7 +74,7 @@ struct QSocAgentRuntimeEvent
         /* ---- context management ---- */
         Compacted,       /**< Compaction committed (savedTokens). */
         ContextRestored, /**< Post-compaction supplies restored (files, skills, agents). */
-        ContextUsage,    /**< Context chip numbers (usedTokens, maxTokens, threshold). */
+        ContextUsage,    /**< Context chip numbers (usedTokens, maxTokens, threshold, flag). */
 
         /* ---- user interaction requests ---- */
         AskUser,      /**< ask_user round-trip (question, options). */
@@ -124,7 +124,7 @@ struct QSocAgentRuntimeEvent
     qint64 outputTokens   = 0;
 
     bool                  ok    = false; /**< Success flag (persist, tool finish). */
-    bool                  flag  = false; /**< Generic boolean (plan mode on, remote connected). */
+    bool                  flag  = false; /**< Generic boolean (plan mode, remote, estimate). */
     QSocAgentRuntimeStyle style = QSocAgentRuntimeStyle::Normal;
 
     /** Human-readable kind name (protocol serialisation, logs). */

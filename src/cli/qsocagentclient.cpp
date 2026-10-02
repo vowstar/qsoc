@@ -733,7 +733,8 @@ bool QSocCliWorker::runAgentClientLoop(
                 compositor.render();
                 break;
             case QSocAgentRuntimeEvent::Kind::ContextUsage:
-                statusBarWidget.setContextUsage(event.usedTokens, event.maxTokens, event.threshold);
+                statusBarWidget
+                    .setContextUsage(event.usedTokens, event.maxTokens, event.threshold, event.flag);
                 compositor.render();
                 break;
             case QSocAgentRuntimeEvent::Kind::SessionResumed:
@@ -930,7 +931,7 @@ bool QSocCliWorker::runAgentClientLoop(
             inputMonitor.setInputBuffer(searchResult);
             return;
         }
-        auto &popup = compositor.completionPopup();
+        const auto &popup = compositor.completionPopup();
         if (!popup.isVisible() || completionStart < 0 || popup.getItems().isEmpty())
             return;
         const QString chosen      = popup.getItems().value(popup.getHighlight());
@@ -1138,8 +1139,7 @@ bool QSocCliWorker::runAgentClientLoop(
         }
         if ((key == '\r' || key == '\n') && inputMonitor.getInputBuffer().isEmpty()
             && !ghost.isEmpty() && !searching) {
-            const auto accepted = ghost;
-            QTimer::singleShot(0, &inputMonitor, [&, accepted] {
+            QTimer::singleShot(0, &inputMonitor, [&, accepted = ghost] {
                 inputMonitor.insertText(accepted);
                 inputMonitor.submitNow();
             });

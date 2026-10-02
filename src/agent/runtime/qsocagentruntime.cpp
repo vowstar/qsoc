@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/runtime/qsocagentruntime.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/runtime/qsocagentruntime_p.h"
 
 #include "agent/mcp/qsocmcpclient.h"
@@ -21,6 +20,7 @@
 #include "agent/qsocmemorydream.h"
 #include "agent/qsocmemoryextractor.h"
 #include "agent/qsocmemorymanager.h"
+#include "agent/qsocmessageauthority.h"
 #include "agent/qsocrewind.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsessionrecovery.h"
@@ -1130,6 +1130,9 @@ void QSocAgentRuntime::wireAgentCallbacks()
             QStringLiteral("Summary request failed (%1): used a mechanical summary.\n").arg(reason),
             static_cast<int>(QSocAgentRuntimeStyle::Dim));
     });
+    connect(d->agent, &QSocAgent::tokenCountFellBack, this, [this](const QString &line) {
+        emitOutput(line + QLatin1Char('\n'), static_cast<int>(QSocAgentRuntimeStyle::Dim));
+    });
     connect(d->agent, &QSocAgent::contextRestored, this, [this]() {
         QSocAgentRuntimeEvent event;
         event.kind = QSocAgentRuntimeEvent::Kind::ContextRestored;
@@ -1402,6 +1405,8 @@ void QSocAgentRuntime::Private::installSessionWriteBarrier(
             auto nextLock = lockSession(sessionPath);
             if (!nextLock)
                 return false;
+            /* The binding is read from disk again, now under the lock. */
+            // cppcheck-suppress knownConditionTrueFalse
             if (history != nullptr && !history->storageIsBound()) {
                 nextLock->unlock();
                 return false;
@@ -1523,7 +1528,11 @@ bool QSocAgentRuntime::openSessionInternal(const QString &sessionId, bool fresh)
     std::unique_ptr<QLockFile> nextLock;
     if (!fresh) {
         nextLock = lockSession(sessionPath);
-        if (!nextLock || !existingSessionPathIsRegular(sessionPath) || !history->storageIsBound()) {
+        if (!nextLock
+            || !existingSessionPathIsRegular(sessionPath)
+            /* The binding is read from disk again, now under the lock. */
+            // cppcheck-suppress knownConditionTrueFalse
+            || !history->storageIsBound()) {
             d->lastErrorText = QStringLiteral("session could not be locked safely: %1").arg(id);
             return false;
         }
@@ -1889,6 +1898,8 @@ QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input)
         && !finalText.trimmed().isEmpty()) {
         if (auto *tool = d->localRegistry->getTool("exit_plan_mode"))
             tool->execute({{"plan", finalText.toStdString()}});
+        /* An approved exit_plan_mode turns plan mode off. */
+        // cppcheck-suppress knownConditionTrueFalse
         if (!planMode())
             d->pendingAutoInputs.append("I approved the plan above. Execute it now.");
     }
@@ -1933,8 +1944,8 @@ QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input)
 
     /* Idle compaction. */
     {
-        const int tokens    = d->agent->estimateTotalTokens();
-        const int threshold = static_cast<int>(
+        const qint64 tokens    = d->agent->contextEstimate().upper();
+        const qint64 threshold = static_cast<qint64>(
             d->agent->effectiveContextTokens() * d->agent->getConfig().compactThreshold);
         if (tokens > threshold) {
             compactNow();
@@ -1944,11 +1955,8 @@ QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input)
     /* Context usage event. */
     {
         QSocAgentRuntimeEvent event;
-        event.kind       = QSocAgentRuntimeEvent::Kind::ContextUsage;
-        event.usedTokens = d->agent->estimateTotalTokens();
-        event.maxTokens  = d->agent->effectiveContextTokens();
-        event.threshold  = d->agent->getConfig().compactThreshold;
-        event.at         = QDateTime::currentDateTimeUtc();
+        fillContextUsage(event);
+        event.at = QDateTime::currentDateTimeUtc();
         emit eventRaised(event);
     }
 
@@ -2005,10 +2013,7 @@ int QSocAgentRuntime::compactNow()
         emitOutput(QStringLiteral("Compaction failed. The history is unchanged.\n"));
         break;
     }
-    event.kind       = QSocAgentRuntimeEvent::Kind::ContextUsage;
-    event.usedTokens = estimateTotalTokens();
-    event.maxTokens  = effectiveContextTokens();
-    event.threshold  = d->agent->getConfig().compactThreshold;
+    fillContextUsage(event);
     emit eventRaised(event);
     emitStatus(QStringLiteral("Ready"));
     return saved;

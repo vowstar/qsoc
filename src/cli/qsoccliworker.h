@@ -418,7 +418,7 @@ private:
      * @details Pure presentation: every event is rendered, every input is
      *          forwarded. No agent infrastructure is hosted in-process.
      */
-    bool runAgentClientLoop(const QString &socketPath, const QSocAgentRuntimeOptions &options);
+    bool runAgentClientLoop(const QString &requestedSocket, const QSocAgentRuntimeOptions &options);
 
     /**
      * @brief Parse options and report a command-line error.

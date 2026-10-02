@@ -461,8 +461,7 @@ private:
             return;
         }
         if (busy_) {
-            if (method == "turn" || method == "queue"
-                || (method == "command" && runtime_ && !runtime_->isRunning())) {
+            if (method == "turn" || method == "queue" || (method == "command" && runtime_)) {
                 const QString input = params.value("input").toString();
                 if (input.trimmed().isEmpty()) {
                     sendError(id, "input must not be empty");
@@ -562,9 +561,9 @@ private:
         }
 
         if (method == QStringLiteral("status")) {
-            const json    payload = runtime_->statusLinePayload();
-            QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(payload.dump()));
-            QJsonObject   result = doc.object();
+            const json  statusLine = runtime_->statusLinePayload();
+            QJsonObject result
+                = QJsonDocument::fromJson(QByteArray::fromStdString(statusLine.dump())).object();
             result.insert(QStringLiteral("running"), runtime_->isRunning());
             result.insert(QStringLiteral("session_id"), runtime_->sessionId());
             sendReply(id, result);

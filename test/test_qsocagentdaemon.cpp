@@ -64,8 +64,8 @@ public:
         if (!m_error.isEmpty()) {
             return {};
         }
-        QByteArray buffer = std::move(m_buffer);
-        m_buffer.clear();
+        QByteArray buffer;
+        buffer.swap(m_buffer);
         while (buffer.size() < kHeaderBytes) {
             if (!m_socket.waitForReadyRead(timeoutMs)) {
                 m_error = m_socket.errorString();

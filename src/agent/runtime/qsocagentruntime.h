@@ -535,6 +535,7 @@ public:
         int    usedTokens       = 0;
         int    maxTokens        = 0;
         double compactThreshold = 0.0;
+        bool   approximate      = false; /**< usedTokens is an estimate range point. */
     };
     [[nodiscard]] UsageSnapshot usage() const;
 
@@ -582,10 +583,11 @@ private:
     void showHistoryDiff();
     void prepareRecovery();
     bool applyOptionsToConfig(const QSocAgentRuntimeOptions &options);
-    void connectLocalWorkspace(const QString &workspace);
+    void connectLocalWorkspace(const QString &workspacePath);
     bool openSessionInternal(const QString &sessionId, bool fresh);
     void emitOutput(const QString &text, int style = static_cast<int>(QSocAgentRuntimeStyle::Normal));
     void emitStatus(const QString &status);
+    void fillContextUsage(QSocAgentRuntimeEvent &event) const;
     void maybeGenerateSessionTitle();
     void maybeGenerateAwaySummary();
 };

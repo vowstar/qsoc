@@ -232,6 +232,9 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
         return false;
     }
     if (!d->remoteConn->adopt(std::move(staged))) {
+        /* A refused adopt consumes nothing, so the transport is still
+         * ours to free. */
+        // cppcheck-suppress accessMoved
         discardAgentRemoteState(&staged);
         if (error != nullptr) {
             *error = QStringLiteral("internal error: incomplete remote transport");
@@ -475,9 +478,9 @@ bool QSocAgentRuntime::switchProject(const QString &directory, QString *error)
         return false;
     }
 
-    const QString nextSessionId = QSocSession::generateId();
-    const QString projectPath   = canonical;
-    const QString sessionPath
+    const QString  nextSessionId = QSocSession::generateId();
+    const QString &projectPath   = canonical;
+    const QString  sessionPath
         = QDir(QSocSession::sessionsDir(projectPath)).filePath(nextSessionId + ".jsonl");
     if (!freshSessionPathAvailable(sessionPath)) {
         if (error != nullptr) {
@@ -593,6 +596,7 @@ bool QSocAgentRuntime::setCurrentModel(const QString &modelId)
     agentCfg.effortLevel = cfg.effort;
     agentCfg.modelId     = modelId;
     d->agent->setConfig(agentCfg);
+    d->agent->resetTokenCounting();
 
     /* Persist model selection to the effective config file. */
     QString configPath;
@@ -665,13 +669,26 @@ bool QSocAgentRuntime::planMode() const
 QSocAgentRuntime::UsageSnapshot QSocAgentRuntime::usage() const
 {
     UsageSnapshot snapshot;
-    const auto    observed    = d->agent->observedUsage();
-    snapshot.inputTokens      = observed.inputTokens;
-    snapshot.outputTokens     = observed.outputTokens;
-    snapshot.usedTokens       = d->agent->estimateTotalTokens();
+    const auto    observed = d->agent->observedUsage();
+    snapshot.inputTokens   = observed.inputTokens;
+    snapshot.outputTokens  = observed.outputTokens;
+    const auto estimate    = d->agent->contextEstimate();
+    snapshot.usedTokens    = static_cast<int>(
+        qMin<qint64>(estimate.point(), std::numeric_limits<int>::max()));
     snapshot.maxTokens        = d->agent->effectiveContextTokens();
     snapshot.compactThreshold = d->agent->getConfig().compactThreshold;
+    snapshot.approximate      = estimate.approximate();
     return snapshot;
+}
+
+void QSocAgentRuntime::fillContextUsage(QSocAgentRuntimeEvent &event) const
+{
+    const UsageSnapshot snapshot = usage();
+    event.kind                   = QSocAgentRuntimeEvent::Kind::ContextUsage;
+    event.usedTokens             = snapshot.usedTokens;
+    event.maxTokens              = snapshot.maxTokens;
+    event.threshold              = snapshot.compactThreshold;
+    event.flag                   = snapshot.approximate;
 }
 
 nlohmann::json QSocAgentRuntime::statusLinePayload() const
