@@ -175,7 +175,7 @@ Every key under an entry is optional except `url`.
      SGLang) pass it to the template. Absent by default],
     [`tokenizer`],
     [How prompt tokens are counted between responses: `auto` (default),
-     `o200k` or `bytes`, see @llm-token-counting],
+     `o200k`, `bytes` or a count endpoint URL, see @llm-token-counting],
     [`modalities.image`], [`true` opts the model into image input],
     [`modalities.image_max_tokens`],
     [Reject the image when the client-side estimate exceeds this],
@@ -308,6 +308,7 @@ Content added after that response is counted locally. The status bar and
     [`auto`], [The o200k tokenizer (default)],
     [`o200k`], [The o200k tokenizer],
     [`bytes`], [One token per four UTF-8 bytes],
+    [URL], [The o200k tokenizer, plus the count endpoint at that URL],
   )],
   caption: [TOKENIZER VALUES],
   kind: table,
@@ -316,6 +317,22 @@ Content added after that response is counted locally. The status bar and
 An invalid value prints a warning and uses `auto`. Compaction thresholds
 allow a margin for locally counted tokens, so compaction can start before
 the status bar reaches the threshold.
+
+A URL value names a vLLM or SGLang `/tokenize` endpoint for the same served
+model. qsoc asks it only when the local count cannot tell whether a
+threshold is crossed. The request carries the same messages and tools as
+the chat request. If the endpoint fails, or its count disagrees with the
+usage the server then reports, qsoc prints one line and counts locally
+until `/model` selects a model again. The API key is sent only when the
+URL has the same scheme, host and port as `url`.
+
+```yaml
+llm:
+  models:
+    omni-lab:
+      url: http://gpu-box.lab:8000/v1/chat/completions
+      tokenizer: http://gpu-box.lab:8000/tokenize
+```
 
 Earlier versions estimated tokens from character counts. Set
 `tokenizer: bytes` to keep a rough estimate of that kind.

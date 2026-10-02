@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <limits>
+#include <utility>
 
 using json = nlohmann::json;
 
@@ -79,6 +80,12 @@ qint64 messageTokens(
         }
     }
     return total;
+}
+bool sameRequest(const QSocRequestSnapshot &left, const QSocRequestSnapshot &right)
+{
+    return left.route == right.route && left.effort == right.effort
+           && left.imageTokens == right.imageTokens && left.tools.dump() == right.tools.dump()
+           && left.messages.dump() == right.messages.dump();
 }
 } // namespace
 
@@ -189,6 +196,7 @@ bool QSocRequestUsage::complete(quint64 generation, const json &usage)
     }
     auto request = std::move(pending_->request);
     pending_.reset();
+    const auto counted = std::exchange(count_, std::nullopt);
     if (!usage.is_object()) {
         return false;
     }
@@ -221,6 +229,11 @@ bool QSocRequestUsage::complete(quint64 generation, const json &usage)
     if (cached && *cached > *input) {
         cached.reset();
     }
+    /* A server count must match what the same request reports. */
+    if (counted && sameRequest(counted->request, request)
+        && qAbs(counted->inputTokens - *input) > *input * 3 / 100 + 64) {
+        mismatch_ = QSocCountMismatch{counted->inputTokens, *input};
+    }
     observed_.inputTokens += *input;
     observed_.outputTokens += output.value_or(0);
     ++observed_.requests;
@@ -248,4 +261,16 @@ void QSocRequestUsage::discardPending()
 void QSocRequestUsage::invalidateAnchor()
 {
     anchor_.reset();
+    count_.reset();
+}
+
+void QSocRequestUsage::recordCount(const QSocRequestSnapshot &request, qint64 tokens)
+{
+    anchor_ = Anchor{request, tokens};
+    count_  = Anchor{request, tokens};
+}
+
+std::optional<QSocCountMismatch> QSocRequestUsage::takeCountMismatch()
+{
+    return std::exchange(mismatch_, std::nullopt);
 }

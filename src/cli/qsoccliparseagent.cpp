@@ -395,6 +395,7 @@ void applyModelSwitch(
         agentCfg.effortLevel = cfg.effort;
         agentCfg.modelId     = modelId;
         agent->setConfig(agentCfg);
+        agent->resetTokenCounting();
         qout << "Model: " << modelId << " (" << cfg.name << ")" << Qt::endl;
 
         /* Persist model selection to the effective config file.
@@ -1804,6 +1805,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         QString      query = parser.value("query");
         QTextStream &qout  = QSocConsole::out();
 
+        connect(agent, &QSocAgent::tokenCountFellBack, agent, [](const QString &line) {
+            QSocConsole::warn().noquote() << line;
+        });
+
         connect(
             taskEventQueue,
             &QSocTaskEventQueue::taskNotificationReady,
@@ -2575,6 +2580,9 @@ bool QSocCliWorker::runAgentLoop(
     connect(agent, &QSocAgent::runComplete, &compositor, clearToolDisplays);
     connect(agent, &QSocAgent::runError, &compositor, clearToolDisplays);
     connect(agent, &QSocAgent::runAborted, &compositor, clearToolDisplays);
+    connect(agent, &QSocAgent::tokenCountFellBack, &compositor, [&compositor](const QString &line) {
+        compositor.printContent(line + QLatin1Char('\n'), QTuiScrollView::Dim);
+    });
 
     /* Helper: render a unified diff to the scroll view with the diff line
      * styles defined on QTuiScrollView (Hunk = yellow bold, Add = green,

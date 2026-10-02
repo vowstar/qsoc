@@ -61,7 +61,8 @@ struct LLMModelConfig
     bool    reasoning = true;         /* False: the model cannot reason, effort is never sent */
     /* Sent as chat_template_kwargs on openai-chat requests when not empty. */
     nlohmann::json chatTemplateKwargs = nlohmann::json::object();
-    QString tokenizer = QStringLiteral("auto"); /* Prompt token counter: auto, o200k, bytes */
+    /* Prompt token counter: auto, o200k, bytes, or a count endpoint URL */
+    QString tokenizer = QStringLiteral("auto");
 
     /* Multimodal capability flags. Default text-only so a misconfigured
      * model never receives an image content block it cannot parse: the
@@ -153,6 +154,22 @@ public:
         double          temperature,
         std::stop_token stopToken,
         const QString  &reasoningEffort);
+
+    /**
+     * @brief Count the prompt tokens of a request at the endpoint's tokenizer URL.
+     * @details Sends the vLLM /tokenize chat body. The API key goes only to a
+     *          URL with the same scheme, host and port as the chat URL.
+     * @return Token count, or nullopt with @p error set
+     */
+    std::optional<qint64> countTokens(
+        const LLMModelConfig &endpoint,
+        const json           &messages,
+        const json           &tools,
+        std::stop_token       stopToken,
+        QString              *error);
+
+    /** @brief Whether two URLs share scheme, host and port. */
+    static bool sameOrigin(const QUrl &left, const QUrl &right);
 
 public slots:
     /* Configuration */

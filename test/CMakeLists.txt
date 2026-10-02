@@ -446,6 +446,7 @@ foreach(_mock_test
     test_qsocagentcompactcancel
     test_qsocagentlazystorage
     test_qsocagentremoterecovery
+    test_qsoctokencount
     test_qsocremotecwdowner
     test_qsocremotedeadlinkcost
     test_qsocsshabortlatency)

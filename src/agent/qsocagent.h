@@ -530,6 +530,11 @@ public:
     QSocTokenizer::Mode tokenCounter() const;
 
     /**
+     * @brief Use the configured count endpoints again after a fallback.
+     */
+    void resetTokenCounting();
+
+    /**
      * @brief Estimate tokens in the message history only.
      */
     int estimateMessagesTokens() const;
@@ -764,6 +769,12 @@ signals:
     void compactionFellBack(const QString &reason);
 
     /**
+     * @brief Signal emitted once when a model's count endpoint is dropped
+     * @param message One line naming the model and the reason
+     */
+    void tokenCountFellBack(const QString &message);
+
+    /**
      * @brief Signal emitted after a compaction re-injects context (auto or
      *        overflow paths), so the CLI can render the restore lines. The
      *        payload is read via takeLastContextRestore(); the signal is a
@@ -922,8 +933,12 @@ private:
     quint64             summaryMissingFinishReasons_ = 0;
     QSocRequestSnapshot requestSnapshot(
         const json &wire, const json &tools, const QLLMService *service) const;
-    bool requestExceeds(const QSocRequestSnapshot &request, qint64 threshold);
-    json wireMessages(const QString &systemPrompt) const;
+    bool                  requestExceeds(const QSocRequestSnapshot &request, qint64 threshold);
+    std::optional<qint64> countOnServer(const QSocRequestSnapshot &request);
+    void                  checkServerCount();
+    void                  dropServerCount(const QString &modelId, const QString &reason);
+    QSet<QString>         serverCountDropped_;
+    json                  wireMessages(const QString &systemPrompt) const;
 
     /* Token tracking */
     std::atomic<qint64> totalInputTokens{0};

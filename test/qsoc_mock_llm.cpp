@@ -61,6 +61,9 @@ struct MockConfig
     QString     reasoning;
     QStringList reasoningFields;
     QByteArray  streamError;
+    QByteArray  tokenize;
+    int         tokenizeCount = -1;
+    int         promptTokens  = -1;
 };
 
 MockConfig config;
@@ -76,6 +79,8 @@ QHash<QByteArray, int> hits{
     {"alpn_h2", 0},
     {"alpn_http1", 0},
     {"alpn_none", 0},
+    {"tokenize", 0},
+    {"tokenize_auth", 0},
 };
 
 int             emitted = 0;
@@ -131,6 +136,9 @@ bool loadConfig(QString *error)
     config.reasoningFields   = QString::fromLatin1(envBytes("MOCK_REASONING_FIELD", "reasoning"))
                                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
     config.streamError       = qgetenv("MOCK_STREAM_ERROR");
+    config.tokenize          = envBytes("MOCK_TOKENIZE", "ok");
+    config.tokenizeCount     = envInt("MOCK_TOKENIZE_COUNT", -1);
+    config.promptTokens      = envInt("MOCK_PROMPT_TOKENS", -1);
     const QString scriptPath = QString::fromLocal8Bit(qgetenv("MOCK_SCRIPT"));
     if (!scriptPath.isEmpty()) {
         QFile file(scriptPath);
@@ -347,6 +355,13 @@ QJsonObject deltaChunk(const QJsonObject &delta, const QString &finishReason)
     choices.append(choice);
     QJsonObject chunk;
     chunk["choices"] = choices;
+    /* MOCK_PROMPT_TOKENS reports usage on the closing chunk. */
+    if (!finishReason.isNull() && config.promptTokens >= 0) {
+        chunk["usage"] = QJsonObject{
+            {"prompt_tokens", config.promptTokens},
+            {"completion_tokens", 1},
+            {"total_tokens", config.promptTokens + 1}};
+    }
     return chunk;
 }
 
@@ -480,9 +495,10 @@ void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
             QJsonArray choices;
             choices.append(choice);
             QJsonObject usage;
-            usage["prompt_tokens"]     = 1;
+            const int   prompt         = config.promptTokens >= 0 ? config.promptTokens : 1;
+            usage["prompt_tokens"]     = prompt;
             usage["completion_tokens"] = 1;
-            usage["total_tokens"]      = 2;
+            usage["total_tokens"]      = prompt + 1;
             QJsonObject payload;
             payload["choices"] = choices;
             payload["usage"]   = usage;
@@ -719,6 +735,38 @@ void respondCountTokens(QTcpSocket *socket, const QJsonObject &request)
     writeBody(socket, 200, "application/json", compactJson(payload));
 }
 
+/**
+ * @brief vLLM /tokenize in chat form.
+ *
+ * MOCK_TOKENIZE picks the reply: ok, 404, 500, 429, html or hold (never
+ * answers). MOCK_TOKENIZE_COUNT fixes the count; otherwise bytes / 4.
+ */
+void respondTokenize(QTcpSocket *socket, const QByteArray &head, const QByteArray &body)
+{
+    ++hits["tokenize"];
+    if (head.toLower().contains("\nauthorization:")) {
+        ++hits["tokenize_auth"];
+    }
+    appendRequestLog(parseBody(body));
+    const QByteArray mode = config.tokenize;
+    if (mode == "hold") {
+        return;
+    }
+    if (mode == "html") {
+        writeBody(socket, 200, "text/html", "<html><body>gateway</body></html>");
+        return;
+    }
+    if (mode == "404" || mode == "500" || mode == "429") {
+        writeBody(socket, mode.toInt(), "application/json", R"({"error":"unavailable"})");
+        return;
+    }
+    QJsonObject payload;
+    payload["count"] = config.tokenizeCount >= 0 ? config.tokenizeCount : int(body.size() / 4);
+    payload["max_model_len"] = 131072;
+    payload["tokens"]        = QJsonArray();
+    writeBody(socket, 200, "application/json", compactJson(payload));
+}
+
 void respondModels(QTcpSocket *socket, Wire wire)
 {
     QJsonArray  data;
@@ -797,7 +845,9 @@ void serve(QTcpSocket *socket, Connection *connection)
 
     connection->served = true;
     if (method == "POST") {
-        if (path.startsWith("/v1/messages/count_tokens")) {
+        if (path.endsWith("/tokenize")) {
+            respondTokenize(socket, head, body.left(contentLength));
+        } else if (path.startsWith("/v1/messages/count_tokens")) {
             respondCountTokens(socket, parseBody(body.left(contentLength)));
         } else if (path.startsWith("/v1/messages")) {
             const QJsonObject request = parseBody(body.left(contentLength));

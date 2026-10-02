@@ -12,6 +12,7 @@
 #include <QEventLoop>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSet>
 #include <QTimer>
 
@@ -112,6 +113,11 @@ std::optional<QString> tokenizerSetting(const QString &value)
     if (keyword == QStringLiteral("auto") || keyword == QStringLiteral("o200k")
         || keyword == QStringLiteral("bytes")) {
         return keyword;
+    }
+    const QUrl url(value, QUrl::StrictMode);
+    if (value.contains(QStringLiteral("://")) && url.isValid() && !url.host().isEmpty()
+        && (url.scheme() == QStringLiteral("http") || url.scheme() == QStringLiteral("https"))) {
+        return value;
     }
     return std::nullopt;
 }
@@ -722,7 +728,7 @@ void QLLMService::loadConfigSettings()
                     } else {
                         QSocConsole::warn()
                             << "Model" << modelCfg.id << "has invalid tokenizer" << value
-                            << "(expected auto, o200k or bytes); using auto";
+                            << "(expected auto, o200k, bytes or a URL); using auto";
                     }
                 }
 
@@ -933,6 +939,86 @@ LLMResponse QLLMService::parseResponse(QNetworkReply *reply, LLMApi api)
     }
 
     return response;
+}
+
+bool QLLMService::sameOrigin(const QUrl &left, const QUrl &right)
+{
+    const auto port = [](const QUrl &url) {
+        return url.port(
+            url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0 ? 443 : 80);
+    };
+    return left.scheme().compare(right.scheme(), Qt::CaseInsensitive) == 0
+           && left.host().compare(right.host(), Qt::CaseInsensitive) == 0
+           && port(left) == port(right);
+}
+
+std::optional<qint64> QLLMService::countTokens(
+    const LLMModelConfig &endpoint,
+    const json           &messages,
+    const json           &tools,
+    std::stop_token       stopToken,
+    QString              *error)
+{
+    const QUrl target(endpoint.tokenizer);
+    if (!target.isValid() || target.host().isEmpty()) {
+        *error = QStringLiteral("no count endpoint");
+        return std::nullopt;
+    }
+    QNetworkRequest request = sameOrigin(target, QUrl(endpoint.url)) ? prepareRequest(endpoint)
+                                                                     : QNetworkRequest();
+    request.setUrl(target);
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    json body = {{"messages", messages}, {"add_generation_prompt", true}};
+    if (!endpoint.model.isEmpty()) {
+        body["model"] = endpoint.model.toStdString();
+    }
+    if (!tools.empty()) {
+        body["tools"] = tools;
+    }
+    if (endpoint.chatTemplateKwargs.is_object() && !endpoint.chatTemplateKwargs.empty()) {
+        body["chat_template_kwargs"] = endpoint.chatTemplateKwargs;
+    }
+    if (networkManager.isNull()) {
+        *error = QStringLiteral("network manager destroyed");
+        return std::nullopt;
+    }
+    const QPointer<QLLMService> owner(this);
+    const int      timeout = endpoint.timeout > 0 ? qMin(endpoint.timeout, 10000) : 10000;
+    QNetworkReply *networkReply
+        = networkManager->post(request, QByteArray::fromStdString(body.dump()));
+    const NetworkWaitResult wait  = waitForNetworkReply(networkReply, timeout, stopToken);
+    QPointer<QNetworkReply> reply = wait.reply;
+    if (wait.cancelled || stopToken.stop_requested()) {
+        drainNetworkReply(reply.data());
+        *error = QStringLiteral("cancelled");
+        return std::nullopt;
+    }
+    if (owner.isNull() || reply.isNull()) {
+        *error = QStringLiteral("request destroyed");
+        return std::nullopt;
+    }
+    const auto finish = qScopeGuard([&reply] { reply->deleteLater(); });
+    if (reply->error() != QNetworkReply::NoError) {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (reply->error() == QNetworkReply::OperationCanceledError) {
+            *error = QStringLiteral("timed out after %1 ms").arg(timeout);
+        } else {
+            *error = status > 0 ? QStringLiteral("HTTP %1").arg(status) : reply->errorString();
+        }
+        return std::nullopt;
+    }
+    try {
+        const json response = json::parse(reply->readAll().toStdString());
+        const auto count    = response.find("count");
+        if (count != response.end() && count->is_number_integer() && count->get<qint64>() >= 0) {
+            return count->get<qint64>();
+        }
+    } catch (const json::exception &) {
+        /* Reported below as a malformed response. */
+    }
+    *error = QStringLiteral("response has no token count");
+    return std::nullopt;
 }
 
 LLMResponse QLLMService::sendRequestToEndpoint(

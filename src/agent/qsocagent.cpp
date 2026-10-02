@@ -1675,6 +1675,7 @@ void QSocAgent::handleStreamComplete(const json &response)
     }
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
+    owner->checkServerCount();
     auto message = response["choices"][0]["message"];
     message.erase("_qsoc_artifact_refs");
     message.erase("_qsoc_result_bounded");
@@ -1941,6 +1942,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
     }
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
+    owner->checkServerCount();
     auto message = response["choices"][0]["message"];
     message.erase("_qsoc_artifact_refs");
     message.erase("_qsoc_result_bounded");
@@ -3733,7 +3735,79 @@ QSocTokenizer::Mode QSocAgent::tokenCounter() const
 
 bool QSocAgent::requestExceeds(const QSocRequestSnapshot &request, qint64 threshold)
 {
-    return requestUsage_.estimate(request).upper() > threshold;
+    const auto estimate = requestUsage_.estimate(request);
+    if (estimate.point() > threshold) {
+        return true;
+    }
+    if (estimate.upper() <= threshold) {
+        return false;
+    }
+    const auto counted = countOnServer(request);
+    return counted ? *counted > threshold : true;
+}
+
+std::optional<qint64> QSocAgent::countOnServer(const QSocRequestSnapshot &request)
+{
+    const QPointer<QLLMService> service = activeRun_ ? activeRun_->llm : llmService;
+    if (!service || !service->hasEndpoint()) {
+        return std::nullopt;
+    }
+    const auto endpoint = service->getCurrentModelConfig();
+    if (!endpoint.tokenizer.contains(QStringLiteral("://"))
+        || serverCountDropped_.contains(endpoint.id)) {
+        return std::nullopt;
+    }
+    const QPointer<QSocAgent> owner(this);
+    const std::stop_token     stop = activeRun_ ? activeRun_->stopSource.get_token()
+                                                : maintenanceStop_.get_token();
+    QString                   error;
+    const auto                counted
+        = service->countTokens(endpoint, request.messages, request.tools, stop, &error);
+    /* The count request runs an event loop that can destroy the agent. */
+    // cppcheck-suppress knownConditionTrueFalse
+    if (!owner) {
+        return std::nullopt;
+    }
+    if (!counted) {
+        if (!stop.stop_requested()) {
+            dropServerCount(endpoint.id, error);
+        }
+        return std::nullopt;
+    }
+    requestUsage_.recordCount(request, *counted);
+    return counted;
+}
+
+void QSocAgent::checkServerCount()
+{
+    const auto mismatch = requestUsage_.takeCountMismatch();
+    if (!mismatch) {
+        return;
+    }
+    const QPointer<QLLMService> service = activeRun_ ? activeRun_->llm : llmService;
+    if (service && service->hasEndpoint()) {
+        dropServerCount(
+            service->getCurrentModelId(),
+            QStringLiteral("counted %1 tokens, the server reported %2")
+                .arg(mismatch->counted)
+                .arg(mismatch->reported));
+    }
+}
+
+void QSocAgent::dropServerCount(const QString &modelId, const QString &reason)
+{
+    if (serverCountDropped_.contains(modelId)) {
+        return;
+    }
+    serverCountDropped_.insert(modelId);
+    emit tokenCountFellBack(
+        QStringLiteral("Token count endpoint of %1 dropped (%2): counting locally.")
+            .arg(modelId, reason));
+}
+
+void QSocAgent::resetTokenCounting()
+{
+    serverCountDropped_.clear();
 }
 
 int QSocAgent::effectiveContextTokens() const

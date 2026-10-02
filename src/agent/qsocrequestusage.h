@@ -45,6 +45,15 @@ struct QSocObservedUsage
     quint64 outputReportedRequests   = 0;
 };
 
+/**
+ * @brief A server count that disagreed with the usage its request reported.
+ */
+struct QSocCountMismatch
+{
+    qint64 counted  = 0;
+    qint64 reported = 0;
+};
+
 class QSocRequestUsage
 {
 public:
@@ -65,7 +74,10 @@ public:
     bool                       complete(quint64 generation, const nlohmann::json &usage);
     void                       discardPending();
     void                       invalidateAnchor();
-    QSocObservedUsage          observed() const { return observed_; }
+    /** @brief Anchor on a server count, checked when the same request completes. */
+    void                             recordCount(const QSocRequestSnapshot &request, qint64 tokens);
+    std::optional<QSocCountMismatch> takeCountMismatch();
+    QSocObservedUsage                observed() const { return observed_; }
 
 private:
     struct Pending
@@ -78,10 +90,12 @@ private:
         QSocRequestSnapshot request;
         qint64              inputTokens;
     };
-    quint64                generation_ = 0;
-    std::optional<Pending> pending_;
-    std::optional<Anchor>  anchor_;
-    QSocObservedUsage      observed_;
+    quint64                          generation_ = 0;
+    std::optional<Pending>           pending_;
+    std::optional<Anchor>            anchor_;
+    std::optional<Anchor>            count_;
+    std::optional<QSocCountMismatch> mismatch_;
+    QSocObservedUsage                observed_;
 };
 
 #endif // QSOCREQUESTUSAGE_H
