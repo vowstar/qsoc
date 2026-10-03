@@ -226,7 +226,8 @@ quint64 fileTime(const FILETIME &time)
 QString processStart(HANDLE handle)
 {
     FILETIME start{}, end{}, kernel{}, user{};
-    if (!::GetProcessTimes(handle, &start, &end, &kernel, &user))
+    if (!::GetProcessTimes(handle, &start, &end, &kernel, &user)
+        || ::WaitForSingleObject(handle, 0) != WAIT_TIMEOUT)
         return {};
     return QString::number(fileTime(start));
 }
@@ -261,8 +262,8 @@ QHash<qint64, Identity> identities()
     entry.dwSize = sizeof(entry);
     if (::Process32FirstW(snapshot, &entry)) {
         do {
-            const HANDLE handle
-                = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+            const HANDLE handle = ::OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, entry.th32ProcessID);
             if (handle == nullptr)
                 continue;
             const auto start = processStart(handle);
@@ -440,8 +441,8 @@ QJsonObject QSocResourceUsage::process(qint64 pid)
     if (identity(pid).start != before.start)
         return emptyProcess(pid);
 #elif defined(Q_OS_WIN)
-    const HANDLE handle
-        = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    const HANDLE handle = ::OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
     if (handle == nullptr)
         return result;
     FILETIME start{}, end{}, kernel{}, user{};
@@ -456,6 +457,8 @@ QJsonObject QSocResourceUsage::process(qint64 pid)
         result.insert("peak_resident_bytes", number(memory.PeakWorkingSetSize));
         result.insert("private_commit_bytes", number(memory.PrivateUsage));
     }
+    if (::WaitForSingleObject(handle, 0) != WAIT_TIMEOUT)
+        result = emptyProcess(pid);
     ::CloseHandle(handle);
 #elif defined(Q_OS_MACOS)
     const auto before = identity(pid);

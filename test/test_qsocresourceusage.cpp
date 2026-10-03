@@ -13,6 +13,10 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace {
 
 bool includesPid(const QJsonArray &tree, qint64 pid)
@@ -135,8 +139,17 @@ private slots:
         QVERIFY(includesPid(subtree, pid));
         QVERIFY(!includesPid(subtree, sibling.processId()));
         QVERIFY(!includesPid(subtree, QCoreApplication::applicationPid()));
+#ifdef Q_OS_WIN
+        const HANDLE retained = ::OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+        QVERIFY(retained != nullptr);
+        const auto releaseHandle = qScopeGuard([retained] { ::CloseHandle(retained); });
+#endif
         child.kill();
         QVERIFY(child.waitForFinished(5000));
+#ifdef Q_OS_WIN
+        QCOMPARE(::WaitForSingleObject(retained, 0), DWORD(WAIT_OBJECT_0));
+#endif
         QVERIFY(QSocResourceUsage::process(pid).value("start_id").isNull());
         QVERIFY(QSocResourceUsage::processTree(pid).isEmpty());
     }
