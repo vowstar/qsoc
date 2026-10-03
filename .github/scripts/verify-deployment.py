@@ -77,6 +77,10 @@ def main():
             program = entry if entry and name == "qsoc" else directory / (name + suffix)
             subprocess.run([str(program), "--version"],
                            cwd=working, env=environment, check=True, timeout=15)
+        subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-smt.py")),
+             str(directory / ("qsoc" + suffix))],
+            cwd=working, env=environment, check=True, timeout=100)
         endpoint = ("qsoc-deployment-" + uuid.uuid4().hex if os.name == "nt"
                     else str(pathlib.Path(working) / "daemon.sock"))
         daemon = subprocess.Popen(
