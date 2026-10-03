@@ -202,7 +202,9 @@ private slots:
         daemon.setWorkingDirectory(fixture.path());
         daemon.start(m_daemonPath, arguments);
         QVERIFY(daemon.waitForStarted(5000));
-        QVERIFY2(waitForSocket(socketPath, 5000), daemon.readAllStandardError().constData());
+        const bool       listening     = waitForSocket(socketPath, 5000);
+        const QByteArray startupErrors = daemon.readAllStandardError();
+        QVERIFY2(listening, startupErrors.constData());
         DaemonClient client(socketPath);
         QVERIFY(client.connected());
         QCOMPARE(client.receive().value("protocol").toInt(), 1);
@@ -213,7 +215,7 @@ private slots:
         QCOMPARE(daemon.exitCode(), 0);
         QVERIFY(daemon.readAllStandardOutput().contains(
             QSocLocalEndpoint::resolve(socketPath).toLocal8Bit()));
-        const QByteArray errors = daemon.readAllStandardError();
+        const QByteArray errors = startupErrors + daemon.readAllStandardError();
         if (runtimeState == QStringLiteral("valid") || explicitEndpoint) {
             QVERIFY2(errors.isEmpty(), errors.constData());
         } else {
