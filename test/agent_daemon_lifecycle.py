@@ -35,7 +35,7 @@ class Mock(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         self.requests.append(request)
-        time.sleep(self.delay)
+        time.sleep(3 if 'SLOWTURN' in json.dumps(request.get('messages', [])) else self.delay)
         call = None
         if self.tool and not any(m.get('role') == 'tool' for m in request.get('messages', [])):
             call = dict(id='call_fixture', type='function', function=dict(name=self.tool[0], arguments=json.dumps(self.tool[1])))
@@ -216,6 +216,21 @@ agent:
         self.assertIsNone(daemon.poll())
         other = self.client(path)
         self.assertIn('result', other.call('status'))
+
+    def test_sessions_do_not_wait_for_each_other(self):
+        _, path = self.daemon()
+        (self.root / 'A').mkdir()
+        (self.root / 'B').mkdir()
+        fast = self.client(path, project_directory=str(self.root / 'A'))
+        slow = self.client(path, project_directory=str(self.root / 'B'))
+        Mock.delay = 1
+        started = time.monotonic()
+        fast_id = fast.send('turn', {'input': 'quick'})
+        time.sleep(0.2)
+        slow_id = slow.send('turn', {'input': 'SLOWTURN'})
+        self.assertIn('result', fast.reply(fast_id))
+        self.assertLess(time.monotonic() - started, 2.5)
+        self.assertIn('result', slow.reply(slow_id))
 
     def test_duplicate_listener_is_refused(self):
         first, path = self.daemon()

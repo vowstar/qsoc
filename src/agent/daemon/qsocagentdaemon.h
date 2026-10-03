@@ -44,6 +44,7 @@
 #include <memory>
 
 class QSocAgentDaemonConnection;
+class QSocAgentSessionProxy;
 
 /**
  * @brief The qsoc-agentd daemon: a QLocalServer hosting agent sessions.
@@ -76,6 +77,20 @@ public:
     /** Stop accepting and close every connection. */
     void shutdown();
 
+    /**
+     * @brief Serve one connection in this process, then exit.
+     * @details Without it the daemon only accepts and relays: each
+     *          connection gets its own session process, so sessions never
+     *          share an event loop.
+     */
+    void setSingleSession(bool single) { singleSession_ = single; }
+
+    /** Exit code of a session process whose client asked the daemon to stop. */
+    static constexpr int stopDaemonExitCode = 3;
+
+    /** Shut down and leave the event loop, as asked by a client. */
+    void requestStop();
+
 signals:
     /** A connection opened or closed. */
     void connectionCountChanged(int count);
@@ -85,14 +100,19 @@ private slots:
 
 private:
     void removeConnection(QSocAgentDaemonConnection *connection);
+    void removeProxy(QSocAgentSessionProxy *proxy);
 
     QString                            socketPath_;
     QString                            error_;
     QLocalServer                       server_;
     std::unique_ptr<QLockFile>         socketLock_;
     QList<QSocAgentDaemonConnection *> connections_;
+    QList<QSocAgentSessionProxy *>     proxies_;
+    bool                               singleSession_ = false;
+    bool                               stopRequested_ = false;
 
     friend class QSocAgentDaemonConnection;
+    friend class QSocAgentSessionProxy;
 };
 
 #endif /* QSOCAGENTDAEMON_H */

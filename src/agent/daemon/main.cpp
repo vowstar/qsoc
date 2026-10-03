@@ -70,6 +70,10 @@ int main(int argc, char *argv[])
         QStringLiteral("Exit when the owning TUI process exits."),
         QStringLiteral("pid"));
     parser.addOption(parentOption);
+    QCommandLineOption
+        sessionOption(QStringLiteral("session"), QStringLiteral("Serve one connection, then exit."));
+    sessionOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(sessionOption);
     parser.process(app);
     bool         parentOk  = false;
     const qint64 parentPid = parser.value(parentOption).toLongLong(&parentOk);
@@ -99,6 +103,7 @@ int main(int argc, char *argv[])
     const QString socketPath = parser.value(socketOption);
 
     QSocAgentDaemon daemon(socketPath);
+    daemon.setSingleSession(parser.isSet(sessionOption));
     QObject::connect(&daemon, &QSocAgentDaemon::connectionCountChanged, [](int count) {
         QSocConsole::debug() << "agentd: connections:" << count;
     });

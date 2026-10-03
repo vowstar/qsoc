@@ -16,6 +16,7 @@
 #include <QScopedValueRollback>
 
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
@@ -23,7 +24,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 #include <utility>
 #include <QTimer>
@@ -457,8 +460,7 @@ private:
         }
         if (method == QStringLiteral("shutdown")) {
             sendReply(id, {{"bye", true}});
-            daemon_->shutdown();
-            QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+            daemon_->requestStop();
             return;
         }
         if (busy_) {
@@ -697,6 +699,104 @@ private:
 /* ---------------------------------------------------------------------- */
 /* Daemon. */
 
+/* ---------------------------------------------------------------------- */
+/* Relay between one client and its session process. */
+
+class QSocAgentSessionProxy : public QObject
+{
+    Q_OBJECT
+
+public:
+    QSocAgentSessionProxy(QSocAgentDaemon *daemon, QLocalSocket *client)
+        : QObject(daemon)
+        , daemon_(daemon)
+        , client_(client)
+    {
+        client_->setParent(this);
+        connect(client_, &QLocalSocket::readyRead, this, [this] {
+            const QByteArray data = client_->readAll();
+            if (worker_.state() == QLocalSocket::ConnectedState)
+                worker_.write(data);
+            else
+                pending_ += data;
+        });
+        connect(client_, &QLocalSocket::disconnected, this, &QSocAgentSessionProxy::finish);
+        connect(&worker_, &QLocalSocket::connected, this, [this] {
+            worker_.write(pending_);
+            pending_.clear();
+        });
+        connect(&worker_, &QLocalSocket::readyRead, this, [this] {
+            client_->write(worker_.readAll());
+        });
+        connect(&worker_, &QLocalSocket::disconnected, this, &QSocAgentSessionProxy::finish);
+        /* The session process needs a moment to listen; retry until then. */
+        connect(&worker_, &QLocalSocket::errorOccurred, this, [this] {
+            QTimer::singleShot(20, this, &QSocAgentSessionProxy::connectWorker);
+        });
+        connect(&process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+            if (status == QProcess::NormalExit && code == QSocAgentDaemon::stopDaemonExitCode)
+                QTimer::singleShot(0, daemon_, &QSocAgentDaemon::requestStop);
+            finish();
+        });
+
+        if (!directory_.isValid()) {
+            QTimer::singleShot(0, this, &QSocAgentSessionProxy::finish);
+            return;
+        }
+        process_.setStandardInputFile(QProcess::nullDevice());
+        process_.setStandardOutputFile(QProcess::nullDevice());
+        process_.setProcessChannelMode(QProcess::ForwardedErrorChannel);
+        process_.start(
+            QCoreApplication::applicationFilePath(),
+            {QStringLiteral("--session"),
+             QStringLiteral("--socket"),
+             workerPath(),
+             QStringLiteral("--parent-pid"),
+             QString::number(QCoreApplication::applicationPid())});
+        connectWorker();
+    }
+
+    /** Drop the client and stop the session process. */
+    void finish()
+    {
+        if (finished_)
+            return;
+        finished_ = true;
+        client_->disconnectFromServer();
+        worker_.abort();
+        if (process_.state() == QProcess::NotRunning) {
+            daemon_->removeProxy(this);
+            return;
+        }
+        connect(&process_, &QProcess::finished, this, [this] { daemon_->removeProxy(this); });
+        process_.terminate();
+        QTimer::singleShot(3000, this, [this] { process_.kill(); });
+    }
+
+private:
+    QString workerPath() const { return directory_.filePath(QStringLiteral("session.sock")); }
+
+    void connectWorker()
+    {
+        if (finished_ || worker_.state() != QLocalSocket::UnconnectedState)
+            return;
+        if (process_.state() == QProcess::NotRunning || startup_.hasExpired()) {
+            finish();
+            return;
+        }
+        worker_.connectToServer(workerPath());
+    }
+
+    QSocAgentDaemon *daemon_;
+    QLocalSocket    *client_;
+    QLocalSocket     worker_;
+    QProcess         process_;
+    QTemporaryDir    directory_;
+    QByteArray       pending_;
+    QDeadlineTimer   startup_{5000};
+    bool             finished_ = false;
+};
+
 QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
     : QObject(parent)
     , socketPath_(socketPath.isEmpty() ? defaultSocketPath() : socketPath)
@@ -751,11 +851,23 @@ bool QSocAgentDaemon::start()
 
 int QSocAgentDaemon::connectionCount() const
 {
-    return connections_.size();
+    return static_cast<int>(connections_.size() + proxies_.size());
+}
+
+void QSocAgentDaemon::requestStop()
+{
+    stopRequested_ = true;
+    shutdown();
+    const int code = singleSession_ ? stopDaemonExitCode : 0;
+    QTimer::singleShot(0, qApp, [code] { QCoreApplication::exit(code); });
 }
 
 void QSocAgentDaemon::shutdown()
 {
+    const auto proxies = proxies_;
+    for (QSocAgentSessionProxy *proxy : proxies) {
+        proxy->finish();
+    }
     const auto connections = connections_;
     for (QSocAgentDaemonConnection *connection : connections) {
         connection->close();
@@ -775,10 +887,20 @@ void QSocAgentDaemon::onNewConnection()
             socket->deleteLater();
             continue;
         }
+        if (!singleSession_) {
+            proxies_.append(new QSocAgentSessionProxy(this, socket));
+            emit connectionCountChanged(connectionCount());
+            continue;
+        }
+        if (!connections_.isEmpty()) {
+            socket->abort();
+            socket->deleteLater();
+            continue;
+        }
         auto *connection = new QSocAgentDaemonConnection(this, socket);
         connections_.append(connection);
         connection->greet();
-        emit connectionCountChanged(connections_.size());
+        emit connectionCountChanged(connectionCount());
     }
 }
 
@@ -786,7 +908,19 @@ void QSocAgentDaemon::removeConnection(QSocAgentDaemonConnection *connection)
 {
     if (connections_.removeOne(connection)) {
         connection->deleteLater();
-        emit connectionCountChanged(connections_.size());
+        emit connectionCountChanged(connectionCount());
+        if (singleSession_) {
+            const int code = stopRequested_ ? stopDaemonExitCode : 0;
+            QTimer::singleShot(0, qApp, [code] { QCoreApplication::exit(code); });
+        }
+    }
+}
+
+void QSocAgentDaemon::removeProxy(QSocAgentSessionProxy *proxy)
+{
+    if (proxies_.removeOne(proxy)) {
+        proxy->deleteLater();
+        emit connectionCountChanged(connectionCount());
     }
 }
 
