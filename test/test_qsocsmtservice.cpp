@@ -325,15 +325,24 @@ private slots:
     {
         QFETCH(QString, mode);
         QFETCH(QString, execution);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto    marker = directory.filePath("phase.pid");
         QElapsedTimer elapsed;
         elapsed.start();
-        const auto result = probe(
-            mode,
-            mode == "probe-memory" ? 5000
-            : execution == "error" ? 2000
-                                   : 100);
-        QCOMPARE(result.value("execution").toString(), execution);
+        const auto result
+            = probe(mode + "\n; probe-ready: " + marker, mode == "probe-memory" ? 5000 : 2000);
+        QVERIFY2(
+            result.value("execution").toString() == execution,
+            QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
         QVERIFY(elapsed.elapsed() < 6000);
+        if (execution == "timeout") {
+            QFile ready(marker);
+            QVERIFY2(ready.open(QIODevice::ReadOnly), "Worker did not reach the stalled phase");
+            const auto pid = ready.readAll().toLongLong();
+            QVERIFY(pid > 0);
+            QVERIFY(!processIsRunning(pid));
+        }
         QVERIFY(result.value("solver_status").isNull());
         QCOMPARE(solve("(assert true)").value("solver_status").toString(), QStringLiteral("sat"));
     }
@@ -341,9 +350,19 @@ private slots:
     void optimizePhaseDeadlines()
     {
         for (const auto *phase : {"probe-parse", "probe-solve", "probe-verify", "probe-serialize"}) {
-            QCOMPARE(
-                probe(phase, 100, {}, true).value("execution").toString(),
-                QStringLiteral("timeout"));
+            QTemporaryDir directory;
+            QVERIFY(directory.isValid());
+            const auto marker = directory.filePath("phase.pid");
+            const auto result
+                = probe(QString::fromLatin1(phase) + "\n; probe-ready: " + marker, 2000, {}, true);
+            QVERIFY2(
+                result.value("execution").toString() == "timeout",
+                QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
+            QFile ready(marker);
+            QVERIFY2(ready.open(QIODevice::ReadOnly), "Worker did not reach the stalled phase");
+            const auto pid = ready.readAll().toLongLong();
+            QVERIFY(pid > 0);
+            QVERIFY(!processIsRunning(pid));
         }
     }
 
