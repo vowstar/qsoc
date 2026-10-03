@@ -78,7 +78,7 @@ public:
         , socket_(socket)
     {
         socket_->setParent(this);
-        connect(socket_, &QLocalSocket::readyRead, this, &QSocAgentDaemonConnection::onReadyRead);
+        connect(socket_, &QLocalSocket::readyRead, this, &QSocAgentDaemonConnection::handleReadyRead);
         connect(socket_, &QLocalSocket::disconnected, this, [this]() {
             disconnected_ = true;
             if (pendingAsk_)
@@ -107,7 +107,7 @@ public:
 
 private slots:
 
-    void onReadyRead()
+    void handleReadyRead()
     {
         buffer_.append(socket_->readAll());
         while (true) {
@@ -754,7 +754,7 @@ public:
         process_.setProcessChannelMode(QProcess::ForwardedErrorChannel);
         process_.start(
             QCoreApplication::applicationFilePath(),
-            {QStringLiteral("--session"),
+            {QStringLiteral("--session-worker"),
              QStringLiteral("--socket"),
              workerPath(),
              QStringLiteral("--parent-pid"),
@@ -811,7 +811,7 @@ QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
     , socketPath_(
           QSocLocalEndpoint::resolve(socketPath.isEmpty() ? defaultSocketPath() : socketPath))
 {
-    connect(&server_, &QLocalServer::newConnection, this, &QSocAgentDaemon::onNewConnection);
+    connect(&server_, &QLocalServer::newConnection, this, &QSocAgentDaemon::handleNewConnection);
 }
 
 QSocAgentDaemon::~QSocAgentDaemon()
@@ -887,7 +887,7 @@ void QSocAgentDaemon::shutdown()
     socketLock_.reset();
 }
 
-void QSocAgentDaemon::onNewConnection()
+void QSocAgentDaemon::handleNewConnection()
 {
     while (server_.hasPendingConnections()) {
         QLocalSocket *socket = server_.nextPendingConnection();

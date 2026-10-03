@@ -4,32 +4,24 @@
 /**
  * @file main.cpp
  * @brief qsoc-agentd: the agent daemon.
- * @details Hosts QSocAgentRuntime sessions behind a unix socket. Any
+ * @details Hosts QSocAgentRuntime sessions behind a local socket. Any
  *          frontend (TUI, GUI, web) connects, opens a session and drives
  *          turns; all agent infrastructure lives here.
  */
 
 #include "agent/daemon/qsocagentdaemon.h"
 #include "common/qsocinterrupt.h"
-#ifdef Q_OS_UNIX
-#include <unistd.h>
-#endif
 #include "common/config.h"
 #include "common/qsocconsole.h"
+#include "common/qsoclocalendpoint.h"
+#include "common/qsocprocessowner.h"
 #include "common/qsocproxy.h"
 #include "common/qsocwinconsole.h"
 
-#ifdef Q_OS_LINUX
-#include <sys/prctl.h>
-#endif
-#ifdef Q_OS_WIN
-#include <windows.h>
-#endif
 #include <csignal>
 #include <iostream>
 #include <QCommandLineParser>
 #include <QCoreApplication>
-#include <QScopeGuard>
 #include <QTimer>
 
 namespace {
@@ -53,12 +45,12 @@ int main(int argc, char *argv[])
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("QSoC agent daemon: agent infrastructure behind a unix socket."));
+        QStringLiteral("QSoC agent daemon: agent infrastructure behind a local socket."));
     parser.addHelpOption();
     parser.addVersionOption();
     QCommandLineOption socketOption(
         {QStringLiteral("s"), QStringLiteral("socket")},
-        QStringLiteral("Unix socket path (default: $XDG_RUNTIME_DIR/qsoc/agentd.sock)."),
+        QStringLiteral("Local endpoint (default: $XDG_RUNTIME_DIR/qsoc/agentd.sock)."),
         QStringLiteral("path"));
     QCommandLineOption foregroundOption(
         {QStringLiteral("f"), QStringLiteral("foreground")},
@@ -67,11 +59,12 @@ int main(int argc, char *argv[])
     parser.addOption(foregroundOption);
     QCommandLineOption parentOption(
         QStringLiteral("parent-pid"),
-        QStringLiteral("Exit when the owning TUI process exits."),
+        QStringLiteral("Exit when the owning parent process exits."),
         QStringLiteral("pid"));
     parser.addOption(parentOption);
-    QCommandLineOption
-        sessionOption(QStringLiteral("session"), QStringLiteral("Serve one connection, then exit."));
+    QCommandLineOption sessionOption(
+        {QStringLiteral("session-worker"), QStringLiteral("session")},
+        QStringLiteral("Serve one connection, then exit."));
     sessionOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(sessionOption);
     parser.process(app);
@@ -79,28 +72,18 @@ int main(int argc, char *argv[])
     const qint64 parentPid = parser.value(parentOption).toLongLong(&parentOk);
     if (parser.isSet(parentOption) && (!parentOk || parentPid <= 1))
         return 2;
-#ifdef Q_OS_LINUX
-    // The timer handles orderly shutdown; the kernel also covers owner death
-    // while a tool is blocking the daemon's event loop.
-    if (parentOk && (::prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || ::getppid() != parentPid))
+    QSocProcessOwner owner;
+    if (parentOk && !owner.watch(parentPid)) {
+        std::cerr << "qsoc-agentd: could not watch the owning process" << std::endl;
         return 1;
-#endif
-#ifdef Q_OS_WIN
-    /* Holding a handle keeps the owner's pid from being reused under us. */
-    HANDLE owner = parentOk ? ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(parentPid))
-                            : nullptr;
-    if (parentOk && owner == nullptr)
-        return 1;
-    const auto closeOwner = qScopeGuard([owner] {
-        if (owner != nullptr)
-            ::CloseHandle(owner);
-    });
-#endif
+    }
     if (!QSocInterrupt::installBridge())
         return 1;
     std::signal(SIGTERM, requestTermination);
 
-    const QString socketPath = parser.value(socketOption);
+    const QString requestedPath = parser.value(socketOption);
+    const QString socketPath = requestedPath.isEmpty() ? QString()
+                                                       : QSocLocalEndpoint::resolve(requestedPath);
 
     QSocAgentDaemon daemon(socketPath);
     daemon.setSingleSession(parser.isSet(sessionOption));
@@ -120,13 +103,7 @@ int main(int argc, char *argv[])
 
     QTimer lifecycle;
     QObject::connect(&lifecycle, &QTimer::timeout, &app, [&] {
-        bool ownerGone = false;
-#ifdef Q_OS_UNIX
-        ownerGone = parentOk && static_cast<qint64>(::getppid()) != parentPid;
-#elif defined(Q_OS_WIN)
-        ownerGone = owner != nullptr && ::WaitForSingleObject(owner, 0) == WAIT_OBJECT_0;
-#endif
-        if (terminationRequested || ownerGone || QSocInterrupt::requested()) {
+        if (terminationRequested || QSocInterrupt::requested()) {
             daemon.shutdown();
             app.quit();
         }

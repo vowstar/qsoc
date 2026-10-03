@@ -96,7 +96,7 @@ signals:
     void connectionCountChanged(int count);
 
 private slots:
-    void onNewConnection();
+    void handleNewConnection();
 
 private:
     void removeConnection(QSocAgentDaemonConnection *connection);
