@@ -170,7 +170,6 @@ quint64 QSocSmtBroker::submit(quint64 owner, const QJsonObject &request, Reply r
     queue.append(id);
     d->queuedBytes += bytes;
     ++d->queued;
-    job->deadline.setParent(this);
     job->deadline.setSingleShot(true);
     connect(
         &job->deadline,

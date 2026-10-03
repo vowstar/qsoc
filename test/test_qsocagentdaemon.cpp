@@ -331,6 +331,33 @@ private slots:
         QCOMPARE(daemon.exitStatus(), QProcess::NormalExit);
     }
 
+    void shutdownClosesOtherLiveSessions()
+    {
+        for (int round = 0; round < 5; ++round) {
+            QTemporaryDir fixture;
+            QVERIFY(fixture.isValid());
+            const QString socketPath = fixture.filePath("daemon.sock");
+            QProcess      daemon;
+            daemon.setProcessEnvironment(isolatedEnvironment(fixture.path()));
+            daemon.start(m_daemonPath, {"--socket", socketPath});
+            QVERIFY(daemon.waitForStarted(5000));
+            QVERIFY(waitForSocket(socketPath, 5000));
+            DaemonClient active(socketPath);
+            QVERIFY(active.connected());
+            QVERIFY(!active.receive().isEmpty());
+            active.send({{"id", 1}, {"method", "status"}});
+            QVERIFY(!active.waitForReply(1).isEmpty());
+            DaemonClient control(socketPath);
+            QVERIFY(control.connected());
+            QVERIFY(!control.receive().isEmpty());
+            control.send({{"id", 1}, {"method", "shutdown"}});
+            QVERIFY(control.waitForReply(1).value("result").toObject().value("bye").toBool());
+            QVERIFY(daemon.waitForFinished(5000));
+            QCOMPARE(daemon.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(daemon.exitCode(), 0);
+        }
+    }
+
     void incompleteFramesShareABoundedBudget()
     {
         QTemporaryDir fixture;

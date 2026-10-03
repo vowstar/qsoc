@@ -803,6 +803,19 @@ public:
         QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleClientRead);
     }
 
+    ~QSocAgentSessionProxy() override
+    {
+        disconnect(&process_, nullptr, this, nullptr);
+        disconnect(&worker_, nullptr, this, nullptr);
+        disconnect(client_, nullptr, this, nullptr);
+        worker_.abort();
+        client_->abort();
+        if (process_.state() != QProcess::NotRunning) {
+            process_.kill();
+            process_.waitForFinished(2000);
+        }
+    }
+
     void finish()
     {
         if (finished_)
@@ -1072,6 +1085,10 @@ QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
 QSocAgentDaemon::~QSocAgentDaemon()
 {
     shutdown();
+    proxies_.clear();
+    qDeleteAll(findChildren<QSocAgentSessionProxy *>(QString(), Qt::FindDirectChildrenOnly));
+    connections_.clear();
+    qDeleteAll(findChildren<QSocAgentDaemonConnection *>(QString(), Qt::FindDirectChildrenOnly));
 }
 
 QString QSocAgentDaemon::defaultSocketPath()
