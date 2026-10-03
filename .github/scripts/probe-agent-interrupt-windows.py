@@ -149,7 +149,7 @@ def main(program):
     require(control(None, False), "Enable Ctrl-C before starting the CLI")
     try:
         with tempfile.TemporaryDirectory(prefix="test_qsoc_console_interrupt_") as directory:
-            working = pathlib.Path(directory)
+            working = pathlib.Path(directory).resolve()
             environment = helpers["isolated_environment"](working)
             environment["TERM"] = "xterm-256color"
             started = threading.Event()
