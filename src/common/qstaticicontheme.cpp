@@ -25,3 +25,5 @@ void QStaticIconTheme::setup()
         QIcon::setThemeName("light");
     }
 }
+
+#include "moc_qstaticicontheme.cpp"

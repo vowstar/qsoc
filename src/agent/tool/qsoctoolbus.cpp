@@ -265,3 +265,5 @@ void QSocToolBusImport::setBusManager(QSocBusManager *busManager)
 {
     this->busManager = busManager;
 }
+
+#include "moc_qsoctoolbus.cpp"

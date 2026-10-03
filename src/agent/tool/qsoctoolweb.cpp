@@ -1043,3 +1043,5 @@ QString QSocToolWebFetch::handleImageResponse(
      * re-encode, and attachment marker construction in one place. */
     return QSocImageAttach::buildAttachmentResult(sourceUrl, contentType, body, llmService);
 }
+
+#include "moc_qsoctoolweb.cpp"

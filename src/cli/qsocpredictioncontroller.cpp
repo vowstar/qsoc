@@ -247,3 +247,5 @@ bool QSocPredictionController::shouldFilter(const QString &line)
         QRegularExpression::CaseInsensitiveOption);
     return kAssistantVoice.match(line).hasMatch();
 }
+
+#include "moc_qsocpredictioncontroller.cpp"

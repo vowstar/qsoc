@@ -507,3 +507,5 @@ bool QSocHostCatalog::writeProject(QString *errorMessage)
     }
     return true;
 }
+
+#include "moc_qsochostprofile.cpp"

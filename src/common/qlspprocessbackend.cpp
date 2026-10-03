@@ -390,3 +390,5 @@ bool QLspProcessBackend::sendInitialize(const QString &workspaceFolder)
     initialized = true;
     return true;
 }
+
+#include "moc_qlspprocessbackend.cpp"

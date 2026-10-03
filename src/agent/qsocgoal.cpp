@@ -503,3 +503,5 @@ bool QSocGoalCatalog::setTokenBudget(int newBudget, QString *errorMessage)
     emit goalChanged();
     return true;
 }
+
+#include "moc_qsocgoal.cpp"

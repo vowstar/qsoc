@@ -713,3 +713,5 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
                                : footerFlash_;
     screen.putString(2, startY + height - 2, fitToWidth(footer, innerW - 2), false, true);
 }
+
+#include "moc_qtuitaskoverlay.cpp"

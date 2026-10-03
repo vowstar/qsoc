@@ -746,3 +746,5 @@ int QSocMcpClient::effectiveTimeoutMs(int requested) const
     }
     return config_.requestTimeoutMs;
 }
+
+#include "moc_qsocmcpclient.cpp"

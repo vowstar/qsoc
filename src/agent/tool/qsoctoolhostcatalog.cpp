@@ -263,3 +263,5 @@ QString QSocToolHostRemove::execute(const json &arguments)
     }
     return QStringLiteral("Removed host '%1'").arg(alias);
 }
+
+#include "moc_qsoctoolhostcatalog.cpp"

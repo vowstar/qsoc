@@ -48,3 +48,5 @@ QString QSocTaskEventQueue::formatTaskNotification(const QSocTaskEvent &event)
     out += QStringLiteral("</task-notification>");
     return out;
 }
+
+#include "moc_qsoctaskeventqueue.cpp"

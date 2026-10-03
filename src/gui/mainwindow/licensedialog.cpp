@@ -60,3 +60,5 @@ void LicenseDialog::handleCurrentRowChanged(int row)
         QStringLiteral("%1 (%2)\n%3\n\n%4")
             .arg(component.name, component.license, component.url, QSocLicense::text(component)));
 }
+
+#include "moc_licensedialog.cpp"

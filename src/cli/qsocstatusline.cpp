@@ -163,3 +163,5 @@ void QSocStatusLine::fire()
 
     killTimer_.start(timeoutMs_);
 }
+
+#include "moc_qsocstatusline.cpp"

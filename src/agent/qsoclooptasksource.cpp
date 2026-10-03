@@ -90,3 +90,5 @@ bool QSocLoopTaskSource::killTask(const QString &id)
         return false;
     return scheduler_->removeJob(id);
 }
+
+#include "moc_qsoclooptasksource.cpp"

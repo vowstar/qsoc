@@ -428,3 +428,5 @@ QJsonArray QLspSlangBackend::buildDiagnostics(const QString &filterUri)
 
     return collector->collected;
 }
+
+#include "moc_qlspslangbackend.cpp"

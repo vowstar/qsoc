@@ -1948,3 +1948,5 @@ ssize_t QSocSshSession::recvOverChannel(
     }
     return n;
 }
+
+#include "moc_qsocsshsession.cpp"

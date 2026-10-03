@@ -21,3 +21,5 @@ QString QStringUtils::truncateMiddle(const QString &str, int maxLen)
 
     return str.left(leftLen) + "..." + str.right(rightLen);
 }
+
+#include "moc_qstringutils.cpp"

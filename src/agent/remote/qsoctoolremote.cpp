@@ -1066,3 +1066,5 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     }
     return QStringLiteral("Error: unknown action '%1'").arg(action);
 }
+
+#include "moc_qsoctoolremote.cpp"

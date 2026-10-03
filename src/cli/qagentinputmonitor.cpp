@@ -1137,3 +1137,5 @@ void QAgentInputMonitor::setExternalKeyConsumer(ExternalKeyConsumer consumer)
 {
     externalKeyConsumer_ = std::move(consumer);
 }
+
+#include "moc_qagentinputmonitor.cpp"

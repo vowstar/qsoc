@@ -264,3 +264,5 @@ void ModulePortModel::emitRowChanged(int row)
         return;
     emit dataChanged(index(row, 0), index(row, ColumnCount - 1), {});
 }
+
+#include "moc_moduleportmodel.cpp"

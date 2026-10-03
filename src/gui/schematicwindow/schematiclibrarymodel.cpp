@@ -363,3 +363,5 @@ void SchematicLibraryModel::addTreeItem(
     parent->appendChild(newItem);
     endInsertRows();
 }
+
+#include "moc_schematiclibrarymodel.cpp"

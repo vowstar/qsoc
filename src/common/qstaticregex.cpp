@@ -49,3 +49,5 @@ bool QStaticRegex::isNameExactMatch(const QString &str, const QRegularExpression
               : QRegularExpression("^" + QRegularExpression::escape(pattern) + "$");
     return strictRegex.match(str).hasMatch();
 }
+
+#include "moc_qstaticregex.cpp"

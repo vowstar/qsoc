@@ -525,3 +525,5 @@ void QSocAgentMailbox::finish(const QString &id, const QString &result)
     }
     setState(id, QStringLiteral("idle"));
 }
+
+#include "moc_qsocagentmailbox.cpp"

@@ -715,3 +715,5 @@ const QString &QSocProjectManager::getCurrentPath()
 {
     return currentPath;
 }
+
+#include "moc_qsocprojectmanager.cpp"

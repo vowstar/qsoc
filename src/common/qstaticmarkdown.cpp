@@ -163,3 +163,5 @@ QString QStaticMarkdown::padText(const QString &text, int width, QStaticMarkdown
     const int rightPad = padding - leftPad;
     return QString(leftPad, ' ') + text + QString(rightPad, ' ');
 }
+
+#include "moc_qstaticmarkdown.cpp"

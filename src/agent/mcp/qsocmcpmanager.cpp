@@ -867,3 +867,5 @@ QString QSocMcpManager::nameForClient(const QSocMcpClient *client) const
     }
     return {};
 }
+
+#include "moc_qsocmcpmanager.cpp"

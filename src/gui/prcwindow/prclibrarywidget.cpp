@@ -163,3 +163,5 @@ void PrcLibraryWidget::initializeLibrary()
         listWidget->addItem(item);
     }
 }
+
+#include "moc_prclibrarywidget.cpp"

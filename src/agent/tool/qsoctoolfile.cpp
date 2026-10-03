@@ -690,3 +690,5 @@ void QSocToolFileEdit::setFileHistory(QSocFileHistory *history)
 {
     this->fileHistory = history;
 }
+
+#include "moc_qsoctoolfile.cpp"

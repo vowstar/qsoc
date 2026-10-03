@@ -232,3 +232,5 @@ const QTerminalCapability &QAgentReadline::terminalCapability() const
 {
     return termCap;
 }
+
+#include "moc_qagentreadline.cpp"

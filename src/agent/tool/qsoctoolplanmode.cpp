@@ -119,3 +119,5 @@ QString QSocToolExitPlanMode::execute(const json &arguments)
                "it. Feedback: %1")
         .arg(feedback);
 }
+
+#include "moc_qsoctoolplanmode.cpp"

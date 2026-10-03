@@ -196,3 +196,5 @@ QSocHookManager::Outcome QSocHookManager::fire(
     }
     return out;
 }
+
+#include "moc_qsochookmanager.cpp"

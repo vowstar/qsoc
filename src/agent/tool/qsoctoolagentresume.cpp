@@ -126,3 +126,5 @@ QString QSocToolAgentResume::execute(const json &arguments)
             .dump()
             .c_str());
 }
+
+#include "moc_qsoctoolagentresume.cpp"

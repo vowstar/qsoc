@@ -254,3 +254,5 @@ QString QSocToolScheduleDelete::execute(const json &arguments)
     }
     return QString("Error: failed to remove task %1 (persist write failed).").arg(id);
 }
+
+#include "moc_qsoctoolschedule.cpp"

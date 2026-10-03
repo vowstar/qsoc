@@ -225,3 +225,5 @@ void QSocToolGenerateTemplate::setGenerateManager(QSocGenerateManager *generateM
 {
     this->generateManager = generateManager;
 }
+
+#include "moc_qsoctoolgenerate.cpp"

@@ -299,3 +299,5 @@ QString QLspService::fromUri(const QString &uri)
 {
     return QUrl(uri).toLocalFile();
 }
+
+#include "moc_qlspservice.cpp"

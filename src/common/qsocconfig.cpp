@@ -383,3 +383,5 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     QSocConsole::debug() << "Created template config file:" << filePath;
     return true;
 }
+
+#include "moc_qsocconfig.cpp"

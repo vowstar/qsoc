@@ -934,3 +934,5 @@ void QTuiCompositor::copySelectionToClipboard()
     fprintf(stdout, "\033]52;c;%s\033\\", base64.constData());
     fflush(stdout);
 }
+
+#include "moc_qtuicompositor.cpp"

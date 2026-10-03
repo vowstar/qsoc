@@ -1684,3 +1684,5 @@ YAML::Node QSocBusManager::getBusYamls(const QRegularExpression &busNameRegex)
 
     return result;
 }
+
+#include "moc_qsocbusmanager.cpp"

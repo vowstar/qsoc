@@ -66,3 +66,5 @@ void MainWindow::updateWindowTitle()
     const QString projectName = projectManager->getProjectName();
     setWindowTitle(QString("%1 %2 - Project: %3").arg(appName).arg(appVersion).arg(projectName));
 }
+
+#include "moc_mainwindow.cpp"

@@ -273,3 +273,5 @@ QString QSocToolAgentMessage::execute(const json &arguments)
     }
     return read();
 }
+
+#include "moc_qsoctoolagentmessage.cpp"

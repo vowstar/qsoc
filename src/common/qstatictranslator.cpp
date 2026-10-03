@@ -29,3 +29,5 @@ void QStaticTranslator::setup()
     initTranslator(QStaticTranslator::translator, ":/i18n/app_");
     initTranslator(QStaticTranslator::translatorBase, ":/i18n/qtbase_");
 }
+
+#include "moc_qstatictranslator.cpp"

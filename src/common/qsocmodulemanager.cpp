@@ -2064,3 +2064,5 @@ bool QSocModuleManager::removeModule(const QRegularExpression &moduleNameRegex)
 
     return true;
 }
+
+#include "moc_qsocmodulemanager.cpp"

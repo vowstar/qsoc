@@ -264,3 +264,5 @@ QSocHookRunner::Result QSocHookRunner::run(
     }
     return captured;
 }
+
+#include "moc_qsochookrunner.cpp"

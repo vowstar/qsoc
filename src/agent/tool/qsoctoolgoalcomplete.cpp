@@ -89,3 +89,5 @@ QString QSocToolGoalComplete::execute(const json &arguments)
     summary.replace(QLatin1Char('\n'), QLatin1Char(' '));
     return successResult(summary);
 }
+
+#include "moc_qsoctoolgoalcomplete.cpp"

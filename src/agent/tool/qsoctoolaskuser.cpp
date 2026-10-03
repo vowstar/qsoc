@@ -130,3 +130,5 @@ QString QSocToolAskUser::execute(const json &arguments)
     const json payload = json{{"status", "ok"}, {"choice", result.choice.toStdString()}};
     return QString::fromStdString(payload.dump());
 }
+
+#include "moc_qsoctoolaskuser.cpp"

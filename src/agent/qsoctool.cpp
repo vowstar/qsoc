@@ -384,3 +384,5 @@ void QSocToolRegistry::abortCalls(QObject *owner)
         }
     }
 }
+
+#include "moc_qsoctool.cpp"

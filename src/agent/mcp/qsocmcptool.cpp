@@ -338,3 +338,5 @@ const McpToolDescriptor &QSocMcpTool::descriptor() const
 {
     return descriptor_;
 }
+
+#include "moc_qsocmcptool.cpp"

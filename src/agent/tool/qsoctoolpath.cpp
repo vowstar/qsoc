@@ -421,3 +421,5 @@ QString QSocToolPathContext::execute(const json &arguments)
 
     return QString("Error: Unknown action '%1'").arg(action);
 }
+
+#include "moc_qsoctoolpath.cpp"

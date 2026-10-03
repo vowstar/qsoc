@@ -265,3 +265,5 @@ void ModuleLibraryModel::setRowEnabled(const QModelIndex &index, bool enabled)
         }
     }
 }
+
+#include "moc_modulelibrarymodel.cpp"

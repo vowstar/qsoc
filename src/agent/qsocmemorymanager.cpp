@@ -573,3 +573,5 @@ QString QSocMemoryManager::sanitizeName(const QString &name)
 
     return result;
 }
+
+#include "moc_qsocmemorymanager.cpp"

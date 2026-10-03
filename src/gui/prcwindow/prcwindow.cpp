@@ -338,3 +338,5 @@ void PrcWindow::handleEditController(int type, const QString &name)
     scene.undoStack()->push(new PrcLibrary::PrcControllerCommand(
         &scene, sceneType, name, before, after, tr("Configure Controller %1").arg(name)));
 }
+
+#include "moc_prcwindow.cpp"

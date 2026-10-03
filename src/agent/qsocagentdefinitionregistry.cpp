@@ -499,3 +499,5 @@ QSocAgentDefinition QSocAgentDefinitionRegistry::parseAgentMarkdownContent(
 
     return def;
 }
+
+#include "moc_qsocagentdefinitionregistry.cpp"

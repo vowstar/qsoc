@@ -380,3 +380,5 @@ QString QSocToolLsp::formatDocumentSymbol(const QString &filePath)
 
     return lines.join("\n");
 }
+
+#include "moc_qsoctoollsp.cpp"

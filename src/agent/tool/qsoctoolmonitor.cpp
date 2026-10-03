@@ -598,3 +598,5 @@ QString QSocToolMonitorStop::execute(const json &arguments)
             .dump()
             .c_str());
 }
+
+#include "moc_qsoctoolmonitor.cpp"

@@ -291,3 +291,5 @@ void QSocToolMemoryDelete::setMemoryManager(QSocMemoryManager *memoryManager)
 {
     this->memoryManager = memoryManager;
 }
+
+#include "moc_qsoctoolmemory.cpp"

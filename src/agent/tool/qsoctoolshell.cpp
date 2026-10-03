@@ -1405,3 +1405,5 @@ QString QSocToolBashManage::execute(const json &arguments)
     return QString("Error: Unknown action '%1'. Use: status, wait, output, kill, terminate")
         .arg(action);
 }
+
+#include "moc_qsoctoolshell.cpp"

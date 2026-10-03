@@ -112,3 +112,5 @@ void QLongTaskMonitor::onTick()
     }
     emit stalled(static_cast<int>(silent), idleStreak_);
 }
+
+#include "moc_qlongtaskmonitor.cpp"

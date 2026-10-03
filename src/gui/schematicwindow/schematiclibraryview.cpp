@@ -77,3 +77,5 @@ void SchematicLibraryView::startDrag(Qt::DropActions supportedActions)
     /* Execute the drag */
     drag->exec(supportedActions, Qt::CopyAction);
 }
+
+#include "moc_schematiclibraryview.cpp"

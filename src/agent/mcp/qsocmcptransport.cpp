@@ -63,3 +63,5 @@ void QSocMcpTransport::setState(State newState)
 {
     state_ = newState;
 }
+
+#include "moc_qsocmcptransport.cpp"

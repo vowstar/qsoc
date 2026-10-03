@@ -213,3 +213,5 @@ void BusSignalModeModel::removeRowIndices(const QList<int> &rows)
     }
     setDirty(true);
 }
+
+#include "moc_bussignalmodemodel.cpp"

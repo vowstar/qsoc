@@ -496,3 +496,5 @@ void SchematicModule::updateLabelPosition()
         m_label->setPos(rect.center().x() - m_label->boundingRect().width() / 2, -15);
     }
 }
+
+#include "moc_schematicmodule.cpp"

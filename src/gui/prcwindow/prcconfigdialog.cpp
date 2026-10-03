@@ -1944,3 +1944,5 @@ PowerControllerDef PrcControllerDialog::getPowerControllerDef() const
     def.host_reset  = hostResetEdit ? hostResetEdit->text() : QString();
     return def;
 }
+
+#include "moc_prcconfigdialog.cpp"

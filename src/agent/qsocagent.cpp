@@ -3790,3 +3790,5 @@ int QSocAgent::estimateTotalTokensFromSnapshot(const QString &systemPrompt, cons
     return static_cast<int>(
         qMin<qint64>(requestUsage_.estimateNext(snapshot), std::numeric_limits<int>::max()));
 }
+
+#include "moc_qsocagent.cpp"

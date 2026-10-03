@@ -952,3 +952,5 @@ QString QStaticStringWeaver::stripCommonLeadingWhitespace(const QString &text)
     /* Join the lines, preserving all empty lines */
     return resultLines.join('\n');
 }
+
+#include "moc_qstaticstringweaver.cpp"

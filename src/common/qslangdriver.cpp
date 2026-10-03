@@ -673,3 +673,5 @@ QSet<QString> QSlangDriver::extractSignalReferences(const QSet<QString> &exclude
 
     return signalSet;
 }
+
+#include "moc_qslangdriver.cpp"

@@ -325,3 +325,5 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     }
     return true;
 }
+
+#include "moc_qsoccliworker.cpp"

@@ -150,3 +150,5 @@ void BusCsvImportDialog::updateBusNames()
     if (!currentBus.isEmpty())
         busCombo->setCurrentText(currentBus);
 }
+
+#include "moc_buscsvimportdialog.cpp"

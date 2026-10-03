@@ -627,3 +627,5 @@ void QSocToolTodoDelete::setProjectManager(QSocProjectManager *projectManager)
 {
     this->projectManager = projectManager;
 }
+
+#include "moc_qsoctooltodo.cpp"

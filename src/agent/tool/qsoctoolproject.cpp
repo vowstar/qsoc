@@ -248,3 +248,5 @@ void QSocToolProjectCreate::setProjectManager(QSocProjectManager *projectManager
 {
     this->projectManager = projectManager;
 }
+
+#include "moc_qsoctoolproject.cpp"

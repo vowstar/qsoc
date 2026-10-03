@@ -131,3 +131,5 @@ QSocTask::Estimate QSocTaskRegistry::estimateFor(const QString &tag, const QStri
 {
     return estimates_.value(qMakePair(tag, id));
 }
+
+#include "moc_qsoctaskregistry.cpp"

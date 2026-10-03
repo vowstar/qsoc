@@ -539,3 +539,5 @@ void ModuleEditorWindow::closeEvent(QCloseEvent *event)
     }
     event->accept();
 }
+
+#include "moc_moduleeditorwindow.cpp"

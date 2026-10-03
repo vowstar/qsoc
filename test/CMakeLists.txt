@@ -251,6 +251,8 @@ qt_add_test_target("test_qsoccliparseproject")
 qt_add_test_target("test_qsoccliworker")
 qt_add_test_target("test_qsoclicense")
 qt_add_test_target("test_qsocguilicensedialog")
+add_test(NAME check_moc_includes
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}/.. -P ${CMAKE_CURRENT_LIST_DIR}/check_moc_includes.cmake)
 qt_add_test_target("test_qsocconsole")
 qt_add_test_target("test_qsoccommonqsocnumberinfo")
 qt_add_test_target("test_qsoccron")

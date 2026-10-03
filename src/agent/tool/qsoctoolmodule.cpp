@@ -370,3 +370,5 @@ void QSocToolModuleBusAdd::setModuleManager(QSocModuleManager *moduleManager)
 {
     this->moduleManager = moduleManager;
 }
+
+#include "moc_qsoctoolmodule.cpp"

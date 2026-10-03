@@ -219,3 +219,5 @@ void QSocToolSmt::completeJob(quint64 id, QJsonObject result)
     else if (job->context)
         job->context->completeDeferred(encoded);
 }
+
+#include "moc_qsoctoolsmt.cpp"

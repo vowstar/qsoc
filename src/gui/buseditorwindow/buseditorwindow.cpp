@@ -307,3 +307,5 @@ void BusEditorWindow::closeEvent(QCloseEvent *event)
     }
     event->accept();
 }
+
+#include "moc_buseditorwindow.cpp"

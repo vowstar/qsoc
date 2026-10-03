@@ -601,3 +601,5 @@ void QSocToolSkillCreate::setProjectManager(QSocProjectManager *projectManager)
 {
     this->projectManager = projectManager;
 }
+
+#include "moc_qsoctoolskill.cpp"

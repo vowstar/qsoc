@@ -53,3 +53,5 @@ void SchematicWire::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     /* Call base class to draw normal wire on top */
     QSchematic::Items::Wire::paint(painter, option, widget);
 }
+
+#include "moc_schematicwire.cpp"

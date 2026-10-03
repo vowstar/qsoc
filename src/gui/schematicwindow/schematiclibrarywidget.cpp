@@ -90,3 +90,5 @@ void SchematicLibraryWidget::itemClickedSlot(const QModelIndex &index)
     /* Emit the signal */
     emit itemClicked(item);
 }
+
+#include "moc_schematiclibrarywidget.cpp"

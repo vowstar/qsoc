@@ -71,3 +71,5 @@ bool QSocBashTaskSource::killTask(const QString &id)
         emit tasksChanged();
     return result;
 }
+
+#include "moc_qsocbashtasksource.cpp"

@@ -90,3 +90,5 @@ QString QSocToolAgentStatus::execute(const json &arguments)
             .dump()
             .c_str());
 }
+
+#include "moc_qsoctoolagentstatus.cpp"

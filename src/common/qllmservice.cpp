@@ -1859,3 +1859,5 @@ json QLLMService::sendChatCompletionTo(
         return {{"error", e.what()}};
     }
 }
+
+#include "moc_qllmservice.cpp"

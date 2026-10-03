@@ -659,3 +659,5 @@ QNetworkReply *QSocMcpHttpTransport::senderReply()
 {
     return qobject_cast<QNetworkReply *>(sender());
 }
+
+#include "moc_qsocmcphttp.cpp"

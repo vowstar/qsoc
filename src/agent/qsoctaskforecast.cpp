@@ -349,3 +349,5 @@ void QSocTaskForecast::finish(bool success)
     }
     schedule();
 }
+
+#include "moc_qsoctaskforecast.cpp"

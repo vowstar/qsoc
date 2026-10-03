@@ -202,3 +202,5 @@ QString QSocToolDocQuery::stripTypstMarkup(const QString &content) const
 
     return result;
 }
+
+#include "moc_qsoctooldoc.cpp"

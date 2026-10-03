@@ -478,3 +478,5 @@ QMap<QString, QSocGenerateManager::TopPortBinding> QSocGenerateManager::buildTop
 
     return redirect;
 }
+
+#include "moc_qsocgeneratemanager.cpp"

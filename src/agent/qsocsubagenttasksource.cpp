@@ -812,3 +812,5 @@ void QSocSubAgentTaskSource::evictStaleCompleted()
         emit tasksChanged();
     }
 }
+
+#include "moc_qsocsubagenttasksource.cpp"

@@ -536,3 +536,5 @@ void PrcScene::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     /* Let default handling proceed */
     QSchematic::Scene::contextMenuEvent(event);
 }
+
+#include "moc_prcscene.cpp"

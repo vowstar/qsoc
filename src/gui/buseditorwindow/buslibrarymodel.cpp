@@ -217,3 +217,5 @@ void BusLibraryModel::setRowEnabled(const QModelIndex &index, bool enabled)
         }
     }
 }
+
+#include "moc_buslibrarymodel.cpp"

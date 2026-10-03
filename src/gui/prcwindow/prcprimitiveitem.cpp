@@ -834,3 +834,5 @@ void PrcPrimitiveItem::updateDynamicPorts()
     updateLabelPosition();
     update();
 }
+
+#include "moc_prcprimitiveitem.cpp"

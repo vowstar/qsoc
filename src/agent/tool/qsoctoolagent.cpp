@@ -1360,3 +1360,5 @@ void QSocToolAgent::abort()
         taskSource_->abortAll();
     }
 }
+
+#include "moc_qsoctoolagent.cpp"

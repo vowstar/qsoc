@@ -515,3 +515,5 @@ void QSocMcpStdioTransport::clearInput()
     readBuffer_.clear();
     scanOffset_ = 0;
 }
+
+#include "moc_qsocmcpstdio.cpp"

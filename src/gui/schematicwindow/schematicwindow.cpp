@@ -305,3 +305,5 @@ void SchematicWindow::setProjectManager(QSocProjectManager *projectManager)
         }
     }
 }
+
+#include "moc_schematicwindow.cpp"

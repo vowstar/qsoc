@@ -479,3 +479,5 @@ void QSocLoopScheduler::tick()
     for (const auto &pair : due)
         emit promptDue(pair.first, pair.second);
 }
+
+#include "moc_qsocloopscheduler.cpp"
