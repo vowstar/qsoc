@@ -400,7 +400,8 @@ private slots:
     void remoteProtocol_data()
     {
         QTest::addColumn<QString>("mode");
-        for (const auto *mode : {"success", "cancel", "version", "response"})
+        for (const auto *mode :
+             {"success", "cancel", "handshake-cancel", "version", "response", "partial"})
             QTest::newRow(mode) << QString::fromLatin1(mode);
     }
 
@@ -421,17 +422,21 @@ private slots:
         });
         QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 2000);
         std::unique_ptr<QLocalSocket> socket(server.nextPendingConnection());
-        const auto                    hello = QSocIpc::frame(
-            QJsonObject{
-                {"daemon", "qsoc-agentd"},
-                {"protocol", mode == "version" ? 2 : 1},
-                {"capabilities", QJsonArray{"smt"}}});
-        socket->write(hello.first(5));
-        socket->flush();
-        QTest::qWait(20);
-        socket->write(hello.mid(5));
-        socket->flush();
-        if (mode != "version") {
+        if (mode == "handshake-cancel") {
+            stop.request_stop();
+        } else {
+            const auto hello = QSocIpc::frame(
+                QJsonObject{
+                    {"daemon", "qsoc-agentd"},
+                    {"protocol", mode == "version" ? 2 : 1},
+                    {"capabilities", QJsonArray{"smt"}}});
+            socket->write(hello.first(5));
+            socket->flush();
+            QTest::qWait(20);
+            socket->write(hello.mid(5));
+            socket->flush();
+        }
+        if (mode != "version" && mode != "handshake-cancel") {
             QByteArray  buffer;
             QJsonObject message;
             auto        decoded = QSocIpc::DecodeResult::Incomplete;
@@ -454,10 +459,13 @@ private slots:
                 result.insert("solver_status", "sat");
                 result.insert("feasibility", "feasible");
                 result.insert("optimality", "not_applicable");
-                socket->write(
-                    QSocIpc::frame(
-                        QJsonObject{{"id", mode == "response" ? 2 : 1}, {"result", result}}));
-                socket->flush();
+                const auto frame = QSocIpc::frame(
+                    QJsonObject{{"id", mode == "response" ? 2 : 1}, {"result", result}});
+                socket->write(mode == "partial" ? frame.chopped(1) : frame);
+                if (mode == "partial")
+                    socket->disconnectFromServer();
+                else
+                    socket->flush();
             }
         }
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -465,9 +473,9 @@ private slots:
         const auto result = pending.get();
         QCOMPARE(
             result.value("execution").toString(),
-            mode == "success"  ? QStringLiteral("completed")
-            : mode == "cancel" ? QStringLiteral("cancelled")
-                               : QStringLiteral("error"));
+            mode == "success"         ? QStringLiteral("completed")
+            : mode.endsWith("cancel") ? QStringLiteral("cancelled")
+                                      : QStringLiteral("error"));
         QTRY_COMPARE(socket->state(), QLocalSocket::UnconnectedState);
     }
 

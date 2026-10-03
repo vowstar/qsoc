@@ -342,6 +342,8 @@ QJsonObject QSocSmtService::solveRemote(
     if (socket.state() != QLocalSocket::ConnectedState || !QSocLocalPeer::sameUser(socket))
         return interruption(stop, elapsed, 2000);
     const auto hello = receive(socket, 2000, stop, elapsed);
+    if (hello.isEmpty())
+        return interruption(stop, elapsed, 2000);
     if (hello.value("daemon").toString() != "qsoc-agentd" || hello.value("protocol").toInt() != 1
         || !hello.value("capabilities").toArray().contains("smt"))
         return failure("error", "Incompatible SMT daemon");
