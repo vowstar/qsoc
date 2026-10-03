@@ -5,6 +5,7 @@
 
 #include "agent/qsoctaskregistry.h"
 #include "agent/remote/qsocagentremote.h"
+#include "agent/runtime/qsocagentpeer.h"
 #include "agent/runtime/qsocagentprotocol.h"
 #include "agent/runtime/qsocagentruntimeevent.h"
 #include "agent/services/qagentcompletion.h"
@@ -768,8 +769,13 @@ void QSocAgentDaemon::shutdown()
 void QSocAgentDaemon::onNewConnection()
 {
     while (server_.hasPendingConnections()) {
-        QLocalSocket *socket     = server_.nextPendingConnection();
-        auto         *connection = new QSocAgentDaemonConnection(this, socket);
+        QLocalSocket *socket = server_.nextPendingConnection();
+        if (!QSocAgentPeer::sameUser(*socket)) {
+            socket->abort();
+            socket->deleteLater();
+            continue;
+        }
+        auto *connection = new QSocAgentDaemonConnection(this, socket);
         connections_.append(connection);
         connection->greet();
         emit connectionCountChanged(connections_.size());

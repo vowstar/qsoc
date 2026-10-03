@@ -39,6 +39,8 @@ public:
 
     /** Daemon version from the greeting. */
     [[nodiscard]] QString daemonVersion() const { return m_daemonVersion; }
+    /** Process id of the daemon end, or -1 when the platform cannot tell. */
+    [[nodiscard]] qint64 daemonProcessId() const;
 
     QJsonObject request(const QString &method, const QJsonObject &params = {}, int timeoutMs = 30000);
     bool isConnected() const { return m_socket.state() == QLocalSocket::ConnectedState; }

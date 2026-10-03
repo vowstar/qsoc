@@ -9,6 +9,7 @@
  *          shutdown.
  */
 
+#include "agent/runtime/qsocagentpeer.h"
 #include "agent/runtime/qsocagentruntimeevent.h"
 #include "qsoc_test.h"
 
@@ -50,8 +51,9 @@ public:
 
     ~DaemonClient() { m_socket.disconnectFromServer(); }
 
-    [[nodiscard]] bool    connected() const { return m_error.isEmpty(); }
-    [[nodiscard]] QString error() const { return m_error; }
+    [[nodiscard]] bool                connected() const { return m_error.isEmpty(); }
+    [[nodiscard]] const QLocalSocket &socket() const { return m_socket; }
+    [[nodiscard]] QString             error() const { return m_error; }
 
     void send(const QJsonObject &object)
     {
@@ -164,6 +166,9 @@ private slots:
         QCOMPARE(greeting.value(QStringLiteral("daemon")).toString(), QStringLiteral("qsoc-agentd"));
         QVERIFY(!greeting.value(QStringLiteral("version")).toString().isEmpty());
         QVERIFY(greeting.value(QStringLiteral("pid")).toDouble() > 0);
+        QVERIFY(QSocAgentPeer::sameUser(client.socket()));
+        const qint64 servedBy = QSocAgentPeer::processId(client.socket());
+        QVERIFY(servedBy == -1 || servedBy == daemon.processId());
 
         client.send({{"id", 1}, {"method", QStringLiteral("shutdown")}});
         const QJsonObject bye = client.waitForReply(1);

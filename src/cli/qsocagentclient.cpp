@@ -19,6 +19,7 @@
 #include "tui/qtuiimagepreviewblock.h"
 #include <QSocketNotifier>
 
+#include "agent/runtime/qsocagentpeer.h"
 #include "agent/runtime/qsocagentprotocol.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "agent/runtime/qsocagentruntimeevent.h"
@@ -173,6 +174,11 @@ QSocAgentDaemonClient::QSocAgentDaemonClient(const QString &socketPath, QObject 
 }
 
 QSocAgentDaemonClient::~QSocAgentDaemonClient() = default;
+
+qint64 QSocAgentDaemonClient::daemonProcessId() const
+{
+    return QSocAgentPeer::processId(m_socket);
+}
 
 bool QSocAgentDaemonClient::connectToDaemon(int timeoutMs)
 {
@@ -342,6 +348,10 @@ bool QSocCliWorker::runAgentClientLoop(
         QTimer::singleShot(20, &wait, &QEventLoop::quit);
         wait.exec();
     }
+    /* An owned endpoint must be served by the child just started. */
+    const qint64 servedBy = client.daemonProcessId();
+    if (owned && servedBy > 0 && servedBy != child.processId())
+        return showError(1, QStringLiteral("Agent daemon socket is served by another process."));
     QJsonObject params{
         {"project_directory", options.projectDirectory},
         {"launch_directory", options.launchDirectory},
