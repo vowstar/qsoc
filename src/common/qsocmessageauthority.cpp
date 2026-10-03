@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "agent/qsocmessageauthority.h"
+#include "common/qsocmessageauthority.h"
 
 #include <QRegularExpression>
 

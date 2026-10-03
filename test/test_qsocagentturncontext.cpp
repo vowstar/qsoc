@@ -4,9 +4,9 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocmemoryextractor.h"
 #include "agent/qsocmemorymanager.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
+#include "common/qsocmessageauthority.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 

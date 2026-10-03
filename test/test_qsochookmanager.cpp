@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsochookmanager.h"
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
 #include "qsoc_test.h"
 
 #include <yaml-cpp/yaml.h>

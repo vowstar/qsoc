@@ -4,7 +4,7 @@
 #ifndef QSOCAGENTDEFINITION_H
 #define QSOCAGENTDEFINITION_H
 
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
 
 #include <QString>
 #include <QStringList>

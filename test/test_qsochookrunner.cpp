@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsochookrunner.h"
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>

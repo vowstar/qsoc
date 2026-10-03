@@ -3,7 +3,7 @@
 
 #include "tui/qtuicompositor.h"
 
-#include "common/qsocmarkdownrenderer.h"
+#include "tui/qsocmarkdownrenderer.h"
 
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuicodeblock.h"

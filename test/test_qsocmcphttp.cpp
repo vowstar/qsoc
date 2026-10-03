@@ -5,7 +5,7 @@
 #include "agent/mcp/qsocmcphttp.h"
 #include "agent/mcp/qsocmcpmanager.h"
 #include "agent/mcp/qsocmcptransport.h"
-#include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocmcptypes.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>

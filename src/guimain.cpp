@@ -4,9 +4,9 @@
 #include "common/config.h"
 #include "common/qsocconsole.h"
 #include "common/qsocproxy.h"
-#include "common/qstaticicontheme.h"
 #include "common/qstatictranslator.h"
 #include "gui/mainwindow/mainwindow.h"
+#include "gui/qstaticicontheme.h"
 
 #include <QApplication>
 #include <QIcon>

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
-#include "agent/remote/qsocinterrupt.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "cli/qsoccliworker.h"
 #include "common/qsocconsole.h"
+#include "common/qsocinterrupt.h"
 #include <QDir>
 
 bool QSocCliWorker::parseAgent(const QStringList &appArguments)

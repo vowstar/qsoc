@@ -7,12 +7,12 @@
 #include "agent/qsocgoal.h"
 #include "agent/qsocgoalprompt.h"
 #include "agent/qsochookmanager.h"
-#include "agent/qsochooktypes.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
+#include "common/qsochooktypes.h"
+#include "common/qsocmessageauthority.h"
 #include "common/qsoctokenizer.h"
 
 #include <algorithm>

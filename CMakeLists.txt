@@ -415,26 +415,19 @@ file(GLOB_RECURSE PROJECT_UI_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "ui/*.u
 file(GLOB_RECURSE PROJECT_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/*.ts")
 file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/app_*.ts")
 
-# qsoc_agent: headless agent infrastructure (src/agent, src/common, services)
-# without terminal or GUI code. Frontends link it and add presentation.
-set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/main\\.cpp$")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/smtworker\\.cpp$")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/guimain\\.cpp$")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/daemon/.*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/gui/.*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/tui/.*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/cli/.*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/common/qsoc(codehighlighter|markdownrenderer|mathparser).*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/common/qstaticicontheme\\.cpp")
+# Shared business code and the agent runtime have separate dependency graphs.
+set(QSOC_COMMON_CPP "${PROJECT_CPP_FILES}")
+list(FILTER QSOC_COMMON_CPP INCLUDE REGEX "src/common/.*")
+set(QSOC_COMMON_HEADERS "${PROJECT_H_FILES}")
+list(FILTER QSOC_COMMON_HEADERS INCLUDE REGEX "src/common/.*")
+add_library(qsoc_common STATIC ${QSOC_COMMON_CPP} ${QSOC_COMMON_HEADERS})
 
+set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
+list(FILTER QSOC_AGENT_CPP INCLUDE REGEX "src/agent/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/daemon/.*")
 set(QSOC_AGENT_HEADERS "${PROJECT_H_FILES}")
+list(FILTER QSOC_AGENT_HEADERS INCLUDE REGEX "src/agent/.*")
 list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/daemon/.*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/gui/.*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/tui/.*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/cli/.*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/common/qsoc(codehighlighter|markdownrenderer|mathparser).*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/common/qstaticicontheme\\.h")
 
 include(GenerateExportHeader)
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -448,13 +441,13 @@ generate_export_header(qsoc_agent
     EXPORT_FILE_NAME qsocagent_export.h
     STATIC_DEFINE QSOC_AGENT_STATIC_DEFINE
 )
-target_include_directories(qsoc_agent PUBLIC
+target_include_directories(qsoc_common PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_BINARY_DIR}"
 )
 
-target_include_directories(qsoc_agent SYSTEM PUBLIC
+target_include_directories(qsoc_common SYSTEM PUBLIC
     "${SVLANG_INCLUDE_DIRS}"
     "${JSON_INCLUDE_DIRS}"
     "${INJA_INCLUDE_DIRS}"
@@ -472,11 +465,7 @@ target_include_directories(qsoc_agent SYSTEM PUBLIC
     "${LEXBOR_INCLUDE_DIRS}"
 )
 
-# The runtime library needs the same dependency surface as the old
-# in-process wiring: every subsystem it assembles. Gui is required by the
-# image attachment pipeline (QImage-based token estimation for
-# multimodal models), which is part of the agent's request path.
-set(QSOC_AGENT_LINK_LIBRARIES
+set(QSOC_COMMON_LINK_LIBRARIES
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Network
     Qt${QT_VERSION_MAJOR}::Gui
@@ -495,22 +484,24 @@ set(QSOC_AGENT_LINK_LIBRARIES
     ${CMARK_GFM_LIBRARIES}
     ${LEXBOR_LIBRARIES}
 )
-target_link_libraries(qsoc_agent PUBLIC ${QSOC_AGENT_LINK_LIBRARIES})
-target_link_libraries(qsoc_agent PRIVATE libz3)
-target_compile_definitions(qsoc_agent PUBLIC
+target_link_libraries(qsoc_common PUBLIC ${QSOC_COMMON_LINK_LIBRARIES})
+target_link_libraries(qsoc_common PRIVATE libz3)
+target_compile_definitions(qsoc_common PUBLIC
     CMARK_GFM_STATIC_DEFINE
     CMARK_GFM_EXTENSIONS_STATIC_DEFINE
     LEXBOR_STATIC
-    QSOC_AGENT_STATIC_DEFINE
 )
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(qsoc_agent PUBLIC -fexperimental-library)
+    target_compile_options(qsoc_common PUBLIC -fexperimental-library)
 endif()
 if(WIN32)
-    target_link_libraries(qsoc_agent PUBLIC ws2_32)
-    target_compile_definitions(qsoc_agent PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(qsoc_common PUBLIC ws2_32)
+    target_compile_definitions(qsoc_common PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
+
+target_link_libraries(qsoc_agent PUBLIC qsoc_common)
+target_compile_definitions(qsoc_agent PUBLIC QSOC_AGENT_STATIC_DEFINE)
 
 # The daemon: one process hosting agent sessions behind a unix socket.
 qt_add_executable(qsoc-agentd
@@ -553,11 +544,11 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
 set(PROJECT_FRONTEND_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
 set(QSOC_TUI_FILES ${PROJECT_FRONTEND_FILES})
 list(FILTER QSOC_TUI_FILES INCLUDE REGEX
-    "src/tui/.*|src/common/qsoc(codehighlighter|markdownrenderer|mathparser)\\..*")
+    "src/tui/.*")
 set(QSOC_CLI_FILES ${PROJECT_FRONTEND_FILES})
 list(FILTER QSOC_CLI_FILES INCLUDE REGEX "src/cli/.*")
 set(QSOC_GUI_FILES ${PROJECT_FRONTEND_FILES})
-list(FILTER QSOC_GUI_FILES INCLUDE REGEX "src/gui/.*|src/common/qstaticicontheme\\..*")
+list(FILTER QSOC_GUI_FILES INCLUDE REGEX "src/gui/.*")
 
 function(qsoc_add_static_library name)
     if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -847,6 +838,7 @@ if(CPPCHECK_COMMAND)
             -I${CMAKE_BINARY_DIR}/qsoc_tui_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_cli_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_gui_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_common_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_agent_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc-agentd_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_autogen/include

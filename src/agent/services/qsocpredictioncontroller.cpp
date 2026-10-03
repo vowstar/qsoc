@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/services/qsocpredictioncontroller.h"
-#include "agent/qsocmessageauthority.h"
+#include "common/qsocmessageauthority.h"
 
 #include <QPointer>
 #include <QRegularExpression>

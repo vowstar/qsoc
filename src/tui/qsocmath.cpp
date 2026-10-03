@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "common/qsocmath.h"
+#include "tui/qsocmath.h"
 
 #include <algorithm>
 

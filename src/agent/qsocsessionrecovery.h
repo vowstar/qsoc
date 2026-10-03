@@ -4,8 +4,8 @@
 #ifndef QSOCSESSIONRECOVERY_H
 #define QSOCSESSIONRECOVERY_H
 
-#include "agent/qsochooktypes.h"
 #include "agent/qsocsession.h"
+#include "common/qsochooktypes.h"
 
 #include <nlohmann/json.hpp>
 

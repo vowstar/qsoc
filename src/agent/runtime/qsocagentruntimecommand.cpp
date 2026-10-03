@@ -20,7 +20,6 @@
 #include "agent/qsocgoal.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocmemoryrecall.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/qsocrewind.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsubagenttasksource.h"
@@ -35,6 +34,7 @@
 #include "common/qsocconfig.h"
 #include "common/qsoccron.h"
 #include "common/qsoclinediff.h"
+#include "common/qsocmessageauthority.h"
 
 #include <QDeadlineTimer>
 #include <QProcess>

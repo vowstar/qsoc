@@ -10,7 +10,7 @@
  */
 
 #include "agent/daemon/qsocagentdaemon.h"
-#include "agent/remote/qsocinterrupt.h"
+#include "common/qsocinterrupt.h"
 #ifdef Q_OS_UNIX
 #include <unistd.h>
 #endif

@@ -3,7 +3,7 @@
 
 #include "tui/qtuicodeblock.h"
 
-#include "common/qsoccodehighlighter.h"
+#include "tui/qsoccodehighlighter.h"
 #include "tui/qtuitextlayout.h"
 #include "tui/qtuiwidget.h"
 

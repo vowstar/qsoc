@@ -11,11 +11,11 @@
  */
 
 #include "cli/qsocagentclient.h"
-#include "agent/qsocmessageauthority.h"
-#include "agent/remote/qsocinterrupt.h"
 #include "cli/qsocagentinputhistory.h"
 #include "cli/qsocagenttaskmodel.h"
 #include "cli/qsoccliworker.h"
+#include "common/qsocinterrupt.h"
+#include "common/qsocmessageauthority.h"
 #include "tui/qtuiimagepreviewblock.h"
 #include <QSocketNotifier>
 

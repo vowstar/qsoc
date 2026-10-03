@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsocsessiontranscript.h"
-#include "agent/qsocmessageauthority.h"
+#include "common/qsocmessageauthority.h"
 
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuiscrollview.h"

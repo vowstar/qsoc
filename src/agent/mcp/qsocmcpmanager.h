@@ -4,7 +4,7 @@
 #ifndef QSOCMCPMANAGER_H
 #define QSOCMCPMANAGER_H
 
-#include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocmcptypes.h"
 
 #include <functional>
 

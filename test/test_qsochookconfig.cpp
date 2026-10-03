@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
 #include "qsoc_test.h"
 
 #include <yaml-cpp/yaml.h>

@@ -527,5 +527,5 @@ private:
     }
 };
 
-QTEST_MAIN(TestQSocAgentRuntime)
+QSOC_TEST_MAIN(TestQSocAgentRuntime)
 #include "test_qsocagentruntime.moc"

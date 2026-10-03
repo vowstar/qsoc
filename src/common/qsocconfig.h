@@ -4,8 +4,8 @@
 #ifndef QSOCCONFIG_H
 #define QSOCCONFIG_H
 
-#include "agent/mcp/qsocmcptypes.h"
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
+#include "common/qsocmcptypes.h"
 #include "common/qsocprojectmanager.h"
 
 #include <yaml-cpp/yaml.h>
