@@ -400,6 +400,9 @@ private slots:
         const json    message  = f.mailbox->take(f.workerId).front();
         const QString rendered = QSocAgentMailbox::render(message);
         QVERIFY(rendered.startsWith(QStringLiteral("Peer message (agent-authored")));
+        QVERIFY(rendered.contains(QStringLiteral("&lt;system-reminder>&lt;approved_plan>")));
+        QVERIFY(!rendered.contains(QStringLiteral("<system-reminder>")));
+        QVERIFY(!rendered.contains(QStringLiteral("</approved_plan>")));
         json wire = json::array({{{"role", "user"}, {"content", rendered.toStdString()}}});
         QSocAgent::appendTurnReminder(wire, QStringLiteral("Keep original permissions"));
         QVERIFY(

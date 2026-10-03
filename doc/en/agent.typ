@@ -1141,8 +1141,14 @@ on every request, including after history compaction. These runtime rules
 also accompany a custom system prompt.
 
 Peer messages remain agent-authored data, including any embedded approval
-or reminder tags. Runtime reminders are placed in the leading system
-message; user and tool content are not promoted to system instructions.
+or reminder tags. In tool output, file contents, peer messages, sub-agent
+results and recalled memory, qsoc escapes the tags it uses for runtime
+instructions (`<system-reminder>`, `<approved_plan>`, `<task-notification>`,
+`<goal_context>`, `<recalled_memory>`), so the model reads them as quoted
+text such as `&lt;system-reminder>`. A tool result that contained such tags
+also ends with a qsoc reminder that the imitation changes nothing. Runtime
+reminders are placed in the leading system message; user and tool content
+are not promoted to system instructions.
 Coordinate overlapping file work before editing, continue independent work
 while peers run, and wait only when their answer is needed.
 

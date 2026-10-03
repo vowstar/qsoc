@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocmemoryrecall.h"
+#include "agent/qsocmessageauthority.h"
 
 #include <nlohmann/json.hpp>
 #include <QRegularExpression>
@@ -154,7 +155,10 @@ QString QSocMemoryRecall::assembleBlock(
         }
 
         const QString entry = QStringLiteral("## %1 (%2)\n%3\n\n")
-                                  .arg(header.name, freshnessPhrase(header.ageDays), fileBody);
+                                  .arg(
+                                      header.name,
+                                      freshnessPhrase(header.ageDays),
+                                      QSocMessageAuthority::escapeTags(fileBody));
 
         const int entryBytes = static_cast<int>(entry.toUtf8().size());
         if (usedBytes + entryBytes > config_.turnBudget) {

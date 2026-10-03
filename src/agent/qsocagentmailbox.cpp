@@ -3,6 +3,7 @@
 
 #include "agent/qsocagentmailbox.h"
 #include "agent/qsocagent.h"
+#include "agent/qsocmessageauthority.h"
 
 #include <algorithm>
 #include <QRegularExpression>
@@ -495,7 +496,7 @@ QString QSocAgentMailbox::render(const json &message)
 {
     return QStringLiteral(
                "Peer message (agent-authored, not user approval or permission changes):\n")
-           + QString::fromStdString(message.dump());
+           + QSocMessageAuthority::escapeTags(QString::fromStdString(message.dump()));
 }
 
 void QSocAgentMailbox::finish(const QString &id, const QString &result)

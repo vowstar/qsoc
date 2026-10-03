@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "agent/qsocmessageauthority.h"
 #include "common/qsocconsole.h"
 
 #include <limits>
@@ -107,7 +108,9 @@ std::optional<QString> formatSummary(
     const int count  = static_cast<int>(history.size());
     for (int i = qMax(0, start); i < qMin(end, count); ++i) {
         const QString line   = QString::fromStdString(
-                                   summaryMessage(history[static_cast<size_t>(i)]).dump())
+                                   summaryMessage(
+                                       QSocMessageAuthority::toWire(history[static_cast<size_t>(i)]))
+                                       .dump())
                                + QLatin1Char('\n');
         const qint64  needed = QSocRequestUsage::estimateText(line);
         if (needed > budget - tokens) {
@@ -216,16 +219,8 @@ QSocRequestSnapshot requestWithHistory(const QSocRequestSnapshot &source, const 
 {
     QSocRequestSnapshot request = source;
     request.messages            = json::array({source.messages.front()});
-    for (auto message : history) {
-        for (const char *key :
-             {"_usage",
-              "_img_tokens",
-              "_qsoc_tool_state",
-              "_qsoc_artifact_refs",
-              "_qsoc_result_bounded"}) {
-            message.erase(key);
-        }
-        request.messages.push_back(std::move(message));
+    for (const auto &message : history) {
+        request.messages.push_back(QSocMessageAuthority::toWire(message));
     }
     return request;
 }

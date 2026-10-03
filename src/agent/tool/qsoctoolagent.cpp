@@ -9,6 +9,7 @@
 #include "agent/qsocagentdefinition.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsochookmanager.h"
+#include "agent/qsocmessageauthority.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocinterrupt.h"
@@ -523,7 +524,7 @@ QString QSocToolAgent::buildTaskNotification(
     const QString &transcriptPath)
 {
     constexpr int kBodyCap = 4000;
-    QString       capped   = body;
+    QString       capped   = QSocMessageAuthority::escapeTags(body);
     if (capped.size() > kBodyCap) {
         capped = capped.left(kBodyCap)
                  + QStringLiteral("\n[... truncated; read the transcript for the full output ...]");

@@ -19,6 +19,7 @@
 #include "agent/qsoclooptasksource.h"
 #include "agent/qsocmemorydream.h"
 #include "agent/qsocmemoryextractor.h"
+#include "agent/qsocmessageauthority.h"
 #include "agent/qsocrewind.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsessionrecovery.h"
@@ -6842,13 +6843,7 @@ bool QSocCliWorker::runAgentLoop(
                 }
             }
             for (const auto &msg : agent->getMessages()) {
-                json sanitized = msg;
-                /* Internal annotations; providers reject unknown fields. */
-                sanitized.erase("_usage");
-                sanitized.erase("_img_tokens");
-                sanitized.erase("_qsoc_tool_state");
-                sanitized.erase("_qsoc_artifact_refs");
-                sideMessages.push_back(sanitized);
+                sideMessages.push_back(QSocMessageAuthority::toWire(msg));
             }
             const QString wrapped = QStringLiteral(
                                         "<system-reminder>Side question: you are a one-off fork of "

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsoccontextrestore.h"
+#include "agent/qsocmessageauthority.h"
 #include "agent/qsoctoolcatalog.h"
 
 namespace {
@@ -167,7 +168,7 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
                                       "[Restored file after compaction: %1 (%2 lines)]\n%3")
                                       .arg(path)
                                       .arg(item.lines)
-                                      .arg(*content);
+                                      .arg(QSocMessageAuthority::escapeTags(*content));
         }
         const int itemTokens = inputs.estimateTokens(item.attachmentText);
         if (itemTokens > inputs.fileBudget - fileTokens || itemTokens > remaining - 10) {
@@ -191,8 +192,9 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
         const QString truncated
             = truncateToTokens(*body, inputs.maxTokensPerSkill, inputs.estimateTokens);
         QSocContextRestore::SkillItem item;
-        item.name            = name;
-        item.attachmentText  = QStringLiteral("## %1\n%2").arg(name, truncated);
+        item.name = name;
+        item.attachmentText
+            = QStringLiteral("## %1\n%2").arg(name, QSocMessageAuthority::escapeTags(truncated));
         const int itemTokens = inputs.estimateTokens(item.attachmentText);
         if (itemTokens > inputs.skillsBudget - skillTokens || itemTokens > remaining - 32) {
             continue;
@@ -208,9 +210,10 @@ QSocContextRestore QSocContextRestoreBuilder::build(const Inputs &inputs)
             break;
         }
         QSocContextRestore::AgentItem item;
-        item.id              = row.id;
-        item.label           = row.label;
-        item.attachmentText  = QStringLiteral("- %1 (%2): %3").arg(row.label, row.id, row.summary);
+        item.id             = row.id;
+        item.label          = row.label;
+        item.attachmentText = QSocMessageAuthority::escapeTags(
+            QStringLiteral("- %1 (%2): %3").arg(row.label, row.id, row.summary));
         const int itemTokens = inputs.estimateTokens(item.attachmentText);
         if (itemTokens > remaining - 32) {
             continue;
