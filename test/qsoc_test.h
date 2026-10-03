@@ -14,6 +14,8 @@
 #include <QtGlobal>
 #include <QtTest>
 
+#include <cstdio>
+
 /* QSOC_TEST_MAIN calls _exit(); pull its declaration in directly rather
  * than relying on a transitive include. */
 #ifdef Q_OS_WIN
@@ -156,6 +158,7 @@ inline bool qsocTestDependenciesRequired()
         /* Output test completion information */ \
         fprintf(stderr, "Tests completed with result: %d\n", result); \
         /* Exit immediately without waiting for event loop cleanup */ \
+        std::fflush(nullptr); \
         _exit(result ? 1 : 0); \
         /* This line will never be reached */ \
         return result; \
