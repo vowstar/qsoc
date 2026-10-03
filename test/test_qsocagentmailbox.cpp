@@ -390,6 +390,24 @@ private slots:
         QCOMPARE(f.mailbox->pendingCount(f.workerId), 1);
     }
 
+    void sessionIdentityNamesTheMainAgent()
+    {
+        Fixture       f;
+        const QString session = QStringLiteral("session-a");
+        f.root.bindSessionIdentity(session);
+        QCOMPARE(f.root.agentIdentity(), session);
+        QCOMPARE(f.mailbox->resolve(QStringLiteral("main")), session);
+        QVERIFY(f.root.buildSystemPromptWithMemory().contains(
+            QStringLiteral("Your stable agent_id is session-a.")));
+        f.worker->bindSessionIdentity(QStringLiteral("session-b"));
+        QCOMPARE(f.root.agentIdentity(), session);
+        QVERIFY(f.worker->agentIdentity() != QStringLiteral("session-b"));
+        f.root.clearHistory();
+        QCOMPARE(f.root.agentIdentity(), session);
+        f.root.bindSessionIdentity(QStringLiteral("session-b"));
+        QCOMPARE(f.mailbox->resolve(QStringLiteral("main")), QStringLiteral("session-b"));
+    }
+
     void peerMarkupRemainsUntrustedData()
     {
         Fixture       f;

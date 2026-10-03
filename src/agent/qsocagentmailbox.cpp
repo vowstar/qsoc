@@ -21,7 +21,10 @@ QString QSocAgentMailbox::registerAgent(QSocAgent *agent, const QString &name, c
         return {};
     QString id = idFor(agent);
     if (id.isEmpty()) {
-        id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const bool root = name == QStringLiteral("main") && taskId.isEmpty();
+        id              = root && !rootId_.isEmpty() && !agents_.contains(rootId_)
+                              ? rootId_
+                              : QUuid::createUuid().toString(QUuid::WithoutBraces);
         AgentEntry entry;
         entry.agent = agent;
         entry.inbox = new QSocAgentInbox(this);

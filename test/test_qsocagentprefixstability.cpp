@@ -256,7 +256,6 @@ const QHash<QString, QString> &knownBreaks()
         {QStringLiteral("plan mode on"), QStringLiteral("plan reminder rides in the system")},
         {QStringLiteral("plan approved"), QStringLiteral("plan reminder rides in the system")},
         {QStringLiteral("AGENTS.md edited"), QStringLiteral("system reread every request")},
-        {QStringLiteral("resume"), QStringLiteral("agent_id is new per process")},
     };
     return breaks;
 }
@@ -370,6 +369,7 @@ private:
         agent->setUserWatchingProbe([&session]() { return session.watching; });
         auto *messaging = new QSocSubAgentTaskSource(agent);
         messaging->enableMessaging(agent);
+        agent->bindSessionIdentity(QStringLiteral("prefix-session"));
         session.current = agent;
         return agent;
     }

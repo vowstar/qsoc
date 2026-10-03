@@ -1082,7 +1082,8 @@ While a backgrounded run is alive:
 `agent_id`, a display name, a current `task_id`, and a state: `pending`,
 `running`, `idle`, `cancelled`, or `closed`. Address peers by `agent_id`
 or a task alias such as `a1`; names are display labels. The `main` alias
-addresses the main agent. A follow-up keeps the agent identity and creates
+addresses the main agent, whose `agent_id` is the session ID and stays the
+same when the session is resumed. A follow-up keeps the agent identity and creates
 a new task ID when it wakes an idle child.
 
 - `send_message(target, message_id, message, reply_to?)` queues information.

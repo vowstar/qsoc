@@ -146,6 +146,14 @@ public:
     QString agentIdentity() const { return agentIdentity_; }
 
     /**
+     * @brief Use the session id as the main agent's peer identity.
+     * @details The identity appears in the system prompt, so a resumed
+     *          session keeps the same prompt. Rebinding resets the
+     *          mailbox when the identity changes. Ignored by sub-agents.
+     */
+    void bindSessionIdentity(const QString &sessionId);
+
+    /**
      * @brief Install a synchronous session-persistence barrier.
      * @details Returning false prevents the pending request or tool from
      *          running. An empty callback disables persistence checkpoints.

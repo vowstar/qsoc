@@ -60,9 +60,11 @@ public:
         const QString &from    = {},
         const QString &replyTo = {},
         bool           peek    = false);
-    int            pendingCount(const QString &recipient) const;
-    void           cancel(const QString &id);
-    void           reset(QSocAgent *root);
+    int  pendingCount(const QString &recipient) const;
+    void cancel(const QString &id);
+    void reset(QSocAgent *root);
+    /* Id the main agent registers under from now on; empty means random. */
+    void           setRootId(const QString &id) { rootId_ = id; }
     void           finish(const QString &id, const QString &result);
     static QString render(const json &message);
 
@@ -111,6 +113,7 @@ private:
     QMap<QString, QStringList>          groups_;
     int                                 recordCount_ = 0;
     quint64                             generation_  = 0;
+    QString                             rootId_;
     std::function<QString(QSocAgent *)> wakeHandler_;
 };
 

@@ -3461,6 +3461,7 @@ bool QSocCliWorker::runAgentLoop(
         sessionLock.reset();
         sessionLockPath.clear();
         currentSession = std::move(candidate->session);
+        agent->bindSessionIdentity(currentSession->id());
         agent->unbindToolResultStore();
         currentFileHistory           = std::move(candidate->history);
         persistedMessages            = json::array();
@@ -4089,6 +4090,7 @@ bool QSocCliWorker::runAgentLoop(
         currentSession     = std::move(candidate->session);
         currentFileHistory = std::move(candidate->history);
         installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
+        agent->bindSessionIdentity(currentSession->id());
         return true;
     };
 
@@ -4284,6 +4286,7 @@ bool QSocCliWorker::runAgentLoop(
             currentSession = std::make_unique<QSocSession>(
                 sessionId, sessionPath, QSocSession::StorageMode::Fresh);
             installSessionWriteBarrier(currentSession.get(), currentFileHistory.get());
+            agent->bindSessionIdentity(sessionId);
             agent->unbindToolResultStore();
         } else {
             const char *why       = nullptr;

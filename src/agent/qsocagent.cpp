@@ -168,6 +168,18 @@ void QSocAgent::setMailbox(QSocAgentMailbox *mailbox, const QString &identity)
     agentIdentity_ = identity;
 }
 
+void QSocAgent::bindSessionIdentity(const QString &sessionId)
+{
+    if (!mailbox_ || agentConfig.isSubAgent
+        || mailbox_->resolve(QStringLiteral("main")) != agentIdentity_) {
+        return;
+    }
+    mailbox_->setRootId(sessionId);
+    if (agentIdentity_ != sessionId) {
+        mailbox_->reset(this);
+    }
+}
+
 QSocAgent::ActiveRunPtr QSocAgent::beginRun(RunMode mode)
 {
     enterRequestBoundary();
