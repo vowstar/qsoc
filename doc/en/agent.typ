@@ -30,6 +30,9 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`--ssh <target>`],
     [Connect to a remote workspace before the first prompt. Accepts
      `[user@]host[:port]` or a `~/.ssh/config` alias. Requires `--workspace`],
+    [`--connect <socket>`],
+    [Attach to a running `qsoc-agentd` instead of starting a private one
+     (@agent-daemon)],
   )],
   caption: [AGENT COMMAND OPTIONS],
   kind: table,
@@ -58,6 +61,26 @@ Ctrl-C cancels an in-flight query with or without streaming. One press prints
 `(interrupted)` and exits with status 0; a second press within two seconds
 exits immediately with status 130. `--no-stream` still sends a synchronous
 request and does not add terminal control sequences to its output.
+
+=== Agent Daemon
+<agent-daemon>
+
+The agent runs in a `qsoc-agentd` process. `qsoc agent` starts a private one
+for itself and stops it on exit. `qsoc-agentd` can also run on its own, and any
+number of clients can attach to it:
+
+```bash
+qsoc-agentd                               # $XDG_RUNTIME_DIR/qsoc/agentd.sock
+qsoc-agentd -s /path/to/agent.sock        # explicit socket path
+qsoc agent --connect /path/to/agent.sock  # TUI attached to that daemon
+```
+
+Each connection gets its own session in its own process, so one session never
+waits for another. Closing an attached TUI aborts the work of its session and
+leaves the daemon running. The session stays on disk for `--resume` and
+`--continue`. Only processes of the same user can connect. On Windows the
+socket path names a local named pipe. Clients exchange length-prefixed JSON
+messages, and the greeting carries the protocol version.
 
 === Workspace Override
 <agent-workspace-flag>

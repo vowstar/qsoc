@@ -38,12 +38,18 @@
     [template],
     [Generate files from Jinja2 templates using various data sources],
     [], [stub], [Generate Verilog and Liberty stub files for selected modules],
-    [gui], [], [Start the software in GUI mode],
+    [gui], [], [Start the GUI program `qsoc-gui` (@gui-overview)],
     [agent], [], [Start interactive AI agent for SoC design automation],
   )],
   caption: [COMMAND LINE INTERFACE],
   kind: table,
 )
+
+QSoC installs four programs side by side: `qsoc` (this command line),
+`qsoc-gui` (the GUI), `qsoc-agentd` (the agent daemon, @agent-daemon) and
+`qsoc-smt-worker` (the SMT solver worker). `qsoc` finds the others in its own
+directory, or in the directory named by the `QSOC_BIN_DIR` environment
+variable.
 
 == Global Options
 <global-options>
