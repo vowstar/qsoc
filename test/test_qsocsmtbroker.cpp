@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <QAbstractEventDispatcher>
 #include <QJsonArray>
 #include <QScopeGuard>
 #include <QtTest>
@@ -234,6 +235,35 @@ private slots:
         QVERIFY(broker.cancel(accepted.first()));
         QVERIFY(broker.submit(100, large, reply));
         QCOMPARE(busy, 1);
+    }
+
+    void completedTasksReleaseTheirQueueDeadlines()
+    {
+        QSocSmtBroker broker(nullptr, [](const auto &, auto) {
+            return QJsonObject{{"execution", "completed"}};
+        });
+        auto         *dispatcher = QAbstractEventDispatcher::instance();
+        QVERIFY(dispatcher);
+        auto timers = [&] {
+            const auto objects = dispatcher->findChildren<QObject *>()
+                                 + broker.findChildren<QObject *>();
+            int        count   = 0;
+            for (auto *object : objects)
+                count += dispatcher->registeredTimers(object).size();
+            return count;
+        };
+        const int baseline  = timers();
+        int       completed = 0;
+        for (int batch = 0; batch < 8; ++batch) {
+            for (int task = 0; task < 8; ++task)
+                QVERIFY(broker.submit(task + 1, request("(assert true)"), [&](const auto &) {
+                    ++completed;
+                }));
+            QTRY_COMPARE(completed, (batch + 1) * 8);
+            QCOMPARE(broker.activeCount(), 0);
+            QCOMPARE(broker.queuedCount(), 0);
+            QCOMPARE(timers(), baseline);
+        }
     }
 
     void shutdownStopsActiveTasks()

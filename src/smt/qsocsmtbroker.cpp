@@ -26,6 +26,7 @@ struct QSocSmtBroker::State
         qsizetype    bytes    = 0;
         bool         running  = false;
         bool         canceled = false;
+        QTimer       deadline;
         std::jthread thread;
     };
 
@@ -65,6 +66,7 @@ struct QSocSmtBroker::State
             const auto job = jobs.value(id);
             queuedBytes -= job->bytes;
             --queued;
+            job->deadline.stop();
             job->running = true;
             ++active;
             job->thread = std::jthread([this, id, request = job->request](std::stop_token stop) {
@@ -168,11 +170,19 @@ quint64 QSocSmtBroker::submit(quint64 owner, const QJsonObject &request, Reply r
     queue.append(id);
     d->queuedBytes += bytes;
     ++d->queued;
-    QTimer::singleShot(d->queueWaitMs, this, [this, id] {
-        const auto queuedJob = d->jobs.value(id);
-        if (queuedJob && !queuedJob->running)
-            d->cancel(id, true);
-    });
+    job->deadline.setParent(this);
+    job->deadline.setSingleShot(true);
+    connect(
+        &job->deadline,
+        &QTimer::timeout,
+        this,
+        [this, id] {
+            const auto queuedJob = d->jobs.value(id);
+            if (queuedJob && !queuedJob->running)
+                d->cancel(id, true);
+        },
+        Qt::QueuedConnection);
+    job->deadline.start(d->queueWaitMs);
     d->pump();
     return id;
 }
