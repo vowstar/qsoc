@@ -420,6 +420,7 @@ file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/a
 set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
 list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/main\\.cpp$")
 list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/smtworker\\.cpp$")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/guimain\\.cpp$")
 list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/daemon/.*")
 list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/gui/.*")
 list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/tui/.*")
@@ -601,6 +602,11 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_lupdate(${PROJECT_NAME} TS_FILES "${APPONLY_TS_FILES}" SOURCES "${PROJECT_CPP_FILES}" "${PROJECT_H_FILES}" "${PROJECT_UI_FILES}")
     qt_add_lrelease(${PROJECT_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
     qt_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
+
+    # The GUI is its own program; `qsoc gui` hands over to it.
+    qt_add_resources(QSOC_GUI_SOURCES "${PROJECT_QRC_FILES}")
+    qt_add_executable(qsoc-gui MANUAL_FINALIZATION src/guimain.cpp ${QSOC_GUI_SOURCES})
+    qt_add_resources(qsoc-gui "gui_translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 else()
     set(PROJECT_SOURCES
         "src/main.cpp"
@@ -644,11 +650,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    qsoc_core
+    qsoc_cli
 )
-add_dependencies(${PROJECT_NAME} qsoc-smt-worker qsoc-agentd)
+add_dependencies(${PROJECT_NAME} qsoc-smt-worker qsoc-agentd qsoc-gui)
 
-set_target_properties(${PROJECT_NAME} PROPERTIES
+target_link_libraries(qsoc-gui PRIVATE qsoc_gui)
+set_target_properties(qsoc-gui PROPERTIES
+    WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER com.vowstar.${PROJECT_NAME}
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
@@ -701,8 +709,8 @@ if(APPLE)
             MACOSX_PACKAGE_LOCATION "Resources"
             GENERATED TRUE
         )
-        target_sources(${PROJECT_NAME} PRIVATE "${QSOC_ICNS}")
-        set_target_properties(${PROJECT_NAME} PROPERTIES
+        target_sources(qsoc-gui PRIVATE "${QSOC_ICNS}")
+        set_target_properties(qsoc-gui PROPERTIES
             MACOSX_BUNDLE_ICON_FILE qsoc.icns
         )
     endif()
@@ -730,9 +738,11 @@ if(WIN32)
             VERBATIM
         )
         add_custom_target(qsoc_win_icon DEPENDS "${QSOC_ICO}")
-        target_sources(${PROJECT_NAME} PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/resource/icons/qsoc.rc")
-        add_dependencies(${PROJECT_NAME} qsoc_win_icon)
+        foreach(target ${PROJECT_NAME} qsoc-gui)
+            target_sources(${target} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/resource/icons/qsoc.rc")
+            add_dependencies(${target} qsoc_win_icon)
+        endforeach()
         # The .rc references qsoc.ico without a path; tell windres to look
         # inside the build-dir output directory where the .ico is generated.
         set_source_files_properties(
@@ -742,7 +752,7 @@ if(WIN32)
     endif()
 endif()
 
-install(TARGETS ${PROJECT_NAME}
+install(TARGETS ${PROJECT_NAME} qsoc-gui
     BUNDLE DESTINATION .
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
@@ -764,6 +774,7 @@ endif()
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
+    qt_finalize_executable(qsoc-gui)
 endif()
 
 # Clang-format
