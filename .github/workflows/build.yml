@@ -590,9 +590,17 @@ jobs:
 
     - name: Full Test
       if: github.event_name == 'pull_request'
+      env:
+        QT_FORCE_STDERR_LOGGING: '1'
       run: |
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
         cd build
+        $probeLog = & ./test/test_qsocsmtservice.exe lexicalRejections 2>&1
+        $probeExit = $LASTEXITCODE
+        $probeLog | Write-Output
+        if ($probeExit -ne 0 -or ($probeLog -join "`n") -notmatch 'PASS') {
+          throw "QtTest output did not reach the captured log"
+        }
         # The loopback sshd fixture and the remote job-control scripts are
         # POSIX-only (sshd path lookup, the password database, /bin/sh on the
         # target, POSIX signals), so Windows has no remote coverage. Excluded
@@ -605,8 +613,6 @@ jobs:
       shell: bash
       run: .github/scripts/ctest-report.sh build/ctest.log
 
-    # ctest records no test output on Windows, so a failure arrives as a bare
-    # exit code. Re-run each failed binary with its own log file and print it.
     - name: Failed test diagnostics
       if: failure()
       run: |
