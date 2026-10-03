@@ -169,6 +169,10 @@ Every key under an entry is optional except `url`.
     [`reasoning`],
     [`false` marks a model without reasoning: no effort is sent, whatever
      `effort` or `/effort` says. Default `true`],
+    [`chat_template_kwargs`],
+    [Map sent unchanged as `chat_template_kwargs` in every `openai-chat`
+     request to this entry. Servers that render a chat template (vLLM,
+     SGLang) pass it to the template. Absent by default],
     [`modalities.image`], [`true` opts the model into image input],
     [`modalities.image_max_tokens`],
     [Reject the image when the client-side estimate exceeds this],
@@ -213,10 +217,15 @@ llm:
       context: 1048576
       modalities:
         image: true
+      chat_template_kwargs:
+        clear_thinking: false
 ```
 
 `omni` and `omni-lab` are the same served model on two servers; `/model`
 picks the server, the request body carries `vendor-omni-2026` either way.
+Only `omni-lab` requests carry `chat_template_kwargs`. Which keys a template
+reads depends on the model; `clear_thinking: false`, for example, asks some
+thinking templates to keep earlier reasoning in the prompt.
 
 === Anthropic Messages API
 <llm-anthropic>

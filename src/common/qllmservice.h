@@ -59,6 +59,8 @@ struct LLMModelConfig
     int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
     QString effort;                   /* Default effort: empty/off, "low", "medium", "high" */
     bool    reasoning = true;         /* False: the model cannot reason, effort is never sent */
+    /* Sent as chat_template_kwargs on openai-chat requests when not empty. */
+    nlohmann::json chatTemplateKwargs = nlohmann::json::object();
 
     /* Multimodal capability flags. Default text-only so a misconfigured
      * model never receives an image content block it cannot parse: the

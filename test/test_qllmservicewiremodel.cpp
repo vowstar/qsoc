@@ -338,6 +338,69 @@ private slots:
         QCOMPARE(request.value("reasoning_effort", std::string()), std::string("high"));
     }
 
+    void templateKwargsRideOnTheirModelOnly()
+    {
+        CaptureServer server;
+        QVERIFY(server.listen());
+        ScopedConfig scope(
+            QByteArrayLiteral(
+                "llm:\n"
+                "  model: thinker\n"
+                "  models:\n"
+                "    thinker:\n"
+                "      url: ")
+            + server.url().toUtf8()
+            + QByteArrayLiteral(
+                "\n"
+                "      timeout: 3000\n"
+                "      chat_template_kwargs:\n"
+                "        clear_thinking: false\n"
+                "        budget: 1024\n"
+                "        mode: fast\n"
+                "        label: \"true\"\n"
+                "        tags: [a, 2]\n"
+                "    plain:\n"
+                "      url: ")
+            + server.url().toUtf8()
+            + QByteArrayLiteral(
+                "\n"
+                "      timeout: 3000\n"
+                "    messages:\n"
+                "      api: anthropic-messages\n"
+                "      chat_template_kwargs: {clear_thinking: false}\n"
+                "      url: ")
+            + server.url().toUtf8() + QByteArrayLiteral("\n      timeout: 3000\n"));
+
+        QSocConfig  config;
+        QLLMService llm(nullptr, &config);
+        const json  expected
+            = {{"clear_thinking", false},
+               {"budget", 1024},
+               {"mode", "fast"},
+               {"label", "true"},
+               {"tags", json::array({"a", 2})}};
+        QCOMPARE(llm.getCurrentModelConfig().chatTemplateKwargs, expected);
+
+        QVERIFY(llm.sendRequest(QStringLiteral("hi")).success);
+        QSignalSpy done(&llm, &QLLMService::streamComplete);
+        QSignalSpy failed(&llm, &QLLMService::streamError);
+        json       messages = json::array();
+        messages.push_back({{"role", "user"}, {"content", "hi"}});
+        llm.sendChatCompletionStream(messages, json::array(), 0.2, QString());
+        QTRY_VERIFY(done.count() + failed.count() == 1);
+        QVERIFY(llm.setCurrentModel(QStringLiteral("plain")));
+        QVERIFY(llm.sendRequest(QStringLiteral("hi")).success);
+
+        QVERIFY(llm.setCurrentModel(QStringLiteral("messages")));
+        llm.sendRequest(QStringLiteral("hi"));
+
+        QCOMPARE(server.requestCount(), 4);
+        QCOMPARE(server.request(0).at("chat_template_kwargs"), expected);
+        QCOMPARE(server.request(1).at("chat_template_kwargs"), expected);
+        QVERIFY(!server.request(2).contains("chat_template_kwargs"));
+        QVERIFY(!server.request(3).contains("chat_template_kwargs"));
+    }
+
     /* Sub-agents and memory children run on clones; the clone must
      * resolve the wire name the same way the parent did. */
     void cloneKeepsTheWireName()

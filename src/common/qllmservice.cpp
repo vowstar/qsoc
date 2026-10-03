@@ -41,6 +41,43 @@ struct QLLMService::StreamState
 
 namespace {
 
+/* YAML to JSON for pass-through config. Quoted scalars stay strings. */
+json yamlToJson(const YAML::Node &node)
+{
+    if (node.IsMap()) {
+        json object = json::object();
+        for (const auto &entry : node) {
+            object[entry.first.as<std::string>()] = yamlToJson(entry.second);
+        }
+        return object;
+    }
+    if (node.IsSequence()) {
+        json array = json::array();
+        for (const auto &item : node) {
+            array.push_back(yamlToJson(item));
+        }
+        return array;
+    }
+    if (!node.IsScalar()) {
+        return nullptr;
+    }
+    const std::string text = node.Scalar();
+    if (node.Tag() != "!") {
+        const json parsed = json::parse(text, nullptr, false);
+        if (parsed.is_boolean() || parsed.is_number()) {
+            return parsed;
+        }
+    }
+    return text;
+}
+
+void applyTemplateKwargs(json &payload, const LLMModelConfig &endpoint)
+{
+    if (endpoint.chatTemplateKwargs.is_object() && !endpoint.chatTemplateKwargs.empty()) {
+        payload["chat_template_kwargs"] = endpoint.chatTemplateKwargs;
+    }
+}
+
 /* Every spelling of the `api` key lives here. */
 const QList<QPair<LLMApi, QString>> &apiNames()
 {
@@ -664,6 +701,9 @@ void QLLMService::loadConfigSettings()
                 if (node["reasoning"]) {
                     modelCfg.reasoning = node["reasoning"].as<bool>();
                 }
+                if (node["chat_template_kwargs"] && node["chat_template_kwargs"].IsMap()) {
+                    modelCfg.chatTemplateKwargs = yamlToJson(node["chat_template_kwargs"]);
+                }
 
                 /* Modality block: opt-in only. Absent or non-map -> all
                  * defaults (text-only). The block's keys are flat
@@ -800,6 +840,7 @@ json QLLMService::buildRequestPayload(
     if (jsonMode) {
         payload["response_format"] = {{"type", "json_object"}};
     }
+    applyTemplateKwargs(payload, endpoint);
 
     return payload;
 }
@@ -975,6 +1016,7 @@ void QLLMService::sendChatCompletionStream(
         payload["stream_options"] = {{"include_usage", true}};
 
         applyReasoningEffort(payload, effort);
+        applyTemplateKwargs(payload, endpoint);
 
         if (!endpoint.model.isEmpty()) {
             payload["model"] = endpoint.model.toStdString();
@@ -1729,6 +1771,7 @@ json QLLMService::sendChatCompletionTo(
         payload["temperature"] = temperature;
         payload["stream"]      = false;
         applyReasoningEffort(payload, effort);
+        applyTemplateKwargs(payload, endpoint);
 
         if (!endpoint.model.isEmpty()) {
             payload["model"] = endpoint.model.toStdString();
