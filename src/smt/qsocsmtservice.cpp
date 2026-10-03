@@ -13,6 +13,7 @@
 #include <mutex>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -296,6 +297,8 @@ QJsonObject QSocSmtService::solve(
     QString    error;
     if (!QSocLocalEndpoint::prepareDirectory(endpoint, &error))
         return failure("error", error);
+    // QLocalServer needs a dispatcher in threads created outside Qt.
+    QEventLoop   events;
     QLocalServer server;
     server.setSocketOptions(QLocalServer::UserAccessOption);
     server.setMaxPendingConnections(1);
@@ -331,6 +334,7 @@ QJsonObject QSocSmtService::solveRemote(
         return failure("error", validation);
     if (stop.stop_requested())
         return failure("cancelled", "Request cancelled");
+    QEventLoop   events;
     QLocalSocket socket;
     socket.setReadBufferSize(wireLimit + QSocIpc::headerBytes);
     socket.connectToServer(QSocLocalEndpoint::resolve(endpoint));
