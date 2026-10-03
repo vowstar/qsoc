@@ -531,6 +531,9 @@ target_include_directories(qsoc-agentd PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
 )
 target_link_libraries(qsoc-agentd PRIVATE qsoc_agent)
+# Agent tools read the manual, the tokenizer table and the licenses from qrc.
+qt_add_resources(QSOC_AGENTD_RESOURCES ${PROJECT_QRC_FILES} ${PROJECT_DOC_QRC_FILES})
+target_sources(qsoc-agentd PRIVATE ${QSOC_AGENTD_RESOURCES})
 install(TARGETS qsoc-agentd RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 add_executable(qsoc-smt-worker
