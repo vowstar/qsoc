@@ -6,8 +6,10 @@
 
 import ctypes
 from ctypes import wintypes
+import io
 import json
 import msvcrt
+import os
 import pathlib
 import runpy
 import subprocess
@@ -58,6 +60,10 @@ allocate = api("AllocConsole", [])
 detach = api("FreeConsole", [])
 control = api("SetConsoleCtrlHandler", [ctypes.c_void_p, wintypes.BOOL])
 broadcast = api("GenerateConsoleCtrlEvent", [wintypes.DWORD, wintypes.DWORD])
+open_console = api("CreateFileW", [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE], wintypes.HANDLE)
+close_handle = api("CloseHandle", [wintypes.HANDLE])
 write_input = api("WriteConsoleInputW", [wintypes.HANDLE, ctypes.POINTER(InputRecord),
                                        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)])
 screen_info = api("GetConsoleScreenBufferInfo", [wintypes.HANDLE, ctypes.POINTER(ScreenInfo)])
@@ -71,8 +77,20 @@ def require(result, operation):
         raise ctypes.WinError(ctypes.get_last_error(), operation)
 
 
+def console_file(name):
+    handle = open_console(name, 0xC0000000, 3, None, 3, 0, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
+    except OSError:
+        close_handle(handle)
+        raise
+    return io.FileIO(descriptor, mode="r+b", closefd=True)
+
+
 def screen():
-    with open("CONOUT$", "r+b", buffering=0) as output:
+    with console_file("CONOUT$") as output:
         handle = msvcrt.get_osfhandle(output.fileno())
         info = ScreenInfo()
         require(screen_info(handle, ctypes.byref(info)), "Read console dimensions")
@@ -145,8 +163,8 @@ def main(program):
                 server_thread.start()
                 process = None
                 try:
-                    with open("CONIN$", "r+b", buffering=0) as input_file, \
-                            open("CONOUT$", "wb", buffering=0) as output_file, \
+                    with console_file("CONIN$") as input_file, \
+                            console_file("CONOUT$") as output_file, \
                             (working / "cli.stderr").open("wb") as error_file:
                         process = subprocess.Popen([str(executable), "agent"], cwd=working,
                             env=environment, stdin=input_file, stdout=output_file, stderr=error_file)
