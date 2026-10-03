@@ -4,8 +4,8 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocsubagenttasksource.h"
-#include "agent/qsoctasksource.h"
 #include "agent/qsoctool.h"
+#include "common/qsoctasksource.h"
 #include "qsoc_test.h"
 
 #include <QDir>

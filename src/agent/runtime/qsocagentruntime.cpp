@@ -26,7 +26,6 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskeventqueue.h"
 #include "agent/qsoctaskforecast.h"
-#include "agent/qsoctaskregistry.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
@@ -78,6 +77,7 @@
 #include "common/qsocpaths.h"
 #include "common/qsocprojectmanager.h"
 #include "common/qsocproxy.h"
+#include "common/qsoctaskregistry.h"
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>

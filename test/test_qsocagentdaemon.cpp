@@ -9,7 +9,7 @@
  *          shutdown.
  */
 
-#include "agent/runtime/qsocagentruntimeevent.h"
+#include "agent/protocol/qsocagentruntimeevent.h"
 #include "common/qsoclocalendpoint.h"
 #include "common/qsoclocalpeer.h"
 #include "qsoc_test.h"

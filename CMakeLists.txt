@@ -415,19 +415,45 @@ file(GLOB_RECURSE PROJECT_UI_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "ui/*.u
 file(GLOB_RECURSE PROJECT_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/*.ts")
 file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/app_*.ts")
 
+# Small OS helpers are shared by clients and the business libraries.
+set(QSOC_PLATFORM_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+list(FILTER QSOC_PLATFORM_FILES INCLUDE REGEX
+    "src/common/qsoc(localendpoint|localpeer|processowner|sibling)\\..*")
+add_library(qsoc_platform STATIC ${QSOC_PLATFORM_FILES})
+target_include_directories(qsoc_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(qsoc_platform PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network)
+if(WIN32)
+    target_compile_definitions(qsoc_platform PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(qsoc_platform PUBLIC advapi32)
+endif()
+
+set(QSOC_PROTOCOL_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+list(FILTER QSOC_PROTOCOL_FILES INCLUDE REGEX "src/agent/protocol/.*")
+add_library(qsoc_agent_protocol STATIC ${QSOC_PROTOCOL_FILES})
+target_include_directories(qsoc_agent_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(qsoc_agent_protocol SYSTEM PUBLIC "${JSON_INCLUDE_DIRS}")
+target_link_libraries(qsoc_agent_protocol PUBLIC Qt${QT_VERSION_MAJOR}::Core ${JSON_LIBRARIES})
+
+set(QSOC_CLIENT_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+list(FILTER QSOC_CLIENT_FILES INCLUDE REGEX "src/agent/client/.*")
+add_library(qsoc_agent_client STATIC ${QSOC_CLIENT_FILES})
+target_link_libraries(qsoc_agent_client PUBLIC qsoc_agent_protocol qsoc_platform)
+
 # Shared business code and the agent runtime have separate dependency graphs.
 set(QSOC_COMMON_CPP "${PROJECT_CPP_FILES}")
 list(FILTER QSOC_COMMON_CPP INCLUDE REGEX "src/common/.*")
 set(QSOC_COMMON_HEADERS "${PROJECT_H_FILES}")
 list(FILTER QSOC_COMMON_HEADERS INCLUDE REGEX "src/common/.*")
+list(REMOVE_ITEM QSOC_COMMON_CPP ${QSOC_PLATFORM_FILES})
+list(REMOVE_ITEM QSOC_COMMON_HEADERS ${QSOC_PLATFORM_FILES})
 add_library(qsoc_common STATIC ${QSOC_COMMON_CPP} ${QSOC_COMMON_HEADERS})
 
 set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
 list(FILTER QSOC_AGENT_CPP INCLUDE REGEX "src/agent/.*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/daemon/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/(daemon|protocol|client)/.*")
 set(QSOC_AGENT_HEADERS "${PROJECT_H_FILES}")
 list(FILTER QSOC_AGENT_HEADERS INCLUDE REGEX "src/agent/.*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/daemon/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/(daemon|protocol|client)/.*")
 
 include(GenerateExportHeader)
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -458,11 +484,6 @@ target_include_directories(qsoc_common SYSTEM PUBLIC
     "${ANTLR4_INCLUDE_DIRS}"
     "${SYSTEMRDL_INCLUDE_DIRS}"
     "${FMT_INCLUDE_DIRS}"
-    "${REPLXX_INCLUDE_DIRS}"
-    "${MBEDTLS_INCLUDE_DIRS}"
-    "${LIBSSH2_INCLUDE_DIRS}"
-    "${CMARK_GFM_INCLUDE_DIRS}"
-    "${LEXBOR_INCLUDE_DIRS}"
 )
 
 set(QSOC_COMMON_LINK_LIBRARIES
@@ -479,18 +500,9 @@ set(QSOC_COMMON_LINK_LIBRARIES
     ${ANTLR4_LIBRARIES}
     ${SYSTEMRDL_LIBRARIES}
     ${FMT_LIBRARIES}
-    ${REPLXX_LIBRARIES}
-    ${LIBSSH2_LIBRARIES}
-    ${CMARK_GFM_LIBRARIES}
-    ${LEXBOR_LIBRARIES}
 )
-target_link_libraries(qsoc_common PUBLIC ${QSOC_COMMON_LINK_LIBRARIES})
+target_link_libraries(qsoc_common PUBLIC qsoc_platform ${QSOC_COMMON_LINK_LIBRARIES})
 target_link_libraries(qsoc_common PRIVATE libz3)
-target_compile_definitions(qsoc_common PUBLIC
-    CMARK_GFM_STATIC_DEFINE
-    CMARK_GFM_EXTENSIONS_STATIC_DEFINE
-    LEXBOR_STATIC
-)
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(qsoc_common PUBLIC -fexperimental-library)
 endif()
@@ -500,7 +512,10 @@ if(WIN32)
 endif()
 
 
-target_link_libraries(qsoc_agent PUBLIC qsoc_common)
+target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol)
+target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}" "${MBEDTLS_INCLUDE_DIRS}")
+target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES} ${MBEDTLS_LIBRARIES})
+target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
 target_compile_definitions(qsoc_agent PUBLIC QSOC_AGENT_STATIC_DEFINE)
 
 # The daemon: one process hosting agent sessions behind a unix socket.
@@ -559,15 +574,18 @@ function(qsoc_add_static_library name)
 endfunction()
 
 qsoc_add_static_library(qsoc_tui ${QSOC_TUI_FILES})
-target_link_libraries(qsoc_tui PUBLIC qsoc_agent Qt${QT_VERSION_MAJOR}::Gui)
+target_link_libraries(qsoc_tui PUBLIC qsoc_common Qt${QT_VERSION_MAJOR}::Gui ${CMARK_GFM_LIBRARIES})
+target_include_directories(qsoc_tui SYSTEM PUBLIC "${CMARK_GFM_INCLUDE_DIRS}")
+target_compile_definitions(qsoc_tui PUBLIC CMARK_GFM_STATIC_DEFINE CMARK_GFM_EXTENSIONS_STATIC_DEFINE)
 
 qsoc_add_static_library(qsoc_cli ${QSOC_CLI_FILES})
-target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent)
+target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client ${REPLXX_LIBRARIES})
+target_include_directories(qsoc_cli SYSTEM PRIVATE "${REPLXX_INCLUDE_DIRS}")
 
 qsoc_add_static_library(qsoc_gui ${QSOC_GUI_FILES} ${PROJECT_UI_FILES})
 target_include_directories(qsoc_gui SYSTEM PUBLIC "${QSCHEMATIC_INCLUDE_DIRS}")
 target_link_libraries(qsoc_gui PUBLIC
-    qsoc_agent
+    qsoc_common
     Qt${QT_VERSION_MAJOR}::PrintSupport
     Qt${QT_VERSION_MAJOR}::Svg
     Qt${QT_VERSION_MAJOR}::Widgets
@@ -576,7 +594,7 @@ target_link_libraries(qsoc_gui PUBLIC
 )
 
 add_library(qsoc_core INTERFACE)
-target_link_libraries(qsoc_core INTERFACE qsoc_cli qsoc_gui)
+target_link_libraries(qsoc_core INTERFACE qsoc_cli qsoc_gui qsoc_agent)
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     set(PROJECT_SOURCES
@@ -838,6 +856,9 @@ if(CPPCHECK_COMMAND)
             -I${CMAKE_BINARY_DIR}/qsoc_tui_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_cli_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_gui_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_platform_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_agent_protocol_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_agent_client_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_common_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_agent_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc-agentd_autogen/include

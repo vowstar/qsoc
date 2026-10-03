@@ -4,7 +4,7 @@
 #ifndef QSOCBASHTASKSOURCE_H
 #define QSOCBASHTASKSOURCE_H
 
-#include "agent/qsoctasksource.h"
+#include "common/qsoctasksource.h"
 
 class QSocToolShellBash;
 

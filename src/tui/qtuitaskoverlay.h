@@ -4,7 +4,7 @@
 #ifndef QTUITASKOVERLAY_H
 #define QTUITASKOVERLAY_H
 
-#include "agent/qsoctaskregistry.h"
+#include "common/qsoctaskregistry.h"
 #include "tui/qtuiwidget.h"
 
 #include <QObject>

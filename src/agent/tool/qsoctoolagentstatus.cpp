@@ -4,7 +4,7 @@
 #include "agent/tool/qsoctoolagentstatus.h"
 
 #include "agent/qsocsubagenttasksource.h"
-#include "agent/qsoctasksource.h"
+#include "common/qsoctasksource.h"
 
 QSocToolAgentStatus::QSocToolAgentStatus(QObject *parent, QSocSubAgentTaskSource *taskSource)
     : QSocTool(parent)

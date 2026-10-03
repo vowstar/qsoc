@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#ifndef QSOCAGENTCLIENT_H
-#define QSOCAGENTCLIENT_H
+#ifndef QSOCAGENTDAEMONCLIENT_H
+#define QSOCAGENTDAEMONCLIENT_H
 
 #include <QJsonObject>
 #include <QLocalSocket>
 #include <QObject>
 #include <QString>
 
-#include "agent/runtime/qsocagentruntimeevent.h"
+#include "agent/protocol/qsocagentruntimeevent.h"
 
 /**
  * @brief Wire client for the qsoc-agentd daemon.
@@ -55,7 +55,7 @@ signals:
     void disconnected();
 
 private slots:
-    void onReadyRead();
+    void handleReadyRead();
 
 private:
     QString      m_socketPath;
@@ -67,4 +67,4 @@ private:
     QJsonObject  m_greeting;
 };
 
-#endif /* QSOCAGENTCLIENT_H */
+#endif /* QSOCAGENTDAEMONCLIENT_H */

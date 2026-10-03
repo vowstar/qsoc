@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 #ifndef QSOCAGENTTASKMODEL_H
 #define QSOCAGENTTASKMODEL_H
-#include "agent/qsoctaskregistry.h"
+#include "common/qsoctaskregistry.h"
 #include <functional>
 #include <QJsonObject>
 

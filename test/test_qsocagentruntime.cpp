@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/protocol/qsocagentruntimeevent.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocsession.h"
-#include "agent/qsoctaskregistry.h"
 #include "agent/qsoctool.h"
 #include "agent/runtime/qsocagentruntime.h"
-#include "agent/runtime/qsocagentruntimeevent.h"
 #include "agent/tool/qsoctoolshell.h"
+#include "common/qsoctaskregistry.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>

@@ -4,7 +4,7 @@
 #ifndef QSOCTASKREGISTRY_H
 #define QSOCTASKREGISTRY_H
 
-#include "agent/qsoctasksource.h"
+#include "common/qsoctasksource.h"
 
 #include <QList>
 #include <QMap>
@@ -19,9 +19,7 @@
  *          killTask back to the right source. Rows are sorted by status
  *          (Running first) then startedAtMs descending.
  *
- *          Sources do not own each other; the registry does not own
- *          sources either — both are owned by QSocCliWorker (or a
- *          future task-router class) which controls lifetime.
+ *          Callers retain ownership of registered sources.
  */
 class QSocTaskRegistry : public QObject
 {

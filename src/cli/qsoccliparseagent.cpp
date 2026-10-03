@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
-#include "agent/runtime/qsocagentruntime.h"
+#include "agent/protocol/qsocagentoptions.h"
 #include "cli/qsoccliworker.h"
 #include "common/qsocconsole.h"
 #include "common/qsocinterrupt.h"

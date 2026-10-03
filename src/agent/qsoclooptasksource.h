@@ -4,7 +4,7 @@
 #ifndef QSOCLOOPTASKSOURCE_H
 #define QSOCLOOPTASKSOURCE_H
 
-#include "agent/qsoctasksource.h"
+#include "common/qsoctasksource.h"
 
 class QSocLoopScheduler;
 
