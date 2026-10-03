@@ -28,6 +28,18 @@ class Test : public QObject
 {
     Q_OBJECT
 private slots:
+    void parentIdentityRejectsReusedProcessIds()
+    {
+        using QSocResourceUsage::detail::followsParentStart;
+        QVERIFY(followsParentStart("999", "1000"));
+        QVERIFY(followsParentStart("1000", "1000"));
+        QVERIFY(!followsParentStart("1000", "999"));
+        QVERIFY(!followsParentStart({}, "1000"));
+        QVERIFY(!followsParentStart("1000", {}));
+        QVERIFY(!followsParentStart("invalid", "1000"));
+        QVERIFY(!followsParentStart("0", "1000"));
+    }
+
     void systemCounters()
     {
         const auto before = QSocResourceUsage::system();

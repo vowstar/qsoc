@@ -9,6 +9,15 @@
 
 namespace QSocResourceUsage::detail {
 
+inline bool followsParentStart(const QString &parentStart, const QString &childStart)
+{
+    bool       parentValid = false;
+    bool       childValid  = false;
+    const auto parent      = parentStart.toULongLong(&parentValid);
+    const auto child       = childStart.toULongLong(&childValid);
+    return parentValid && childValid && parent > 0 && child >= parent;
+}
+
 #ifdef Q_OS_LINUX
 void sampleCgroupMemory(QJsonObject &result, const QString &procDirectory);
 #endif

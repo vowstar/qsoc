@@ -490,8 +490,15 @@ QJsonArray QSocResourceUsage::processTree(qint64 rootPid)
         return result;
     QMultiHash<qint64, qint64> children;
     for (auto it = records.cbegin(); it != records.cend(); ++it) {
-        if (!it.value().start.isEmpty())
-            children.insert(it.value().parent, it.key());
+        if (it.value().start.isEmpty())
+            continue;
+#ifdef Q_OS_WIN
+        const auto parent = records.constFind(it.value().parent);
+        if (parent == records.cend()
+            || !detail::followsParentStart(parent.value().start, it.value().start))
+            continue;
+#endif
+        children.insert(it.value().parent, it.key());
     }
     QList<qint64> pending{rootPid};
     QSet<qint64>  seen;

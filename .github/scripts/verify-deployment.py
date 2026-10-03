@@ -130,8 +130,13 @@ def main():
             for metric in ("memory_total_bytes", "memory_available_bytes", "cpu_total_ns"):
                 if not isinstance(system.get(metric), (int, float)) or system[metric] < 0:
                     raise RuntimeError(f"Missing native resource metric: {metric}")
-            if len(snapshot["processes"]) != 1 or not snapshot["storage"]:
-                raise RuntimeError("Resource queries must sample storage without starting a session")
+            processes = snapshot["processes"]
+            pids = [process["pid"] for process in processes]
+            if (not pids or any(not isinstance(pid, int) or pid <= 0 for pid in pids)
+                    or len(set(pids)) != len(pids) or not snapshot["storage"]):
+                raise RuntimeError("The resource snapshot requires unique process IDs and storage")
+            if processes[0].get("parent_pid") in pids:
+                raise RuntimeError("The resource snapshot did not begin with its daemon root")
             if not snapshot["storage"][0].get("valid"):
                 raise RuntimeError("The packaged storage probe failed")
         except (subprocess.CalledProcessError, ValueError, KeyError, RuntimeError):

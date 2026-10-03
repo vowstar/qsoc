@@ -18,14 +18,23 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QProcess>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+
+#include <tlhelp32.h>
+#endif
 
 #ifdef Q_OS_LINUX
 #include <pwd.h>
@@ -273,8 +282,45 @@ private slots:
             qint64(customPolicy ? 256 : 512) * 1024 * 1024);
         QCOMPARE(smt.value("strict_sampling").toBool(), customPolicy);
         const auto processes = result.value("processes").toArray();
-        QCOMPARE(processes.size(), 1);
+        QVERIFY(!processes.isEmpty());
         QCOMPARE(processes.first().toObject().value("pid").toInteger(), daemon.processId());
+        QSet<qint64> pids;
+        for (const auto &entry : processes) {
+            const auto pid = entry.toObject().value("pid").toInteger();
+            QVERIFY(pid > 0);
+            QVERIFY(!pids.contains(pid));
+            pids.insert(pid);
+        }
+#ifdef Q_OS_WIN
+        const HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        QVERIFY(snapshot != INVALID_HANDLE_VALUE);
+        QHash<qint64, QString> images;
+        PROCESSENTRY32W        entry{};
+        entry.dwSize          = sizeof(entry);
+        const bool enumerated = ::Process32FirstW(snapshot, &entry);
+        if (enumerated) {
+            do {
+                images.insert(entry.th32ProcessID, QString::fromWCharArray(entry.szExeFile));
+            } while (::Process32NextW(snapshot, &entry));
+        }
+        const DWORD error = ::GetLastError();
+        ::CloseHandle(snapshot);
+        QVERIFY(enumerated);
+        QCOMPARE(error, DWORD(ERROR_NO_MORE_FILES));
+        QCOMPARE(images.value(daemon.processId()), QFileInfo(m_daemonPath).fileName());
+        for (const auto pid : pids) {
+            if (pid == daemon.processId())
+                continue;
+            const auto image = images.value(pid);
+            qInfo().noquote() << "Resource descendant" << pid
+                              << (image.isEmpty() ? QStringLiteral("already exited") : image);
+            QVERIFY2(
+                image.compare(QFileInfo(m_daemonPath).fileName(), Qt::CaseInsensitive) != 0,
+                "A resources query started a session or retained its sampling process");
+        }
+#else
+        QCOMPARE(processes.size(), 1);
+#endif
         const auto storage = result.value("storage").toArray();
         QCOMPARE(storage.size(), 1);
         QVERIFY(storage.first().toObject().value("valid").toBool());
