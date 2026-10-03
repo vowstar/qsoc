@@ -1,0 +1,9 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
+
+app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1
+if [ "$#" -eq 0 ]; then
+    set -- gui
+fi
+exec "$app_dir/usr/bin/qsoc" "$@"

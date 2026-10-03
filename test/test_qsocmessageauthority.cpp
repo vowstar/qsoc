@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocmemoryrecall.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/tool/qsoctoolagent.h"
+#include "common/qsocmessageauthority.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>

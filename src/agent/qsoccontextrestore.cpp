@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsoccontextrestore.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/qsoctoolcatalog.h"
+#include "common/qsocmessageauthority.h"
 
 namespace {
 QString filePathFromCall(const json &call)

@@ -487,7 +487,7 @@ QString QSocToolFileWrite::execute(const json &arguments)
     }
 
     /* Notify LSP service about the file change. */
-    QLspService::instance()->didSave(filePath);
+    (lspService ? lspService : QLspService::instance())->didSave(filePath);
 
     return QString("Successfully wrote %1 bytes to: %2").arg(bytes.size()).arg(filePath);
 }
@@ -674,7 +674,7 @@ QString QSocToolFileEdit::execute(const json &arguments)
     }
 
     /* Notify LSP service about the file change. */
-    QLspService::instance()->didSave(filePath);
+    (lspService ? lspService : QLspService::instance())->didSave(filePath);
 
     return QString("Successfully edited file: %1 (%2 replacement(s))")
         .arg(filePath)

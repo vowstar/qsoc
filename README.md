@@ -18,10 +18,24 @@ nix shell github:vowstar/qsoc#qsoc
 
 ```bash
 qsoc agent -q "list the modules in this project"        # one-shot query
-qsoc agent                                              # interactive REPL
+qsoc agent                                              # TUI with a private agent daemon
 qsoc agent --workspace /tmp/scratch                     # tools run in a different cwd
 qsoc agent --ssh user@host --workspace /home/u/proj     # remote workspace via SSH
+
+# A shared daemon that several clients can attach to
+qsoc-agentd                                             # listen on $XDG_RUNTIME_DIR/qsoc/agentd.sock
+qsoc-agentd -s /tmp/agent.sock                          # ... or an explicit socket
+qsoc agent --connect /tmp/agent.sock                    # TUI attached to that daemon
 ```
+
+## Programs
+
+| Program | Role |
+|---|---|
+| `qsoc` | Command line, generators and the agent TUI; `qsoc gui` starts `qsoc-gui` |
+| `qsoc-gui` | Main window, editors and schematic |
+| `qsoc-agentd` | Agent daemon: one process per session behind a versioned socket protocol, for the TUI or any other client |
+| `qsoc-smt-worker` | Isolated SMT solver worker |
 
 ## Features
 

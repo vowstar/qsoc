@@ -4,9 +4,9 @@
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsoclooptasksource.h"
 #include "agent/qsocsubagenttasksource.h"
-#include "agent/qsoctaskregistry.h"
-#include "agent/qsoctasksource.h"
-#include "cli/qsocloopscheduler.h"
+#include "agent/services/qsocloopscheduler.h"
+#include "common/qsoctaskregistry.h"
+#include "common/qsoctasksource.h"
 #include "qsoc_test.h"
 #include "tui/qtuitaskoverlay.h"
 

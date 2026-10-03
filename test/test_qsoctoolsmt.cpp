@@ -50,8 +50,7 @@ private slots:
 
 void Test::initTestCase()
 {
-    if (!QSocToolSmt::supported())
-        QSKIP("Worker resource limits require Linux");
+    QVERIFY(QSocToolSmt::supported());
 }
 
 void Test::schemaAndImmediateErrors()

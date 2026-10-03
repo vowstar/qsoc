@@ -47,8 +47,10 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
 
     add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
 
-    # GUI tests need the offscreen platform plugin.
-    if(${TARGET_NAME} MATCHES "^test_qsocgui")
+    # GUI tests and the agent-runtime tests (which drive the full Qt
+    # stack, including the daemon's QLocalServer) need the offscreen
+    # platform plugin.
+    if(${TARGET_NAME} MATCHES "^test_qsocgui|^test_qsocagentruntime|^test_qsocagentdaemon")
         set_tests_properties(${TARGET_NAME} PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -137,16 +139,30 @@ qt_add_test_target("test_qsocprcmsolver" LABELS "prcm")
 target_link_libraries(test_qsocprcmsolver PRIVATE libz3)
 add_executable(qsoc_smt_worker_probe
     qsoc_smt_worker_probe.cpp
-    ../src/common/qsocsmtengine.cpp
-    ../src/common/qsocsmtinput.cpp
-    ../src/common/qsocsmtservice.cpp
+    ../src/smt/qsocsmtengine.cpp
+    ../src/smt/qsocsmtinput.cpp
+    ../src/smt/qsocsmtworker.cpp
 )
-target_include_directories(qsoc_smt_worker_probe PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
-target_link_libraries(qsoc_smt_worker_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
-if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(qsoc_smt_worker_probe PRIVATE -fexperimental-library)
-endif()
+target_link_libraries(qsoc_smt_worker_probe PRIVATE qsoc_smt libz3)
+qt_add_test_target("test_qsocsibling")
+qt_add_test_target("test_qsocguihandoff")
+qt_add_test_target("test_qsocprocessowner")
+add_executable(qsoc_process_owner_probe qsoc_process_owner_probe.cpp
+    "${CMAKE_SOURCE_DIR}/src/common/qsocprocessowner.cpp")
+target_include_directories(qsoc_process_owner_probe PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(qsoc_process_owner_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+add_dependencies(test_qsocprocessowner qsoc_process_owner_probe)
+target_compile_definitions(test_qsocprocessowner PRIVATE QSOC_OWNER_PROBE_PATH="$<TARGET_FILE:qsoc_process_owner_probe>")
+add_executable(qsoc_gui_handoff_probe qsoc_gui_handoff_probe.cpp)
+target_link_libraries(qsoc_gui_handoff_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+add_dependencies(test_qsocguihandoff qsoc qsoc_gui_handoff_probe)
+target_compile_definitions(test_qsocguihandoff PRIVATE QSOC_BINARY_PATH="$<TARGET_FILE:qsoc>")
+target_compile_definitions(test_qsocguihandoff PRIVATE QSOC_GUI_PROBE_PATH="$<TARGET_FILE:qsoc_gui_handoff_probe>")
+qt_add_test_target("test_qsocsmtbroker" LABELS "smt")
+set_property(TARGET test_qsocsmtbroker PROPERTY LINK_LIBRARIES qsoc_smt Qt${QT_VERSION_MAJOR}::Test)
 qt_add_test_target("test_qsocsmtservice" LABELS "smt")
+target_sources(test_qsocsmtservice PRIVATE ../src/smt/qsocsmtinput.cpp)
+set_property(TARGET test_qsocsmtservice PROPERTY LINK_LIBRARIES qsoc_smt Qt${QT_VERSION_MAJOR}::Test)
 add_dependencies(test_qsocsmtservice qsoc-smt-worker qsoc_smt_worker_probe)
 target_compile_definitions(test_qsocsmtservice PRIVATE
     QSOC_SMT_WORKER_PATH="$<TARGET_FILE:qsoc-smt-worker>"
@@ -314,6 +330,17 @@ qt_add_test_target("test_qsoctoolagentstatus")
 qt_add_test_target("test_qllmserviceclone")
 qt_add_test_target("test_qsoctoolsendmessage")
 qt_add_test_target("test_qsocagentmailbox" LABELS "agent-messaging")
+qt_add_test_target("test_qsocipc" LABELS "agent-runtime")
+set_property(TARGET test_qsocipc PROPERTY LINK_LIBRARIES Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Test)
+target_include_directories(test_qsocipc PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
+qt_add_test_target("test_qsocagentclient" LABELS "agent-runtime")
+qt_add_test_target("test_qsocagentqueue" LABELS "agent-runtime")
+set_property(TARGET test_qsocagentclient PROPERTY LINK_LIBRARIES qsoc_agent_client Qt${QT_VERSION_MAJOR}::Test)
+qt_add_test_target("test_qsocagentruntime" LABELS "agent-runtime")
+qt_add_test_target("test_qsocagentdaemon" LABELS "agent-runtime")
+add_dependencies(test_qsocagentdaemon qsoc-agentd)
+target_compile_definitions(test_qsocagentdaemon PRIVATE QSOC_AGENTD_PATH="$<TARGET_FILE:qsoc-agentd>")
 qt_add_test_target("test_qsoctoolagentresume")
 qt_add_test_target("test_qsocagentinputmonitor")
 qt_add_test_target("test_qtuiinputlinewrap")
@@ -475,4 +502,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Cla
         "-Wl,--wrap=libssh2_session_disconnect_ex"
         "-Wl,--wrap=libssh2_session_free"
     )
+endif()
+
+# Real Unix socket + terminal lifecycle checks use only Python's standard library.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME test_agent_daemon_lifecycle
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/agent_daemon_lifecycle.py
+                    $<TARGET_FILE_DIR:qsoc> -v)
+        set_tests_properties(test_agent_daemon_lifecycle PROPERTIES TIMEOUT 90)
+    endif()
 endif()

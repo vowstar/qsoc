@@ -5,7 +5,7 @@
 #define QSOCMCPSTDIO_H
 
 #include "agent/mcp/qsocmcptransport.h"
-#include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocmcptypes.h"
 
 #include <QByteArray>
 #include <QPointer>

@@ -4,6 +4,8 @@
 #include "qsoc_test.h"
 #include "qsoc_test_pty.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -130,6 +132,28 @@ void Test::escCancelsCompactionAndRunsQueuedInput()
             agent.output().right(8192).constData());
     }
     if (manual) {
+        // A transcript redraw can repeat the first MOCKDONE while the second
+        // turn is still running. Wait for both terminal records before asking
+        // the idle agent to compact.
+        QVERIFY2(
+            agent.waitUntil(
+                [&]() {
+                    const QDir sessions(QDir(project).filePath(QStringLiteral(".qsoc/sessions")));
+                    int        completed = 0;
+                    for (const QString &name :
+                         sessions.entryList({QStringLiteral("*.jsonl")}, QDir::Files)) {
+                        for (const QByteArray &line :
+                             readBytes(sessions.filePath(name)).split('\n')) {
+                            const auto record = QJsonDocument::fromJson(line).object();
+                            if (record.value("type").toString() == "run"
+                                && record.value("event").toString() == "completed")
+                                ++completed;
+                        }
+                    }
+                    return completed >= 2;
+                },
+                15000),
+            "the two setup turns did not finish");
         QVERIFY(agent.submitLine("/compact"));
     }
     QVERIFY2(

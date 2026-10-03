@@ -3,7 +3,7 @@
 
 #include "tui/qtuitaskoverlay.h"
 
-#include "agent/qsoctasksource.h"
+#include "common/qsoctasksource.h"
 #include "tui/qtuiansi.h"
 
 #include <algorithm>

@@ -4,8 +4,8 @@
 #include "agent/mcp/qsocmcpstdio.h"
 #include "agent/mcp/qsocmcpstdioparser_p.h"
 #include "agent/mcp/qsocmcptransport.h"
-#include "agent/mcp/qsocmcptypes.h"
 #include "common/qsocconsole.h"
+#include "common/qsocmcptypes.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>

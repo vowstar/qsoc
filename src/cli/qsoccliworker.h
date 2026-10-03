@@ -4,7 +4,7 @@
 #ifndef QSOCCLIWORKER_H
 #define QSOCCLIWORKER_H
 
-#include "agent/remote/qsocsshconfigparser.h"
+#include "agent/protocol/qsocagentoptions.h"
 #include "common/qllmservice.h"
 #include "common/qsocbusmanager.h"
 #include "common/qsocconfig.h"
@@ -15,16 +15,13 @@
 #include <memory>
 #include <optional>
 
-#include <QApplication>
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QObject>
 #include <QStringList>
 
-class QSocAgent;
 class QAgentReadline;
-class QSocMcpManager;
-class QSocPathContext;
 
 /**
  * @brief The QSocCliWorker class.
@@ -89,16 +86,6 @@ private:
     QSocBusManager      *busManager      = nullptr;
     QSocModuleManager   *moduleManager   = nullptr;
     QSocGenerateManager *generateManager = nullptr;
-    QSocMcpManager      *mcpManager      = nullptr;
-
-    /* Shell directory of the agent launch, before --workspace changes it. */
-    QString agentLaunchDir;
-
-    /* Parsed ~/.ssh/config handed to the sub-agent spawn tool, which keeps
-     * a non-owning pointer for its whole life. Owned here because the tool
-     * is parented to this worker and therefore outlives parseAgent()'s
-     * locals. */
-    std::unique_ptr<QSocSshConfigParser> agentSshConfig;
 
     /**
      * @brief Parse the application command line arguments.
@@ -418,27 +405,11 @@ private:
     bool parseAgent(const QStringList &appArguments);
 
     /**
-     * @brief Run the agent interactive loop.
-     * @details This function runs the interactive REPL loop for the agent.
-     *          Uses enhanced readline if terminal supports it.
-     * @param agent The agent to run.
-     * @param streaming Whether to use streaming mode.
-     * @retval true Run successfully.
-     * @retval false Run failed.
+     * @brief TUI client mode: drive a qsoc-agentd daemon over its socket.
+     * @details Pure presentation: every event is rendered, every input is
+     *          forwarded. No agent infrastructure is hosted in-process.
      */
-    bool runAgentLoop(
-        QSocAgent                   *agent,
-        bool                         streaming                  = false,
-        const QString               &resumeSessionId            = QString(),
-        QSocPathContext             *pathContext                = nullptr,
-        class QSocRemoteConnection  *preconnectedConn           = nullptr,
-        class QSocToolRegistry      *preconnectedRemoteRegistry = nullptr,
-        class QSocToolRegistry      *preLocalRegistry           = nullptr,
-        class QSocTaskRegistry      *taskRegistry               = nullptr,
-        class QSocTaskEventQueue    *taskEventQueue             = nullptr,
-        class QSocMonitorTaskSource *monitorTaskSource          = nullptr,
-        class QSocHostCatalog       *hostCatalog                = nullptr,
-        class QSocGoalCatalog       *goalCatalog                = nullptr);
+    bool runAgentClientLoop(const QString &requestedSocket, const QSocAgentRuntimeOptions &options);
 
     /**
      * @brief Parse options and report a command-line error.

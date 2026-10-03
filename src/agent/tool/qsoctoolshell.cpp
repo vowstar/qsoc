@@ -319,6 +319,12 @@ QSocToolShellBash::~QSocToolShellBash()
     killTracked(this);
 }
 
+bool QSocToolShellBash::ownsProcess(int processId) const
+{
+    const auto it = activeProcesses.constFind(processId);
+    return it != activeProcesses.cend() && it->owner.data() == this;
+}
+
 void QSocToolShellBash::killAllActive()
 {
     killTracked(nullptr);
@@ -414,11 +420,14 @@ void QSocToolShellBash::killTracked(const QSocToolShellBash *owner)
     }
 }
 
-QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive()
+QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive(
+    const QSocToolShellBash *owner)
 {
     QList<BackgroundSnapshot> out;
     for (auto it = activeProcesses.begin(); it != activeProcesses.end(); ++it) {
-        auto              &info = it.value();
+        auto &info = it.value();
+        if (owner && info.owner.data() != owner)
+            continue;
         BackgroundSnapshot snap;
         snap.id          = it.key();
         snap.command     = info.command;
@@ -694,6 +703,8 @@ QString QSocToolShellBash::execute(const json &arguments)
             maxOutputBytes = raw;
     }
 
+    if (workingDir.isEmpty() && workingDirectoryProvider)
+        workingDir = workingDirectoryProvider();
     if (workingDir.isEmpty() && projectManager) {
         workingDir = projectManager->getProjectPath();
     }
@@ -1092,7 +1103,8 @@ QString QSocToolBashManage::execute(const json &arguments)
     int     processId = arguments["process_id"].get<int>();
     QString action    = QString::fromStdString(arguments["action"].get<std::string>());
 
-    if (!QSocToolShellBash::activeProcesses.contains(processId)) {
+    if ((ownerBound_ && (owner_.isNull() || !owner_->ownsProcess(processId)))
+        || !QSocToolShellBash::activeProcesses.contains(processId)) {
         return QString(
                    "Error: No active process with ID %1. "
                    "It may have already been cleaned up.")

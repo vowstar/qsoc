@@ -8,12 +8,12 @@
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
-#include "agent/remote/qsocinterrupt.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/tool/qsoctoolagent.h"
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
+#include "common/qsocinterrupt.h"
 #include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
 

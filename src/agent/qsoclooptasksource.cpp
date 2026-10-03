@@ -3,7 +3,7 @@
 
 #include "agent/qsoclooptasksource.h"
 
-#include "cli/qsocloopscheduler.h"
+#include "agent/services/qsocloopscheduler.h"
 #include "common/qsoccron.h"
 
 #include <QDateTime>

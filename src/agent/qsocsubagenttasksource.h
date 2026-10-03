@@ -4,7 +4,7 @@
 #ifndef QSOCSUBAGENTTASKSOURCE_H
 #define QSOCSUBAGENTTASKSOURCE_H
 
-#include "agent/qsoctasksource.h"
+#include "common/qsoctasksource.h"
 
 #include <functional>
 #include <QList>

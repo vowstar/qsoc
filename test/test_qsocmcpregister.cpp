@@ -5,8 +5,8 @@
 #include "agent/mcp/qsocmcpmanager.h"
 #include "agent/mcp/qsocmcptool.h"
 #include "agent/mcp/qsocmcptransport.h"
-#include "agent/mcp/qsocmcptypes.h"
 #include "agent/qsoctool.h"
+#include "common/qsocmcptypes.h"
 #include "qsoc_test.h"
 
 #include <algorithm>

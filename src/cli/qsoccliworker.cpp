@@ -16,12 +16,7 @@
 
 QSocCliWorker::QSocCliWorker(QObject *parent)
     : QObject(parent)
-    , projectManager(new QSocProjectManager(this))
-    , socConfig(new QSocConfig(this, projectManager))
-    , llmService(new QLLMService(this, socConfig))
-    , busManager(new QSocBusManager(this, projectManager))
-    , moduleManager(new QSocModuleManager(this, projectManager, busManager, llmService))
-    , generateManager(new QSocGenerateManager(this, projectManager, moduleManager, busManager))
+
 {
     /* Set up application name and version */
     QCoreApplication::setApplicationName("QSoC");
@@ -283,8 +278,16 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: missing subcommand."));
     }
     /* Perform different operations according to different subcommands */
-    const QString &command       = positionalArgs.first();
-    QStringList    nextArguments = appArguments;
+    const QString &command = positionalArgs.first();
+    if (command != "agent" && !projectManager) {
+        projectManager  = new QSocProjectManager(this);
+        socConfig       = new QSocConfig(this, projectManager);
+        llmService      = new QLLMService(this, socConfig);
+        busManager      = new QSocBusManager(this, projectManager);
+        moduleManager   = new QSocModuleManager(this, projectManager, busManager, llmService);
+        generateManager = new QSocGenerateManager(this, projectManager, moduleManager, busManager);
+    }
+    QStringList nextArguments = appArguments;
     if (command == "gui") {
         QSocConsole::debug().noquote().nospace() << Q_FUNC_INFO << ":Starting GUI ...";
     } else if (command == "project") {

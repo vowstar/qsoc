@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/tool/qsoctoolsmt.h"
-#include "common/qsocsmtservice.h"
+#include "smt/qsocsmtservice.h"
 
 #include <mutex>
 #include <thread>

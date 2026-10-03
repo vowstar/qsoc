@@ -4,8 +4,8 @@
 #ifndef QSOCMCPTOOL_H
 #define QSOCMCPTOOL_H
 
-#include "agent/mcp/qsocmcptypes.h"
 #include "agent/qsoctool.h"
+#include "common/qsocmcptypes.h"
 
 #include <QPointer>
 #include <QSet>

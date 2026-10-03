@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
-#include "agent/qsocmessageauthority.h"
 #include "common/qsocconsole.h"
+#include "common/qsocmessageauthority.h"
 
 #include <limits>
 #include <QCryptographicHash>

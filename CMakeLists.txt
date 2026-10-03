@@ -415,18 +415,145 @@ file(GLOB_RECURSE PROJECT_UI_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "ui/*.u
 file(GLOB_RECURSE PROJECT_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/*.ts")
 file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/app_*.ts")
 
-set(PROJECT_CORE_CPP_FILES "${PROJECT_CPP_FILES}")
-list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/main\\.cpp$")
-list(FILTER PROJECT_CORE_CPP_FILES EXCLUDE REGEX "src/smtworker\\.cpp$")
+# Small OS helpers are shared by clients and the business libraries.
+set(QSOC_PLATFORM_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+list(FILTER QSOC_PLATFORM_FILES INCLUDE REGEX
+    "src/common/qsoc(localendpoint|localpeer|processlimits|processowner|sibling)\\..*")
+add_library(qsoc_platform STATIC ${QSOC_PLATFORM_FILES})
+target_include_directories(qsoc_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(qsoc_platform PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network)
+if(WIN32)
+    target_compile_definitions(qsoc_platform PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(qsoc_platform PUBLIC advapi32)
+endif()
+
+add_library(qsoc_smt STATIC
+    src/smt/qsocsmtservice.cpp
+    src/smt/qsocsmtservice.h
+    src/smt/qsocsmtbroker.cpp
+    src/smt/qsocsmtbroker.h
+)
+target_link_libraries(qsoc_smt PUBLIC qsoc_platform)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(qsoc_smt PUBLIC -fexperimental-library)
+endif()
+
+set(QSOC_PROTOCOL_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+list(FILTER QSOC_PROTOCOL_FILES INCLUDE REGEX "src/agent/protocol/.*")
+add_library(qsoc_agent_protocol STATIC ${QSOC_PROTOCOL_FILES})
+target_include_directories(qsoc_agent_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(qsoc_agent_protocol SYSTEM PUBLIC "${JSON_INCLUDE_DIRS}")
+target_link_libraries(qsoc_agent_protocol PUBLIC Qt${QT_VERSION_MAJOR}::Core ${JSON_LIBRARIES})
+
+set(QSOC_CLIENT_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+list(FILTER QSOC_CLIENT_FILES INCLUDE REGEX "src/agent/client/.*")
+add_library(qsoc_agent_client STATIC ${QSOC_CLIENT_FILES})
+target_link_libraries(qsoc_agent_client PUBLIC qsoc_agent_protocol qsoc_platform)
+
+# Shared business code and the agent runtime have separate dependency graphs.
+set(QSOC_COMMON_CPP "${PROJECT_CPP_FILES}")
+list(FILTER QSOC_COMMON_CPP INCLUDE REGEX "src/common/.*")
+set(QSOC_COMMON_HEADERS "${PROJECT_H_FILES}")
+list(FILTER QSOC_COMMON_HEADERS INCLUDE REGEX "src/common/.*")
+list(REMOVE_ITEM QSOC_COMMON_CPP ${QSOC_PLATFORM_FILES})
+list(REMOVE_ITEM QSOC_COMMON_HEADERS ${QSOC_PLATFORM_FILES})
+add_library(qsoc_common STATIC ${QSOC_COMMON_CPP} ${QSOC_COMMON_HEADERS})
+
+set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
+list(FILTER QSOC_AGENT_CPP INCLUDE REGEX "src/agent/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/(daemon|protocol|client)/.*")
+set(QSOC_AGENT_HEADERS "${PROJECT_H_FILES}")
+list(FILTER QSOC_AGENT_HEADERS INCLUDE REGEX "src/agent/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/(daemon|protocol|client)/.*")
+
+include(GenerateExportHeader)
+if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+    qt_add_library(qsoc_agent STATIC ${QSOC_AGENT_CPP} ${QSOC_AGENT_HEADERS})
+else()
+    add_library(qsoc_agent STATIC ${QSOC_AGENT_CPP} ${QSOC_AGENT_HEADERS})
+endif()
+generate_export_header(qsoc_agent
+    BASE_NAME QSOC_AGENT
+    EXPORT_MACRO_NAME QSOC_AGENT_API
+    EXPORT_FILE_NAME qsocagent_export.h
+    STATIC_DEFINE QSOC_AGENT_STATIC_DEFINE
+)
+target_include_directories(qsoc_common PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+)
+
+target_include_directories(qsoc_common SYSTEM PUBLIC
+    "${SVLANG_INCLUDE_DIRS}"
+    "${JSON_INCLUDE_DIRS}"
+    "${INJA_INCLUDE_DIRS}"
+    "${YAML_INCLUDE_DIRS}"
+    "${CSV_INCLUDE_DIRS}"
+    "${GPDS_INCLUDE_DIRS}"
+    "${BIGINT_INCLUDE_DIRS}"
+    "${ANTLR4_INCLUDE_DIRS}"
+    "${SYSTEMRDL_INCLUDE_DIRS}"
+    "${FMT_INCLUDE_DIRS}"
+)
+
+set(QSOC_COMMON_LINK_LIBRARIES
+    Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network
+    Qt${QT_VERSION_MAJOR}::Gui
+    ${SVLANG_LIBRARIES}
+    ${JSON_LIBRARIES}
+    ${INJA_LIBRARIES}
+    ${YAML_LIBRARIES}
+    ${CSV_LIBRARIES}
+    ${GPDS_LIBRARIES}
+    ${BIGINT_LIBRARIES}
+    ${ANTLR4_LIBRARIES}
+    ${SYSTEMRDL_LIBRARIES}
+    ${FMT_LIBRARIES}
+)
+target_link_libraries(qsoc_common PUBLIC qsoc_platform ${QSOC_COMMON_LINK_LIBRARIES})
+target_link_libraries(qsoc_common PRIVATE libz3)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(qsoc_common PUBLIC -fexperimental-library)
+endif()
+if(WIN32)
+    target_link_libraries(qsoc_common PUBLIC ws2_32 advapi32)
+    target_compile_definitions(qsoc_common PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
+
+target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_smt)
+target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}" "${MBEDTLS_INCLUDE_DIRS}")
+target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES} ${MBEDTLS_LIBRARIES})
+target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
+target_compile_definitions(qsoc_agent PUBLIC QSOC_AGENT_STATIC_DEFINE)
+
+# The daemon: one process hosting agent sessions behind a unix socket.
+qt_add_executable(qsoc-agentd
+    MANUAL_FINALIZATION
+    src/agent/daemon/main.cpp
+    src/agent/daemon/qsocagentdaemon.cpp
+    src/agent/daemon/qsocagentdaemon.h
+)
+target_include_directories(qsoc-agentd PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_BINARY_DIR}"
+)
+target_link_libraries(qsoc-agentd PRIVATE qsoc_agent)
+# Agent tools read the manual, the tokenizer table and the licenses from qrc.
+qt_add_resources(QSOC_AGENTD_RESOURCES ${PROJECT_QRC_FILES} ${PROJECT_DOC_QRC_FILES})
+target_sources(qsoc-agentd PRIVATE ${QSOC_AGENTD_RESOURCES})
+install(TARGETS qsoc-agentd RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 add_executable(qsoc-smt-worker
     src/smtworker.cpp
-    src/common/qsocsmtengine.cpp
-    src/common/qsocsmtinput.cpp
-    src/common/qsocsmtservice.cpp
+    src/smt/qsocsmtengine.cpp
+    src/smt/qsocsmtinput.cpp
+    src/smt/qsocsmtworker.cpp
 )
-target_include_directories(qsoc-smt-worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(qsoc-smt-worker PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
+target_link_libraries(qsoc-smt-worker PRIVATE qsoc_smt libz3)
 install(TARGETS qsoc-smt-worker RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS
@@ -435,13 +562,50 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/resource"
 )
 
-if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-    qt_add_library(qsoc_core STATIC
-        "${PROJECT_CORE_CPP_FILES}"
-        "${PROJECT_H_FILES}"
-        "${PROJECT_UI_FILES}"
-    )
+# Frontend libraries: qsoc_tui (terminal widgets and renderers), qsoc_cli
+# (commands and the agent client) and qsoc_gui (windows and schematic).
+# qsoc_core bundles all of them for the tests.
+set(PROJECT_FRONTEND_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
+set(QSOC_TUI_FILES ${PROJECT_FRONTEND_FILES})
+list(FILTER QSOC_TUI_FILES INCLUDE REGEX
+    "src/tui/.*")
+set(QSOC_CLI_FILES ${PROJECT_FRONTEND_FILES})
+list(FILTER QSOC_CLI_FILES INCLUDE REGEX "src/cli/.*")
+set(QSOC_GUI_FILES ${PROJECT_FRONTEND_FILES})
+list(FILTER QSOC_GUI_FILES INCLUDE REGEX "src/gui/.*")
 
+function(qsoc_add_static_library name)
+    if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+        qt_add_library(${name} STATIC ${ARGN})
+    else()
+        add_library(${name} STATIC ${ARGN})
+    endif()
+endfunction()
+
+qsoc_add_static_library(qsoc_tui ${QSOC_TUI_FILES})
+target_link_libraries(qsoc_tui PUBLIC qsoc_common Qt${QT_VERSION_MAJOR}::Gui ${CMARK_GFM_LIBRARIES})
+target_include_directories(qsoc_tui SYSTEM PUBLIC "${CMARK_GFM_INCLUDE_DIRS}")
+target_compile_definitions(qsoc_tui PUBLIC CMARK_GFM_STATIC_DEFINE CMARK_GFM_EXTENSIONS_STATIC_DEFINE)
+
+qsoc_add_static_library(qsoc_cli ${QSOC_CLI_FILES})
+target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client ${REPLXX_LIBRARIES})
+target_include_directories(qsoc_cli SYSTEM PRIVATE "${REPLXX_INCLUDE_DIRS}")
+
+qsoc_add_static_library(qsoc_gui ${QSOC_GUI_FILES} ${PROJECT_UI_FILES})
+target_include_directories(qsoc_gui SYSTEM PUBLIC "${QSCHEMATIC_INCLUDE_DIRS}")
+target_link_libraries(qsoc_gui PUBLIC
+    qsoc_common
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+    Qt${QT_VERSION_MAJOR}::Svg
+    Qt${QT_VERSION_MAJOR}::Widgets
+    ${QT_LIBRARIES}
+    ${QSCHEMATIC_LIBRARIES}
+)
+
+add_library(qsoc_core INTERFACE)
+target_link_libraries(qsoc_core INTERFACE qsoc_cli qsoc_gui qsoc_agent)
+
+if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     set(PROJECT_SOURCES
         "src/main.cpp"
         "${PROJECT_TS_FILES}"
@@ -456,13 +620,12 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_lupdate(${PROJECT_NAME} TS_FILES "${APPONLY_TS_FILES}" SOURCES "${PROJECT_CPP_FILES}" "${PROJECT_H_FILES}" "${PROJECT_UI_FILES}")
     qt_add_lrelease(${PROJECT_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
     qt_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
-else()
-    add_library(qsoc_core STATIC
-        "${PROJECT_CORE_CPP_FILES}"
-        "${PROJECT_H_FILES}"
-        "${PROJECT_UI_FILES}"
-    )
 
+    # The GUI is its own program; `qsoc gui` hands over to it.
+    qt_add_resources(QSOC_GUI_SOURCES "${PROJECT_QRC_FILES}")
+    qt_add_executable(qsoc-gui MANUAL_FINALIZATION src/guimain.cpp ${QSOC_GUI_SOURCES})
+    qt_add_resources(qsoc-gui "gui_translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
+else()
     set(PROJECT_SOURCES
         "src/main.cpp"
         "${PROJECT_TS_FILES}"
@@ -494,74 +657,6 @@ if(NOT QSOC_O200K_SHA256 STREQUAL "446a9538cb6c348e3516120d7c08b09f57c36495e2acf
     message(FATAL_ERROR "${QSOC_O200K_TABLE} does not match the published o200k_base SHA-256.")
 endif()
 
-target_include_directories(qsoc_core PUBLIC
-    "${CMAKE_CURRENT_LIST_DIR}"
-    "${CMAKE_CURRENT_LIST_DIR}/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-)
-
-target_include_directories(qsoc_core SYSTEM PUBLIC
-    "${SVLANG_INCLUDE_DIRS}"
-    "${JSON_INCLUDE_DIRS}"
-    "${INJA_INCLUDE_DIRS}"
-    "${YAML_INCLUDE_DIRS}"
-    "${CSV_INCLUDE_DIRS}"
-    "${GPDS_INCLUDE_DIRS}"
-    "${QSCHEMATIC_INCLUDE_DIRS}"
-    "${BIGINT_INCLUDE_DIRS}"
-    "${ANTLR4_INCLUDE_DIRS}"
-    "${SYSTEMRDL_INCLUDE_DIRS}"
-    "${FMT_INCLUDE_DIRS}"
-    "${REPLXX_INCLUDE_DIRS}"
-    "${MBEDTLS_INCLUDE_DIRS}"
-    "${LIBSSH2_INCLUDE_DIRS}"
-    "${CMARK_GFM_INCLUDE_DIRS}"
-    "${LEXBOR_INCLUDE_DIRS}"
-)
-
-target_link_libraries(qsoc_core PUBLIC
-    Qt${QT_VERSION_MAJOR}::Core
-    Qt${QT_VERSION_MAJOR}::Gui
-    Qt${QT_VERSION_MAJOR}::Network
-    Qt${QT_VERSION_MAJOR}::PrintSupport
-    Qt${QT_VERSION_MAJOR}::Svg
-    Qt${QT_VERSION_MAJOR}::Widgets
-    ${QT_LIBRARIES}
-    ${SVLANG_LIBRARIES}
-    ${JSON_LIBRARIES}
-    ${INJA_LIBRARIES}
-    ${YAML_LIBRARIES}
-    ${CSV_LIBRARIES}
-    ${GPDS_LIBRARIES}
-    ${QSCHEMATIC_LIBRARIES}
-    ${BIGINT_LIBRARIES}
-    ${ANTLR4_LIBRARIES}
-    ${SYSTEMRDL_LIBRARIES}
-    ${FMT_LIBRARIES}
-    ${REPLXX_LIBRARIES}
-    ${LIBSSH2_LIBRARIES}
-    ${CMARK_GFM_LIBRARIES}
-    ${LEXBOR_LIBRARIES}
-)
-
-target_link_libraries(qsoc_core PRIVATE libz3)
-
-target_compile_definitions(qsoc_core PUBLIC
-    CMARK_GFM_STATIC_DEFINE
-    CMARK_GFM_EXTENSIONS_STATIC_DEFINE
-    LEXBOR_STATIC
-)
-
-if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(qsoc_core PUBLIC -fexperimental-library)
-    target_compile_options(qsoc-smt-worker PRIVATE -fexperimental-library)
-endif()
-
-if(WIN32)
-    target_link_libraries(qsoc_core PUBLIC ws2_32)
-    target_compile_definitions(qsoc_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-endif()
-
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${CMAKE_CURRENT_LIST_DIR}/src"
@@ -569,11 +664,13 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    qsoc_core
+    qsoc_cli
 )
-add_dependencies(${PROJECT_NAME} qsoc-smt-worker)
+add_dependencies(${PROJECT_NAME} qsoc-smt-worker qsoc-agentd qsoc-gui)
 
-set_target_properties(${PROJECT_NAME} PROPERTIES
+target_link_libraries(qsoc-gui PRIVATE qsoc_gui)
+set_target_properties(qsoc-gui PROPERTIES
+    WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER com.vowstar.${PROJECT_NAME}
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
@@ -626,8 +723,8 @@ if(APPLE)
             MACOSX_PACKAGE_LOCATION "Resources"
             GENERATED TRUE
         )
-        target_sources(${PROJECT_NAME} PRIVATE "${QSOC_ICNS}")
-        set_target_properties(${PROJECT_NAME} PROPERTIES
+        target_sources(qsoc-gui PRIVATE "${QSOC_ICNS}")
+        set_target_properties(qsoc-gui PROPERTIES
             MACOSX_BUNDLE_ICON_FILE qsoc.icns
         )
     endif()
@@ -655,9 +752,11 @@ if(WIN32)
             VERBATIM
         )
         add_custom_target(qsoc_win_icon DEPENDS "${QSOC_ICO}")
-        target_sources(${PROJECT_NAME} PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/resource/icons/qsoc.rc")
-        add_dependencies(${PROJECT_NAME} qsoc_win_icon)
+        foreach(target ${PROJECT_NAME} qsoc-gui)
+            target_sources(${target} PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/resource/icons/qsoc.rc")
+            add_dependencies(${target} qsoc_win_icon)
+        endforeach()
         # The .rc references qsoc.ico without a path; tell windres to look
         # inside the build-dir output directory where the .ico is generated.
         set_source_files_properties(
@@ -667,7 +766,7 @@ if(WIN32)
     endif()
 endif()
 
-install(TARGETS ${PROJECT_NAME}
+install(TARGETS ${PROJECT_NAME} qsoc-gui
     BUNDLE DESTINATION .
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
@@ -689,6 +788,7 @@ endif()
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(${PROJECT_NAME})
+    qt_finalize_executable(qsoc-gui)
 endif()
 
 # Clang-format
@@ -758,7 +858,16 @@ if(CPPCHECK_COMMAND)
             -I${CMAKE_CURRENT_SOURCE_DIR}/src
             -I${CMAKE_CURRENT_SOURCE_DIR}/test
             -I${CMAKE_BINARY_DIR}
-            -I${CMAKE_BINARY_DIR}/qsoc_core_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_tui_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_cli_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_gui_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_platform_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_smt_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_agent_protocol_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_agent_client_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_common_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_agent_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc-agentd_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_autogen/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}/test

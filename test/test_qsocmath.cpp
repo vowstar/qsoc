@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "common/qsocmarkdownrenderer.h"
-#include "common/qsocmath.h"
 #include "qsoc_test.h"
+#include "tui/qsocmarkdownrenderer.h"
+#include "tui/qsocmath.h"
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuiwidget.h"

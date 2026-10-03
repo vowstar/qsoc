@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "agent/remote/qsocinterrupt.h"
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
 #include "cli/qagentinputmonitor.h"
+#include "common/qsocinterrupt.h"
 #include "qsoc_test.h"
 
 #include <QDeadlineTimer>

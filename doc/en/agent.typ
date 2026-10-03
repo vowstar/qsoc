@@ -30,6 +30,9 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`--ssh <target>`],
     [Connect to a remote workspace before the first prompt. Accepts
      `[user@]host[:port]` or a `~/.ssh/config` alias. Requires `--workspace`],
+    [`--connect <socket>`],
+    [Attach to a running `qsoc-agentd` instead of starting a private one
+     (@agent-daemon)],
   )],
   caption: [AGENT COMMAND OPTIONS],
   kind: table,
@@ -58,6 +61,34 @@ Ctrl-C cancels an in-flight query with or without streaming. One press prints
 `(interrupted)` and exits with status 0; a second press within two seconds
 exits immediately with status 130. `--no-stream` still sends a synchronous
 request and does not add terminal control sequences to its output.
+
+=== Agent Daemon
+<agent-daemon>
+
+`qsoc agent` starts a private `qsoc-agentd` and stops it on exit. A daemon started separately accepts up to 64 simultaneous connections:
+
+```bash
+qsoc-agentd                               # default local endpoint
+qsoc-agentd -s /path/to/agent.sock        # explicit endpoint
+qsoc agent --connect /path/to/agent.sock  # attach to that daemon
+```
+
+On Windows, use a pipe name such as `qsoc-agent` for `--socket` and `--connect`.
+
+An agent request starts a separate session process for its connection. Sessions have separate event loops and share the daemon's SMT task budget (@agent-smt). Closing an attached TUI cancels its session's work and leaves the daemon running. Saved sessions remain available through `--resume` and `--continue`.
+
+Only processes of the same user can connect. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object.
+
+When the greeting advertises `smt`, clients can submit `smt.solve` without opening an agent session or configuring an LLM. Its `params` object accepts the same fields as `z3_solve` (@agent-smt). Multiple requests can remain outstanding, and results can arrive out of order. Keep each outstanding request ID unique within its connection.
+
+```json
+{"id":1,"method":"smt.solve","params":{"mode":"check","smtlib":"(assert true)"}}
+{"id":2,"method":"smt.cancel","params":{"request_id":1}}
+```
+
+`smt.cancel` targets a request on the same connection. Its `result.canceled` field reports whether cancellation was accepted. The solve request receives a separate final result. Disconnecting cancels that connection's SMT requests. The daemon also cancels tasks belonging to a session when its session process exits. Failed or disconnected requests are not automatically replayed.
+
+JSON payloads are limited to 16 MiB. The daemon shares a 64 MiB transport budget across connections and closes a connection that exceeds the budget.
 
 === Workspace Override
 <agent-workspace-flag>
@@ -572,7 +603,7 @@ The agent provides the following tools through natural language:
   SKILL.md format and @config-files for the full layout
 - *LSP*: `lsp` for diagnostics, definitions, hover, references, and symbols
   (@agent-lsp)
-- *Constraints*: `z3_solve` checks SMT-LIB formulas and optimizes ordered objectives on Linux. See @agent-smt
+- *Constraints*: `z3_solve` checks SMT-LIB formulas and optimizes ordered objectives on Linux, Windows, and macOS. See @agent-smt
 - *Web*: `web_fetch` for URL content, `web_search` via SearXNG (when configured)
 - *Schedules*: `schedule_create`, `schedule_list`, `schedule_delete` share the
   scheduler behind `/loop` (@agent-loop)
@@ -583,7 +614,7 @@ endpoints are unsupported.
 == Constraint Solving
 <agent-smt>
 
-On Linux, `z3_solve` accepts literal SMT-LIB declarations and assertions. A separate local worker solves the formulas, including calls from remote workspaces. The tool does not read project or remote files.
+`z3_solve` accepts literal SMT-LIB declarations and assertions on Linux, Windows, and macOS. Each task runs in a separate local `qsoc-smt-worker` process, which exits after its result. Calls from remote workspaces also solve locally. The tool does not read project or remote files.
 
 `mode="check"` returns satisfiability, an optional model, and an optional unsat core for named assertions. `mode="optimize"` accepts 1 to 16 `minimize` or `maximize` objectives. Objectives use lexicographic order: earlier objectives take priority. Optimize rejects quantified formulas. Pareto, box, soft constraints, and recursive definitions are unsupported.
 
@@ -597,9 +628,29 @@ On Linux, `z3_solve` accepts literal SMT-LIB declarations and assertions. A sepa
 
 The response separates execution, satisfiability, feasibility, and optimality. A feasible model does not establish an optimum. Nonlinear or unsupported certification theories report `not_proven`. Objective bounds preserve exact rationals, infinity, and infinitesimal epsilon terms. A strict bound can describe a limit that no feasible model attains. Check `optimality`, each objective's `classification`, and `bounds_proven` before treating a model as optimal.
 
-`timeout_ms` defaults to 10000 and accepts 1 to 120000. The deadline includes parsing, solving, verification, and output. Cancellation and resource limits have separate execution states. An unknown result does not establish unsatisfiability.
+`timeout_ms` defaults to 10000 and accepts 1 to 120000. The deadline includes worker startup, parsing, solving, verification, and output. Cancellation and resource limits have separate execution states. An unknown result does not establish unsatisfiability.
 
-Requests accept at most 256 KiB of SMT-LIB. Output is limited to 1 MiB, and each worker has a 512 MiB address-space limit. The worker installs this limit before reading a request and exits without solving if installation fails. Two workers can run concurrently. Excess requests wait in a bounded queue or return busy. Worker failure leaves the agent available for later calls.
+Requests accept at most 256 KiB of SMT-LIB. Output is limited to 1 MiB. Each daemon runs at most two SMT workers concurrently across its sessions and direct clients. Waiting requests share a queue of at most 64 tasks and 16 MiB of serialized input. Each session or direct client connection can own at most 16 running and waiting tasks combined. Requests from different owners take turns as worker slots become available. These budgets apply to one daemon, not the entire machine.
+
+A full queue returns `busy`. A request that remains queued for 120 seconds returns `timeout`. Queue waiting is separate from `timeout_ms`. Cancelling a running task stops its worker. The daemon reuses the slot only after that process exits. A failed worker does not terminate other workers or the agent.
+
+Worker memory limits depend on the platform:
+
+#figure(
+  align(center)[#table(
+    columns: (0.25fr, 1fr),
+    align: (auto, left),
+    table.header([Platform], [Worker limit]),
+    table.hline(),
+    [Linux], [512 MiB of total virtual address space],
+    [Windows], [512 MiB of committed process memory],
+    [macOS], [512 MiB above the worker's initial virtual address space],
+  )],
+  caption: [SMT WORKER MEMORY LIMITS],
+  kind: table,
+)
+
+These limits measure different resources and are not a shared resident-memory limit. Z3 also has an internal 448 MiB allocation limit. The worker refuses to solve if the operating system cannot enforce its process limit. Older macOS versions that do not enforce the address-space limit cannot run SMT tasks.
 
 == Code Intelligence
 <agent-lsp>

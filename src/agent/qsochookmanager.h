@@ -5,7 +5,7 @@
 #define QSOCHOOKMANAGER_H
 
 #include "agent/qsochookrunner.h"
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
 
 #include <nlohmann/json.hpp>
 

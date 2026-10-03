@@ -7,12 +7,12 @@
 #include "agent/qsocgoal.h"
 #include "agent/qsocgoalprompt.h"
 #include "agent/qsochookmanager.h"
-#include "agent/qsochooktypes.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
+#include "common/qsochooktypes.h"
+#include "common/qsocmessageauthority.h"
 #include "common/qsoctokenizer.h"
 
 #include <algorithm>
@@ -2474,6 +2474,16 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         }
 
         publishResult(result);
+        for (const auto &attachment : attachments) {
+            if (stopBatch())
+                return false;
+            emit owner->imageAttachment(
+                attachment.sourceUrl,
+                attachment.mime,
+                attachment.dataB64,
+                attachment.width,
+                attachment.height);
+        }
         if (stopBatch()) {
             return false;
         }
@@ -3450,9 +3460,16 @@ bool QSocAgent::maybeQueuePlanModeNudge()
 
 bool QSocAgent::queueRequest(const QString &request)
 {
-    QMutexLocker locker(&queueMutex);
-    if (rejectQueuedRequests_) {
+    QMutexLocker        locker(&queueMutex);
+    constexpr qsizetype maxCharacters = 8 * 1024 * 1024;
+    if (rejectQueuedRequests_ || requestQueue.size() >= 64 || request.size() > maxCharacters) {
         return false;
+    }
+    qsizetype remaining = maxCharacters - request.size();
+    for (const auto &pending : requestQueue) {
+        if (pending.text.size() > remaining)
+            return false;
+        remaining -= pending.text.size();
     }
     requestQueue.append({request, QueuedRequest::Kind::User});
     return true;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "cli/qsocloopscheduler.h"
+#include "agent/services/qsocloopscheduler.h"
 #include "qsoc_test.h"
 
 #include <QDateTime>

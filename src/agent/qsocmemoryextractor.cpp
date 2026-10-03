@@ -4,9 +4,9 @@
 #include "agent/qsocmemoryextractor.h"
 
 #include "agent/qsocagent.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/qsocsession.h"
 #include "common/qsocconsole.h"
+#include "common/qsocmessageauthority.h"
 
 #include <QEventLoop>
 #include <QStringList>

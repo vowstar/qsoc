@@ -9,15 +9,15 @@
 #include "agent/qsocagentdefinition.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsochookmanager.h"
-#include "agent/qsocmessageauthority.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/remote/qsochostprofile.h"
-#include "agent/remote/qsocinterrupt.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
+#include "common/qsocinterrupt.h"
+#include "common/qsocmessageauthority.h"
 #include "common/qsocprojectmanager.h"
 
 #include <memory>

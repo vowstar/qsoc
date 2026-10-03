@@ -4,7 +4,7 @@
 #include "agent/mcp/qsocmcpclient.h"
 #include "agent/mcp/qsocmcpmanager.h"
 #include "agent/mcp/qsocmcpstdio.h"
-#include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocmcptypes.h"
 #include "qsoc_test.h"
 
 #include <yaml-cpp/yaml.h>

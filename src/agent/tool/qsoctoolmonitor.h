@@ -5,9 +5,9 @@
 #define QSOCTOOLMONITOR_H
 
 #include "agent/qsoctaskeventqueue.h"
-#include "agent/qsoctasksource.h"
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
+#include "common/qsoctasksource.h"
 
 #include <QHash>
 #include <QPointer>

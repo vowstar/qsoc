@@ -3,7 +3,7 @@
 
 #include "cli/qagentinputmonitor.h"
 
-#include "agent/remote/qsocinterrupt.h"
+#include "common/qsocinterrupt.h"
 
 #ifdef Q_OS_WIN
 #include <io.h>

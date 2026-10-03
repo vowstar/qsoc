@@ -155,7 +155,7 @@ jobs:
         extra: '--external 7z'
 
     # Tests are built on a push too, so the saved cache holds their objects.
-    # A push still runs only the smoke test.
+    # Pushes also run the local-process and deployment checks.
     - name: Configure CMake
       run: >-
         cmake -B build -G Ninja
@@ -169,6 +169,29 @@ jobs:
 
     - name: Build
       run: cmake --build build --config ${{env.BUILD_TYPE}}
+
+    - name: Local process contracts
+      run: python3 .github/scripts/run-core-tests.py build
+
+    - name: Stage deployment
+      run: |
+        DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
+        mkdir -p "$RUNNER_TEMP/deployment-tools"
+        curl --fail --location --retry 3 \
+          https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+          --output "$RUNNER_TEMP/deployment-tools/linuxdeploy-x86_64.AppImage"
+        curl --fail --location --retry 3 \
+          https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+          --output "$RUNNER_TEMP/deployment-tools/linuxdeploy-plugin-qt-x86_64.AppImage"
+        chmod +x "$RUNNER_TEMP/deployment-tools/"*.AppImage
+        export QMAKE="$QT_ROOT_DIR/bin/qmake"
+        python3 .github/scripts/stage-deployment.py build AppDir \
+          --linuxdeploy "$RUNNER_TEMP/deployment-tools/linuxdeploy-x86_64.AppImage"
+
+    - name: Verify deployment
+      run: >-
+        python3 .github/scripts/verify-deployment.py AppDir/usr/bin
+        --desktop AppDir/usr/share/applications/qsoc.desktop
 
     - name: Smoke Test
       if: github.event_name == 'push'
@@ -529,6 +552,15 @@ jobs:
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
+    - name: Local process contracts
+      run: python .github/scripts/run-core-tests.py build
+
+    - name: Stage deployment
+      run: python .github/scripts/stage-deployment.py build deploy
+
+    - name: Verify deployment
+      run: python .github/scripts/verify-deployment.py deploy
+
     - name: Smoke Test
       if: github.event_name == 'push'
       run: |
@@ -565,7 +597,7 @@ jobs:
         # POSIX-only (sshd path lookup, the password database, /bin/sh on the
         # target, POSIX signals), so Windows has no remote coverage. Excluded
         # by name: letting them skip would look green.
-        ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocgui|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript" | Tee-Object -FilePath ctest.log
+        ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocgui(licensedialog|buseditorwindow|schematicsnapshot|prccontrollergrouping|prcnetlist|moduleeditorwindow|moduleeditormodels|schematicwindow)$|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocremoteguardafterreconnect|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript" | Tee-Object -FilePath ctest.log
         exit $LASTEXITCODE
 
     - name: Full Test report
@@ -642,11 +674,22 @@ jobs:
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
+    - name: Local process contracts
+      run: python3 .github/scripts/run-core-tests.py build
+
+    - name: Stage deployment
+      run: python3 .github/scripts/stage-deployment.py build deploy
+
+    - name: Verify deployment
+      run: >-
+        python3 .github/scripts/verify-deployment.py deploy/QSoC.app/Contents/MacOS
+        --bundle deploy/QSoC.app
+
     - name: Smoke Test
       if: github.event_name == 'push'
       run: |
         set -e
-        QSOC=./build/qsoc.app/Contents/MacOS/qsoc
+        QSOC=./build/qsoc
         TMPD=$(mktemp -d)
         trap 'rm -rf "$TMPD"' EXIT
         echo "--- version ---"
@@ -818,7 +861,7 @@ jobs:
         -DCMAKE_AUTOGEN_ORIGIN_DEPENDS=OFF
 
     - name: Generate moc and uic headers
-      run: cmake --build build --target qsoc_core_autogen qsoc_autogen
+      run: cmake --build build --target qsoc_platform_autogen qsoc_agent_protocol_autogen qsoc_agent_client_autogen qsoc_common_autogen qsoc_tui_autogen qsoc_cli_autogen qsoc_gui_autogen qsoc_smt_autogen qsoc_agent_autogen qsoc-agentd_autogen qsoc_autogen
 
     - name: Static Analysis (cppcheck)
       run: cmake --build build --target cppcheck

@@ -4,7 +4,7 @@
 #ifndef QSOCHOOKRUNNER_H
 #define QSOCHOOKRUNNER_H
 
-#include "agent/qsochooktypes.h"
+#include "common/qsochooktypes.h"
 
 #include <nlohmann/json.hpp>
 

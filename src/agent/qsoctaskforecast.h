@@ -4,7 +4,7 @@
 #ifndef QSOCTASKFORECAST_H
 #define QSOCTASKFORECAST_H
 
-#include "agent/qsoctaskregistry.h"
+#include "common/qsoctaskregistry.h"
 
 #include <nlohmann/json.hpp>
 #include <QMap>

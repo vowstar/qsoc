@@ -1,7 +1,10 @@
 = GUI Overview
 <gui-overview>
-`qsoc gui` opens the main window: a launcher for the four editors, a project
-tree, and the project-wide file operations. The editors read and write the same
+`qsoc gui` starts `qsoc-gui`, which opens the main window: a launcher for the
+four editors, a project tree, and the project-wide file operations. The other
+arguments pass through unchanged. On Linux and macOS `qsoc gui` becomes the GUI
+process; on Windows it returns as soon as the GUI has started. `qsoc-gui` can
+also be run directly. The editors read and write the same
 project files the CLI uses (@project-layout), so a design can move between them
 freely.
 

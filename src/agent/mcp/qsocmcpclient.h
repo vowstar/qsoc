@@ -4,7 +4,7 @@
 #ifndef QSOCMCPCLIENT_H
 #define QSOCMCPCLIENT_H
 
-#include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocmcptypes.h"
 
 #include <nlohmann/json.hpp>
 

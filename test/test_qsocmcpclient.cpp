@@ -3,7 +3,7 @@
 
 #include "agent/mcp/qsocmcpclient.h"
 #include "agent/mcp/qsocmcptransport.h"
-#include "agent/mcp/qsocmcptypes.h"
+#include "common/qsocmcptypes.h"
 #include "qsoc_test.h"
 #include "qsocmcp_fake_transport.h"
 

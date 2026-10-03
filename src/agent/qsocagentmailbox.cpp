@@ -3,7 +3,7 @@
 
 #include "agent/qsocagentmailbox.h"
 #include "agent/qsocagent.h"
-#include "agent/qsocmessageauthority.h"
+#include "common/qsocmessageauthority.h"
 
 #include <algorithm>
 #include <QRegularExpression>
