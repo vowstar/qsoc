@@ -47,6 +47,9 @@ class InputRecord(ctypes.Structure):
 
 
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+key_scan = ctypes.WinDLL("user32", use_last_error=True).VkKeyScanW
+key_scan.argtypes = [wintypes.WCHAR]
+key_scan.restype = wintypes.SHORT
 
 
 def api(name, arguments, result=wintypes.BOOL):
@@ -106,10 +109,18 @@ def type_text(input_file, text):
     records = (InputRecord * len(text))()
     for record, character in zip(records, text):
         record.kind = 1
-        record.event.key = KeyEvent(True, 1, ord(character.upper()), 0, character, 0)
         if character == "\x03":
-            record.event.key.key = ord("C")
-            record.event.key.state = 8
+            virtual_key, state = ord("C"), 8
+        else:
+            mapped = key_scan(character)
+            if mapped == -1 or (mapped >> 8) & ~7:
+                raise RuntimeError(f"The keyboard layout cannot encode {character!r}")
+            virtual_key = mapped & 0xff
+            modifiers = mapped >> 8
+            state = ((0x10 if modifiers & 1 else 0)
+                     | (0x08 if modifiers & 2 else 0)
+                     | (0x02 if modifiers & 4 else 0))
+        record.event.key = KeyEvent(True, 1, virtual_key, 0, character, state)
     written = wintypes.DWORD()
     require(write_input(msvcrt.get_osfhandle(input_file.fileno()), records, len(records),
                         ctypes.byref(written)), "Write console input")
