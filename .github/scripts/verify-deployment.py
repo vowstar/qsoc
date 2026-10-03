@@ -88,11 +88,12 @@ def main():
             [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-smt.py")),
              str(directory / ("qsoc" + suffix))],
             cwd=working, env=environment, check=True, timeout=100)
-        if os.name != "nt":
-            subprocess.run(
-                [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-interrupt.py")),
-                 str(directory / "qsoc")],
-                cwd=working, env=environment, check=True, timeout=60)
+        interrupt_probe = ("probe-agent-interrupt-windows.py" if os.name == "nt"
+                           else "probe-agent-interrupt.py")
+        subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).with_name(interrupt_probe)),
+             str(directory / ("qsoc" + suffix))],
+            cwd=working, env=environment, check=True, timeout=60)
         endpoint = ("qsoc-deployment-" + uuid.uuid4().hex if os.name == "nt"
                     else str(pathlib.Path(working) / "daemon.sock"))
         daemon = subprocess.Popen(
