@@ -384,7 +384,8 @@ whether its window is the active one. If you switch away mid-run, the
 agent is steered to stop pausing for non-critical `ask_user` questions
 and instead proceed on reasonable, reversible defaults, so an unattended
 run keeps moving instead of blocking on a prompt nobody answers; a
-`[away]` chip shows in the status bar. Terminals or multiplexers that do
+`[away]` chip shows in the status bar. A focus or plan-mode change during a
+turn reaches the model with the next tool result. Terminals or multiplexers that do
 not report focus (e.g. tmux without `focus-events on`) are treated as
 focused, so behavior is unchanged there.
 

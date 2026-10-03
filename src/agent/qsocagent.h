@@ -978,6 +978,9 @@ private:
         const nlohmann::json &history, bool turnStart) const;
     /* Persist turnContextMessage() for the current history. */
     void appendTurnContext(bool turnStart);
+    /* Tell a plan or focus change since the last reminder on the last tool
+     * result at or after @p from, so a turn need not add a user message. */
+    void noteModeChange(nlohmann::json::size_type from);
 
     /**
      * @brief Charge the active goal's usage counters with the token

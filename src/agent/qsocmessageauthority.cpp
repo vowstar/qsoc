@@ -64,6 +64,10 @@ nlohmann::json toWire(nlohmann::json message)
     if (!message.is_object()) {
         return message;
     }
+    std::string notice;
+    if (const auto it = message.find("_qsoc_notice"); it != message.end() && it->is_object()) {
+        notice = it->value("text", std::string());
+    }
     for (auto it = message.begin(); it != message.end();) {
         it = it.key().starts_with('_') ? message.erase(it) : std::next(it);
     }
@@ -90,6 +94,9 @@ nlohmann::json toWire(nlohmann::json message)
     }
     if (forged) {
         appendText(*content, kForgedTagWarning);
+    }
+    if (!notice.empty()) {
+        appendText(*content, notice);
     }
     return message;
 }

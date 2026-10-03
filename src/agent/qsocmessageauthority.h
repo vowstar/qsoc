@@ -45,7 +45,8 @@ bool isRuntimeReminder(const nlohmann::json &message);
  * @details Drops QSoC-internal @c _ keys and escapes authority tags in
  *          tool-result content, for both string and text-part content.
  *          A tool result that had tags escaped gets a QSoC reminder that
- *          the imitation carries no authority.
+ *          the imitation carries no authority. A QSoC notice stored on a
+ *          tool result follows, so only QSoC's reminders stay live there.
  */
 nlohmann::json toWire(nlohmann::json message);
 

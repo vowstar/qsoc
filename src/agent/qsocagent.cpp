@@ -79,6 +79,14 @@ const char *const kNotWatchingReminder
       "reversible default, state the assumption, and keep going. Reserve "
       "ask_user for a genuinely blocking, irreversible decision.";
 
+/* Wrap ephemeral per-turn context as a <system-reminder> block. The base
+ * system prompt teaches the model that these tags are system-injected and
+ * bear no direct relation to the message they ride in. */
+std::string wrapSystemReminder(const QString &content)
+{
+    return "<system-reminder>\n" + content.toStdString() + "\n</system-reminder>";
+}
+
 const char *const kPlanModeEndedReminder
     = "Plan mode has ended. You may make the changes the user asks for.";
 
@@ -113,20 +121,63 @@ QSet<QString> recalledNames(const json &history)
     return names;
 }
 
+/* Plan and focus state the model was last told, and the plans it has seen. */
+struct ToldState
+{
+    bool          plan = false;
+    bool          away = false;
+    QSet<QString> plans;
+};
+
+ToldState toldState(const json &history)
+{
+    ToldState state;
+    for (const auto &message : history) {
+        for (const char *key : {"_qsoc_reminder", "_qsoc_notice"}) {
+            const auto told = message.find(key);
+            if (told == message.end() || !told->is_object()) {
+                continue;
+            }
+            state.plan = told->value("plan", state.plan);
+            state.away = told->value("away", state.away);
+            state.plans.insert(QString::fromStdString(told->value("approved_plan", std::string())));
+        }
+    }
+    return state;
+}
+
+/* Reminders for plan and focus; restate repeats an unchanged active mode. */
+QStringList modeParts(const ToldState &told, bool plan, bool away, bool restate)
+{
+    QStringList parts;
+    if (plan && (restate || !told.plan)) {
+        parts << QString::fromUtf8(kPlanModeReminder);
+    } else if (!plan && told.plan) {
+        parts << QString::fromUtf8(kPlanModeEndedReminder);
+    }
+    if (away && (restate || !told.away)) {
+        parts << QString::fromUtf8(kNotWatchingReminder);
+    } else if (!away && told.away) {
+        parts << QString::fromUtf8(kWatchingAgainReminder);
+    }
+    return parts;
+}
+
+std::string joinReminders(const QStringList &parts)
+{
+    std::string text;
+    for (const QString &part : parts) {
+        text += (text.empty() ? "" : "\n") + wrapSystemReminder(part);
+    }
+    return text;
+}
+
 std::string planDigest(const QString &plan)
 {
     return QCryptographicHash::hash(plan.toUtf8(), QCryptographicHash::Sha256)
         .toHex()
         .left(16)
         .toStdString();
-}
-
-/* Wrap ephemeral per-turn context as a <system-reminder> block. The base
- * system prompt teaches the model that these tags are system-injected and
- * bear no direct relation to the message they ride in. */
-std::string wrapSystemReminder(const QString &content)
-{
-    return "<system-reminder>\n" + content.toStdString() + "\n</system-reminder>";
 }
 
 std::optional<json> buildToolAttachmentMessage(const QList<QSocAgent::AttachmentSpec> &attachments)
@@ -305,6 +356,7 @@ void QSocAgent::finishToolBatch(const ActiveRunPtr &run)
                 : QStringLiteral("skipped"));
         completedIds.insert(id);
     }
+    noteModeChange(start + 1);
     for (const json &attachment : attachments) {
         messages.push_back(attachment);
         ++historyRevision_;
@@ -2571,37 +2623,15 @@ std::optional<json> QSocAgent::turnContextMessage(const json &history, bool turn
     if (agentConfig.isSubAgent) {
         return std::nullopt;
     }
-    bool          toldPlan = false;
-    bool          toldAway = false;
-    QSet<QString> plans;
-    for (const auto &message : history) {
-        const auto told = message.find("_qsoc_reminder");
-        if (told == message.end() || !told->is_object()) {
-            continue;
-        }
-        toldPlan = told->value("plan", false);
-        toldAway = told->value("away", false);
-        plans.insert(QString::fromStdString(told->value("approved_plan", std::string())));
-    }
+    const ToldState     told     = toldState(history);
     const QSet<QString> surfaced = recalledNames(history);
-
-    const bool  plan = agentConfig.planMode;
-    const bool  away = userWatchingProbe_ && !userWatchingProbe_();
-    QStringList parts;
-    json        state = {{"plan", plan}, {"away", away}};
-    if (plan && (turnStart || !toldPlan)) {
-        parts << QString::fromUtf8(kPlanModeReminder);
-    } else if (!plan && toldPlan) {
-        parts << QString::fromUtf8(kPlanModeEndedReminder);
-    }
-    if (away && (turnStart || !toldAway)) {
-        parts << QString::fromUtf8(kNotWatchingReminder);
-    } else if (!away && toldAway) {
-        parts << QString::fromUtf8(kWatchingAgainReminder);
-    }
+    const bool          plan     = agentConfig.planMode;
+    const bool          away     = userWatchingProbe_ && !userWatchingProbe_();
+    QStringList         parts    = modeParts(told, plan, away, turnStart);
+    json                state    = {{"plan", plan}, {"away", away}};
     if (!approvedPlan_.isEmpty()) {
         const std::string digest = planDigest(approvedPlan_);
-        if (!plans.contains(QString::fromStdString(digest))) {
+        if (!told.plans.contains(QString::fromStdString(digest))) {
             parts << approvedPlanBlock(approvedPlan_);
             state["approved_plan"] = digest;
         }
@@ -2621,11 +2651,29 @@ std::optional<json> QSocAgent::turnContextMessage(const json &history, bool turn
     if (parts.isEmpty()) {
         return std::nullopt;
     }
-    std::string text;
-    for (const QString &part : parts) {
-        text += (text.empty() ? "" : "\n") + wrapSystemReminder(part);
+    return json{{"role", "user"}, {"content", joinReminders(parts)}, {"_qsoc_reminder", state}};
+}
+
+void QSocAgent::noteModeChange(json::size_type from)
+{
+    if (agentConfig.isSubAgent) {
+        return;
     }
-    return json{{"role", "user"}, {"content", text}, {"_qsoc_reminder", state}};
+    for (auto index = messages.size(); index > from; --index) {
+        json &message = messages.at(index - 1);
+        if (message.value("role", std::string()) != "tool") {
+            continue;
+        }
+        const bool        plan  = agentConfig.planMode;
+        const bool        away  = userWatchingProbe_ && !userWatchingProbe_();
+        const QStringList parts = modeParts(toldState(messages), plan, away, false);
+        if (!parts.isEmpty()) {
+            message["_qsoc_notice"]
+                = {{"plan", plan}, {"away", away}, {"text", joinReminders(parts)}};
+            ++historyRevision_;
+        }
+        return;
+    }
 }
 
 void QSocAgent::appendTurnContext(bool turnStart)
