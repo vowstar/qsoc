@@ -69,7 +69,7 @@ bool QSocProcessOwner::watch(qint64 parentPid)
     if (state_ || parentPid <= 1)
         return false;
 #ifdef Q_OS_WIN
-    if (parentPid > std::numeric_limits<DWORD>::max())
+    if (parentPid > (std::numeric_limits<DWORD>::max)())
         return false;
 #else
     if (parentPid > std::numeric_limits<int>::max())
