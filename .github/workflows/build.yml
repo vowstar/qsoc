@@ -646,7 +646,7 @@ jobs:
       if: github.event_name == 'push'
       run: |
         set -e
-        QSOC=./build/qsoc.app/Contents/MacOS/qsoc
+        QSOC=./build/qsoc
         TMPD=$(mktemp -d)
         trap 'rm -rf "$TMPD"' EXIT
         echo "--- version ---"
