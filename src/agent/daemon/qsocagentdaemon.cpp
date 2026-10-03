@@ -961,6 +961,13 @@ private:
                         {"error", "session service connection only accepts SMT requests"}}));
             return;
         }
+        if (method == "shutdown") {
+            write(
+                client_,
+                QSocIpc::frame(QJsonObject{{"id", number}, {"result", QJsonObject{{"bye", true}}}}));
+            daemon_->requestStop();
+            return;
+        }
         const auto bytes = QSocIpc::frame(request);
         if (workerReady_) {
             write(&worker_, bytes);

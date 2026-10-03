@@ -331,6 +331,39 @@ private slots:
         QCOMPARE(daemon.exitStatus(), QProcess::NormalExit);
     }
 
+    void shutdownSurvivesSessionDisconnects()
+    {
+        for (int round = 0; round < 32; ++round) {
+            QTemporaryDir fixture;
+            QVERIFY(fixture.isValid());
+            const QString socketPath = fixture.filePath("daemon.sock");
+            QProcess      daemon;
+            daemon.setProcessEnvironment(isolatedEnvironment(fixture.path()));
+            daemon.start(m_daemonPath, {"--socket", socketPath});
+            QVERIFY(daemon.waitForStarted(5000));
+            QVERIFY(waitForSocket(socketPath, 5000));
+            {
+                DaemonClient disconnected(socketPath);
+                QVERIFY(disconnected.connected());
+                QVERIFY(!disconnected.receive().isEmpty());
+                disconnected.send({{"id", 1}, {"method", "status"}});
+                QVERIFY(!disconnected.waitForReply(1).isEmpty());
+            }
+            DaemonClient control(socketPath);
+            QVERIFY(control.connected());
+            QVERIFY(!control.receive().isEmpty());
+            if (round % 2) {
+                control.send({{"id", 1}, {"method", "status"}});
+                QVERIFY(!control.waitForReply(1).isEmpty());
+            }
+            control.send({{"id", 2}, {"method", "shutdown"}});
+            QVERIFY(control.waitForReply(2).value("result").toObject().value("bye").toBool());
+            QVERIFY(daemon.waitForFinished(5000));
+            QCOMPARE(daemon.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(daemon.exitCode(), 0);
+        }
+    }
+
     void shutdownClosesOtherLiveSessions()
     {
         for (int round = 0; round < 5; ++round) {
