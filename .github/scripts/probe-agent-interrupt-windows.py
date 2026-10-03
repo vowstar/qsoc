@@ -145,7 +145,7 @@ def main(program):
                 server_thread.start()
                 process = None
                 try:
-                    with open("CONIN$", "rb", buffering=0) as input_file, \
+                    with open("CONIN$", "r+b", buffering=0) as input_file, \
                             open("CONOUT$", "wb", buffering=0) as output_file, \
                             (working / "cli.stderr").open("wb") as error_file:
                         process = subprocess.Popen([str(executable), "agent"], cwd=working,
