@@ -27,8 +27,16 @@ namespace {
 int guiArgument(int argc, char *argv[])
 {
     for (int i = 1; i < argc; ++i) {
-        if (0 == qstrcmp(argv[i], "gui"))
-            return i;
+        const QByteArray argument(argv[i]);
+        if (argument == "--")
+            return i + 1 < argc && qstrcmp(argv[i + 1], "gui") == 0 ? i + 1 : 0;
+        if (argument == "--verbose" || argument == "--color") {
+            ++i;
+            continue;
+        }
+        if (argument.startsWith("--verbose=") || argument.startsWith("--color="))
+            continue;
+        return argument == "gui" ? i : 0;
     }
     return 0;
 }

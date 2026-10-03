@@ -5,6 +5,9 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -22,27 +25,75 @@ private:
     }
 
 private slots:
-    void guiReplacesTheProcessAndKeepsTheOtherArguments()
+    void guiHandoffPreservesArgumentsAndPlatformLifetime()
     {
-#ifdef Q_OS_WIN
-        QSKIP("Windows starts qsoc-gui detached instead of replacing the process");
-#else
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
-        QFile fake(QDir(dir.path()).filePath(QStringLiteral("qsoc-gui")));
-        QVERIFY(fake.open(QIODevice::WriteOnly));
-        fake.write("#!/bin/sh\necho \"args=$*\"\nexit 7\n");
-        fake.close();
-        QVERIFY(fake.setPermissions(fake.permissions() | QFileDevice::ExeOwner));
+        const QString filename = QStringLiteral("qsoc-gui")
+#ifdef Q_OS_WIN
+                                 + QStringLiteral(".exe")
+#endif
+            ;
+        QVERIFY(QFile::copy(QStringLiteral(QSOC_GUI_PROBE_PATH), dir.filePath(filename)));
+        const QString output      = dir.filePath("arguments.json");
+        const QString release     = dir.filePath("release");
+        auto          environment = withBinDir(dir.path());
+        environment.insert("QSOC_GUI_PROBE_OUTPUT", output);
+#ifdef Q_OS_WIN
+        environment.insert("QSOC_GUI_PROBE_RELEASE", release);
+#endif
 
         QProcess qsoc;
-        qsoc.setProcessEnvironment(withBinDir(dir.path()));
+        qsoc.setProcessEnvironment(environment);
         qsoc.setWorkingDirectory(dir.path());
-        qsoc.start(QStringLiteral(QSOC_BINARY_PATH), {"-d", "project", "gui", "--flag"});
+        qsoc.start(QStringLiteral(QSOC_BINARY_PATH), {"--color", "never", "gui", "--flag", "a b"});
+        QVERIFY(qsoc.waitForStarted(5000));
+        const qint64 launcherPid = qsoc.processId();
         QVERIFY(qsoc.waitForFinished(10000));
+#ifdef Q_OS_WIN
+        QCOMPARE(qsoc.exitCode(), 0);
+        QTRY_VERIFY(QFile::exists(output));
+        QVERIFY(!QFile::exists(output + ".done"));
+        QFile releaseFile(release);
+        QVERIFY(releaseFile.open(QIODevice::WriteOnly));
+        releaseFile.close();
+        QTRY_VERIFY(QFile::exists(output + ".done"));
+#else
         QCOMPARE(qsoc.exitCode(), 7);
-        QCOMPARE(qsoc.readAllStandardOutput().trimmed(), QByteArray("args=-d project --flag"));
 #endif
+        QFile arguments(output);
+        QVERIFY(arguments.open(QIODevice::ReadOnly));
+        const auto result = QJsonDocument::fromJson(arguments.readAll()).object();
+        QCOMPARE(
+            result.value("arguments").toArray(), QJsonArray({"--color", "never", "--flag", "a b"}));
+#ifdef Q_OS_WIN
+        QVERIFY(result.value("pid").toInteger() != launcherPid);
+#else
+        QCOMPARE(result.value("pid").toInteger(), launcherPid);
+#endif
+    }
+
+    void otherCommandsAndOptionValuesDoNotLaunchTheGui_data()
+    {
+        QTest::addColumn<QStringList>("arguments");
+        QTest::newRow("project-name") << QStringList{"project", "create", "gui", "--help"};
+        QTest::newRow("option-value") << QStringList{"--color", "gui", "--help"};
+        QTest::newRow("license-name") << QStringList{"--licenses", "gui"};
+        QTest::newRow("version") << QStringList{"--version", "gui"};
+    }
+
+    void otherCommandsAndOptionValuesDoNotLaunchTheGui()
+    {
+        QFETCH(QStringList, arguments);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QProcess qsoc;
+        qsoc.setWorkingDirectory(directory.path());
+        qsoc.setProcessEnvironment(withBinDir(directory.path()));
+        qsoc.start(QStringLiteral(QSOC_BINARY_PATH), arguments);
+        QVERIFY(qsoc.waitForFinished(10000));
+        QVERIFY(qsoc.exitCode() != 127);
+        QVERIFY(!qsoc.readAllStandardError().contains("qsoc-gui was not found"));
     }
 
     void missingGuiIsAnError()
