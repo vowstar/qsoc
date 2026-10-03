@@ -103,13 +103,17 @@ def main(endpoint):
         send(stream,
              {"id": 2, "method": "smt.solve", "params": dict(request, smtlib=problem)},
              {"id": 3, "method": "smt.cancel", "params": {"request_id": 2}})
-        result = replies(stream, {2, 3})[2]
+        results = replies(stream, {2, 3})
+        if results[3].get("canceled") is not True:
+            raise RuntimeError(f"The packaged daemon rejected cancellation: {results[3]}")
+        result = results[2]
         if result.get("execution") != "cancelled":
             raise RuntimeError(f"The packaged solver did not cancel: {result}")
-        send(stream, {"id": 4, "method": "smt.solve", "params": request})
-        result = replies(stream, {4})[4]
-        if result.get("execution") != "completed" or result.get("solver_status") != "sat":
-            raise RuntimeError(f"The packaged solver did not recover: {result}")
+        send(stream, *[{"id": index, "method": "smt.solve", "params": request}
+                       for index in (4, 5)])
+        for result in replies(stream, {4, 5}).values():
+            if result.get("execution") != "completed" or result.get("solver_status") != "sat":
+                raise RuntimeError(f"The packaged solver did not recover: {result}")
     print("Packaged SMT solve, cancellation and recovery passed", flush=True)
 
 

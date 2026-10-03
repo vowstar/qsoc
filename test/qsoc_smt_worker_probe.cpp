@@ -11,7 +11,9 @@
 #include <memory>
 #include <thread>
 #include <vector>
+#include <QCoreApplication>
 #include <QJsonDocument>
+#include <QSaveFile>
 
 QJsonObject execute(const QJsonObject &request)
 {
@@ -46,11 +48,23 @@ QJsonObject execute(const QJsonObject &request)
     } else if (mode.contains("probe-serialize")) {
         selected = Phase::Serialize;
     }
-    const auto result = QSocSmtEngine::execute(request, [selected](Phase phase) {
+    QString marker;
+    for (const auto &line : mode.split('\n')) {
+        if (line.startsWith("; probe-ready: "))
+            marker = line.mid(15);
+    }
+    const auto result = QSocSmtEngine::execute(request, [selected, marker](Phase phase) {
         if (phase != selected) {
             return;
         }
         std::signal(SIGTERM, SIG_IGN);
+        if (!marker.isEmpty()) {
+            QSaveFile  ready(marker);
+            const auto pid = QByteArray::number(QCoreApplication::applicationPid());
+            if (!ready.open(QIODevice::WriteOnly) || ready.write(pid) != pid.size()
+                || !ready.commit())
+                std::_Exit(19);
+        }
         while (true) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }

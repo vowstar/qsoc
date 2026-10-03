@@ -17,10 +17,33 @@
 #include <QLocalSocket>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtTest>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#else
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
+#endif
+
 namespace {
+
+bool processIsRunning(qint64 pid)
+{
+#ifdef Q_OS_WIN
+    const HANDLE process = ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+    if (process == nullptr)
+        return false;
+    const bool running = ::WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+    ::CloseHandle(process);
+    return running;
+#else
+    return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH;
+#endif
+}
 
 QJsonObject request(const QString &source, bool optimize = false)
 {
@@ -347,6 +370,52 @@ private slots:
         secondStop.request_stop();
         QCOMPARE(first.get().value("execution").toString(), QStringLiteral("cancelled"));
         QCOMPARE(second.get().value("execution").toString(), QStringLiteral("cancelled"));
+        QCOMPARE(solve("(assert true)").value("solver_status").toString(), QStringLiteral("sat"));
+    }
+
+    void runningCancellationReclaimsBothWorkers()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        for (int round = 0; round < 2; ++round) {
+            const auto firstMarker = directory.filePath(QStringLiteral("first-%1.pid").arg(round));
+            const auto secondMarker = directory.filePath(QStringLiteral("second-%1.pid").arg(round));
+            std::stop_source firstStop;
+            std::stop_source secondStop;
+            auto             first   = std::async(std::launch::async, [&] {
+                return probe(
+                    "probe-solve\n; probe-ready: " + firstMarker, 20000, firstStop.get_token());
+            });
+            auto             second  = std::async(std::launch::async, [&] {
+                return probe(
+                    "probe-solve\n; probe-ready: " + secondMarker, 20000, secondStop.get_token());
+            });
+            const auto       cleanup = qScopeGuard([&] {
+                firstStop.request_stop();
+                secondStop.request_stop();
+            });
+            QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(firstMarker) && QFile::exists(secondMarker), 5000);
+            QFile firstFile(firstMarker);
+            QFile secondFile(secondMarker);
+            QVERIFY(firstFile.open(QIODevice::ReadOnly));
+            QVERIFY(secondFile.open(QIODevice::ReadOnly));
+            const auto firstPid  = firstFile.readAll().toLongLong();
+            const auto secondPid = secondFile.readAll().toLongLong();
+            QVERIFY(firstPid > 1 && secondPid > 1 && firstPid != secondPid);
+            QVERIFY(processIsRunning(firstPid));
+            QVERIFY(processIsRunning(secondPid));
+            QElapsedTimer elapsed;
+            elapsed.start();
+            firstStop.request_stop();
+            secondStop.request_stop();
+            QVERIFY(first.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+            QVERIFY(second.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+            QVERIFY(elapsed.elapsed() < 4000);
+            QCOMPARE(first.get().value("execution").toString(), QStringLiteral("cancelled"));
+            QCOMPARE(second.get().value("execution").toString(), QStringLiteral("cancelled"));
+            QVERIFY(!processIsRunning(firstPid));
+            QVERIFY(!processIsRunning(secondPid));
+        }
         QCOMPARE(solve("(assert true)").value("solver_status").toString(), QStringLiteral("sat"));
     }
 
