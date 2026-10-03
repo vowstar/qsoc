@@ -77,7 +77,7 @@ On Windows, use a pipe name such as `qsoc-agent` for `--socket` and `--connect`.
 
 An agent request starts a separate session process for its connection. Sessions have separate event loops and share the daemon's SMT task budget (@agent-smt). Closing an attached TUI cancels its session's work and leaves the daemon running. Saved sessions remain available through `--resume` and `--continue`.
 
-Only processes of the same user can connect. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object.
+Only processes of the same user can connect. Windows also requires matching process integrity levels. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object.
 
 When the greeting advertises `smt`, clients can submit `smt.solve` without opening an agent session or configuring an LLM. Its `params` object accepts the same fields as `z3_solve` (@agent-smt). Multiple requests can remain outstanding, and results can arrive out of order. Keep each outstanding request ID unique within its connection.
 

@@ -10,11 +10,11 @@ class QLocalSocket;
 
 /**
  * @brief Identity of the process on the other end of an agent socket.
- * @details Checks the peer's kernel credentials, including its user SID on Windows.
+ * @details Checks kernel credentials and matches the Windows user SID and integrity level.
  */
 namespace QSocLocalPeer {
 
-/** True when the peer runs as this user. False when it cannot be read. */
+/** True for this user and, on Windows, integrity level. Unreadable credentials fail. */
 bool sameUser(const QLocalSocket &socket);
 
 /** Process id of the peer, or -1 when the platform cannot tell. */

@@ -20,23 +20,37 @@
 #ifdef Q_OS_WIN
 namespace {
 
-QByteArray userSid(HANDLE process)
+QByteArray tokenSid(HANDLE token, TOKEN_INFORMATION_CLASS kind)
+{
+    DWORD bytes = 0;
+    ::GetTokenInformation(token, kind, nullptr, 0, &bytes);
+    if (bytes == 0)
+        return {};
+    QByteArray storage(static_cast<qsizetype>(bytes), Qt::Uninitialized);
+    if (!::GetTokenInformation(token, kind, storage.data(), bytes, &bytes))
+        return {};
+    const auto sid
+        = kind == TokenUser
+              ? reinterpret_cast<const TOKEN_USER *>(storage.constData())->User.Sid
+              : reinterpret_cast<const TOKEN_MANDATORY_LABEL *>(storage.constData())->Label.Sid;
+    if (!::IsValidSid(sid))
+        return {};
+    return QByteArray(static_cast<const char *>(sid), ::GetLengthSid(sid));
+}
+
+struct Identity
+{
+    QByteArray user;
+    QByteArray integrity;
+};
+
+Identity identity(HANDLE process)
 {
     HANDLE token = nullptr;
     if (!::OpenProcessToken(process, TOKEN_QUERY, &token))
         return {};
     const auto closeToken = qScopeGuard([token] { ::CloseHandle(token); });
-    DWORD      bytes      = 0;
-    ::GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
-    if (bytes == 0)
-        return {};
-    QByteArray storage(static_cast<qsizetype>(bytes), Qt::Uninitialized);
-    if (!::GetTokenInformation(token, TokenUser, storage.data(), bytes, &bytes))
-        return {};
-    const auto *user = reinterpret_cast<const TOKEN_USER *>(storage.constData());
-    if (!::IsValidSid(user->User.Sid))
-        return {};
-    return QByteArray(static_cast<const char *>(user->User.Sid), ::GetLengthSid(user->User.Sid));
+    return {tokenSid(token, TokenUser), tokenSid(token, TokenIntegrityLevel)};
 }
 
 } // namespace
@@ -64,10 +78,11 @@ bool sameUser(const QLocalSocket &socket)
         = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
     if (peer == nullptr)
         return false;
-    const auto closePeer  = qScopeGuard([peer] { ::CloseHandle(peer); });
-    const auto currentSid = userSid(::GetCurrentProcess());
-    const auto peerSid    = userSid(peer);
-    return !currentSid.isEmpty() && currentSid == peerSid;
+    const auto closePeer = qScopeGuard([peer] { ::CloseHandle(peer); });
+    const auto current   = identity(::GetCurrentProcess());
+    const auto remote    = identity(peer);
+    return !current.user.isEmpty() && !current.integrity.isEmpty() && current.user == remote.user
+           && current.integrity == remote.integrity;
 #else
     Q_UNUSED(socket);
     return false;

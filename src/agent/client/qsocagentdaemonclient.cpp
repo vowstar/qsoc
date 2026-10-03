@@ -50,7 +50,7 @@ bool QSocAgentDaemonClient::connectToDaemon(int timeoutMs)
     }
     if (!QSocLocalPeer::sameUser(m_socket)) {
         m_error = QStringLiteral(
-            "agent daemon belongs to another user or its identity is unavailable");
+            "agent daemon security context differs or its identity is unavailable");
         m_socket.abort();
         return false;
     }

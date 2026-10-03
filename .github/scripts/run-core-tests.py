@@ -15,6 +15,7 @@ import xml.etree.ElementTree as ET
 CORE_TESTS = (
     "test_qsocagentdaemon",
     "test_qsocprocessowner",
+    "test_qsoclocalpeer",
     "test_qsocguihandoff",
     "test_qsocsmtservice",
     "test_qsoctoolsmt",
