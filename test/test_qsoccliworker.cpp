@@ -181,7 +181,7 @@ private slots:
             "-d",
             directory.path(),
             "--workspace",
-            directory.path()};
+            remote ? QStringLiteral("/workspace/remote") : directory.path()};
         if (remote)
             arguments << "--ssh" << "resource-test";
         worker.setup(arguments, true);
