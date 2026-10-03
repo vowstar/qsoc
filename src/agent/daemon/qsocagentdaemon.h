@@ -3,7 +3,7 @@
 
 /**
  * @file qsocagentdaemon.h
- * @brief Unix-socket front end for the agent runtime library.
+ * @brief Local-socket front end for the agent runtime library.
  * @details One QSocAgentRuntime per connection. The wire protocol is
  *          length-prefixed JSON: a request object in, a stream of event
  *          objects out, terminated by a reply object carrying the
@@ -56,13 +56,13 @@ class QSocAgentDaemon : public QObject
 public:
     /**
      * @brief Construct the daemon.
-     * @param socketPath Unix socket path; empty = default runtime path.
+     * @param socketPath Local endpoint; empty = default runtime path.
      * @param parent QObject parent.
      */
     explicit QSocAgentDaemon(const QString &socketPath = QString(), QObject *parent = nullptr);
     ~QSocAgentDaemon() override;
 
-    /** Default socket path ($XDG_RUNTIME_DIR/qsoc/agent.sock, temp fallback). */
+    /** Default socket path ($XDG_RUNTIME_DIR/qsoc/agentd.sock, temp fallback). */
     static QString defaultSocketPath();
 
     /** Bind + listen. Returns false with error() set on failure. */

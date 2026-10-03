@@ -495,7 +495,7 @@ if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(qsoc_common PUBLIC -fexperimental-library)
 endif()
 if(WIN32)
-    target_link_libraries(qsoc_common PUBLIC ws2_32)
+    target_link_libraries(qsoc_common PUBLIC ws2_32 advapi32)
     target_compile_definitions(qsoc_common PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 

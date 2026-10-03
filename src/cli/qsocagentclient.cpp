@@ -19,7 +19,6 @@
 #include "tui/qtuiimagepreviewblock.h"
 #include <QSocketNotifier>
 
-#include "agent/runtime/qsocagentpeer.h"
 #include "agent/runtime/qsocagentprotocol.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "agent/runtime/qsocagentruntimeevent.h"
@@ -30,6 +29,8 @@
 #include "cli/qterminalcapability.h"
 #include "common/qsocconsole.h"
 #include "common/qsoclinediff.h"
+#include "common/qsoclocalendpoint.h"
+#include "common/qsoclocalpeer.h"
 #include "common/qsocsibling.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuidiffblock.h"
@@ -167,7 +168,7 @@ QTuiScrollView::LineStyle styleFor(QSocAgentRuntimeStyle style)
 
 QSocAgentDaemonClient::QSocAgentDaemonClient(const QString &socketPath, QObject *parent)
     : QObject(parent)
-    , m_socketPath(socketPath)
+    , m_socketPath(QSocLocalEndpoint::resolve(socketPath))
 {
     connect(&m_socket, &QLocalSocket::readyRead, this, &QSocAgentDaemonClient::onReadyRead);
     connect(&m_socket, &QLocalSocket::disconnected, this, [this]() { emit disconnected(); });
@@ -177,17 +178,24 @@ QSocAgentDaemonClient::~QSocAgentDaemonClient() = default;
 
 qint64 QSocAgentDaemonClient::daemonProcessId() const
 {
-    return QSocAgentPeer::processId(m_socket);
+    return QSocLocalPeer::processId(m_socket);
 }
 
 bool QSocAgentDaemonClient::connectToDaemon(int timeoutMs)
 {
+    m_error.clear();
     m_buffer.clear();
     m_greeting = {};
     m_socket.abort();
     m_socket.connectToServer(m_socketPath);
     if (!m_socket.waitForConnected(timeoutMs)) {
         m_error = m_socket.errorString();
+        return false;
+    }
+    if (!QSocLocalPeer::sameUser(m_socket)) {
+        m_error = QStringLiteral(
+            "agent daemon belongs to another user or its identity is unavailable");
+        m_socket.abort();
         return false;
     }
     QEventLoop loop;
@@ -204,7 +212,8 @@ bool QSocAgentDaemonClient::connectToDaemon(int timeoutMs)
         loop.exec();
     disconnect(received);
     disconnect(lost);
-    if (m_greeting.value("protocol").toInt() != QSocAgentProtocol::version) {
+    if (m_greeting.value("protocol").toInt() != QSocAgentProtocol::version
+        || m_greeting.value("daemon").toString() != QStringLiteral("qsoc-agentd")) {
         m_error = QStringLiteral("missing or incompatible daemon protocol greeting");
         m_socket.abort();
         return false;
@@ -340,7 +349,7 @@ bool QSocCliWorker::runAgentClientLoop(
     }
     QSocAgentDaemonClient client(socketPath);
     QDeadlineTimer        startup(5000);
-    while (!client.connectToDaemon(owned ? 100 : 5000)) {
+    while (!client.connectToDaemon(static_cast<int>(startup.remainingTime()))) {
         if (!owned || startup.hasExpired() || child.state() == QProcess::NotRunning)
             return showError(
                 1, QStringLiteral("Could not connect to agent daemon: %1").arg(client.error()));
@@ -350,7 +359,7 @@ bool QSocCliWorker::runAgentClientLoop(
     }
     /* An owned endpoint must be served by the child just started. */
     const qint64 servedBy = client.daemonProcessId();
-    if (owned && servedBy > 0 && servedBy != child.processId())
+    if (owned && servedBy != child.processId())
         return showError(1, QStringLiteral("Agent daemon socket is served by another process."));
     QJsonObject params{
         {"project_directory", options.projectDirectory},

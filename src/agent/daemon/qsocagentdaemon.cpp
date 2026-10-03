@@ -5,13 +5,14 @@
 
 #include "agent/qsoctaskregistry.h"
 #include "agent/remote/qsocagentremote.h"
-#include "agent/runtime/qsocagentpeer.h"
 #include "agent/runtime/qsocagentprotocol.h"
 #include "agent/runtime/qsocagentruntimeevent.h"
 #include "agent/services/qagentcompletion.h"
 #include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolplanmode.h"
 #include "common/config.h"
+#include "common/qsoclocalendpoint.h"
+#include "common/qsoclocalpeer.h"
 #include <QScopeGuard>
 #include <QScopedValueRollback>
 
@@ -722,6 +723,11 @@ public:
         });
         connect(client_, &QLocalSocket::disconnected, this, &QSocAgentSessionProxy::finish);
         connect(&worker_, &QLocalSocket::connected, this, [this] {
+            if (!QSocLocalPeer::sameUser(worker_)
+                || QSocLocalPeer::processId(worker_) != process_.processId()) {
+                finish();
+                return;
+            }
             worker_.write(pending_);
             pending_.clear();
         });
@@ -774,7 +780,10 @@ public:
     }
 
 private:
-    QString workerPath() const { return directory_.filePath(QStringLiteral("session.sock")); }
+    QString workerPath() const
+    {
+        return QSocLocalEndpoint::resolve(directory_.filePath(QStringLiteral("session.sock")));
+    }
 
     void connectWorker()
     {
@@ -799,7 +808,8 @@ private:
 
 QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
     : QObject(parent)
-    , socketPath_(socketPath.isEmpty() ? defaultSocketPath() : socketPath)
+    , socketPath_(
+          QSocLocalEndpoint::resolve(socketPath.isEmpty() ? defaultSocketPath() : socketPath))
 {
     connect(&server_, &QLocalServer::newConnection, this, &QSocAgentDaemon::onNewConnection);
 }
@@ -813,14 +823,13 @@ QString QSocAgentDaemon::defaultSocketPath()
 {
     const QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
     const QString base       = runtimeDir.isEmpty() ? QDir::tempPath() : runtimeDir;
-    return QDir(base).filePath(QStringLiteral("qsoc/agentd.sock"));
+    return QSocLocalEndpoint::resolve(QDir(base).filePath(QStringLiteral("qsoc/agentd.sock")));
 }
 
 bool QSocAgentDaemon::start()
 {
     const QFileInfo info(socketPath_);
-    if (!QDir().mkpath(info.absolutePath())) {
-        error_ = QStringLiteral("could not create socket directory %1").arg(info.absolutePath());
+    if (!QSocLocalEndpoint::prepareDirectory(socketPath_, &error_)) {
         return false;
     }
     socketLock_ = std::make_unique<QLockFile>(socketPath_ + QStringLiteral(".lock"));
@@ -882,7 +891,7 @@ void QSocAgentDaemon::onNewConnection()
 {
     while (server_.hasPendingConnections()) {
         QLocalSocket *socket = server_.nextPendingConnection();
-        if (!QSocAgentPeer::sameUser(*socket)) {
+        if (!QSocLocalPeer::sameUser(*socket)) {
             socket->abort();
             socket->deleteLater();
             continue;

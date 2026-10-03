@@ -9,8 +9,9 @@
  *          shutdown.
  */
 
-#include "agent/runtime/qsocagentpeer.h"
 #include "agent/runtime/qsocagentruntimeevent.h"
+#include "common/qsoclocalendpoint.h"
+#include "common/qsoclocalpeer.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
@@ -20,6 +21,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocalServer>
 #include <QLocalSocket>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -43,7 +45,7 @@ public:
     explicit DaemonClient(const QString &socketPath)
         : m_socketPath(socketPath)
     {
-        m_socket.connectToServer(socketPath);
+        m_socket.connectToServer(QSocLocalEndpoint::resolve(socketPath));
         if (!m_socket.waitForConnected(5000)) {
             m_error = m_socket.errorString();
         }
@@ -166,14 +168,73 @@ private slots:
         QCOMPARE(greeting.value(QStringLiteral("daemon")).toString(), QStringLiteral("qsoc-agentd"));
         QVERIFY(!greeting.value(QStringLiteral("version")).toString().isEmpty());
         QVERIFY(greeting.value(QStringLiteral("pid")).toDouble() > 0);
-        QVERIFY(QSocAgentPeer::sameUser(client.socket()));
-        const qint64 servedBy = QSocAgentPeer::processId(client.socket());
+        QVERIFY(QSocLocalPeer::sameUser(client.socket()));
+        const qint64 servedBy = QSocLocalPeer::processId(client.socket());
         QVERIFY(servedBy == -1 || servedBy == daemon.processId());
 
         client.send({{"id", 1}, {"method", QStringLiteral("shutdown")}});
         const QJsonObject bye = client.waitForReply(1);
         QVERIFY(
             bye.value(QStringLiteral("result")).toObject().value(QStringLiteral("bye")).toBool());
+        QVERIFY(daemon.waitForFinished(5000));
+    }
+
+    void peersReportBothEndsAndRejectDisconnectedSockets()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QLocalServer server;
+        server.setSocketOptions(QLocalServer::UserAccessOption);
+        QVERIFY(server.listen(QSocLocalEndpoint::resolve(directory.filePath("peer.sock"))));
+        QLocalSocket client;
+        QVERIFY(!QSocLocalPeer::sameUser(client));
+        QCOMPARE(QSocLocalPeer::processId(client), qint64(-1));
+        client.connectToServer(server.fullServerName());
+        QVERIFY(client.waitForConnected(5000));
+        QTRY_VERIFY(server.hasPendingConnections());
+        std::unique_ptr<QLocalSocket> accepted(server.nextPendingConnection());
+        QVERIFY(QSocLocalPeer::sameUser(client));
+        QVERIFY(QSocLocalPeer::sameUser(*accepted));
+        QCOMPARE(QSocLocalPeer::processId(client), QCoreApplication::applicationPid());
+        QCOMPARE(QSocLocalPeer::processId(*accepted), QCoreApplication::applicationPid());
+    }
+
+    void rejectsSharedSocketDirectories()
+    {
+#ifdef Q_OS_UNIX
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVERIFY(
+            QFile::setPermissions(
+                directory.path(),
+                QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner | QFile::ReadOther
+                    | QFile::ExeOther));
+        QString error;
+        QVERIFY(!QSocLocalEndpoint::prepareDirectory(directory.filePath("agent.sock"), &error));
+        QVERIFY(error.contains("private"));
+#endif
+    }
+
+    void longEndpointUsesTheSamePrivateAddressOnBothSides()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString requested = directory.filePath(QString(160, QLatin1Char('x')) + "/agent.sock");
+        const QString resolved = QSocLocalEndpoint::resolve(requested);
+#ifdef Q_OS_UNIX
+        QVERIFY(QFile::encodeName(resolved).size() < 104);
+        QVERIFY(resolved != requested);
+#endif
+        QProcess daemon;
+        daemon.setProcessEnvironment(isolatedEnvironment(directory.path()));
+        daemon.start(m_daemonPath, {"--socket", requested});
+        QVERIFY(daemon.waitForStarted(5000));
+        QVERIFY(waitForSocket(requested, 5000));
+        DaemonClient client(requested);
+        QVERIFY(client.connected());
+        QCOMPARE(client.receive().value("protocol").toInt(), 1);
+        client.send({{"id", 1}, {"method", "shutdown"}});
+        QVERIFY(!client.waitForReply(1).isEmpty());
         QVERIFY(daemon.waitForFinished(5000));
     }
 
@@ -317,9 +378,11 @@ private:
     {
         QDeadlineTimer deadline(timeoutMs);
         while (!deadline.hasExpired()) {
-            if (QFile::exists(socketPath)) {
+            DaemonClient probe(socketPath);
+            if (probe.connected()
+                && probe.receive(static_cast<int>(deadline.remainingTime())).value("protocol").toInt()
+                       == 1)
                 return true;
-            }
             QTest::qWait(20);
         }
         return false;
@@ -328,5 +391,5 @@ private:
     QString m_daemonPath;
 };
 
-QTEST_MAIN(TestQSocAgentDaemon)
+QSOC_TEST_MAIN(TestQSocAgentDaemon)
 #include "test_qsocagentdaemon.moc"
