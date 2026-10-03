@@ -75,8 +75,15 @@ def main():
         })
         for name in ("qsoc", "qsoc-agentd"):
             program = entry if entry and name == "qsoc" else directory / (name + suffix)
-            subprocess.run([str(program), "--version"],
-                           cwd=working, env=environment, check=True, timeout=15)
+            try:
+                version = subprocess.run([str(program), "--version"],
+                                         cwd=working, env=environment, check=True, timeout=15,
+                                         stdin=subprocess.DEVNULL, capture_output=True)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+                print(((error.stdout or b"") + (error.stderr or b"")).decode(errors="replace"),
+                      flush=True)
+                raise
+            print((version.stdout + version.stderr).decode(errors="replace"), flush=True)
         subprocess.run(
             [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-smt.py")),
              str(directory / ("qsoc" + suffix))],
