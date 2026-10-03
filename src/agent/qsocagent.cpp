@@ -3460,9 +3460,16 @@ bool QSocAgent::maybeQueuePlanModeNudge()
 
 bool QSocAgent::queueRequest(const QString &request)
 {
-    QMutexLocker locker(&queueMutex);
-    if (rejectQueuedRequests_) {
+    QMutexLocker        locker(&queueMutex);
+    constexpr qsizetype maxCharacters = 8 * 1024 * 1024;
+    if (rejectQueuedRequests_ || requestQueue.size() >= 64 || request.size() > maxCharacters) {
         return false;
+    }
+    qsizetype remaining = maxCharacters - request.size();
+    for (const auto &pending : requestQueue) {
+        if (pending.text.size() > remaining)
+            return false;
+        remaining -= pending.text.size();
     }
     requestQueue.append({request, QueuedRequest::Kind::User});
     return true;

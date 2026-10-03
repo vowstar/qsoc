@@ -112,6 +112,57 @@ private slots:
             client.request("status").value("error").toString(),
             QStringLiteral("daemon disconnected"));
     }
+
+    void eventHandlerCanRequestDuringReplyDelivery()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = QSocLocalEndpoint::resolve(directory.filePath("client.sock"));
+        QString    error;
+        QVERIFY(QSocLocalEndpoint::prepareDirectory(path, &error));
+        QLocalServer server;
+        server.setSocketOptions(QLocalServer::UserAccessOption);
+        QVERIFY(server.listen(path));
+        connect(&server, &QLocalServer::newConnection, &server, [&] {
+            auto *socket = server.nextPendingConnection();
+            socket->write(QSocIpc::frame(QJsonObject{{"daemon", "qsoc-agentd"}, {"protocol", 1}}));
+            connect(socket, &QLocalSocket::readyRead, socket, [socket, pending = QByteArray{}]() mutable {
+                pending += socket->readAll();
+                QJsonObject request;
+                while (QSocIpc::decode(pending, request) == QSocIpc::DecodeResult::Complete) {
+                    if (request.value("method") == QStringLiteral("outer")) {
+                        socket->write(
+                            QSocIpc::frame(
+                                QJsonObject{
+                                    {"event",
+                                     QJsonObject{{"kind", "content_chunk"}, {"text", "chunk"}}}}));
+                    }
+                    socket->write(
+                        QSocIpc::frame(
+                            QJsonObject{
+                                {"id", request.value("id")}, {"result", request.value("method")}}));
+                }
+            });
+        });
+        QSocAgentDaemonClient client(path);
+        QVERIFY(client.connectToDaemon());
+        QJsonObject nested;
+        connect(
+            &client,
+            &QSocAgentDaemonClient::eventReceived,
+            &client,
+            [&](const QSocAgentRuntimeEvent &) { nested = client.request("nested"); });
+        const auto outer = client.request("outer");
+        QCOMPARE(outer.value("result").toString(), QStringLiteral("outer"));
+        QCOMPARE(nested.value("result").toString(), QStringLiteral("nested"));
+    }
+
+    void rejectsOversizedOutgoingFrame()
+    {
+        QSocAgentDaemonClient client(QStringLiteral("unused"));
+        client.send({{"text", QString(QSocIpc::maxPayloadBytes, QLatin1Char('x'))}});
+        QVERIFY(client.error().contains("limit"));
+    }
 };
 
 } // namespace

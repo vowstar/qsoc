@@ -58,6 +58,7 @@ private slots:
     void handleReadyRead();
 
 private:
+    void         processFrame();
     QString      m_socketPath;
     QLocalSocket m_socket;
     QByteArray   m_buffer;
@@ -65,6 +66,7 @@ private:
     QString      m_daemonVersion;
     qint64       m_requestCounter = 0;
     QJsonObject  m_greeting;
+    bool         m_dispatchPending = false;
 };
 
 #endif /* QSOCAGENTDAEMONCLIENT_H */

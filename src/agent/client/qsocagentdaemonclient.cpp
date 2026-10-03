@@ -25,6 +25,7 @@ QSocAgentDaemonClient::QSocAgentDaemonClient(const QString &socketPath, QObject 
     : QObject(parent)
     , m_socketPath(QSocLocalEndpoint::resolve(socketPath))
 {
+    m_socket.setReadBufferSize(QSocIpc::maxPayloadBytes + QSocIpc::headerBytes);
     connect(&m_socket, &QLocalSocket::readyRead, this, &QSocAgentDaemonClient::handleReadyRead);
     connect(&m_socket, &QLocalSocket::disconnected, this, [this]() { emit disconnected(); });
 }
@@ -97,7 +98,7 @@ QJsonObject QSocAgentDaemonClient::request(
     if (timeoutMs > 0)
         timer.start(timeoutMs);
     send({{"id", id}, {"method", method}, {"params", params}});
-    if (isConnected())
+    if (reply.isEmpty() && isConnected())
         loop.exec();
     disconnect(received);
     disconnect(lost);
@@ -111,7 +112,14 @@ QJsonObject QSocAgentDaemonClient::request(
 
 void QSocAgentDaemonClient::send(const QJsonObject &request)
 {
-    m_socket.write(frame(request));
+    const auto encoded = frame(request);
+    if (encoded.isEmpty()
+        || m_socket.bytesToWrite() + encoded.size() > QSocIpc::maxPayloadBytes + kHeaderBytes) {
+        m_error = QStringLiteral("daemon request buffer limit exceeded");
+        m_socket.abort();
+        return;
+    }
+    m_socket.write(encoded);
     m_socket.flush();
 }
 
@@ -122,34 +130,44 @@ qint64 QSocAgentDaemonClient::nextId()
 
 void QSocAgentDaemonClient::handleReadyRead()
 {
-    m_buffer += m_socket.readAll();
-    while (true) {
-        if (m_buffer.size() < kHeaderBytes) {
+    if (m_dispatchPending)
+        return;
+    m_dispatchPending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_dispatchPending = false;
+        processFrame();
+    });
+}
+
+void QSocAgentDaemonClient::processFrame()
+{
+    const auto capacity = QSocIpc::maxPayloadBytes + kHeaderBytes - m_buffer.size();
+    if (capacity > 0 && m_socket.bytesAvailable() > 0)
+        m_buffer += m_socket.read(capacity);
+    QJsonObject frameObject;
+    const auto  state = QSocIpc::decode(m_buffer, frameObject, QSocIpc::maxPayloadBytes, &m_error);
+    if (state == QSocIpc::DecodeResult::Invalid) {
+        m_buffer.clear();
+        m_socket.abort();
+        return;
+    }
+    if (state == QSocIpc::DecodeResult::Incomplete)
+        return;
+    // Schedule before emitting: an event handler can enter a nested request loop.
+    if (!m_buffer.isEmpty() || m_socket.bytesAvailable() > 0)
+        handleReadyRead();
+    if (frameObject.contains(QStringLiteral("event"))) {
+        if (!frameObject.value(QStringLiteral("event")).isObject()) {
+            m_error = QStringLiteral("invalid daemon event");
+            m_buffer.clear();
+            m_socket.abort();
             return;
         }
-        const int length = QSocAgentProtocol::payloadLength(m_buffer);
-        if (length < 0) {
-            m_socket.disconnectFromServer();
-            return;
-        }
-        if (m_buffer.size() < kHeaderBytes + length) {
-            return;
-        }
-        const QByteArray payload = m_buffer.mid(kHeaderBytes, length);
-        m_buffer.remove(0, kHeaderBytes + length);
-        const QJsonDocument doc = QJsonDocument::fromJson(payload);
-        if (!doc.isObject()) {
-            continue;
-        }
-        const QJsonObject frameObject = doc.object();
-        if (frameObject.contains(QStringLiteral("event"))) {
-            const auto event = eventFromJson(frameObject.value(QStringLiteral("event")).toObject());
-            QTimer::singleShot(0, this, [this, event] { emit eventReceived(event); });
-        } else {
-            if (frameObject.contains("daemon"))
-                m_greeting = frameObject;
-            QTimer::singleShot(0, this, [this, frameObject] { emit replyReceived(frameObject); });
-        }
+        emit eventReceived(eventFromJson(frameObject.value(QStringLiteral("event")).toObject()));
+    } else {
+        if (frameObject.contains("daemon"))
+            m_greeting = frameObject;
+        emit replyReceived(frameObject);
     }
 }
 

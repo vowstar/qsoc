@@ -335,6 +335,7 @@ set_property(TARGET test_qsocipc PROPERTY LINK_LIBRARIES Qt${QT_VERSION_MAJOR}::
 target_include_directories(test_qsocipc PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 qt_add_test_target("test_qsocagentclient" LABELS "agent-runtime")
+qt_add_test_target("test_qsocagentqueue" LABELS "agent-runtime")
 set_property(TARGET test_qsocagentclient PROPERTY LINK_LIBRARIES qsoc_agent_client Qt${QT_VERSION_MAJOR}::Test)
 qt_add_test_target("test_qsocagentruntime" LABELS "agent-runtime")
 qt_add_test_target("test_qsocagentdaemon" LABELS "agent-runtime")

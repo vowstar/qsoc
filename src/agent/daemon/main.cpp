@@ -10,9 +10,9 @@
  */
 
 #include "agent/daemon/qsocagentdaemon.h"
-#include "common/qsocinterrupt.h"
 #include "common/config.h"
 #include "common/qsocconsole.h"
+#include "common/qsocinterrupt.h"
 #include "common/qsoclocalendpoint.h"
 #include "common/qsocprocessowner.h"
 #include "common/qsocproxy.h"
