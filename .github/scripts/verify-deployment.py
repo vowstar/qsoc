@@ -8,10 +8,35 @@ import argparse
 import os
 import pathlib
 import plistlib
+import struct
 import subprocess
 import sys
 import tempfile
 import uuid
+
+
+def read_pe_subsystem(program):
+    with program.open("rb") as source:
+        dos = source.read(64)
+        if len(dos) != 64 or dos[:2] != b"MZ":
+            raise RuntimeError(f"Invalid DOS header: {program}")
+        offset = struct.unpack_from("<I", dos, 60)[0]
+        if offset < len(dos):
+            raise RuntimeError(f"Invalid PE header offset: {program}")
+        source.seek(offset)
+        header = source.read(24)
+        if len(header) != 24 or header[:4] != b"PE\0\0":
+            raise RuntimeError(f"Invalid PE header: {program}")
+        size = struct.unpack_from("<H", header, 20)[0]
+        optional = source.read(size)
+        if size < 2 or len(optional) != size:
+            raise RuntimeError(f"Truncated PE optional header: {program}")
+        minimum = {0x10B: 96, 0x20B: 112}.get(struct.unpack_from("<H", optional)[0])
+        if minimum is None:
+            raise RuntimeError(f"Unsupported PE optional header: {program}")
+        if size < minimum:
+            raise RuntimeError(f"Truncated PE optional header: {program}")
+        return struct.unpack_from("<H", optional, 68)[0]
 
 
 def main():
@@ -27,6 +52,11 @@ def main():
         program = directory / (name + suffix)
         if not program.is_file() or not os.access(program, os.X_OK):
             raise RuntimeError(f"Missing executable: {program}")
+        if sys.platform == "win32":
+            expected = 2 if name == "qsoc-gui" else 3
+            actual = read_pe_subsystem(program)
+            if actual != expected:
+                raise RuntimeError(f"Wrong PE subsystem for {name}: {actual}, expected {expected}")
     if args.bundle:
         with (args.bundle / "Contents" / "Info.plist").open("rb") as source:
             if plistlib.load(source).get("CFBundleExecutable") != "qsoc-gui":
@@ -35,6 +65,8 @@ def main():
         entries = args.desktop.read_text().splitlines()
         if "Exec=qsoc gui" not in entries:
             raise RuntimeError("The desktop entry must start qsoc gui")
+        if "Terminal=false" not in entries:
+            raise RuntimeError("The desktop entry must not open a terminal")
     environment = os.environ.copy()
     for variable in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "QT_PLUGIN_PATH",
                      "QT_QPA_PLATFORM_PLUGIN_PATH", "QSOC_BIN_DIR"):
