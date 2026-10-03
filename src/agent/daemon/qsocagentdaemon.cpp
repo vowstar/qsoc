@@ -1164,7 +1164,8 @@ void QSocAgentDaemon::handleNewConnection()
 {
     while (server_.hasPendingConnections()) {
         QLocalSocket *socket = server_.nextPendingConnection();
-        if (stopRequested_ || connectionCount() >= 64 || !QSocLocalPeer::sameUser(*socket)) {
+        if (stopRequested_ || connectionCount() >= 64 || !QSocLocalPeer::sameUser(*socket)
+            || QSocLocalPeer::processId(*socket) <= 0) {
             socket->abort();
             socket->deleteLater();
             continue;
