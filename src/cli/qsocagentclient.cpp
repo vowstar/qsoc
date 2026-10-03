@@ -53,6 +53,12 @@
 
 #include <cmath>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#elif defined(Q_OS_UNIX)
+#include <unistd.h>
+#endif
+
 using json = nlohmann::json;
 
 namespace {
@@ -156,8 +162,6 @@ bool QSocCliWorker::runAgentClientLoop(
         return showError(1, QStringLiteral("Error: terminal too small (minimum 40x10)."));
 
     // A private endpoint distinguishes an owned child from an attached daemon.
-    // QProcess uses fork/exec (or the platform equivalent), so the child starts
-    // with a clean Qt event loop and never shares a terminal with the TUI.
     QTemporaryDir privateDirectory;
     QProcess      child;
     QString       socketPath = requestedSocket;
@@ -181,6 +185,16 @@ bool QSocCliWorker::runAgentClientLoop(
         child.setStandardInputFile(QProcess::nullDevice());
         child.setStandardOutputFile(QProcess::nullDevice());
         child.setStandardErrorFile(privateDirectory.filePath("daemon.log"));
+#ifdef Q_OS_UNIX
+        child.setChildProcessModifier([] {
+            if (::setsid() < 0)
+                ::_exit(127);
+        });
+#elif defined(Q_OS_WIN)
+        child.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
+            arguments->flags |= CREATE_NEW_PROCESS_GROUP;
+        });
+#endif
         child.start(
             daemonPath,
             {"--socket",
