@@ -818,7 +818,7 @@ jobs:
         -DCMAKE_AUTOGEN_ORIGIN_DEPENDS=OFF
 
     - name: Generate moc and uic headers
-      run: cmake --build build --target qsoc_core_autogen qsoc_agent_autogen qsoc-agentd_autogen qsoc_autogen
+      run: cmake --build build --target qsoc_tui_autogen qsoc_cli_autogen qsoc_gui_autogen qsoc_agent_autogen qsoc-agentd_autogen qsoc_autogen
 
     - name: Static Analysis (cppcheck)
       run: cmake --build build --target cppcheck

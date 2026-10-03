@@ -24,7 +24,6 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QGuiApplication>
 #include <QLockFile>
 #include <QSaveFile>
 #include <QTextStream>

@@ -16,8 +16,8 @@
 #include <memory>
 #include <optional>
 
-#include <QApplication>
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QObject>
 #include <QStringList>
