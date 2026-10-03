@@ -31,7 +31,7 @@ int runSocket(const QString &endpoint, qint64 parentPid, const QSocSmtWorker::Ex
     if (!socket.waitForConnected(2000) || !QSocLocalPeer::sameUser(socket))
         return 17;
     const qint64 peerPid = QSocLocalPeer::processId(socket);
-    if (peerPid > 0 && peerPid != parentPid)
+    if (peerPid != parentPid)
         return 17;
     socket.write(
         QSocIpc::frame(

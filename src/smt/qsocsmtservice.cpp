@@ -166,7 +166,7 @@ QJsonObject runWorker(
         return interruption(stop, elapsed, startupTimeout);
     socket->setReadBufferSize(wireLimit + QSocIpc::headerBytes);
     const auto peerPid = QSocLocalPeer::processId(*socket);
-    if (!QSocLocalPeer::sameUser(*socket) || (peerPid > 0 && peerPid != process.processId()))
+    if (!QSocLocalPeer::sameUser(*socket) || peerPid != process.processId())
         return QSocSmtService::failure("error", "Worker identity mismatch");
     const auto hello = receive(*socket, startupTimeout, stop, elapsed, &process);
     if (hello.value("service").toString() != "qsoc-smt-worker"
