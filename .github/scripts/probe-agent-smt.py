@@ -19,8 +19,10 @@ import uuid
 class MockServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self):
+    def __init__(self, resource_probe=False):
         super().__init__(("127.0.0.1", 0), MockHandler)
+        self.resource_probe = resource_probe
+        self.tool_name = "system_resources" if resource_probe else "z3_solve"
         self.call_id = uuid.uuid4().hex
         self.marker = "SMT_DEPLOYMENT_" + uuid.uuid4().hex
         self.key = secrets.token_hex(24)
@@ -34,7 +36,7 @@ class MockServer(http.server.ThreadingHTTPServer):
         if request.get("model") != self.model:
             raise RuntimeError("The agent did not inherit the configured model")
         tools = request.get("tools", [])
-        if not any(tool.get("function", {}).get("name") == "z3_solve" for tool in tools):
+        if not any(tool.get("function", {}).get("name") == self.tool_name for tool in tools):
             return {"role": "assistant", "content": "Deployment probe"}, "stop"
         results = [message for message in request.get("messages", [])
                    if message.get("role") == "tool"
@@ -44,10 +46,18 @@ class MockServer(http.server.ThreadingHTTPServer):
                 if self.tool_calls != 1 or len(results) != 1:
                     raise RuntimeError("Expected exactly one SMT tool call and result")
                 result = json.loads(results[0]["content"])
-                if result.get("execution") != "completed" or result.get("solver_status") != "sat":
-                    raise RuntimeError(f"The packaged SMT tool failed: {result}")
-                if "deployment_value" not in result.get("model_smtlib", ""):
-                    raise RuntimeError("The solver did not return the requested model")
+                if self.resource_probe:
+                    if (result.get("scope") != "local_daemon"
+                            or result.get("status") not in ("ok", "partial")
+                            or not isinstance(result.get("system", {}).get("memory_total_bytes"), (int, float))
+                            or len(result.get("processes", [])) < 2
+                            or not result.get("storage")):
+                        raise RuntimeError(f"The packaged resource tool failed: {result}")
+                else:
+                    if result.get("execution") != "completed" or result.get("solver_status") != "sat":
+                        raise RuntimeError(f"The packaged SMT tool failed: {result}")
+                    if "deployment_value" not in result.get("model_smtlib", ""):
+                        raise RuntimeError("The solver did not return the requested model")
                 self.tool_results += 1
                 return {"role": "assistant", "content": self.marker}, "stop"
             if self.tool_calls:
@@ -57,7 +67,7 @@ class MockServer(http.server.ThreadingHTTPServer):
                      "(assert (= deployment_value 7))", "timeout_ms": 10000}
         return {"role": "assistant", "tool_calls": [{
             "index": 0, "id": self.call_id, "type": "function",
-            "function": {"name": "z3_solve", "arguments": json.dumps(arguments)},
+            "function": {"name": self.tool_name, "arguments": json.dumps({} if self.resource_probe else arguments)},
         }]}, "tool_calls"
 
 
@@ -131,13 +141,13 @@ def isolated_environment(working):
     return environment
 
 
-def main(program):
+def main(program, resource_probe=False):
     executable = str(pathlib.Path(program).resolve())
     temporary_root = None if os.name == "nt" else "/tmp"
     with tempfile.TemporaryDirectory(prefix="test_qsoc_agent_smt_", dir=temporary_root) as directory:
         working = pathlib.Path(directory)
         environment = isolated_environment(working)
-        with MockServer() as server:
+        with MockServer(resource_probe) as server:
             configuration = {"llm": {"model": server.model, "models": {
                 server.model: {"name": "Deployment probe", "key": server.key,
                                "url": f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
@@ -148,7 +158,7 @@ def main(program):
             thread.start()
             try:
                 result = subprocess.run(
-                    [executable, "agent", "-q", "Check the deployment SMT constraint."],
+                    [executable, "agent", "-q", "Read the local resource snapshot." if resource_probe else "Check the deployment SMT constraint."],
                     cwd=working, env=environment, stdin=subprocess.DEVNULL,
                     capture_output=True, timeout=90)
             finally:
@@ -162,9 +172,10 @@ def main(program):
                     f"Packaged agent SMT probe failed: exit={result.returncode}, "
                     f"calls={server.tool_calls}, results={server.tool_results}, "
                     f"errors={server.errors}\nstdout:\n{output}\nstderr:\n{error}")
-    print("Packaged CLI discovered its daemon and completed z3_solve through the SMT worker",
+    print("Packaged agent queried system_resources through its parent daemon" if resource_probe
+          else "Packaged CLI discovered its daemon and completed z3_solve through the SMT worker",
           flush=True)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], "--resources" in sys.argv[2:])

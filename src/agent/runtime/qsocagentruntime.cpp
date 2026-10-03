@@ -54,6 +54,7 @@
 #include "agent/tool/qsoctoolpath.h"
 #include "agent/tool/qsoctoolplanmode.h"
 #include "agent/tool/qsoctoolproject.h"
+#include "agent/tool/qsoctoolresources.h"
 #include "agent/tool/qsoctoolschedule.h"
 #include "agent/tool/qsoctoolsendmessage.h"
 #include "agent/tool/qsoctoolshell.h"
@@ -814,6 +815,10 @@ void QSocAgentRuntime::registerTools()
     d->monitorTaskSource = new QSocMonitorTaskSource(this, d->taskEventQueue, d->projectManager);
     d->toolRegistry->registerTool(new QSocToolMonitor(this, d->monitorTaskSource));
     d->toolRegistry->registerTool(new QSocToolMonitorStop(this, d->monitorTaskSource));
+
+    d->toolRegistry->registerTool(new QSocToolResources(this, [this] {
+        return isRemote() ? QStringList{} : QStringList{workingDirectory()};
+    }));
 
     /* Documentation tools */
     d->toolRegistry->registerTool(new QSocToolDocQuery(this));

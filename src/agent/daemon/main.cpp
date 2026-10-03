@@ -10,6 +10,7 @@
  */
 
 #include "agent/daemon/qsocagentdaemon.h"
+#include "agent/daemon/qsocdaemonresources.h"
 #include "common/config.h"
 #include "common/qsocconsole.h"
 #include "common/qsocinterrupt.h"
@@ -68,6 +69,9 @@ int main(int argc, char *argv[])
         QStringLiteral("Serve one connection, then exit."));
     sessionOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(sessionOption);
+    QCommandLineOption resourceOption(QStringLiteral("resource-probe"));
+    resourceOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(resourceOption);
     QCommandLineOption memoryReserveOption(
         QStringLiteral("smt-memory-reserve-mib"),
         QStringLiteral("Extra memory headroom required before starting an SMT worker."),
@@ -97,6 +101,12 @@ int main(int argc, char *argv[])
     if (parentOk && !owner.watch(parentPid)) {
         std::cerr << "qsoc-agentd: could not watch the owning process" << std::endl;
         return 1;
+    }
+    if (parser.isSet(resourceOption)) {
+        const int code = parentOk ? QSocDaemonResources::runProbe(parentPid) : 2;
+        QSocConsole::restore();
+        QSocWinConsole::restore();
+        return code;
     }
     if (!QSocInterrupt::installBridge())
         return 1;

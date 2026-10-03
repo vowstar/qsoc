@@ -48,6 +48,7 @@
 #include <memory>
 
 class QSocSmtBroker;
+class QSocDaemonResources;
 class QSocAgentDaemonConnection;
 class QSocAgentSessionProxy;
 
@@ -109,17 +110,18 @@ private:
     void removeConnection(QSocAgentDaemonConnection *connection);
     void removeProxy(QSocAgentSessionProxy *proxy);
 
-    QString                            socketPath_;
-    QString                            error_;
-    QLocalServer                       server_;
-    std::unique_ptr<QLockFile>         socketLock_;
-    QList<QSocAgentDaemonConnection *> connections_;
-    QList<QSocAgentSessionProxy *>     proxies_;
-    std::unique_ptr<QSocSmtBroker>     smtBroker_;
-    QHash<qint64, quint64>             sessionOwners_;
-    quint64                            nextOwner_     = 0;
-    bool                               singleSession_ = false;
-    bool                               stopRequested_ = false;
+    QString                              socketPath_;
+    QString                              error_;
+    QLocalServer                         server_;
+    std::unique_ptr<QLockFile>           socketLock_;
+    QList<QSocAgentDaemonConnection *>   connections_;
+    QList<QSocAgentSessionProxy *>       proxies_;
+    std::unique_ptr<QSocSmtBroker>       smtBroker_;
+    std::unique_ptr<QSocDaemonResources> resources_;
+    QHash<qint64, quint64>               sessionOwners_;
+    quint64                              nextOwner_     = 0;
+    bool                                 singleSession_ = false;
+    bool                                 stopRequested_ = false;
 
     friend class QSocAgentDaemonConnection;
     friend class QSocAgentSessionProxy;

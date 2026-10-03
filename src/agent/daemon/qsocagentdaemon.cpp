@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/daemon/qsocagentdaemon.h"
+#include "agent/daemon/qsocdaemonresources.h"
 
 #include "agent/protocol/qsocagentprotocol.h"
 #include "agent/protocol/qsocagentruntimeevent.h"
@@ -31,6 +32,7 @@
 #include <QPointer>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -802,7 +804,7 @@ public:
                         {"version", QSOC_VERSION},
                         {"protocol", QSocAgentProtocol::version},
                         {"pid", static_cast<double>(QCoreApplication::applicationPid())},
-                        {"capabilities", QJsonArray{"smt"}}}));
+                        {"capabilities", QJsonArray{"smt", "resources"}}}));
         });
         QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleClientRead);
     }
@@ -828,6 +830,7 @@ public:
         if (finished_)
             return;
         finished_ = true;
+        daemon_->resources_->cancel(this);
         daemon_->sessionOwners_.remove(sessionPid_);
         if (ownsOwner_)
             daemon_->smtBroker_->removeOwner(owner_);
@@ -927,8 +930,34 @@ private:
             return;
         }
         const auto id = static_cast<qint64>(number);
-        if (tasks_.contains(id)) {
+        if (tasks_.contains(id) || resourceRequests_.contains(id)) {
             finish();
+            return;
+        }
+        if (method == "resources") {
+            QJsonArray paths;
+            if ((request.contains("params") && !request.value("params").isObject())
+                || !QSocDaemonResources::validatePaths(params, paths)) {
+                write(
+                    client_,
+                    QSocIpc::frame(
+                        QJsonObject{
+                            {"id", number},
+                            {"error", "Expected at most eight absolute local paths"}}));
+                return;
+            }
+            resourceRequests_.insert(id);
+            const QPointer<QSocAgentSessionProxy> self(this);
+            daemon_->resources_->request(this, paths, [self, id](QJsonObject result) {
+                if (!self || self->finished_)
+                    return;
+                self->resourceRequests_.remove(id);
+                result.insert("smt", self->daemon_->smtBroker_->resourceStatus());
+                self->write(
+                    self->client_,
+                    QSocIpc::frame(
+                        QJsonObject{{"id", static_cast<double>(id)}, {"result", result}}));
+            });
             return;
         }
         if (method == "smt.solve") {
@@ -965,7 +994,7 @@ private:
                 QSocIpc::frame(
                     QJsonObject{
                         {"id", number},
-                        {"error", "session service connection only accepts SMT requests"}}));
+                        {"error", "session service connection only accepts service requests"}}));
             return;
         }
         if (method == "shutdown") {
@@ -999,6 +1028,7 @@ private:
         startup_         = QDeadlineTimer(5000);
         auto environment = QProcessEnvironment::systemEnvironment();
         environment.insert("QSOC_SMT_SOCKET", daemon_->socketPath_);
+        environment.insert("QSOC_AGENT_SOCKET", daemon_->socketPath_);
         process_.setProcessEnvironment(environment);
         process_.setStandardInputFile(QProcess::nullDevice());
         process_.setStandardOutputFile(QProcess::nullDevice());
@@ -1080,8 +1110,9 @@ private:
     QByteArray                     workerBuffer_;
     QHash<qint64, quint64>         tasks_;
     QDeadlineTimer                 startup_;
-    qint64                         sessionPid_  = 0;
-    quint64                        owner_       = 0;
+    qint64                         sessionPid_ = 0;
+    quint64                        owner_      = 0;
+    QSet<qint64>                   resourceRequests_;
     bool                           ownsOwner_   = false;
     bool                           workerReady_ = false;
     bool                           finished_    = false;
@@ -1095,6 +1126,7 @@ QSocAgentDaemon::QSocAgentDaemon(
 {
     smtBroker_
         = std::make_unique<QSocSmtBroker>(this, QSocSmtBroker::Solver{}, 120000, memoryPolicy);
+    resources_ = std::make_unique<QSocDaemonResources>(this);
     connect(&server_, &QLocalServer::newConnection, this, &QSocAgentDaemon::handleNewConnection);
 }
 
@@ -1168,6 +1200,7 @@ void QSocAgentDaemon::requestStop()
 
 void QSocAgentDaemon::shutdown()
 {
+    resources_->shutdown();
     const auto proxies = proxies_;
     for (QSocAgentSessionProxy *proxy : proxies) {
         proxy->finish();

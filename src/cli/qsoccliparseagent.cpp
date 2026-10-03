@@ -55,6 +55,9 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
              "[user@]host[:port] or a ~/.ssh/config alias; --workspace is "
              "required and must be an absolute remote path."),
          "target"},
+        {"resources",
+         QCoreApplication::translate(
+             "main", "Print local daemon resources as JSON without opening an agent session.")},
         {"connect",
          QCoreApplication::translate(
              "main",
@@ -76,6 +79,11 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     if (parser.isSet("help")) {
         return showHelp(0);
     }
+
+    if (parser.isSet("resources")
+        && (parser.isSet("query") || parser.isSet("resume") || parser.isSet("continue")
+            || !parser.positionalArguments().isEmpty()))
+        return showError(2, "--resources cannot be combined with a query or session selection.");
 
     /* Build the runtime options from the CLI flags. The runtime reads the
      * config layers itself; these are the caller's overrides. */

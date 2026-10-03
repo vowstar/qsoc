@@ -7,6 +7,7 @@
 #include "common/qsoclocalpeer.h"
 
 #include <QEventLoop>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QTimer>
 
@@ -31,6 +32,11 @@ QSocAgentDaemonClient::QSocAgentDaemonClient(const QString &socketPath, QObject 
 }
 
 QSocAgentDaemonClient::~QSocAgentDaemonClient() = default;
+
+bool QSocAgentDaemonClient::hasCapability(const QString &name) const
+{
+    return m_greeting.value("capabilities").toArray().contains(name);
+}
 
 qint64 QSocAgentDaemonClient::daemonProcessId() const
 {

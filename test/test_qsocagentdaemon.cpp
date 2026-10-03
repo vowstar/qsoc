@@ -227,6 +227,65 @@ private slots:
     }
 #endif
 
+    void resourcesDoNotStartASession_data()
+    {
+        QTest::addColumn<bool>("customPolicy");
+        QTest::newRow("default-policy") << false;
+        QTest::newRow("owner-policy") << true;
+    }
+
+    void resourcesDoNotStartASession()
+    {
+        QFETCH(bool, customPolicy);
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const auto socketPath = fixture.filePath("resources.sock");
+        QProcess   daemon;
+        daemon.setProcessEnvironment(isolatedEnvironment(fixture.path()));
+        daemon.setWorkingDirectory(fixture.path());
+        QStringList arguments{"--socket", socketPath};
+        if (customPolicy)
+            arguments << "--smt-memory-reserve-mib" << "256" << "--smt-memory-strict";
+        daemon.start(m_daemonPath, arguments);
+        QVERIFY(daemon.waitForStarted(5000));
+        QVERIFY(waitForSocket(socketPath, 5000));
+        DaemonClient client(socketPath);
+        QVERIFY(client.connected());
+        const auto greeting = client.receive();
+        QVERIFY(greeting.value("capabilities").toArray().contains("resources"));
+        client.send(
+            {{"id", 1},
+             {"method", "resources"},
+             {"params", QJsonObject{{"paths", QJsonArray{"relative"}}}}});
+        QVERIFY(client.waitForReply(1).contains("error"));
+        client.send({{"id", 2}, {"method", "resources"}, {"params", QJsonArray{}}});
+        QVERIFY(client.waitForReply(2).contains("error"));
+        client.send(
+            {{"id", 3},
+             {"method", "resources"},
+             {"params", QJsonObject{{"paths", QJsonArray{fixture.path()}}}}});
+        const auto result = client.waitForReply(3).value("result").toObject();
+        QCOMPARE(result.value("scope").toString(), QStringLiteral("local_daemon"));
+        QVERIFY(!result.value("system").toObject().isEmpty());
+        const auto smt = result.value("smt").toObject();
+        QCOMPARE(
+            smt.value("host_reserve_bytes").toInteger(),
+            qint64(customPolicy ? 256 : 512) * 1024 * 1024);
+        QCOMPARE(smt.value("strict_sampling").toBool(), customPolicy);
+        const auto processes = result.value("processes").toArray();
+        QCOMPARE(processes.size(), 1);
+        QCOMPARE(processes.first().toObject().value("pid").toInteger(), daemon.processId());
+        const auto storage = result.value("storage").toArray();
+        QCOMPARE(storage.size(), 1);
+        QVERIFY(storage.first().toObject().value("valid").toBool());
+        client.send({{"id", 4}, {"method", "shutdown"}});
+        QVERIFY(client.waitForReply(4).value("result").toObject().value("bye").toBool());
+        QVERIFY(daemon.waitForFinished(5000));
+        QCOMPARE(daemon.exitCode(), 0);
+        const auto errors = daemon.readAllStandardError();
+        QVERIFY2(errors.isEmpty(), errors.constData());
+    }
+
     void greetingCarriesDaemonIdentity()
     {
         QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/agentd_greet_XXXXXX"));

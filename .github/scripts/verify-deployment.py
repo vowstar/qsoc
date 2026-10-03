@@ -5,6 +5,7 @@
 """Check packaged programs, SMT execution and GUI startup."""
 
 import argparse
+import json
 import os
 import pathlib
 import plistlib
@@ -116,6 +117,27 @@ def main():
                       flush=True)
                 raise
             print((version.stdout + version.stderr).decode(errors="replace"), flush=True)
+        resource_probe = subprocess.run(
+            [str(entry or directory / ("qsoc" + suffix)), "agent", "--resources"],
+            cwd=working, env=environment, timeout=15,
+            stdin=subprocess.DEVNULL, capture_output=True)
+        try:
+            resource_probe.check_returncode()
+            snapshot = json.loads(resource_probe.stdout)
+            if snapshot.get("scope") != "local_daemon" or snapshot.get("status") not in ("ok", "partial"):
+                raise RuntimeError("The packaged resource probe did not produce a snapshot")
+            system = snapshot["system"]
+            for metric in ("memory_total_bytes", "memory_available_bytes", "cpu_total_ns"):
+                if not isinstance(system.get(metric), (int, float)) or system[metric] < 0:
+                    raise RuntimeError(f"Missing native resource metric: {metric}")
+            if len(snapshot["processes"]) != 1 or not snapshot["storage"]:
+                raise RuntimeError("Resource queries must sample storage without starting a session")
+            if not snapshot["storage"][0].get("valid"):
+                raise RuntimeError("The packaged storage probe failed")
+        except (subprocess.CalledProcessError, ValueError, KeyError, RuntimeError):
+            print((resource_probe.stdout + resource_probe.stderr).decode(errors="replace"), flush=True)
+            raise
+        print("Packaged native resource snapshot passed", flush=True)
         subprocess.run(
             [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-smt.py")),
              str(directory / ("qsoc" + suffix))],
@@ -126,6 +148,10 @@ def main():
             [sys.executable, str(pathlib.Path(__file__).with_name(interrupt_probe)),
              str(directory / ("qsoc" + suffix))],
             cwd=working, env=environment, check=True, timeout=90 if os.name == "nt" else 60)
+        subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-smt.py")),
+             str(directory / ("qsoc" + suffix)), "--resources"],
+            cwd=working, env=environment, check=True, timeout=100)
         endpoint = ("qsoc-deployment-" + uuid.uuid4().hex if os.name == "nt"
                     else str(pathlib.Path(working) / "daemon.sock"))
         daemon = subprocess.Popen(

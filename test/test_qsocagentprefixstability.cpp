@@ -6,6 +6,7 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolplanmode.h"
+#include "agent/tool/qsoctoolresources.h"
 #include "common/qllmservice.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
@@ -236,6 +237,18 @@ QString section(const QList<QPair<QString, QString>> &parts, qsizetype at)
     return QStringLiteral("end");
 }
 
+bool containsText(const json &value, const std::string &needle)
+{
+    if (value.is_string())
+        return value.get_ref<const std::string &>().find(needle) != std::string::npos;
+    if (value.is_structured()) {
+        for (const auto &item : value)
+            if (containsText(item, needle))
+                return true;
+    }
+    return false;
+}
+
 struct StepResult
 {
     bool    prefixHeld = true;
@@ -280,6 +293,7 @@ private:
     {
         QSocAgentConfig config;
         config.verbose             = false;
+        config.effortLevel         = QStringLiteral("high");
         config.projectPath         = project_.path();
         config.maxIterations       = 6;
         config.memoryRecallEnabled = true;
@@ -363,7 +377,17 @@ private:
         session.service.setModel(endpoint);
         writeAgentsMd(QStringLiteral("# Rules\nAnswer briefly.\n"));
 
-        QSocToolRegistry &registry = session.registry;
+        QSocToolRegistry &registry        = session.registry;
+        int               resourceQueries = 0;
+        QJsonObject       resourceSample{
+            {"scope", "local_daemon"},
+            {"status", "ok"},
+            {"system", QJsonObject{{"memory_available_bytes", 734003200}, {"sampled_at_ns", 1000}}}};
+        registry.registerTool(new QSocToolResources(&registry, {}, [&](const QStringList &paths) {
+            Q_ASSERT(paths.isEmpty());
+            ++resourceQueries;
+            return resourceSample;
+        }));
         const QString big = QStringLiteral("line: module u connects clk to rst_n\n").repeated(40);
         registry.registerTool(
             new ProbeTool(QStringLiteral("read_probe"), true, [big]() { return big; }, &registry));
@@ -404,6 +428,40 @@ private:
         turn(session, QStringLiteral("single word turn"), QStringLiteral("ok"));
         server.text("T4 done");
         turn(session, QStringLiteral("recall returns"), QStringLiteral("Check the wiring again"));
+
+        QCOMPARE(resourceQueries, 0);
+        const auto beforeResources = server.requests.back();
+        for (int state = 0; state < 3; ++state) {
+            if (state == 1)
+                resourceSample
+                    = {{"scope", "local_daemon"},
+                       {"status", "partial"},
+                       {"system",
+                        QJsonObject{
+                            {"memory_available_bytes", QJsonValue::Null},
+                            {"memory_available_kind", "unknown"},
+                            {"sampled_at_ns", 2000}}}};
+            if (state == 2)
+                resourceSample
+                    = {{"scope", "local_daemon"},
+                       {"status", "ok"},
+                       {"system",
+                        QJsonObject{{"memory_available_bytes", 0}, {"sampled_at_ns", 3000}}}};
+            server.call("system_resources");
+            server.text("Resource query done");
+            turn(
+                session,
+                QStringLiteral("resource snapshot %1").arg(state),
+                QStringLiteral("Read the resource snapshot"));
+            QCOMPARE(resourceQueries, state + 1);
+            const auto &request = server.requests.back();
+            QVERIFY(request.at("model") == beforeResources.at("model"));
+            for (const char *field : {"reasoning_effort", "thinking", "output_config"})
+                QVERIFY(request.value(field, json()) == beforeResources.value(field, json()));
+            const std::string expected = state == 1 ? "null" : state == 2 ? "0" : "734003200";
+            QVERIFY(
+                containsText(request.at("messages").back(), "\"memory_available_bytes\":" + expected));
+        }
 
         session.watching = false;
         server.text("T5 done");

@@ -20,7 +20,10 @@ CORE_TESTS = (
     "test_qsocsmtservice",
     "test_qsoctoolsmt",
     "test_qsocresourceusage",
+    "test_qsocdaemonresources",
+    "test_qsoctoolresources",
     "test_qsocsmtbroker",
+    "test_qsocagentprefixstability",
 )
 
 

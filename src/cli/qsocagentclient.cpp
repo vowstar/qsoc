@@ -7,6 +7,7 @@
 #include "cli/qsocagentinputhistory.h"
 #include "cli/qsocagenttaskmodel.h"
 #include "cli/qsoccliworker.h"
+#include "cli/qsocresourceformat.h"
 #include "common/qsocinterrupt.h"
 #include "common/qsocmessageauthority.h"
 #include "tui/qtuiimagepreviewblock.h"
@@ -153,12 +154,13 @@ QTuiScrollView::LineStyle styleFor(QSocAgentRuntimeStyle style)
 bool QSocCliWorker::runAgentClientLoop(
     const QString &requestedSocket, const QSocAgentRuntimeOptions &options)
 {
-    const bool          singleQuery = parser.isSet("query");
+    const bool          singleQuery   = parser.isSet("query");
+    const bool          resourcesOnly = parser.isSet("resources");
     QTerminalCapability termCap;
-    if (!singleQuery && !termCap.useEnhancedMode())
+    if (!singleQuery && !resourcesOnly && !termCap.useEnhancedMode())
         return showError(
             1, QStringLiteral("Error: interactive terminal required. Use -q for a single query."));
-    if (!singleQuery && (termCap.columns() < 40 || termCap.rows() < 10))
+    if (!singleQuery && !resourcesOnly && (termCap.columns() < 40 || termCap.rows() < 10))
         return showError(1, QStringLiteral("Error: terminal too small (minimum 40x10)."));
 
     // A private endpoint distinguishes an owned child from an attached daemon.
@@ -218,6 +220,31 @@ bool QSocCliWorker::runAgentClientLoop(
     const qint64 servedBy = client.daemonProcessId();
     if (owned && servedBy != child.processId())
         return showError(1, QStringLiteral("Agent daemon socket is served by another process."));
+    QString    resourceWorkspace = options.sshTarget.isEmpty()
+                                           && QDir::isAbsolutePath(options.workspace)
+                                       ? options.workspace
+                                       : options.projectDirectory;
+    const auto resourceParams    = [&](bool remote) {
+        QJsonArray paths;
+        if (!remote && QDir::isAbsolutePath(resourceWorkspace))
+            paths.append(QDir::cleanPath(resourceWorkspace));
+        return QJsonObject{{"paths", paths}};
+    };
+    if (resourcesOnly) {
+        if (!client.hasCapability("resources"))
+            return showError(1, "Resource queries are unsupported by this daemon.");
+        const auto reply
+            = client.request("resources", resourceParams(!options.sshTarget.isEmpty()), 3500);
+        if (reply.contains("error"))
+            return showError(1, reply.value("error").toString());
+        const auto result = reply.value("result").toObject();
+        if (result.value("scope") != "local_daemon" || !result.value("status").isString())
+            return showError(1, "Invalid resource response from daemon.");
+        QSocConsole::out() << QJsonDocument(result).toJson(QJsonDocument::Indented) << Qt::flush;
+        const auto status = result.value("status").toString();
+        exitCode          = status == "ok" || status == "partial" || status == "unknown" ? 0 : 1;
+        return exitCode == 0;
+    }
     QJsonObject params{
         {"project_directory", options.projectDirectory},
         {"launch_directory", options.launchDirectory},
@@ -241,11 +268,15 @@ bool QSocCliWorker::runAgentClientLoop(
     QAgentInputMonitor inputMonitor;
     inputMonitor.setAtomicPattern(
         QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+(?: \+\d+ lines)?\])")));
-    QEventLoop            mainLoop;
-    bool                  daemonLost = false;
-    bool                  closing    = false;
-    bool                  running    = false;
-    bool                  planMode   = false;
+    QEventLoop mainLoop;
+    bool       daemonLost        = false;
+    bool       closing           = false;
+    bool       running           = false;
+    bool       planMode          = false;
+    bool       remoteWorkspace   = !options.sshTarget.isEmpty();
+    qint64     resourceRequestId = 0;
+    QTimer     resourceDeadline;
+    resourceDeadline.setSingleShot(true);
     QString               resumeHint;
     bool                  streamedContent = false;
     QSocAgentInputHistory inputHistory;
@@ -309,6 +340,8 @@ bool QSocCliWorker::runAgentClientLoop(
             commandNames.clear();
             for (const auto &value : state.value("commands").toArray())
                 commandNames.append(value.toString());
+            if (client.hasCapability("resources") && !commandNames.contains("/resources"))
+                commandNames.append("/resources");
         }
         if (state.contains("resume_command"))
             resumeHint = state.value("resume_command").toString();
@@ -319,6 +352,10 @@ bool QSocCliWorker::runAgentClientLoop(
         planMode = state.value("plan_mode").toBool();
         statusBarWidget.setPlanMode(planMode);
         const QString remote = state.value("remote").toString();
+        remoteWorkspace      = !remote.isEmpty();
+        const auto cwd       = state.value("cwd").toString();
+        if (!remoteWorkspace && QDir::isAbsolutePath(cwd))
+            resourceWorkspace = cwd;
         statusBarWidget.setRemoteState(remote, !remote.isEmpty());
         if (state.contains("messages")) {
             compositor.contentView().clear();
@@ -655,7 +692,12 @@ bool QSocCliWorker::runAgentClientLoop(
                 statusBarWidget.setPlanMode(event.flag);
                 compositor.render();
                 break;
+            case QSocAgentRuntimeEvent::Kind::WorkingDirChanged:
+                if (!remoteWorkspace && QDir::isAbsolutePath(event.text))
+                    resourceWorkspace = event.text;
+                break;
             case QSocAgentRuntimeEvent::Kind::RemoteChanged:
+                remoteWorkspace = !event.text.isEmpty();
                 statusBarWidget.setRemoteState(event.text, event.flag);
                 compositor.render();
                 break;
@@ -731,7 +773,25 @@ bool QSocCliWorker::runAgentClientLoop(
         history = savedHistory;
     historyPosition = history.size();
     statusBarWidget.setStatus("Ready");
+    connect(&resourceDeadline, &QTimer::timeout, &compositor, [&] {
+        compositor.printContent("Resource query timed out. A reply is still pending.\n");
+        compositor.render();
+    });
     connect(&client, &QSocAgentDaemonClient::replyReceived, &compositor, [&](const QJsonObject &reply) {
+        if (resourceRequestId && reply.value("id").toInteger() == resourceRequestId) {
+            resourceRequestId = 0;
+            resourceDeadline.stop();
+            const auto result = reply.value("result").toObject();
+            if (reply.contains("error"))
+                compositor.printContent("Resources: " + reply.value("error").toString() + "\n");
+            else if (result.value("scope") != "local_daemon")
+                compositor.printContent("Invalid resource response from daemon.\n");
+            else
+                compositor.printContent(
+                    QSocResourceFormat::summary(result, client.daemonProcessId()));
+            compositor.render();
+            return;
+        }
         if (reply.contains("error"))
             compositor.printContent("Error: " + reply.value("error").toString() + "\n");
         const auto result = reply.value("result").toObject();
@@ -845,6 +905,27 @@ bool QSocCliWorker::runAgentClientLoop(
         if (trimmed == "/exit" || trimmed == "/quit" || trimmed == "exit" || trimmed == "quit") {
             closing = true;
             mainLoop.quit();
+            return;
+        }
+        static const QRegularExpression resourceCommand(QStringLiteral(R"(^/resources(?:\s|$))"));
+        if (resourceCommand.match(trimmed).hasMatch()) {
+            hideCompletion();
+            compositor.dismissTopBanner();
+            if (trimmed != "/resources")
+                compositor.printContent("Usage: /resources\n");
+            else if (!client.hasCapability("resources"))
+                compositor.printContent("Resource queries are unsupported by this daemon.\n");
+            else if (resourceRequestId)
+                compositor.printContent("A resource query is already pending.\n");
+            else {
+                resourceRequestId = client.nextId();
+                resourceDeadline.start(3500);
+                client.send(
+                    {{"id", resourceRequestId},
+                     {"method", "resources"},
+                     {"params", resourceParams(remoteWorkspace)}});
+            }
+            compositor.render();
             return;
         }
         if (history.isEmpty() || history.last() != text)

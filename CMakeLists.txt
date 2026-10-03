@@ -523,7 +523,7 @@ if(WIN32)
 endif()
 
 
-target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_smt)
+target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_agent_client qsoc_smt)
 target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}" "${MBEDTLS_INCLUDE_DIRS}")
 target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES} ${MBEDTLS_LIBRARIES})
 target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
@@ -535,6 +535,8 @@ qt_add_executable(qsoc-agentd
     src/agent/daemon/main.cpp
     src/agent/daemon/qsocagentdaemon.cpp
     src/agent/daemon/qsocagentdaemon.h
+    src/agent/daemon/qsocdaemonresources.cpp
+    src/agent/daemon/qsocdaemonresources.h
 )
 target_include_directories(qsoc-agentd PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"

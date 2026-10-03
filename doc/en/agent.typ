@@ -15,6 +15,7 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`-d`, `--directory <path>`], [Project directory path],
     [`-p`, `--project <name>`], [Project name],
     [`-q`, `--query <text>`], [Single query mode (non-interactive)],
+    [`--resources`], [Print a local daemon resource snapshot as JSON without opening an agent session],
     [`--max-tokens <n>`], [Maximum context tokens (default: 128000)],
     [`--temperature <n>`], [LLM temperature 0.0--1.0 (default: 0.2)],
     [`--no-stream`], [Disable streaming output],
@@ -77,7 +78,7 @@ On Windows, use a pipe name such as `qsoc-agent` for `--socket` and `--connect`.
 
 An agent request starts a separate session process for its connection. Sessions have separate event loops and share the daemon's SMT task budget (@agent-smt). Closing an attached TUI cancels its session's work and leaves the daemon running. Saved sessions remain available through `--resume` and `--continue`.
 
-Only processes of the same user can connect. Windows also requires matching process integrity levels. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object.
+Different OS users can run their own daemons. One user can run multiple daemons on distinct endpoints. Only processes of the same user can connect. Windows also requires matching process integrity levels. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object.
 
 When the greeting advertises `smt`, clients can submit `smt.solve` without opening an agent session or configuring an LLM. Its `params` object accepts the same fields as `z3_solve` (@agent-smt). Multiple requests can remain outstanding, and results can arrive out of order. Keep each outstanding request ID unique within its connection.
 
@@ -89,6 +90,27 @@ When the greeting advertises `smt`, clients can submit `smt.solve` without openi
 `smt.cancel` targets a request on the same connection. Its `result.canceled` field reports whether cancellation was accepted. The solve request receives a separate final result. Disconnecting cancels that connection's SMT requests. The daemon also cancels tasks belonging to a session when its session process exits. Failed or disconnected requests are not automatically replayed.
 
 JSON payloads are limited to 16 MiB. The daemon shares a 64 MiB transport budget across connections and closes a connection that exceeds the budget.
+
+=== Resource Usage
+<agent-resources>
+
+Use `qsoc agent --resources` for a JSON snapshot or `/resources` in the TUI. Add `--connect` to query an existing daemon. These queries do not contact the model or enter its conversation history.
+
+The `system_resources` tool returns a snapshot only when the model calls it. Its definition stays fixed throughout the session. Samples are appended as tool results, without refreshing previous messages or the system prompt. Resource changes do not select a different model or reasoning effort.
+
+Snapshots describe the local daemon host, its current descendant processes, and requested local workspace storage. SSH workspace resources are not included. CPU counters are cumulative nanoseconds. Memory and storage fields use bytes. `null` means the measurement is unavailable, not zero or unlimited. `sampled_at_utc` records collection start and `collection_duration_ms` records its duration. Old snapshots do not establish current capacity or reserve resources.
+
+Resident, proportional, private committed, and footprint memory measure different things. Summing resident memory across processes counts shared pages more than once. Process ancestry is a best-effort observation and can miss processes that exit or detach during collection.
+
+Linux reports host memory and, when readable, the remaining memory under visible cgroup v2 ancestors. Windows reports available physical memory. macOS estimates available memory from free and inactive pages. Container limits or parent job limits that cannot be read remain unknown. Storage reports available bytes and mount read-only status. It does not check directory access rights or reserve space.
+
+When the greeting advertises `resources`, a client can request the same snapshot without opening a session:
+
+```json
+{"id":3,"method":"resources","params":{"paths":[]}}
+```
+
+`paths` accepts at most eight absolute local paths. An empty list skips storage queries. The daemon allows one probe at a time and stops waiting after three seconds. A busy, timed-out, or unavailable probe returns an explicit status. Resource probes do not change limits.
 
 === Workspace Override
 <agent-workspace-flag>
@@ -638,7 +660,7 @@ Before launching an SMT worker, the daemon checks a fresh memory sample against 
 
 `qsoc-agentd --smt-memory-reserve-mib <n>` sets the extra host reserve, defaulting to 512 MiB. `--smt-memory-strict` requires a fresh effective-memory sample before admission. Platforms without that sample wait until the queue deadline. These settings belong to the daemon owner and cannot be changed through a tool request.
 
-Admission is a conservative estimate. Other applications and separate daemons can allocate memory after sampling. Worker memory limits depend on the platform:
+Admission is a conservative estimate. Other applications and separate daemons can allocate memory after sampling. Disk snapshots do not prevent a filesystem from filling during a write. Worker memory limits depend on the platform:
 
 #figure(
   align(center)[#table(

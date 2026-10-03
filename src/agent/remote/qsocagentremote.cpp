@@ -14,6 +14,7 @@
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolmonitor.h"
+#include "agent/tool/qsoctoolresources.h"
 #include "agent/tool/qsoctoolsmt.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qsocconfig.h"
@@ -669,6 +670,7 @@ QSocToolRegistry *buildAgentRemoteRegistry(
         registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
     }
     /* Control-plane tools stay local even in remote mode. */
+    registry->registerTool(new QSocToolResources(parent));
     registry->registerTool(new QSocToolDocQuery(parent));
     if (QSocToolSmt::supported())
         registry->registerTool(new QSocToolSmt(parent));
