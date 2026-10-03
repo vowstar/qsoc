@@ -132,14 +132,14 @@ def main(program):
                     if any(tool.get("function", {}).get("name") == "z3_solve"
                            for tool in request.get("tools", [])):
                         started.set()
-                        if not release.wait(20):
+                        if not release.wait(60):
                             raise RuntimeError("The console probe did not release its LLM request")
                     return {"role": "assistant", "content": "Console probe complete"}, "stop"
                 mock.reply = reply
                 configuration = {"llm": {"model": mock.model, "models": {mock.model: {
                     "name": "Console probe", "key": mock.key,
                     "url": f"http://127.0.0.1:{mock.server_port}/v1/chat/completions",
-                    "timeout": 30000}}}, "proxy": {"type": "none"}}
+                    "timeout": 90000}}}, "proxy": {"type": "none"}}
                 (working / ".qsoc.yml").write_text(json.dumps(configuration), encoding="utf-8")
                 server_thread = threading.Thread(target=mock.serve_forever, daemon=True)
                 server_thread.start()
@@ -163,6 +163,10 @@ def main(program):
                                 raise RuntimeError("The owned endpoint returned an invalid greeting")
                             type_text(input_file, "Wait for the interrupt probe.\r")
                             wait_for(started.is_set, process, "the active LLM request")
+                            def busy():
+                                text = screen()
+                                return "Reasoning" in text and "Ready" not in text
+                            wait_for(busy, process, "the busy prompt without stale Ready text")
                             require(broadcast(0, 0), "Broadcast Ctrl-C to the console")
                             time.sleep(0.3)
                             protocol["send"](stream, {"id": 1, "method": "smt.solve", "params": {
@@ -171,8 +175,15 @@ def main(program):
                             result = protocol["replies"](stream, {1})[1]
                             if result.get("execution") != "completed" or result.get("solver_status") != "sat":
                                 raise RuntimeError(f"The daemon failed after the console broadcast: {result}")
+                            before_cancel = screen()
+                            if ("Reasoning" not in before_cancel or "Ready" in before_cancel
+                                    or "(interrupted)" in before_cancel):
+                                raise RuntimeError("The active turn ended before keyboard cancellation")
                             type_text(input_file, "\x03")
-                            wait_for(lambda: "Ready" in screen(), process, "keyboard cancellation")
+                            def cancelled():
+                                text = screen()
+                                return "Ready" in text and "(interrupted)" in text
+                            wait_for(cancelled, process, "a fresh cancellation notice and Ready prompt")
                             release.set()
                             type_text(input_file, "/exit\r")
                             if process.wait(timeout=10) != 0:
