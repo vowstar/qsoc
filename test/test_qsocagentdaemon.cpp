@@ -331,6 +331,90 @@ private slots:
         QCOMPARE(daemon.exitStatus(), QProcess::NormalExit);
     }
 
+    void incompleteFramesShareABoundedBudget()
+    {
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const QString socketPath = fixture.filePath("daemon.sock");
+        QProcess      daemon;
+        daemon.setProcessEnvironment(isolatedEnvironment(fixture.path()));
+        daemon.start(m_daemonPath, {"--socket", socketPath});
+        QVERIFY(daemon.waitForStarted(5000));
+        QVERIFY(waitForSocket(socketPath, 5000));
+        QList<std::shared_ptr<QLocalSocket>> sockets;
+        for (int i = 0; i < 5; ++i) {
+            auto socket = std::make_shared<QLocalSocket>();
+            socket->connectToServer(QSocLocalEndpoint::resolve(socketPath));
+            QVERIFY(socket->waitForConnected(5000));
+            QVERIFY(socket->waitForReadyRead(5000));
+            socket->readAll();
+            const int bytes = (i < 4 ? 15 : 5) * 1024 * 1024;
+            socket->write(QByteArray("01000000") + QByteArray(bytes, ' '));
+            QDeadlineTimer deadline(10000);
+            while (socket->bytesToWrite() && !deadline.hasExpired()
+                   && socket->state() == QLocalSocket::ConnectedState)
+                socket->waitForBytesWritten(100);
+            if (i < 4) {
+                QCOMPARE(socket->bytesToWrite(), qint64(0));
+                QCOMPARE(socket->state(), QLocalSocket::ConnectedState);
+            } else if (socket->state() == QLocalSocket::ConnectedState) {
+                QVERIFY(socket->waitForDisconnected(5000));
+            }
+            sockets.append(socket);
+        }
+        QCOMPARE(sockets.last()->state(), QLocalSocket::UnconnectedState);
+        for (const auto &socket : sockets)
+            socket->abort();
+        QTest::qWait(100);
+        DaemonClient client(socketPath);
+        QVERIFY(client.connected());
+        QVERIFY(!client.receive().isEmpty());
+        client.send({{"id", 1}, {"method", "shutdown"}});
+        QVERIFY(!client.waitForReply(1).isEmpty());
+        QVERIFY(daemon.waitForFinished(5000));
+    }
+
+    void smtRequestsDoNotRequireAnAgentSession()
+    {
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const QString socketPath = fixture.filePath("daemon.sock");
+        QProcess      daemon;
+        daemon.setProcessEnvironment(isolatedEnvironment(fixture.path()));
+        daemon.start(m_daemonPath, {"--socket", socketPath});
+        QVERIFY(daemon.waitForStarted(5000));
+        QVERIFY(waitForSocket(socketPath, 5000));
+        DaemonClient client(socketPath);
+        QVERIFY(client.connected());
+        const auto hello = client.receive();
+        QVERIFY(hello.value("capabilities").toArray().contains("smt"));
+        QCOMPARE(hello.value("pid").toDouble(), static_cast<double>(daemon.processId()));
+        client.send(
+            {{"id", 1},
+             {"method", "smt.solve"},
+             {"params", QJsonObject{{"smtlib", "(assert true)"}, {"mode", "check"}}}});
+        client.send(
+            {{"id", 2},
+             {"method", "smt.solve"},
+             {"params", QJsonObject{{"smtlib", "(assert false)"}, {"mode", "check"}}}});
+        QHash<int, QJsonObject> replies;
+        for (int i = 0; i < 2; ++i) {
+            const auto response = client.receive();
+            QVERIFY2(!response.isEmpty(), qPrintable(client.error()));
+            replies.insert(response.value("id").toInt(), response.value("result").toObject());
+        }
+        QCOMPARE(replies.value(1).value("execution").toString(), "completed");
+        QCOMPARE(replies.value(1).value("solver_status").toString(), "sat");
+        QCOMPARE(replies.value(2).value("execution").toString(), "completed");
+        QCOMPARE(replies.value(2).value("solver_status").toString(), "unsat");
+        client.send(
+            {{"id", 3}, {"method", "smt.cancel"}, {"params", QJsonObject{{"request_id", 1}}}});
+        QCOMPARE(client.waitForReply(3).value("result").toObject().value("canceled").toBool(), false);
+        client.send({{"id", 4}, {"method", "shutdown"}});
+        QVERIFY(!client.waitForReply(4).isEmpty());
+        QVERIFY(daemon.waitForFinished(5000));
+    }
+
     void turnWithoutOpenIsRefused()
     {
         QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/agentd_noopen_XXXXXX"));

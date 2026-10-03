@@ -3,8 +3,8 @@
 
 /**
  * @file qsocagentdaemon.h
- * @brief Local-socket front end for the agent runtime library.
- * @details One QSocAgentRuntime per connection. The wire protocol is
+ * @brief Local-socket front end for agent sessions and SMT tasks.
+ * @details Agent requests start a separate session process. The wire protocol is
  *          length-prefixed JSON: a request object in, a stream of event
  *          objects out, terminated by a reply object carrying the
  *          request's id.
@@ -25,6 +25,8 @@
  *            {"id":N,"method":"cwd","params":{"path":"..."}}
  *            {"id":N,"method":"project","params":{"path":"..."}}
  *            {"id":N,"method":"shutdown"}
+ *            {"id":N,"method":"smt.solve","params":{...}}
+ *            {"id":N,"method":"smt.cancel","params":{"request_id":N}}
  *
  *          Replies carry {"id":N,"result":...} or {"id":N,"error":"..."}.
  *          Events arrive as {"event":{...QSocAgentRuntimeEvent}}.
@@ -35,6 +37,7 @@
 
 #include "agent/runtime/qsocagentruntime.h"
 
+#include <QHash>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLockFile>
@@ -43,6 +46,7 @@
 
 #include <memory>
 
+class QSocSmtBroker;
 class QSocAgentDaemonConnection;
 class QSocAgentSessionProxy;
 
@@ -79,9 +83,8 @@ public:
 
     /**
      * @brief Serve one connection in this process, then exit.
-     * @details Without it the daemon only accepts and relays: each
-     *          connection gets its own session process, so sessions never
-     *          share an event loop.
+     * @details The supervisor schedules SMT tasks and starts one isolated
+     *          process for each connection that requests an agent session.
      */
     void setSingleSession(bool single) { singleSession_ = single; }
 
@@ -108,6 +111,9 @@ private:
     std::unique_ptr<QLockFile>         socketLock_;
     QList<QSocAgentDaemonConnection *> connections_;
     QList<QSocAgentSessionProxy *>     proxies_;
+    std::unique_ptr<QSocSmtBroker>     smtBroker_;
+    QHash<qint64, quint64>             sessionOwners_;
+    quint64                            nextOwner_     = 0;
     bool                               singleSession_ = false;
     bool                               stopRequested_ = false;
 

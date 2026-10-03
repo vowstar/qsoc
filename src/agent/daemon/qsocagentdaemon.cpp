@@ -3,19 +3,22 @@
 
 #include "agent/daemon/qsocagentdaemon.h"
 
-#include "agent/protocol/qsocagentprotocol.h"
-#include "agent/protocol/qsocagentruntimeevent.h"
+#include "common/qsoctaskregistry.h"
 #include "agent/remote/qsocagentremote.h"
+#include "agent/protocol/qsocagentprotocol.h"
+#include "agent/runtime/qsocagentruntimeevent.h"
 #include "agent/services/qagentcompletion.h"
 #include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolplanmode.h"
 #include "common/config.h"
+#include "common/qsocipc.h"
 #include "common/qsoclocalendpoint.h"
 #include "common/qsoclocalpeer.h"
-#include "common/qsoctaskregistry.h"
+#include "common/qsocsmtbroker.h"
 #include <QScopeGuard>
 #include <QScopedValueRollback>
 
+#include <cmath>
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QDir>
@@ -25,7 +28,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPointer>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -78,6 +83,7 @@ public:
         , socket_(socket)
     {
         socket_->setParent(this);
+        socket_->setReadBufferSize(64 * 1024);
         connect(socket_, &QLocalSocket::readyRead, this, &QSocAgentDaemonConnection::handleReadyRead);
         connect(socket_, &QLocalSocket::disconnected, this, [this]() {
             disconnected_ = true;
@@ -109,8 +115,8 @@ private slots:
 
     void handleReadyRead()
     {
-        buffer_.append(socket_->readAll());
-        while (true) {
+        for (int count = 0; count < 16; ++count) {
+            buffer_.append(socket_->read(QSocIpc::maxPayloadBytes + kHeaderBytes - buffer_.size()));
             if (buffer_.size() < kHeaderBytes) {
                 return;
             }
@@ -124,7 +130,15 @@ private slots:
             }
             const QByteArray payload = buffer_.mid(kHeaderBytes, length);
             buffer_.remove(0, kHeaderBytes + length);
+            if (pendingFrames_ >= 64 || pendingBytes_ + payload.size() > QSocIpc::maxPayloadBytes) {
+                socket_->abort();
+                return;
+            }
+            ++pendingFrames_;
+            pendingBytes_ += payload.size();
             QTimer::singleShot(0, this, [this, payload] {
+                --pendingFrames_;
+                pendingBytes_ -= payload.size();
                 if (disconnected_)
                     return;
                 ++dispatchDepth_;
@@ -134,12 +148,19 @@ private slots:
                     daemon_->removeConnection(this);
             });
         }
+        QTimer::singleShot(0, this, &QSocAgentDaemonConnection::handleReadyRead);
     }
 
 private:
     void sendJson(const QByteArray &payload)
     {
         if (socket_->state() != QLocalSocket::ConnectedState) {
+            return;
+        }
+        if (payload.size() > QSocIpc::maxPayloadBytes
+            || socket_->bytesToWrite() + payload.size() + kHeaderBytes
+                   > 2 * QSocIpc::maxPayloadBytes) {
+            socket_->abort();
             return;
         }
         socket_->write(frame(payload));
@@ -199,6 +220,7 @@ private:
         runtime_ = std::make_unique<QSocAgentRuntime>(options, this);
         connect(runtime_.get(), &QSocAgentRuntime::sessionChanged, this, [this] {
             deferred_.clear();
+            deferredBytes_ = 0;
         });
         connect(
             runtime_.get(),
@@ -285,6 +307,7 @@ private:
             }
             if (!deferred_.isEmpty()) {
                 const auto payload = deferred_.takeFirst();
+                deferredBytes_ -= payload.size();
                 ++dispatchDepth_;
                 handleFrame(payload);
                 --dispatchDepth_;
@@ -469,19 +492,27 @@ private:
                 const QString input = params.value("input").toString();
                 if (input.trimmed().isEmpty()) {
                     sendError(id, "input must not be empty");
-                } else if (method != "command" && runtime_ && runtime_->queueRequest(input)) {
+                } else if (method != "command" && runtime_ && runtime_->isRunning()) {
+                    if (!runtime_->queueRequest(input)) {
+                        sendError(id, "input queue is full");
+                        return;
+                    }
                     QSocAgentRuntimeEvent event;
                     event.kind = QSocAgentRuntimeEvent::Kind::QueuedRequest;
                     event.text = input;
                     sendEvent(event);
                     sendReply(id, {{"queued", true}, {"ok", true}});
-                } else if (deferred_.size() < 64) {
+                } else if (
+                    deferred_.size() < 64
+                    && deferredBytes_ + payload.size() <= QSocIpc::maxPayloadBytes) {
                     // Maintenance and commands also enter nested event loops.
                     // Preserve the request until the current operation unwinds.
                     auto queued = request;
                     queued.insert("id", 0);
                     queued.insert("method", method == "command" ? "command" : "turn");
-                    deferred_.append(QJsonDocument(queued).toJson(QJsonDocument::Compact));
+                    const auto encoded = QJsonDocument(queued).toJson(QJsonDocument::Compact);
+                    deferredBytes_ += encoded.size();
+                    deferred_.append(encoded);
                     sendReply(id, {{"queued", true}, {"ok", true}});
                 } else
                     sendError(id, "input queue is full");
@@ -683,6 +714,9 @@ private:
     QLocalSocket                     *socket_ = nullptr;
     QByteArray                        buffer_;
     QList<QByteArray>                 deferred_;
+    qsizetype                         deferredBytes_ = 0;
+    qsizetype                         pendingBytes_  = 0;
+    int                               pendingFrames_ = 0;
     std::unique_ptr<QSocAgentRuntime> runtime_;
     bool                              disconnected_  = false;
     int                               dispatchDepth_ = 0;
@@ -714,13 +748,13 @@ public:
         , client_(client)
     {
         client_->setParent(this);
-        connect(client_, &QLocalSocket::readyRead, this, [this] {
-            const QByteArray data = client_->readAll();
-            if (worker_.state() == QLocalSocket::ConnectedState)
-                worker_.write(data);
-            else
-                pending_ += data;
-        });
+        const auto peer      = QSocLocalPeer::processId(*client_);
+        const auto inherited = daemon_->sessionOwners_.value(peer);
+        owner_               = inherited ? inherited : ++daemon_->nextOwner_;
+        ownsOwner_           = !inherited;
+        client_->setReadBufferSize(64 * 1024);
+        worker_.setReadBufferSize(64 * 1024);
+        connect(client_, &QLocalSocket::readyRead, this, &QSocAgentSessionProxy::handleClientRead);
         connect(client_, &QLocalSocket::disconnected, this, &QSocAgentSessionProxy::finish);
         connect(&worker_, &QLocalSocket::connected, this, [this] {
             if (!QSocLocalPeer::sameUser(worker_)
@@ -728,46 +762,64 @@ public:
                 finish();
                 return;
             }
-            worker_.write(pending_);
-            pending_.clear();
         });
-        connect(&worker_, &QLocalSocket::readyRead, this, [this] {
-            client_->write(worker_.readAll());
-        });
+        connect(&worker_, &QLocalSocket::readyRead, this, &QSocAgentSessionProxy::handleWorkerRead);
         connect(&worker_, &QLocalSocket::disconnected, this, &QSocAgentSessionProxy::finish);
-        /* The session process needs a moment to listen; retry until then. */
         connect(&worker_, &QLocalSocket::errorOccurred, this, [this] {
-            QTimer::singleShot(20, this, &QSocAgentSessionProxy::connectWorker);
+            if (workerReady_)
+                finish();
+            else
+                QTimer::singleShot(20, this, &QSocAgentSessionProxy::connectWorker);
+        });
+        connect(&process_, &QProcess::started, this, [this] {
+            if (finished_) {
+                process_.kill();
+                return;
+            }
+            sessionPid_ = process_.processId();
+            daemon_->sessionOwners_.insert(sessionPid_, owner_);
+            connectWorker();
+        });
+        connect(&process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart)
+                finish();
         });
         connect(&process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
             if (status == QProcess::NormalExit && code == QSocAgentDaemon::stopDaemonExitCode)
                 QTimer::singleShot(0, daemon_, &QSocAgentDaemon::requestStop);
             finish();
         });
-
-        if (!directory_.isValid()) {
-            QTimer::singleShot(0, this, &QSocAgentSessionProxy::finish);
-            return;
-        }
-        process_.setStandardInputFile(QProcess::nullDevice());
-        process_.setStandardOutputFile(QProcess::nullDevice());
-        process_.setProcessChannelMode(QProcess::ForwardedErrorChannel);
-        process_.start(
-            QCoreApplication::applicationFilePath(),
-            {QStringLiteral("--session-worker"),
-             QStringLiteral("--socket"),
-             workerPath(),
-             QStringLiteral("--parent-pid"),
-             QString::number(QCoreApplication::applicationPid())});
-        connectWorker();
+        QTimer::singleShot(0, this, [this] {
+            write(
+                client_,
+                QSocIpc::frame(
+                    QJsonObject{
+                        {"daemon", "qsoc-agentd"},
+                        {"version", QSOC_VERSION},
+                        {"protocol", QSocAgentProtocol::version},
+                        {"pid", static_cast<double>(QCoreApplication::applicationPid())},
+                        {"capabilities", QJsonArray{"smt"}}}));
+        });
+        QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleClientRead);
     }
 
-    /** Drop the client and stop the session process. */
     void finish()
     {
         if (finished_)
             return;
         finished_ = true;
+        daemon_->sessionOwners_.remove(sessionPid_);
+        if (ownsOwner_)
+            daemon_->smtBroker_->removeOwner(owner_);
+        else {
+            const auto tasks = tasks_.values();
+            for (auto task : tasks)
+                daemon_->smtBroker_->cancel(task);
+        }
+        tasks_.clear();
+        pending_.clear();
+        clientBuffer_.clear();
+        workerBuffer_.clear();
         client_->disconnectFromServer();
         worker_.abort();
         if (process_.state() == QProcess::NotRunning) {
@@ -780,9 +832,204 @@ public:
     }
 
 private:
+    static constexpr int       bufferLimit   = QSocIpc::maxPayloadBytes + QSocIpc::headerBytes;
+    static constexpr int       writeLimit    = 2 * bufferLimit;
+    static constexpr int       dispatchLimit = 16;
+    static constexpr qsizetype transitLimit  = 64 * 1024 * 1024;
+
+    bool withinBudget(qsizetype additional = 0) const
+    {
+        qsizetype bytes = additional;
+        for (const auto *proxy : std::as_const(daemon_->proxies_)) {
+            bytes += proxy->pending_.size() + proxy->clientBuffer_.size()
+                     + proxy->workerBuffer_.size();
+            bytes += proxy->client_->bytesAvailable() + proxy->client_->bytesToWrite();
+            bytes += proxy->worker_.bytesAvailable() + proxy->worker_.bytesToWrite();
+        }
+        return bytes <= transitLimit;
+    }
+
+    bool write(QLocalSocket *socket, const QByteArray &bytes)
+    {
+        if (finished_)
+            return false;
+        if (bytes.isEmpty() || socket->bytesToWrite() + bytes.size() > writeLimit
+            || !withinBudget(bytes.size())) {
+            finish();
+            return false;
+        }
+        if (socket->write(bytes) < 0) {
+            finish();
+            return false;
+        }
+        socket->flush();
+        return true;
+    }
+
+    void handleClientRead()
+    {
+        if (finished_)
+            return;
+        for (int count = 0; count < dispatchLimit; ++count) {
+            clientBuffer_ += client_->read(bufferLimit - clientBuffer_.size());
+            if (!withinBudget()) {
+                finish();
+                return;
+            }
+            QJsonObject request;
+            const auto  decoded = QSocIpc::decode(clientBuffer_, request);
+            if (decoded == QSocIpc::DecodeResult::Invalid) {
+                finish();
+                return;
+            }
+            if (decoded == QSocIpc::DecodeResult::Incomplete)
+                return;
+            handleRequest(request);
+            if (finished_)
+                return;
+        }
+        QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleClientRead);
+    }
+
+    void handleRequest(const QJsonObject &request)
+    {
+        if (!ownsOwner_ && !daemon_->sessionOwners_.values().contains(owner_)) {
+            finish();
+            return;
+        }
+        const auto   method = request.value("method").toString();
+        const auto   params = request.value("params").toObject();
+        const auto   value  = request.value("id");
+        const double number = value.toDouble(-1);
+        if (!value.isDouble() || number < 0 || number > 9007199254740991.0
+            || std::floor(number) != number) {
+            finish();
+            return;
+        }
+        const auto id = static_cast<qint64>(number);
+        if (tasks_.contains(id)) {
+            finish();
+            return;
+        }
+        if (method == "smt.solve") {
+            const QPointer<QSocAgentSessionProxy> self(this);
+            const auto                            task
+                = daemon_->smtBroker_->submit(owner_, params, [self, id](const QJsonObject &result) {
+                      if (!self || self->finished_)
+                          return;
+                      self->tasks_.remove(id);
+                      self->write(
+                          self->client_,
+                          QSocIpc::frame(
+                              QJsonObject{{"id", static_cast<double>(id)}, {"result", result}}));
+                  });
+            if (task)
+                tasks_.insert(id, task);
+            return;
+        }
+        if (method == "smt.cancel") {
+            const auto target   = params.value("request_id").toDouble(-1);
+            const bool valid    = target >= 0 && target <= 9007199254740991.0
+                                  && std::floor(target) == target;
+            const auto task     = valid ? tasks_.value(static_cast<qint64>(target)) : 0;
+            const bool canceled = task && daemon_->smtBroker_->cancel(task);
+            write(
+                client_,
+                QSocIpc::frame(
+                    QJsonObject{{"id", number}, {"result", QJsonObject{{"canceled", canceled}}}}));
+            return;
+        }
+        if (!ownsOwner_) {
+            write(
+                client_,
+                QSocIpc::frame(
+                    QJsonObject{
+                        {"id", number},
+                        {"error", "session service connection only accepts SMT requests"}}));
+            return;
+        }
+        const auto bytes = QSocIpc::frame(request);
+        if (workerReady_) {
+            write(&worker_, bytes);
+            return;
+        }
+        if (pending_.size() + bytes.size() > bufferLimit || !withinBudget(bytes.size())) {
+            finish();
+            return;
+        }
+        pending_ += bytes;
+        if (!directory_)
+            startSession();
+    }
+
+    void startSession()
+    {
+        directory_ = std::make_unique<QTemporaryDir>();
+        if (!directory_->isValid()) {
+            finish();
+            return;
+        }
+        startup_         = QDeadlineTimer(5000);
+        auto environment = QProcessEnvironment::systemEnvironment();
+        environment.insert("QSOC_SMT_SOCKET", daemon_->socketPath_);
+        process_.setProcessEnvironment(environment);
+        process_.setStandardInputFile(QProcess::nullDevice());
+        process_.setStandardOutputFile(QProcess::nullDevice());
+        process_.setProcessChannelMode(QProcess::ForwardedErrorChannel);
+        process_.start(
+            QCoreApplication::applicationFilePath(),
+            {QStringLiteral("--session-worker"),
+             QStringLiteral("--socket"),
+             workerPath(),
+             QStringLiteral("--parent-pid"),
+             QString::number(QCoreApplication::applicationPid())});
+        QTimer::singleShot(5000, this, [this] {
+            if (!workerReady_)
+                finish();
+        });
+    }
+
+    void handleWorkerRead()
+    {
+        if (finished_)
+            return;
+        for (int count = 0; count < dispatchLimit; ++count) {
+            workerBuffer_ += worker_.read(bufferLimit - workerBuffer_.size());
+            if (!withinBudget()) {
+                finish();
+                return;
+            }
+            QJsonObject message;
+            const auto  decoded = QSocIpc::decode(workerBuffer_, message);
+            if (decoded == QSocIpc::DecodeResult::Invalid) {
+                finish();
+                return;
+            }
+            if (decoded == QSocIpc::DecodeResult::Incomplete)
+                return;
+            if (!workerReady_) {
+                if (message.value("daemon") != "qsoc-agentd"
+                    || message.value("protocol").toInt() != QSocAgentProtocol::version) {
+                    finish();
+                    return;
+                }
+                workerReady_ = true;
+                if (!pending_.isEmpty()) {
+                    const auto pending = std::exchange(pending_, QByteArray());
+                    write(&worker_, pending);
+                }
+            } else {
+                write(client_, QSocIpc::frame(message));
+            }
+            if (finished_)
+                return;
+        }
+        QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleWorkerRead);
+    }
+
     QString workerPath() const
     {
-        return QSocLocalEndpoint::resolve(directory_.filePath(QStringLiteral("session.sock")));
+        return QSocLocalEndpoint::resolve(directory_->filePath(QStringLiteral("session.sock")));
     }
 
     void connectWorker()
@@ -796,14 +1043,21 @@ private:
         worker_.connectToServer(workerPath());
     }
 
-    QSocAgentDaemon *daemon_;
-    QLocalSocket    *client_;
-    QLocalSocket     worker_;
-    QProcess         process_;
-    QTemporaryDir    directory_;
-    QByteArray       pending_;
-    QDeadlineTimer   startup_{5000};
-    bool             finished_ = false;
+    QSocAgentDaemon               *daemon_;
+    QLocalSocket                  *client_;
+    QLocalSocket                   worker_;
+    QProcess                       process_;
+    std::unique_ptr<QTemporaryDir> directory_;
+    QByteArray                     pending_;
+    QByteArray                     clientBuffer_;
+    QByteArray                     workerBuffer_;
+    QHash<qint64, quint64>         tasks_;
+    QDeadlineTimer                 startup_;
+    qint64                         sessionPid_  = 0;
+    quint64                        owner_       = 0;
+    bool                           ownsOwner_   = false;
+    bool                           workerReady_ = false;
+    bool                           finished_    = false;
 };
 
 QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
@@ -811,6 +1065,7 @@ QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
     , socketPath_(
           QSocLocalEndpoint::resolve(socketPath.isEmpty() ? defaultSocketPath() : socketPath))
 {
+    smtBroker_ = std::make_unique<QSocSmtBroker>(this);
     connect(&server_, &QLocalServer::newConnection, this, &QSocAgentDaemon::handleNewConnection);
 }
 
@@ -884,6 +1139,7 @@ void QSocAgentDaemon::shutdown()
     if (server_.isListening()) {
         server_.close();
     }
+    smtBroker_->shutdown();
     socketLock_.reset();
 }
 
@@ -891,7 +1147,7 @@ void QSocAgentDaemon::handleNewConnection()
 {
     while (server_.hasPendingConnections()) {
         QLocalSocket *socket = server_.nextPendingConnection();
-        if (!QSocLocalPeer::sameUser(*socket)) {
+        if (stopRequested_ || connectionCount() >= 64 || !QSocLocalPeer::sameUser(*socket)) {
             socket->abort();
             socket->deleteLater();
             continue;
