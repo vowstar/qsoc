@@ -2,14 +2,45 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "smt/qsocsmtbroker.h"
+#include "common/qsocresourceusage.h"
 #include "smt/qsocsmtservice.h"
 
+#include <cmath>
 #include <thread>
 #include <utility>
 #include <QHash>
 #include <QJsonDocument>
 #include <QList>
 #include <QTimer>
+
+namespace {
+QSocMemoryBudget::Snapshot sampleMemory()
+{
+    const auto                 report = QSocResourceUsage::system();
+    QSocMemoryBudget::Snapshot result;
+    for (const auto &field :
+         {QStringLiteral("memory_effective_available_bytes"),
+          QStringLiteral("memory_available_bytes")}) {
+        const auto bytes = report.value(field);
+        const auto value = bytes.toDouble(-1);
+        if (!bytes.isDouble() || !std::isfinite(value) || value < 0 || value > 9007199254740991.0
+            || std::floor(value) != value)
+            continue;
+        result.availableBytes = static_cast<quint64>(value);
+        const bool effective  = field == "memory_effective_available_bytes";
+        result.coverage       = effective ? QSocMemoryBudget::Coverage::Effective
+                                          : QSocMemoryBudget::Coverage::HostOnly;
+        result.kind
+            = report.value(effective ? "memory_effective_available_kind" : "memory_available_kind")
+                  .toString();
+        break;
+    }
+    const auto sampled = report.value("sampled_at_ns").toInteger(-1);
+    if (sampled >= 0)
+        result.sampledAt = QSocMemoryBudget::Clock::time_point(std::chrono::nanoseconds(sampled));
+    return result;
+}
+} // namespace
 
 struct QSocSmtBroker::State
 {
@@ -23,15 +54,22 @@ struct QSocSmtBroker::State
         quint64      owner = 0;
         QJsonObject  request;
         Reply        reply;
-        qsizetype    bytes    = 0;
-        bool         running  = false;
-        bool         canceled = false;
+        qsizetype    bytes      = 0;
+        bool         running    = false;
+        bool         canceled   = false;
+        bool         unverified = false;
         QTimer       deadline;
         std::jthread thread;
     };
 
-    QSocSmtBroker                       *host;
-    Solver                               solver;
+    QSocSmtBroker              *host;
+    Solver                      solver;
+    Sampler                     sampler;
+    QSocMemoryBudget::Policy    memoryPolicy;
+    QSocMemoryBudget::Snapshot  memorySample;
+    QSocMemoryBudget::Admission admission = QSocMemoryBudget::Admission::Unverified;
+    QTimer                      resourceRetry;
+    static constexpr quint64 workerMemory = quint64(QSocSmtService::memoryLimitMiB) * 1024 * 1024;
     QHash<quint64, std::shared_ptr<Job>> jobs;
     QHash<quint64, QList<quint64>>       queues;
     QList<quint64>                       readyOwners;
@@ -42,9 +80,11 @@ struct QSocSmtBroker::State
     int                                  active      = 0;
     bool                                 stopping    = false;
 
-    State(QSocSmtBroker *broker, Solver executor)
+    State(QSocSmtBroker *broker, Solver executor, QSocMemoryBudget::Policy policy, Sampler provider)
         : host(broker)
         , solver(std::move(executor))
+        , sampler(provider ? std::move(provider) : sampleMemory)
+        , memoryPolicy(policy)
     {
         if (!solver) {
             solver = [](const QJsonObject &request, std::stop_token stop) {
@@ -55,7 +95,24 @@ struct QSocSmtBroker::State
 
     void pump()
     {
+        resourceRetry.stop();
         while (!stopping && active < activeLimit && !readyOwners.isEmpty()) {
+            try {
+                memorySample = sampler();
+            } catch (...) {
+                memorySample = {};
+            }
+            admission = QSocMemoryBudget::evaluate(
+                memoryPolicy,
+                memorySample,
+                quint64(active) * workerMemory,
+                workerMemory,
+                QSocMemoryBudget::Clock::now());
+            if (admission == QSocMemoryBudget::Admission::WaitingMemory
+                || admission == QSocMemoryBudget::Admission::WaitingMeasurement) {
+                resourceRetry.start(1000);
+                return;
+            }
             const auto owner = readyOwners.takeFirst();
             auto      &queue = queues[owner];
             const auto id    = queue.takeFirst();
@@ -67,7 +124,8 @@ struct QSocSmtBroker::State
             queuedBytes -= job->bytes;
             --queued;
             job->deadline.stop();
-            job->running = true;
+            job->running    = true;
+            job->unverified = admission != QSocMemoryBudget::Admission::Admitted;
             ++active;
             job->thread = std::jthread([this, id, request = job->request](std::stop_token stop) {
                 QJsonObject result;
@@ -118,20 +176,35 @@ struct QSocSmtBroker::State
         queuedBytes -= job->bytes;
         --queued;
         jobs.remove(id);
-        const auto reply = std::move(job->reply);
+        if (queued == 0)
+            resourceRetry.stop();
+        const auto    reply = std::move(job->reply);
+        const QString reason
+            = admission == QSocMemoryBudget::Admission::WaitingMemory
+                  ? QStringLiteral("SMT queue wait expired: insufficient memory budget")
+              : admission == QSocMemoryBudget::Admission::WaitingMeasurement
+                  ? QStringLiteral("SMT queue wait expired: memory availability is unverified")
+                  : QStringLiteral("SMT queue wait expired");
         if (reply)
             reply(
-                timeout ? QSocSmtService::failure("timeout", "SMT queue wait expired")
+                timeout ? QSocSmtService::failure("timeout", reason)
                         : QSocSmtService::failure("cancelled", "SMT request canceled"));
         return true;
     }
 };
 
-QSocSmtBroker::QSocSmtBroker(QObject *parent, Solver solver, int queueWaitMs)
+QSocSmtBroker::QSocSmtBroker(
+    QObject                 *parent,
+    Solver                   solver,
+    int                      queueWaitMs,
+    QSocMemoryBudget::Policy memoryPolicy,
+    Sampler                  sampler)
     : QObject(parent)
-    , d(std::make_unique<State>(this, std::move(solver)))
+    , d(std::make_unique<State>(this, std::move(solver), memoryPolicy, std::move(sampler)))
 {
     d->queueWaitMs = qMax(1, queueWaitMs);
+    d->resourceRetry.setSingleShot(true);
+    connect(&d->resourceRetry, &QTimer::timeout, this, [this] { d->pump(); });
 }
 
 QSocSmtBroker::~QSocSmtBroker()
@@ -205,7 +278,8 @@ void QSocSmtBroker::shutdown()
 {
     if (d->stopping)
         return;
-    d->stopping    = true;
+    d->stopping = true;
+    d->resourceRetry.stop();
     const auto ids = d->jobs.keys();
     for (auto id : ids) {
         d->jobs.value(id)->reply = {};
@@ -230,6 +304,33 @@ int QSocSmtBroker::activeCount() const
 int QSocSmtBroker::queuedCount() const
 {
     return d->queued;
+}
+
+QJsonObject QSocSmtBroker::resourceStatus() const
+{
+    const bool sampleFresh
+        = QSocMemoryBudget::fresh(d->memorySample, QSocMemoryBudget::Clock::now());
+    int unverified = 0;
+    for (const auto &job : std::as_const(d->jobs))
+        unverified += job->running && job->unverified;
+    return {
+        {"admission", QSocMemoryBudget::name(d->admission)},
+        {"scope", "daemon"},
+        {"reserved_bytes", static_cast<qint64>(d->active * State::workerMemory)},
+        {"host_reserve_bytes", static_cast<double>(d->memoryPolicy.reserveBytes)},
+        {"strict_sampling", d->memoryPolicy.strictSampling},
+        {"available_bytes",
+         sampleFresh && d->memorySample.availableBytes
+             ? QJsonValue(static_cast<double>(*d->memorySample.availableBytes))
+             : QJsonValue()},
+        {"sample_fresh", sampleFresh},
+        {"availability_kind", d->memorySample.kind},
+        {"availability_coverage",
+         d->memorySample.coverage == QSocMemoryBudget::Coverage::Effective ? "visible_limits"
+                                                                           : "host_only"},
+        {"active_count", d->active},
+        {"queued_count", d->queued},
+        {"unverified_active", unverified}};
 }
 
 #include "moc_qsocsmtbroker.cpp"

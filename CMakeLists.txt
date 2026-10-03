@@ -418,7 +418,7 @@ file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/a
 # Small OS helpers are shared by clients and the business libraries.
 set(QSOC_PLATFORM_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
 list(FILTER QSOC_PLATFORM_FILES INCLUDE REGEX
-    "src/common/qsoc(localendpoint|localpeer|processlimits|processowner|sibling)\\..*")
+    "src/common/qsoc(localendpoint|localpeer|processlimits|processowner|resourceusage(_p)?|sibling)\\..*")
 add_library(qsoc_platform STATIC ${QSOC_PLATFORM_FILES})
 target_include_directories(qsoc_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(qsoc_platform PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network)

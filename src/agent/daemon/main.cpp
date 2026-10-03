@@ -20,6 +20,7 @@
 
 #include <csignal>
 #include <iostream>
+#include <limits>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QTimer>
@@ -67,7 +68,27 @@ int main(int argc, char *argv[])
         QStringLiteral("Serve one connection, then exit."));
     sessionOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(sessionOption);
+    QCommandLineOption memoryReserveOption(
+        QStringLiteral("smt-memory-reserve-mib"),
+        QStringLiteral("Extra memory headroom required before starting an SMT worker."),
+        QStringLiteral("MiB"),
+        QStringLiteral("512"));
+    QCommandLineOption memoryStrictOption(
+        QStringLiteral("smt-memory-strict"),
+        QStringLiteral("Wait for a fresh effective-memory sample before starting SMT workers."));
+    parser.addOption(memoryReserveOption);
+    parser.addOption(memoryStrictOption);
     parser.process(app);
+    bool              reserveOk   = false;
+    const quint64     reserveMiB  = parser.value(memoryReserveOption).toULongLong(&reserveOk);
+    constexpr quint64 bytesPerMiB = 1024 * 1024;
+    if (!reserveOk
+        || reserveMiB > static_cast<quint64>((std::numeric_limits<qint64>::max)()) / bytesPerMiB) {
+        std::cerr << "qsoc-agentd: invalid SMT memory reserve" << std::endl;
+        return 2;
+    }
+    const QSocMemoryBudget::Policy
+                 memoryPolicy{parser.isSet(memoryStrictOption), reserveMiB * bytesPerMiB};
     bool         parentOk  = false;
     const qint64 parentPid = parser.value(parentOption).toLongLong(&parentOk);
     if (parser.isSet(parentOption) && (!parentOk || parentPid <= 1))
@@ -85,7 +106,7 @@ int main(int argc, char *argv[])
     const QString socketPath = requestedPath.isEmpty() ? QString()
                                                        : QSocLocalEndpoint::resolve(requestedPath);
 
-    QSocAgentDaemon daemon(socketPath);
+    QSocAgentDaemon daemon(socketPath, nullptr, memoryPolicy);
     daemon.setSingleSession(parser.isSet(sessionOption));
     QObject::connect(&daemon, &QSocAgentDaemon::connectionCountChanged, [](int count) {
         QSocConsole::debug() << "agentd: connections:" << count;

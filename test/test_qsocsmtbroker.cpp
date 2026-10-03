@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <QAbstractEventDispatcher>
 #include <QJsonArray>
@@ -71,23 +72,181 @@ QJsonObject request(const QString &label)
     return {{"smtlib", label}, {"mode", "check"}, {"timeout_ms", 1000}};
 }
 
+class TestBroker : public QSocSmtBroker
+{
+public:
+    TestBroker(
+        QObject                 *parent,
+        Solver                   solver,
+        int                      queueWaitMs = 120000,
+        QSocMemoryBudget::Policy policy      = {},
+        Sampler                  sampler =
+            [] {
+                return QSocMemoryBudget::Snapshot{
+                    quint64(4) * 1024 * 1024 * 1024,
+                    QSocMemoryBudget::Coverage::Effective,
+                    QSocMemoryBudget::Clock::now(),
+                    "test"};
+            })
+        : QSocSmtBroker(parent, std::move(solver), queueWaitMs, policy, std::move(sampler))
+    {}
+};
+
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void boundedConcurrencyAndFairOwners()
+    void memoryAdmissionUsesCompleteRequirements()
     {
-        Gate          gate;
-        QSocSmtBroker broker(nullptr, [&gate](const auto &input, auto stop) {
-            return gate.solve(input, stop);
-        });
-        const auto    cleanup = qScopeGuard([&] {
+        using namespace QSocMemoryBudget;
+        const auto now = Clock::now();
+        Snapshot   sample{1024, Coverage::Effective, now, "test"};
+        QCOMPARE(evaluate({}, sample, 512, 512, now), Admission::Admitted);
+        QCOMPARE(evaluate({false, 1}, sample, 512, 512, now), Admission::WaitingMemory);
+        QCOMPARE(
+            evaluate({}, sample, std::numeric_limits<quint64>::max(), 512, now),
+            Admission::WaitingMemory);
+        sample.availableBytes = 0;
+        QCOMPARE(evaluate({}, sample, 0, 1, now), Admission::WaitingMemory);
+        sample.availableBytes.reset();
+        QCOMPARE(evaluate({}, sample, 0, 512, now), Admission::Unverified);
+        QCOMPARE(evaluate({true, 0}, sample, 0, 512, now), Admission::WaitingMeasurement);
+        sample.availableBytes = 1024;
+        sample.sampledAt      = now - std::chrono::seconds(2);
+        QCOMPARE(evaluate({}, sample, 0, 512, now), Admission::Unverified);
+        sample.sampledAt = now + std::chrono::seconds(1);
+        QCOMPARE(evaluate({true, 0}, sample, 0, 512, now), Admission::WaitingMeasurement);
+        sample.sampledAt = now;
+        sample.coverage  = Coverage::HostOnly;
+        QCOMPARE(evaluate({}, sample, 0, 512, now), Admission::Partial);
+        QCOMPARE(evaluate({true, 0}, sample, 0, 512, now), Admission::WaitingMeasurement);
+        sample.availableBytes = 1;
+        QCOMPARE(evaluate({}, sample, 0, 512, now), Admission::WaitingMemory);
+    }
+
+    void memoryWaitRecoversAndRetainsReservationsUntilExit()
+    {
+        Gate              gate;
+        quint64           available   = 0;
+        constexpr quint64 workerBytes = 512 * 1024 * 1024;
+        TestBroker        broker(
+            nullptr,
+            [&gate](const auto &input, auto stop) { return gate.solve(input, stop); },
+            5000,
+            {},
+            [&] {
+                return QSocMemoryBudget::Snapshot{
+                    available,
+                    QSocMemoryBudget::Coverage::Effective,
+                    QSocMemoryBudget::Clock::now(),
+                    "test"};
+            });
+        const auto cleanup = qScopeGuard([&] {
             gate.finishStops();
             broker.shutdown();
         });
-        QStringList   results;
-        auto          submit = [&](quint64 owner, const QString &label) {
+        int        replies = 0;
+        const auto first   = broker.submit(1, request("first"), [&](const auto &) { ++replies; });
+        broker.submit(2, request("second"), [&](const auto &) { ++replies; });
+        QCOMPARE(broker.activeCount(), 0);
+        QCOMPARE(broker.queuedCount(), 2);
+        QCOMPARE(broker.resourceStatus().value("admission").toString(), "waiting_memory");
+        available = workerBytes;
+        QTRY_COMPARE(gate.order().size(), 1);
+        QCOMPARE(broker.activeCount(), 1);
+        QCOMPARE(broker.resourceStatus().value("reserved_bytes").toInteger(), qint64(workerBytes));
+        QVERIFY(broker.cancel(first));
+        QTRY_COMPARE(gate.stopping.load(), 1);
+        QCOMPARE(broker.activeCount(), 1);
+        QCOMPARE(broker.queuedCount(), 1);
+        QCOMPARE(replies, 0);
+        gate.finishStops();
+        QTRY_VERIFY(gate.order().contains("second"));
+        QCOMPARE(replies, 1);
+        gate.release("second");
+        QTRY_COMPARE(replies, 2);
+        QCOMPARE(broker.resourceStatus().value("reserved_bytes").toInteger(), qint64(0));
+    }
+
+    void memoryPollingDoesNotExtendTheQueueDeadline()
+    {
+        int        samples = 0;
+        int        started = 0;
+        TestBroker broker(
+            nullptr,
+            [&](const auto &, auto) {
+                ++started;
+                return QJsonObject{};
+            },
+            1250,
+            {},
+            [&] {
+                ++samples;
+                return QSocMemoryBudget::Snapshot{
+                    0,
+                    QSocMemoryBudget::Coverage::Effective,
+                    QSocMemoryBudget::Clock::now(),
+                    "test"};
+            });
+        QJsonObject result;
+        broker.submit(1, request("waiting"), [&](const auto &reply) { result = reply; });
+        QTRY_VERIFY_WITH_TIMEOUT(!result.isEmpty(), 2000);
+        QVERIFY(samples >= 2);
+        QCOMPARE(started, 0);
+        QCOMPARE(result.value("execution").toString(), "timeout");
+        QVERIFY(result.value("reason").toString().contains("memory budget"));
+        QCOMPARE(broker.queuedCount(), 0);
+    }
+
+    void unknownSamplingHasExplicitStrictMode()
+    {
+        std::atomic<int> started = 0;
+        auto             solver  = [&](const auto &, auto) {
+            ++started;
+            return QJsonObject{{"execution", "resource_limit"}};
+        };
+        TestBroker         permissive(nullptr, solver, 100, {}, [] {
+            return QSocMemoryBudget::Snapshot{
+                1024,
+                QSocMemoryBudget::Coverage::Effective,
+                QSocMemoryBudget::Clock::now() - std::chrono::seconds(2),
+                "test"};
+        });
+        QList<QJsonObject> replies;
+        permissive.submit(1, request("first"), [&](const auto &result) { replies.append(result); });
+        QCOMPARE(permissive.resourceStatus().value("unverified_active").toInt(), 1);
+        QVERIFY(permissive.resourceStatus().value("available_bytes").isNull());
+        QVERIFY(!permissive.resourceStatus().value("sample_fresh").toBool());
+        QTRY_COMPARE(replies.size(), 1);
+        QCOMPARE(replies.first().value("execution").toString(), "resource_limit");
+        QVERIFY(!replies.first().contains("resource_status"));
+        QCOMPARE(started.load(), 1);
+        TestBroker strict(nullptr, solver, 100, {true, 0}, [] {
+            return QSocMemoryBudget::Snapshot{};
+        });
+        strict.submit(1, request("second"), [&](const auto &result) { replies.append(result); });
+        QCOMPARE(strict.activeCount(), 0);
+        QCOMPARE(strict.queuedCount(), 1);
+        QTRY_COMPARE(replies.size(), 2);
+        QCOMPARE(replies.last().value("execution").toString(), "timeout");
+        QVERIFY(replies.last().value("reason").toString().contains("unverified"));
+        QCOMPARE(strict.queuedCount(), 0);
+        QCOMPARE(started.load(), 1);
+    }
+
+    void boundedConcurrencyAndFairOwners()
+    {
+        Gate        gate;
+        TestBroker  broker(nullptr, [&gate](const auto &input, auto stop) {
+            return gate.solve(input, stop);
+        });
+        const auto  cleanup = qScopeGuard([&] {
+            gate.finishStops();
+            broker.shutdown();
+        });
+        QStringList results;
+        auto        submit = [&](quint64 owner, const QString &label) {
             return broker.submit(owner, request(label), [&, label](const auto &) {
                 results.append(label);
             });
@@ -119,7 +278,7 @@ private slots:
     void cancelRetainsRunningSlotUntilExit()
     {
         Gate               gate;
-        QSocSmtBroker      broker(nullptr, [&gate](const auto &input, auto stop) {
+        TestBroker         broker(nullptr, [&gate](const auto &input, auto stop) {
             return gate.solve(input, stop);
         });
         const auto         cleanup = qScopeGuard([&] {
@@ -151,17 +310,17 @@ private slots:
 
     void ownerQuotaAndQueuedCancellation()
     {
-        Gate          gate;
-        QSocSmtBroker broker(nullptr, [&gate](const auto &input, auto stop) {
+        Gate       gate;
+        TestBroker broker(nullptr, [&gate](const auto &input, auto stop) {
             return gate.solve(input, stop);
         });
-        const auto    cleanup   = qScopeGuard([&] {
+        const auto cleanup   = qScopeGuard([&] {
             gate.finishStops();
             broker.shutdown();
         });
-        int           cancelled = 0;
-        int           busy      = 0;
-        auto          reply     = [&](const QJsonObject &result) {
+        int        cancelled = 0;
+        int        busy      = 0;
+        auto       reply     = [&](const QJsonObject &result) {
             cancelled += result.value("execution") == "cancelled";
             busy += result.value("execution") == "busy";
         };
@@ -184,8 +343,8 @@ private slots:
 
     void queuedDeadlineAndGlobalLimit()
     {
-        Gate          gate;
-        QSocSmtBroker broker(
+        Gate       gate;
+        TestBroker broker(
             nullptr, [&gate](const auto &input, auto stop) { return gate.solve(input, stop); }, 250);
         const auto cleanup  = qScopeGuard([&] {
             gate.finishStops();
@@ -210,11 +369,11 @@ private slots:
 
     void serializedQueueBytesAreBoundedAndReclaimed()
     {
-        Gate          gate;
-        QSocSmtBroker broker(nullptr, [&gate](const auto &input, auto stop) {
+        Gate       gate;
+        TestBroker broker(nullptr, [&gate](const auto &input, auto stop) {
             return gate.solve(input, stop);
         });
-        const auto    cleanup = qScopeGuard([&] {
+        const auto cleanup = qScopeGuard([&] {
             gate.finishStops();
             broker.shutdown();
         });
@@ -239,10 +398,10 @@ private slots:
 
     void completedTasksReleaseTheirQueueDeadlines()
     {
-        QSocSmtBroker broker(nullptr, [](const auto &, auto) {
+        TestBroker broker(nullptr, [](const auto &, auto) {
             return QJsonObject{{"execution", "completed"}};
         });
-        auto         *dispatcher = QAbstractEventDispatcher::instance();
+        auto      *dispatcher = QAbstractEventDispatcher::instance();
         QVERIFY(dispatcher);
         auto timers = [&] {
             const auto objects = dispatcher->findChildren<QObject *>()
@@ -268,8 +427,8 @@ private slots:
 
     void shutdownStopsActiveTasks()
     {
-        Gate          gate;
-        QSocSmtBroker broker(nullptr, [&gate](const auto &input, auto stop) {
+        Gate       gate;
+        TestBroker broker(nullptr, [&gate](const auto &input, auto stop) {
             return gate.solve(input, stop);
         });
         broker.submit(1, request("first"), [](const auto &) {});

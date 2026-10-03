@@ -19,6 +19,8 @@ CORE_TESTS = (
     "test_qsocguihandoff",
     "test_qsocsmtservice",
     "test_qsoctoolsmt",
+    "test_qsocresourceusage",
+    "test_qsocsmtbroker",
 )
 
 

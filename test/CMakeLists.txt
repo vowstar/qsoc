@@ -164,6 +164,9 @@ target_link_libraries(qsoc_gui_handoff_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core
 add_dependencies(test_qsocguihandoff qsoc qsoc_gui_handoff_probe)
 target_compile_definitions(test_qsocguihandoff PRIVATE QSOC_BINARY_PATH="$<TARGET_FILE:qsoc>")
 target_compile_definitions(test_qsocguihandoff PRIVATE QSOC_GUI_PROBE_PATH="$<TARGET_FILE:qsoc_gui_handoff_probe>")
+qt_add_test_target("test_qsocresourceusage")
+set_property(TARGET test_qsocresourceusage PROPERTY LINK_LIBRARIES qsoc_platform Qt${QT_VERSION_MAJOR}::Test)
+
 qt_add_test_target("test_qsocsmtbroker" LABELS "smt")
 set_property(TARGET test_qsocsmtbroker PROPERTY LINK_LIBRARIES qsoc_smt Qt${QT_VERSION_MAJOR}::Test)
 qt_add_test_target("test_qsocsmtservice" LABELS "smt")

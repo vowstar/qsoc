@@ -1087,12 +1087,14 @@ private:
     bool                           finished_    = false;
 };
 
-QSocAgentDaemon::QSocAgentDaemon(const QString &socketPath, QObject *parent)
+QSocAgentDaemon::QSocAgentDaemon(
+    const QString &socketPath, QObject *parent, QSocMemoryBudget::Policy memoryPolicy)
     : QObject(parent)
     , socketPath_(
           QSocLocalEndpoint::resolve(socketPath.isEmpty() ? defaultSocketPath() : socketPath))
 {
-    smtBroker_ = std::make_unique<QSocSmtBroker>(this);
+    smtBroker_
+        = std::make_unique<QSocSmtBroker>(this, QSocSmtBroker::Solver{}, 120000, memoryPolicy);
     connect(&server_, &QLocalServer::newConnection, this, &QSocAgentDaemon::handleNewConnection);
 }
 

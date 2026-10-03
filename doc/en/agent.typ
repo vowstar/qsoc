@@ -634,7 +634,11 @@ Requests accept at most 256 KiB of SMT-LIB. Output is limited to 1 MiB. Each dae
 
 A full queue returns `busy`. A request that remains queued for 120 seconds returns `timeout`. Queue waiting is separate from `timeout_ms`. Cancelling a running task stops its worker. The daemon reuses the slot only after that process exits. A failed worker does not terminate other workers or the agent.
 
-Worker memory limits depend on the platform:
+Before launching an SMT worker, the daemon checks a fresh memory sample against its active worker reservations and configured host reserve. Reservations remain until the worker exits. Linux uses visible cgroup headroom when available. Other known host samples provide partial coverage. Unknown measurements retain the existing worker limits unless strict sampling is enabled. Waiting for memory does not extend the queue deadline.
+
+`qsoc-agentd --smt-memory-reserve-mib <n>` sets the extra host reserve, defaulting to 512 MiB. `--smt-memory-strict` requires a fresh effective-memory sample before admission. Platforms without that sample wait until the queue deadline. These settings belong to the daemon owner and cannot be changed through a tool request.
+
+Admission is a conservative estimate. Other applications and separate daemons can allocate memory after sampling. Worker memory limits depend on the platform:
 
 #figure(
   align(center)[#table(

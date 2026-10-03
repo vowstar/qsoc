@@ -36,6 +36,7 @@
 #define QSOCAGENTDAEMON_H
 
 #include "agent/runtime/qsocagentruntime.h"
+#include "smt/qsocmemorybudget.h"
 
 #include <QHash>
 #include <QLocalServer>
@@ -63,7 +64,10 @@ public:
      * @param socketPath Local endpoint; empty = default runtime path.
      * @param parent QObject parent.
      */
-    explicit QSocAgentDaemon(const QString &socketPath = QString(), QObject *parent = nullptr);
+    explicit QSocAgentDaemon(
+        const QString           &socketPath   = QString(),
+        QObject                 *parent       = nullptr,
+        QSocMemoryBudget::Policy memoryPolicy = {false, 512 * 1024 * 1024});
     ~QSocAgentDaemon() override;
 
     /** Default socket path ($XDG_RUNTIME_DIR/qsoc/agentd.sock, temp fallback). */
