@@ -244,8 +244,7 @@ private slots:
 
     void invokedSolverSavesBoundedResult()
     {
-        if (!QSocToolSmt::supported())
-            QSKIP("Worker resource limits require Linux");
+        QVERIFY(QSocToolSmt::supported());
         QFETCH(bool, stream);
         MockAgentServer server;
         QVERIFY(server.listen());

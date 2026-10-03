@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "qsocsmtworker.h"
-#include "qsocipc.h"
-#include "qsoclocalpeer.h"
-#include "qsocprocessowner.h"
+#include "common/qsocipc.h"
+#include "common/qsoclocalpeer.h"
+#include "common/qsocprocessowner.h"
 #include "qsocsmtservice.h"
 
 #include <cstdio>

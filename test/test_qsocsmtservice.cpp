@@ -4,9 +4,9 @@
 #include "common/qsocipc.h"
 #include "common/qsoclocalendpoint.h"
 #include "common/qsocprocesslimits.h"
-#include "common/qsocsmtinput.h"
-#include "common/qsocsmtservice.h"
 #include "qsoc_test.h"
+#include "smt/qsocsmtinput.h"
+#include "smt/qsocsmtservice.h"
 
 #include <future>
 #include <QElapsedTimer>

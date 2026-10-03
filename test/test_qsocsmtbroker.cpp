@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "common/qsocsmtbroker.h"
 #include "qsoc_test.h"
+#include "smt/qsocsmtbroker.h"
 
 #include <atomic>
 #include <condition_variable>

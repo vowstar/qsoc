@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
-#include "common/qsocsmtengine.h"
-#include "common/qsocsmtworker.h"
+#include "smt/qsocsmtengine.h"
+#include "smt/qsocsmtworker.h"
 
 int main(int argc, char **argv)
 {

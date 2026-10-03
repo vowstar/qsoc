@@ -418,13 +418,24 @@ file(GLOB_RECURSE APPONLY_TS_FILES  RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "i18n/a
 # Small OS helpers are shared by clients and the business libraries.
 set(QSOC_PLATFORM_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
 list(FILTER QSOC_PLATFORM_FILES INCLUDE REGEX
-    "src/common/qsoc(localendpoint|localpeer|processowner|sibling)\\..*")
+    "src/common/qsoc(localendpoint|localpeer|processlimits|processowner|sibling)\\..*")
 add_library(qsoc_platform STATIC ${QSOC_PLATFORM_FILES})
 target_include_directories(qsoc_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(qsoc_platform PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network)
 if(WIN32)
     target_compile_definitions(qsoc_platform PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(qsoc_platform PUBLIC advapi32)
+endif()
+
+add_library(qsoc_smt STATIC
+    src/smt/qsocsmtservice.cpp
+    src/smt/qsocsmtservice.h
+    src/smt/qsocsmtbroker.cpp
+    src/smt/qsocsmtbroker.h
+)
+target_link_libraries(qsoc_smt PUBLIC qsoc_platform)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(qsoc_smt PUBLIC -fexperimental-library)
 endif()
 
 set(QSOC_PROTOCOL_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
@@ -512,7 +523,7 @@ if(WIN32)
 endif()
 
 
-target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol)
+target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_smt)
 target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}" "${MBEDTLS_INCLUDE_DIRS}")
 target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES} ${MBEDTLS_LIBRARIES})
 target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
@@ -538,22 +549,11 @@ install(TARGETS qsoc-agentd RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 add_executable(qsoc-smt-worker
     src/smtworker.cpp
-    src/common/qsocsmtengine.cpp
-    src/common/qsocsmtinput.cpp
-    src/common/qsocsmtservice.cpp
-    src/common/qsocsibling.cpp
-    src/common/qsoclocalendpoint.cpp
-    src/common/qsoclocalpeer.cpp
-    src/common/qsocprocessowner.cpp
-    src/common/qsocprocesslimits.cpp
-    src/common/qsocsmtworker.cpp
+    src/smt/qsocsmtengine.cpp
+    src/smt/qsocsmtinput.cpp
+    src/smt/qsocsmtworker.cpp
 )
-target_include_directories(qsoc-smt-worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(qsoc-smt-worker PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network libz3)
-if(WIN32)
-    target_link_libraries(qsoc-smt-worker PRIVATE advapi32)
-    target_compile_definitions(qsoc-smt-worker PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-endif()
+target_link_libraries(qsoc-smt-worker PRIVATE qsoc_smt libz3)
 install(TARGETS qsoc-smt-worker RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS
@@ -655,10 +655,6 @@ set(QSOC_O200K_TABLE "${CMAKE_CURRENT_SOURCE_DIR}/external/tiktoken/o200k_base.t
 file(SHA256 "${QSOC_O200K_TABLE}" QSOC_O200K_SHA256)
 if(NOT QSOC_O200K_SHA256 STREQUAL "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d")
     message(FATAL_ERROR "${QSOC_O200K_TABLE} does not match the published o200k_base SHA-256.")
-endif()
-
-if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(qsoc-smt-worker PRIVATE -fexperimental-library)
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -866,6 +862,7 @@ if(CPPCHECK_COMMAND)
             -I${CMAKE_BINARY_DIR}/qsoc_cli_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_gui_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_platform_autogen/include
+            -I${CMAKE_BINARY_DIR}/qsoc_smt_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_agent_protocol_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_agent_client_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_common_autogen/include

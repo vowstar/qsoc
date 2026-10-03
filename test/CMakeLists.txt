@@ -139,25 +139,11 @@ qt_add_test_target("test_qsocprcmsolver" LABELS "prcm")
 target_link_libraries(test_qsocprcmsolver PRIVATE libz3)
 add_executable(qsoc_smt_worker_probe
     qsoc_smt_worker_probe.cpp
-    ../src/common/qsocsmtengine.cpp
-    ../src/common/qsocsmtinput.cpp
-    ../src/common/qsocsmtservice.cpp
-    ../src/common/qsocsibling.cpp
-    ../src/common/qsoclocalendpoint.cpp
-    ../src/common/qsoclocalpeer.cpp
-    ../src/common/qsocprocessowner.cpp
-    ../src/common/qsocprocesslimits.cpp
-    ../src/common/qsocsmtworker.cpp
+    ../src/smt/qsocsmtengine.cpp
+    ../src/smt/qsocsmtinput.cpp
+    ../src/smt/qsocsmtworker.cpp
 )
-target_include_directories(qsoc_smt_worker_probe PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
-target_link_libraries(qsoc_smt_worker_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network libz3)
-if(WIN32)
-    target_link_libraries(qsoc_smt_worker_probe PRIVATE advapi32)
-    target_compile_definitions(qsoc_smt_worker_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-endif()
-if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(qsoc_smt_worker_probe PRIVATE -fexperimental-library)
-endif()
+target_link_libraries(qsoc_smt_worker_probe PRIVATE qsoc_smt libz3)
 qt_add_test_target("test_qsocsibling")
 qt_add_test_target("test_qsocguihandoff")
 qt_add_test_target("test_qsocprocessowner")
@@ -173,7 +159,10 @@ add_dependencies(test_qsocguihandoff qsoc qsoc_gui_handoff_probe)
 target_compile_definitions(test_qsocguihandoff PRIVATE QSOC_BINARY_PATH="$<TARGET_FILE:qsoc>")
 target_compile_definitions(test_qsocguihandoff PRIVATE QSOC_GUI_PROBE_PATH="$<TARGET_FILE:qsoc_gui_handoff_probe>")
 qt_add_test_target("test_qsocsmtbroker" LABELS "smt")
+set_property(TARGET test_qsocsmtbroker PROPERTY LINK_LIBRARIES qsoc_smt Qt${QT_VERSION_MAJOR}::Test)
 qt_add_test_target("test_qsocsmtservice" LABELS "smt")
+target_sources(test_qsocsmtservice PRIVATE ../src/smt/qsocsmtinput.cpp)
+set_property(TARGET test_qsocsmtservice PROPERTY LINK_LIBRARIES qsoc_smt Qt${QT_VERSION_MAJOR}::Test)
 add_dependencies(test_qsocsmtservice qsoc-smt-worker qsoc_smt_worker_probe)
 target_compile_definitions(test_qsocsmtservice PRIVATE
     QSOC_SMT_WORKER_PATH="$<TARGET_FILE:qsoc-smt-worker>"

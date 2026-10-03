@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "qsocsmtengine.h"
-#include "qsocprocesslimits.h"
+#include "common/qsocprocesslimits.h"
 #include "qsocsmtinput.h"
 #include "qsocsmtservice.h"
 

@@ -3,10 +3,9 @@
 
 #include "agent/daemon/qsocagentdaemon.h"
 
-#include "common/qsoctaskregistry.h"
-#include "agent/remote/qsocagentremote.h"
 #include "agent/protocol/qsocagentprotocol.h"
-#include "agent/runtime/qsocagentruntimeevent.h"
+#include "agent/protocol/qsocagentruntimeevent.h"
+#include "agent/remote/qsocagentremote.h"
 #include "agent/services/qagentcompletion.h"
 #include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolplanmode.h"
@@ -14,7 +13,8 @@
 #include "common/qsocipc.h"
 #include "common/qsoclocalendpoint.h"
 #include "common/qsoclocalpeer.h"
-#include "common/qsocsmtbroker.h"
+#include "common/qsoctaskregistry.h"
+#include "smt/qsocsmtbroker.h"
 #include <QScopeGuard>
 #include <QScopedValueRollback>
 

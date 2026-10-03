@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "qsocsmtservice.h"
+#include "common/qsocipc.h"
+#include "common/qsoclocalendpoint.h"
+#include "common/qsoclocalpeer.h"
+#include "common/qsocprocesslimits.h"
 #include "common/qsocsibling.h"
-#include "qsocipc.h"
-#include "qsoclocalendpoint.h"
-#include "qsoclocalpeer.h"
-#include "qsocprocesslimits.h"
 
 #include <cmath>
 #include <condition_variable>
