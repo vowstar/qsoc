@@ -7,15 +7,23 @@
 #include <QDirIterator>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QUuid>
 #include <QtTest>
+
+#ifdef Q_OS_UNIX
+#include <csignal>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -68,6 +76,7 @@ private slots:
     void nonDurableCommandsStayClean();
     void pristineProjectSwitchStaysClean();
     void unsafeProjectSwitchKeepsCurrentSession();
+    void firstPromptPersistsAndCanContinue_data();
     void firstPromptPersistsAndCanContinue();
     void changedArtifactBindingRefusesRequest_data();
     void changedArtifactBindingRefusesRequest();
@@ -277,9 +286,17 @@ void Test::unsafeProjectSwitchKeepsCurrentSession()
 #endif
 }
 
+void Test::firstPromptPersistsAndCanContinue_data()
+{
+    QTest::addColumn<bool>("pauseSessionOnExit");
+    QTest::newRow("normal-exit") << false;
+    QTest::newRow("delayed-session-exit") << true;
+}
+
 void Test::firstPromptPersistsAndCanContinue()
 {
 #ifdef Q_OS_UNIX
+    QFETCH(bool, pauseSessionOnExit);
     const QString mockBinary = QString::fromUtf8(QSOC_MOCK_LLM_PATH);
     QVERIFY2(QFile::exists(mockBinary), "qsoc_mock_llm was not built");
 
@@ -414,7 +431,29 @@ void Test::firstPromptPersistsAndCanContinue()
         QFile scope(sessionPath + QStringLiteral(".artifacts/.scope"));
         QVERIFY(scope.open(QIODevice::ReadOnly));
         QCOMPARE(scope.readAll(), artifactBinding);
-        QVERIFY(resumed.submitLine("/quit"));
+        const auto beforeQuit = resumed.markOutput();
+        QVERIFY(resumed.writeInput("/quit"));
+        QVERIFY(resumed.waitForOutputAfter("/quit", beforeQuit, 2000));
+        qint64 sessionPid = 0;
+        QTimer resumeSession;
+        resumeSession.setSingleShot(true);
+        const auto restoreSession = qScopeGuard([&] {
+            resumeSession.stop();
+            if (sessionPid > 1)
+                ::kill(static_cast<pid_t>(sessionPid), SIGCONT);
+        });
+        if (pauseSessionOnExit) {
+            QLockFile lock(sessionPath + QStringLiteral(".lock"));
+            QString   host, application;
+            QVERIFY(lock.getLockInfo(&sessionPid, &host, &application));
+            QVERIFY(sessionPid > 1 && sessionPid != QCoreApplication::applicationPid());
+            QCOMPARE(::kill(static_cast<pid_t>(sessionPid), SIGSTOP), 0);
+            connect(&resumeSession, &QTimer::timeout, this, [sessionPid] {
+                ::kill(static_cast<pid_t>(sessionPid), SIGCONT);
+            });
+            resumeSession.start(200);
+        }
+        QVERIFY(resumed.writeInput("\r"));
         QVERIFY2(resumed.waitForExit(10000), resumed.output().right(8192).constData());
         QCOMPARE(resumed.exitStatus(), QProcess::NormalExit);
         QCOMPARE(resumed.exitCode(), 0);

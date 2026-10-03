@@ -815,8 +815,11 @@ public:
         worker_.abort();
         client_->abort();
         if (process_.state() != QProcess::NotRunning) {
-            process_.kill();
-            process_.waitForFinished(2000);
+            process_.terminate();
+            if (!process_.waitForFinished(1000)) {
+                process_.kill();
+                process_.waitForFinished(1000);
+            }
         }
     }
 
