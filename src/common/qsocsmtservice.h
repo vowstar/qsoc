@@ -20,6 +20,8 @@ public:
     /* Blocking service for a deferred tool's background task. */
     static QJsonObject solve(
         const QJsonObject &request, std::stop_token stop = {}, const QString &executable = {});
+    static QJsonObject solveRemote(
+        const QJsonObject &request, const QString &endpoint, std::stop_token stop = {});
     static QString     validateRequest(const QJsonObject &request);
     static QJsonObject failure(const QString &execution, const QString &reason);
 };

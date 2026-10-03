@@ -542,9 +542,18 @@ add_executable(qsoc-smt-worker
     src/common/qsocsmtinput.cpp
     src/common/qsocsmtservice.cpp
     src/common/qsocsibling.cpp
+    src/common/qsoclocalendpoint.cpp
+    src/common/qsoclocalpeer.cpp
+    src/common/qsocprocessowner.cpp
+    src/common/qsocprocesslimits.cpp
+    src/common/qsocsmtworker.cpp
 )
 target_include_directories(qsoc-smt-worker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(qsoc-smt-worker PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
+target_link_libraries(qsoc-smt-worker PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network libz3)
+if(WIN32)
+    target_link_libraries(qsoc-smt-worker PRIVATE advapi32)
+    target_compile_definitions(qsoc-smt-worker PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 install(TARGETS qsoc-smt-worker RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS

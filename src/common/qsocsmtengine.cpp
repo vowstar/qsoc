@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "qsocsmtengine.h"
+#include "qsocprocesslimits.h"
 #include "qsocsmtinput.h"
 #include "qsocsmtservice.h"
 
@@ -12,10 +13,6 @@
 #include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
-
-#ifdef Q_OS_LINUX
-#include <sys/resource.h>
-#endif
 
 namespace {
 
@@ -366,20 +363,14 @@ QJsonObject optimize(
 
 bool QSocSmtEngine::applyLimits()
 {
-#ifdef Q_OS_LINUX
-    const rlimit memory{
-        QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL,
-        QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL};
-    const rlimit core{0, 0};
-    if (setrlimit(RLIMIT_AS, &memory) != 0 || setrlimit(RLIMIT_CORE, &core) != 0) {
+    if (!QSocProcessLimits::apply(QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL))
         return false;
-    }
     Z3_global_param_set("memory_max_size", "448");
     Z3_global_param_set("unsat_core", "true");
+    Z3_global_param_set("parallel.enable", "false");
+    Z3_global_param_set("smt.threads", "1");
+    Z3_global_param_set("sat.threads", "1");
     return true;
-#else
-    return false;
-#endif
 }
 
 QJsonObject QSocSmtEngine::execute(const QJsonObject &request, const PhaseObserver &observer)

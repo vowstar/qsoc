@@ -3,6 +3,10 @@
 
 #include "qsocsmtservice.h"
 #include "common/qsocsibling.h"
+#include "qsocipc.h"
+#include "qsoclocalendpoint.h"
+#include "qsoclocalpeer.h"
+#include "qsocprocesslimits.h"
 
 #include <cmath>
 #include <condition_variable>
@@ -10,9 +14,13 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QProcess>
 #include <QSet>
+#include <QTemporaryDir>
 
 namespace {
 
@@ -91,47 +99,99 @@ bool validResponse(const QJsonObject &result)
            && (solver.isNull() || status.contains(solver.toString()));
 }
 
-QJsonObject collect(QProcess &process, int timeout, std::stop_token stop, QElapsedTimer &elapsed)
+constexpr int wireLimit = 2 * 1024 * 1024;
+
+QJsonObject receive(
+    QLocalSocket   &socket,
+    int             timeout,
+    std::stop_token stop,
+    QElapsedTimer  &elapsed,
+    QProcess       *process = nullptr)
 {
-    QByteArray output;
-    while (process.state() != QProcess::NotRunning) {
-        if (stop.stop_requested() || elapsed.elapsed() >= timeout) {
-            stopProcess(process);
-            return QSocSmtService::failure(
-                stop.stop_requested() ? QStringLiteral("cancelled") : QStringLiteral("timeout"),
-                QStringLiteral("Worker interrupted"));
+    QByteArray buffer;
+    while (true) {
+        buffer += socket.read(wireLimit + QSocIpc::headerBytes - buffer.size());
+        QJsonObject message;
+        const auto  decoded = QSocIpc::decode(buffer, message, wireLimit);
+        if (decoded == QSocIpc::DecodeResult::Complete) {
+            if (!buffer.isEmpty())
+                return {};
+            return message;
         }
-        process.waitForFinished(20);
-        output += process.read(QSocSmtService::outputLimit - output.size() + 1);
-        if (output.size() > QSocSmtService::outputLimit) {
-            stopProcess(process);
-            return QSocSmtService::failure("error", "Worker output exceeded the limit");
-        }
+        if (decoded == QSocIpc::DecodeResult::Invalid || stop.stop_requested()
+            || elapsed.elapsed() >= timeout || socket.state() != QLocalSocket::ConnectedState)
+            return {};
+        socket.waitForReadyRead(20);
+        if (process != nullptr)
+            process->waitForFinished(0);
     }
-    output += process.read(QSocSmtService::outputLimit - output.size() + 1);
-    if (stop.stop_requested()) {
-        return QSocSmtService::failure("cancelled", "Request cancelled");
-    }
-    if (elapsed.elapsed() >= timeout) {
-        return QSocSmtService::failure("timeout", "Worker exceeded the time limit");
-    }
-    if (output.size() > QSocSmtService::outputLimit) {
-        return QSocSmtService::failure("error", "Worker output exceeded the limit");
-    }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-        return QSocSmtService::failure(
-            (process.exitCode() == 12 || process.exitCode() == 101)
-                ? QStringLiteral("resource_limit")
-                : QStringLiteral("error"),
-            QStringLiteral("Worker did not finish successfully"));
-    }
-    QJsonParseError error;
-    const auto      document = QJsonDocument::fromJson(output, &error);
-    if (error.error != QJsonParseError::NoError || !document.isObject()
-        || !validResponse(document.object())) {
+}
+
+QJsonObject interruption(std::stop_token stop, const QElapsedTimer &elapsed, int timeout)
+{
+    return QSocSmtService::failure(
+        stop.stop_requested()          ? QStringLiteral("cancelled")
+        : elapsed.elapsed() >= timeout ? QStringLiteral("timeout")
+                                       : QStringLiteral("error"),
+        QStringLiteral("SMT transport interrupted"));
+}
+
+QJsonObject response(const QJsonObject &message)
+{
+    const auto result = message.value("result").toObject();
+    if (message.value("id").toInt() != 1 || !validResponse(result)
+        || QJsonDocument(result).toJson(QJsonDocument::Compact).size() > QSocSmtService::outputLimit)
         return QSocSmtService::failure("error", "Invalid worker response");
+    return result;
+}
+
+QJsonObject runWorker(
+    QProcess          &process,
+    QLocalServer      &server,
+    const QJsonObject &request,
+    int                timeout,
+    std::stop_token    stop,
+    QElapsedTimer     &elapsed)
+{
+    const int                     startupTimeout = qMin(timeout, 2000);
+    std::unique_ptr<QLocalSocket> socket;
+    while (!socket && elapsed.elapsed() < startupTimeout && !stop.stop_requested()) {
+        server.waitForNewConnection(20);
+        socket.reset(server.nextPendingConnection());
+        process.waitForFinished(0);
+        if (process.state() == QProcess::NotRunning && !socket)
+            return QSocSmtService::failure("error", "Worker exited before connecting");
     }
-    return document.object();
+    if (!socket)
+        return interruption(stop, elapsed, startupTimeout);
+    socket->setReadBufferSize(wireLimit + QSocIpc::headerBytes);
+    const auto peerPid = QSocLocalPeer::processId(*socket);
+    if (!QSocLocalPeer::sameUser(*socket) || (peerPid > 0 && peerPid != process.processId()))
+        return QSocSmtService::failure("error", "Worker identity mismatch");
+    const auto hello = receive(*socket, startupTimeout, stop, elapsed, &process);
+    if (hello.value("service").toString() != "qsoc-smt-worker"
+        || hello.value("protocol").toInt() != 1)
+        return interruption(stop, elapsed, startupTimeout);
+    socket->write(
+        QSocIpc::frame(
+            QJsonObject{{"id", 1}, {"method", "smt.solve"}, {"params", request}}, wireLimit));
+    const auto message = receive(*socket, timeout, stop, elapsed, &process);
+    if (stop.stop_requested() || elapsed.elapsed() >= timeout)
+        return interruption(stop, elapsed, timeout);
+    if (message.isEmpty()) {
+        process.waitForFinished(100);
+        return QSocSmtService::failure(
+            process.exitCode() == 12 || process.exitCode() == 101 ? "resource_limit" : "error",
+            "Worker did not finish successfully");
+    }
+    while (process.state() != QProcess::NotRunning && !stop.stop_requested()
+           && elapsed.elapsed() < timeout)
+        process.waitForFinished(20);
+    if (process.state() != QProcess::NotRunning)
+        return interruption(stop, elapsed, timeout);
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+        return QSocSmtService::failure("error", "Worker did not exit successfully");
+    return response(message);
 }
 
 } // namespace
@@ -146,7 +206,7 @@ QString QSocSmtService::workerPath()
 
 bool QSocSmtService::supported()
 {
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) || defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     return true;
 #else
     return false;
@@ -216,37 +276,81 @@ QJsonObject QSocSmtService::solve(
     if (stop.stop_requested()) {
         return failure("cancelled", "Request cancelled");
     }
-#ifndef Q_OS_LINUX
-    Q_UNUSED(executable)
-    return failure("error", "Hard memory isolation is unavailable on this platform");
-#else
-    const QString path = executable.isEmpty() ? workerPath() : executable;
-    if (!QFileInfo(path).isExecutable()) {
-        return failure("error", "SMT worker is unavailable");
+    if (executable.isEmpty()) {
+        const auto endpoint = qEnvironmentVariable("QSOC_SMT_SOCKET");
+        if (!endpoint.isEmpty())
+            return solveRemote(request, endpoint, stop);
     }
+    const QString path = executable.isEmpty() ? workerPath() : executable;
+    if (!QFileInfo(path).isExecutable())
+        return failure("error", "SMT worker is unavailable");
     const QByteArray input = QJsonDocument(request).toJson(QJsonDocument::Compact);
     Permit           permit;
     const auto       state = permit.acquire(input.size(), stop);
-    if (!state.isEmpty()) {
+    if (!state.isEmpty())
         return failure(state, "Worker admission did not complete");
-    }
+    QTemporaryDir directory;
+    if (!directory.isValid())
+        return failure("error", "Could not prepare worker socket directory");
+    const auto endpoint = QSocLocalEndpoint::resolve(directory.filePath("smt.sock"));
+    QString    error;
+    if (!QSocLocalEndpoint::prepareDirectory(endpoint, &error))
+        return failure("error", error);
+    QLocalServer server;
+    server.setSocketOptions(QLocalServer::UserAccessOption);
+    server.setMaxPendingConnections(1);
+    if (!server.listen(endpoint))
+        return failure("error", "Could not listen for SMT worker");
     QElapsedTimer elapsed;
     elapsed.start();
-    const int timeout = request.value("timeout_ms").toInt(10000);
-    QProcess  process;
+    const int         timeout = request.value("timeout_ms").toInt(10000);
+    QSocProcessLimits limits;
+    QProcess          process;
+    if (!limits.configure(process, memoryLimitMiB * 1024ULL * 1024ULL))
+        return failure("error", "Could not configure worker limits");
     process.setProgram(path);
-    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.setArguments(
+        {"--socket", endpoint, "--owner-pid", QString::number(QCoreApplication::applicationPid())});
+    process.setStandardOutputFile(QProcess::nullDevice());
     process.setStandardErrorFile(QProcess::nullDevice());
     process.start();
     if (!process.waitForStarted(qMin(timeout, 2000))) {
-        const auto execution = stop.stop_requested()          ? QStringLiteral("cancelled")
-                               : elapsed.elapsed() >= timeout ? QStringLiteral("timeout")
-                                                              : QStringLiteral("error");
         stopProcess(process);
-        return failure(execution, "Could not start SMT worker");
+        return interruption(stop, elapsed, timeout);
     }
-    process.write(input);
-    process.closeWriteChannel();
-    return collect(process, timeout, stop, elapsed);
-#endif
+    const auto result = runWorker(process, server, request, timeout, stop, elapsed);
+    stopProcess(process);
+    return result;
+}
+
+QJsonObject QSocSmtService::solveRemote(
+    const QJsonObject &request, const QString &endpoint, std::stop_token stop)
+{
+    const auto validation = validateRequest(request);
+    if (!validation.isEmpty())
+        return failure("error", validation);
+    if (stop.stop_requested())
+        return failure("cancelled", "Request cancelled");
+    QLocalSocket socket;
+    socket.setReadBufferSize(wireLimit + QSocIpc::headerBytes);
+    socket.connectToServer(QSocLocalEndpoint::resolve(endpoint));
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (socket.state() == QLocalSocket::ConnectingState && !stop.stop_requested()
+           && elapsed.elapsed() < 2000)
+        socket.waitForConnected(20);
+    if (socket.state() != QLocalSocket::ConnectedState || !QSocLocalPeer::sameUser(socket))
+        return interruption(stop, elapsed, 2000);
+    const auto hello = receive(socket, 2000, stop, elapsed);
+    if (hello.value("daemon").toString() != "qsoc-agentd" || hello.value("protocol").toInt() != 1
+        || !hello.value("capabilities").toArray().contains("smt"))
+        return failure("error", "Incompatible SMT daemon");
+    socket.write(
+        QSocIpc::frame(
+            QJsonObject{{"id", 1}, {"method", "smt.solve"}, {"params", request}}, wireLimit));
+    const int  timeout = 130000 + request.value("timeout_ms").toInt(10000);
+    const auto message = receive(socket, timeout, stop, elapsed);
+    if (message.isEmpty())
+        return interruption(stop, elapsed, timeout);
+    return response(message);
 }

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "common/qsocipc.h"
+#include "common/qsoclocalendpoint.h"
+#include "common/qsocprocesslimits.h"
 #include "common/qsocsmtinput.h"
 #include "common/qsocsmtservice.h"
 #include "qsoc_test.h"
@@ -10,6 +13,8 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QTemporaryDir>
@@ -41,12 +46,7 @@ class Test final : public QObject
     Q_OBJECT
 
 private slots:
-    void initTestCase()
-    {
-        if (!QSocSmtService::supported()) {
-            QSKIP("Hard memory isolation is unavailable on this platform");
-        }
-    }
+    void initTestCase() { QVERIFY(QSocSmtService::supported()); }
 
     void lexicalRejections_data()
     {
@@ -304,7 +304,11 @@ private slots:
         QFETCH(QString, execution);
         QElapsedTimer elapsed;
         elapsed.start();
-        const auto result = probe(mode, mode == "probe-memory" ? 5000 : 100);
+        const auto result = probe(
+            mode,
+            mode == "probe-memory" ? 5000
+            : execution == "error" ? 2000
+                                   : 100);
         QCOMPARE(result.value("execution").toString(), execution);
         QVERIFY(elapsed.elapsed() < 6000);
         QVERIFY(result.value("solver_status").isNull());
@@ -377,6 +381,110 @@ private slots:
         }
         QVERIFY(busy);
         QCOMPARE(solve("(assert true)").value("solver_status").toString(), QStringLiteral("sat"));
+    }
+
+    void concurrentWorkerFailureIsContained()
+    {
+        std::stop_source stop;
+        auto             active = std::async(std::launch::async, [&] {
+            return probe("probe-stall", 10000, stop.get_token());
+        });
+        QTest::qWait(100);
+        QCOMPARE(probe("probe-crash", 2000).value("execution").toString(), QStringLiteral("error"));
+        QCOMPARE(solve("(assert true)").value("solver_status").toString(), QStringLiteral("sat"));
+        QVERIFY(active.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+        stop.request_stop();
+        QCOMPARE(active.get().value("execution").toString(), QStringLiteral("cancelled"));
+    }
+
+    void remoteProtocol_data()
+    {
+        QTest::addColumn<QString>("mode");
+        for (const auto *mode : {"success", "cancel", "version", "response"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void remoteProtocol()
+    {
+        QFETCH(QString, mode);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto endpoint = QSocLocalEndpoint::resolve(directory.filePath("remote.sock"));
+        QString    error;
+        QVERIFY(QSocLocalEndpoint::prepareDirectory(endpoint, &error));
+        QLocalServer server;
+        server.setSocketOptions(QLocalServer::UserAccessOption);
+        QVERIFY(server.listen(endpoint));
+        std::stop_source stop;
+        auto             pending = std::async(std::launch::async, [&] {
+            return QSocSmtService::solveRemote(request("(assert true)"), endpoint, stop.get_token());
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 2000);
+        std::unique_ptr<QLocalSocket> socket(server.nextPendingConnection());
+        const auto                    hello = QSocIpc::frame(
+            QJsonObject{
+                {"daemon", "qsoc-agentd"},
+                {"protocol", mode == "version" ? 2 : 1},
+                {"capabilities", QJsonArray{"smt"}}});
+        socket->write(hello.first(5));
+        socket->flush();
+        QTest::qWait(20);
+        socket->write(hello.mid(5));
+        socket->flush();
+        if (mode != "version") {
+            QByteArray  buffer;
+            QJsonObject message;
+            auto        decoded = QSocIpc::DecodeResult::Incomplete;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                ([&] {
+                    if (decoded == QSocIpc::DecodeResult::Incomplete) {
+                        buffer += socket->readAll();
+                        decoded = QSocIpc::decode(buffer, message, 2 * 1024 * 1024);
+                    }
+                    return decoded != QSocIpc::DecodeResult::Incomplete;
+                })(),
+                2000);
+            QCOMPARE(decoded, QSocIpc::DecodeResult::Complete);
+            QCOMPARE(message.value("method").toString(), QStringLiteral("smt.solve"));
+            QCOMPARE(message.value("params").toObject(), request("(assert true)"));
+            if (mode == "cancel") {
+                stop.request_stop();
+            } else {
+                auto result = QSocSmtService::failure("completed", {});
+                result.insert("solver_status", "sat");
+                result.insert("feasibility", "feasible");
+                result.insert("optimality", "not_applicable");
+                socket->write(
+                    QSocIpc::frame(
+                        QJsonObject{{"id", mode == "response" ? 2 : 1}, {"result", result}}));
+                socket->flush();
+            }
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(
+            pending.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 2000);
+        const auto result = pending.get();
+        QCOMPARE(
+            result.value("execution").toString(),
+            mode == "success"  ? QStringLiteral("completed")
+            : mode == "cancel" ? QStringLiteral("cancelled")
+                               : QStringLiteral("error"));
+        QTRY_COMPARE(socket->state(), QLocalSocket::UnconnectedState);
+    }
+
+    void stdinTransportRemainsCompatible()
+    {
+        QSocProcessLimits limits;
+        QProcess          process;
+        QVERIFY(limits.configure(process, QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL));
+        process.start(QStringLiteral(QSOC_SMT_WORKER_PATH), {});
+        QVERIFY(process.waitForStarted(2000));
+        process.write(QJsonDocument(request("(assert true)")).toJson(QJsonDocument::Compact));
+        process.closeWriteChannel();
+        QVERIFY(process.waitForFinished(5000));
+        QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(process.exitCode(), 0);
+        const auto result = QJsonDocument::fromJson(process.readAllStandardOutput()).object();
+        QCOMPARE(result.value("solver_status").toString(), QStringLiteral("sat"));
     }
 
     void hardMemoryLimitIsInstalled()

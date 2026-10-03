@@ -143,9 +143,18 @@ add_executable(qsoc_smt_worker_probe
     ../src/common/qsocsmtinput.cpp
     ../src/common/qsocsmtservice.cpp
     ../src/common/qsocsibling.cpp
+    ../src/common/qsoclocalendpoint.cpp
+    ../src/common/qsoclocalpeer.cpp
+    ../src/common/qsocprocessowner.cpp
+    ../src/common/qsocprocesslimits.cpp
+    ../src/common/qsocsmtworker.cpp
 )
 target_include_directories(qsoc_smt_worker_probe PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../src")
-target_link_libraries(qsoc_smt_worker_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core libz3)
+target_link_libraries(qsoc_smt_worker_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network libz3)
+if(WIN32)
+    target_link_libraries(qsoc_smt_worker_probe PRIVATE advapi32)
+    target_compile_definitions(qsoc_smt_worker_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(qsoc_smt_worker_probe PRIVATE -fexperimental-library)
 endif()

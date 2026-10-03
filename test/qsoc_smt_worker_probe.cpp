@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocsmtengine.h"
+#include "common/qsocsmtservice.h"
+#include "common/qsocsmtworker.h"
 
 #include <csignal>
 #include <cstdio>
@@ -11,18 +13,9 @@
 #include <vector>
 #include <QJsonDocument>
 
-int main()
+QJsonObject execute(const QJsonObject &request)
 {
-    if (!QSocSmtEngine::applyLimits()) {
-        return 13;
-    }
-    QByteArray input;
-    char       buffer[4096];
-    while (const auto count = std::fread(buffer, 1, sizeof(buffer), stdin)) {
-        input.append(buffer, static_cast<qsizetype>(count));
-    }
-    const auto request = QJsonDocument::fromJson(input).object();
-    const auto mode    = request.value("smtlib").toString();
+    const auto mode = request.value("smtlib").toString();
     if (mode.contains("probe-crash")) {
         std::abort();
     }
@@ -37,13 +30,12 @@ int main()
         }
     }
     if (mode.contains("probe-output")) {
-        const QByteArray output(1024 * 1024 + 1, 'x');
-        std::fwrite(output.constData(), 1, static_cast<size_t>(output.size()), stdout);
-        return 0;
+        auto result = QSocSmtService::failure("error", "Probe output");
+        result.insert("output", QString(QSocSmtService::outputLimit + 1, 'x'));
+        return result;
     }
     if (mode.contains("probe-partial")) {
-        std::fputs("{\"protocol\":1,\"solver_status\":\"sat\"", stdout);
-        return 0;
+        std::_Exit(0);
     }
     using Phase    = QSocSmtEngine::Phase;
     Phase selected = Phase::Solve;
@@ -63,7 +55,12 @@ int main()
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
     });
-    const auto output = QJsonDocument(result).toJson(QJsonDocument::Compact);
-    std::fwrite(output.constData(), 1, static_cast<size_t>(output.size()), stdout);
-    return 0;
+    return result;
+}
+
+int main(int argc, char **argv)
+{
+    if (!QSocSmtEngine::applyLimits())
+        return 13;
+    return QSocSmtWorker::run(argc, argv, execute);
 }
