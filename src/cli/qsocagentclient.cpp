@@ -400,7 +400,7 @@ bool QSocCliWorker::runAgentClientLoop(
         client.send({{"id", client.nextId()}, {"method", method}, {"params", values}});
     };
     std::unique_ptr<QSocketNotifier> interrupt;
-    if (QSocInterrupt::handlerReady()) {
+    if (QSocInterrupt::handlerReady() && QSocInterrupt::signalReadFd() >= 0) {
         interrupt
             = std::make_unique<QSocketNotifier>(QSocInterrupt::signalReadFd(), QSocketNotifier::Read);
         connect(interrupt.get(), &QSocketNotifier::activated, &client, [&] {

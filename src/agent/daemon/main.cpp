@@ -22,10 +22,14 @@
 #ifdef Q_OS_LINUX
 #include <sys/prctl.h>
 #endif
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 #include <csignal>
 #include <iostream>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QScopeGuard>
 #include <QTimer>
 
 namespace {
@@ -77,6 +81,17 @@ int main(int argc, char *argv[])
     if (parentOk && (::prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || ::getppid() != parentPid))
         return 1;
 #endif
+#ifdef Q_OS_WIN
+    /* Holding a handle keeps the owner's pid from being reused under us. */
+    HANDLE owner = parentOk ? ::OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(parentPid))
+                            : nullptr;
+    if (parentOk && owner == nullptr)
+        return 1;
+    const auto closeOwner = qScopeGuard([owner] {
+        if (owner != nullptr)
+            ::CloseHandle(owner);
+    });
+#endif
     if (!QSocInterrupt::installBridge())
         return 1;
     std::signal(SIGTERM, requestTermination);
@@ -103,6 +118,8 @@ int main(int argc, char *argv[])
         bool ownerGone = false;
 #ifdef Q_OS_UNIX
         ownerGone = parentOk && static_cast<qint64>(::getppid()) != parentPid;
+#elif defined(Q_OS_WIN)
+        ownerGone = owner != nullptr && ::WaitForSingleObject(owner, 0) == WAIT_OBJECT_0;
 #endif
         if (terminationRequested || ownerGone || QSocInterrupt::requested()) {
             daemon.shutdown();
