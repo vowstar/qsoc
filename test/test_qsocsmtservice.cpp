@@ -442,34 +442,89 @@ private slots:
 
     void queuedBytesAreBounded()
     {
-        std::stop_source stop;
-        auto input = request("; probe-solve\n" + QString(260000, '\n') + "(assert true)");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        std::stop_source                      stop;
         std::vector<std::future<QJsonObject>> calls;
+        const auto                            cleanup = qScopeGuard([&] { stop.request_stop(); });
+        QJsonArray                            results;
+        const auto                            collect = [&](bool wait) {
+            for (size_t index = 0; index < calls.size(); ++index) {
+                auto &call = calls[index];
+                if (call.valid()
+                    && (wait
+                        || call.wait_for(std::chrono::milliseconds(0))
+                               == std::future_status::ready)) {
+                    results.append(QJsonObject{{"call", int(index)}, {"result", call.get()}});
+                }
+            }
+        };
+        QStringList markers;
+        for (int index = 0; index < 2; ++index) {
+            const auto marker = directory.filePath(QString::number(index));
+            markers.append(marker);
+            calls.push_back(std::async(std::launch::async, [marker, &stop] {
+                return probe("probe-solve\n; probe-ready: " + marker, 20000, stop.get_token());
+            }));
+        }
+        QElapsedTimer elapsed;
+        elapsed.start();
+        while ((!QFile::exists(markers[0]) || !QFile::exists(markers[1]))
+               && elapsed.elapsed() < 5000) {
+            collect(false);
+            if (!results.isEmpty())
+                break;
+            QTest::qWait(10);
+        }
+        const bool started = QFile::exists(markers[0]) && QFile::exists(markers[1]);
+        if (!started) {
+            stop.request_stop();
+            collect(true);
+        }
+        QVERIFY2(started, QJsonDocument(results).toJson(QJsonDocument::Compact).constData());
+        QList<qint64> pids;
+        for (const auto &marker : markers) {
+            QFile file(marker);
+            QVERIFY(file.open(QIODevice::ReadOnly));
+            const auto pid = file.readAll().toLongLong();
+            QVERIFY(pid > 1);
+            QVERIFY(processIsRunning(pid));
+            pids.append(pid);
+        }
+        QVERIFY(pids[0] != pids[1]);
+        const auto input = request("; probe-solve\n" + QString(260000, '\n') + "(assert true)");
         for (int i = 0; i < 36; ++i) {
             calls.push_back(std::async(std::launch::async, [input, &stop] {
                 return QSocSmtService::solve(
                     input, stop.get_token(), QStringLiteral(QSOC_SMT_PROBE_PATH));
             }));
         }
-        bool          busy = false;
-        QElapsedTimer elapsed;
-        elapsed.start();
+        bool busy = false;
+        elapsed.restart();
         while (!busy && elapsed.elapsed() < 5000) {
-            for (auto &call : calls) {
-                if (call.valid()
-                    && call.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-                    busy = call.get().value("execution").toString() == "busy" || busy;
-                }
+            collect(false);
+            for (const auto &entry : results) {
+                busy = entry.toObject().value("result").toObject().value("execution") == "busy"
+                       || busy;
             }
             QTest::qWait(10);
         }
+        collect(false);
+        const bool workersHeld = calls[0].valid() && calls[1].valid();
         stop.request_stop();
-        for (auto &call : calls) {
-            if (call.valid()) {
-                call.get();
-            }
+        collect(true);
+        const auto details = QJsonDocument(results).toJson(QJsonDocument::Compact);
+        QVERIFY2(workersHeld, details.constData());
+        QVERIFY2(busy, details.constData());
+        for (const auto &entry : results) {
+            const auto completed = entry.toObject();
+            if (completed.value("call").toInt() < 2)
+                QVERIFY2(
+                    completed.value("result").toObject().value("execution") == "cancelled",
+                    details.constData());
         }
-        QVERIFY(busy);
+        for (const auto pid : pids)
+            QVERIFY(!processIsRunning(pid));
         QCOMPARE(solve("(assert true)").value("solver_status").toString(), QStringLiteral("sat"));
     }
 
