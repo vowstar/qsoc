@@ -202,8 +202,10 @@ private slots:
                     .toString(),
                 QStringLiteral("unsat"));
         }
-        const auto mixed = solve(background + "(minimize x)(maximize y)(maximize 7)", true);
-        QCOMPARE(mixed.value("optimality").toString(), QStringLiteral("optimal"));
+        const auto mixed   = solve(background + "(minimize x)(maximize y)(maximize 7)", true);
+        const auto details = QJsonDocument(mixed).toJson(QJsonDocument::Compact);
+        QVERIFY2(mixed.value("execution").toString() == "completed", details.constData());
+        QVERIFY2(mixed.value("optimality").toString() == "optimal", details.constData());
         const auto values = mixed.value("objectives").toArray();
         QCOMPARE(values[0].toObject().value("model_value").toString(), QStringLiteral("0"));
         QCOMPARE(values[1].toObject().value("model_value").toString(), QStringLiteral("10"));
