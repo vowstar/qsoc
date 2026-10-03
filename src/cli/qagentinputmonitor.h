@@ -40,7 +40,7 @@ public:
      * @brief Start monitoring stdin for ESC key and user input
      * @details Saves terminal settings, enters raw mode, creates QSocketNotifier
      */
-    void start();
+    void start(bool monitorInterrupt = true);
 
     /**
      * @brief Stop monitoring and restore terminal settings
@@ -87,7 +87,7 @@ signals:
      *        detects the keystroke timing.
      */
     void escEscPressed();
-    void ctrlCPressed();
+    void ctrlCPressed(bool hadInput);
     void inputReady(const QString &text);
     void inputChanged(const QString &text);
 
@@ -368,7 +368,7 @@ private:
      *          edge (POSIX with the bridge on). One press behaves identically
      *          on every path, including double-press detection downstream.
      */
-    void emitCtrlC();
+    void emitCtrlC(bool acknowledgeSignal = true);
 };
 
 #endif // QAGENTINPUTMONITOR_H

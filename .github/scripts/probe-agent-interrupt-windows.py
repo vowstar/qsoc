@@ -166,48 +166,76 @@ def main(program):
                     with console_file("CONIN$") as input_file, \
                             console_file("CONOUT$") as output_file, \
                             (working / "cli.stderr").open("wb") as error_file:
-                        process = subprocess.Popen([str(executable), "agent"], cwd=working,
-                            env=environment, stdin=input_file, stdout=output_file, stderr=error_file)
-                        # Set the controller's ignore flag only after the CLI inherits normal delivery.
-                        require(control(None, True), "Protect the controller from its broadcast")
-                        wait_for(lambda: "Ready" in screen(), process, "the interactive prompt")
-                        logs = list(working.glob("*/daemon.log"))
-                        if len(logs) != 1:
-                            raise RuntimeError("Expected exactly one owned daemon directory")
-                        endpoint = (logs[0].parent / "agent.sock").as_posix()
-                        with protocol["connect"](endpoint) as stream:
-                            greeting = protocol["receive"](stream)
-                            if greeting.get("daemon") != "qsoc-agentd":
-                                raise RuntimeError("The owned endpoint returned an invalid greeting")
-                            type_text(input_file, "Wait for the interrupt probe.\r")
+                        for mode in ("broadcast", "keyboard", "query"):
+                            started = threading.Event()
+                            release = threading.Event()
+                            require(control(None, False), "Enable Ctrl-C before starting the CLI")
+                            arguments = [str(executable), "agent"]
+                            if mode == "query":
+                                arguments += ["-q", "Wait for the interrupt probe."]
+                            process = subprocess.Popen(arguments, cwd=working, env=environment,
+                                stdin=subprocess.DEVNULL if mode == "query" else input_file,
+                                stdout=subprocess.PIPE if mode == "query" else output_file,
+                                stderr=error_file)
+                            # The CLI must inherit normal signal delivery before the controller ignores it.
+                            require(control(None, True), "Protect the controller from its broadcast")
+                            if mode != "query":
+                                wait_for(lambda: "Ready" in screen(), process, "the interactive prompt")
+                                draft = "draft-" + mode + "-" + mock.call_id[:12]
+                                type_text(input_file, draft)
+                                wait_for(lambda: draft in screen(), process, "the rendered idle draft")
+                                type_text(input_file, "\x03")
+                                def draft_cleared():
+                                    text = screen()
+                                    return draft not in text and "Ready" in text
+                                wait_for(draft_cleared, process, "the cleared idle draft")
+                                time.sleep(2.1)
+                                wait_for(draft_cleared, process, "the live session after clearing its draft")
+                                if started.is_set():
+                                    raise RuntimeError("Clearing the idle draft unexpectedly started a turn")
+                                type_text(input_file, "Wait for the interrupt probe.\r")
                             wait_for(started.is_set, process, "the active LLM request")
-                            def busy():
-                                text = screen()
-                                return "Reasoning" in text and "Ready" not in text
-                            wait_for(busy, process, "the busy prompt without stale Ready text")
-                            require(broadcast(0, 0), "Broadcast Ctrl-C to the console")
-                            time.sleep(0.3)
-                            protocol["send"](stream, {"id": 1, "method": "smt.solve", "params": {
-                                "smtlib": "(declare-const value Int)(assert (= value 7))",
-                                "timeout_ms": 5000}})
-                            result = protocol["replies"](stream, {1})[1]
-                            if result.get("execution") != "completed" or result.get("solver_status") != "sat":
-                                raise RuntimeError(f"The daemon failed after the console broadcast: {result}")
-                            before_cancel = screen()
-                            if ("Reasoning" not in before_cancel or "Ready" in before_cancel
-                                    or "(interrupted)" in before_cancel):
-                                raise RuntimeError("The active turn ended before keyboard cancellation")
-                            type_text(input_file, "\x03")
-                            def cancelled():
-                                text = screen()
-                                return "Ready" in text and "(interrupted)" in text
-                            wait_for(cancelled, process, "a fresh cancellation notice and Ready prompt")
+                            if mode != "query":
+                                def busy():
+                                    text = screen()
+                                    return "Reasoning" in text and "Ready" not in text
+                                wait_for(busy, process, "the busy prompt without stale Ready text")
+                                if "(interrupted)" in screen():
+                                    raise RuntimeError("A stale cancellation notice remains before the test")
+                            logs = list(working.glob("*/daemon.log"))
+                            if len(logs) != 1:
+                                raise RuntimeError("Expected exactly one owned daemon directory")
+                            endpoint = (logs[0].parent / "agent.sock").as_posix()
+                            with protocol["connect"](endpoint) as stream:
+                                if protocol["receive"](stream).get("daemon") != "qsoc-agentd":
+                                    raise RuntimeError("The owned endpoint returned an invalid greeting")
+                                if mode == "keyboard":
+                                    type_text(input_file, "\x03")
+                                else:
+                                    require(broadcast(0, 0), "Broadcast Ctrl-C to the console")
+                                if mode == "query":
+                                    output, _ = process.communicate(timeout=10)
+                                    if process.returncode != 0 or b"(interrupted)" not in output:
+                                        raise RuntimeError(f"The redirected query did not cancel: {output!r}")
+                                else:
+                                    def cancelled():
+                                        text = screen()
+                                        return "Ready" in text and "(interrupted)" in text
+                                    wait_for(cancelled, process, "a fresh cancellation notice and Ready prompt")
+                                    protocol["send"](stream, {"id": 1, "method": "smt.solve", "params": {
+                                        "smtlib": "(declare-const value Int)(assert (= value 7))",
+                                        "timeout_ms": 5000}})
+                                    result = protocol["replies"](stream, {1})[1]
+                                    if result.get("execution") != "completed" or result.get("solver_status") != "sat":
+                                        raise RuntimeError(f"The daemon failed after {mode} cancellation: {result}")
                             release.set()
-                            type_text(input_file, "/exit\r")
-                            if process.wait(timeout=10) != 0:
-                                raise RuntimeError("The CLI did not exit cleanly after cancellation")
-                        if mock.errors:
-                            raise RuntimeError(f"The mock LLM failed: {mock.errors}")
+                            if mode != "query":
+                                type_text(input_file, "/exit\r")
+                                if process.wait(timeout=10) != 0:
+                                    raise RuntimeError("The CLI did not exit cleanly after cancellation")
+                            if mock.errors:
+                                raise RuntimeError(f"The mock LLM failed: {mock.errors}")
+                            print(f"Console interrupt case passed: {mode}", flush=True)
                         require(control(None, False), "Enable Ctrl-C before the standalone daemon")
                         endpoint = "qsoc-console-" + mock.call_id
                         process = subprocess.Popen(
@@ -230,11 +258,13 @@ def main(program):
                     if process is not None and process.poll() is None:
                         process.kill()
                         process.wait(timeout=10)
+                    if process is not None and process.stdout is not None:
+                        process.stdout.close()
                     mock.shutdown()
                     server_thread.join()
     finally:
         detach()
-    print("Console Ctrl-C broadcast preserves the owned daemon; keyboard cancellation passed",
+    print("Console broadcasts, keyboard cancellation and redirected query interruption passed",
           flush=True)
 
 

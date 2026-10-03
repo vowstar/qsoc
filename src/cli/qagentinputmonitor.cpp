@@ -314,17 +314,17 @@ void QAgentInputMonitor::resetEscBuffer()
     inEscSeq = false;
 }
 
-void QAgentInputMonitor::emitCtrlC()
+void QAgentInputMonitor::emitCtrlC(bool acknowledgeSignal)
 {
-#ifdef Q_OS_WIN
-    QSocInterrupt::acknowledge();
-#endif
+    const bool hadInput = !inputBuffer.isEmpty();
+    if (acknowledgeSignal)
+        QSocInterrupt::acknowledge();
     inputBuffer.clear();
     cursorPos = 0;
     utf8Pending.clear();
     clearUndoStack();
     emit inputChanged(inputBuffer);
-    emit ctrlCPressed();
+    emit ctrlCPressed(hadInput);
 }
 
 void QAgentInputMonitor::processEscSequence()
@@ -923,7 +923,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
     }
 }
 
-void QAgentInputMonitor::start()
+void QAgentInputMonitor::start(bool monitorInterrupt)
 {
     if (active) {
         return;
@@ -958,7 +958,12 @@ void QAgentInputMonitor::start()
     /* Poll console input with a 20ms timer */
     pollTimer = new QTimer(this);
     pollTimer->setInterval(20);
-    connect(pollTimer, &QTimer::timeout, this, [this]() {
+    connect(pollTimer, &QTimer::timeout, this, [this, monitorInterrupt]() {
+        if (monitorInterrupt) {
+            const int edges = QSocInterrupt::drainSignalPipe();
+            for (int i = 0; i < edges; ++i)
+                emitCtrlC(false);
+        }
         DWORD numEvents = 0;
         if (!GetNumberOfConsoleInputEvents(origStdinHandle, &numEvents) || numEvents == 0) {
             return;
@@ -1042,14 +1047,14 @@ void QAgentInputMonitor::start()
         }
     });
 
-    if (sigBridge) {
+    if (sigBridge && monitorInterrupt) {
         sigintNotifier
             = new QSocketNotifier(QSocInterrupt::signalReadFd(), QSocketNotifier::Read, this);
         connect(sigintNotifier, &QSocketNotifier::activated, this, [this]() {
             /* One byte per press preserves rapid double-press detection. */
             const int edges = QSocInterrupt::drainSignalPipe();
             for (int i = 0; i < edges; ++i) {
-                emitCtrlC();
+                emitCtrlC(false);
             }
         });
     }

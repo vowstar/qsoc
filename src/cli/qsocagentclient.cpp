@@ -275,24 +275,29 @@ bool QSocCliWorker::runAgentClientLoop(
     const auto send = [&](const QString &method, const QJsonObject &values = QJsonObject()) {
         client.send({{"id", client.nextId()}, {"method", method}, {"params", values}});
     };
+    const auto consumeQueryInterrupt = [&] {
+        const int edges = QSocInterrupt::drainSignalPipe();
+        for (int i = 0; i < edges; ++i) {
+            send("abort");
+            if (lastInterrupt.isValid() && lastInterrupt.elapsed() < 2000)
+                client.disconnectFromDaemon();
+            lastInterrupt.start();
+        }
+    };
+#ifdef Q_OS_WIN
+    QTimer interruptTimer;
+    if (singleQuery && QSocInterrupt::handlerReady()) {
+        connect(&interruptTimer, &QTimer::timeout, &client, consumeQueryInterrupt);
+        interruptTimer.start(20);
+    }
+#else
     std::unique_ptr<QSocketNotifier> interrupt;
-    if (QSocInterrupt::handlerReady() && QSocInterrupt::signalReadFd() >= 0) {
+    if (singleQuery && QSocInterrupt::handlerReady() && QSocInterrupt::signalReadFd() >= 0) {
         interrupt
             = std::make_unique<QSocketNotifier>(QSocInterrupt::signalReadFd(), QSocketNotifier::Read);
-        connect(interrupt.get(), &QSocketNotifier::activated, &client, [&] {
-            const int edges = QSocInterrupt::drainSignalPipe();
-            if (edges <= 0)
-                return;
-            if (!singleQuery && inputMonitor.isActive()) {
-                emit inputMonitor.ctrlCPressed();
-            } else {
-                send("abort");
-                if (lastInterrupt.isValid() && lastInterrupt.elapsed() < 2000)
-                    client.disconnectFromDaemon();
-                lastInterrupt.start();
-            }
-        });
+        connect(interrupt.get(), &QSocketNotifier::activated, &client, consumeQueryInterrupt);
     }
+#endif
     connect(&client, &QSocAgentDaemonClient::disconnected, &mainLoop, [&] {
         daemonLost = !closing;
         mainLoop.quit();
@@ -413,7 +418,7 @@ bool QSocCliWorker::runAgentClientLoop(
         }
         send("answer", answer);
         inputMonitor.resetEscState();
-        inputMonitor.start();
+        inputMonitor.start(!singleQuery);
         compositor.invalidate();
         compositor.render();
     };
@@ -691,7 +696,7 @@ bool QSocCliWorker::runAgentClientLoop(
             send("turn", {{"input", text}});
         });
         if (termCap.useEnhancedMode())
-            inputMonitor.start();
+            inputMonitor.start(!singleQuery);
         const auto reply  = client.request("turn", {{"input", parser.value("query")}}, 0);
         const auto result = reply.value("result").toObject();
         if (reply.contains("error") || result.value("error").toBool())
@@ -877,7 +882,7 @@ bool QSocCliWorker::runAgentClientLoop(
         if (!running && inputMonitor.getInputBuffer().isEmpty())
             send("command", {{"input", "/rewind"}});
     });
-    connect(&inputMonitor, &QAgentInputMonitor::ctrlCPressed, &inputMonitor, [&] {
+    connect(&inputMonitor, &QAgentInputMonitor::ctrlCPressed, &inputMonitor, [&](bool hadInput) {
         if (lastInterrupt.isValid() && lastInterrupt.elapsed() < 2000) {
             closing = true;
             mainLoop.quit();
@@ -886,9 +891,7 @@ bool QSocCliWorker::runAgentClientLoop(
         lastInterrupt.start();
         if (running)
             send("abort");
-        else if (!inputMonitor.getInputBuffer().isEmpty())
-            inputMonitor.setInputBuffer({});
-        else {
+        else if (!hadInput) {
             closing = true;
             mainLoop.quit();
         }
@@ -937,7 +940,7 @@ bool QSocCliWorker::runAgentClientLoop(
         const bool ok = QSocExternalEditor::editText(
             inputHistory.expand(inputMonitor.getInputBuffer()), result, error);
         compositor.resume();
-        inputMonitor.start();
+        inputMonitor.start(!singleQuery);
         if (ok)
             inputMonitor.setInputBuffer(result);
         else
@@ -1031,7 +1034,7 @@ bool QSocCliWorker::runAgentClientLoop(
         if (!ghost.isEmpty())
             inputMonitor.insertText(ghost);
     });
-    inputMonitor.start();
+    inputMonitor.start(!singleQuery);
     if (!inputMonitor.isActive())
         return fail("Terminal input setup failed.");
     compositor.render();

@@ -80,7 +80,7 @@ def main(program):
                 "url": f"http://127.0.0.1:{mock.server_port}/v1/chat/completions"}}},
                 "proxy": {"type": "none"}}
             (working / ".qsoc.yml").write_text(json.dumps(configuration), encoding="utf-8")
-        for mode in ("owned", "parent_exit", "standalone"):
+        for mode in ("owned", "empty", "parent_exit", "standalone"):
             owned = mode != "standalone"
             endpoint = working / "standalone.sock"
             arguments = ([str(executable), "agent"] if owned else
@@ -110,36 +110,57 @@ def main(program):
                     daemon_group = os.getpgid(daemon_pid)
                     if foreground != pid or not termios.tcgetattr(master)[3] & termios.ISIG:
                         raise RuntimeError("The probe requires foreground terminal signal delivery")
-                    if owned:
-                        os.write(master, b"pending draft")
-                        deadline = time.monotonic() + 0.3
+                    if owned and daemon_group == foreground:
+                        raise RuntimeError("The owned daemon remained in the terminal process group")
+                    if owned and termios.tcgetattr(master)[3] & termios.ECHO:
+                        raise RuntimeError("The input probe requires terminal echo to be disabled")
+                    if owned and mode != "empty":
+                        draft = b"pending draft"
+                        before = len(output)
+                        os.write(master, draft)
+                        deadline = time.monotonic() + 5
                         while time.monotonic() < deadline:
                             pump(master, output)
+                            if b"> " + draft in output[before:]:
+                                break
+                        else:
+                            raise RuntimeError("The TUI did not render the pending draft")
+                    before_interrupt = len(output)
                     os.write(master, b"\x03")
                     deadline = time.monotonic() + 0.3
                     while time.monotonic() < deadline:
                         pump(master, output)
-                    if owned:
+                    if owned and mode != "empty":
+                        deadline = time.monotonic() + 5
+                        while time.monotonic() < deadline:
+                            pump(master, output)
+                            if b"Type a prompt" in output[before_interrupt:]:
+                                break
+                        else:
+                            raise RuntimeError("Ctrl-C did not clear the draft while keeping the TUI open")
                         send_frame(connection, {"id": 1, "method": "smt.solve", "params": {
                             "smtlib": "(declare-const value Int)(assert (= value 7))",
                             "timeout_ms": 5000}})
                         result = read_frame(connection).get("result", {})
                         if result.get("execution") != "completed" or result.get("solver_status") != "sat":
                             raise RuntimeError(f"The daemon did not survive terminal Ctrl-C: {result}")
-                        if daemon_group == foreground:
-                            raise RuntimeError("The owned daemon remained in the terminal process group")
                         if mode == "parent_exit":
                             os.kill(pid, signal.SIGKILL)
                             if connection.recv(1):
                                 raise RuntimeError("The daemon remained after its owning CLI exited")
                         else:
                             os.write(master, b"/exit\r")
+                    elif owned and connection.recv(1):
+                        raise RuntimeError("The daemon remained after an empty-input Ctrl-C exit")
                 status = wait_exit(pid, master, output)
                 reaped = True
                 expected = -signal.SIGKILL if mode == "parent_exit" else 0
                 if status != expected:
                     raise RuntimeError(f"Terminal process exited with status {status}")
             except Exception:
+                print(f"Interrupt probe mode: {mode}, CLI PID: {pid}", file=sys.stderr)
+                for log in working.glob("*/daemon.log"):
+                    print(log.read_text(errors="replace"), file=sys.stderr)
                 print(output.decode(errors="replace"), file=sys.stderr)
                 raise
             finally:

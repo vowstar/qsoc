@@ -17,25 +17,11 @@
 
 using json = nlohmann::json;
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     /* Terminal focus reporting (DECSET 1004): ESC[O = blur, ESC[I = focus.
      * Default state is focused, so only changes emit. No model needed. */
     void terminalFocusEvents()
@@ -497,6 +483,20 @@ private slots:
         monitor.processBytes(&ctrlC, 1);
         QCOMPARE(ctrlCCount, 1);
         QCOMPARE(changeCount, 1); /* inputChanged emitted to clear buffer */
+    }
+
+    void ctrlCPreservesWhetherTheDraftWasEmpty()
+    {
+        QAgentInputMonitor monitor;
+        QSignalSpy         pressed(&monitor, &QAgentInputMonitor::ctrlCPressed);
+        monitor.processBytes("draft", 5);
+        monitor.processBytes("\x03", 1);
+        QCOMPARE(pressed.size(), 1);
+        QCOMPARE(pressed.at(0).at(0).toBool(), true);
+        QVERIFY(monitor.getInputBuffer().isEmpty());
+        monitor.processBytes("\x03", 1);
+        QCOMPARE(pressed.size(), 2);
+        QCOMPARE(pressed.at(1).at(0).toBool(), false);
     }
 
     /* Cursor position + line editing tests */
