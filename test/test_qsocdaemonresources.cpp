@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/daemon/qsocdaemonresources.h"
+#include "qsoc_resource_process_test.h"
 #include "qsoc_test.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -94,8 +96,22 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!processExists(pid), 3000);
         QVERIFY(QFile::remove(marker));
         QJsonObject recovered;
-        resources.request(this, {}, [&recovered](const QJsonObject &reply) { recovered = reply; });
-        QTRY_VERIFY_WITH_TIMEOUT(readPid(marker) > 0, 2000);
+        bool        accepted   = false;
+        const auto  tryRecover = [&] {
+            if (accepted)
+                return true;
+            recovered = {};
+            resources.request(this, {}, [&recovered](const QJsonObject &reply) {
+                recovered = reply;
+            });
+            accepted = recovered.value("status").toString() != "busy";
+            return accepted;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(tryRecover(), 2000);
+        QVERIFY2(recovered.isEmpty(), QJsonDocument(recovered).toJson().constData());
+        QTRY_VERIFY_WITH_TIMEOUT(readPid(marker) > 0 || !recovered.isEmpty(), 2000);
+        QVERIFY2(recovered.isEmpty(), QJsonDocument(recovered).toJson().constData());
+        QVERIFY(readPid(marker) > 0);
         const auto nextPid = readPid(marker);
         QVERIFY(nextPid != pid);
         QVERIFY(recovered.isEmpty());
@@ -135,12 +151,13 @@ private slots:
             QDateTime::fromString(result.value("sampled_at_utc").toString(), Qt::ISODateWithMs)
                 .isValid());
         QVERIFY(result.value("collection_duration_ms").toInteger(-1) >= 0);
-        const auto processes = result.value("processes").toArray();
-        QVERIFY(!processes.isEmpty());
-        QCOMPARE(
-            processes.first().toObject().value("pid").toInteger(),
-            QCoreApplication::applicationPid());
-        QCOMPARE(processes.size(), 1);
+        const auto processes    = result.value("processes").toArray();
+        const auto processError = QSocTest::resourceProcessError(
+            processes,
+            QCoreApplication::applicationPid(),
+            QCoreApplication::applicationFilePath(),
+            QStringLiteral(QSOC_AGENTD_PATH));
+        QVERIFY2(processError.isEmpty(), qPrintable(processError));
         QVERIFY(result.value("storage").toArray().isEmpty());
     }
 
