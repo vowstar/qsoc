@@ -27,6 +27,11 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#ifdef Q_OS_LINUX
+#include <pwd.h>
+#include <unistd.h>
+#endif
+
 using json = nlohmann::json;
 
 namespace {
@@ -148,6 +153,77 @@ private slots:
         m_daemonPath = QStringLiteral(QSOC_AGENTD_PATH);
         QVERIFY2(QFile::exists(m_daemonPath), "qsoc-agentd was not built");
     }
+
+#ifdef Q_OS_LINUX
+    void defaultEndpointUsesPrivateRuntime_data()
+    {
+        QTest::addColumn<QString>("runtimeState");
+        QTest::addColumn<bool>("explicitEndpoint");
+        QTest::newRow("valid-runtime") << QStringLiteral("valid") << false;
+        QTest::newRow("missing-runtime") << QStringLiteral("missing") << false;
+        QTest::newRow("invalid-runtime-and-fallback") << QStringLiteral("invalid") << false;
+        QTest::newRow("explicit-endpoint") << QStringLiteral("invalid") << true;
+    }
+
+    void defaultEndpointUsesPrivateRuntime()
+    {
+        QFETCH(QString, runtimeState);
+        QFETCH(bool, explicitEndpoint);
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const auto *user = ::getpwuid(::geteuid());
+        QVERIFY(user != nullptr);
+        const QString qtFallback = fixture.filePath(
+            QStringLiteral("runtime-") + QString::fromLocal8Bit(user->pw_name));
+        QProcessEnvironment env = isolatedEnvironment(fixture.path());
+        env.insert(QStringLiteral("TMPDIR"), fixture.path());
+        QString socketPath = fixture.filePath(QStringLiteral("qsoc/agentd.sock"));
+        if (runtimeState == QStringLiteral("missing")) {
+            env.remove(QStringLiteral("XDG_RUNTIME_DIR"));
+            env.remove(QStringLiteral("QT_FATAL_WARNINGS"));
+            socketPath = QDir(qtFallback).filePath(QStringLiteral("qsoc/agentd.sock"));
+        } else if (runtimeState == QStringLiteral("invalid")) {
+            QFile invalidRuntime(fixture.filePath(QStringLiteral("invalid-runtime")));
+            QFile invalidFallback(qtFallback);
+            QVERIFY(invalidRuntime.open(QIODevice::WriteOnly));
+            QVERIFY(invalidFallback.open(QIODevice::WriteOnly));
+            env.insert(QStringLiteral("XDG_RUNTIME_DIR"), invalidRuntime.fileName());
+            env.remove(QStringLiteral("QT_FATAL_WARNINGS"));
+            socketPath = fixture.filePath(
+                QStringLiteral("qsoc-%1/agentd.sock").arg(static_cast<qulonglong>(::geteuid())));
+        }
+        QStringList arguments;
+        if (explicitEndpoint) {
+            socketPath = fixture.filePath(QStringLiteral("explicit.sock"));
+            arguments << QStringLiteral("--socket") << socketPath;
+        }
+        QProcess daemon;
+        daemon.setProcessEnvironment(env);
+        daemon.setWorkingDirectory(fixture.path());
+        daemon.start(m_daemonPath, arguments);
+        QVERIFY(daemon.waitForStarted(5000));
+        QVERIFY2(waitForSocket(socketPath, 5000), daemon.readAllStandardError().constData());
+        DaemonClient client(socketPath);
+        QVERIFY(client.connected());
+        QCOMPARE(client.receive().value("protocol").toInt(), 1);
+        client.send({{"id", 1}, {"method", "shutdown"}});
+        QVERIFY(client.waitForReply(1).value("result").toObject().value("bye").toBool());
+        QVERIFY(daemon.waitForFinished(5000));
+        QCOMPARE(daemon.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(daemon.exitCode(), 0);
+        QVERIFY(daemon.readAllStandardOutput().contains(
+            QSocLocalEndpoint::resolve(socketPath).toLocal8Bit()));
+        const QByteArray errors = daemon.readAllStandardError();
+        if (runtimeState == QStringLiteral("valid") || explicitEndpoint) {
+            QVERIFY2(errors.isEmpty(), errors.constData());
+        } else {
+            QVERIFY(errors.contains("QStandardPaths:"));
+            for (const QByteArray &line : errors.split('\n')) {
+                QVERIFY2(line.isEmpty() || line.startsWith("QStandardPaths:"), errors.constData());
+            }
+        }
+    }
+#endif
 
     void greetingCarriesDaemonIdentity()
     {

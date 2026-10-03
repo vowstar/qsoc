@@ -37,6 +37,10 @@
 #include <utility>
 #include <QTimer>
 
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
+
 using json = nlohmann::json;
 
 namespace {
@@ -1100,9 +1104,16 @@ QSocAgentDaemon::~QSocAgentDaemon()
 
 QString QSocAgentDaemon::defaultSocketPath()
 {
-    const QString runtimeDir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    const QString base       = runtimeDir.isEmpty() ? QDir::tempPath() : runtimeDir;
-    return QSocLocalEndpoint::resolve(QDir(base).filePath(QStringLiteral("qsoc/agentd.sock")));
+    QString base      = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    QString directory = QStringLiteral("qsoc");
+    if (base.isEmpty()) {
+        base = QDir::tempPath();
+#ifdef Q_OS_UNIX
+        directory += QStringLiteral("-%1").arg(static_cast<qulonglong>(::geteuid()));
+#endif
+    }
+    return QSocLocalEndpoint::resolve(
+        QDir(base).filePath(directory + QStringLiteral("/agentd.sock")));
 }
 
 bool QSocAgentDaemon::start()
