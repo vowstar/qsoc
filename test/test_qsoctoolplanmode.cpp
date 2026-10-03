@@ -120,15 +120,22 @@ void Test::effectiveDefsFollowPlanMode()
     const QSet<QString> offPlan = definitionNames(agent.getEffectiveToolDefinitions());
     QVERIFY(offPlan.contains(wr));
     QVERIFY(offPlan.contains(QStringLiteral("enter_plan_mode")));
-    QVERIFY(!offPlan.contains(QStringLiteral("exit_plan_mode")));
+    QVERIFY(offPlan.contains(QStringLiteral("exit_plan_mode")));
 
+    /* The main agent keeps one tool list; dispatch enforces plan mode. */
     QSocAgentConfig cfg;
     cfg.planMode = true;
     agent.setConfig(cfg);
-    const QSet<QString> inPlan = definitionNames(agent.getEffectiveToolDefinitions());
-    QVERIFY(!inPlan.contains(wr));
-    QVERIFY(!inPlan.contains(QStringLiteral("enter_plan_mode")));
-    QVERIFY(inPlan.contains(QStringLiteral("exit_plan_mode")));
+    QCOMPARE(definitionNames(agent.getEffectiveToolDefinitions()), offPlan);
+    QVERIFY(!agent.isToolAllowed(wr));
+
+    /* A sub-agent's plan mode is fixed, so its list still drops writes. */
+    cfg.isSubAgent = true;
+    agent.setConfig(cfg);
+    const QSet<QString> child = definitionNames(agent.getEffectiveToolDefinitions());
+    QVERIFY(!child.contains(wr));
+    QVERIFY(!child.contains(QStringLiteral("enter_plan_mode")));
+    QVERIFY(!child.contains(QStringLiteral("exit_plan_mode")));
 }
 
 void Test::approvedPlanRoundTrips()

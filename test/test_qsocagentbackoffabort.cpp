@@ -3574,6 +3574,8 @@ private slots:
         newRegistry.registerTool(&newTool);
         QSocAgentConfig config = testConfig();
         config.planMode        = true;
+        /* A sub-agent's offer follows plan mode, which tells the registries apart. */
+        config.isSubAgent = true;
         QSocAgent  agent(nullptr, &service, &oldRegistry, config);
         QSignalSpy aborted(&agent, &QSocAgent::runAborted);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);

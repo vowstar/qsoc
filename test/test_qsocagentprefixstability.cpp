@@ -260,15 +260,6 @@ const QHash<QString, QString> &knownBreaks()
     return breaks;
 }
 
-const QHash<QString, QString> &knownToolBreaks()
-{
-    static const QHash<QString, QString> breaks = {
-        {QStringLiteral("plan mode on"), QStringLiteral("plan mode filters the tools")},
-        {QStringLiteral("plan approved"), QStringLiteral("plan mode filters the tools")},
-    };
-    return breaks;
-}
-
 } // namespace
 
 class Test : public QObject
@@ -541,10 +532,6 @@ private slots:
     void toolsStayFixed()
     {
         QFETCH(QString, step);
-        const QString name = step.section(QLatin1Char('/'), 1);
-        if (knownToolBreaks().contains(name)) {
-            QEXPECT_FAIL("", qPrintable(knownToolBreaks().value(name)), Continue);
-        }
         QVERIFY(results_.value(step).toolsHeld);
     }
 };

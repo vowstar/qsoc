@@ -351,7 +351,9 @@ Plan mode is a read-only brake for non-trivial or hard-to-undo work
 the agent may only take read-only actions: read files, search, query
 LSP, run read-only shell, and spawn read-only sub-agents. File writes,
 mutating shell, commits, and config changes are rejected, and the status
-line shows a `⏸ PLAN` chip.
+line shows a `⏸ PLAN` chip. The main agent's tool list stays the same in
+and out of plan mode; a call to a write tool returns an error until a plan
+is approved.
 
 Plan-mode sub-agents return findings, supporting evidence, unresolved
 ambiguities, and a proposed plan to the parent agent.

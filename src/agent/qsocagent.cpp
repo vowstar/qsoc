@@ -55,7 +55,8 @@ void addTokenCount(std::atomic<qint64> &counter, qint64 increment)
 const char *const kPlanModeReminder
     = "Plan mode is active. You MUST NOT modify anything: no file edits, "
       "no shell writes, no commits, no config changes. This supersedes "
-      "other instructions. Work the loop: (1) explore read-only (read "
+      "other instructions. Write tools stay listed but are rejected until "
+      "the user approves a plan. Work the loop: (1) explore read-only (read "
       "files, search, run read-only shell, spawn read-only sub-agents); "
       "(2) when the approach is ambiguous or needs a non-trivial choice, "
       "call ask_user to clarify with the user, repeating as many rounds "
@@ -484,7 +485,7 @@ QString QSocAgent::toolDenyReason(const QString &name) const
 }
 
 QString QSocAgent::toolDenyReasonForRegistry(
-    const QString &name, const QSocToolRegistry *registry) const
+    const QString &name, const QSocToolRegistry *registry, bool modeGates) const
 {
     /* Sub-agents must never spawn further sub-agents: closes the
      * recursion door regardless of allowlist. */
@@ -512,10 +513,10 @@ QString QSocAgent::toolDenyReasonForRegistry(
     }
     /* exit_plan_mode is only meaningful inside plan mode; enter_plan_mode
      * only outside it. Keep each off the menu when irrelevant. */
-    if (name == QStringLiteral("exit_plan_mode") && !agentConfig.planMode) {
+    if (modeGates && name == QStringLiteral("exit_plan_mode") && !agentConfig.planMode) {
         return QStringLiteral("plan mode is not active");
     }
-    if (name == QStringLiteral("enter_plan_mode") && agentConfig.planMode) {
+    if (modeGates && name == QStringLiteral("enter_plan_mode") && agentConfig.planMode) {
         return QStringLiteral("plan mode is already active");
     }
     /* Allowlist gate: empty list inherits everything. */
@@ -533,7 +534,7 @@ QString QSocAgent::toolDenyReasonForRegistry(
      * tool passes (children inherit planMode and are read-only too); the
      * plan tools and every other read-only tool pass via isReadOnly().
      * Everything that can mutate is rejected. */
-    if (agentConfig.planMode) {
+    if (modeGates && agentConfig.planMode) {
         const bool shellJudged
             = (name == QStringLiteral("bash") || name == QStringLiteral("remote_shell_bash"));
         const bool      child   = agentConfig.isSubAgent;
@@ -549,6 +550,11 @@ QString QSocAgent::toolDenyReasonForRegistry(
         }
     }
     return {};
+}
+
+bool QSocAgent::isToolPresented(const QString &name, const QSocToolRegistry *registry) const
+{
+    return toolDenyReasonForRegistry(name, registry, agentConfig.isSubAgent).isEmpty();
 }
 
 bool QSocAgent::isToolAllowed(const QString &name) const
@@ -626,11 +632,11 @@ nlohmann::json QSocAgent::filterAllowedTools(
             filtered.push_back(def);
             continue;
         }
-        const QString name   = QString::fromStdString(def["function"]["name"].get<std::string>());
-        const QString reason = toolDenyReasonForRegistry(name, registry);
+        const QString name = QString::fromStdString(def["function"]["name"].get<std::string>());
+        const bool    presented = isToolPresented(name, registry);
         if (!owner || (registry && !guardedRegistry))
             return json::array();
-        if (reason.isEmpty()) {
+        if (presented) {
             filtered.push_back(def);
         }
     }
@@ -2701,7 +2707,8 @@ void QSocAgent::appendRuntimeSystemSections(QString &prompt) const
                       .arg(mailbox_->resolve(QStringLiteral("main")));
     const auto available = [this](const char *name) {
         const QString toolName = QString::fromLatin1(name);
-        return toolRegistry && toolRegistry->getTool(toolName) && isToolAllowed(toolName);
+        return toolRegistry && toolRegistry->getTool(toolName)
+               && isToolPresented(toolName, toolRegistry.data());
     };
     if (available("agent_list"))
         prompt += QStringLiteral(
@@ -2935,7 +2942,8 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         QHash<QString, int> mcpToolCounts;
         const QStringList   allNames = toolRegistry->toolNames();
         for (const QString &name : allNames) {
-            if (!name.startsWith(QStringLiteral("mcp__")) || !isToolAllowed(name)) {
+            if (!name.startsWith(QStringLiteral("mcp__"))
+                || !isToolPresented(name, toolRegistry.data())) {
                 continue;
             }
             const QString rest = name.mid(5);

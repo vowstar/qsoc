@@ -944,7 +944,12 @@ private:
     nlohmann::json filterAllowedTools(
         const nlohmann::json &defs, const QSocToolRegistry *registry) const;
 
-    QString toolDenyReasonForRegistry(const QString &name, const QSocToolRegistry *registry) const;
+    QString toolDenyReasonForRegistry(
+        const QString &name, const QSocToolRegistry *registry, bool modeGates = true) const;
+    /* Whether the tool is offered to the model. The main agent's offer
+     * ignores plan mode so its tool list stays fixed; dispatch still
+     * applies every gate. */
+    bool isToolPresented(const QString &name, const QSocToolRegistry *registry) const;
 
     /**
      * @brief Append the dynamic prompt sections (environment, remote

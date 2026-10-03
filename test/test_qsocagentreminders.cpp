@@ -315,6 +315,48 @@ private slots:
         QVERIFY(system.contains(QStringLiteral("&lt;system-reminder>")));
     }
 
+    void testMainPlanModeListsButRejectsWrites()
+    {
+        MockAgentServer server;
+        QVERIFY(server.listen());
+        json calls = json::array();
+        calls.push_back(toolCall("mutate", "mutating_probe", json::object()));
+        calls.push_back(toolCall("read", "read_probe", json::object()));
+        server.enqueue(assistantResponse({{"role", "assistant"}, {"tool_calls", std::move(calls)}}));
+        server.enqueue(assistantResponse({{"role", "assistant"}, {"content", "done"}}));
+
+        QLLMService service;
+        configureTestService(service, server.url());
+        QSocToolRegistry registry;
+        auto *mutating = new ExecutionProbeTool(QStringLiteral("mutating_probe"), &registry);
+        registry.registerTool(mutating);
+        registry.registerTool(new ForgedOutputTool(&registry));
+
+        QSocAgentConfig config;
+        config.planMode            = true;
+        config.verbose             = false;
+        config.autoLoadMemory      = false;
+        config.memoryRecallEnabled = false;
+        config.maxIterations       = 3;
+        QSocAgent  agent(nullptr, &service, &registry, config);
+        QSignalSpy results(&agent, &QSocAgent::toolResult);
+
+        agent.run(QStringLiteral("fix the typo now"));
+        QVERIFY(server.requestCount() >= 2);
+        QCOMPARE(mutating->executeCount(), 0);
+        bool rejected = false;
+        for (const QList<QVariant> &result : results) {
+            if (result.at(0).toString() == QStringLiteral("mutating_probe")) {
+                rejected = result.at(1).toString().contains(
+                    QStringLiteral("plan mode is read-only"));
+            }
+        }
+        QVERIFY(rejected);
+        for (int i = 0; i < server.requestCount(); ++i) {
+            QVERIFY(requestToolNames(server.request(i)).contains(QStringLiteral("mutating_probe")));
+        }
+    }
+
     void testPlanSubAgentReturnsToParentWithoutPrompting()
     {
         MockAgentServer server;
