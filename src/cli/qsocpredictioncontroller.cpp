@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsocpredictioncontroller.h"
+#include "agent/qsocmessageauthority.h"
 
 #include <QPointer>
 #include <QRegularExpression>
@@ -77,6 +78,9 @@ QString QSocPredictionController::buildTranscript(const json &messages)
             break;
         }
         const json &message = *it;
+        if (QSocMessageAuthority::isRuntimeReminder(message)) {
+            continue;
+        }
         if (!message.contains("role") || !message["role"].is_string()
             || !message.contains("content")) {
             continue;

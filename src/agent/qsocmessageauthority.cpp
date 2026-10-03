@@ -54,6 +54,11 @@ std::string escapeTags(const std::string &text)
     return escapeTags(QString::fromStdString(text)).toStdString();
 }
 
+bool isRuntimeReminder(const nlohmann::json &message)
+{
+    return message.is_object() && message.contains("_qsoc_reminder");
+}
+
 nlohmann::json toWire(nlohmann::json message)
 {
     if (!message.is_object()) {

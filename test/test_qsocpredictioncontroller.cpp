@@ -90,6 +90,7 @@ public:
 
     int     requestCount() const { return models_.size(); }
     QString wireModel(int index) const { return models_.at(index); }
+    QString body(int index) const { return bodies_.at(index); }
 
 private:
     void consume(QTcpSocket *socket)
@@ -114,6 +115,7 @@ private:
         const json payload
             = json::parse(buffer.mid(bodyStart, contentLength).toStdString(), nullptr, false);
         models_.append(QString::fromStdString(payload.value("model", std::string())));
+        bodies_.append(QString::fromStdString(payload.dump()));
         buffers_.remove(socket);
 
         const json reply = {
@@ -131,6 +133,7 @@ private:
 
     QHash<QTcpSocket *, QByteArray> buffers_;
     QStringList                     models_;
+    QStringList                     bodies_;
     QTcpServer                      server_;
 };
 
@@ -140,6 +143,10 @@ json twoTurns()
     messages.push_back({{"role", "user"}, {"content", "hello"}});
     messages.push_back({{"role", "assistant"}, {"content", "hi"}});
     messages.push_back({{"role", "user"}, {"content", "do it"}});
+    messages.push_back(
+        {{"role", "user"},
+         {"content", "<system-reminder>\ninternal note\n</system-reminder>"},
+         {"_qsoc_reminder", {{"plan", true}}}});
     messages.push_back({{"role", "assistant"}, {"content", "done"}});
     return messages;
 }
@@ -185,6 +192,8 @@ private slots:
 
         QCOMPARE(server.requestCount(), 1);
         QCOMPARE(server.wireModel(0), QStringLiteral("served-model"));
+        QVERIFY(server.body(0).contains(QStringLiteral("do it")));
+        QVERIFY(!server.body(0).contains(QStringLiteral("internal note")));
         QCOMPARE(main.getCurrentModelId(), QStringLiteral("flash-b"));
     }
 

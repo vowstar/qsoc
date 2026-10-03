@@ -215,6 +215,9 @@ void Test::keepsSyntheticMessagesOutOfUserBlocks()
          {{"role", "user"},
           {"content", "[Background agents still running after compaction]\ninternal"}},
          {{"role", "user"}, {"content", "[ordinary bracket text]"}},
+         {{"role", "user"},
+          {"content", "<system-reminder>\ninternal\n</system-reminder>"},
+          {"_qsoc_reminder", {{"plan", true}}}},
          {{"role", "user"}, {"content", "[Conversation Summary]\nremember this"}}});
 
     QTuiScrollView view;

@@ -797,8 +797,9 @@ private:
     void                                 appendBoundedToolMessage(
         const QString &id, const QString &content, const QString &state, const QString &toolName);
 
-    /* Memory recall is rebuilt once per user turn and sent as a system reminder. */
-    QString recallBlock_;
+    /* Memory recall is rebuilt once per user turn and sent as a reminder. */
+    QString     recallBlock_;
+    QStringList recallNames_;
     /* Plan-mode shell safety judge (empty = fail-closed). */
     QSocBashSafetyJudge           bashSafetyJudge_;
     QSocContextualBashSafetyJudge contextualBashSafetyJudge_;
@@ -962,9 +963,21 @@ private:
     void    appendRuntimeSystemSections(QString &prompt) const;
 
     /**
-     * @brief Append ephemeral runtime reminders to the leading system message.
+     * @brief Append a sub-agent's fixed reminders to its system message.
      */
     void injectPerTurnReminders(nlohmann::json &wire) const;
+
+    /**
+     * @brief Build the main agent's runtime reminder for a history.
+     * @details At a turn start, plan mode and an away user are restated.
+     *          Otherwise only what the history does not already say is
+     *          sent: a plan-mode or focus change, an approved plan not yet
+     *          shown, and this turn's recall when none of it remains.
+     */
+    std::optional<nlohmann::json> turnContextMessage(
+        const nlohmann::json &history, bool turnStart) const;
+    /* Persist turnContextMessage() for the current history. */
+    void appendTurnContext(bool turnStart);
 
     /**
      * @brief Charge the active goal's usage counters with the token

@@ -4,6 +4,7 @@
 #include "agent/qsocmemoryextractor.h"
 
 #include "agent/qsocagent.h"
+#include "agent/qsocmessageauthority.h"
 #include "agent/qsocsession.h"
 #include "common/qsocconsole.h"
 
@@ -63,7 +64,8 @@ QSocMemoryExtractor::Decision QSocMemoryExtractor::decide(
     for (int idx = start; idx < total; idx++) {
         const auto       &msg  = messages[idx];
         const std::string role = msg.value("role", std::string());
-        if (role == "user" || role == "assistant") {
+        if ((role == "user" || role == "assistant")
+            && !QSocMessageAuthority::isRuntimeReminder(msg)) {
             decision.newCount++;
         }
         if (role == "assistant" && msg.contains("tool_calls") && msg["tool_calls"].is_array()) {

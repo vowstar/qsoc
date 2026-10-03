@@ -33,6 +33,14 @@ QString escapeTags(const QString &text);
 std::string escapeTags(const std::string &text);
 
 /**
+ * @brief Whether a history message is a runtime reminder QSoC inserted.
+ * @details Reminders are user-role messages the model reads but the user
+ *          never typed, so transcripts, rewind points and summaries skip
+ *          them.
+ */
+bool isRuntimeReminder(const nlohmann::json &message);
+
+/**
  * @brief Copy a history message into its on-the-wire form.
  * @details Drops QSoC-internal @c _ keys and escapes authority tags in
  *          tool-result content, for both string and text-part content.

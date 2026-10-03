@@ -4197,7 +4197,8 @@ bool QSocCliWorker::runAgentLoop(
             int persistedUserTurns = 0;
             for (const auto &msg : persistedMessages) {
                 if (msg.is_object() && msg.contains("role") && msg["role"].is_string()
-                    && msg["role"].get<std::string>() == "user") {
+                    && msg["role"].get<std::string>() == "user"
+                    && !QSocMessageAuthority::isRuntimeReminder(msg)) {
                     persistedUserTurns++;
                 }
             }
@@ -5355,7 +5356,8 @@ bool QSocCliWorker::runAgentLoop(
                     if (!msg.is_object() || !msg.contains("role") || !msg.contains("content")) {
                         continue;
                     }
-                    if (msg["role"].get<std::string>() != "user") {
+                    if (msg["role"].get<std::string>() != "user"
+                        || QSocMessageAuthority::isRuntimeReminder(msg)) {
                         continue;
                     }
                     turnSeen++;

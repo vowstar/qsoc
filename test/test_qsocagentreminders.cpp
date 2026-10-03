@@ -310,9 +310,16 @@ private slots:
         QCOMPARE(text.count(QStringLiteral("<system-reminder>")), 1);
         QVERIFY(text.endsWith(QStringLiteral("have not changed.\n</system-reminder>")));
 
-        const QString system = systemContent(server.request(1));
-        QVERIFY(system.contains(QStringLiteral("<system-reminder>\nThe user is not actively")));
-        QVERIFY(system.contains(QStringLiteral("&lt;system-reminder>")));
+        /* QSoC's own reminder follows the request as a user message. */
+        const json &reminder = messages.at(2);
+        QCOMPARE(reminder["role"], json("user"));
+        QVERIFY(
+            reminder["content"]
+                .get<std::string>()
+                .rfind("<system-reminder>\nThe user is not actively", 0)
+            == 0);
+        QVERIFY(!reminder.contains("_qsoc_reminder"));
+        QVERIFY(systemContent(server.request(1)).contains(QStringLiteral("&lt;system-reminder>")));
     }
 
     void testMainPlanModeListsButRejectsWrites()

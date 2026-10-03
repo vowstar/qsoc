@@ -1840,8 +1840,9 @@ private slots:
         }
         QVERIFY(agent.estimateTotalTokens() >= 50000);
         const auto historyEstimate = agent.estimateMessagesTokens();
+        /* An approved plan joins the history at the next turn, not this request. */
         agent.setApprovedPlan(QStringLiteral("Preserve the selected interface."));
-        QVERIFY(agent.estimateTotalTokens() < 50000);
+        QVERIFY(agent.estimateTotalTokens() >= 50000);
         QCOMPARE(agent.estimateMessagesTokens(), historyEstimate);
         agent.setApprovedPlan(QString());
         QVERIFY(agent.estimateTotalTokens() >= 50000);

@@ -247,14 +247,6 @@ struct StepResult
 const QHash<QString, QString> &knownBreaks()
 {
     static const QHash<QString, QString> breaks = {
-        {QStringLiteral("single word turn"), QStringLiteral("recall rides in the system")},
-        {QStringLiteral("recall returns"), QStringLiteral("recall rides in the system")},
-        {QStringLiteral("focus lost"), QStringLiteral("focus rides in the system")},
-        {QStringLiteral("focus regained"), QStringLiteral("focus rides in the system")},
-        {QStringLiteral("focus lost mid-turn"), QStringLiteral("focus rides in the system")},
-        {QStringLiteral("refocused turn"), QStringLiteral("focus rides in the system")},
-        {QStringLiteral("plan mode on"), QStringLiteral("plan reminder rides in the system")},
-        {QStringLiteral("plan approved"), QStringLiteral("plan reminder rides in the system")},
         {QStringLiteral("AGENTS.md edited"), QStringLiteral("system reread every request")},
     };
     return breaks;

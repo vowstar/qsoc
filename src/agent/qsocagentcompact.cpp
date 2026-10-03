@@ -107,6 +107,9 @@ std::optional<QString> formatSummary(
     qint64    tokens = 0;
     const int count  = static_cast<int>(history.size());
     for (int i = qMax(0, start); i < qMin(end, count); ++i) {
+        if (QSocMessageAuthority::isRuntimeReminder(history[static_cast<size_t>(i)])) {
+            continue;
+        }
         const QString line   = QString::fromStdString(
                                    summaryMessage(
                                        QSocMessageAuthority::toWire(history[static_cast<size_t>(i)]))
@@ -160,7 +163,8 @@ QString summarizedUserRequest(const json &history, int start, int boundary)
 {
     for (int i = static_cast<int>(history.size()) - 1; i >= start; --i) {
         const auto &message = history[static_cast<size_t>(i)];
-        if (message.value("role", "") != "user") {
+        if (message.value("role", "") != "user"
+            || QSocMessageAuthority::isRuntimeReminder(message)) {
             continue;
         }
         if (i >= boundary) {
@@ -487,6 +491,11 @@ int QSocAgent::performCompaction(bool force, bool manual)
         }
         for (const auto &message : QSocContextRestoreBuilder::toMessages(candidate.restoreNotice)) {
             candidate.candidateMessages.push_back(message);
+        }
+    }
+    if (summarized) {
+        if (auto reminder = turnContextMessage(candidate.candidateMessages, false)) {
+            candidate.candidateMessages.push_back(std::move(*reminder));
         }
     }
     const auto candidateRequest = requestWithHistory(request, candidate.candidateMessages);

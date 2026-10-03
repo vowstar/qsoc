@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsocsessiontranscript.h"
+#include "agent/qsocmessageauthority.h"
 
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuiscrollview.h"
@@ -198,7 +199,7 @@ void appendTo(const json &messages, QTuiScrollView &view)
         }
 
         pending.clear();
-        if (role != QStringLiteral("user")) {
+        if (role != QStringLiteral("user") || QSocMessageAuthority::isRuntimeReminder(message)) {
             continue;
         }
 

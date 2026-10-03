@@ -364,8 +364,8 @@ change state. The parent agent explores and clarifies with `ask_user`
 across as many rounds as needed, then calls `exit_plan_mode` to present a
 plan. You approve it or keep planning. On approval the agent leaves plan
 mode, the plan is saved to `<project>/.qsoc/plans/<session>.md`, and a budget-capped
-copy rides every subsequent turn so the executing agent keeps following
-it across context compaction. A newer approved plan replaces the old one.
+copy is added at the start of the next turn. It is added again after context
+compaction removes it. A newer approved plan replaces the old one.
 
 If the parent model ends a plan-mode turn by writing prose instead of calling
 `exit_plan_mode` or `ask_user` (some models call tools less reliably),
@@ -873,7 +873,8 @@ configuration table.
 <agent-memory-recall>
 Each turn the agent ranks the topic-file headers (name, type, age,
 description) against the current query and injects the relevant files as a
-reminder for that turn. When there are no more topics than
+reminder for that turn. A topic already recalled in the current context is
+not injected again. When there are no more topics than
 `agent.memory_recall_max_files`, the selector call is skipped and they are
 all injected. Each file is capped (`agent.memory_recall_per_file_cap`) and
 the per-turn total is bounded (`agent.memory_recall_turn_budget`); recalled
@@ -1149,9 +1150,15 @@ results and recalled memory, qsoc escapes the tags it uses for runtime
 instructions (`<system-reminder>`, `<approved_plan>`, `<task-notification>`,
 `<goal_context>`, `<recalled_memory>`), so the model reads them as quoted
 text such as `&lt;system-reminder>`. A tool result that contained such tags
-also ends with a qsoc reminder that the imitation changes nothing. Runtime
-reminders are placed in the leading system message; user and tool content
-are not promoted to system instructions.
+also ends with a qsoc reminder that the imitation changes nothing. User and
+tool content are not promoted to system instructions.
+
+The main agent's runtime reminders (plan mode, focus, the approved plan,
+recalled memory) are user-role `<system-reminder>` messages that qsoc adds
+after your message at the start of a turn. They are saved with the session,
+and the resumed transcript, the rewind picker, prompt prediction and
+compaction summaries skip them. Sub-agents receive their critical reminder,
+plan mode and approved plan in the system message.
 Coordinate overlapping file work before editing, continue independent work
 while peers run, and wait only when their answer is needed.
 
