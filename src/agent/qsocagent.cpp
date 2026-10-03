@@ -124,9 +124,10 @@ QSet<QString> recalledNames(const json &history)
 /* Plan and focus state the model was last told, and the plans it has seen. */
 struct ToldState
 {
-    bool          plan = false;
-    bool          away = false;
-    QSet<QString> plans;
+    bool                    plan = false;
+    bool                    away = false;
+    QSet<QString>           plans;
+    QHash<QString, QString> sections;
 };
 
 ToldState toldState(const json &history)
@@ -141,6 +142,12 @@ ToldState toldState(const json &history)
             state.plan = told->value("plan", state.plan);
             state.away = told->value("away", state.away);
             state.plans.insert(QString::fromStdString(told->value("approved_plan", std::string())));
+            const json sections = told->value("sections", json::object());
+            for (const auto &[heading, digest] : sections.items()) {
+                state.sections.insert(
+                    QString::fromStdString(heading),
+                    QString::fromStdString(digest.get<std::string>()));
+            }
         }
     }
     return state;
@@ -172,12 +179,70 @@ std::string joinReminders(const QStringList &parts)
     return text;
 }
 
-std::string planDigest(const QString &plan)
+std::string shortDigest(const QString &text)
 {
-    return QCryptographicHash::hash(plan.toUtf8(), QCryptographicHash::Sha256)
+    return QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha256)
         .toHex()
         .left(16)
         .toStdString();
+}
+
+/* System prompt sections in order, keyed by their "# " heading. */
+QList<QPair<QString, QString>> systemSections(const QString &prompt)
+{
+    QList<QPair<QString, QString>> sections{{QString(), QString()}};
+    QSet<QString>                  seen;
+    for (const QString &line : prompt.split(QLatin1Char('\n'))) {
+        if (line.startsWith(QStringLiteral("# "))) {
+            QString heading = line.mid(2).trimmed();
+            for (int copy = 2; seen.contains(heading); ++copy) {
+                heading = line.mid(2).trimmed() + QStringLiteral(" (%1)").arg(copy);
+            }
+            seen.insert(heading);
+            sections.append({heading, QString()});
+        }
+        sections.last().second += line + QLatin1Char('\n');
+    }
+    return sections;
+}
+
+/* Reminders for sections of @p live that differ from @p frozen and from
+ * what earlier reminders already said; records each told digest. */
+QStringList sectionParts(
+    const QString &frozen, const QString &live, const ToldState &told, json &state)
+{
+    QHash<QString, QString> before;
+    for (const auto &[heading, text] : systemSections(frozen)) {
+        before.insert(heading, text);
+    }
+    QList<QPair<QString, QString>> after = systemSections(live);
+    for (const auto &[heading, text] : systemSections(frozen)) {
+        if (!std::any_of(after.cbegin(), after.cend(), [&heading](const auto &section) {
+                return section.first == heading;
+            })) {
+            after.append({heading, QString()});
+        }
+    }
+    QStringList parts;
+    for (const auto &[heading, text] : after) {
+        const std::string digest = shortDigest(text);
+        const QString     last
+            = told.sections
+                  .value(heading, QString::fromStdString(shortDigest(before.value(heading))));
+        if (QString::fromStdString(digest) == last) {
+            continue;
+        }
+        const QString name = heading.isEmpty() ? QStringLiteral("opening") : heading;
+        parts
+            << (text.isEmpty()
+                    ? QStringLiteral("The \"%1\" section of the system prompt no longer applies.")
+                          .arg(name)
+                    : QStringLiteral(
+                          "The \"%1\" section of the system prompt changed. It now reads:\n\n%2")
+                          .arg(name, text.trimmed()));
+        state["sections"][heading.toStdString()] = digest;
+    }
+    return parts;
 }
 
 std::optional<json> buildToolAttachmentMessage(const QList<QSocAgent::AttachmentSpec> &attachments)
@@ -1486,7 +1551,7 @@ void QSocAgent::processStreamIteration()
             }
         }
 
-        const QString fullSystemPrompt   = owner->buildSystemPromptWithMemory();
+        const QString fullSystemPrompt   = owner->requestSystemPrompt();
         const json    messagesWithSystem = owner->wireMessages(fullSystemPrompt);
         action                           = checkpoint();
         if (action == CheckpointAction::Restart) {
@@ -1801,7 +1866,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         return IterationResult::Stopped;
     };
 
-    const QString fullSystemPrompt   = buildSystemPromptWithMemory();
+    const QString fullSystemPrompt   = requestSystemPrompt();
     const json    messagesWithSystem = wireMessages(fullSystemPrompt);
     if (const auto result = checkpointPreparation()) {
         return *result;
@@ -2618,7 +2683,8 @@ void QSocAgent::injectPerTurnReminders(json &wire) const
     }
 }
 
-std::optional<json> QSocAgent::turnContextMessage(const json &history, bool turnStart) const
+std::optional<json> QSocAgent::turnContextMessage(
+    const json &history, bool turnStart, bool systemChanges) const
 {
     if (agentConfig.isSubAgent) {
         return std::nullopt;
@@ -2630,7 +2696,7 @@ std::optional<json> QSocAgent::turnContextMessage(const json &history, bool turn
     QStringList         parts    = modeParts(told, plan, away, turnStart);
     json                state    = {{"plan", plan}, {"away", away}};
     if (!approvedPlan_.isEmpty()) {
-        const std::string digest = planDigest(approvedPlan_);
+        const std::string digest = shortDigest(approvedPlan_);
         if (!told.plans.contains(QString::fromStdString(digest))) {
             parts << approvedPlanBlock(approvedPlan_);
             state["approved_plan"] = digest;
@@ -2647,6 +2713,9 @@ std::optional<json> QSocAgent::turnContextMessage(const json &history, bool turn
             names.push_back(name.toStdString());
         }
         state["recall"] = names;
+    }
+    if (systemChanges && !systemSnapshot_.isEmpty() && systemSnapshotKey_ == systemRebuildKey()) {
+        parts << sectionParts(systemSnapshot_, buildSystemPromptWithMemory(), told, state);
     }
     if (parts.isEmpty()) {
         return std::nullopt;
@@ -2676,11 +2745,50 @@ void QSocAgent::noteModeChange(json::size_type from)
     }
 }
 
+QString QSocAgent::systemRebuildKey() const
+{
+    const json key
+        = {{"model", agentConfig.modelId.toStdString()},
+           {"image", llmService != nullptr && llmService->currentSupportsImage()},
+           {"project", agentConfig.projectPath.toStdString()},
+           {"cwd", QDir::currentPath().toStdString()},
+           {"remote", agentConfig.remoteMode},
+           {"target", agentConfig.remoteName.toStdString()},
+           {"display", agentConfig.remoteDisplay.toStdString()},
+           {"workspace", agentConfig.remoteWorkspace.toStdString()},
+           {"remote_cwd", agentConfig.remoteWorkingDir.toStdString()},
+           {"identity", agentIdentity_.toStdString()},
+           {"override", agentConfig.systemPromptOverride.toStdString()}};
+    return QString::fromStdString(key.dump());
+}
+
+QString QSocAgent::requestSystemPrompt() const
+{
+    if (!agentConfig.isSubAgent && !systemSnapshot_.isEmpty()
+        && systemSnapshotKey_ == systemRebuildKey()) {
+        return systemSnapshot_;
+    }
+    return buildSystemPromptWithMemory();
+}
+
+void QSocAgent::refreshSystemSnapshot(bool rebuild)
+{
+    if (agentConfig.isSubAgent) {
+        return;
+    }
+    const QString key = systemRebuildKey();
+    if (rebuild || systemSnapshot_.isEmpty() || key != systemSnapshotKey_) {
+        systemSnapshot_    = buildSystemPromptWithMemory();
+        systemSnapshotKey_ = key;
+    }
+}
+
 void QSocAgent::appendTurnContext(bool turnStart)
 {
     if (compactionCommitting_) {
         return;
     }
+    refreshSystemSnapshot(false);
     if (auto message = turnContextMessage(messages, turnStart)) {
         messages.push_back(std::move(*message));
         ++historyRevision_;
@@ -3241,6 +3349,7 @@ void QSocAgent::clearHistory()
         clearPendingRequests();
     }
     messages = json::array();
+    systemSnapshot_.clear();
     ++historyRevision_;
     ++historyAccountingRevision_;
     streamPrevTokensEstimate = estimateMessagesTokens();
@@ -3667,7 +3776,7 @@ QSocRequestSnapshot QSocAgent::requestSnapshot(
 
 int QSocAgent::estimateTotalTokens() const
 {
-    const QString systemPrompt = buildSystemPromptWithMemory();
+    const QString systemPrompt = requestSystemPrompt();
     json          tools        = json::array();
     if (toolRegistry) {
         tools = presentedTools(toolRegistry->getToolDefinitions(), toolRegistry.data());

@@ -110,7 +110,7 @@ qint64 QSocAgent::toolResultBudgetTokens() const
     const auto run = activeRun_;
     if (!run || !run->toolBatchStart || !isCurrentRun(run))
         return 4096;
-    json              wire = wireMessages(buildSystemPromptWithMemory());
+    json              wire = wireMessages(requestSystemPrompt());
     QSet<std::string> complete;
     for (auto index = *run->toolBatchStart + 1; index < messages.size(); ++index) {
         const auto &message = messages.at(index);

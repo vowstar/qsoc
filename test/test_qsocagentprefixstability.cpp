@@ -243,15 +243,6 @@ struct StepResult
     QString where;
 };
 
-/* Breaks the current layout still causes. Each fix deletes its rows. */
-const QHash<QString, QString> &knownBreaks()
-{
-    static const QHash<QString, QString> breaks = {
-        {QStringLiteral("AGENTS.md edited"), QStringLiteral("system reread every request")},
-    };
-    return breaks;
-}
-
 } // namespace
 
 class Test : public QObject
@@ -512,10 +503,6 @@ private slots:
     {
         QFETCH(QString, step);
         const StepResult result = results_.value(step);
-        const QString    name   = step.section(QLatin1Char('/'), 1);
-        if (knownBreaks().contains(name)) {
-            QEXPECT_FAIL("", qPrintable(knownBreaks().value(name)), Continue);
-        }
         QVERIFY2(result.prefixHeld, qPrintable(result.where));
     }
 

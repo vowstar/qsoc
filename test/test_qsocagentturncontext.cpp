@@ -313,6 +313,65 @@ private slots:
         QVERIFY(text(told.back()).contains(QStringLiteral("2. Rename the bus.")));
     }
 
+    void systemStaysFrozenBetweenRebuildPoints()
+    {
+        ScriptServer server;
+        QVERIFY(server.listen());
+        QLLMService service;
+        server.attach(service);
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        const auto writeRules = [&project](const char *rules) {
+            QFile file(QDir(project.path()).filePath(QStringLiteral("AGENTS.md")));
+            QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            file.write(rules);
+        };
+        const auto system = [&server](int index) {
+            return QString::fromStdString(
+                server.requests.at(index).at("messages").front()["content"].get<std::string>());
+        };
+        writeRules("Rule alpha.");
+        QSocToolRegistry registry;
+        auto             config   = baseConfig();
+        config.projectPath        = project.path();
+        config.keepRecentMessages = 2;
+        QSocAgent agent(nullptr, &service, &registry, config);
+
+        server.text("one");
+        agent.run(QStringLiteral("first turn here"));
+        writeRules("Rule beta.");
+        server.text("two");
+        agent.run(QStringLiteral("second turn here"));
+        server.text("three");
+        agent.run(QStringLiteral("third turn here"));
+        QCOMPARE(system(1), system(0));
+        QCOMPARE(system(2), system(0));
+        QVERIFY(system(0).contains(QStringLiteral("Rule alpha.")));
+        QList<json> told = reminders(agent.getMessages());
+        QCOMPARE(told.size(), 1);
+        QVERIFY(text(told[0]).contains(QStringLiteral("\"Project instructions\" section")));
+        QVERIFY(text(told[0]).contains(QStringLiteral("Rule beta.")));
+
+        /* Compaction is a rebuild point: the system takes the new rules. */
+        server.text("## Task Overview\n- rules changed\n");
+        QVERIFY(agent.compact() > 0);
+        server.text("four");
+        agent.run(QStringLiteral("fourth turn here"));
+        const QString rebuilt = system(server.requests.size() - 1);
+        QVERIFY(rebuilt.contains(QStringLiteral("Rule beta.")));
+        QVERIFY(!rebuilt.contains(QStringLiteral("Rule alpha.")));
+        QVERIFY(reminders(agent.getMessages()).isEmpty());
+
+        /* A model switch rebuilds without a reminder. */
+        auto switched    = agent.getConfig();
+        switched.modelId = QStringLiteral("other-model");
+        agent.setConfig(switched);
+        server.text("five");
+        agent.run(QStringLiteral("fifth turn here"));
+        QVERIFY(system(server.requests.size() - 1).contains(QStringLiteral("other-model")));
+        QVERIFY(reminders(agent.getMessages()).isEmpty());
+    }
+
     void recallSkipsMemoriesAlreadyShown()
     {
         ScriptServer server;

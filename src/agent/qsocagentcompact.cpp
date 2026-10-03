@@ -304,7 +304,7 @@ QSocRequestSnapshot QSocAgent::compactionRequest(const json &history) const
 {
     const QPointer<const QSocAgent> owner(this);
     json                            wire   = json::array();
-    const QString                   prompt = buildSystemPromptWithMemory();
+    const QString                   prompt = requestSystemPrompt();
     /* Tool permission callbacks can destroy the agent. */
     // cppcheck-suppress knownConditionTrueFalse
     if (!owner) {
@@ -494,7 +494,7 @@ int QSocAgent::performCompaction(bool force, bool manual)
         }
     }
     if (summarized) {
-        if (auto reminder = turnContextMessage(candidate.candidateMessages, false)) {
+        if (auto reminder = turnContextMessage(candidate.candidateMessages, false, false)) {
             candidate.candidateMessages.push_back(std::move(*reminder));
         }
     }
@@ -601,6 +601,7 @@ int QSocAgent::performCompaction(bool force, bool manual)
         return 0;
     }
     messages = std::move(candidate.candidateMessages);
+    refreshSystemSnapshot(true);
     ++historyRevision_;
     ++historyAccountingRevision_;
     streamPrevTokensEstimate = estimateMessagesTokens();

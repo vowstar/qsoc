@@ -1368,7 +1368,7 @@ and exits without modifying state.
 
 == System Prompt Sources
 <agent-system-prompt>
-On every turn, the system prompt is composed from:
+The system prompt is composed from:
 
 - *Modular sections*: built-in role, decision flow, and tool usage guidance
 - *Project instructions*: `AGENTS.md` and `AGENTS.local.md` in the project
@@ -1380,6 +1380,14 @@ On every turn, the system prompt is composed from:
 
 Set `agent.system_prompt` in the config to replace the modular base with a
 literal string (useful for testing or custom deployments).
+
+The main agent builds the system prompt once and keeps it until a rebuild
+point: a model switch (`/model`), a workspace or working-directory change
+(`/ssh`, `/cwd`, `/project`), a new session (`/clear`, `/resume`) or a
+context compaction. If a section changes in between, for example after an
+edit to `AGENTS.md`, a host catalog update or a new MCP server, the next turn
+starts with a reminder that carries the new section text. The next rebuild
+puts the change into the system prompt.
 
 == Remote Workspace
 <agent-remote>

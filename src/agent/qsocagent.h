@@ -546,6 +546,15 @@ public:
      */
     QString buildSystemPromptWithMemory(bool includeRuntime = true) const;
 
+    /**
+     * @brief The system prompt the next request sends.
+     * @details The main agent keeps the prompt it built at a rebuild point
+     *          (a model, workspace, project or session change, /clear, or a
+     *          compaction) until the next one. A section that changes in
+     *          between reaches the model as a reminder at the next turn.
+     */
+    QString requestSystemPrompt() const;
+
     bool bindToolResultStore(
         const QString &directory, const QString &owner, QString *error = nullptr);
     void                                 unbindToolResultStore();
@@ -797,6 +806,12 @@ private:
     void                                 appendBoundedToolMessage(
         const QString &id, const QString &content, const QString &state, const QString &toolName);
 
+    /* System prompt frozen between rebuild points, and the key that ends it. */
+    QString systemSnapshot_;
+    QString systemSnapshotKey_;
+    QString systemRebuildKey() const;
+    void    refreshSystemSnapshot(bool rebuild);
+
     /* Memory recall is rebuilt once per user turn and sent as a reminder. */
     QString     recallBlock_;
     QStringList recallNames_;
@@ -975,7 +990,7 @@ private:
      *          shown, and this turn's recall when none of it remains.
      */
     std::optional<nlohmann::json> turnContextMessage(
-        const nlohmann::json &history, bool turnStart) const;
+        const nlohmann::json &history, bool turnStart, bool systemChanges = true) const;
     /* Persist turnContextMessage() for the current history. */
     void appendTurnContext(bool turnStart);
     /* Tell a plan or focus change since the last reminder on the last tool

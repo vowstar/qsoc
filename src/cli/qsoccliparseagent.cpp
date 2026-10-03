@@ -5828,7 +5828,7 @@ bool QSocCliWorker::runAgentLoop(
             const json   allMsgs          = agent->getMessages();
             const int    maxCtx           = agent->getConfig().maxContextTokens;
             const qint64 basePromptTokens = QSocRequestUsage::estimateText(
-                agent->buildSystemPromptWithMemory());
+                agent->requestSystemPrompt());
             const json   definitions   = agent->getEffectiveToolDefinitions();
             const qint64 toolDefTokens = definitions.empty()
                                              ? 0
@@ -6841,7 +6841,7 @@ bool QSocCliWorker::runAgentLoop(
              * so the main context is untouched. */
             json sideMessages = json::array();
             {
-                const QString sysPrompt = agent->buildSystemPromptWithMemory();
+                const QString sysPrompt = agent->requestSystemPrompt();
                 if (!sysPrompt.isEmpty()) {
                     sideMessages.push_back(
                         {{"role", "system"}, {"content", sysPrompt.toStdString()}});
