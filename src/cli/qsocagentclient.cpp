@@ -4,6 +4,7 @@
 /* TUI input and rendering for the daemon client. */
 
 #include "agent/client/qsocagentdaemonclient.h"
+#include "agent/client/qsocdaemonconnection.h"
 #include "cli/qsocagentinputhistory.h"
 #include "cli/qsocagenttaskmodel.h"
 #include "cli/qsoccliworker.h"
@@ -23,9 +24,6 @@
 #include "cli/qterminalcapability.h"
 #include "common/qsocconsole.h"
 #include "common/qsoclinediff.h"
-#include "common/qsoclocalendpoint.h"
-#include "common/qsoclocalpeer.h"
-#include "common/qsocsibling.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuidiffblock.h"
 #include "tui/qtuilineinput.h"
@@ -36,20 +34,16 @@
 #include "tui/qtuitodoblock.h"
 #include <QDir>
 #include <QElapsedTimer>
-#include <QProcess>
 #include <QRegularExpression>
 #include <QScopeGuard>
-#include <QTemporaryDir>
 #include <QTimer>
 
 #include <QCoreApplication>
-#include <QDeadlineTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QLocalSocket>
 #include <QStringList>
 
 #include <cmath>
@@ -163,63 +157,10 @@ bool QSocCliWorker::runAgentClientLoop(
     if (!singleQuery && !resourcesOnly && (termCap.columns() < 40 || termCap.rows() < 10))
         return showError(1, QStringLiteral("Error: terminal too small (minimum 40x10)."));
 
-    // A private endpoint distinguishes an owned child from an attached daemon.
-    QTemporaryDir privateDirectory;
-    QProcess      child;
-    QString       socketPath = requestedSocket;
-    const bool    owned      = socketPath.isEmpty();
-    const auto    stopChild  = qScopeGuard([&] {
-        if (owned && child.state() != QProcess::NotRunning) {
-            child.terminate();
-            if (!child.waitForFinished(3000)) {
-                child.kill();
-                child.waitForFinished(1000);
-            }
-        }
-    });
-    if (owned) {
-        const QString daemonPath = QSocSibling::path(QStringLiteral("qsoc-agentd"));
-        if (daemonPath.isEmpty())
-            return showError(1, QSocSibling::missingMessage(QStringLiteral("qsoc-agentd")));
-        if (!privateDirectory.isValid())
-            return showError(1, "Could not create daemon socket directory.");
-        socketPath = privateDirectory.filePath("agent.sock");
-        child.setStandardInputFile(QProcess::nullDevice());
-        child.setStandardOutputFile(QProcess::nullDevice());
-        child.setStandardErrorFile(privateDirectory.filePath("daemon.log"));
-#ifdef Q_OS_UNIX
-        child.setChildProcessModifier([] {
-            if (::setsid() < 0)
-                ::_exit(127);
-        });
-#elif defined(Q_OS_WIN)
-        child.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
-            arguments->flags |= CREATE_NEW_PROCESS_GROUP;
-        });
-#endif
-        child.start(
-            daemonPath,
-            {"--socket",
-             socketPath,
-             "--parent-pid",
-             QString::number(QCoreApplication::applicationPid())});
-        if (!child.waitForStarted(5000))
-            return showError(1, child.errorString());
-    }
-    QSocAgentDaemonClient client(socketPath);
-    QDeadlineTimer        startup(5000);
-    while (!client.connectToDaemon(static_cast<int>(startup.remainingTime()))) {
-        if (!owned || startup.hasExpired() || child.state() == QProcess::NotRunning)
-            return showError(
-                1, QStringLiteral("Could not connect to agent daemon: %1").arg(client.error()));
-        QEventLoop wait;
-        QTimer::singleShot(20, &wait, &QEventLoop::quit);
-        wait.exec();
-    }
-    /* An owned endpoint must be served by the child just started. */
-    const qint64 servedBy = client.daemonProcessId();
-    if (owned && servedBy != child.processId())
-        return showError(1, QStringLiteral("Agent daemon socket is served by another process."));
+    QSocDaemonConnection connection(requestedSocket);
+    if (!connection.start())
+        return showError(1, connection.error());
+    auto      &client            = connection.client();
     QString    resourceWorkspace = options.sshTarget.isEmpty()
                                            && QDir::isAbsolutePath(options.workspace)
                                        ? options.workspace

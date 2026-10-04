@@ -590,7 +590,7 @@ target_include_directories(qsoc_tui SYSTEM PUBLIC "${CMARK_GFM_INCLUDE_DIRS}")
 target_compile_definitions(qsoc_tui PUBLIC CMARK_GFM_STATIC_DEFINE CMARK_GFM_EXTENSIONS_STATIC_DEFINE)
 
 qsoc_add_static_library(qsoc_cli ${QSOC_CLI_FILES})
-target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client ${REPLXX_LIBRARIES})
+target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client qsoc_smt ${REPLXX_LIBRARIES})
 target_include_directories(qsoc_cli SYSTEM PRIVATE "${REPLXX_INCLUDE_DIRS}")
 
 qsoc_add_static_library(qsoc_gui ${QSOC_GUI_FILES} ${PROJECT_UI_FILES})

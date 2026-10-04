@@ -19,6 +19,7 @@ CORE_TESTS = (
     "test_qsoclocalpeer",
     "test_qsocguihandoff",
     "test_qsocsmtservice",
+    "test_qsocsmtcli",
     "test_qsoctoolsmt",
     "test_qsocresourceusage",
     "test_qsocdaemonresources",

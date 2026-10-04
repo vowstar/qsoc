@@ -40,6 +40,7 @@
     [], [stub], [Generate Verilog and Liberty stub files for selected modules],
     [gui], [], [Start the GUI program `qsoc-gui` (@gui-overview)],
     [agent], [], [Start interactive AI agent for SoC design automation],
+    [smt], [], [Solve SMT-LIB constraints without an LLM (@smt-cli)],
   )],
   caption: [COMMAND LINE INTERFACE],
   kind: table,
@@ -879,3 +880,18 @@ The `generate stub` command generates Verilog and Liberty stub files for selecte
   caption: [STUB GENERATION OPTIONS],
   kind: table,
 )
+
+== SMT Solver
+<smt-cli>
+
+`qsoc smt [file|-]` reads a UTF-8 SMT-LIB file, or standard input through EOF when the file is omitted or `-`. It runs locally without a project, model configuration, or agent session. The input and solving limits match `z3_solve` (@agent-smt).
+
+```sh
+qsoc smt constraints.smt2
+qsoc smt --mode optimize --timeout-ms 20000 objectives.smt2
+qsoc smt --connect /path/to/daemon.sock constraints.smt2
+```
+
+The default starts an owned daemon and cleans it up when the command exits. `--connect` uses an existing local daemon and leaves it running. On Windows, the endpoint is a named pipe. `--no-model` and `--no-unsat-core` disable model and unsatisfiable-core output. Ctrl-C during solving cancels only this request. A disconnected or failed request is never replayed.
+
+Standard output contains one JSON result. Check `execution`, `solver_status`, `feasibility`, and `optimality` separately. Exit status 0 means completed execution, including `sat`, `unsat`, or `unknown`. Status 130 means cancelled, 124 means timeout, and 2 means an input, transport, resource, or solver error. Command syntax errors use standard error. A cancellation transport timeout does not confirm worker cleanup.

@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import sys
+import subprocess
 import time
 
 
@@ -83,7 +84,20 @@ def replies(stream, ids):
     raise RuntimeError("The daemon did not complete the requests")
 
 
-def main(endpoint):
+def main(endpoint, program=None):
+    if program:
+        for arguments, source, status in (
+                ([], "(assert true)", "sat"),
+                (["--connect", endpoint], "(assert false)", "unsat"),
+                (["--connect", endpoint, "--mode", "optimize"],
+                 "(declare-const x Int)(assert (>= x 1))(minimize x)", "sat")):
+            completed = subprocess.run([program, "smt", *arguments, "-"],
+                                       input=source.encode(), capture_output=True, timeout=20)
+            result = json.loads(completed.stdout)
+            if (completed.returncode != 0 or result.get("execution") != "completed"
+                    or result.get("solver_status") != status):
+                raise RuntimeError(f"Packaged SMT CLI failed: {result}, {completed.stderr!r}")
+        print("Packaged owned and connected SMT CLI passed", flush=True)
     request = {"smtlib": "(declare-const x Int)(assert (= x 1))",
                "mode": "check", "timeout_ms": 10000}
     with connect(endpoint) as stream:
@@ -118,4 +132,4 @@ def main(endpoint):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else None)

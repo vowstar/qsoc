@@ -23,6 +23,7 @@ public:
     static QJsonObject solveRemote(
         const QJsonObject &request, const QString &endpoint, std::stop_token stop = {});
     static QString     validateRequest(const QJsonObject &request);
+    static bool        isValidResponse(const QJsonObject &result);
     static QJsonObject failure(const QString &execution, const QString &reason);
 };
 

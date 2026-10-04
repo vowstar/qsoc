@@ -157,6 +157,10 @@ def main():
             [sys.executable, str(pathlib.Path(__file__).with_name("probe-agent-smt.py")),
              str(directory / ("qsoc" + suffix)), "--resources"],
             cwd=working, env=environment, check=True, timeout=100)
+        subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).with_name("probe-smt-cli.py")),
+             str(directory / ("qsoc" + suffix))],
+            cwd=working, env=environment, check=True, timeout=40)
         endpoint = ("qsoc-deployment-" + uuid.uuid4().hex if os.name == "nt"
                     else str(pathlib.Path(working) / "daemon.sock"))
         daemon = subprocess.Popen(
@@ -165,7 +169,8 @@ def main():
             cwd=working, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             subprocess.run([sys.executable, str(pathlib.Path(__file__).with_name("probe-local-smt.py")),
-                            endpoint], cwd=working, env=environment, check=True, timeout=30)
+                            endpoint, str(directory / ("qsoc" + suffix))],
+                           cwd=working, env=environment, check=True, timeout=90)
         finally:
             if daemon.poll() is None:
                 daemon.terminate()

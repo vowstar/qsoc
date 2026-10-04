@@ -83,23 +83,6 @@ void stopProcess(QProcess &process)
     }
 }
 
-bool validResponse(const QJsonObject &result)
-{
-    static const QSet<QString> executions
-        = {"completed", "timeout", "cancelled", "resource_limit", "error", "busy"};
-    static const QSet<QString> feasibility = {"feasible", "infeasible", "unknown"};
-    static const QSet<QString> optimality
-        = {"optimal", "unbounded", "limit", "not_proven", "not_applicable"};
-    static const QSet<QString> status = {"sat", "unsat", "unknown"};
-    const auto                 solver = result.value("solver_status");
-    return result.value("protocol").toDouble() == 1
-           && executions.contains(result.value("execution").toString())
-           && feasibility.contains(result.value("feasibility").toString())
-           && optimality.contains(result.value("optimality").toString())
-           && result.value("truncated").isBool()
-           && (solver.isNull() || status.contains(solver.toString()));
-}
-
 constexpr int wireLimit = 2 * 1024 * 1024;
 
 QJsonObject receive(
@@ -140,8 +123,7 @@ QJsonObject interruption(std::stop_token stop, const QElapsedTimer &elapsed, int
 QJsonObject response(const QJsonObject &message)
 {
     const auto result = message.value("result").toObject();
-    if (message.value("id").toInt() != 1 || !validResponse(result)
-        || QJsonDocument(result).toJson(QJsonDocument::Compact).size() > QSocSmtService::outputLimit)
+    if (message.value("id").toInt() != 1 || !QSocSmtService::isValidResponse(result))
         return QSocSmtService::failure("error", "Invalid worker response");
     return result;
 }
@@ -196,6 +178,24 @@ QJsonObject runWorker(
 }
 
 } // namespace
+
+bool QSocSmtService::isValidResponse(const QJsonObject &result)
+{
+    static const QSet<QString> executions
+        = {"completed", "timeout", "cancelled", "resource_limit", "error", "busy"};
+    static const QSet<QString> feasibility = {"feasible", "infeasible", "unknown"};
+    static const QSet<QString> optimality
+        = {"optimal", "unbounded", "limit", "not_proven", "not_applicable"};
+    static const QSet<QString> status = {"sat", "unsat", "unknown"};
+    const auto                 solver = result.value("solver_status");
+    return QJsonDocument(result).toJson(QJsonDocument::Compact).size() <= outputLimit
+           && result.value("protocol").toDouble() == 1
+           && executions.contains(result.value("execution").toString())
+           && feasibility.contains(result.value("feasibility").toString())
+           && optimality.contains(result.value("optimality").toString())
+           && result.value("truncated").isBool()
+           && (solver.isNull() || status.contains(solver.toString()));
+}
 
 QString QSocSmtService::workerPath()
 {

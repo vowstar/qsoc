@@ -403,6 +403,7 @@ private:
      * @retval false Parse failed.
      */
     bool parseAgent(const QStringList &appArguments);
+    bool parseSmt(const QStringList &appArguments);
 
     /**
      * @brief TUI client mode: drive a qsoc-agentd daemon over its socket.

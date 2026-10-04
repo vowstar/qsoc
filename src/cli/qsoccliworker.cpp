@@ -230,7 +230,8 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
             "bus         Import, update of bus.\n"
             "schematic   Processing of Schematic.\n"
             "generate    Generate rtl, such as verilog, etc.\n"
-            "agent       Run interactive AI agent mode.\n"),
+            "agent       Run interactive AI agent mode.\n"
+            "smt         Solve local SMT-LIB constraints.\n"),
         "<command> [command options]");
     parser.parse(appArguments);
     /* Resolve --color before any output-emitting code runs. */
@@ -279,7 +280,7 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
     }
     /* Perform different operations according to different subcommands */
     const QString &command = positionalArgs.first();
-    if (command != "agent" && !projectManager) {
+    if (command != "agent" && command != "smt" && !projectManager) {
         projectManager  = new QSocProjectManager(this);
         socConfig       = new QSocConfig(this, projectManager);
         llmService      = new QLLMService(this, socConfig);
@@ -313,6 +314,10 @@ bool QSocCliWorker::parseRoot(const QStringList &appArguments)
         if (!parseGenerate(nextArguments)) {
             return false;
         }
+    } else if (command == "smt") {
+        nextArguments.removeOne(command);
+        if (!parseSmt(nextArguments))
+            return false;
     } else if (command == "agent") {
         nextArguments.removeOne(command);
         if (!parseAgent(nextArguments)) {
