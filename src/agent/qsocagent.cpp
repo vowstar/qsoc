@@ -13,8 +13,8 @@
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocconsole.h"
 #include "common/qsochooktypes.h"
+#include "common/qsocmachine.h"
 #include "common/qsocmessageauthority.h"
-#include "common/qsocshellexecutor.h"
 #include "common/qsoctokenizer.h"
 
 #include <algorithm>
@@ -3013,38 +3013,15 @@ void QSocAgent::appendRuntimeSystemSections(QString &prompt) const
 
 QString QSocAgent::environmentShellLines(const QSocAgentConfig &config)
 {
-    const auto orUnknown = [](const QString &value) {
-        return value.isEmpty() ? QStringLiteral("unknown") : value;
-    };
-    const QString local = QSysInfo::productType() + QStringLiteral(" ")
-                          + QSysInfo::productVersion();
-    if (config.remoteMode) {
-        return QStringLiteral(
-                   "- OS: %1\n- Arch: %2\n- Shell: %3\n- Executor: remote\n"
-                   "- This machine (%4, %5) runs web_fetch, web_search, query_docs, SMT/z3 "
-                   "and MCP tools; they do not reach the remote host\n")
-            .arg(
-                orUnknown(config.remoteOs),
-                orUnknown(config.remoteArch),
-                orUnknown(config.remoteShell),
-                local,
-                QSysInfo::currentCpuArchitecture());
+    if (!config.remoteMode) {
+        return machineEnvironmentLines(localMachine(), false);
     }
-    const QSocShellExecutor shell     = localShellExecutor();
-    QString                 shellText = shell.summary();
-    if (!shell.available()) {
-#ifdef Q_OS_WIN
-        shellText = QStringLiteral(
-            "unavailable (install Git for Windows or set QSOC_GIT_BASH_PATH); bash, "
-            "bash_manage and monitor are not offered");
-#else
-        shellText = QStringLiteral(
-            "unavailable (no /bin/bash, bash on PATH or /bin/sh); bash, bash_manage and "
-            "monitor are not offered");
-#endif
-    }
-    return QStringLiteral("- OS: %1\n- Arch: %2\n- Shell: %3\n- Executor: local\n")
-        .arg(local, QSysInfo::currentCpuArchitecture(), shellText);
+    const QSocMachine local = localMachine();
+    return machineEnvironmentLines(config.remoteMachine, true)
+           + QStringLiteral(
+                 "- This machine (%1, %2) runs web_fetch, web_search, query_docs, SMT/z3 "
+                 "and MCP tools; they do not reach the remote host\n")
+                 .arg(local.os, local.arch);
 }
 
 void QSocAgent::appendDynamicSystemSections(QString &prompt) const
@@ -3099,7 +3076,7 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                       ? QStringLiteral("- bash and bash_manage execute on the remote host.\n")
                       : QStringLiteral(
                             "- bash, bash_manage and monitor are unavailable: "
-                            "the remote host has no POSIX shell.\n"))
+                            "the remote host has no usable shell (see Environment).\n"))
                + QStringLiteral(
                    "- path_context reports and changes remote paths.\n"
                    "- todo tools read/write the remote workspace .qsoc/todos.md.\n"

@@ -35,17 +35,7 @@ void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *
     if (conn == nullptr || config == nullptr) {
         return;
     }
-    const QSocRemoteHost &host = conn->host();
-    config->remoteOs           = host.kind == QSocRemoteHost::Kind::Unknown ? QString() : host.os;
-    config->remoteArch         = host.arch;
-    const QString offered      = QStringLiteral("; bash, bash_manage and monitor are not offered");
-    if (host.shellError.isEmpty()) {
-        config->remoteShell = host.shell.summary();
-    } else if (host.kind == QSocRemoteHost::Kind::Unknown) {
-        config->remoteShell = QStringLiteral("unknown (%1)").arg(host.shellError) + offered;
-    } else {
-        config->remoteShell = QStringLiteral("none (%1)").arg(host.shellError) + offered;
-    }
+    config->remoteMachine = conn->host();
 }
 
 void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *config)
@@ -661,11 +651,11 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemotePath(parent, conn, pathCtx));
-    if (remoteHostOffersExecTools(conn->host())) {
+    if (machineOffersExecTools(conn->host())) {
         registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
         registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
     }
-    if (monitorSource != nullptr && remoteHostOffersExecTools(conn->host())) {
+    if (monitorSource != nullptr && machineOffersExecTools(conn->host())) {
         QSocMonitorTaskSource::RemoteSpec remote;
         remote.targetKey = conn->target();
         remote.workspace = conn->workspace();
@@ -806,8 +796,12 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
     const int probeMs = left < 0
                             ? kHostProbeMs
                             : static_cast<int>(qMin<qint64>(qMax<qint64>(1, left), kHostProbeMs));
-    m_host            = m_hostProbe ? m_hostProbe(m_session, m_shellPreference)
-                                    : probeRemoteHost(m_session, m_shellPreference, probeMs);
+    if (m_hostProbe) {
+        m_host = m_hostProbe(m_session, m_shellPreference);
+    } else {
+        m_host = probeRemoteHost(m_session, m_sftp, m_shellPreference, probeMs);
+        verifyRemoteShellRoot(m_session, &m_host, m_canonicalWorkspace, probeMs);
+    }
     ++m_generation;
     m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
     return true;
@@ -828,7 +822,7 @@ bool QSocRemoteConnection::setShellPreference(const QString &preference, QString
 }
 
 void QSocRemoteConnection::setHostProbe(
-    std::function<QSocRemoteHost(QSocSshSession *, const QString &)> probe)
+    std::function<QSocMachine(QSocSshSession *, const QString &)> probe)
 {
     m_hostProbe = std::move(probe);
 }
@@ -863,7 +857,7 @@ void QSocRemoteConnection::teardown()
     m_workspaceTreeId.clear();
     m_transportLink.clear();
     m_writableAnchors.clear();
-    m_host                 = QSocRemoteHost{};
+    m_host                 = QSocMachine{};
     m_lastReconnectKeptCwd = false;
 }
 

@@ -67,14 +67,6 @@ QString resolveBashPath()
     /* Never take `bash` straight from PATH on Windows: System32\bash.exe
      * is the WSL launcher and runs commands in a different OS image.
      * Only a git-bash derived from the git executable is acceptable. */
-    const QString gitExe = QStandardPaths::findExecutable(QStringLiteral("git"));
-    if (!gitExe.isEmpty()) {
-        for (const QString &candidate : gitBashCandidates(gitExe)) {
-            if (isUsableCandidate(candidate)) {
-                return QFileInfo(candidate).absoluteFilePath();
-            }
-        }
-    }
     QHash<QString, QString> env;
     for (const char *name :
          {"GIT_INSTALL_ROOT",
@@ -85,7 +77,8 @@ QString resolveBashPath()
           "USERPROFILE"}) {
         env.insert(QString::fromLatin1(name), qEnvironmentVariable(name));
     }
-    for (const QString &candidate : gitBashInstallCandidates(env)) {
+    const QString gitExe = QStandardPaths::findExecutable(QStringLiteral("git"));
+    for (const QString &candidate : windowsGitBashCandidates({}, gitExe, env)) {
         if (isUsableCandidate(candidate)) {
             return QFileInfo(candidate).absoluteFilePath();
         }
@@ -193,17 +186,57 @@ QString toPosixPath(const QString &path)
         out.replace(QLatin1Char('\\'), QLatin1Char('/'));
         return out;
     }
-    /* Drive letter C:\x or C:/x -> /c/x */
-    static const QRegularExpression driveRe(QStringLiteral(R"(^([A-Za-z]):[/\\])"));
+    /* Drive letter C:\x, C:/x or SFTP /C:/x -> /c/x */
+    static const QRegularExpression driveRe(QStringLiteral(R"(^/?([A-Za-z]):([/\\]|$))"));
     const QRegularExpressionMatch   match = driveRe.match(path);
     if (match.hasMatch()) {
-        QString rest = path.mid(2);
+        QString rest = path.mid(match.capturedEnd(1) + 1);
         rest.replace(QLatin1Char('\\'), QLatin1Char('/'));
         return QStringLiteral("/") + match.captured(1).toLower() + rest;
     }
     /* Already POSIX or relative: flip any stray backslashes */
     QString out = path;
     out.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return out;
+}
+
+QString toWindowsPath(const QString &path)
+{
+    static const QRegularExpression driveRe(QStringLiteral(R"(^/?([A-Za-z])(:?)([/\\]|$))"));
+    QString                         out   = path;
+    const QRegularExpressionMatch   match = driveRe.match(path);
+    /* `/c/x` is a drive only in the MSYS form; `c:/x` and `/C:/x` always are. */
+    if (match.hasMatch() && (path.startsWith(QLatin1Char('/')) || !match.captured(2).isEmpty())) {
+        out = match.captured(1).toUpper() + QLatin1Char(':') + path.mid(match.capturedEnd(2));
+        if (out.size() == 2) {
+            out += QLatin1Char('/');
+        }
+    }
+    out.replace(QLatin1Char('/'), QLatin1Char('\\'));
+    return out;
+}
+
+QString toSftpPath(const QString &path)
+{
+    return QLatin1Char('/') + toWindowsPath(path).replace(QLatin1Char('\\'), QLatin1Char('/'));
+}
+
+bool isWindowsBashPath(const QString &path)
+{
+    static const QRegularExpression bashRe(
+        QStringLiteral(R"(^/?[A-Za-z]:[/\\](.*[/\\])?bash\.exe$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    return bashRe.match(path).hasMatch();
+}
+
+QStringList windowsGitBashCandidates(
+    const QString &override, const QString &gitExePath, const QHash<QString, QString> &env)
+{
+    if (!override.isEmpty()) {
+        return {override};
+    }
+    QStringList out = gitBashCandidates(gitExePath) + gitBashInstallCandidates(env);
+    out.removeDuplicates();
     return out;
 }
 

@@ -99,10 +99,10 @@ private:
 
     /* A binding over the loopback session, with the host the hook decides. */
     bool bind(
-        QSocRemoteConnection                                            *conn,
-        const QString                                                   &workspace,
-        std::function<QSocRemoteHost(QSocSshSession *, const QString &)> probe,
-        QString                                                         *error)
+        QSocRemoteConnection                                         *conn,
+        const QString                                                &workspace,
+        std::function<QSocMachine(QSocSshSession *, const QString &)> probe,
+        QString                                                      *error)
     {
         if (probe) {
             conn->setHostProbe(std::move(probe));
@@ -145,8 +145,8 @@ private slots:
         QString              err;
         QVERIFY2(bind(&conn, paths.work, {}, &err), qPrintable(err));
 
-        const QSocRemoteHost &host = conn.host();
-        QCOMPARE(host.kind, QSocRemoteHost::Kind::Posix);
+        const QSocMachine &host = conn.host();
+        QCOMPARE(host.kind, QSocMachine::Kind::Posix);
         QCOMPARE(host.hasProc, QDir(QStringLiteral("/proc/1")).exists());
         QVERIFY(!host.os.isEmpty());
         QVERIFY(!host.arch.isEmpty());
@@ -198,7 +198,8 @@ private slots:
         QVERIFY2(out.contains(QStringLiteral("exit_code: 0")), qPrintable(out));
         QVERIFY2(out.contains(QStringLiteral("from-stdin")), qPrintable(out));
         QVERIFY2(out.contains(paths.work), qPrintable(out));
-        if (runtime.agent()->getConfig().remoteShell.startsWith(QStringLiteral("bash"))) {
+        if (runtime.agent()->getConfig().remoteMachine.shell.summary().startsWith(
+                QStringLiteral("bash"))) {
             QVERIFY2(out.contains(QStringLiteral("login")), qPrintable(out));
         }
         runtime.disconnectRemote();
@@ -253,8 +254,9 @@ private slots:
         QString err;
         QVERIFY2(runtime.connectRemote(kAlias, &err), qPrintable(err));
         QVERIFY2(
-            runtime.agent()->getConfig().remoteShell.startsWith(QStringLiteral("sh (POSIX only")),
-            qPrintable(runtime.agent()->getConfig().remoteShell));
+            runtime.agent()->getConfig().remoteMachine.shell.summary().startsWith(
+                QStringLiteral("sh (POSIX only")),
+            qPrintable(runtime.agent()->getConfig().remoteMachine.shell.summary()));
         QSocTool *bash = runtime.toolRegistry()->getTool(QStringLiteral("bash"));
         QVERIFY(bash != nullptr);
         QVERIFY(bash->getDescription().contains(QStringLiteral("Only POSIX sh")));
@@ -283,13 +285,18 @@ private slots:
         QSocRemoteConnection conn;
         QString              err;
         const auto           windows = [](QSocSshSession *, const QString &) {
-            return parseRemoteHostProbe({}, QStringLiteral("Microsoft Windows [Version 10.0]"), {});
+            /* A Windows host whose login shell answered neither as cmd nor
+             * as PowerShell: nothing can be launched there. */
+            return parseRemoteHostProbe(
+                QStringLiteral("__QSOC_PROBE_BEGIN__\nos=MINGW64_NT-10.0\n__QSOC_PROBE_END__\n"),
+                {},
+                {});
         };
         QVERIFY2(bind(&conn, paths.work, windows, &err), qPrintable(err));
 
         QSocToolRemoteShellBash bash(nullptr, &conn, conn.path());
         const QString           refused = bash.execute(json{{"command", "touch nope"}});
-        QVERIFY2(refused.contains(QStringLiteral("no POSIX shell")), qPrintable(refused));
+        QVERIFY2(refused.contains(QStringLiteral("no usable shell")), qPrintable(refused));
         QVERIFY(!QFile::exists(paths.work + QStringLiteral("/nope")));
 
         /* The loopback login shell is POSIX, so the raw line runs; what is
@@ -310,13 +317,13 @@ private slots:
          * login that hangs would; the second answers normally. */
         const auto probe = [&probes](QSocSshSession *session, const QString &preference) {
             if (++probes > 1) {
-                return probeRemoteHost(session, preference, 10000);
+                return probeRemoteHost(session, nullptr, preference, 10000);
             }
             QSocSshExec exec(*session);
             return unknownRemoteHost(remoteProbeFailure(exec.run(QStringLiteral("sleep 5"), 300)));
         };
         QVERIFY2(bind(&conn, paths.work, probe, &err), qPrintable(err));
-        QCOMPARE(conn.host().kind, QSocRemoteHost::Kind::Unknown);
+        QCOMPARE(conn.host().kind, QSocMachine::Kind::Unknown);
         QCOMPARE(conn.host().shellError, QStringLiteral("shell probe timed out"));
         QVERIFY2(conn.isUsable(), qPrintable(conn.unusableText()));
 
@@ -353,7 +360,7 @@ private slots:
         conn.session()->markTransportDead();
         QCOMPARE(conn.reconnect(&err), QSocRemoteConnection::ReconnectOutcome::Reconnected);
         QCOMPARE(probes, 2);
-        QCOMPARE(conn.host().kind, QSocRemoteHost::Kind::Posix);
+        QCOMPARE(conn.host().kind, QSocMachine::Kind::Posix);
         QVERIFY(bash.execute(json{{"command", "true"}}).contains(QStringLiteral("exit_code: 0")));
     }
 

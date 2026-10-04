@@ -34,6 +34,7 @@
 #include "common/qsocconfig.h"
 #include "common/qsoccron.h"
 #include "common/qsoclinediff.h"
+#include "common/qsocmachine.h"
 #include "common/qsocmessageauthority.h"
 #include "common/qsocshellpath.h"
 
@@ -78,17 +79,17 @@ QString QSocAgentRuntimeInternal::runLocalShellEscape(
     process.setChildProcessModifier([] { ::setsid(); });
 #endif
     process.setProcessChannelMode(QProcess::MergedChannels);
-    /* Policy: local `!` keeps the platform command shell. */
+    const QSocMachine machine = localMachine();
+    if (machineShellEscapeMode(machine) == QSocShellEscapeMode::Passthrough)
+        return QStringLiteral("Error: no shell to run the line (%1)\n").arg(machine.shellError);
 #ifdef Q_OS_WIN
-    const QString shell = QStringLiteral("cmd.exe");
-    process.setProgram(shell);
+    process.setProgram(QStringLiteral("cmd.exe"));
     process.setNativeArguments(QSocShellPath::cmdExeNativeArguments(command));
     /* Always a console of its own, so its code page is the OEM one. */
     process.setCreateProcessArgumentsModifier(
         [](QProcess::CreateProcessArguments *args) { args->flags |= CREATE_NO_WINDOW; });
 #else
-    const QString shell = QStringLiteral("/bin/sh");
-    process.setProgram(shell);
+    process.setProgram(machine.shell.path);
     process.setArguments({QStringLiteral("-c"), command});
 #endif
     process.start();
@@ -119,7 +120,7 @@ QString QSocAgentRuntimeInternal::runLocalShellEscape(
     append(QSocShellPath::decodeConsoleOutput(process.readAll()));
     if (process.exitCode() != 0)
         append(QStringLiteral("(exit code: %1)").arg(process.exitCode()));
-    append(QStringLiteral("(shell: %1)").arg(shell));
+    append(QStringLiteral("(shell: %1)").arg(shellEscapeShellName(machine)));
     return result;
 }
 

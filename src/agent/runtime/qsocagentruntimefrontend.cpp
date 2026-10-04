@@ -401,10 +401,8 @@ void QSocAgentRuntime::disconnectRemote()
         newCfg.remoteWorkspace.clear();
         newCfg.remoteWorkingDir.clear();
         newCfg.remoteWritableDirs.clear();
-        newCfg.remoteOs.clear();
-        newCfg.remoteArch.clear();
-        newCfg.remoteShell.clear();
-        newCfg.skillListing = d->skillListing();
+        newCfg.remoteMachine = QSocMachine{};
+        newCfg.skillListing  = d->skillListing();
         d->agent->setConfig(newCfg);
     }
 

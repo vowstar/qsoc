@@ -5,6 +5,7 @@
 #define QSOCAGENTCONFIG_H
 
 #include "common/qsochooktypes.h"
+#include "common/qsocmachine.h"
 
 #include <QString>
 #include <QStringList>
@@ -148,9 +149,7 @@ struct QSocAgentConfig
     QString     remoteWorkspace;  /* Absolute remote workspace root. */
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
-    QString     remoteOs;    /* Probed `uname -s`, or "Windows"; empty when unknown. */
-    QString     remoteArch;  /* Probed `uname -m`. */
-    QString     remoteShell; /* Executor summary for the remote bash tool. */
+    QSocMachine remoteMachine; /* What the host probe learned; Unknown when not bound. */
 
     struct RemoteProjectRules
     {

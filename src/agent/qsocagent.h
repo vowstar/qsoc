@@ -568,8 +568,8 @@ public:
 
     /**
      * @brief The Environment lines naming the OS, arch and shell bash runs in.
-     * @details Remote mode reports the probed host; local mode reports the
-     *          shell @ref localShellExecutor resolves.
+     * @details One format for both modes: remote mode reports the probed
+     *          host, local mode @ref localMachine.
      */
     static QString environmentShellLines(const QSocAgentConfig &config);
 

@@ -3,6 +3,7 @@
 
 #include "agent/tool/qsoctoolshell.h"
 
+#include "common/qsocmachine.h"
 #include "common/qsocshellpath.h"
 
 #include <QDateTime>
@@ -517,7 +518,10 @@ QString QSocToolShellBash::getDescription() const
            "Only one blocking shell call can run per agent; use background=true for concurrency. "
            "If command times out, process keeps running and can be managed via bash_manage tool. "
            "Each call starts a fresh process in the project directory; cwd does not persist "
-           "across calls. Use absolute paths or chain with && (e.g. 'cd build && make').";
+           "across calls. Use absolute paths or chain with && (e.g. 'cd build && make')."
+           + (localShellExecutor().kind == QSocShellExecutor::Kind::GitBash
+                  ? QStringLiteral(" ") + gitBashGuidance()
+                  : QString());
 }
 
 json QSocToolShellBash::getParametersSchema() const

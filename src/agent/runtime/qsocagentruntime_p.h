@@ -78,9 +78,9 @@ bool persistRecoverySnapshot(
 
 /**
  * @brief Run a local `!` line and return what it printed.
- * @details `/bin/sh -c` on Unix, `cmd.exe` on Windows, which receives the
- *          line unchanged. Ends with the exit code when non-zero and with
- *          the shell that ran it.
+ * @details The local machine's `!` rule: its executor (`-c`) on POSIX,
+ *          `cmd.exe` on Windows, which receives the line unchanged. Ends with
+ *          the exit code when non-zero and with the shell that ran it.
  */
 QString runLocalShellEscape(const QString &command, const QString &directory, std::stop_token stop);
 

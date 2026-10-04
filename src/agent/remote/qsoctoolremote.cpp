@@ -12,6 +12,7 @@
 #include "agent/remote/qsocsshsession.h"
 #include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
+#include "common/qsocshellpath.h"
 
 #include <QDateTime>
 #include <QString>
@@ -283,15 +284,15 @@ ResolvedPath resolveRemoteJobPath(
  * that probed a different answer than the bind did. */
 QString noExecutorRefusal(QSocRemoteConnection *conn)
 {
-    const QSocRemoteHost &host = conn->host();
-    const QString         why  = host.shellError.isEmpty() ? host.summary() : host.shellError;
-    if (host.kind == QSocRemoteHost::Kind::Unknown) {
+    const QSocMachine &host = conn->host();
+    const QString      why  = host.shellError.isEmpty() ? host.summary() : host.shellError;
+    if (host.kind == QSocMachine::Kind::Unknown) {
         return QStringLiteral(
                    "Error: the shell of this host is unknown (%1); file tools still work, and "
                    "a reconnect with /ssh probes again")
             .arg(why);
     }
-    return QStringLiteral("Error: this host has no POSIX shell to run commands (%1)").arg(why);
+    return QStringLiteral("Error: this host has no usable shell to run commands (%1)").arg(why);
 }
 
 /* A command whose fate we know is ok or failed; one that was cut off is
@@ -367,8 +368,8 @@ QString shellEscapeText(const QSocSshExec::Result &result)
             output += QLatin1Char('\n');
         }
     };
-    append(QString::fromUtf8(result.stdoutBytes));
-    append(QString::fromUtf8(result.stderrBytes));
+    append(QSocShellPath::decodeConsoleOutput(result.stdoutBytes));
+    append(QSocShellPath::decodeConsoleOutput(result.stderrBytes));
     if (result.timedOut) {
         append(QStringLiteral("(timed out)"));
     } else if (result.aborted) {
@@ -390,9 +391,10 @@ QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &com
         return sessionRefusal(conn) + QLatin1Char('\n');
     }
 
-    constexpr int kRemoteShellEscapeMs = 30 * 1000;
-    QSocSshExec   exec(*conn->session());
-    if (remoteHostShellEscapePassthrough(conn->host())) {
+    constexpr int      kRemoteShellEscapeMs = 30 * 1000;
+    QSocSshExec        exec(*conn->session());
+    const QSocMachine &host = conn->host();
+    if (machineShellEscapeMode(host) == QSocShellEscapeMode::Passthrough) {
         return remoteShellEscapePassthroughNotice() + QLatin1Char('\n')
                + shellEscapeText(exec.run(command, kRemoteShellEscapeMs));
     }
@@ -402,9 +404,9 @@ QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &com
     if (!conn->resolveBoundCwd(&cwd, &err)) {
         return QStringLiteral("Error: %1\n").arg(err);
     }
-    const QSocRemoteExec request = remoteCommandExec(conn->host(), cwd, command);
+    const QSocRemoteExec request = remoteShellEscapeExec(host, cwd, command);
     return shellEscapeText(exec.run(request.command, kRemoteShellEscapeMs, request.input))
-           + QStringLiteral("(shell: %1)\n").arg(conn->host().shell.summary());
+           + QStringLiteral("(shell: %1)\n").arg(shellEscapeShellName(host));
 }
 
 /* read_file */
@@ -823,6 +825,9 @@ QString QSocToolRemoteShellBash::getDescription() const
         text += QStringLiteral(
             " Only POSIX sh is available on this host: write POSIX sh, not bash syntax.");
     }
+    if (m_conn != nullptr && m_conn->host().shell.kind == QSocShellExecutor::Kind::GitBash) {
+        text += QLatin1Char(' ') + gitBashGuidance();
+    }
     return text;
 }
 
@@ -850,7 +855,7 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
     if (!arguments.contains("command") || !arguments["command"].is_string()) {
         return QStringLiteral("Error: command is required");
     }
-    if (!remoteHostOffersExecTools(m_conn->host())) {
+    if (!machineOffersExecTools(m_conn->host())) {
         return noExecutorRefusal(m_conn);
     }
     const QString cmd       = QString::fromStdString(arguments["command"].get<std::string>());
@@ -887,7 +892,12 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
 
         const QSocRemoteExec launch = remoteScriptExec(
             m_conn->host(),
-            jobLaunchScript(jobPath.path, cwd, jobId, cmd, m_conn->host().shell),
+            jobLaunchScript(
+                machineShellPath(m_conn->host(), jobPath.path),
+                machineShellPath(m_conn->host(), cwd),
+                jobId,
+                cmd,
+                m_conn->host().shell),
             false);
         QSocSshExec exec(*m_conn->session());
         m_running         = &exec;
@@ -1078,8 +1088,7 @@ QString QSocToolRemoteBashManage::getDescription() const
                "Actions: status, output, terminate (SIGTERM), kill (SIGKILL). A signal is sent "
                "only when the host still reports the boot identity and the process start time "
                "recorded at launch; otherwise the answer is uncertain and nothing is signalled.")
-           + (m_conn != nullptr && remoteHostOffersExecTools(m_conn->host())
-                      && !m_conn->host().hasProc
+           + (m_conn != nullptr && machineOffersExecTools(m_conn->host()) && !m_conn->host().hasProc
                   ? QStringLiteral(
                         " This host has no /proc, so a job's identity may be unverifiable and "
                         "signals refused.")
@@ -1108,7 +1117,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
     if (m_conn == nullptr || !m_conn->isUsable()) {
         return sessionRefusal(m_conn);
     }
-    if (!remoteHostOffersExecTools(m_conn->host())) {
+    if (!machineOffersExecTools(m_conn->host())) {
         return noExecutorRefusal(m_conn);
     }
     if (m_conn->path()->root().isEmpty()) {
@@ -1180,7 +1189,8 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         if (!jobPath.error.isEmpty()) {
             return QStringLiteral("Error: %1").arg(jobPath.error);
         }
-        const auto    result  = runShell(jobStatusScript(jobPath.path, record), 5000);
+        const auto result
+            = runShell(jobStatusScript(machineShellPath(m_conn->host(), jobPath.path), record), 5000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;
@@ -1211,7 +1221,9 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
                 maxLines = 200;
             }
         }
-        const auto    result  = runShell(jobOutputScript(jobPath.path, maxLines, record), 10000);
+        const auto result = runShell(
+            jobOutputScript(machineShellPath(m_conn->host(), jobPath.path), maxLines, record),
+            10000);
         const QString failure = queryFailure(result);
         if (!failure.isEmpty()) {
             return failure;

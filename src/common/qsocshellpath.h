@@ -14,9 +14,8 @@
  *          resolve the interpreter through here so the platform rules
  *          live in one place:
  *          - Unix: `/bin/bash`, else `bash` on PATH, else `/bin/sh`.
- *          - Windows: `QSOC_GIT_BASH_PATH` env override, else `bash.exe`
- *            derived from the `git` executable on PATH, else the standard
- *            Git for Windows install roots. `bash` found
+ *          - Windows: `QSOC_GIT_BASH_PATH` env override, else
+ *            @ref windowsGitBashCandidates. `bash` found
  *            directly on PATH is never used: `System32\bash.exe` is the
  *            WSL launcher, not a POSIX shell for the host.
  *          An empty result means no usable shell; callers must fail the
@@ -60,7 +59,8 @@ QStringList gitBashInstallCandidates(const QHash<QString, QString> &env);
 
 /**
  * @brief Convert a Windows path to POSIX (MSYS/git-bash) form.
- * @details Pure string transform: `C:\Users\foo` becomes `/c/Users/foo`,
+ * @details Pure string transform: `C:\Users\foo` and the SFTP form
+ *          `/C:/Users/foo` become `/c/Users/foo`,
  *          UNC `\\server\share` becomes `//server/share`, remaining
  *          backslashes are flipped. Input already in POSIX form passes
  *          through unchanged.
@@ -68,6 +68,33 @@ QStringList gitBashInstallCandidates(const QHash<QString, QString> &env);
  * @return Path in POSIX form.
  */
 QString toPosixPath(const QString &path);
+
+/**
+ * @brief Convert an MSYS, SFTP or mixed Windows path to Windows form.
+ * @details Pure string transform: `/c/x`, `/C:/x` and `C:/x` become `C:\x`.
+ *          Meant for paths known to be on a Windows machine.
+ */
+QString toWindowsPath(const QString &path);
+
+/** @brief The SFTP form of a Windows path: `C:\x` and `/c/x` become `/C:/x`. */
+QString toSftpPath(const QString &path);
+
+/** @brief Whether @p path is an absolute Windows path to a `bash.exe`. */
+bool isWindowsBashPath(const QString &path);
+
+/**
+ * @brief Every Git Bash candidate for a Windows machine, in probe order.
+ * @details The one list for the local machine and for a remote host. A
+ *          non-empty @p override is the only candidate. Otherwise the
+ *          layout around @p gitExePath (@ref gitBashCandidates), then the
+ *          install roots in @p env (@ref gitBashInstallCandidates). Never a
+ *          `bash.exe` from PATH or System32 (the WSL launcher).
+ * @param override `QSOC_GIT_BASH_PATH` locally, host.yml `shell:` remotely.
+ * @param gitExePath Located git executable, or empty.
+ * @param env Environment values by name.
+ */
+QStringList windowsGitBashCandidates(
+    const QString &override, const QString &gitExePath, const QHash<QString, QString> &env);
 
 /**
  * @brief Normalize a path for consumption by the resolved shell.
@@ -88,7 +115,7 @@ QString toShellPath(const QString &path);
 QString cmdExeNativeArguments(const QString &command);
 
 /**
- * @brief Decode a console program's output.
+ * @brief Decode a shell command's output, the same rule for every machine.
  * @details UTF-8 when the bytes are valid UTF-8. Otherwise the OEM code
  *          page on Windows, the code page of a child started in its own
  *          console, and the local 8-bit encoding elsewhere.

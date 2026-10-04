@@ -2,10 +2,12 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/runtime/qsocagentruntime_p.h"
+#include "common/qsocshellexecutor.h"
 #include "common/qsocshellpath.h"
 #include "qsoc_test.h"
 
 #include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -24,6 +26,8 @@ private slots:
     }
 
 #ifdef Q_OS_UNIX
+    void cleanup() { setLocalShellResolver({}); }
+
     void aLocalLineReportsItsExitAndShell()
     {
         QTemporaryDir dir;
@@ -33,7 +37,35 @@ private slots:
         QVERIFY2(out.startsWith(QStringLiteral("x")), qPrintable(out));
         QVERIFY2(out.contains(QDir(dir.path()).canonicalPath()), qPrintable(out));
         QVERIFY2(out.contains(QStringLiteral("\n(exit code: 2)\n")), qPrintable(out));
-        QVERIFY2(out.endsWith(QStringLiteral("(shell: /bin/sh)\n")), qPrintable(out));
+        QVERIFY2(
+            out.endsWith(QStringLiteral("(shell: %1)\n").arg(localShellExecutor().summary())),
+            qPrintable(out));
+    }
+
+    void aLocalLineRunsUnderTheResolvedExecutor()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString wrapper = dir.filePath(QStringLiteral("resolved-sh"));
+        QFile         file(wrapper);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("#!/bin/sh\necho via-resolved\nexec /bin/sh \"$@\"\n");
+        file.close();
+        QVERIFY(file.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+        QSocShellExecutor shell;
+        shell.kind = QSocShellExecutor::Kind::Sh;
+        shell.path = wrapper;
+        setLocalShellResolver([shell] { return shell; });
+        const QString out = QSocAgentRuntimeInternal::runLocalShellEscape(
+            QStringLiteral("echo ran"), dir.path(), {});
+        QVERIFY2(out.startsWith(QStringLiteral("via-resolved\nran\n")), qPrintable(out));
+        QVERIFY2(out.contains(QStringLiteral("(shell: sh (POSIX only")), qPrintable(out));
+
+        setLocalShellResolver([] { return QSocShellExecutor{}; });
+        const QString none = QSocAgentRuntimeInternal::runLocalShellEscape(
+            QStringLiteral("echo ran"), dir.path(), {});
+        QVERIFY2(none.startsWith(QStringLiteral("Error: no shell")), qPrintable(none));
+        QVERIFY(!none.contains(QStringLiteral("ran\n")));
     }
 #endif
 
@@ -47,7 +79,7 @@ private slots:
         const QString out  = QSocAgentRuntimeInternal::runLocalShellEscape(
             QStringLiteral("echo \"quoted words\" ") + word, dir.path(), {});
         QVERIFY2(out.contains(QStringLiteral("\"quoted words\" ") + word), qPrintable(out));
-        QVERIFY2(out.endsWith(QStringLiteral("(shell: cmd.exe)\n")), qPrintable(out));
+        QVERIFY2(out.endsWith(QStringLiteral("(shell: cmd)\n")), qPrintable(out));
     }
 #endif
 };

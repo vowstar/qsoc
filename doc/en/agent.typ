@@ -172,12 +172,14 @@ hostList:
     workspace: /home/alice/sim
     capability: |
       RTL simulation
-    shell: sh                   # optional: auto (default), bash or sh
+    shell: sh                   # optional: auto (default), bash, sh, or a Git Bash path
 ```
 
 `shell:` chooses the interpreter for commands on that host (see
-@agent-remote-where). Any value other than `auto`, `bash` or `sh` makes
-`/ssh <alias>` fail with an error naming the entry.
+@agent-shell-discovery). It accepts `auto`, `bash`, `sh`, or an absolute
+Windows path to a `bash.exe` such as `C:\Program Files\Git\bin\bash.exe`,
+which applies to Windows hosts only. Any other value makes `/ssh <alias>`
+fail with an error naming the entry.
 
 Two separate concerns share the file:
 
@@ -390,10 +392,10 @@ The following commands are available during an interactive session:
      `/loop clear`. See @agent-loop.],
     [`!<command>`],
     [Run a shell command in the working directory and show its output,
-     non-zero exit code, and the shell that ran it. Locally it runs under
-     `/bin/sh` (`cmd.exe` on Windows, which receives the line unchanged).
-     In remote mode it runs under the host's shell (@agent-remote-where),
-     only when the working directory still resolves inside the workspace.],
+     non-zero exit code, and the shell that ran it. The same rule applies
+     locally and on a remote host (@agent-shell-discovery). In remote mode
+     it runs only when the working directory still resolves inside the
+     workspace.],
   )],
   caption: [INTERACTIVE COMMANDS],
   kind: table,
@@ -1401,30 +1403,73 @@ The key is read from the user and system configuration layers only. A
 project `.qsoc.yml` cannot supply it: checking out a repository must
 never execute code from it.
 
-== Shell Discovery
+== Shell Selection
 <agent-shell-discovery>
-Features that run a command string (the `bash` tool, hooks, monitors,
-the status line) resolve the interpreter the same way on all platforms:
+The local machine and every SSH host follow one rule. QSoC classifies the
+machine as POSIX, Windows or unknown, then picks the executor that runs
+`bash`, `bash_manage` and `monitor`, and the shell that runs `!`:
 
-- Unix: `/bin/bash`, else `bash` on `PATH`, else `/bin/sh`.
-- Windows: the `bash.exe` shipped with Git for Windows, derived from the
-  `git` executable on `PATH`, else found under the standard install
-  folders: `%GIT_INSTALL_ROOT%`, `%ProgramFiles%\Git`,
+#figure(
+  align(center)[#table(
+    columns: (0.6fr, 1fr, 1fr),
+    align: (auto, left, left),
+    table.header([Machine], [`bash`, `bash_manage`, `monitor`], [`!<command>`]),
+    table.hline(),
+    [POSIX with bash], [`bash`], [The same executor],
+    [POSIX without bash], [`sh`; tool descriptions say only POSIX sh is
+      available], [The same executor],
+    [Windows with Git Bash], [Git Bash (`bash.exe` from Git for Windows)],
+      [`cmd /d /s /c "<command>"`, which receives the line unchanged],
+    [Windows without Git Bash], [Not offered], [`cmd`, as above],
+    [Unknown (remote only)], [Not offered], [The login shell, as typed, with
+      no directory change and a notice],
+  )],
+  caption: [SHELL SELECTION],
+  kind: table,
+)
+
+Local POSIX: `/bin/bash`, else `bash` on `PATH`, else `/bin/sh`. A remote
+POSIX host runs `bash -l` or `sh -l` found on its own `PATH`.
+
+A host is Windows when its login shell is cmd or PowerShell, or when its
+`uname -s` starts with `MINGW`, `MSYS` or `CYGWIN`. Git Bash is looked
+for in this order, locally and on a host:
+
++ The pinned path: `QSOC_GIT_BASH_PATH` locally, a `shell:` path in
+  host.yml remotely. When it is set but missing, no shell is used.
++ Locally only, the Git for Windows layout around the `git` executable on
+  `PATH`.
++ `bin\bash.exe` under `%GIT_INSTALL_ROOT%`, `%ProgramFiles%\Git`,
   `%ProgramFiles(x86)%\Git`, `%LOCALAPPDATA%\Programs\Git`, and scoop's
-  `apps\git\current`. `bash` found directly on `PATH` is never used
-  there, because `System32\bash.exe` launches WSL instead of a host
-  shell.
-- `QSOC_GIT_BASH_PATH` pins an explicit interpreter on any platform. If
-  it is set but invalid, shell execution is disabled rather than
-  silently falling back to a different interpreter.
+  `apps\git\current` (under `%SCOOP%` or `%USERPROFILE%\scoop`), then
+  `usr\bin\bash.exe` under each.
 
-Executables inside the current working directory are rejected during
-discovery, so a checked-out repository cannot substitute its own shell.
-When no interpreter is found, the agent does not offer `bash`,
-`bash_manage` or `monitor`, the system prompt says shell execution is
-unavailable, and everything else keeps working. The system prompt names
-the shell in use: `bash` with its version, `sh` (POSIX only), or Git Bash
-(MSYS), which takes POSIX paths such as `/c/Users/...`.
+`bash.exe` found on `PATH` or in `System32` is never used: it launches
+WSL instead of a host shell. On a remote host the variables come from
+the host and each candidate is checked over SFTP. Local executables
+inside the current working directory are rejected, so a checked-out
+repository cannot substitute its own shell. `QSOC_GIT_BASH_PATH` also
+pins the local interpreter on Linux and macOS.
+
+Git Bash takes POSIX paths: `C:\Users\me` is `/c/Users/me`. On a remote
+host QSoC asks the host's `cygpath -u` for the workspace root once per
+connection; when its answer differs from that form, the system prompt
+names it. A remote Windows host starts Git Bash only when its login
+shell is cmd or PowerShell; with any other login shell the tools are not
+offered and `!` runs as on an unknown host. Background jobs on Git Bash have no boot identity, so
+`bash_manage` may refuse to signal them.
+
+The system prompt reports, in the same format locally and remotely, the
+OS, architecture, shell and executor. With Git Bash it adds rules for
+Windows: POSIX paths, Windows programs by name, CRLF line endings, no
+`sudo`, and `cmd //c` for cmd builtins. When no shell is used, it says
+why and the shell tools are not offered; everything else keeps working.
+
+Output of `!` is read as UTF-8 when it is valid UTF-8. Otherwise local
+Windows output is read in the OEM code page; output that is not
+UTF-8 from a remote Windows host can show replacement characters.
+
+Hooks and the status line run through the local executor.
 
 == Background Tasks
 <agent-tasks>
@@ -1758,41 +1803,23 @@ Control-plane tools stay on the local machine regardless of mode:
 - SMT (`z3`) and MCP tools
 
 On every connect and reconnect QSoC probes the host once and picks the
-interpreter that runs `bash`, `bash_manage`, `monitor` and `!`:
-
-#figure(
-  align(center)[#table(
-    columns: (0.5fr, 1fr),
-    align: (auto, left),
-    table.header([Host], [Commands run under]),
-    table.hline(),
-    [POSIX with bash], [`bash -l`, found on the host's `PATH`],
-    [POSIX without bash], [`sh -l` (`sh` when `-l` is refused); tool
-      descriptions say only POSIX sh is available],
-    [Windows, or no answer], [Nothing. `bash`, `bash_manage` and `monitor`
-      are not offered; file tools keep working over SFTP],
-  )],
-  caption: [REMOTE SHELL SELECTION],
-  kind: table,
-)
+interpreter that runs `bash`, `bash_manage`, `monitor` and `!` by the
+rule in @agent-shell-discovery.
 
 A probe that times out or gets no usable answer leaves the host's shell
 unknown: the connection stays up, file tools keep working, the shell tools
 refuse with the reason, and the next reconnect probes again.
 
-The catalog `shell:` field (@agent-host-catalog) forces `bash` or `sh`;
-when the forced shell is missing, no shell is used. Each command reaches
-the interpreter on standard input, so the remote login shell (csh, fish
-or any other) never parses it, and a command that reads standard input
-sees end of file. The command starts in the working directory and does
-not run if that directory cannot be entered.
+The catalog `shell:` field (@agent-host-catalog) forces `bash` or `sh`, or
+a Git Bash path on Windows; when the forced shell is missing, no shell is
+used. Each command reaches the interpreter on standard input, so the
+remote login shell (csh, fish, cmd, PowerShell or any other) never parses
+it, and a command that reads standard input sees end of file. The command
+starts in the working directory and does not run if that directory
+cannot be entered.
 
-The system prompt reports the host's OS, architecture and shell, and
-states that the control-plane tools above run on the local machine.
-
-On a host with no shell, `!<command>` sends the line to the login shell
-unchanged, without changing to the working directory, and the output is
-preceded by a notice saying so.
+The system prompt states that the control-plane tools above run on the
+local machine.
 
 The following tools are intentionally unavailable in remote mode because
 they depend on local QSoC managers:
