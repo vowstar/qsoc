@@ -281,6 +281,8 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
                 /* Closing fence: code body is finalised; the next
                  * prose line will create a fresh assistant text block
                  * in the same run group. */
+                if (trimmed == QStringLiteral("```"))
+                    activeCode->setClosed();
                 activeCode = nullptr;
             }
             continue;
@@ -350,6 +352,8 @@ void QTuiCompositor::sealStream(StreamMode mode)
              * message on the fence line) must close the block, not land
              * inside the code body and double up at toMarkdown time. */
             if (pending.trimmed().startsWith(QStringLiteral("```"))) {
+                if (pending.trimmed() == QStringLiteral("```"))
+                    activeCode->setClosed();
                 activeCode = nullptr;
             } else {
                 activeCode->appendBody(pending);

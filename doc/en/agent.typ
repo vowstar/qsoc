@@ -545,6 +545,38 @@ and copied, including single-character emoji and mathematical letters.
 Formula output uses terminal fonts and does not require an external
 TeX installation.
 
+Closed `mermaid` code fences can render as Unicode diagrams:
+
+- `flowchart` and `graph`: four directions, rectangles, decisions, rounded nodes,
+  solid or dashed links, arrows at either end, labels, `&` node groups, cycles, and self-links.
+- `sequenceDiagram`: participants and actors, messages, self-messages, notes,
+  and nested `loop`, `alt`, `opt`, `critical`, and `break` fragments.
+- `stateDiagram` and `stateDiagram-v2`: flat states, aliases, descriptions,
+  labeled transitions, and initial and final states.
+- `classDiagram`: members, associations, inheritance, composition, aggregation,
+  dependencies, and endpoint cardinalities.
+- `erDiagram`: entity attributes, keys and comments, relationship labels,
+  cardinalities, and identifying or non-identifying links.
+
+Graph nodes follow declaration or first-reference order in the requested
+`TD`/`TB`, `BT`, `LR`, or `RL` direction. Each link has a separate route;
+`╪` crossings do not join links. Sequence messages retain source order.
+A diagram shows the supplied relationships; rendering does not validate them.
+
+These are limited subsets. Subgraphs, compound states, sequence activation and
+parallel fragments, styling, directives, HTML, and entity escapes retain the
+source. Labels accept ordinary Unicode, including Chinese and single-character
+emoji. Combining characters, joined emoji, and unsupported character widths
+retain the source. Diagrams are limited to 16 KiB of source, 16 graph nodes,
+24 links, 16 members per node, and 40 columns per label. Sequences allow
+8 participants, 64 events, and 4 fragment levels. A canvas has at most
+65,536 cells. Unknown syntax, limits, an unfinished fence, or insufficient
+terminal width show the complete source instead of a partial diagram.
+
+History, logs, whole-block copies, and Markdown copies retain the diagram source.
+Mouse selection copies displayed diagram characters. Widening the terminal can
+restore a diagram that previously needed source fallback.
+
 Completion and interrupt:
 
 - `@<name>`: Fuzzy-complete a project file path

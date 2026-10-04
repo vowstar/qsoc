@@ -4,6 +4,7 @@
 #include "tui/qtuicodeblock.h"
 
 #include "tui/qsoccodehighlighter.h"
+#include "tui/qsocdiagram.h"
 #include "tui/qtuitextlayout.h"
 #include "tui/qtuiwidget.h"
 
@@ -51,6 +52,12 @@ void QTuiCodeBlock::appendBody(const QString &chunk)
     invalidate();
 }
 
+void QTuiCodeBlock::setClosed()
+{
+    closed_ = true;
+    invalidate();
+}
+
 void QTuiCodeBlock::layout(int width)
 {
     if (!layoutDirty && layoutWidth == width) {
@@ -82,6 +89,31 @@ void QTuiCodeBlock::layout(int width)
         header.append(cyanDim(language.isEmpty() ? QStringLiteral("code") : language));
         header.append(cyanDim(QStringLiteral(" ┄┄┄")));
         rows.append({.runs = header, .logicalLineIndex = -1});
+    }
+
+    if (closed_ && language == QStringLiteral("mermaid")) {
+        const auto diagram = QSocDiagram::render(sourceCode, width);
+        if (diagram.valid()) {
+            for (const auto &spans : diagram.rows) {
+                QList<QTuiStyledRun> runs;
+                QString              text;
+                for (const auto &span : spans) {
+                    QTuiStyledRun run;
+                    run.text   = span.text;
+                    run.fg     = span.role == QSocDiagram::Role::Node   ? QTuiFgColor::Cyan
+                                 : span.role == QSocDiagram::Role::Edge ? QTuiFgColor::Yellow
+                                                                        : QTuiFgColor::Default;
+                    run.dim    = forceDim_;
+                    run.italic = forceDim_;
+                    text += span.text;
+                    runs.append(run);
+                }
+                const int line = logicalLines_.size();
+                logicalLines_.append(text);
+                rows.append(qtuiWrapStyledRuns(runs, line, width));
+            }
+            return;
+        }
     }
 
     const QStringList lines = sourceCode.split(QLatin1Char('\n'), Qt::KeepEmptyParts);

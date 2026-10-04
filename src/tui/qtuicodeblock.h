@@ -45,6 +45,7 @@ public:
      * invalidate the layout. The trailing newline is supplied by the
      * caller so consecutive appends concatenate cleanly. */
     void appendBody(const QString &chunk);
+    void setClosed();
 
     int  groupId() const { return groupId_; }
     bool forceDim() const { return forceDim_; }
@@ -70,6 +71,7 @@ private:
     QString language;
     QString sourceCode;
     bool    forceDim_ = false;
+    bool    closed_   = false;
     int     groupId_  = 0;
 
     /* Cached visual rows (banner + soft-wrapped code lines). Each code
