@@ -293,8 +293,9 @@ int QTuiMenu::exec()
     tcgetattr(STDIN_FILENO, &savedTerm);
     {
         struct termios menuTerm = savedTerm;
-        menuTerm.c_cc[VMIN]     = 1;
-        menuTerm.c_cc[VTIME]    = 0;
+        menuTerm.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+        menuTerm.c_cc[VMIN]  = 1;
+        menuTerm.c_cc[VTIME] = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &menuTerm);
     }
 #endif

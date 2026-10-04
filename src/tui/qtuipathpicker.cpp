@@ -403,8 +403,9 @@ QString QTuiPathPicker::exec()
     tcgetattr(STDIN_FILENO, &savedTerm);
     {
         struct termios pickerTerm = savedTerm;
-        pickerTerm.c_cc[VMIN]     = 1;
-        pickerTerm.c_cc[VTIME]    = 0;
+        pickerTerm.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+        pickerTerm.c_cc[VMIN]  = 1;
+        pickerTerm.c_cc[VTIME] = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &pickerTerm);
     }
 #endif
