@@ -237,6 +237,24 @@ public:
     void setSecretCallback(SecretCallback callback);
 
     /**
+     * @brief Callback asked whether to trust a host key not yet known.
+     * @details Consulted only under StrictHostKeyChecking ask (the
+     *          default). @p prompt names the host and the key fingerprint.
+     *          Return true to accept the key and save it. When unset, an
+     *          unknown key is refused, as OpenSSH does with nobody to ask.
+     */
+    using HostKeyConfirm = std::function<bool(const QString &prompt)>;
+    void setHostKeyConfirm(HostKeyConfirm confirm);
+
+    /**
+     * @brief What the last connect decided about an unknown host key.
+     * @details A saved key, a key that could not be saved, or a key used
+     *          unverified under StrictHostKeyChecking no. Empty when the key
+     *          was already known. For the user, not for logs only.
+     */
+    QString hostKeyNotice() const { return m_hostKeyNotice; }
+
+    /**
      * @brief Install the predicate a connect-path wait consults every slice.
      * @details Connecting is a sequence of EAGAIN loops around one poll each,
      *          and a poll bounded only by the operation timeout is a wait the
@@ -286,7 +304,16 @@ private:
      *          deadline cover the whole connect and still allow a human to
      *          answer a passphrase prompt.
      */
-    QString       promptSecret(const QString &prompt);
+    QString promptSecret(const QString &prompt);
+    /** @brief Run a user interaction with the connect deadline frozen. */
+    void holdDeadline(const std::function<void()> &interaction);
+    /** @brief Apply StrictHostKeyChecking to a key no known_hosts file holds. */
+    ConnectStatus acceptUnknownHostKey(
+        const QSocSshHostConfig &host,
+        LIBSSH2_KNOWNHOSTS      *kh,
+        const QString           &savePath,
+        QString                 *errorMessage);
+    ConnectStatus refuseHostKey(ConnectStatus status, const QString &msg, QString *errorMessage);
     ConnectStatus performHandshake(QString *errorMessage);
     ConnectStatus verifyHostKey(const QSocSshHostConfig &host, QString *errorMessage);
     ConnectStatus authenticate(const QSocSshHostConfig &host, QString *errorMessage);
@@ -330,6 +357,8 @@ private:
     LIBSSH2_CHANNEL      *m_parentChannel    = nullptr;
     QString               m_lastError;
     SecretCallback        m_secretCallback;
+    HostKeyConfirm        m_hostKeyConfirm;
+    QString               m_hostKeyNotice;
     std::function<bool()> m_abortProbe;
     /* The connect deadline starts before the blocking resolver; later stages
      * consume only the time it leaves. */

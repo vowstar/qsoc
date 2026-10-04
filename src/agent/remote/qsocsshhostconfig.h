@@ -15,8 +15,16 @@
  */
 struct QSocSshHostConfig
 {
-    /** @brief Strict host key checking mode. */
-    enum class StrictHostKey { Yes, AcceptNew, No };
+    /**
+     * @brief StrictHostKeyChecking policy for a host key not yet known.
+     * @details A changed key is refused under every policy.
+     */
+    enum class StrictHostKey {
+        Yes,       /**< Refuse an unknown key. */
+        Ask,       /**< Confirm an unknown key and save it; refuse with nobody to ask. */
+        AcceptNew, /**< Accept an unknown key and save it. */
+        No,        /**< Accept an unknown key without saving it, with a warning. */
+    };
 
     /** Original alias or raw target as passed in. */
     QString alias;
@@ -39,11 +47,14 @@ struct QSocSshHostConfig
     /** If true, use only the identity files listed here. */
     bool identitiesOnly = false;
 
-    /** Known-hosts file path (empty means default ~/.ssh/known_hosts). */
+    /**
+     * Known-hosts file list, whitespace separated (empty means
+     * ~/.ssh/known_hosts). New keys are saved to the first one.
+     */
     QString userKnownHostsFile;
 
-    /** Strict host key checking policy. */
-    StrictHostKey strictHostKey = StrictHostKey::Yes;
+    /** Strict host key checking policy; OpenSSH's default is ask. */
+    StrictHostKey strictHostKey = StrictHostKey::Ask;
 
     /** Parsed value of the AddKeysToAgent directive. */
     bool addKeysToAgent = false;

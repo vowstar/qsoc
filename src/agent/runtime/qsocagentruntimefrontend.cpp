@@ -212,16 +212,31 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
         return d->cancelRequested;
     };
+    const auto confirmHostKey = [this](const QString &prompt) {
+        return d->menu
+               && d->menu(
+                      prompt,
+                      {QStringLiteral("No, cancel the connection"),
+                       QStringLiteral("Yes, trust this host key")},
+                      {},
+                      {})
+                      == 1;
+    };
     if (!connectAgentSshSession(
             target,
             this,
             &staged,
             &connectError,
             [this](const QString &prompt) { return d->secret ? d->secret(prompt) : QString(); },
-            cancelled)) {
+            cancelled,
+            QDeadlineTimer(30000),
+            confirmHostKey)) {
         if (error)
             *error = connectError;
         return false;
+    }
+    for (const QString &notice : staged.hostKeyNotices) {
+        emitOutput(notice + QLatin1Char('\n'), static_cast<int>(QSocAgentRuntimeStyle::Warning));
     }
     const QString workspace = d->options.workspace.isEmpty() ? QStringLiteral("/")
                                                              : d->options.workspace;

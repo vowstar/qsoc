@@ -452,8 +452,10 @@ QSocSshHostConfig QSocSshConfigParser::resolve(const QString &alias) const
                 knownHostsSet = true;
             } else if (keyword == QLatin1String("stricthostkeychecking") && !strictSet) {
                 const QString v = raw.toLower();
-                if (v == QLatin1String("yes") || v == QLatin1String("ask")) {
+                if (v == QLatin1String("yes")) {
                     cfg.strictHostKey = QSocSshHostConfig::StrictHostKey::Yes;
+                } else if (v == QLatin1String("ask")) {
+                    cfg.strictHostKey = QSocSshHostConfig::StrictHostKey::Ask;
                 } else if (v == QLatin1String("accept-new")) {
                     cfg.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
                 } else if (v == QLatin1String("no") || v == QLatin1String("off")) {

@@ -228,7 +228,9 @@ void Test::releasesAuthenticationCallbackAfterConnect()
                      "  Port %1\n"
                      "  User %2\n"
                      "  IdentityFile %3\n"
-                     "  IdentitiesOnly yes\n")
+                     "  IdentitiesOnly yes\n"
+                     "  StrictHostKeyChecking no\n"
+                     "  UserKnownHostsFile /dev/null\n")
                      .arg(m_fixture.port())
                      .arg(m_fixture.user(), m_fixture.keyPath())
                      .toUtf8());

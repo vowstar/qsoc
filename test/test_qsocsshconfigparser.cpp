@@ -235,7 +235,9 @@ private slots:
         const QString content = QStringLiteral(
             "Host yes\n    StrictHostKeyChecking yes\n"
             "Host an\n    StrictHostKeyChecking accept-new\n"
-            "Host no\n    StrictHostKeyChecking no\n");
+            "Host no\n    StrictHostKeyChecking no\n"
+            "Host ask\n    StrictHostKeyChecking ask\n"
+            "Host unset\n    Port 22\n");
         const QString       cfg = writeFile(QDir(tmp.path()), "config", content);
         QSocSshConfigParser parser;
         QVERIFY(parser.parse(cfg));
@@ -248,6 +250,13 @@ private slots:
         QCOMPARE(
             parser.resolve(QStringLiteral("no")).strictHostKey,
             QSocSshHostConfig::StrictHostKey::No);
+        QCOMPARE(
+            parser.resolve(QStringLiteral("ask")).strictHostKey,
+            QSocSshHostConfig::StrictHostKey::Ask);
+        /* OpenSSH's default when the directive is absent. */
+        QCOMPARE(
+            parser.resolve(QStringLiteral("unset")).strictHostKey,
+            QSocSshHostConfig::StrictHostKey::Ask);
     }
 
     void testUnknownAliasReturnsDefaults()

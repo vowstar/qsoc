@@ -1746,8 +1746,37 @@ may overrun the deadline until the system resolver's own retry schedule ends,
 and on Windows the agent is a Pageant window or a named pipe driven by libssh2,
 which the bound above does not reach.
 
-Host key verification uses `~/.ssh/known_hosts` by default with strict
-checking enabled. `accept-new` is honored for first-contact hosts.
+Host key verification follows `StrictHostKeyChecking` for the target and
+every `ProxyJump` hop. Keys are looked up in the `UserKnownHostsFile` list
+(default `~/.ssh/known_hosts`) and in `/etc/ssh/ssh_known_hosts`. A new key
+is appended to the first `UserKnownHostsFile`; existing lines are never
+rewritten.
+
+#figure(
+  align(center)[#table(
+    columns: (0.32fr, 1fr),
+    align: (auto, left),
+    table.header([Value], [Unknown host key]),
+    table.hline(),
+    [`yes`],
+    [Refused.],
+    [`ask` (default)],
+    [`/ssh` and `--ssh` in an interactive session show the SHA256
+     fingerprint and ask. Yes saves the key. Refused when nobody can
+     answer: `-q`, reconnects, and sub-agents sent to a host.],
+    [`accept-new`],
+    [Accepted and saved.],
+    [`no`, `off`],
+    [Accepted with a warning. Not saved.],
+  )],
+  caption: [STRICTHOSTKEYCHECKING],
+  kind: table,
+)
+
+A changed host key is refused under every value. Remove the old line from
+known_hosts when the change is expected. A key listed on any `@revoked` line
+is refused under every value. `@cert-authority` lines are ignored: host
+certificates are not supported.
 
 === Private Key Safety
 <agent-remote-keys>

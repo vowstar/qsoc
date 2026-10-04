@@ -50,6 +50,7 @@ struct AgentRemoteState
     QString                 workspace;          /* Remote absolute workspace path. */
     QString                 canonicalWorkspace; /* Host-resolved workspace identity. */
     QString                 workspaceTreeId;    /* Persistent random id stored in the root. */
+    QStringList             hostKeyNotices;     /* Unknown-key decisions to show the user. */
 };
 
 /**
@@ -405,6 +406,8 @@ private:
  * @param abortProbe Optional stop predicate, installed on every session in the
  *                   chain so a poll inside any of them can be cut short.
  * @param deadline Absolute budget supplied to each hop and SFTP startup.
+ * @param hostKeyConfirm Optional question for an unknown host key under
+ *                       StrictHostKeyChecking ask; unset refuses the key.
  * @return True on success, false on any connect or SFTP failure.
  */
 bool connectAgentSshSession(
@@ -414,7 +417,8 @@ bool connectAgentSshSession(
     QString                       *errorMessage,
     QSocSshSession::SecretCallback secretCallback = {},
     std::function<bool()>          abortProbe     = {},
-    QDeadlineTimer                 deadline       = QDeadlineTimer(30000));
+    QDeadlineTimer                 deadline       = QDeadlineTimer(30000),
+    QSocSshSession::HostKeyConfirm hostKeyConfirm = {});
 
 /**
  * @brief Ensure and identify the workspace directory on the remote host.

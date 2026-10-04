@@ -308,7 +308,8 @@ bool connectAgentSshSession(
     QString                       *errorMessage,
     QSocSshSession::SecretCallback secretCallback,
     std::function<bool()>          abortProbe,
-    QDeadlineTimer                 deadline)
+    QDeadlineTimer                 deadline,
+    QSocSshSession::HostKeyConfirm hostKeyConfirm)
 {
     if (state == nullptr) {
         if (errorMessage != nullptr) {
@@ -372,11 +373,10 @@ bool connectAgentSshSession(
      * starve auth of keys because our parser does not synthesize the
      * default id_* list. Flip to no so the session's default key
      * enumeration kicks in, matching first-connect UX. */
-    host.identitiesOnly = resolvedCfg.identitiesOnly && !host.identityFiles.isEmpty();
-    host.proxyJump      = resolvedCfg.proxyJump;
-    /* Default to accept-new so first-time connects and ProxyJump hops
-     * work without a pre-populated known_hosts. Mismatches still abort. */
-    host.strictHostKey = QSocSshHostConfig::StrictHostKey::AcceptNew;
+    host.identitiesOnly     = resolvedCfg.identitiesOnly && !host.identityFiles.isEmpty();
+    host.proxyJump          = resolvedCfg.proxyJump;
+    host.strictHostKey      = resolvedCfg.strictHostKey;
+    host.userKnownHostsFile = resolvedCfg.userKnownHostsFile;
 
     const QString osDefaultUser = defaultOsUser();
 
@@ -392,12 +392,12 @@ bool connectAgentSshSession(
             cfg.user = osDefaultUser;
         }
         cfg.alias          = hopAlias;
-        cfg.strictHostKey  = QSocSshHostConfig::StrictHostKey::AcceptNew;
         cfg.identitiesOnly = cfg.identitiesOnly && !cfg.identityFiles.isEmpty();
         return cfg;
     };
 
     QList<QSocSshSession *> localJumps;
+    QStringList             hostKeyNotices;
     QSet<QString>           activeAliases;
     constexpr int           MAX_PROXY_JUMP_DEPTH = 16;
     std::function<QSocSshSession *(
@@ -464,15 +464,20 @@ bool connectAgentSshSession(
         if (secretCallback && currentParent == nullptr) {
             session->setSecretCallback(secretCallback);
         }
+        session->setHostKeyConfirm(hostKeyConfirm);
         QSocSshSession::ConnectStatus status
             = (currentParent != nullptr)
                   ? session->connectToVia(cfg, currentParent, deadline, errOut)
                   : session->connectTo(cfg, deadline, errOut);
         deadline = session->connectDeadline();
         session->setSecretCallback({});
+        session->setHostKeyConfirm({});
         if (status != QSocSshSession::ConnectStatus::Ok) {
             delete session;
             return nullptr;
+        }
+        if (!session->hostKeyNotice().isEmpty()) {
+            hostKeyNotices.append(session->hostKeyNotice());
         }
         return session;
     };
@@ -512,6 +517,7 @@ bool connectAgentSshSession(
     state->session          = newSession;
     state->sftp             = newSftp;
     state->jumps            = localJumps;
+    state->hostKeyNotices   = hostKeyNotices;
     state->endpointIdentity = user + QLatin1Char(':') + newSession->hostKeyIdentity();
     if (state->endpointIdentity.endsWith(QLatin1Char(':'))) {
         discardAgentRemoteState(state);
@@ -642,6 +648,7 @@ void discardAgentRemoteState(AgentRemoteState *state)
     state->workspace.clear();
     state->canonicalWorkspace.clear();
     state->workspaceTreeId.clear();
+    state->hostKeyNotices.clear();
 }
 
 QSocToolRegistry *buildAgentRemoteRegistry(

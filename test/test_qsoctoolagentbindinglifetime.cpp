@@ -270,7 +270,9 @@ bool Test::prepare()
                      "  Port %2\n"
                      "  User %3\n"
                      "  IdentityFile %4\n"
-                     "  IdentitiesOnly yes\n")
+                     "  IdentitiesOnly yes\n"
+                     "  StrictHostKeyChecking no\n"
+                     "  UserKnownHostsFile /dev/null\n")
                      .arg(QString::fromLatin1(kAlias))
                      .arg(m_fixture.port())
                      .arg(m_fixture.user(), m_fixture.keyPath())

@@ -12,6 +12,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
+#include <QScopeGuard>
 
 #ifdef Q_OS_WIN
 #include <winsock2.h>
@@ -860,17 +862,22 @@ bool QSocSshSession::connectAborted() const
 
 QString QSocSshSession::promptSecret(const QString &prompt)
 {
-    if (!m_secretCallback) {
-        return {};
+    QString secret;
+    if (m_secretCallback) {
+        holdDeadline([&] { secret = m_secretCallback(prompt); });
     }
+    return secret;
+}
+
+void QSocSshSession::holdDeadline(const std::function<void()> &interaction)
+{
     /* Frozen, not extended: remainingTime() reports zero once expired, so
      * adding the time on screen to it would hand a spent budget a fresh one. */
-    const qint64  before = m_connectDeadline.remainingTime();
-    const QString secret = m_secretCallback(prompt);
+    const qint64 before = m_connectDeadline.remainingTime();
+    interaction();
     if (before > 0) {
         m_connectDeadline = QDeadlineTimer(before);
     }
-    return secret;
 }
 
 void QSocSshSession::noteStrandedChannel(LIBSSH2_CHANNEL *channel)
@@ -1249,100 +1256,313 @@ QSocSshSession::ConnectStatus QSocSshSession::performHandshake(QString *errorMes
     return ConnectStatus::Ok;
 }
 
+namespace {
+
+#ifndef Q_OS_WIN
+constexpr char kGlobalKnownHosts[] = "/etc/ssh/ssh_known_hosts";
+#endif
+
+int knownHostKeyMask(int keyType)
+{
+    const int base = LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW;
+    switch (keyType) {
+    case LIBSSH2_HOSTKEY_TYPE_RSA:
+        return base | LIBSSH2_KNOWNHOST_KEY_SSHRSA;
+    case LIBSSH2_HOSTKEY_TYPE_DSS:
+        return base | LIBSSH2_KNOWNHOST_KEY_SSHDSS;
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256:
+        return base | LIBSSH2_KNOWNHOST_KEY_ECDSA_256;
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384:
+        return base | LIBSSH2_KNOWNHOST_KEY_ECDSA_384;
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521:
+        return base | LIBSSH2_KNOWNHOST_KEY_ECDSA_521;
+    case LIBSSH2_HOSTKEY_TYPE_ED25519:
+        return base | LIBSSH2_KNOWNHOST_KEY_ED25519;
+    default:
+        return base;
+    }
+}
+
+QString keyTypeName(int keyType)
+{
+    switch (keyType) {
+    case LIBSSH2_HOSTKEY_TYPE_RSA:
+        return QStringLiteral("RSA");
+    case LIBSSH2_HOSTKEY_TYPE_DSS:
+        return QStringLiteral("DSA");
+    case LIBSSH2_HOSTKEY_TYPE_ED25519:
+        return QStringLiteral("ED25519");
+    default:
+        return QStringLiteral("ECDSA");
+    }
+}
+
+/* The name OpenSSH files a host under: a bare host on port 22, else
+ * `[host]:port`. */
+QByteArray knownHostName(const QSocSshHostConfig &host)
+{
+    const QByteArray name = host.hostname.toUtf8();
+    return host.port == 22 ? name : "[" + name + "]:" + QByteArray::number(host.port);
+}
+
+QStringList knownHostsFiles(const QString &configured)
+{
+    if (configured.trimmed().isEmpty()) {
+        return {QDir::homePath() + QStringLiteral("/.ssh/known_hosts")};
+    }
+    QStringList files;
+    for (QString path :
+         configured.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts)) {
+        if (path.compare(QStringLiteral("none"), Qt::CaseInsensitive) == 0) {
+            continue;
+        }
+        if (path.startsWith(QStringLiteral("~/"))) {
+            path = QDir::homePath() + path.mid(1);
+        }
+        files.append(path);
+    }
+    return files;
+}
+
+/* "ED25519 key SHA256:<base64>", the way OpenSSH names a key to a user. */
+QString describeHostKey(LIBSSH2_SESSION *session)
+{
+    size_t      keyLen  = 0;
+    int         keyType = 0;
+    const char *key     = libssh2_session_hostkey(session, &keyLen, &keyType);
+    const char *digest  = libssh2_hostkey_hash(session, LIBSSH2_HOSTKEY_HASH_SHA256);
+    if (key == nullptr || digest == nullptr) {
+        return QStringLiteral("unidentified key");
+    }
+    return QStringLiteral("%1 key SHA256:%2")
+        .arg(
+            keyTypeName(keyType),
+            QString::fromLatin1(QByteArray(digest, 32).toBase64(QByteArray::OmitTrailingEquals)));
+}
+
+/* Line by line, because libssh2's own reader stops at the first line it
+ * cannot parse and drops every key after it. libssh2 knows no markers, so
+ * `@revoked` keys are collected here and `@cert-authority` lines are skipped:
+ * certificates are not supported. */
+void loadKnownHosts(LIBSSH2_KNOWNHOSTS *kh, const QString &path, QList<QByteArray> *revoked)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    while (!file.atEnd()) {
+        const QByteArray line = file.readLine();
+        if (!line.trimmed().startsWith('@')) {
+            (void) libssh2_knownhost_readline(
+                kh,
+                line.constData(),
+                static_cast<size_t>(line.size()),
+                LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+            continue;
+        }
+        const QList<QByteArray> fields = line.simplified().split(' ');
+        if (fields.size() >= 4 && fields.at(0) == "@revoked") {
+            revoked->append(QByteArray::fromBase64(fields.at(3)));
+        }
+    }
+}
+
+/* Append, never rewrite: the user's file keeps every line libssh2 cannot
+ * represent. */
+bool appendKnownHost(
+    LIBSSH2_SESSION         *session,
+    LIBSSH2_KNOWNHOSTS      *kh,
+    const QSocSshHostConfig &host,
+    const QString           &path,
+    QString                 *error)
+{
+    size_t             keyLen  = 0;
+    int                keyType = 0;
+    const char        *key     = libssh2_session_hostkey(session, &keyLen, &keyType);
+    const QByteArray   name    = knownHostName(host);
+    libssh2_knownhost *entry   = nullptr;
+    QByteArray         line(16384, '\0');
+    size_t             lineLen = 0;
+    if (libssh2_knownhost_addc(
+            kh, name.constData(), nullptr, key, keyLen, nullptr, 0, knownHostKeyMask(keyType), &entry)
+            != 0
+        || libssh2_knownhost_writeline(
+               kh,
+               entry,
+               line.data(),
+               static_cast<size_t>(line.size()),
+               &lineLen,
+               LIBSSH2_KNOWNHOST_FILE_OPENSSH)
+               != 0) {
+        *error = QStringLiteral("the key could not be encoded");
+        return false;
+    }
+    line.truncate(static_cast<qsizetype>(lineLen));
+
+    const QString dir      = QFileInfo(path).absolutePath();
+    const bool    freshDir = !QFileInfo::exists(dir);
+    if (!QDir().mkpath(dir)) {
+        *error = QStringLiteral("cannot create %1").arg(dir);
+        return false;
+    }
+    if (freshDir) {
+        QFile::setPermissions(
+            dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    }
+    QFile      file(path);
+    const bool freshFile = !file.exists();
+    if (!file.open(QIODevice::ReadWrite | QIODevice::Append)) {
+        *error = file.errorString();
+        return false;
+    }
+    if (freshFile) {
+        file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+    if (file.size() > 0 && file.seek(file.size() - 1) && file.read(1) != "\n") {
+        line.prepend('\n');
+    }
+    if (file.write(line) != line.size() || !file.flush()) {
+        *error = file.errorString();
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+QSocSshSession::ConnectStatus QSocSshSession::refuseHostKey(
+    ConnectStatus status, const QString &msg, QString *errorMessage)
+{
+    setError(msg);
+    if (errorMessage != nullptr) {
+        *errorMessage = msg;
+    }
+    return status;
+}
+
 QSocSshSession::ConnectStatus QSocSshSession::verifyHostKey(
     const QSocSshHostConfig &host, QString *errorMessage)
 {
-    if (host.strictHostKey == QSocSshHostConfig::StrictHostKey::No) {
-        return ConnectStatus::Ok;
-    }
-
-    LIBSSH2_KNOWNHOSTS *kh = libssh2_knownhost_init(m_session);
-    if (kh == nullptr) {
-        const QString msg = QStringLiteral("knownhost init failed");
-        setError(msg);
-        if (errorMessage != nullptr) {
-            *errorMessage = msg;
-        }
-        return ConnectStatus::HostKeyNotFound;
-    }
-
-    QString khPath = host.userKnownHostsFile;
-    if (khPath.isEmpty()) {
-        khPath = QFileInfo(QStringLiteral("~/.ssh/known_hosts")).filePath();
-        khPath = QDir::homePath() + QStringLiteral("/.ssh/known_hosts");
-    }
-    libssh2_knownhost_readfile(kh, khPath.toLocal8Bit().constData(), LIBSSH2_KNOWNHOST_FILE_OPENSSH);
-
+    m_hostKeyNotice.clear();
     size_t      keyLen  = 0;
     int         keyType = 0;
     const char *key     = libssh2_session_hostkey(m_session, &keyLen, &keyType);
     if (key == nullptr) {
-        libssh2_knownhost_free(kh);
-        const QString msg = QStringLiteral("Server did not present a host key");
-        setError(msg);
-        if (errorMessage != nullptr) {
-            *errorMessage = msg;
-        }
-        return ConnectStatus::HostKeyNotFound;
+        return refuseHostKey(
+            ConnectStatus::HostKeyNotFound,
+            QStringLiteral("Server did not present a host key"),
+            errorMessage);
     }
-
-    int typeMask = LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW;
-    switch (keyType) {
-    case LIBSSH2_HOSTKEY_TYPE_RSA:
-        typeMask |= LIBSSH2_KNOWNHOST_KEY_SSHRSA;
-        break;
-    case LIBSSH2_HOSTKEY_TYPE_DSS:
-        typeMask |= LIBSSH2_KNOWNHOST_KEY_SSHDSS;
-        break;
-    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256:
-        typeMask |= LIBSSH2_KNOWNHOST_KEY_ECDSA_256;
-        break;
-    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384:
-        typeMask |= LIBSSH2_KNOWNHOST_KEY_ECDSA_384;
-        break;
-    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521:
-        typeMask |= LIBSSH2_KNOWNHOST_KEY_ECDSA_521;
-        break;
-    case LIBSSH2_HOSTKEY_TYPE_ED25519:
-        typeMask |= LIBSSH2_KNOWNHOST_KEY_ED25519;
-        break;
-    default:
-        break;
+    LIBSSH2_KNOWNHOSTS *kh = libssh2_knownhost_init(m_session);
+    if (kh == nullptr) {
+        return refuseHostKey(
+            ConnectStatus::HostKeyNotFound, QStringLiteral("knownhost init failed"), errorMessage);
+    }
+    const auto        freeKnownHosts = qScopeGuard([kh] { libssh2_knownhost_free(kh); });
+    const QStringList files          = knownHostsFiles(host.userKnownHostsFile);
+    QList<QByteArray> revoked;
+    for (const QString &path : files) {
+        loadKnownHosts(kh, path, &revoked);
+    }
+#ifndef Q_OS_WIN
+    loadKnownHosts(kh, QString::fromLatin1(kGlobalKnownHosts), &revoked);
+#endif
+    if (revoked.contains(QByteArray(key, static_cast<qsizetype>(keyLen)))) {
+        return refuseHostKey(
+            ConnectStatus::HostKeyMismatch,
+            QStringLiteral(
+                "Host key for %1 (%2) is marked @revoked in known_hosts; refusing to "
+                "connect.")
+                .arg(QString::fromUtf8(knownHostName(host)), describeHostKey(m_session)),
+            errorMessage);
     }
 
     const QByteArray hostName = host.hostname.toUtf8();
     const int        check    = libssh2_knownhost_checkp(
-        kh, hostName.constData(), host.port, key, keyLen, typeMask, nullptr);
-    libssh2_knownhost_free(kh);
-
+        kh, hostName.constData(), host.port, key, keyLen, knownHostKeyMask(keyType), nullptr);
     switch (check) {
     case LIBSSH2_KNOWNHOST_CHECK_MATCH:
         return ConnectStatus::Ok;
-    case LIBSSH2_KNOWNHOST_CHECK_MISMATCH: {
-        const QString msg
-            = QStringLiteral("Host key mismatch for %1:%2").arg(host.hostname).arg(host.port);
-        setError(msg);
-        if (errorMessage != nullptr) {
-            *errorMessage = msg;
-        }
-        return ConnectStatus::HostKeyMismatch;
-    }
+    case LIBSSH2_KNOWNHOST_CHECK_MISMATCH:
+        return refuseHostKey(
+            ConnectStatus::HostKeyMismatch,
+            QStringLiteral(
+                "Host key for %1 has changed; refusing to connect. Someone may be "
+                "intercepting the connection. If the change is expected, remove the old "
+                "key for %1 from known_hosts.")
+                .arg(QString::fromUtf8(knownHostName(host))),
+            errorMessage);
     case LIBSSH2_KNOWNHOST_CHECK_NOTFOUND:
-        if (host.strictHostKey == QSocSshHostConfig::StrictHostKey::AcceptNew) {
-            return ConnectStatus::Ok;
-        }
-        setError(QStringLiteral("Host key not found in known_hosts for %1").arg(host.hostname));
-        if (errorMessage != nullptr) {
-            *errorMessage = m_lastError;
-        }
-        return ConnectStatus::HostKeyNotFound;
+        return acceptUnknownHostKey(host, kh, files.value(0), errorMessage);
     default:
-        setError(QStringLiteral("Host key check failed for %1").arg(host.hostname));
-        if (errorMessage != nullptr) {
-            *errorMessage = m_lastError;
-        }
-        return ConnectStatus::HostKeyNotFound;
+        return refuseHostKey(
+            ConnectStatus::HostKeyNotFound,
+            QStringLiteral("Host key check failed for %1").arg(host.hostname),
+            errorMessage);
     }
+}
+
+QSocSshSession::ConnectStatus QSocSshSession::acceptUnknownHostKey(
+    const QSocSshHostConfig &host,
+    LIBSSH2_KNOWNHOSTS      *kh,
+    const QString           &savePath,
+    QString                 *errorMessage)
+{
+    const QString name     = QString::fromUtf8(knownHostName(host));
+    const QString identity = describeHostKey(m_session);
+    switch (host.strictHostKey) {
+    case QSocSshHostConfig::StrictHostKey::No:
+        m_hostKeyNotice = QStringLiteral(
+                              "Warning: host key for %1 (%2) is not in known_hosts and was not "
+                              "verified (StrictHostKeyChecking no).")
+                              .arg(name, identity);
+        return ConnectStatus::Ok;
+    case QSocSshHostConfig::StrictHostKey::Yes:
+        return refuseHostKey(
+            ConnectStatus::HostKeyNotFound,
+            QStringLiteral(
+                "Host key for %1 (%2) is not in known_hosts and StrictHostKeyChecking is yes.")
+                .arg(name, identity),
+            errorMessage);
+    case QSocSshHostConfig::StrictHostKey::Ask: {
+        bool trusted = false;
+        if (m_hostKeyConfirm) {
+            const QString prompt = QStringLiteral(
+                                       "The authenticity of host %1 can't be established. %2. "
+                                       "Trust it and save it to %3?")
+                                       .arg(name, identity, savePath);
+            holdDeadline([&] { trusted = m_hostKeyConfirm(prompt); });
+        }
+        if (!trusted) {
+            return refuseHostKey(
+                ConnectStatus::HostKeyNotFound,
+                QStringLiteral(
+                    "Host key for %1 (%2) is not in known_hosts and was not confirmed. Confirm "
+                    "it in an interactive /ssh, add it to known_hosts, or set "
+                    "StrictHostKeyChecking accept-new for this host.")
+                    .arg(name, identity),
+                errorMessage);
+        }
+        break;
+    }
+    case QSocSshHostConfig::StrictHostKey::AcceptNew:
+        break;
+    }
+
+    QString saveError;
+    if (savePath.isEmpty()) {
+        m_hostKeyNotice
+            = QStringLiteral("Accepted host key for %1 (%2) without saving it.").arg(name, identity);
+    } else if (appendKnownHost(m_session, kh, host, savePath, &saveError)) {
+        m_hostKeyNotice
+            = QStringLiteral("Permanently added %1 (%2) to %3.").arg(name, identity, savePath);
+    } else {
+        m_hostKeyNotice = QStringLiteral(
+                              "Warning: accepted host key for %1 (%2) but could not save it "
+                              "to %3: %4")
+                              .arg(name, identity, savePath, saveError);
+    }
+    return ConnectStatus::Ok;
 }
 
 bool QSocSshSession::tryAgentAuth(const QString &user, QDeadlineTimer deadline)
@@ -1480,6 +1700,11 @@ bool QSocSshSession::tryIdentityFileAuth(
 void QSocSshSession::setSecretCallback(SecretCallback callback)
 {
     m_secretCallback = std::move(callback);
+}
+
+void QSocSshSession::setHostKeyConfirm(HostKeyConfirm confirm)
+{
+    m_hostKeyConfirm = std::move(confirm);
 }
 
 void QSocSshSession::setAbortProbe(std::function<bool()> probe)
