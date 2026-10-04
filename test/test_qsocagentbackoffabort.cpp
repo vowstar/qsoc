@@ -14,6 +14,7 @@
 #include "agent/tool/qsoctooloutputread.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "common/qllmservice.h"
+#include "common/qlongtaskmonitor.h"
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
 
@@ -3987,6 +3988,60 @@ private slots:
         QVERIFY(owner.isNull());
         QTest::qWait(3500);
         QCOMPARE(server.requestCount(), 1);
+    }
+
+    void watchdogNotificationPreservesRequestBoundary_data()
+    {
+        QTest::addColumn<bool>("workspaceFailed");
+        QTest::newRow("healthy_workspace") << false;
+        QTest::newRow("failed_workspace") << true;
+    }
+
+    void watchdogNotificationPreservesRequestBoundary()
+    {
+        QFETCH(bool, workspaceFailed);
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueToolCall(QStringLiteral("side_effect_tool"));
+        server.enqueueStream(QStringLiteral("status received"));
+        QLLMService service;
+        configureService(service, server);
+        QSocToolRegistry registry;
+        SideEffectTool   effect;
+        registry.registerTool(&effect);
+        QSocAgentConfig config = testConfig();
+        config.autoStatusCheck = true;
+        QSocAgent  agent(nullptr, &service, &registry, config);
+        QSignalSpy aborted(&agent, &QSocAgent::runAborted);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        QSignalSpy errors(&agent, &QSocAgent::runError);
+        int        boundaries = 0;
+        bool       notified   = false;
+        agent.setRequestBoundaryHandler([&] { ++boundaries; });
+        agent.setWorkspaceHealthProbe([&]() -> QString {
+            if (!notified) {
+                auto *monitor = agent.findChild<QLongTaskMonitor *>();
+                if (monitor != nullptr) {
+                    notified = true;
+                    emit monitor->stalled(30000, 3);
+                }
+            }
+            return workspaceFailed ? QStringLiteral("remote workspace unavailable") : QString();
+        });
+
+        agent.runStream(QStringLiteral("check workspace"));
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count() + completed.count() + errors.count(), 1, 5000);
+        QVERIFY(notified);
+        QCOMPARE(boundaries, 1);
+        QCOMPARE(errors.count(), 0);
+        QCOMPARE(aborted.count(), workspaceFailed ? 1 : 0);
+        QCOMPARE(completed.count(), workspaceFailed ? 0 : 1);
+        QCOMPARE(effect.executeCount(), workspaceFailed ? 0 : 1);
+        QCOMPARE(server.requestCount(), workspaceFailed ? 1 : 2);
+        if (!workspaceFailed) {
+            QVERIFY(server.requestBody(1).contains("No progress detected"));
+        }
+        QVERIFY(!agent.isRunning());
     }
 
     /* A sibling can replace a shared remote transport while this run waits

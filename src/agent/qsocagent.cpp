@@ -3578,7 +3578,7 @@ void QSocAgent::armStreamMonitor()
         const int silentSec = silentMs / 1000;
         emit      stuckDetected(streamIteration, silentSec);
         if (agentConfig.autoStatusCheck) {
-            queueRequest(
+            queueTaskNotification(
                 "[System: No progress detected. Please briefly report: "
                 "1) What are you doing? 2) Any issues? 3) Estimated time remaining?]");
         }
