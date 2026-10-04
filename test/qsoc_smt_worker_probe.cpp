@@ -78,8 +78,9 @@ QJsonObject execute(const QJsonObject &request)
 
 int main(int argc, char **argv)
 {
-    if (!QSocSmtEngine::applyLimits())
-        return 13;
+    const auto limits = QSocSmtEngine::applyLimits();
+    if (limits != QSocProcessLimits::ApplyResult::Success)
+        return static_cast<int>(limits);
     const auto startup = qEnvironmentVariable("QSOC_TEST_SMT_STARTUP");
     if (startup == "exit")
         return 23;

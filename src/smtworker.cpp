@@ -6,8 +6,9 @@
 
 int main(int argc, char **argv)
 {
-    if (!QSocSmtEngine::applyLimits())
-        return 13;
+    const auto limits = QSocSmtEngine::applyLimits();
+    if (limits != QSocProcessLimits::ApplyResult::Success)
+        return static_cast<int>(limits);
     return QSocSmtWorker::run(argc, argv, [](const QJsonObject &request) {
         return QSocSmtEngine::execute(request);
     });

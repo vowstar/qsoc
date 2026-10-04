@@ -361,16 +361,17 @@ QJsonObject optimize(
 
 } // namespace
 
-bool QSocSmtEngine::applyLimits()
+QSocProcessLimits::ApplyResult QSocSmtEngine::applyLimits()
 {
-    if (!QSocProcessLimits::apply(QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL))
-        return false;
+    const auto result = QSocProcessLimits::apply(QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL);
+    if (result != QSocProcessLimits::ApplyResult::Success)
+        return result;
     Z3_global_param_set("memory_max_size", "448");
     Z3_global_param_set("unsat_core", "true");
     Z3_global_param_set("parallel.enable", "false");
     Z3_global_param_set("smt.threads", "1");
     Z3_global_param_set("sat.threads", "1");
-    return true;
+    return QSocProcessLimits::ApplyResult::Success;
 }
 
 QJsonObject QSocSmtEngine::execute(const QJsonObject &request, const PhaseObserver &observer)
