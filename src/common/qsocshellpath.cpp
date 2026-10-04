@@ -9,7 +9,14 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QStringDecoder>
 #include <QtGlobal>
+
+#ifdef Q_OS_WIN
+#include <string>
+
+#include <windows.h>
+#endif
 
 namespace QSocShellPath {
 
@@ -198,6 +205,34 @@ QString toPosixPath(const QString &path)
     QString out = path;
     out.replace(QLatin1Char('\\'), QLatin1Char('/'));
     return out;
+}
+
+QString cmdExeNativeArguments(const QString &command)
+{
+    return QStringLiteral("/d /s /c \"") + command + QLatin1Char('"');
+}
+
+QString decodeConsoleOutput(const QByteArray &bytes)
+{
+    QStringDecoder utf8(QStringDecoder::Utf8);
+    const QString  text = utf8(bytes);
+    if (!utf8.hasError()) {
+        return text;
+    }
+#ifdef Q_OS_WIN
+    /* Not UTF-8: cmd builtins write the code page of the console the
+     * child runs in, which is a fresh one with the OEM code page. */
+    const int size = static_cast<int>(bytes.size());
+    const int wide = MultiByteToWideChar(CP_OEMCP, 0, bytes.constData(), size, nullptr, 0);
+    if (wide <= 0) {
+        return text;
+    }
+    std::wstring buffer(static_cast<size_t>(wide), L'\0');
+    MultiByteToWideChar(CP_OEMCP, 0, bytes.constData(), size, buffer.data(), wide);
+    return QString::fromStdWString(buffer);
+#else
+    return QString::fromLocal8Bit(bytes);
+#endif
 }
 
 QString toShellPath(const QString &path)

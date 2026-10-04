@@ -389,8 +389,11 @@ The following commands are available during an interactive session:
     [Schedule a recurring prompt. Subforms: `/loop list`, `/loop stop <id>`,
      `/loop clear`. See @agent-loop.],
     [`!<command>`],
-    [Execute a shell command directly. Locally it runs under `/bin/sh`
-     (`cmd.exe` on Windows); the result names the shell that ran it.],
+    [Run a shell command in the working directory and show its output,
+     non-zero exit code, and the shell that ran it. Locally it runs under
+     `/bin/sh` (`cmd.exe` on Windows, which receives the line unchanged).
+     In remote mode it runs under the host's shell (@agent-remote-where),
+     only when the working directory still resolves inside the workspace.],
   )],
   caption: [INTERACTIVE COMMANDS],
   kind: table,
@@ -1626,7 +1629,7 @@ failure rather than a wait:
   its timeout to finish. Only once the budget is spent does closing a handle
   fall back to its own separate two-second window, so cleanup is bounded
   rather than skipped. The interactive `!` shell escape is bounded too, at
-  fifteen minutes.
+  thirty seconds, and Esc does not interrupt it before then.
 - The socket carries TCP keepalive as a second line of detection. How long
   the kernel takes to declare a silent peer dead is platform dependent and
   partly outside QSoC's control: the requested schedule is a 15-second idle

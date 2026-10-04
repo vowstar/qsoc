@@ -80,6 +80,22 @@ QString toPosixPath(const QString &path);
 QString toShellPath(const QString &path);
 
 /**
+ * @brief The raw argument string for `cmd.exe` running @p command.
+ * @details `/d /s /c "<command>"`: AutoRun is skipped, and `/s` makes cmd
+ *          strip only the outer quotes, so it sees @p command verbatim.
+ *          Meant for QProcess::setNativeArguments, which adds no quoting.
+ */
+QString cmdExeNativeArguments(const QString &command);
+
+/**
+ * @brief Decode a console program's output.
+ * @details UTF-8 when the bytes are valid UTF-8. Otherwise the OEM code
+ *          page on Windows, the code page of a child started in its own
+ *          console, and the local 8-bit encoding elsewhere.
+ */
+QString decodeConsoleOutput(const QByteArray &bytes);
+
+/**
  * @brief Reset the cached shell path (test support).
  */
 void resetCache();

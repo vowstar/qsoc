@@ -25,7 +25,7 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsftpclient.h"
-#include "agent/remote/qsocsshexec.h"
+#include "agent/remote/qsoctoolremote.h"
 #include "agent/services/qsocloopscheduler.h"
 #include "agent/tool/qsoctoolagent.h"
 #include "agent/tool/qsoctoolshell.h"
@@ -35,6 +35,7 @@
 #include "common/qsoccron.h"
 #include "common/qsoclinediff.h"
 #include "common/qsocmessageauthority.h"
+#include "common/qsocshellpath.h"
 
 #include <QDeadlineTimer>
 #include <QProcess>
@@ -55,6 +56,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -65,9 +69,8 @@ using QSocAgentRuntimeInternal::persistRecoverySnapshot;
 using QSocAgentRuntimeInternal::persistSessionState;
 using QSocAgentRuntimeInternal::sessionProjectPath;
 
-namespace {
-
-QString runShellEscape(const QString &command, const QString &directory, std::stop_token stop)
+QString QSocAgentRuntimeInternal::runLocalShellEscape(
+    const QString &command, const QString &directory, std::stop_token stop)
 {
     QProcess process;
     process.setWorkingDirectory(directory);
@@ -77,13 +80,18 @@ QString runShellEscape(const QString &command, const QString &directory, std::st
     process.setProcessChannelMode(QProcess::MergedChannels);
     /* Policy: local `!` keeps the platform command shell. */
 #ifdef Q_OS_WIN
-    const QString     shell = QStringLiteral("cmd.exe");
-    const QStringList args{QStringLiteral("/c"), command};
+    const QString shell = QStringLiteral("cmd.exe");
+    process.setProgram(shell);
+    process.setNativeArguments(QSocShellPath::cmdExeNativeArguments(command));
+    /* Always a console of its own, so its code page is the OEM one. */
+    process.setCreateProcessArgumentsModifier(
+        [](QProcess::CreateProcessArguments *args) { args->flags |= CREATE_NO_WINDOW; });
 #else
-    const QString     shell = QStringLiteral("/bin/sh");
-    const QStringList args{QStringLiteral("-c"), command};
+    const QString shell = QStringLiteral("/bin/sh");
+    process.setProgram(shell);
+    process.setArguments({QStringLiteral("-c"), command});
 #endif
-    process.start(shell, args);
+    process.start();
     if (!process.waitForStarted())
         return process.errorString() + QLatin1Char('\n');
     QEventLoop loop;
@@ -102,29 +110,20 @@ QString runShellEscape(const QString &command, const QString &directory, std::st
     cancellation.start();
     if (process.state() != QProcess::NotRunning)
         loop.exec();
-    QString result = QString::fromLocal8Bit(process.readAll());
+    QString    result;
+    const auto append = [&result](const QString &text) {
+        result += text;
+        if (!result.isEmpty() && !result.endsWith(QLatin1Char('\n')))
+            result += QLatin1Char('\n');
+    };
+    append(QSocShellPath::decodeConsoleOutput(process.readAll()));
     if (process.exitCode() != 0)
-        result += QStringLiteral("(exit code: %1)\n").arg(process.exitCode());
-    if (!result.isEmpty() && !result.endsWith(QLatin1Char('\n')))
-        result += QLatin1Char('\n');
-    return result + QStringLiteral("(shell: %1)\n").arg(shell);
+        append(QStringLiteral("(exit code: %1)").arg(process.exitCode()));
+    append(QStringLiteral("(shell: %1)").arg(shell));
+    return result;
 }
 
-QString runRemoteShellEscape(QSocRemoteConnection *conn, const QString &command)
-{
-    if (conn == nullptr || conn->session() == nullptr) {
-        return QStringLiteral("(not connected)\n");
-    }
-    QSocSshExec exec(*conn->session());
-    QString     cwd = conn->path()->cwd();
-    cwd.replace(QLatin1Char('\''), QStringLiteral("'\"'\"'"));
-    const auto result = exec.run(QStringLiteral("cd '%1' && %2 2>&1").arg(cwd, command), 30000);
-    QString    text   = QString::fromUtf8(result.stdoutBytes);
-    if (!text.endsWith(QLatin1Char('\n')) && !text.isEmpty()) {
-        text += QLatin1Char('\n');
-    }
-    return text;
-}
+namespace {
 
 QString fmtTok(qint64 tokens)
 {
@@ -154,9 +153,10 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         emitOutput(
             QStringLiteral("$ ") + shellCmd + QStringLiteral("\n"),
             static_cast<int>(QSocAgentRuntimeStyle::Bold));
-        const QString output
-            = isRemote() ? runRemoteShellEscape(d->remoteConn, shellCmd)
-                         : runShellEscape(shellCmd, workingDirectory(), d->commandStop.get_token());
+        const QString output = isRemote()
+                                   ? runBoundRemoteShellEscape(d->remoteConn, shellCmd)
+                                   : QSocAgentRuntimeInternal::runLocalShellEscape(
+                                         shellCmd, workingDirectory(), d->commandStop.get_token());
         if (!output.isEmpty()) {
             emitOutput(output, static_cast<int>(QSocAgentRuntimeStyle::Dim));
         }
