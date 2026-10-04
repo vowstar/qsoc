@@ -128,22 +128,34 @@ private slots:
         QTest::addColumn<QByteArray>("source");
         QTest::addColumn<int>("expectedExit");
         QTest::addColumn<QString>("expectedStatus");
-        const QByteArray tail = "(assert false)";
+        QTest::addColumn<QString>("expectedReason");
+        const QByteArray tail         = "(assert false)";
+        const QString    invalidBytes = "SMT-LIB input exceeds 256 KiB or is not valid UTF-8.";
         QTest::newRow("delayed-blocks")
-            << QByteArray("(assert true)") + QByteArray(32768, ' ') + tail << 0 << QString("unsat");
+            << QByteArray("(assert true)") + QByteArray(32768, ' ') + tail << 0 << QString("unsat")
+            << QString();
         QTest::newRow("exact-limit")
             << QByteArray(QSocSmtService::inputLimit - tail.size(), ' ') + tail << 0
-            << QString("unsat");
+            << QString("unsat") << QString();
         QTest::newRow("over-limit")
-            << QByteArray(QSocSmtService::inputLimit + 1, ' ') << 2 << QString();
-        QTest::newRow("invalid-utf8") << QByteArray(1, char(0xff)) << 2 << QString();
-        QTest::newRow("empty") << QByteArray() << 2 << QString();
+            << QByteArray(QSocSmtService::inputLimit + 1, ' ') << 2 << QString() << invalidBytes;
+        QTest::newRow("invalid-utf8")
+            << QByteArray(1, char(0xff)) << 2 << QString() << invalidBytes;
+        QTest::newRow("empty") << QByteArray() << 2 << QString()
+                               << QString("Invalid SMT input size or NUL byte");
+        QTest::newRow("ctrl-z-prefix") << QByteArray("(assert true)") + char(0x1a) + tail << 2
+                                       << QString() << QString("Unsupported control character");
+        QTest::newRow("crlf-byte-limit")
+            << QByteArray("(assert true)")
+                   + QByteArray("\r\n").repeated(QSocSmtService::inputLimit / 2)
+            << 2 << QString() << invalidBytes;
     }
     void stdinClosedPipe()
     {
         QFETCH(QByteArray, source);
         QFETCH(int, expectedExit);
         QFETCH(QString, expectedStatus);
+        QFETCH(QString, expectedReason);
         QProcess process;
         configureStdinProcess(process);
         const auto cleanup = qScopeGuard([&] {
@@ -175,6 +187,8 @@ private slots:
             value.value("execution").toString() == (expectedExit == 0 ? "completed" : "error"),
             diagnostic.constData());
         QCOMPARE(value.value("solver_status").toString(), expectedStatus);
+        if (!expectedReason.isEmpty())
+            QCOMPARE(value.value("reason").toString(), expectedReason);
         QVERIFY2(value.value("reason").toString() != "Unknown error", diagnostic.constData());
     }
     void invalidModeLeavesStdinOpen()
@@ -334,7 +348,7 @@ private slots:
         cli.setup({"qsoc", "smt", "--connect", endpoint, "--timeout-ms", "20000", input}, true);
         QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 15000);
         cancel.stop();
-        QVERIFY(interrupted);
+        QVERIFY2(interrupted, output.data().constData());
         QCOMPARE(done.first().first().toInt(), 130);
         QCOMPARE(result().value("execution").toString(), QString("cancelled"));
         QVERIFY(!alive(markerPid(ownMarker)));

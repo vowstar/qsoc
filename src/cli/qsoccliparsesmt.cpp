@@ -13,6 +13,7 @@
 #include <QScopeGuard>
 #include <QTimer>
 #ifdef Q_OS_WIN
+#include <fcntl.h>
 #include <io.h>
 #endif
 
@@ -54,9 +55,24 @@ bool QSocCliWorker::parseSmt(const QStringList &appArguments)
         return fail("mode must be check or optimize.");
     QFile         input;
     const QString path = paths.value(0, QStringLiteral("-"));
+#ifdef Q_OS_WIN
+    const int  stdinDescriptor   = ::_fileno(stdin);
+    int        previousInputMode = -1;
+    const auto restoreInputMode  = qScopeGuard([&] {
+        if (previousInputMode >= 0)
+            ::_setmode(stdinDescriptor, previousInputMode);
+    });
+#endif
     if (path == "-") {
 #ifdef Q_OS_WIN
-        const int descriptor = ::_fileno(stdin);
+        const int descriptor = stdinDescriptor;
+        if (descriptor < 0)
+            return fail("Standard input is unavailable.");
+        if (!::_isatty(descriptor)) {
+            previousInputMode = ::_setmode(descriptor, _O_BINARY);
+            if (previousInputMode < 0)
+                return fail("Could not read standard input as bytes.");
+        }
 #else
         const int descriptor = ::fileno(stdin);
 #endif
