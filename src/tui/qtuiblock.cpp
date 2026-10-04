@@ -39,7 +39,7 @@ QString rowToAnsi(const QTuiScreen &screen, int row, int width)
 
     for (int col = 0; col < width;) {
         const QTuiCell &cell = screen.at(col, row);
-        const int       chW  = QTuiText::isWideChar(cell.character.unicode()) ? 2 : 1;
+        const int       chW  = QTuiText::isWideChar(cell.codePoint()) ? 2 : 1;
 
         const bool changed = cell.bold != curBold || cell.italic != curItalic || cell.dim != curDim
                              || cell.underline != curUnderline || cell.inverted != curInverted
@@ -94,7 +94,7 @@ QString rowToAnsi(const QTuiScreen &screen, int row, int width)
             currentLink = cell.hyperlink;
         }
 
-        output += cell.character;
+        output += cell.text();
         col += chW;
     }
 

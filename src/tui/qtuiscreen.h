@@ -37,7 +37,30 @@ static constexpr QTuiBgColor BG_DEFAULT = 0;
  */
 struct QTuiCell
 {
-    QChar       character = ' ';
+    QChar character = ' ';
+    QChar lowSurrogate;
+
+    void setScalar(char32_t value)
+    {
+        if (value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
+            value = 0xfffd;
+        character    = value > 0xffff ? QChar(QChar::highSurrogate(value)) : QChar(ushort(value));
+        lowSurrogate = value > 0xffff ? QChar(QChar::lowSurrogate(value)) : QChar();
+    }
+
+    char32_t codePoint() const
+    {
+        return character.isHighSurrogate() && lowSurrogate.isLowSurrogate()
+                   ? QChar::surrogateToUcs4(character, lowSurrogate)
+                   : character.unicode();
+    }
+
+    QString text() const
+    {
+        const char32_t value = codePoint();
+        return QString::fromUcs4(&value, 1);
+    }
+
     bool        bold      = false;
     bool        italic    = false;
     bool        dim       = false;
@@ -60,7 +83,7 @@ struct QTuiCell
 
     bool operator==(const QTuiCell &other) const
     {
-        return character == other.character && bold == other.bold && italic == other.italic
+        return codePoint() == other.codePoint() && bold == other.bold && italic == other.italic
                && dim == other.dim && underline == other.underline && inverted == other.inverted
                && fgColor == other.fgColor && bgColor == other.bgColor
                && hyperlink == other.hyperlink && decorative == other.decorative;
@@ -120,6 +143,15 @@ public:
         int         col,
         int         row,
         QChar       ch,
+        bool        bold     = false,
+        bool        dim      = false,
+        bool        inverted = false,
+        QTuiFgColor fgColor  = QTuiFgColor::Default,
+        QTuiBgColor bgColor  = BG_DEFAULT);
+    void putScalar(
+        int         col,
+        int         row,
+        char32_t    value,
         bool        bold     = false,
         bool        dim      = false,
         bool        inverted = false,

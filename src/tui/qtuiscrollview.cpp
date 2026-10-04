@@ -38,20 +38,16 @@ QList<QString> softWrap(const QString &text, int maxWidth, const QString &contin
     QString current;
     int     currentWidth = 0;
     int     lastBreak    = -1;
-    for (int idx = 0; idx < text.size(); ++idx) {
-        const QChar character = text.at(idx);
-        const int   chWid     = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+    for (const char32_t character : text.toUcs4()) {
+        const int chWid = QTuiText::isWideChar(character) ? 2 : 1;
         if (currentWidth + chWid > budget() && !current.isEmpty()) {
             if (lastBreak > 0) {
                 QString head = current.left(lastBreak);
                 QString tail = current.mid(lastBreak + 1);
                 finalize(head);
                 current      = tail;
-                currentWidth = 0;
-                for (const QChar tail_ch : tail) {
-                    currentWidth += QTuiText::isWideChar(tail_ch.unicode()) ? 2 : 1;
-                }
-                lastBreak = -1;
+                currentWidth = QTuiText::visualWidth(tail);
+                lastBreak    = -1;
             } else {
                 finalize(current);
                 current.clear();
@@ -59,10 +55,10 @@ QList<QString> softWrap(const QString &text, int maxWidth, const QString &contin
                 lastBreak    = -1;
             }
         }
-        if (character == QLatin1Char(' ')) {
+        if (character == U' ') {
             lastBreak = current.size();
         }
-        current.append(character);
+        current.append(QString::fromUcs4(&character, 1));
         currentWidth += chWid;
     }
     if (!current.isEmpty() || out.isEmpty()) {
@@ -83,15 +79,15 @@ QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int
     }
     struct CharCell
     {
-        QChar character;
-        int   runIdx;
-        int   width;
+        char32_t character;
+        int      runIdx;
+        int      width;
     };
     QList<CharCell> cells;
     cells.reserve(256);
     for (int idx = 0; idx < runs.size(); ++idx) {
-        for (const QChar character : runs[idx].text) {
-            const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+        for (const char32_t character : runs[idx].text.toUcs4()) {
+            const int chW = QTuiText::isWideChar(character) ? 2 : 1;
             cells.append({.character = character, .runIdx = idx, .width = chW});
         }
     }
@@ -116,7 +112,7 @@ QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int
                 proto      = runs[current];
                 proto.text = QString();
             }
-            proto.text.append(cells[idx].character);
+            proto.text.append(QString::fromUcs4(&cells[idx].character, 1));
         }
         if (!proto.text.isEmpty()) {
             rowRuns.append(proto);
@@ -139,7 +135,7 @@ QList<QList<QTuiStyledRun>> wrapStyledRuns(const QList<QTuiStyledRun> &runs, int
                 rowWidth += cells[back].width;
             }
         }
-        if (cell.character == QLatin1Char(' ')) {
+        if (cell.character == U' ') {
             lastSpace = idx;
         }
         rowWidth += cell.width;
@@ -277,12 +273,12 @@ public:
         }
         int col = 0;
         for (const QTuiStyledRun &run : wrapped[viewportRow]) {
-            for (const QChar character : run.text) {
-                if (col >= width) {
+            for (const char32_t character : run.text.toUcs4()) {
+                if (col + (QTuiText::isWideChar(character) ? 2 : 1) > width) {
                     return;
                 }
-                QTuiCell &cell  = screen.at(col, screenRow);
-                cell.character  = character;
+                QTuiCell &cell = screen.at(col, screenRow);
+                cell.setScalar(character);
                 cell.bold       = run.bold;
                 cell.italic     = run.italic;
                 cell.dim        = run.dim;
@@ -292,7 +288,7 @@ public:
                 cell.bgColor    = run.bg;
                 cell.hyperlink  = run.hyperlink;
                 cell.decorative = run.decorative;
-                col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+                col += QTuiText::isWideChar(character) ? 2 : 1;
             }
         }
     }

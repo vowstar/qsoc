@@ -902,12 +902,18 @@ QString QTuiCompositor::buildSelectionPayload() const
         const int colBegin = (row == startRow) ? startCol : 0;
         const int colEnd   = (row == endRow) ? endCol : lastCol;
         QString   line;
-        for (int col = colBegin; col <= colEnd && col < screen.width(); col++) {
+        const int firstCell = colBegin > 0
+                                      && QTuiText::isWideChar(
+                                          screen.at(colBegin - 1, row).codePoint())
+                                  ? colBegin - 1
+                                  : colBegin;
+        for (int col = firstCell; col <= colEnd && col < screen.width(); col++) {
             const QTuiCell &cell = screen.at(col, row);
             if (cell.decorative) {
                 continue;
             }
-            line += cell.character;
+            line += cell.text();
+            col += QTuiText::isWideChar(cell.codePoint()) ? 1 : 0;
         }
         while (line.endsWith(QLatin1Char(' '))) {
             line.chop(1);

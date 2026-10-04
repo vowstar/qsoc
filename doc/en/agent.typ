@@ -535,7 +535,9 @@ retain their source. Narrowing the terminal can cause this fallback.
 
 History, logs, and Markdown copies retain the original formula source. Mouse
 selection copies the displayed characters, including the rows of a display
-formula. Formula output uses terminal fonts and does not require an external
+formula. Supplementary Unicode characters remain intact when rendered, wrapped,
+and copied, including single-character emoji and mathematical letters.
+Formula output uses terminal fonts and does not require an external
 TeX installation.
 
 Completion and interrupt:

@@ -46,11 +46,11 @@ QString fitToWidth(const QString &text, int width)
         return {};
     QString plain;
     for (const auto &span : QTuiAnsi::parse(text)) {
-        for (const QChar ch : span.text) {
-            if (!ch.isPrint())
+        for (const char32_t ch : span.text.toUcs4()) {
+            if (!QChar::isPrint(ch))
                 plain += QLatin1Char(' ');
             else
-                plain += ch;
+                plain += QString::fromUcs4(&ch, 1);
         }
     }
     if (QTuiText::visualWidth(plain) > width)

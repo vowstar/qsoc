@@ -60,16 +60,36 @@ void QTuiScreen::putChar(
     QTuiFgColor fgColor,
     QTuiBgColor bgColor)
 {
-    if (row < 0 || row >= rows || col < 0 || col >= cols) {
+    putScalar(col, row, ch.unicode(), bold, dim, inverted, fgColor, bgColor);
+}
+
+void QTuiScreen::putScalar(
+    int         col,
+    int         row,
+    char32_t    value,
+    bool        bold,
+    bool        dim,
+    bool        inverted,
+    QTuiFgColor fgColor,
+    QTuiBgColor bgColor)
+{
+    const int width = QTuiText::isWideChar(value) ? 2 : 1;
+    if (row < 0 || row >= rows || col < 0 || col + width > cols)
         return;
+    if (col > 0 && QTuiText::isWideChar(cells[row][col - 1].codePoint()))
+        cells[row][col - 1] = QTuiCell();
+    for (int at = col; at < col + width; ++at) {
+        if (QTuiText::isWideChar(cells[row][at].codePoint()) && at + 1 < cols)
+            cells[row][at + 1] = QTuiCell();
+        cells[row][at] = QTuiCell();
     }
-    auto &cell     = cells[row][col];
-    cell.character = ch;
-    cell.bold      = bold;
-    cell.dim       = dim;
-    cell.inverted  = inverted;
-    cell.fgColor   = fgColor;
-    cell.bgColor   = bgColor;
+    auto &cell = cells[row][col];
+    cell.setScalar(value);
+    cell.bold     = bold;
+    cell.dim      = dim;
+    cell.inverted = inverted;
+    cell.fgColor  = fgColor;
+    cell.bgColor  = bgColor;
 }
 
 void QTuiScreen::putString(
@@ -109,8 +129,13 @@ void QTuiScreen::putString(
             continue;
         }
 
-        if (pos >= 0) {
-            putChar(pos, row, chr, bold, dim, inverted, fgColor, bgColor);
+        char32_t scalar = chr.unicode();
+        if (chr.isHighSurrogate() && idx + 1 < len && text[idx + 1].isLowSurrogate()) {
+            scalar = QChar::surrogateToUcs4(chr, text[++idx]);
+        }
+        const int cellWidth = QTuiText::isWideChar(scalar) ? 2 : 1;
+        if (pos >= 0 && pos + cellWidth <= cols) {
+            putScalar(pos, row, scalar, bold, dim, inverted, fgColor, bgColor);
         }
         /* Wide chars (CJK / emoji) occupy two terminal cells; advance
          * the write cursor by the visual width so consecutive wide
@@ -118,7 +143,7 @@ void QTuiScreen::putString(
          * trailing cell is left as the default ' ' which toAnsi then
          * skips, keeping the screen buffer in sync with what the
          * terminal actually shows. */
-        pos += QTuiText::isWideChar(chr.unicode()) ? 2 : 1;
+        pos += cellWidth;
         idx++;
     }
 }
@@ -129,10 +154,10 @@ void QTuiScreen::hline(int row, QChar ch)
         return;
     }
     for (int col = 0; col < cols; col++) {
-        cells[row][col].character = ch;
-        cells[row][col].bold      = false;
-        cells[row][col].dim       = true;
-        cells[row][col].inverted  = false;
+        cells[row][col].setScalar(ch.unicode());
+        cells[row][col].bold     = false;
+        cells[row][col].dim      = true;
+        cells[row][col].inverted = false;
     }
 }
 
@@ -189,7 +214,7 @@ QString QTuiScreen::toAnsi()
              * must not be emitted, otherwise the terminal renders an
              * extra space and pushes following content one cell to the
              * right. Detect, emit once, skip the trailing cell. */
-            const int charWidth = QTuiText::isWideChar(cell.character.unicode()) ? 2 : 1;
+            const int charWidth = QTuiText::isWideChar(cell.codePoint()) ? 2 : 1;
 
             /* Emit style changes */
             bool needReset = false;
@@ -259,7 +284,7 @@ QString QTuiScreen::toAnsi()
                 }
                 currentLink = cell.hyperlink;
             }
-            output += cell.character;
+            output += cell.text();
             col += charWidth;
         }
     }

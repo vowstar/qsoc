@@ -398,12 +398,12 @@ void QTuiImagePreviewBlock::paintRow(
     }
     int col = 0;
     for (const QTuiStyledRun &run : rendered[viewportRow]) {
-        for (const QChar character : run.text) {
-            if (col >= width) {
+        for (const char32_t character : run.text.toUcs4()) {
+            if (col + (QTuiText::isWideChar(character) ? 2 : 1) > width) {
                 return;
             }
-            QTuiCell &cell  = screen.at(col, screenRow);
-            cell.character  = character;
+            QTuiCell &cell = screen.at(col, screenRow);
+            cell.setScalar(character);
             cell.bold       = run.bold;
             cell.italic     = run.italic;
             cell.dim        = run.dim;
@@ -413,7 +413,7 @@ void QTuiImagePreviewBlock::paintRow(
             cell.bgColor    = run.bg;
             cell.hyperlink  = run.hyperlink;
             cell.decorative = run.decorative;
-            col += QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            col += QTuiText::isWideChar(character) ? 2 : 1;
         }
     }
 }

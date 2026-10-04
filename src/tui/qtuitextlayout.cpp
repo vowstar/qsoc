@@ -38,16 +38,16 @@ QList<QTuiVisualRow> qtuiWrapStyledRuns(
 
     struct Cell
     {
-        QChar character;
-        int   runIdx;
-        int   visualWidth;
-        bool  decorative;
+        char32_t character;
+        int      runIdx;
+        int      visualWidth;
+        bool     decorative;
     };
     QList<Cell> cells;
     cells.reserve(256);
     for (int idx = 0; idx < runs.size(); ++idx) {
-        for (const QChar character : runs[idx].text) {
-            const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+        for (const char32_t character : runs[idx].text.toUcs4()) {
+            const int chW = QTuiText::isWideChar(character) ? 2 : 1;
             cells.append(
                 {.character   = character,
                  .runIdx      = idx,
@@ -66,7 +66,8 @@ QList<QTuiVisualRow> qtuiWrapStyledRuns(
     nonDecoBefore.reserve(cells.size() + 1);
     nonDecoBefore.append(0);
     for (const Cell &cell : cells) {
-        nonDecoBefore.append(nonDecoBefore.last() + (cell.decorative ? 0 : 1));
+        nonDecoBefore.append(
+            nonDecoBefore.last() + (cell.decorative ? 0 : (cell.character > 0xffff ? 2 : 1)));
     }
 
     auto regroup = [&](int begin, int end) -> QList<QTuiStyledRun> {
@@ -86,7 +87,7 @@ QList<QTuiVisualRow> qtuiWrapStyledRuns(
                 proto      = runs[current];
                 proto.text = QString();
             }
-            proto.text.append(cells[idx].character);
+            proto.text.append(QString::fromUcs4(&cells[idx].character, 1));
         }
         if (!proto.text.isEmpty()) {
             rowRuns.append(proto);
@@ -110,7 +111,7 @@ QList<QTuiVisualRow> qtuiWrapStyledRuns(
                 rowWidth += cells[back].visualWidth;
             }
         }
-        if (cell.character == QLatin1Char(' ')) {
+        if (cell.character == U' ') {
             lastSpace = idx;
         }
         rowWidth += cell.visualWidth;
@@ -175,8 +176,8 @@ QString qtuiSelectedLogicalText(
         int  rowMax  = -1;
         bool rowHit  = false;
         for (const QTuiStyledRun &run : row.runs) {
-            for (const QChar character : run.text) {
-                const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+            for (const char32_t character : run.text.toUcs4()) {
+                const int chW = QTuiText::isWideChar(character) ? 2 : 1;
                 if (!run.decorative) {
                     const int colA = painted;
                     const int colB = painted + chW - 1;
@@ -186,9 +187,9 @@ QString qtuiSelectedLogicalText(
                             rowMin = off;
                             rowHit = true;
                         }
-                        rowMax = off;
+                        rowMax = off + (character > 0xffff ? 1 : 0);
                     }
-                    k++;
+                    k += character > 0xffff ? 2 : 1;
                 }
                 painted += chW;
             }

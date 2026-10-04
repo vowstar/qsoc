@@ -198,13 +198,13 @@ void QTuiToolBlock::paintRow(
     }
     int painted = 0;
     for (const QTuiStyledRun &run : rows[viewportRow]) {
-        for (const QChar character : run.text) {
-            const int chW = QTuiText::isWideChar(character.unicode()) ? 2 : 1;
+        for (const char32_t character : run.text.toUcs4()) {
+            const int chW = QTuiText::isWideChar(character) ? 2 : 1;
             if (painted + chW > width) {
                 return;
             }
-            QTuiCell &cell  = screen.at(painted, screenRow);
-            cell.character  = character;
+            QTuiCell &cell = screen.at(painted, screenRow);
+            cell.setScalar(character);
             cell.bold       = run.bold;
             cell.italic     = run.italic;
             cell.dim        = run.dim;
