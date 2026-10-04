@@ -154,21 +154,51 @@ jobs:
         py7zrversion: '==0.20.*'
         extra: '--external 7z'
 
+    - name: Verify source archive
+      run: |
+        python3 .github/scripts/test-source-archive.py
+        python3 .github/scripts/source-archive.py \
+          --repository . --ref "$GITHUB_SHA" --output-dir "$RUNNER_TEMP/source-archive"
+        cd "$RUNNER_TEMP/source-archive"
+        sha256sum --check qsoc-*.tar.xz.sha256
+        mkdir "$RUNNER_TEMP/qsoc-source"
+        tar -xJf qsoc-*.tar.xz -C "$RUNNER_TEMP/qsoc-source" --strip-components=1
+        test ! -e "$RUNNER_TEMP/qsoc-source/.git"
+
     # Tests are built on a push too, so the saved cache holds their objects.
     # Pushes also run the local-process and deployment checks.
     - name: Configure CMake
-      run: >-
-        cmake -B build -G Ninja
-        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-        -DCMAKE_LINKER_TYPE=LLD
-        -DENABLE_CLANG_TIDY=OFF
-        -DENABLE_DOXYGEN=OFF
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      run: |
+        cd "$RUNNER_TEMP/qsoc-source"
+        sudo unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
+          env "PATH=$PATH" "HOME=$HOME" "CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH" \
+          "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
+          "CCACHE_DIR=${CCACHE_DIR:-$GITHUB_WORKSPACE/.ccache}" \
+          "CCACHE_BASEDIR=$RUNNER_TEMP/qsoc-source" \
+          "CCACHE_COMPILERCHECK=$CCACHE_COMPILERCHECK" \
+          cmake -B "$GITHUB_WORKSPACE/build" -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_LINKER_TYPE=LLD \
+          -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+          -DFETCHCONTENT_SOURCE_DIR_FMT="$PWD/external/fmt" \
+          -DSLANG_USE_MIMALLOC=OFF \
+          -DSLANG_USE_CPPTRACE=OFF \
+          -DSLANG_INCLUDE_TESTS=OFF \
+          -DENABLE_CLANG_TIDY=OFF \
+          -DENABLE_DOXYGEN=OFF \
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
     - name: Build
-      run: cmake --build build --config ${{env.BUILD_TYPE}}
+      run: |
+        cd "$RUNNER_TEMP/qsoc-source"
+        sudo unshare --net --setgid="$(id -g)" --setuid="$(id -u)" \
+          env "PATH=$PATH" "HOME=$HOME" "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" \
+          "CCACHE_DIR=${CCACHE_DIR:-$GITHUB_WORKSPACE/.ccache}" \
+          "CCACHE_BASEDIR=$RUNNER_TEMP/qsoc-source" \
+          "CCACHE_COMPILERCHECK=$CCACHE_COMPILERCHECK" \
+          cmake --build "$GITHUB_WORKSPACE/build" --config ${{env.BUILD_TYPE}}
 
     - name: Local process contracts
       run: python3 .github/scripts/run-core-tests.py build

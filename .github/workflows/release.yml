@@ -16,7 +16,28 @@ env:
   QT_VERSION: '6.6.2'
 
 jobs:
+  source-archive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: recursive
+    - name: Test source archiving
+      run: python3 .github/scripts/test-source-archive.py
+    - name: Export complete sources
+      run: >-
+        python3 .github/scripts/source-archive.py
+        --repository . --ref "$GITHUB_SHA" --output-dir source-archive
+    - uses: actions/upload-artifact@v7
+      with:
+        name: source-archive
+        path: source-archive/*
+        if-no-files-found: error
+
   build-linux:
+    needs: source-archive
     runs-on: ubuntu-22.04
     container:
       image: almalinux:8
@@ -48,8 +69,10 @@ jobs:
           python39 \
           python39-pip \
           squashfs-tools \
+          tar \
           wget \
           which \
+          xz \
           xcb-util-cursor-devel \
           xcb-util-devel \
           xcb-util-image-devel \
@@ -58,9 +81,17 @@ jobs:
           xcb-util-wm-devel
         git config --global --add safe.directory '*'
 
-    - uses: actions/checkout@v7
+    - uses: actions/download-artifact@v8
       with:
-        submodules: recursive
+        name: source-archive
+        path: ${{ runner.temp }}/source-archive
+
+    - name: Extract release sources
+      run: |
+        cd "$RUNNER_TEMP/source-archive"
+        sha256sum --check qsoc-*.tar.xz.sha256
+        tar -xJf qsoc-*.tar.xz -C "$GITHUB_WORKSPACE" --strip-components=1
+        test ! -e "$GITHUB_WORKSPACE/.git"
 
     - name: Install Qt
       run: |
@@ -78,6 +109,11 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_INSTALL_PREFIX=/usr \
           -DCMAKE_PREFIX_PATH=/opt/qt/${{ env.QT_VERSION }}/gcc_64 \
+          -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+          -DFETCHCONTENT_SOURCE_DIR_FMT="$PWD/external/fmt" \
+          -DSLANG_USE_MIMALLOC=OFF \
+          -DSLANG_USE_CPPTRACE=OFF \
+          -DSLANG_INCLUDE_TESTS=OFF \
           -DENABLE_CLANG_TIDY=OFF \
           -DENABLE_DOXYGEN=OFF \
           -DENABLE_UNIT_TEST=OFF
@@ -299,7 +335,7 @@ jobs:
         path: doc-pdf/*.pdf
 
   release:
-    needs: [build-linux, build-windows, build-macos, build-docs]
+    needs: [source-archive, build-linux, build-windows, build-macos, build-docs]
     runs-on: ubuntu-22.04
 
     steps:
@@ -326,6 +362,7 @@ jobs:
         ls -la QSoC-*-windows-x64.zip
         ls -la macos-dmg/
         ls -la docs-pdf/
+        ls -la source-archive/
 
     - name: Create Release
       uses: softprops/action-gh-release@v3
@@ -335,6 +372,9 @@ jobs:
           QSoC-*-windows-x64.zip
           macos-dmg/QSoC-*-macos-arm64.dmg
           docs-pdf/*.pdf
+          source-archive/qsoc-*.tar.xz
+          source-archive/qsoc-*.tar.xz.sha256
+        fail_on_unmatched_files: true
         body_path: RELEASE_NOTES.md
         draft: false
         prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}

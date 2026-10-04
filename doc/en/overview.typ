@@ -53,6 +53,11 @@ for three platforms and this manual as a PDF:
   kind: table,
 )
 
+Releases also provide `qsoc-X.Y.Z.tar.xz` and its `.sha256` checksum file.
+This archive includes recursive submodule sources, which GitHub's automatic source downloads omit.
+The `source-revisions.json` file records the main and dependency commits.
+Qt and other system build dependencies still need installation.
+
 With Nix, `nix shell github:vowstar/qsoc#qsoc` gives a shell with `qsoc` on
 the `PATH`. To build from a clone of the repository:
 

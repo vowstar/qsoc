@@ -63,6 +63,8 @@ See [doc/README.md](doc/README.md) for build instructions.
 
 ## Development
 
+Releases include `qsoc-X.Y.Z.tar.xz` with all recursive Git submodule sources and a `.sha256` checksum file. The archive records the main commit and dependency commits in `source-revisions.json`. GitHub's automatic source downloads omit submodule contents. Qt and other system build dependencies still need installation.
+
 QSoC uses Nix to provide a reproducible development environment with
 all dependencies pinned:
 
