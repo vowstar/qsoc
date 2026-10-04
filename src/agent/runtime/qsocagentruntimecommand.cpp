@@ -194,7 +194,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
     if (cmd == QStringLiteral("/help")) {
         emitOutput(QStringLiteral(
             "Commands\n"
-            "  /help /status /context /cost /compact /clear\n"
+            "  /help /status /context /cost /cache /compact /clear\n"
             "  /model [id] /effort [off|low|medium|high] /plan\n"
             "  /resume [id] /rewind /branch [name] /rename <title> /diff /btw <question>\n"
             "  /memory /goal /agents /agents-history /mcp /loop\n"
@@ -430,6 +430,18 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
                        .arg(fmtTok(snapshot.usedTokens))
                        .arg(fmtTok(snapshot.maxTokens)));
         emitOutput(QStringLiteral("  Threshold: %1%\n\n").arg(int(snapshot.compactThreshold * 100)));
+        return true;
+    }
+
+    if (cmd == QStringLiteral("/cache")) {
+        emitOutput(QStringLiteral(
+            "\nCache diagnostics for the current LLM service.\n"
+            "Calls count service invocations, not user turns.\n"
+            "Missing values are not reported by the provider.\n"));
+        if (d->llmService)
+            emitOutput(
+                QString::fromStdString(d->llmService->requestDiagnostics().dump(2))
+                + QLatin1Char('\n'));
         return true;
     }
 

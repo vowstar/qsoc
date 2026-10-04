@@ -198,15 +198,15 @@ using QSocAgentRuntimeInternal::sessionProjectPath;
 namespace {
 
 const QStringList kRuntimeCommands = {
-    QStringLiteral("/clear"),  QStringLiteral("/compact"),        QStringLiteral("/context"),
-    QStringLiteral("/cost"),   QStringLiteral("/status"),         QStringLiteral("/mcp"),
-    QStringLiteral("/branch"), QStringLiteral("/rename"),         QStringLiteral("/memory"),
-    QStringLiteral("/plan"),   QStringLiteral("/local"),          QStringLiteral("/goal"),
-    QStringLiteral("/cwd"),    QStringLiteral("/project"),        QStringLiteral("/ssh"),
-    QStringLiteral("/agents"), QStringLiteral("/agents-history"), QStringLiteral("/loop"),
-    QStringLiteral("/diff"),   QStringLiteral("/help"),           QStringLiteral("/model"),
-    QStringLiteral("/effort"), QStringLiteral("/resume"),         QStringLiteral("/rewind"),
-    QStringLiteral("/btw"),
+    QStringLiteral("/clear"),  QStringLiteral("/compact"), QStringLiteral("/context"),
+    QStringLiteral("/cost"),   QStringLiteral("/cache"),   QStringLiteral("/status"),
+    QStringLiteral("/mcp"),    QStringLiteral("/branch"),  QStringLiteral("/rename"),
+    QStringLiteral("/memory"), QStringLiteral("/plan"),    QStringLiteral("/local"),
+    QStringLiteral("/goal"),   QStringLiteral("/cwd"),     QStringLiteral("/project"),
+    QStringLiteral("/ssh"),    QStringLiteral("/agents"),  QStringLiteral("/agents-history"),
+    QStringLiteral("/loop"),   QStringLiteral("/diff"),    QStringLiteral("/help"),
+    QStringLiteral("/model"),  QStringLiteral("/effort"),  QStringLiteral("/resume"),
+    QStringLiteral("/rewind"), QStringLiteral("/btw"),
 };
 
 bool isRuntimeCommand(const QString &cmd)

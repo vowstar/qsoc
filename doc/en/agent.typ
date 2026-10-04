@@ -335,6 +335,7 @@ The following commands are available during an interactive session:
     [`/compact`], [Compact context and report tokens saved],
     [`/context`], [Show token usage breakdown and suggestions],
     [`/cost`], [Show session token totals and cost (if rates configured)],
+    [`/cache`], [Show local request and cache diagnostics],
     [`/cwd [path]`],
     [Show or change the working directory. Empty opens a picker. In remote
      mode, drives the remote cwd: the host resolves the path first, so a
@@ -1054,6 +1055,29 @@ anchor.
 The child reuses the parent's identity and tool restrictions. It builds environment and project rules once for its own workspace. A legacy full prompt override is not split into sections. Forks rebuild the default identity in that case. Critical reminders, plan mode, and the approved plan remain system instructions.
 
 Unchanged prompt sections stay stable across turns. Workspace, permissions, model, or runtime reminders can change the request prefix. Provider caching depends on the endpoint and request contents. A fork does not guarantee a cache hit.
+
+`/cache` reports the current LLM service's text, chat, and streaming calls.
+A service call is one API invocation, not a user turn. Caller retries are
+separate calls. Network attempts count actual sends. Token-count requests
+and independent service clones are outside this report.
+
+The report distinguishes missing, invalid, and reported token counts.
+A reported zero means zero. A missing total is `null`, not zero. Cache ratios
+use only calls that report both valid input and cache-read counts. Usage
+from an interrupted response can be incomplete and is counted separately.
+First-byte latency measures network response data, not the first model token.
+
+Prefix changes compare consecutive requests within each request type. They
+describe local changes, not the provider's cache decision. Comparisons retain
+only private in-memory fingerprints, with a fresh random key per collector.
+The report contains no prompt text, tool results, credentials, fingerprints,
+or endpoint names. Comparisons stop at 4096 messages or 8 MiB of serialized
+parts, 65536 values, or 64 nested levels and report `unobserved` beyond those
+bounds. The size check runs before serialization and can conservatively
+reject content near the limit. Statistics stay in memory
+until the service exits. Querying them makes no model request and does not
+add anything to the conversation.
+
 
 Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, with a 64 KiB limit per file. Missing files add no rules. Unavailable or oversized files add a notice. Remote prompts never substitute local project rules or skill paths.
 

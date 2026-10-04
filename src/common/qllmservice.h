@@ -4,6 +4,7 @@
 #ifndef QLLMSERVICE_H
 #define QLLMSERVICE_H
 
+#include "common/qllmdiagnostics.h"
 #include "common/qllmresponselimits.h"
 #include "common/qsocconfig.h"
 
@@ -132,6 +133,9 @@ public:
      *          single-flight invariant.
      */
     QLLMService *clone(QObject *parent = nullptr) const;
+
+    json requestDiagnostics() const;
+    void setDiagnosticsEnabled(bool enabled);
 
     /**
      * @brief Send a cancellable chat completion request
@@ -454,11 +458,12 @@ private:
      * @return Parsed LLM response struct
      */
     static LLMResponse parseResponse(
-        QNetworkReply            *reply,
-        LLMApi                    api,
-        const QByteArray         &body,
-        const QLLMResponseLimits &limits,
-        const QString            &limitError = {});
+        QNetworkReply                     *reply,
+        LLMApi                             api,
+        const QByteArray                  &body,
+        const QLLMResponseLimits          &limits,
+        const QString                     &limitError,
+        const QLLMDiagnostics::RequestPtr &observation = {});
 
     /**
      * @brief Send request to a specific endpoint
@@ -495,8 +500,9 @@ private:
         const QPointer<QLLMService> &owner, const StreamStatePtr &state, const json &event);
     static json buildStreamResponse(const StreamStatePtr &state);
 
-    StreamStatePtr currentStream;
-    quint64        streamGeneration = 0;
+    QLLMDiagnostics diagnostics_;
+    StreamStatePtr  currentStream;
+    quint64         streamGeneration = 0;
 };
 
 #endif // QLLMSERVICE_H

@@ -8,6 +8,7 @@
 #include "agent/qsoctool.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "agent/tool/qsoctoolshell.h"
+#include "common/qllmservice.h"
 #include "common/qsoctaskregistry.h"
 #include "qsoc_test.h"
 
@@ -384,6 +385,30 @@ private slots:
          * frontend can tell the user instead of shipping a typo to the LLM. */
         events.clear();
         QVERIFY(!runtime.executeCommand(QStringLiteral("/nosuchcommand")));
+    }
+
+    void cacheDiagnosticsStayOutOfHistory()
+    {
+        QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_cache_command_XXXXXX"));
+        QVERIFY(fixture.isValid());
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = fixture.path();
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+        const json before      = runtime.messages();
+        const json diagnostics = runtime.llmService()->requestDiagnostics();
+        QSignalSpy events(&runtime, &QSocAgentRuntime::eventRaised);
+        QVERIFY(runtime.executeCommand(QStringLiteral("/cache")));
+        QString text;
+        for (const QVariantList &args : std::as_const(events)) {
+            const auto event = args.first().value<QSocAgentRuntimeEvent>();
+            if (event.kind == QSocAgentRuntimeEvent::Kind::Output)
+                text += event.text;
+        }
+        QVERIFY(text.contains(QStringLiteral("llm_service")));
+        QVERIFY(text.contains(QStringLiteral("service_calls")));
+        QVERIFY(runtime.messages() == before);
+        QVERIFY(runtime.llmService()->requestDiagnostics() == diagnostics);
     }
 
     void resumedSessionKeepsIdentityAndCountsOnlyUserTurns()

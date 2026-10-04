@@ -18,27 +18,28 @@
 
 struct QLLMService::StreamState
 {
-    QPointer<QNetworkReply> reply;
-    QPointer<QTimer>        timer;
-    QByteArray              buffer;
-    QLLMResponseLimits      limits;
-    qint64                  receivedBytes = 0;
-    QMap<qint64, qint64>    messageArgumentBytes;
-    QString                 content;
-    QMap<int, json>         toolCalls;
-    QString                 reasoning;
-    QString                 reasoningField;
-    QString                 finishReason;
-    QString                 terminalError;
-    quint64                 generation         = 0;
-    bool                    reasoningMode      = false;
-    bool                    consumeScheduled   = false;
-    bool                    processing         = false;
-    bool                    replyFinished      = false;
-    bool                    transportFailed    = false;
-    bool                    sawAssistantChoice = false;
-    json                    usage              = json::object();
-    StreamOutcome           outcome            = StreamOutcome::Active;
+    QPointer<QNetworkReply>     reply;
+    QPointer<QTimer>            timer;
+    QByteArray                  buffer;
+    QLLMResponseLimits          limits;
+    qint64                      receivedBytes = 0;
+    QMap<qint64, qint64>        messageArgumentBytes;
+    QString                     content;
+    QMap<int, json>             toolCalls;
+    QString                     reasoning;
+    QString                     reasoningField;
+    QString                     finishReason;
+    QString                     terminalError;
+    quint64                     generation         = 0;
+    bool                        reasoningMode      = false;
+    bool                        consumeScheduled   = false;
+    bool                        processing         = false;
+    bool                        replyFinished      = false;
+    bool                        transportFailed    = false;
+    bool                        sawAssistantChoice = false;
+    json                        usage              = json::object();
+    StreamOutcome               outcome            = StreamOutcome::Active;
+    QLLMDiagnostics::RequestPtr observation;
     /* Set for an anthropic-messages entry; owns the reply state then. */
     std::optional<QLLMAnthropic::StreamDecoder> anthropic;
 };
@@ -170,7 +171,19 @@ struct AsyncRequestState
     QPointer<QTimer>                timer;
     bool                            terminal = false;
     std::shared_ptr<ResponseBuffer> response;
+    QLLMDiagnostics::RequestPtr     observation;
 };
+
+void observeReply(QNetworkReply *reply, const QLLMDiagnostics::RequestPtr &observation)
+{
+    if (!reply || !observation)
+        return;
+    QObject::connect(reply, &QNetworkReply::readyRead, reply, [observation] {
+        observation->firstByte();
+    });
+    if (reply->bytesAvailable() > 0)
+        observation->firstByte();
+}
 
 bool isNullableString(const json &object, const char *field)
 {
@@ -427,6 +440,16 @@ QLLMService *QLLMService::clone(QObject *parent) const
     return child;
 }
 
+json QLLMService::requestDiagnostics() const
+{
+    return diagnostics_.snapshot();
+}
+
+void QLLMService::setDiagnosticsEnabled(bool enabled)
+{
+    diagnostics_.setEnabled(enabled);
+}
+
 /* Configuration */
 
 void QLLMService::setConfig(QSocConfig *config)
@@ -545,6 +568,11 @@ void QLLMService::sendRequestAsync(
     json            payload
         = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint, reasoningEffort);
 
+    const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Text, endpoint.url, payload);
+    auto       failed      = qScopeGuard([&] {
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Failed);
+    });
     if (networkManager.isNull()) {
         LLMResponse response;
         response.success      = false;
@@ -554,6 +582,8 @@ void QLLMService::sendRequestAsync(
         }
         return;
     }
+    if (observation)
+        observation->posted();
     QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
     if (reply == nullptr) {
         LLMResponse response;
@@ -565,13 +595,17 @@ void QLLMService::sendRequestAsync(
         return;
     }
 
+    observeReply(reply, observation);
+    failed.dismiss();
+
     /* Set timeout */
     auto *timer = new QTimer(reply);
     timer->setSingleShot(true);
-    auto state      = std::make_shared<AsyncRequestState>();
-    state->reply    = reply;
-    state->timer    = timer;
-    state->response = collectResponse(reply, endpoint.responseLimits);
+    auto state         = std::make_shared<AsyncRequestState>();
+    state->reply       = reply;
+    state->timer       = timer;
+    state->response    = collectResponse(reply, endpoint.responseLimits);
+    state->observation = observation;
     const QPointer<QLLMService> owner(this);
 
     const auto complete = [owner, state, callback](LLMResponse response, bool abortReply) {
@@ -579,6 +613,12 @@ void QLLMService::sendRequestAsync(
             return;
         }
         state->terminal = true;
+        if (state->observation) {
+            state->observation->finish(
+                response.success ? QLLMDiagnostics::Outcome::Completed
+                : abortReply     ? QLLMDiagnostics::Outcome::TimedOut
+                                 : QLLMDiagnostics::Outcome::Failed);
+        }
 
         const QPointer<QNetworkReply> guardedReply = state->reply;
         const QPointer<QTimer>        guardedTimer = state->timer;
@@ -617,7 +657,8 @@ void QLLMService::sendRequestAsync(
             api,
             state->response->data,
             state->response->limits,
-            state->response->error);
+            state->response->error,
+            state->observation);
         complete(response, false);
     };
 
@@ -962,11 +1003,12 @@ json QLLMService::buildRequestPayload(
 }
 
 LLMResponse QLLMService::parseResponse(
-    QNetworkReply            *reply,
-    LLMApi                    api,
-    const QByteArray         &responseData,
-    const QLLMResponseLimits &limits,
-    const QString            &limitError)
+    QNetworkReply                     *reply,
+    LLMApi                             api,
+    const QByteArray                  &responseData,
+    const QLLMResponseLimits          &limits,
+    const QString                     &limitError,
+    const QLLMDiagnostics::RequestPtr &observation)
 {
     LLMResponse response;
     response.success = false;
@@ -990,7 +1032,10 @@ LLMResponse QLLMService::parseResponse(
     }
 
     try {
-        json jsonResponse = json::parse(responseData.toStdString());
+        json       jsonResponse = json::parse(responseData.toStdString());
+        const auto usage        = jsonResponse.find("usage");
+        if (observation && usage != jsonResponse.end())
+            observation->usage(*usage, api == LLMApi::AnthropicMessages);
         if (api == LLMApi::AnthropicMessages) {
             jsonResponse = QLLMAnthropic::toChatResponse(jsonResponse);
             if (jsonResponse.contains("error")) {
@@ -1177,6 +1222,11 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint);
 
+    const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Text, endpoint.url, payload);
+    auto       failed      = qScopeGuard([&] {
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Failed);
+    });
     const QPointer<QLLMService> owner(this);
     if (networkManager.isNull()) {
         LLMResponse response;
@@ -1184,8 +1234,11 @@ LLMResponse QLLMService::sendRequestToEndpoint(
         response.errorMessage = QStringLiteral("Network manager destroyed");
         return response;
     }
+    if (observation)
+        observation->posted();
     QNetworkReply *networkReply
         = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    observeReply(networkReply, observation);
     const auto wait
         = waitForNetworkReply(networkReply, endpoint.timeout, {}, endpoint.responseLimits);
     QPointer<QNetworkReply> reply = wait.reply;
@@ -1214,7 +1267,15 @@ LLMResponse QLLMService::sendRequestToEndpoint(
         endpoint.api,
         wait.response->data,
         endpoint.responseLimits,
-        wait.response->error);
+        wait.response->error,
+        observation);
+    if (observation)
+        observation->finish(
+            response.success ? QLLMDiagnostics::Outcome::Completed
+            : wait.response->error.isEmpty()
+                    && reply->error() == QNetworkReply::OperationCanceledError
+                ? QLLMDiagnostics::Outcome::TimedOut
+                : QLLMDiagnostics::Outcome::Failed);
     reply->deleteLater();
 
     return response;
@@ -1294,16 +1355,27 @@ void QLLMService::sendChatCompletionStream(
         }
     }
 
+    const auto observation
+        = diagnostics_.begin(QLLMDiagnostics::Kind::Stream, endpoint.url, payload);
+    auto failed = qScopeGuard([&] {
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Failed);
+    });
     if (networkManager.isNull()) {
         emit streamError(QStringLiteral("Network manager destroyed"));
         return;
     }
+    if (observation)
+        observation->posted();
     QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
     if (reply == nullptr) {
         emit streamError(QStringLiteral("Network request failed to start"));
         return;
     }
+    observeReply(reply, observation);
+    failed.dismiss();
     auto state           = std::make_shared<StreamState>();
+    state->observation   = observation;
     state->reply         = reply;
     state->reasoningMode = !effort.isEmpty();
     state->limits        = endpoint.responseLimits;
@@ -1416,6 +1488,32 @@ bool QLLMService::claimTerminal(const StreamStatePtr &state, StreamOutcome outco
         return false;
     }
     state->outcome = outcome;
+    if (state->observation) {
+        state->observation->usage(
+            state->anthropic ? state->anthropic->rawUsage() : state->usage,
+            state->anthropic.has_value());
+        QLLMDiagnostics::Outcome observed = QLLMDiagnostics::Outcome::Failed;
+        switch (outcome) {
+        case StreamOutcome::Completed:
+            observed = QLLMDiagnostics::Outcome::Completed;
+            break;
+        case StreamOutcome::TimedOut:
+            observed = QLLMDiagnostics::Outcome::TimedOut;
+            break;
+        case StreamOutcome::Aborted:
+            observed = QLLMDiagnostics::Outcome::Cancelled;
+            break;
+        case StreamOutcome::Superseded:
+            observed = QLLMDiagnostics::Outcome::Superseded;
+            break;
+        case StreamOutcome::OwnerDestroyed:
+            observed = QLLMDiagnostics::Outcome::Destroyed;
+            break;
+        default:
+            break;
+        }
+        state->observation->finish(observed);
+    }
     currentStream.reset();
     return true;
 }
@@ -2155,21 +2253,33 @@ json QLLMService::sendChatCompletionTo(
         }
     }
 
+    const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Chat, endpoint.url, payload);
+    auto       failed      = qScopeGuard([&] {
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Failed);
+    });
     if (networkManager.isNull()) {
         return {{"error", "Network manager destroyed"}};
     }
+    if (observation)
+        observation->posted();
     QNetworkReply *networkReply
         = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    observeReply(networkReply, observation);
     const NetworkWaitResult wait
         = waitForNetworkReply(networkReply, endpoint.timeout, stopToken, endpoint.responseLimits);
     QPointer<QNetworkReply> reply = wait.reply;
 
     if (wait.cancelled || stopToken.stop_requested()) {
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Cancelled);
         drainNetworkReply(reply.data());
         return {{"error", "Request cancelled"}};
     }
 
     if (owner.isNull()) {
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Destroyed);
         return {{"error", "LLM service destroyed"}};
     }
     if (owner->networkManager.isNull()) {
@@ -2187,12 +2297,16 @@ json QLLMService::sendChatCompletionTo(
 
     if (reply->error() != QNetworkReply::NoError) {
         /* Only the wait timer aborts a reply that was not cancelled. */
+        if (observation && reply->error() == QNetworkReply::OperationCanceledError)
+            observation->finish(QLLMDiagnostics::Outcome::TimedOut);
         const QString error = reply->error() == QNetworkReply::OperationCanceledError
                                   ? QStringLiteral("timed out after %1 ms").arg(endpoint.timeout)
                                   : reply->errorString();
         QSocConsole::warn() << "Endpoint" << endpoint.name << "failed:" << error;
         reply->deleteLater();
         if (stopToken.stop_requested()) {
+            if (observation)
+                observation->finish(QLLMDiagnostics::Outcome::Cancelled);
             return {{"error", "Request cancelled"}};
         }
         return {{"error", error.toStdString()}};
@@ -2207,7 +2321,10 @@ json QLLMService::sendChatCompletionTo(
     }
 
     try {
-        json response = json::parse(responseData.toStdString());
+        json       response = json::parse(responseData.toStdString());
+        const auto usage    = response.find("usage");
+        if (observation && usage != response.end())
+            observation->usage(*usage, anthropic);
         if (anthropic) {
             response = QLLMAnthropic::toChatResponse(response);
         }
@@ -2216,6 +2333,8 @@ json QLLMService::sendChatCompletionTo(
             QSocConsole::warn() << "Endpoint" << endpoint.name
                                 << "returned an invalid chat response";
             if (stopToken.stop_requested()) {
+                if (observation)
+                    observation->finish(QLLMDiagnostics::Outcome::Cancelled);
                 return {{"error", "Request cancelled"}};
             }
             json       error = {{"error", validationError.toStdString()}};
@@ -2226,12 +2345,18 @@ json QLLMService::sendChatCompletionTo(
             return error;
         }
         if (stopToken.stop_requested()) {
+            if (observation)
+                observation->finish(QLLMDiagnostics::Outcome::Cancelled);
             return {{"error", "Request cancelled"}};
         }
+        if (observation)
+            observation->finish(QLLMDiagnostics::Outcome::Completed);
         return response;
     } catch (const json::exception &e) {
         QSocConsole::warn() << "JSON parse error:" << e.what();
         if (stopToken.stop_requested()) {
+            if (observation)
+                observation->finish(QLLMDiagnostics::Outcome::Cancelled);
             return {{"error", "Request cancelled"}};
         }
         return {{"error", e.what()}};

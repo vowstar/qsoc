@@ -481,6 +481,11 @@ private slots:
         }
         QVERIFY2(error.contains(QStringLiteral("limit exceeded")), qPrintable(error));
         QVERIFY(waitForNoReplies(&service));
+        const char *bucket   = kind == 3 ? "stream" : kind == 0 || kind == 2 ? "text" : "chat";
+        const json  observed = service.requestDiagnostics().at(bucket);
+        QCOMPARE(observed.at("finished_calls"), json(1));
+        QCOMPARE(observed.at("in_flight_calls"), json(0));
+        QCOMPARE(observed.at("outcomes"), json({{"failed", 1}}));
         endpoint.api = LLMApi::OpenAIChat;
         service.setModel(endpoint);
         server.enqueue(jsonResponse(QStringLiteral("recovered")));

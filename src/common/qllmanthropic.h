@@ -105,7 +105,8 @@ public:
     bool started() const { return started_; }
 
     /** @brief The reply so far as a chat completion. */
-    json response() const;
+    json        response() const;
+    const json &rawUsage() const { return usage_; }
 
 private:
     struct Block
