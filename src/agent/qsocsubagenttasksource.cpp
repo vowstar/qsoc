@@ -5,6 +5,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsocagentmailbox.h"
+#include "agent/qsocprivatefile.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -648,12 +649,15 @@ void QSocSubAgentTaskSource::appendDiskEvent(
         return;
     }
     const QString dir = transcriptDir();
-    QDir().mkpath(dir);
+    if (!QSocPrivateFile::makeDir(dir)) {
+        return;
+    }
     const QString path = QDir(dir).filePath(id + QStringLiteral(".jsonl"));
     QFile         file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
         return;
     }
+    QSocPrivateFile::restrict(file);
     QJsonObject obj;
     obj["ts"]                   = QDateTime::currentMSecsSinceEpoch();
     obj["kind"]                 = kind;
@@ -667,7 +671,9 @@ void QSocSubAgentTaskSource::appendDiskEvent(
 void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
 {
     const QString dir = transcriptDir();
-    QDir().mkpath(dir);
+    if (!QSocPrivateFile::makeDir(dir)) {
+        return;
+    }
     const QString path = QDir(dir).filePath(run.id + QStringLiteral(".meta.json"));
     QJsonObject   meta;
     if (run.agent && run.agent->toolResultStore() && !run.agent->toolResultStore()->isTemporary()) {
@@ -696,6 +702,7 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return;
     }
+    QSocPrivateFile::restrict(file);
     file.write(QJsonDocument(meta).toJson(QJsonDocument::Indented));
     file.close();
 }
@@ -753,6 +760,7 @@ QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistori
             patched["finished_at_ms"] = run.finishedAtMs;
             QFile out(path);
             if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                QSocPrivateFile::restrict(out);
                 out.write(QJsonDocument(patched).toJson(QJsonDocument::Indented));
                 out.close();
             }

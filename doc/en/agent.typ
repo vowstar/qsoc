@@ -1815,7 +1815,15 @@ are refused until that root is selected again.
 Each session is persisted as `.qsoc/sessions/<id>.jsonl` under the project
 directory, one JSON event per line (messages plus metadata). New-session
 metadata stays in memory until the first durable record; starting, inspecting,
-and exiting an unused agent does not create `.qsoc/`. This enables:
+and exiting an unused agent does not create `.qsoc/`.
+
+On Unix, session files, saved tool results and sub-agent run records are
+readable only by their owner: files get mode `0600` and their directories
+`0700`, whatever the umask. An older file with wider modes is tightened when
+it is next written. The first session write also creates `.qsoc/.gitignore`
+listing `sessions/` and `file-history/`, unless that file already exists.
+
+Saved sessions enable:
 
 - `qsoc agent --continue`: resume the most recent session
 - `qsoc agent --resume [id]`: pick a session from a list, or load one by id /

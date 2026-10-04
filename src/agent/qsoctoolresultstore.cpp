@@ -3,6 +3,8 @@
 
 #include "agent/qsoctoolresultstore.h"
 
+#include "agent/qsocprivatefile.h"
+
 #include <nlohmann/json.hpp>
 #include <QCryptographicHash>
 #include <QDir>
@@ -51,7 +53,7 @@ QSocToolResultStore::QSocToolResultStore(QString directory, QString owner, Limit
     if (root.isSymLink() || owner_.isEmpty() || owner_.toUtf8().size() > 256
         || limits.artifactBytes <= 0 || limits.sessionBytes <= 0 || limits.pageBytes < 4)
         return;
-    if (!QDir().mkpath(root.absoluteFilePath()))
+    if (!QSocPrivateFile::makeDir(root.absoluteFilePath()))
         return;
     directory_           = QFileInfo(root.absoluteFilePath()).canonicalFilePath();
     const QString marker = QDir(directory_).filePath(QStringLiteral(".scope"));
@@ -84,8 +86,12 @@ QSocToolResultStore::QSocToolResultStore(QString directory, QString owner, Limit
     binding_ = QByteArray::fromStdString(value.dump());
     QSaveFile output(marker);
     output.setDirectWriteFallback(false);
-    if (!output.open(QIODevice::WriteOnly) || output.write(binding_) != binding_.size()
-        || !output.commit())
+    if (!output.open(QIODevice::WriteOnly)) {
+        directory_.clear();
+        return;
+    }
+    QSocPrivateFile::restrict(output);
+    if (output.write(binding_) != binding_.size() || !output.commit())
         directory_.clear();
 }
 
@@ -184,6 +190,7 @@ bool QSocToolResultStore::write(
         fail(error, QStringLiteral("Artifact storage could not create a temporary record."));
         return false;
     }
+    QSocPrivateFile::restrict(file);
     for (qint64 offset = 0; offset < payload.size(); offset += 32768) {
         const qint64 count = std::min(qint64(32768), payload.size() - offset);
         if (!allowed(guard) || file.write(payload.constData() + offset, count) != count) {

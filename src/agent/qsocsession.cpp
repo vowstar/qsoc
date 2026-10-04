@@ -3,6 +3,8 @@
 
 #include "agent/qsocsession.h"
 
+#include "agent/qsocprivatefile.h"
+
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -72,11 +74,37 @@ bool sessionPathIsRegular(const QString &filePath)
     return info.isFile() && !info.isSymLink();
 }
 
+/* Keep a project's session data out of version control. An existing
+ * .qsoc/.gitignore belongs to the user and is left alone. */
+void ensureSessionIgnore(const QDir &sessions)
+{
+    QDir qsocDir = sessions;
+    if (sessions.dirName() != QStringLiteral("sessions") || !qsocDir.cdUp()
+        || qsocDir.dirName() != QStringLiteral(".qsoc")) {
+        return;
+    }
+    QFile ignore(qsocDir.filePath(QStringLiteral(".gitignore")));
+    if (ignore.exists() || QFileInfo(ignore.fileName()).isSymLink()
+        || !ignore.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::NewOnly)) {
+        return;
+    }
+    ignore.write("sessions/\nfile-history/\n");
+}
+
+/* Sessions hold conversation text and tool output: owner-only. */
+bool ensureSessionDir(const QString &filePath)
+{
+    const QDir parent = QFileInfo(filePath).absoluteDir();
+    if (!QSocPrivateFile::makeDir(parent.absolutePath())) {
+        return false;
+    }
+    ensureSessionIgnore(parent);
+    return true;
+}
+
 bool appendJsonLine(const QString &filePath, const nlohmann::json &line)
 {
-    QFileInfo fileInfo(filePath);
-    QDir      parentDir = fileInfo.absoluteDir();
-    if (!parentDir.exists() && !parentDir.mkpath(QStringLiteral("."))) {
+    if (!ensureSessionDir(filePath)) {
         return false;
     }
 
@@ -84,6 +112,7 @@ bool appendJsonLine(const QString &filePath, const nlohmann::json &line)
     if (!file.open(QIODevice::ReadWrite | QIODevice::Append)) {
         return false;
     }
+    QSocPrivateFile::restrict(file);
     const auto payload = jsonLinePayload(line);
     if (!payload.has_value()) {
         return false;
@@ -236,15 +265,14 @@ bool QSocSession::prepareWrite() const
 
 bool QSocSession::writeFreshPayload(const QByteArray &payload)
 {
-    const QFileInfo info(filePathValue);
-    QDir            parent = info.absoluteDir();
-    if (!parent.exists() && !parent.mkpath(QStringLiteral("."))) {
+    if (!ensureSessionDir(filePathValue)) {
         return false;
     }
     QFile file(filePathValue);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::NewOnly)) {
         return false;
     }
+    QSocPrivateFile::restrict(file);
     if (file.write(payload) != payload.size() || !file.flush()) {
         return false;
     }
@@ -369,9 +397,7 @@ bool QSocSession::replaceWithMeta(const QList<QPair<QString, QString>> &metadata
     if (!persisted && storageModeValue == StorageMode::Fresh) {
         return writeFreshPayload(payload);
     }
-    const QFileInfo info(filePathValue);
-    QDir            parent = info.absoluteDir();
-    if (!parent.exists() && !parent.mkpath(QStringLiteral("."))) {
+    if (!ensureSessionDir(filePathValue)) {
         return false;
     }
     QSaveFile file(filePathValue);
@@ -379,6 +405,7 @@ bool QSocSession::replaceWithMeta(const QList<QPair<QString, QString>> &metadata
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
+    QSocPrivateFile::restrict(file);
     if (file.write(payload) != payload.size()) {
         file.cancelWriting();
         return false;
@@ -488,9 +515,7 @@ bool QSocSession::rewriteMessages(const nlohmann::json &messages)
         return writeFreshPayload(payload);
     }
 
-    QFileInfo fileInfo(filePathValue);
-    QDir      parentDir = fileInfo.absoluteDir();
-    if (!parentDir.exists() && !parentDir.mkpath(QStringLiteral("."))) {
+    if (!ensureSessionDir(filePathValue)) {
         return false;
     }
 
@@ -498,6 +523,7 @@ bool QSocSession::rewriteMessages(const nlohmann::json &messages)
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
+    QSocPrivateFile::restrict(file);
     if (file.write(payload) != payload.size()) {
         file.cancelWriting();
         return false;
@@ -656,28 +682,21 @@ bool QSocSession::createRecoveryClaim(const QString &runId)
     if (path.isEmpty()) {
         return false;
     }
-    const QString directory = QFileInfo(path).absolutePath();
-    if (!QDir().mkpath(directory)) {
+    if (!QSocPrivateFile::makeDir(QFileInfo(path).absolutePath())) {
         return false;
     }
-    QFile::setPermissions(
-        directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         return false;
     }
-    file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    QSocPrivateFile::restrict(file);
     const QByteArray content = runId.toUtf8();
     if (file.write(content) != content.size()) {
         file.cancelWriting();
         return false;
     }
-    if (!file.commit()) {
-        return false;
-    }
-    QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    return true;
+    return file.commit();
 }
 
 bool QSocSession::hasRecoveryClaim(const QString &runId)
