@@ -3,7 +3,13 @@
 
 #include "agent/qsocagent.h"
 
+#include <QMap>
 #include <QSet>
+
+namespace {
+constexpr qint64 toolBatchImageBytesLimit = 16 * 1024 * 1024;
+constexpr qint64 toolResultTokensLimit    = 4096;
+} // namespace
 
 void QSocAgent::unbindToolResultStore()
 {
@@ -88,6 +94,11 @@ QList<QSocToolResultStore::Reference> QSocAgent::artifactReferences(const json &
 
 qint64 QSocAgent::toolResultBudgetTokens() const
 {
+    return std::min(toolBatchRemainingTokens(), toolResultTokensLimit);
+}
+
+qint64 QSocAgent::toolBatchRemainingTokens(bool reserveResults) const
+{
     const auto run = activeRun_;
     if (!run || !run->toolBatchStart || !isCurrentRun(run))
         return 4096;
@@ -98,24 +109,104 @@ qint64 QSocAgent::toolResultBudgetTokens() const
         if (message.value("role", std::string()) == "tool")
             complete.insert(message.value("tool_call_id", std::string()));
     }
+    qint64        reserved    = 0;
+    const QString placeholder = QStringLiteral(
+        "Not executed because the tool batch was interrupted.");
     const auto &assistant = messages.at(*run->toolBatchStart);
     for (const auto &call : assistant.at("tool_calls")) {
         const auto id = call.value("id", std::string());
-        if (!complete.contains(id))
+        if (!complete.contains(id)) {
+            if (reserveResults)
+                reserved = std::min(
+                    qint64(std::max(0, effectiveContextTokens())),
+                    reserved
+                        + std::max(
+                            qint64(0),
+                            toolResultTokensLimit
+                                - QSocRequestUsage::estimateText(
+                                    placeholder, run->requestSnapshot.counter)));
             wire.push_back(
-                {{"role", "tool"},
-                 {"tool_call_id", id},
-                 {"content", "Not executed because the tool batch was interrupted."}});
-    }
-    for (const auto &attachment : run->toolBatchAttachments) {
-        json sanitized = attachment;
-        sanitized.erase("_img_tokens");
-        wire.push_back(std::move(sanitized));
+                {{"role", "tool"}, {"tool_call_id", id}, {"content", placeholder.toStdString()}});
+        }
     }
     auto snapshot     = run->requestSnapshot;
     snapshot.messages = std::move(wire);
     const auto used   = QSocRequestUsage::estimateRequest(snapshot);
-    return std::clamp(qint64(effectiveContextTokens()) - used - 256, qint64(0), qint64(4096));
+    const auto images
+        = QSocRequestUsage::estimateHistory(run->toolBatchAttachments, snapshot.counter);
+    qint64 remaining = std::max(qint64(0), qint64(effectiveContextTokens()) - used);
+    remaining        = std::max(qint64(0), remaining - images);
+    return std::max(qint64(0), remaining - reserved - 256);
+}
+
+QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &attachments)
+{
+    const auto run = activeRun_;
+    if (attachments.isEmpty() || !run || !run->toolBatchStart || !isCurrentRun(run))
+        return {};
+    qint64 imageBytes = 0;
+    for (const auto &message : run->toolBatchAttachments)
+        for (const auto &part : message.at("content"))
+            if (part.value("type", std::string()) == "image_url")
+                imageBytes += part.at("image_url").at("url").get_ref<const std::string &>().size();
+    qint64       remaining = toolBatchRemainingTokens(true);
+    json         content  = json::array({{{"type", "text"}, {"text", "Tool attachment payload:"}}});
+    const qint64 envelope = QSocRequestUsage::estimateMessages(
+        json::array({{{"role", "user"}, {"content", content}}}),
+        run->requestSnapshot.imageTokens,
+        run->requestSnapshot.counter);
+    remaining                         = std::max(qint64(0), remaining - envelope);
+    qint64                imageTokens = 0;
+    QMap<QString, qint64> rejected;
+    QString               firstSource;
+    for (const auto &attachment : attachments) {
+        QString reason;
+        const qint64 cost = std::max(qint64(attachment.estTokens), run->requestSnapshot.imageTokens);
+        const qint64 availableBytes = toolBatchImageBytesLimit - imageBytes;
+        QByteArray   mime;
+        QByteArray   data;
+        qint64       bytes = 0;
+        if (attachment.estTokens <= 0)
+            reason = QStringLiteral("unknown token cost");
+        else if (cost > remaining)
+            reason = QStringLiteral("remaining context budget");
+        else if (attachment.mime.size() > 256 || attachment.dataB64.size() > availableBytes)
+            reason = QStringLiteral("batch encoded byte limit");
+        else {
+            mime  = attachment.mime.toUtf8();
+            data  = attachment.dataB64.toUtf8();
+            bytes = 13 + mime.size() + data.size();
+            if (bytes > availableBytes)
+                reason = QStringLiteral("batch encoded byte limit");
+        }
+        if (!reason.isEmpty()) {
+            ++rejected[reason];
+            if (firstSource.isEmpty())
+                firstSource = attachment.sourceUrl.left(512);
+            continue;
+        }
+        const QByteArray url = QByteArrayLiteral("data:") + mime + QByteArrayLiteral(";base64,")
+                               + data;
+        content.push_back({{"type", "image_url"}, {"image_url", {{"url", url.toStdString()}}}});
+        remaining -= cost;
+        imageTokens += cost;
+        imageBytes += bytes;
+    }
+    if (imageTokens > 0)
+        run->toolBatchAttachments.push_back(
+            {{"role", "user"}, {"content", std::move(content)}, {"_img_tokens", imageTokens}});
+    if (rejected.isEmpty())
+        return {};
+    QStringList reasons;
+    for (auto it = rejected.cbegin(); it != rejected.cend(); ++it)
+        reasons.push_back(QStringLiteral("%1: %2").arg(it.key()).arg(it.value()));
+    const QString source = firstSource.isEmpty()
+                               ? QString()
+                               : QStringLiteral(" First tool-reported source: %1.").arg(firstSource);
+    return QStringLiteral(
+               "[Image attachments omitted (%1).%2 No image artifact was saved for these "
+               "attachments. Read the source again only if needed and still accessible.]\n")
+        .arg(reasons.join(QStringLiteral(", ")), source);
 }
 
 void QSocAgent::appendBoundedToolMessage(

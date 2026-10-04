@@ -1127,6 +1127,9 @@ public:
     static QString extractImageAttachments(const QString &raw, QList<AttachmentSpec> *out);
 
 private:
+    qint64  toolBatchRemainingTokens(bool reserveResults = false) const;
+    QString queueToolAttachments(const QList<AttachmentSpec> &attachments);
+
     /**
      * @brief Add a tool result message to the conversation history
      * @param toolCallId  The ID of the tool call

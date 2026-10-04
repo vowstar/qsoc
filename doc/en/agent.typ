@@ -830,6 +830,15 @@ truncate its output before returning it. `source_completeness` is `unknown`
 unless the source reports truncation. `captured_bytes` describes the saved
 return, not the original command output. Images remain separate attachments.
 
+After per-image processing, a tool batch admits new images within the
+remaining request context and a combined 16 MiB of encoded data URLs. This
+is a local payload bound, not a provider capacity guarantee. The context
+check reserves up to 4096 tokens for each outstanding tool result, including
+its existing placeholder once. Unknown image token costs are rejected.
+A rejected image leaves a reason in the tool result and does not create an
+image artifact. Its tool-reported source may be read again if needed and
+still accessible. Earlier conversation content stays unchanged.
+
 The defaults are 16 MiB per artifact, 256 MiB per session, and 32 KiB per
 read. Configure `agent.tool_artifact_bytes`, `agent.tool_artifact_session_bytes`,
 and `agent.tool_artifact_page_bytes` in bytes. The reader also limits pages

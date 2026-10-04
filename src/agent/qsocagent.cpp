@@ -246,29 +246,6 @@ QStringList sectionParts(
     return parts;
 }
 
-std::optional<json> buildToolAttachmentMessage(const QList<QSocAgent::AttachmentSpec> &attachments)
-{
-    if (attachments.isEmpty()) {
-        return std::nullopt;
-    }
-
-    json content     = json::array();
-    int  imageTokens = 0;
-    content.push_back({{"type", "text"}, {"text", std::string("Tool attachment payload:")}});
-    for (const auto &attachment : attachments) {
-        const QString dataUrl
-            = QStringLiteral("data:%1;base64,%2").arg(attachment.mime, attachment.dataB64);
-        content.push_back({{"type", "image_url"}, {"image_url", {{"url", dataUrl.toStdString()}}}});
-        imageTokens += attachment.estTokens;
-    }
-
-    json message = {{"role", "user"}, {"content", content}};
-    if (imageTokens > 0) {
-        message["_img_tokens"] = imageTokens;
-    }
-    return message;
-}
-
 } // namespace
 
 QSocAgent::QSocAgent(
@@ -2438,16 +2415,17 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         const QString         result = functionName == QStringLiteral("tool_output_read")
                                            ? rawResult
                                            : extractImageAttachments(rawResult, &attachments);
+        const QString         attachmentNotice = queueToolAttachments(attachments);
         const QString         historyResult
             = run->stop.load() == StopMode::None
-                  ? result
-                  : QStringLiteral(
-                        "Tool reported: %1. A stop was requested while this tool was running. "
-                        "Completion is uncertain, and side effects may have occurred. "
-                        "Verify current state before retrying.")
-                        .arg(result);
-        if (const auto attachmentMessage = buildToolAttachmentMessage(attachments))
-            run->toolBatchAttachments.push_back(*attachmentMessage);
+                  ? attachmentNotice + result
+                  : attachmentNotice
+                        + QStringLiteral(
+                              "Tool reported: %1. A stop was requested while this tool was "
+                              "running. "
+                              "Completion is uncertain, and side effects may have occurred. "
+                              "Verify current state before retrying.")
+                              .arg(result);
         owner->addToolMessage(
             toolCallId,
             historyResult,
