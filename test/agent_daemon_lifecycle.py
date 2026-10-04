@@ -428,7 +428,7 @@ agent:
         def alive(pid):
             try:
                 return Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1][0] != 'Z'
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 return False
         while any(alive(pid) for pid in children) and time.monotonic() < deadline:
             time.sleep(0.05)
