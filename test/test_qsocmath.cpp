@@ -56,6 +56,7 @@ private slots:
     void matrixLayouts();
     void matrixEnvironments();
     void commonCommands();
+    void fontSemantics();
     void structuredLayouts();
     void screenshotExamples();
     void alternativeDelimiters();
@@ -130,12 +131,11 @@ void Test::commonCommands()
     QCOMPARE(rendered(R"($\sqrt[3]{27}=3$)"), QStringList{"³√(27)=3"});
     QCOMPARE(rendered(R"($$\sqrt[3]{27}$$)"), (QStringList{"  ──", "³√27"}));
     QCOMPARE(rendered(R"($\sqrt[n]{x}=x^{1/n}$)"), QStringList{"ⁿ√(x)=x^{1/n}"});
-    QCOMPARE(rendered(R"($x_i+y_{out}+A^{\mathsf{T}}$)"), QStringList{"xᵢ+yₒᵤₜ+Aᵀ"});
+    QCOMPARE(rendered(R"($x_i+y_{out}+A^{\mathrm{T}}$)"), QStringList{"xᵢ+yₒᵤₜ+Aᵀ"});
     QCOMPARE(rendered(R"(\({a+b}^2\))"), QStringList{"(a+b)²"});
     QCOMPARE(rendered(R"($x_{i+1}^{n-1}$)"), QStringList{"xᵢ₊₁ⁿ⁻¹"});
     QCOMPARE(
-        rendered(R"($\text{中文 与 }\mathrm{a}\quad\mathbf{b}\qquad\mathit{c}$)"),
-        QStringList{"中文 与 a  b    c"});
+        rendered(R"($\text{中文 与 }\mathrm{a}\quad b\qquad c$)"), QStringList{"中文 与 a  b    c"});
     QCOMPARE(rendered(R"($\text{\{a\}\_\$\%}$)"), QStringList{"{a}_$%"});
     QCOMPARE(rendered(R"($\left(x+1\right)\,\sin\theta$)"), QStringList{"(x+1) sinθ"});
     QCOMPARE(rendered(R"($\mathbb{R}\quad\mathcal{L}$)"), QStringList{QString::fromUcs4(U"ℝ  ℒ")});
@@ -143,6 +143,27 @@ void Test::commonCommands()
     QCOMPARE(rendered(R"($\frac{1}{\frac{2}{3}}$)"), QStringList{"(1)/((2)/(3))"});
     QCOMPARE(rendered(R"($\frac{1}{2}^2$)"), QStringList{"((1)/(2))²"});
     QCOMPARE(rendered(R"($\mathbb{RC}^2$)"), QStringList{"(ℝℂ)²"});
+}
+
+void Test::fontSemantics()
+{
+    for (const QString &command : {"mathbf", "mathit", "mathsf", "mathtt"}) {
+        for (const QString &delimiter : {"$", "$$"}) {
+            const QString source = delimiter + "a+\\" + command + "{x}" + delimiter;
+            QCOMPARE(rendered(source), QStringList{source});
+            QTuiAssistantTextBlock block(source);
+            block.layout(80);
+            QCOMPARE(block.toMarkdown(), source);
+            QCOMPARE(block.selectedLogicalText(0, 0, 0, source.size()), source);
+            block.layout(8);
+            block.layout(80);
+            QCOMPARE(block.toPlainText(), source);
+        }
+    }
+    const QString transpose = R"($x_i+y_{out}+A^{\mathsf{T}}$)";
+    QCOMPARE(rendered(transpose), QStringList{transpose});
+    QCOMPARE(rendered(R"($A^{\mathrm{T}}$)"), QStringList{"Aᵀ"});
+    QCOMPARE(rendered(R"($\frac{\mathbf{x}}{2}$)"), QStringList{R"($\frac{\mathbf{x}}{2}$)"});
 }
 
 void Test::structuredLayouts()
@@ -183,7 +204,7 @@ void Test::screenshotExamples()
         R"(I_3=\begin{pmatrix}1&0&0\\0&1&0\\0&0&1\end{pmatrix})",
         R"(\Lambda=\begin{pmatrix}\lambda_1&0&0\\0&\lambda_2&0\\0&0&\lambda_3\end{pmatrix})",
         R"(U=\begin{bmatrix}1&2&3\\0&4&5\\0&0&6\end{bmatrix})",
-        R"(A=\begin{bmatrix}2&1&0\\1&3&1\\0&1&2\end{bmatrix},\quad A=A^{\mathsf{T}})",
+        R"(A=\begin{bmatrix}2&1&0\\1&3&1\\0&1&2\end{bmatrix},\quad A=A^{\mathrm{T}})",
         R"(\left[\begin{array}{cc|c}1&2&3\\4&5&6\end{array}\right]\quad\text{与}\quad\begin{vmatrix}a&b\\c&d\end{vmatrix}=ad-bc)",
         R"(\boxed{\begin{aligned}f(x)&=\sum_{i=1}^{n}x_i\\g(x)&=\underset{t}{\lim}\frac{x}{t}\end{aligned}})"};
     for (const QString &formula : formulas) {

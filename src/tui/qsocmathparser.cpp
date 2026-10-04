@@ -593,7 +593,7 @@ private:
             auto value = literal();
             return value ? std::optional(text(*value)) : std::nullopt;
         }
-        if (QStringList{"mathrm", "mathbf", "mathit", "mathsf", "mathtt"}.contains(name)) {
+        if (name == "mathrm") {
             kind = AtomKind::Group;
             return argument(depth);
         }

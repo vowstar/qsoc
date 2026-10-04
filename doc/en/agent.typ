@@ -516,9 +516,11 @@ Roots accept `\sqrt{x}` and `\sqrt[n]{x}`. Common functions include `\sin`, `\co
 
 Use `\text{...}` for literal text, `\operatorname{...}` for operator names,
 and `\quad` or `\qquad` for spacing. Text arguments can contain Chinese and escaped
-punctuation, but cannot contain nested groups or commands. Font commands
-`\mathrm`, `\mathbf`, `\mathit`, `\mathsf`, and `\mathtt` preserve their contents
-using the terminal font. `\mathbb` supports `R`, `C`, `N`, `Z`, `Q`, and `P`;
+punctuation, but cannot contain nested groups or commands.
+`\mathrm` uses the terminal's upright font. Formulas containing `\mathbf`,
+`\mathit`, `\mathsf`, or `\mathtt` retain their source because the renderer
+cannot preserve those font distinctions. This also applies inside scripts,
+such as `A^{\mathsf{T}}`. `\mathbb` supports `R`, `C`, `N`, `Z`, `Q`, and `P`;
 `\mathcal` supports uppercase Latin letters.
 
 Display formulas support `\boxed`, `\overset`, `\underset`, and stacked limits for
