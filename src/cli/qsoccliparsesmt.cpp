@@ -12,6 +12,9 @@
 #include <QJsonDocument>
 #include <QScopeGuard>
 #include <QTimer>
+#ifdef Q_OS_WIN
+#include <io.h>
+#endif
 
 bool QSocCliWorker::parseSmt(const QStringList &appArguments)
 {
@@ -52,7 +55,12 @@ bool QSocCliWorker::parseSmt(const QStringList &appArguments)
     QFile         input;
     const QString path = paths.value(0, QStringLiteral("-"));
     if (path == "-") {
-        if (!input.open(stdin, QIODevice::ReadOnly))
+#ifdef Q_OS_WIN
+        const int descriptor = ::_fileno(stdin);
+#else
+        const int descriptor = ::fileno(stdin);
+#endif
+        if (!input.open(descriptor, QIODevice::ReadOnly))
             return fail(input.errorString());
     } else {
         input.setFileName(path);

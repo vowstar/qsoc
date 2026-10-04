@@ -69,6 +69,18 @@ private:
 
     QJsonObject result() const { return QJsonDocument::fromJson(output.data()).object(); }
 
+    void configureStdinProcess(QProcess &process)
+    {
+        auto environment = QProcessEnvironment::systemEnvironment();
+        for (const auto *key :
+             {"HOME", "USERPROFILE", "QSOC_HOME", "XDG_CONFIG_HOME", "TMPDIR", "TEMP", "TMP"})
+            environment.insert(key, temporary.path());
+        environment.remove("QSOC_SMT_SOCKET");
+        process.setProcessEnvironment(environment);
+        process.setWorkingDirectory(temporary.path());
+        process.setProgram(QStringLiteral(QSOC_BINARY_PATH));
+    }
+
 private slots:
     void init()
     {
@@ -110,6 +122,78 @@ private slots:
         QCOMPARE(done.first().first().toInt(), 0);
         QCOMPARE(result().value("execution").toString(), QString("completed"));
         QCOMPARE(result().value("solver_status").toString(), status);
+    }
+    void stdinClosedPipe_data()
+    {
+        QTest::addColumn<QByteArray>("source");
+        QTest::addColumn<int>("expectedExit");
+        QTest::addColumn<QString>("expectedStatus");
+        const QByteArray tail = "(assert false)";
+        QTest::newRow("delayed-blocks")
+            << QByteArray("(assert true)") + QByteArray(32768, ' ') + tail << 0 << QString("unsat");
+        QTest::newRow("exact-limit")
+            << QByteArray(QSocSmtService::inputLimit - tail.size(), ' ') + tail << 0
+            << QString("unsat");
+        QTest::newRow("over-limit")
+            << QByteArray(QSocSmtService::inputLimit + 1, ' ') << 2 << QString();
+        QTest::newRow("invalid-utf8") << QByteArray(1, char(0xff)) << 2 << QString();
+        QTest::newRow("empty") << QByteArray() << 2 << QString();
+    }
+    void stdinClosedPipe()
+    {
+        QFETCH(QByteArray, source);
+        QFETCH(int, expectedExit);
+        QFETCH(QString, expectedStatus);
+        QProcess process;
+        configureStdinProcess(process);
+        const auto cleanup = qScopeGuard([&] {
+            if (process.state() != QProcess::NotRunning) {
+                process.kill();
+                process.waitForFinished(5000);
+            }
+        });
+        process.setArguments({"smt", "-"});
+        process.start();
+        QVERIFY(process.waitForStarted(5000));
+        for (qsizetype offset = 0; offset < source.size(); offset += 4096) {
+            const QByteArray block = source.mid(offset, 4096);
+            QCOMPARE(process.write(block), block.size());
+            while (process.bytesToWrite() > 0)
+                QVERIFY(process.waitForBytesWritten(5000));
+            if (offset == 0 && source.size() > 4096)
+                QVERIFY(!process.waitForFinished(50));
+        }
+        process.closeWriteChannel();
+        QVERIFY(process.waitForFinished(15000));
+        const QByteArray stdoutBytes = process.readAllStandardOutput();
+        const QByteArray stderrBytes = process.readAllStandardError();
+        const QByteArray diagnostic  = stdoutBytes + '\n' + stderrBytes;
+        QVERIFY2(process.exitStatus() == QProcess::NormalExit, diagnostic.constData());
+        QVERIFY2(process.exitCode() == expectedExit, diagnostic.constData());
+        const auto value = QJsonDocument::fromJson(stdoutBytes).object();
+        QVERIFY2(
+            value.value("execution").toString() == (expectedExit == 0 ? "completed" : "error"),
+            diagnostic.constData());
+        QCOMPARE(value.value("solver_status").toString(), expectedStatus);
+        QVERIFY2(value.value("reason").toString() != "Unknown error", diagnostic.constData());
+    }
+    void invalidModeLeavesStdinOpen()
+    {
+        QProcess process;
+        configureStdinProcess(process);
+        const auto cleanup = qScopeGuard([&] {
+            if (process.state() != QProcess::NotRunning) {
+                process.kill();
+                process.waitForFinished(5000);
+            }
+        });
+        process.setArguments({"smt", "--mode", "unsupported", "-"});
+        process.start();
+        QVERIFY(process.waitForStarted(5000));
+        QVERIFY(process.waitForFinished(5000));
+        QCOMPARE(process.exitCode(), 2);
+        const auto value = QJsonDocument::fromJson(process.readAllStandardOutput()).object();
+        QCOMPARE(value.value("reason").toString(), QString("mode must be check or optimize."));
     }
     void invalidModePrecedesInput()
     {

@@ -179,8 +179,9 @@ target_compile_definitions(test_qsocsmtservice PRIVATE
 )
 set_tests_properties(test_qsocsmtservice PROPERTIES TIMEOUT 90)
 qt_add_test_target("test_qsocsmtcli" LABELS "smt;cli")
-add_dependencies(test_qsocsmtcli qsoc-agentd qsoc-smt-worker qsoc_smt_worker_probe)
+add_dependencies(test_qsocsmtcli qsoc qsoc-agentd qsoc-smt-worker qsoc_smt_worker_probe)
 target_compile_definitions(test_qsocsmtcli PRIVATE
+    QSOC_BINARY_PATH="$<TARGET_FILE:qsoc>"
     QSOC_AGENTD_PATH="$<TARGET_FILE:qsoc-agentd>"
     QSOC_SMT_WORKER_PATH="$<TARGET_FILE:qsoc-smt-worker>"
     QSOC_SMT_PROBE_PATH="$<TARGET_FILE:qsoc_smt_worker_probe>")
