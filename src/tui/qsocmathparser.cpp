@@ -342,6 +342,8 @@ private:
     {
         GridFormat format;
         format.aligned = name == "aligned";
+        if (name == "cases")
+            format.alignment = "ll";
         if (name != "array")
             return format;
         auto specification = literal();
@@ -476,7 +478,7 @@ private:
             return std::nullopt;
         auto name = literal();
         if (!name
-            || !QStringList{"matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix", "array", "aligned"}
+            || !QStringList{"matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix", "array", "aligned", "cases"}
                     .contains(*name))
             return std::nullopt;
         auto format = gridFormat(*name);
@@ -487,6 +489,8 @@ private:
         auto                       value = rows ? layoutGrid(*rows, *format) : std::nullopt;
         if (!value)
             return std::nullopt;
+        if (*name == "cases")
+            return surround(*value, "{", "");
         if (*name == "pmatrix")
             return surround(*value, "(", ")");
         if (*name == "bmatrix")
@@ -546,21 +550,40 @@ private:
         }
         return std::nullopt;
     }
+    std::optional<Layout> accent(int depth, const QString &name)
+    {
+        if (!display)
+            return std::nullopt;
+        auto base = argument(depth);
+        if (!base || !base->width)
+            return std::nullopt;
+        QString mark;
+        if (name == "hat")
+            mark = "^";
+        else if (name == "vec")
+            mark = QString(base->width - 1, QChar(0x2500)) + QChar(0x2192);
+        else
+            mark = QString(base->width, QChar(0x2500));
+        return annotate(*base, text(mark), true);
+    }
     std::optional<Layout> alphabet(int depth, bool calligraphic)
     {
         auto value = compactArgument(depth);
         if (!value)
             return std::nullopt;
-        const QString letters = calligraphic ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "RCNZQP";
-        const auto    glyphs  = (calligraphic ? QString::fromUcs4(U"𝒜ℬ𝒞𝒟ℰℱ𝒢ℋℐ𝒥𝒦ℒℳ𝒩𝒪𝒫𝒬ℛ𝒮𝒯𝒰𝒱𝒲𝒳𝒴𝒵")
-                                              : QStringLiteral("ℝℂℕℤℚℙ"))
-                                    .toUcs4();
-        QString       output;
+        const auto script   = QString::fromUcs4(U"𝒜ℬ𝒞𝒟ℰℱ𝒢ℋℐ𝒥𝒦ℒℳ𝒩𝒪𝒫𝒬ℛ𝒮𝒯𝒰𝒱𝒲𝒳𝒴𝒵").toUcs4();
+        const auto capitals = QString::fromUcs4(U"𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁𝕂𝕃𝕄ℕ𝕆ℙℚℝ𝕊𝕋𝕌𝕍𝕎𝕏𝕐ℤ").toUcs4();
+        QString    output;
         for (QChar ch : value->rows.first()) {
-            const int index = letters.indexOf(ch);
-            if (index < 0)
+            char32_t glyph = 0;
+            if (ch >= QLatin1Char('A') && ch <= QLatin1Char('Z'))
+                glyph = (calligraphic ? script : capitals)[ch.unicode() - 'A'];
+            else if (!calligraphic && ch >= QLatin1Char('a') && ch <= QLatin1Char('z'))
+                glyph = 0x1d552 + ch.unicode() - 'a';
+            else if (!calligraphic && ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+                glyph = 0x1d7d8 + ch.unicode() - '0';
+            else
                 return std::nullopt;
-            const char32_t glyph = glyphs[index];
             output += QString::fromUcs4(&glyph, 1);
         }
         return text(output);
@@ -600,6 +623,10 @@ private:
         if (name == "mathbb" || name == "mathcal") {
             kind = AtomKind::Group;
             return alphabet(depth, name == "mathcal");
+        }
+        if (name == "hat" || name == "vec" || name == "overline") {
+            kind = AtomKind::Group;
+            return accent(depth, name);
         }
         if (name == "boxed")
             return box(depth);

@@ -58,6 +58,7 @@ private slots:
     void commonCommands();
     void fontSemantics();
     void structuredLayouts();
+    void casesAndAccents();
     void screenshotExamples();
     void alternativeDelimiters();
     void extendedBounds();
@@ -189,10 +190,42 @@ void Test::structuredLayouts()
         (QStringList{"   1   ", "───────", "    1  ", " 1+─── ", "    2  "}));
 }
 
+void Test::casesAndAccents()
+{
+    QCOMPARE(
+        rendered(R"($$\begin{cases}x&x\ge0\\-x&x<0\end{cases}$$)"),
+        (QStringList{"⎧ x   x≥0", "⎨        ", "⎩ -x  x<0"}));
+    QCOMPARE(rendered(R"($$\hat{x}+\vec{AB}+\overline{xy}$$)"), (QStringList{"^ ─→ ──", "x+AB+xy"}));
+    QCOMPARE(rendered(R"($\mathbb{Aa0H}$)"), QStringList{QString::fromUcs4(U"𝔸𝕒𝟘ℍ")});
+    QCOMPARE(rendered(R"($\mathbb{RCNZQP}$)"), QStringList{QStringLiteral("ℝℂℕℤℚℙ")});
+    for (const QString &source :
+         {R"($\hat{x}$)",
+          R"($\vec{v}$)",
+          R"($\overline{AB}$)",
+          R"($$\begin{cases}a\\b\end{cases}$$)",
+          R"($$\begin{cases}a&b&c\end{cases}$$)",
+          R"($$\hat{}$$)",
+          R"($\mathbb{α}$)"}) {
+        QCOMPARE(rendered(source), QStringList{source});
+    }
+    const QString source = R"(\overline{\frac{a}{b}})";
+    const auto    layout = QSocMath::render(source, true);
+    QVERIFY(layout);
+    QCOMPARE(layout->rows.size(), 4);
+    QCOMPARE(layout->rows.first(), QStringLiteral("───"));
+    QVERIFY(QSocMath::render(source, true, 3));
+    QVERIFY(!QSocMath::render(source, true, 2));
+    for (const auto &row : layout->rows)
+        QCOMPARE(QTuiText::visualWidth(row), layout->width);
+}
+
 void Test::screenshotExamples()
 {
     const QStringList formulas{
         R"(\dfrac{a}{b})",
+        R"(f(x)=\begin{cases}x^2&x\ge0\\-x&x<0\end{cases})",
+        R"(\hat{x}+\vec{AB}+\overline{\frac{a}{b}})",
+        R"(\mathbb{Aa0H}+\mathcal{A})",
         R"(\dfrac{6}{8}=\dfrac{3}{4})",
         R"(\dfrac{7}{3}=2\dfrac{1}{3})",
         R"(\dfrac{\dfrac{1}{2}+\dfrac{1}{3}}{1-\dfrac{1}{4}}=\dfrac{10}{9})",
@@ -275,7 +308,7 @@ void Test::extendedBounds()
         R"(x^{n}^{2})",
         R"(\boxed{})",
         R"(\overset{}{x})",
-        R"(\mathbb{A})"};
+        R"(\mathbb{\alpha})"};
     for (const auto &formula : invalid) {
         QVERIFY2(!QSocMath::render(formula, true), qPrintable(formula));
         const QString source = "$$" + formula + "$$";
@@ -465,6 +498,8 @@ void Test::copyAndResize()
 void Test::streamingCuts()
 {
     const QStringList sources{
+        "$$\\begin{cases}x&x>0\\\\0&x=0\\end{cases}$$\n",
+        "$$\\hat{x}+\\vec{AB}+\\overline{x}$$\n$\\mathbb{Aa0}$\n",
         "π $x_2$\n$$\\begin{bmatrix}1&2\\\\3&4\\end{bmatrix}$$\n",
         "$$\\unknown\n```bad\n$$\n```text\n$x_2$\n```\n",
         "$$\\frac{1}{2}\n```unclosed\n",

@@ -520,8 +520,13 @@ punctuation, but cannot contain nested groups or commands.
 `\mathrm` uses the terminal's upright font. Formulas containing `\mathbf`,
 `\mathit`, `\mathsf`, or `\mathtt` retain their source because the renderer
 cannot preserve those font distinctions. This also applies inside scripts,
-such as `A^{\mathsf{T}}`. `\mathbb` supports `R`, `C`, `N`, `Z`, `Q`, and `P`;
+such as `A^{\mathsf{T}}`. `\mathbb` supports ASCII uppercase and lowercase
+letters and digits;
 `\mathcal` supports uppercase Latin letters.
+
+Display formulas support the two-column `cases` environment with a left brace.
+They also support `\hat`, `\vec`, and `\overline` above an expression. Accents
+inside inline formulas retain their source because they need a separate row.
 
 Display formulas support `\boxed`, `\overset`, `\underset`, and stacked limits for
 `\sum`, `\prod`, and `\int`. Inline annotations retain explicit grouping.
