@@ -71,6 +71,53 @@ class Test final : public QObject
 private slots:
     void initTestCase() { QVERIFY(QSocSmtService::supported()); }
 
+    void startupExitDiagnostics_data()
+    {
+        QTest::addColumn<QByteArray>("mode");
+        QTest::addColumn<QString>("status");
+        QTest::newRow("normal") << QByteArray("exit") << QStringLiteral("normal");
+        QTest::newRow("crash") << QByteArray("crash") << QStringLiteral("crash");
+    }
+
+    void startupExitDiagnostics()
+    {
+        QFETCH(QByteArray, mode);
+        QFETCH(QString, status);
+        const auto previous = qgetenv("QSOC_TEST_SMT_STARTUP");
+        const auto restore  = qScopeGuard([previous] {
+            if (previous.isNull())
+                qunsetenv("QSOC_TEST_SMT_STARTUP");
+            else
+                qputenv("QSOC_TEST_SMT_STARTUP", previous);
+        });
+        qputenv("QSOC_TEST_SMT_STARTUP", mode);
+        const auto result  = probe("startup", 2000);
+        const auto details = QJsonDocument(result).toJson(QJsonDocument::Compact);
+        QVERIFY2(result.value("execution").toString() == "error", details.constData());
+        const auto reason = result.value("reason").toString();
+        QVERIFY2(reason.startsWith("Worker exited before connecting"), details.constData());
+        QVERIFY2(reason.contains("exit status: " + status), details.constData());
+        if (mode == "exit")
+            QVERIFY2(reason.contains("exit code: 23"), details.constData());
+        else
+            QVERIFY2(reason.contains("exit code: "), details.constData());
+        QVERIFY(QSocSmtService::isValidResponse(result));
+    }
+
+    void repeatedWorkerStartup()
+    {
+        auto input = request("(assert true)");
+        input.insert("timeout_ms", 2000);
+        for (int iteration = 0; iteration < 64; ++iteration) {
+            const auto result
+                = QSocSmtService::solve(input, {}, QStringLiteral(QSOC_SMT_WORKER_PATH));
+            const auto details = QByteArray::number(iteration) + ": "
+                                 + QJsonDocument(result).toJson(QJsonDocument::Compact);
+            QVERIFY2(result.value("execution").toString() == "completed", details.constData());
+            QVERIFY2(result.value("solver_status").toString() == "sat", details.constData());
+        }
+    }
+
     void lexicalRejections_data()
     {
         QTest::addColumn<QByteArray>("source");
@@ -238,8 +285,9 @@ private slots:
         QFETCH(QString, source);
         QFETCH(QString, value);
         QFETCH(QString, optimality);
-        const auto result = solve(source, true);
-        QCOMPARE(result.value("optimality").toString(), optimality);
+        const auto result  = solve(source, true);
+        const auto details = QJsonDocument(result).toJson(QJsonDocument::Compact);
+        QVERIFY2(result.value("optimality").toString() == optimality, details.constData());
         const auto row = result.value("objectives").toArray()[0].toObject();
         QCOMPARE(row.value("lower").toObject().value("rational").toString(), value);
         QCOMPARE(row.value("upper").toObject().value("rational").toString(), value);

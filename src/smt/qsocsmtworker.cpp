@@ -23,7 +23,7 @@ int runSocket(const QString &endpoint, qint64 parentPid, const QSocSmtWorker::Ex
 #ifndef Q_OS_WIN
     QSocProcessOwner owner;
     if (!owner.watch(parentPid))
-        return 13;
+        return 18;
 #endif
     QLocalSocket socket;
     socket.setReadBufferSize(wireLimit + QSocIpc::headerBytes);

@@ -128,6 +128,23 @@ QJsonObject response(const QJsonObject &message)
     return result;
 }
 
+QJsonObject workerExitFailure(
+    const QProcess &process,
+    const QString  &reason,
+    const QString  &execution = QStringLiteral("error"))
+{
+    if (process.state() != QProcess::NotRunning)
+        return QSocSmtService::failure(execution, reason + QStringLiteral(" (still running)"));
+    return QSocSmtService::failure(
+        execution,
+        QStringLiteral("%1 (exit status: %2, exit code: %3)")
+            .arg(
+                reason,
+                process.exitStatus() == QProcess::NormalExit ? QStringLiteral("normal")
+                                                             : QStringLiteral("crash"))
+            .arg(process.exitCode()));
+}
+
 QJsonObject runWorker(
     QProcess          &process,
     QLocalServer      &server,
@@ -143,7 +160,7 @@ QJsonObject runWorker(
         socket.reset(server.nextPendingConnection());
         process.waitForFinished(0);
         if (process.state() == QProcess::NotRunning && !socket)
-            return QSocSmtService::failure("error", "Worker exited before connecting");
+            return workerExitFailure(process, QStringLiteral("Worker exited before connecting"));
     }
     if (!socket)
         return interruption(stop, elapsed, startupTimeout);
@@ -163,9 +180,10 @@ QJsonObject runWorker(
         return interruption(stop, elapsed, timeout);
     if (message.isEmpty()) {
         process.waitForFinished(100);
-        return QSocSmtService::failure(
-            process.exitCode() == 12 || process.exitCode() == 101 ? "resource_limit" : "error",
-            "Worker did not finish successfully");
+        return workerExitFailure(
+            process,
+            QStringLiteral("Worker did not finish successfully"),
+            process.exitCode() == 12 || process.exitCode() == 101 ? "resource_limit" : "error");
     }
     while (process.state() != QProcess::NotRunning && !stop.stop_requested()
            && elapsed.elapsed() < timeout)
@@ -173,7 +191,7 @@ QJsonObject runWorker(
     if (process.state() != QProcess::NotRunning)
         return interruption(stop, elapsed, timeout);
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
-        return QSocSmtService::failure("error", "Worker did not exit successfully");
+        return workerExitFailure(process, QStringLiteral("Worker did not exit successfully"));
     return response(message);
 }
 

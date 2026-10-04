@@ -15,6 +15,10 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 QJsonObject execute(const QJsonObject &request)
 {
     const auto mode = request.value("smtlib").toString();
@@ -76,5 +80,16 @@ int main(int argc, char **argv)
 {
     if (!QSocSmtEngine::applyLimits())
         return 13;
+    const auto startup = qEnvironmentVariable("QSOC_TEST_SMT_STARTUP");
+    if (startup == "exit")
+        return 23;
+    if (startup == "crash") {
+#ifdef Q_OS_WIN
+        ::SetErrorMode(SEM_NOGPFAULTERRORBOX);
+        ::RaiseException(EXCEPTION_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+#else
+        std::abort();
+#endif
+    }
     return QSocSmtWorker::run(argc, argv, execute);
 }
