@@ -7,6 +7,7 @@
 
 #include <limits>
 #include <QElapsedTimer>
+#include <QJsonDocument>
 #include <QProcess>
 #include <QScopeGuard>
 #include <QStorageInfo>
@@ -80,13 +81,32 @@ private slots:
         QVERIFY(!before.value("start_id").toString().isEmpty());
         QVERIFY(before.value("resident_bytes").toInteger() > 0);
         QVERIFY(before.value("cpu_time_ns").toInteger(-1) >= 0);
-        QElapsedTimer timer;
-        timer.start();
-        while (timer.elapsed() < 80)
-            Q_UNUSED(timer.nsecsElapsed())
-        const auto after = QSocResourceUsage::process(pid);
-        QCOMPARE(after.value("start_id"), before.value("start_id"));
-        QVERIFY(after.value("cpu_time_ns").toInteger() > before.value("cpu_time_ns").toInteger());
+        const qint64  initialCpu  = before.value("cpu_time_ns").toInteger();
+        qint64        previousCpu = initialCpu;
+        QJsonObject   after;
+        QByteArray    diagnostic;
+        QElapsedTimer deadline;
+        deadline.start();
+        do {
+            QElapsedTimer work;
+            work.start();
+            while (work.elapsed() < 20)
+                Q_UNUSED(work.nsecsElapsed())
+            after      = QSocResourceUsage::process(pid);
+            diagnostic = QJsonDocument(
+                             QJsonObject{
+                                 {"before", before},
+                                 {"after", after},
+                                 {"previous_cpu_time_ns", previousCpu}})
+                             .toJson(QJsonDocument::Compact);
+            QVERIFY2(after.value("start_id") == before.value("start_id"), diagnostic.constData());
+            const qint64 currentCpu = after.value("cpu_time_ns").toInteger(-1);
+            QVERIFY2(currentCpu >= previousCpu, diagnostic.constData());
+            previousCpu = currentCpu;
+            if (currentCpu > initialCpu)
+                break;
+        } while (deadline.elapsed() < 2000);
+        QVERIFY2(previousCpu > initialCpu, diagnostic.constData());
 #ifdef Q_OS_LINUX
         QVERIFY(after.value("private_commit_bytes").isNull());
         QVERIFY(after.value("footprint_bytes").isNull());
