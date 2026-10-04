@@ -6,6 +6,8 @@
 
 #include "common/qsoctasksource.h"
 
+#include <nlohmann/json.hpp>
+
 #include <functional>
 #include <QList>
 #include <QPointer>
@@ -152,12 +154,32 @@ public:
     QString           startFollowup(QSocAgent *agent);
 
     /**
-     * @brief Override the directory used to persist transcripts.
-     *        Empty (default) routes to
-     *        `<XDG_RUNTIME_DIR>/qsoc/agents/` with a temp-path
-     *        fallback for non-Linux. Test-only.
+     * @brief Bind the directory that stores this session's runs
+     *        (`<session>.jsonl.agents/`). Empty keeps new runs in memory.
+     * @details New ids continue past every `a<N>` stored in @p dir, so a
+     *          reopened session never reuses an id. A run keeps the
+     *          directory it was registered under.
      */
-    void setTranscriptDir(const QString &dir) { transcriptDir_ = dir; }
+    void setTranscriptDir(const QString &dir);
+
+    /**
+     * @brief Continue ids past every `task_id` an `agent` tool result in
+     *        @p messages names, so a resumed history stays unambiguous.
+     */
+    void reserveIdsFrom(const nlohmann::json &messages);
+
+    /**
+     * @brief Read-only directory of runs written by releases that kept
+     *        every session's runs in one shared runtime directory.
+     *        Empty when the platform has no runtime location.
+     */
+    static QString legacyTranscriptDir();
+
+    /**
+     * @brief Copy a session's run directory for `/branch`. Regular files
+     *        only; @p to must not exist. A missing @p from is a no-op.
+     */
+    static bool copyRunDirectory(const QString &from, const QString &to);
 
     /**
      * @brief Override how long a finished run lingers in the panel
@@ -189,6 +211,12 @@ public:
         const QString &id, const QString &isolation, const QString &worktreePath);
 
     /**
+     * @brief Record where a run executes: `local` or the SSH target,
+     *        and its workspace root. No-op for unknown ids.
+     */
+    void setPlacementMetadata(const QString &id, const QString &host, const QString &workspace);
+
+    /**
      * @brief One historical run reconstructed from disk meta sidecar.
      *        Distinct from in-memory RunState: no live agent pointer,
      *        meant for read-only listing and tail fallback.
@@ -205,14 +233,19 @@ public:
         QString worktreePath;
         QString error;
         QString finalPreview;
+        QString host;
+        QString workspace;
+        QString historyFile; /* QSocSession jsonl of the child history */
+        bool    legacy = false;
     };
 
     /**
-     * @brief Scan the transcript directory for .meta.json sidecars
-     *        and rebuild a list of past runs. Any meta with
-     *        status="running" older than @p staleAgeSec is rewritten
-     *        as failed (with reason "process restart") so a
-     *        process-killed run never reappears as live.
+     * @brief Scan the session's run directory, then the legacy one, for
+     *        .meta.json sidecars and rebuild a list of past runs. A
+     *        session meta with status="running" older than @p staleAgeSec
+     *        is rewritten as aborted (reason "process restart") so a
+     *        process-killed run never reappears as live. Legacy runs are
+     *        never written and carry `legacy`.
      *        Returns the loaded list (also cached for
      *        historicalRuns()).
      */
@@ -228,7 +261,8 @@ public:
     /**
      * @brief Look up one historical run by id from the cache (or
      *        rescan disk if cache empty / id missing). Used by the
-     *        agent_resume tool to find a prior run's metadata.
+     *        agent_resume tool to find a prior run's metadata. A run of
+     *        this session wins over a legacy run with the same id.
      *        Returns true on hit; populates `out`.
      */
     bool findHistoricalRun(const QString &id, HistoricalRun *out);
@@ -269,6 +303,10 @@ private:
         QString               errorText;   /* on Failed / Aborted */
         QString               isolation;   /* "none" | "worktree" */
         QString               worktreePath;
+        QString               host;
+        QString               workspace;
+        QString               directory; /* run storage; empty = memory only */
+        QString               historyFile;
         std::function<void()> launcher; /* set by start(); fired by pumpQueue */
         bool                  launcherStarted = false;
     };
@@ -283,12 +321,15 @@ private:
      * registered, so the panel doesn't grow without bound. */
     void evictStaleCompleted();
 
-    /** Resolve the on-disk directory transcripts are written to. */
-    QString transcriptDir() const;
+    /** Path of `<id><suffix>` for a tracked run, this session or legacy. */
+    QString locate(const QString &id, const QString &suffix) const;
 
-    /** Append a JSONL event {ts, kind, data} to the transcript
+    /** Persist the child's message history in the session jsonl format. */
+    void writeHistory(RunState &run) const;
+
+    /** Append a JSONL event {ts, kind, data} to the run's transcript
      *  file (best effort; failures are silent). */
-    void appendDiskEvent(const QString &id, const QString &kind, const QString &data) const;
+    void appendDiskEvent(const RunState &run, const QString &kind, const QString &data) const;
 
     /** Write the meta sidecar JSON file for a given run. */
     void writeMeta(const RunState &run) const;
@@ -301,7 +342,7 @@ private:
     bool                 pumping_         = false;             /* pumpQueue re-entry guard */
     qint64               completionTtlMs_ = qint64{60} * 1000; /* 60 s lingering window */
     int                  transcriptCap_   = 64 * 1024;
-    QString              transcriptDir_; /* empty = compute from QStandardPaths */
+    QString              transcriptDir_; /* empty = runs stay in memory */
 };
 
 #endif /* QSOCSUBAGENTTASKSOURCE_H */

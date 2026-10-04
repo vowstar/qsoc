@@ -766,8 +766,9 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
                     break;
                 }
                 ++shown;
-                emitOutput(QStringLiteral("  %1 [%2] %3 (%4)\n")
-                               .arg(run.id, run.subagentType, run.label, run.status));
+                emitOutput(QStringLiteral("  %1 [%2] %3 (%4)%5\n")
+                               .arg(run.id, run.subagentType, run.label, run.status)
+                               .arg(run.legacy ? QStringLiteral(" legacy") : QString()));
                 if (!run.error.isEmpty()) {
                     emitOutput(
                         QStringLiteral("    error: %1\n").arg(run.error),
@@ -1065,11 +1066,13 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             QStringLiteral(".branch-") + newId + ".tmp");
         const QString srcHist = QSocFileHistory::historyDir(projectPath, d->currentSession->id());
         const QString dstHist = QSocFileHistory::historyDir(projectPath, newId);
+        const QString dstRuns = newPath + QStringLiteral(".agents");
 
         auto branchLock = lockSession(newPath);
         if (!branchLock || QFileInfo::exists(newPath) || QFileInfo(newPath).isSymLink()
             || QFileInfo::exists(sessionStage) || QFileInfo(sessionStage).isSymLink()
-            || QFileInfo::exists(dstHist) || QFileInfo(dstHist).isSymLink()) {
+            || QFileInfo::exists(dstHist) || QFileInfo(dstHist).isSymLink()
+            || QFileInfo::exists(dstRuns) || QFileInfo(dstRuns).isSymLink()) {
             emitOutput(QStringLiteral("Session branch refused: staging is not private.\n"));
             return true;
         }
@@ -1084,10 +1087,17 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             }
         }
         if (branchOk) {
+            branchOk = QSocSubAgentTaskSource::copyRunDirectory(
+                d->currentSession->filePath() + QStringLiteral(".agents"), dstRuns);
+        }
+        if (branchOk) {
             branchOk = QDir().rename(sessionStage, newPath);
         }
         if (!branchOk) {
             QFile::remove(sessionStage);
+            if (QFileInfo(dstRuns).isDir() && !QFileInfo(dstRuns).isSymLink()) {
+                QDir(dstRuns).removeRecursively();
+            }
             emitOutput(QStringLiteral("Session branch failed; no branch was published.\n"));
             return true;
         }

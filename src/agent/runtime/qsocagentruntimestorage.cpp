@@ -21,6 +21,11 @@
 
 void QSocAgentRuntime::wireSessionTools()
 {
+    if (d->subAgentTaskSource) {
+        d->subAgentTaskSource->setTranscriptDir(
+            d->currentSession ? d->currentSession->filePath() + QStringLiteral(".agents")
+                              : QString());
+    }
     auto *history = d->currentFileHistory.get();
     if (history) {
         history->setLiveAccessor(

@@ -1592,8 +1592,10 @@ bool QSocAgentRuntime::openSessionInternal(const QString &sessionId, bool fresh)
     if (sessionExists) {
         const json restored = QSocSession::loadMessages(sessionPath);
         if (restored.is_array()) {
-            d->persistedMessages    = restored;
-            d->lastPersistedIndex   = static_cast<int>(restored.size());
+            d->persistedMessages  = restored;
+            d->lastPersistedIndex = static_cast<int>(restored.size());
+            if (d->subAgentTaskSource)
+                d->subAgentTaskSource->reserveIdsFrom(restored);
             const bool baselineSafe = QSocSessionRecovery::historySafeForNewTurn(restored);
             d->agent->setMessages(baselineSafe ? restored : json::array());
             d->historyInputBlocked = !baselineSafe;

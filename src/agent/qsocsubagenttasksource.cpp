@@ -7,17 +7,27 @@
 #include "agent/qsocagentmailbox.h"
 #include "agent/qsocprivatefile.h"
 
+#include "agent/qsocsession.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QStringList>
 
 #include <algorithm>
+#include <limits>
 #include <utility>
+
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -32,6 +42,117 @@ QString terminalEventKind(QSocTask::Status state)
         return QStringLiteral("aborted");
     }
     return QStringLiteral("error");
+}
+
+/* Run files are `a<N>.<kind>`; the serial seeds new ids. */
+const QRegularExpression &runFileName()
+{
+    static const QRegularExpression pattern(QStringLiteral(R"(^a([0-9]{1,9})\.)"));
+    return pattern;
+}
+
+/* Child histories above this size are not kept. */
+constexpr qint64 historyBytesLimit = qint64{16} * 1024 * 1024;
+
+qint64 serializedSize(const nlohmann::json &value)
+{
+    try {
+        return static_cast<qint64>(value.dump().size());
+    } catch (const nlohmann::json::exception &) {
+        return std::numeric_limits<qint64>::max();
+    }
+}
+
+/* A regular file this user owns; links are never followed. */
+bool trustedFile(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.isFile() || info.isSymLink()) {
+        return false;
+    }
+#ifdef Q_OS_UNIX
+    return info.ownerId() == ::getuid();
+#else
+    return true;
+#endif
+}
+
+/* Replace @p path atomically; a link at @p path is refused, not followed. */
+bool writeJsonFile(const QString &path, const QJsonObject &object)
+{
+    if (QFileInfo(path).isSymLink()) {
+        return false;
+    }
+    QSaveFile file(path);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    QSocPrivateFile::restrict(file);
+    const QByteArray payload = QJsonDocument(object).toJson(QJsonDocument::Indented);
+    if (file.write(payload) != payload.size()) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
+}
+
+bool readHistoricalRun(
+    const QString                         &path,
+    bool                                   legacy,
+    int                                    staleAgeSec,
+    qint64                                 nowMs,
+    QSocSubAgentTaskSource::HistoricalRun *run)
+{
+    QFile file(path);
+    if (!trustedFile(path) || !file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    file.close();
+    if (!doc.isObject()) {
+        return false;
+    }
+    const QJsonObject obj = doc.object();
+    run->id               = obj.value(QStringLiteral("task_id")).toString();
+    run->label            = obj.value(QStringLiteral("label")).toString();
+    run->subagentType     = obj.value(QStringLiteral("subagent_type")).toString();
+    run->status           = obj.value(QStringLiteral("status")).toString();
+    run->startedAtMs      = obj.value(QStringLiteral("started_at_ms")).toVariant().toLongLong();
+    run->finishedAtMs     = obj.value(QStringLiteral("finished_at_ms")).toVariant().toLongLong();
+    run->isolation        = obj.value(QStringLiteral("isolation")).toString();
+    run->worktreePath     = obj.value(QStringLiteral("worktree")).toString();
+    run->error            = obj.value(QStringLiteral("error")).toString();
+    run->finalPreview     = obj.value(QStringLiteral("final_preview")).toString();
+    run->host             = obj.value(QStringLiteral("host")).toString();
+    run->workspace        = obj.value(QStringLiteral("workspace")).toString();
+    run->legacy           = legacy;
+    const QString history = obj.value(QStringLiteral("history_file")).toString();
+    if (!legacy && runFileName().match(history).hasMatch() && !history.contains(QLatin1Char('/'))
+        && !history.contains(QLatin1Char('\\'))) {
+        run->historyFile = QFileInfo(path).dir().filePath(history);
+    }
+    if (run->id.isEmpty()) {
+        return false;
+    }
+    /* Resurrect-prevention: a running meta older than staleAgeSec is from
+     * a dead process. It was cut off, so its effects are unknown, the same
+     * fact an aborted run carries; rewriting it as failed would invite a
+     * retry of a run that may have finished. Legacy metas are never written. */
+    if (run->status == QStringLiteral("running") && run->startedAtMs > 0
+        && (nowMs - run->startedAtMs) / 1000 > staleAgeSec) {
+        run->status       = QStringLiteral("aborted");
+        run->error        = QStringLiteral("process restart (sub-agent did not finish)");
+        run->finishedAtMs = nowMs;
+        if (!legacy) {
+            QJsonObject patched       = obj;
+            patched["status"]         = run->status;
+            patched["error"]          = run->error;
+            patched["finished_at_ms"] = run->finishedAtMs;
+            writeJsonFile(path, patched);
+        }
+    }
+    return true;
 }
 
 } /* namespace */
@@ -77,15 +198,20 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
         return {};
     QString isolation;
     QString worktreePath;
+    QString host;
+    QString workspace;
     for (const auto &run : std::as_const(runs_)) {
         if (run.agent == agent) {
             isolation    = run.isolation;
             worktreePath = run.worktreePath;
+            host         = run.host;
+            workspace    = run.workspace;
         }
     }
     const QString id
         = registerRun(QStringLiteral("Follow-up"), QStringLiteral("continuation"), agent);
     setIsolationMetadata(id, isolation, worktreePath);
+    setPlacementMetadata(id, host, workspace);
     const auto connections = std::make_shared<QList<QMetaObject::Connection>>();
     *connections << connect(agent, &QSocAgent::contentChunk, this, [this, id](const QString &text) {
         appendTranscript(id, text);
@@ -290,6 +416,7 @@ QString QSocSubAgentTaskSource::registerRun(
     run.status         = QSocTask::Status::Pending;
     run.queuedAtMs     = QDateTime::currentMSecsSinceEpoch();
     run.lastActivityMs = run.queuedAtMs;
+    run.directory      = transcriptDir_;
     if (agent != nullptr) {
         agent->setParent(this);
         if (mailbox_ != nullptr)
@@ -368,7 +495,7 @@ void QSocSubAgentTaskSource::pumpQueue()
             run.startedAtMs    = QDateTime::currentMSecsSinceEpoch();
             run.lastActivityMs = run.startedAtMs;
             appendDiskEvent(
-                run.id,
+                run,
                 QStringLiteral("start"),
                 QStringLiteral("run %1 (%2): %3").arg(run.id, run.subagentType, run.label));
             writeMeta(run);
@@ -410,7 +537,7 @@ void QSocSubAgentTaskSource::appendTranscript(const QString &id, const QString &
             run.transcript = run.transcript.right(transcriptCap_);
         }
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        appendDiskEvent(id, QStringLiteral("chunk"), chunk);
+        appendDiskEvent(run, QStringLiteral("chunk"), chunk);
         return;
     }
 }
@@ -436,7 +563,8 @@ void QSocSubAgentTaskSource::markTerminal(
             run.errorText = text;
         }
         run.lastActivityMs = QDateTime::currentMSecsSinceEpoch();
-        appendDiskEvent(id, terminalEventKind(state), text);
+        appendDiskEvent(run, terminalEventKind(state), text);
+        writeHistory(run);
         writeMeta(run);
         if (mailbox_ != nullptr && run.agent != nullptr) {
             const QString identity = mailbox_->idFor(run.agent);
@@ -494,6 +622,20 @@ void QSocSubAgentTaskSource::setIsolationMetadata(
         }
         run.isolation    = isolation;
         run.worktreePath = worktreePath;
+        writeMeta(run);
+        return;
+    }
+}
+
+void QSocSubAgentTaskSource::setPlacementMetadata(
+    const QString &id, const QString &host, const QString &workspace)
+{
+    for (RunState &run : runs_) {
+        if (run.id != id) {
+            continue;
+        }
+        run.host      = host;
+        run.workspace = workspace;
         writeMeta(run);
         return;
     }
@@ -618,43 +760,102 @@ QString QSocSubAgentTaskSource::subagentTypeFor(const QString &id) const
     return {};
 }
 
-QString QSocSubAgentTaskSource::transcriptDir() const
+void QSocSubAgentTaskSource::setTranscriptDir(const QString &dir)
 {
-    if (!transcriptDir_.isEmpty()) {
-        return transcriptDir_;
+    transcriptDir_          = dir;
+    const QStringList names = dir.isEmpty() ? QStringList() : QDir(dir).entryList(QDir::Files);
+    for (const QString &name : names) {
+        const auto match = runFileName().match(name);
+        if (match.hasMatch()) {
+            nextSerial_ = std::max(nextSerial_, match.captured(1).toInt() + 1);
+        }
     }
-    QString base = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    if (base.isEmpty()) {
-        base = QDir::tempPath() + QStringLiteral("/qsoc-agents");
-    } else {
-        base += QStringLiteral("/qsoc/agents");
+}
+
+void QSocSubAgentTaskSource::reserveIdsFrom(const nlohmann::json &messages)
+{
+    if (!messages.is_array()) {
+        return;
     }
-    return base;
+    static const QRegularExpression taskId(QStringLiteral(R"re("task_id"\s*:\s*"a([0-9]{1,9})")re"));
+    for (const auto &message : messages) {
+        if (!message.is_object() || message.value("role", std::string()) != "tool"
+            || !message.contains("content") || !message["content"].is_string()) {
+            continue;
+        }
+        const QString content = QString::fromStdString(message["content"].get<std::string>());
+        auto          matches = taskId.globalMatch(content);
+        while (matches.hasNext()) {
+            nextSerial_ = std::max(nextSerial_, matches.next().captured(1).toInt() + 1);
+        }
+    }
+}
+
+QString QSocSubAgentTaskSource::legacyTranscriptDir()
+{
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    return base.isEmpty() ? QString() : base + QStringLiteral("/qsoc/agents");
+}
+
+bool QSocSubAgentTaskSource::copyRunDirectory(const QString &from, const QString &to)
+{
+    if (!QFileInfo(from).isDir()) {
+        return true;
+    }
+    if (QFileInfo::exists(to) || QFileInfo(to).isSymLink() || !QSocPrivateFile::makeDir(to)) {
+        return false;
+    }
+    QDir target(to);
+    for (const QFileInfo &entry : QDir(from).entryInfoList(QDir::Files | QDir::Hidden)) {
+        if (!trustedFile(entry.filePath())) {
+            continue;
+        }
+        const QString copy = target.filePath(entry.fileName());
+        if (!QFile::copy(entry.filePath(), copy)) {
+            target.removeRecursively();
+            return false;
+        }
+        QSocPrivateFile::restrict(copy);
+    }
+    return true;
+}
+
+QString QSocSubAgentTaskSource::locate(const QString &id, const QString &suffix) const
+{
+    for (const RunState &run : runs_) {
+        if (run.id == id) {
+            return run.directory.isEmpty() ? QString() : QDir(run.directory).filePath(id + suffix);
+        }
+    }
+    for (const QString &dir : {transcriptDir_, legacyTranscriptDir()}) {
+        const QString path = dir.isEmpty() ? QString() : QDir(dir).filePath(id + suffix);
+        if (!path.isEmpty() && trustedFile(path)) {
+            return path;
+        }
+    }
+    return transcriptDir_.isEmpty() ? QString() : QDir(transcriptDir_).filePath(id + suffix);
 }
 
 QString QSocSubAgentTaskSource::transcriptPathFor(const QString &id) const
 {
-    return QDir(transcriptDir()).filePath(id + QStringLiteral(".jsonl"));
+    return locate(id, QStringLiteral(".jsonl"));
 }
 
 QString QSocSubAgentTaskSource::metaPathFor(const QString &id) const
 {
-    return QDir(transcriptDir()).filePath(id + QStringLiteral(".meta.json"));
+    return locate(id, QStringLiteral(".meta.json"));
 }
 
 void QSocSubAgentTaskSource::appendDiskEvent(
-    const QString &id, const QString &kind, const QString &data) const
+    const RunState &run, const QString &kind, const QString &data) const
 {
-    if (data.isEmpty() && kind != QStringLiteral("start")) {
+    if (run.directory.isEmpty() || (data.isEmpty() && kind != QStringLiteral("start"))
+        || !QSocPrivateFile::makeDir(run.directory)) {
         return;
     }
-    const QString dir = transcriptDir();
-    if (!QSocPrivateFile::makeDir(dir)) {
-        return;
-    }
-    const QString path = QDir(dir).filePath(id + QStringLiteral(".jsonl"));
+    const QString path = QDir(run.directory).filePath(run.id + QStringLiteral(".jsonl"));
     QFile         file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) {
+    if (QFileInfo(path).isSymLink() || !file.open(QIODevice::WriteOnly | QIODevice::Append)) {
         return;
     }
     QSocPrivateFile::restrict(file);
@@ -668,14 +869,35 @@ void QSocSubAgentTaskSource::appendDiskEvent(
     file.close();
 }
 
-void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
+void QSocSubAgentTaskSource::writeHistory(RunState &run) const
 {
-    const QString dir = transcriptDir();
-    if (!QSocPrivateFile::makeDir(dir)) {
+    if (run.directory.isEmpty() || run.agent.isNull()) {
         return;
     }
-    const QString path = QDir(dir).filePath(run.id + QStringLiteral(".meta.json"));
-    QJsonObject   meta;
+    const nlohmann::json messages = run.agent->getMessages();
+    if (!messages.is_array() || messages.empty() || serializedSize(messages) > historyBytesLimit) {
+        return;
+    }
+    const QString path = QDir(run.directory).filePath(run.id + QStringLiteral(".history.jsonl"));
+    if (QFileInfo(path).isSymLink()) {
+        return;
+    }
+    QSocSession history(
+        run.id,
+        path,
+        QFileInfo::exists(path) ? QSocSession::StorageMode::Existing
+                                : QSocSession::StorageMode::Fresh);
+    if (history.rewriteMessages(messages)) {
+        run.historyFile = QFileInfo(path).fileName();
+    }
+}
+
+void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
+{
+    if (run.directory.isEmpty() || !QSocPrivateFile::makeDir(run.directory)) {
+        return;
+    }
+    QJsonObject meta;
     if (run.agent && run.agent->toolResultStore() && !run.agent->toolResultStore()->isTemporary()) {
         meta["artifact_directory"] = run.agent->toolResultStore()->directory();
         meta["artifact_owner"]     = run.agent->toolResultStore()->owner();
@@ -689,6 +911,15 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     if (!run.worktreePath.isEmpty()) {
         meta["worktree"] = run.worktreePath;
     }
+    if (!run.host.isEmpty()) {
+        meta["host"] = run.host;
+    }
+    if (!run.workspace.isEmpty()) {
+        meta["workspace"] = run.workspace;
+    }
+    if (!run.historyFile.isEmpty()) {
+        meta["history_file"] = run.historyFile;
+    }
     if (isTerminal(run.status)) {
         meta["finished_at_ms"] = run.lastActivityMs;
         if (!run.finalResult.isEmpty()) {
@@ -698,77 +929,31 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
             meta["error"] = run.errorText;
         }
     }
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return;
-    }
-    QSocPrivateFile::restrict(file);
-    file.write(QJsonDocument(meta).toJson(QJsonDocument::Indented));
-    file.close();
+    writeJsonFile(QDir(run.directory).filePath(run.id + QStringLiteral(".meta.json")), meta);
 }
 
 QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistoricalRuns(
     int staleAgeSec)
 {
     historical_.clear();
-    const QString dirPath = transcriptDir();
-    QDir          dir(dirPath);
-    if (!dir.exists()) {
-        return {};
-    }
-    const QStringList entries
-        = dir.entryList({QStringLiteral("*.meta.json")}, QDir::Files | QDir::Readable);
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    for (const QString &name : entries) {
-        const QString path = dir.filePath(name);
-        QFile         file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
+    const QString                         legacyDir = legacyTranscriptDir();
+    const qint64                          nowMs     = QDateTime::currentMSecsSinceEpoch();
+    const QList<std::pair<QString, bool>> sources
+        = {{transcriptDir_, false}, {legacyDir == transcriptDir_ ? QString() : legacyDir, true}};
+    for (const auto &[dirPath, legacy] : sources) {
+        const QDir dir(dirPath);
+        if (dirPath.isEmpty() || !dir.exists()) {
             continue;
         }
-        const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-        file.close();
-        if (!doc.isObject()) {
-            continue;
-        }
-        const QJsonObject obj = doc.object();
-        HistoricalRun     run;
-        run.id           = obj.value(QStringLiteral("task_id")).toString();
-        run.label        = obj.value(QStringLiteral("label")).toString();
-        run.subagentType = obj.value(QStringLiteral("subagent_type")).toString();
-        run.status       = obj.value(QStringLiteral("status")).toString();
-        run.startedAtMs  = obj.value(QStringLiteral("started_at_ms")).toVariant().toLongLong();
-        run.finishedAtMs = obj.value(QStringLiteral("finished_at_ms")).toVariant().toLongLong();
-        run.isolation    = obj.value(QStringLiteral("isolation")).toString();
-        run.worktreePath = obj.value(QStringLiteral("worktree")).toString();
-        run.error        = obj.value(QStringLiteral("error")).toString();
-        run.finalPreview = obj.value(QStringLiteral("final_preview")).toString();
-        if (run.id.isEmpty()) {
-            continue;
-        }
-        /* Resurrect-prevention: a running meta older than staleAgeSec is from
-         * a dead process. It was cut off, so its effects are unknown, the same
-         * fact an aborted run carries; rewriting it as failed would invite a
-         * retry of a run that may have finished. */
-        if (run.status == QStringLiteral("running") && run.startedAtMs > 0
-            && (nowMs - run.startedAtMs) / 1000 > staleAgeSec) {
-            run.status          = QStringLiteral("aborted");
-            run.error           = QStringLiteral("process restart (sub-agent did not finish)");
-            run.finishedAtMs    = nowMs;
-            QJsonObject patched = obj;
-            patched["status"]   = run.status;
-            patched["error"]    = run.error;
-            patched["finished_at_ms"] = run.finishedAtMs;
-            QFile out(path);
-            if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                QSocPrivateFile::restrict(out);
-                out.write(QJsonDocument(patched).toJson(QJsonDocument::Indented));
-                out.close();
+        for (const QString &name : dir.entryList({QStringLiteral("*.meta.json")}, QDir::Files)) {
+            HistoricalRun run;
+            if (readHistoricalRun(dir.filePath(name), legacy, staleAgeSec, nowMs, &run)) {
+                historical_.append(run);
             }
         }
-        historical_.append(run);
     }
     /* Newest first. */
-    std::sort(
+    std::stable_sort(
         historical_.begin(),
         historical_.end(),
         [](const HistoricalRun &lhs, const HistoricalRun &rhs) {
@@ -780,15 +965,16 @@ QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistori
 bool QSocSubAgentTaskSource::findHistoricalRun(const QString &id, HistoricalRun *out)
 {
     auto search = [&]() -> bool {
+        const HistoricalRun *hit = nullptr;
         for (const HistoricalRun &run : historical_) {
-            if (run.id == id) {
-                if (out != nullptr) {
-                    *out = run;
-                }
-                return true;
+            if (run.id == id && (hit == nullptr || hit->legacy)) {
+                hit = &run;
             }
         }
-        return false;
+        if (hit != nullptr && out != nullptr) {
+            *out = *hit;
+        }
+        return hit != nullptr;
     };
     if (search()) {
         return true;

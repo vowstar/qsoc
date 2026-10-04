@@ -23,6 +23,11 @@ import uuid
 import yaml
 
 
+def run_dir(sessions):
+    found = sorted(sessions.glob("*.jsonl.agents"))
+    return found[0] if found else sessions / "missing.jsonl.agents"
+
+
 def records(path):
     result = []
     if path.exists():
@@ -182,14 +187,14 @@ def main():
                     print(f"observed {elapsed}s; session records={len(messages)}", flush=True)
             else:
                 raise AssertionError("live model did not complete peer coordination before timeout")
-            evidence = verify(messages, work / "runtime/qsoc/agents", expected)
+            evidence = verify(messages, run_dir(project / ".qsoc/sessions"), expected)
             (artifacts / "summary.json").write_text(json.dumps(
                 {"model": selected, "effort": model.get("effort", "off"), "expected": expected,
                  "children": evidence, "passed": True}, indent=2, ensure_ascii=False))
             print("PASS: natural-language task, peer discovery, direct sibling sends and matching final sums", flush=True)
         finally:
             for name, source in (("sessions", project / ".qsoc/sessions"),
-                                 ("children", work / "runtime/qsoc/agents")):
+                                 ("children", run_dir(project / ".qsoc/sessions"))):
                 if source.exists():
                     shutil.copytree(source, artifacts / name, dirs_exist_ok=True)
             capture = tmux("capture-pane", "-p", "-S", "-1000", "-t", "live", check=False)

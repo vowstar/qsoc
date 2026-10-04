@@ -1208,16 +1208,30 @@ The body of the file is the child's base system prompt.
 === Runtime State
 <agent-subagents-state>
 
-Each run produces:
+Runs belong to the session that started them and are stored next to it in
+`.qsoc/sessions/<id>.jsonl.agents/`. Task ids are unique within a session: a
+resumed session continues after the highest id it already holds. Each run
+produces:
 
-- `<runtime>/qsoc/agents/<task_id>.jsonl`: structured event stream
-  (one JSON event per line: prompt, tool calls, tool results,
-  content chunks, final output).
+- `<task_id>.jsonl`: structured event stream (one JSON event per line:
+  prompt, tool calls, tool results, content chunks, final output).
 - `<task_id>.meta.json`: sidecar with label, `subagent_type`, status,
-  isolation mode, and worktree path.
+  isolation mode, worktree path, `host` (`local` or the SSH target) and
+  `workspace`. It is replaced atomically.
+- `<task_id>.history.jsonl`: the child's message history in the session file
+  format, written when the run ends. A history larger than 16 MiB is not
+  kept. The meta names it in `history_file`.
+
+`/branch` copies the directory to the new session. Without a session, runs
+stay in memory and nothing is written.
+
+qsoc 2.7.0 and earlier kept every session's runs in
+`<runtime>/qsoc/agents/`. Those runs stay readable by `/agents-history`
+(marked `legacy`), `agent_status` and `agent_resume`, and are never written.
+A run of the current session wins over a legacy run with the same id.
 
 At startup, runs whose meta says `running` but whose owning process is
-gone are rewritten to `failed`, and worktrees older than one hour
+gone are rewritten to `aborted`, and worktrees older than one hour
 without a live owner are swept.
 
 === Polling and Resuming

@@ -4640,11 +4640,13 @@ private slots:
 
         QSocAgentDefinitionRegistry definitions;
         definitions.registerBuiltins();
+        QTemporaryDir          transcripts;
         QSocSubAgentTaskSource tasks;
-        QSocToolRegistry       registry;
-        QSocAgentConfig        config = testConfig();
-        config.autoBackgroundMs       = 0;
-        config.hooks                  = hookConfig;
+        tasks.setTranscriptDir(transcripts.path());
+        QSocToolRegistry registry;
+        QSocAgentConfig  config = testConfig();
+        config.autoBackgroundMs = 0;
+        config.hooks            = hookConfig;
         QSocAgent     parent(nullptr, &service, &registry, config);
         QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
         tool.setParentAgent(&parent);

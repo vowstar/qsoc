@@ -925,6 +925,10 @@ QString QSocToolAgent::execute(const json &arguments)
     /* Stash isolation + worktree on the run so the meta sidecar
      * captures them; mirrors what the response JSON reports. */
     taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
+    taskSource_->setPlacementMetadata(
+        taskId,
+        childCfg.remoteMode ? childCfg.remoteName : QStringLiteral("local"),
+        childCfg.remoteMode ? childCfg.remoteWorkspace : childCfg.projectPath);
 
     /* Forward child token usage into the parent's running totals so
      * the parent's status pill / cost view reflects total cost in
