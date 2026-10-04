@@ -1267,6 +1267,9 @@ a new task ID when it wakes an idle child.
 - `interrupt_agent(target)` lets the main agent cancel a child and discard
   its pending messages. Later messages cannot revive that child. Task-panel
   cancellation has the same effect. Start a fresh child for further work.
+- Esc on the main agent does not cancel its mailbox. Replies and task
+  notifications that arrive while it is idle stay queued and reach it on
+  its next turn.
 
 `send_message` accepts four target forms:
 

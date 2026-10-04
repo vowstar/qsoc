@@ -53,7 +53,7 @@ void QSocSubAgentTaskSource::enableMessaging(QSocAgent *root)
         mailbox_->setState(root->agentIdentity(), QStringLiteral("idle"));
     });
     connect(root, &QSocAgent::runAborted, mailbox_, [this, root](const QString &) {
-        mailbox_->cancel(root->agentIdentity());
+        mailbox_->setState(root->agentIdentity(), QStringLiteral("idle"));
     });
     connect(mailbox_, &QSocAgentMailbox::changed, this, [this]() {
         QStringList cancelled;

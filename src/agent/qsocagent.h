@@ -223,7 +223,8 @@ public:
 
     /**
      * @brief Stop the current run and discard queued input
-     * @details Later queue additions are rejected until a new run starts.
+     * @details Later queue additions are rejected until a new run starts,
+     *          except on the mailbox main agent, which keeps accepting them.
      */
     void abortAndDiscardPendingRequests();
 
@@ -1176,6 +1177,7 @@ private:
     void finishSynchronousRun(const ActiveRunPtr &run, RunOutcome outcome);
     void requestStop(StopMode mode);
     bool hasRestartableRequests() const;
+    bool isMailboxRoot() const;
     bool drainQueuedRequests(const ActiveRunPtr &run);
 
     /**

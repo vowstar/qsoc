@@ -308,8 +308,7 @@ void QSocAgent::setMailbox(QSocAgentMailbox *mailbox, const QString &identity)
 
 void QSocAgent::bindSessionIdentity(const QString &sessionId)
 {
-    if (!mailbox_ || agentConfig.isSubAgent
-        || mailbox_->resolve(QStringLiteral("main")) != agentIdentity_) {
+    if (agentConfig.isSubAgent || !isMailboxRoot()) {
         return;
     }
     mailbox_->setRootId(sessionId);
@@ -3366,7 +3365,7 @@ void QSocAgent::clearHistory()
     if (compactionCommitting_) {
         return;
     }
-    if (mailbox_ && mailbox_->resolve(QStringLiteral("main")) == agentIdentity_) {
+    if (isMailboxRoot()) {
         mailbox_->reset(this);
         clearPendingRequests();
     }
@@ -3523,20 +3522,28 @@ void QSocAgent::clearPendingRequests()
     requestQueue.clear();
 }
 
+bool QSocAgent::isMailboxRoot() const
+{
+    return mailbox_ && mailbox_->resolve(QStringLiteral("main")) == agentIdentity_;
+}
+
 void QSocAgent::abortAndDiscardPendingRequests()
 {
+    /* The main agent is never cancelled: replies and notifications that
+     * arrive while it is idle wait for its next turn. */
+    const bool cancel = !isMailboxRoot();
     if (compactionCommitting_) {
         QMutexLocker locker(&queueMutex);
-        rejectQueuedRequests_ = true;
+        rejectQueuedRequests_ = cancel;
         requestQueue.clear();
         requestStop(StopMode::Hard);
         return;
     }
-    if (mailbox_)
+    if (mailbox_ && cancel)
         mailbox_->cancel(agentIdentity_);
     {
         QMutexLocker locker(&queueMutex);
-        rejectQueuedRequests_ = true;
+        rejectQueuedRequests_ = cancel;
         requestQueue.clear();
     }
     requestStop(StopMode::Hard);

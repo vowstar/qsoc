@@ -525,6 +525,23 @@ private slots:
         QVERIFY(first.taskRegistry()->killTask(row.sourceTag, row.row.id));
     }
 
+    void projectSwitchDropsQueuedNotifications()
+    {
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        const auto a = fixture.filePath("a"), b = fixture.filePath("b");
+        QVERIFY(QDir().mkpath(a));
+        QVERIFY(QDir().mkpath(b));
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = a;
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+        QVERIFY(runtime.agent()->queueTaskNotification(QStringLiteral("stale notification")));
+        QString error;
+        QVERIFY2(runtime.switchProject(b, &error), qPrintable(error));
+        QCOMPARE(runtime.agent()->pendingRequestCount(), 0);
+    }
+
     void clearSessionStartsFresh()
     {
         QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/rt_clear_XXXXXX"));

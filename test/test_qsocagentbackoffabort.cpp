@@ -3,6 +3,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocagentmailbox.h"
 #include "agent/qsocgoal.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsocmemorydream.h"
@@ -3120,6 +3121,61 @@ private slots:
         QCOMPARE(completed.count(), 1);
         QCOMPARE(aborted.count(), 0);
         QCOMPARE(errors.count(), 0);
+    }
+
+    void mainAbortKeepsChildRepliesForTheNextTurn()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueHeldRequest();
+        server.enqueueStream(QStringLiteral("next turn done"));
+        QLLMService service;
+        configureService(service, server);
+        QTemporaryDir          root;
+        QSocSubAgentTaskSource tasks;
+        tasks.setTranscriptDir(root.filePath("transcripts"));
+        QSocToolRegistry registry;
+        QSocAgent        main(nullptr, &service, &registry, testConfig());
+        tasks.enableMessaging(&main);
+        auto         *mailbox = tasks.mailbox();
+        auto         *child   = new QSocAgent(nullptr, nullptr, &registry);
+        const QString taskId
+            = tasks.registerRun(QStringLiteral("worker"), QStringLiteral("general-purpose"), child);
+        tasks.markCompleted(taskId, QStringLiteral("ready"));
+        const QString mainId = main.agentIdentity();
+        QSignalSpy    aborted(&main, &QSocAgent::runAborted);
+        QSignalSpy    completed(&main, &QSocAgent::runComplete);
+
+        main.runStream(QStringLiteral("first request"));
+        QTRY_COMPARE_WITH_TIMEOUT(server.requestCount(), 1, 5000);
+        main.abort();
+        QTRY_COMPARE_WITH_TIMEOUT(aborted.count(), 1, 5000);
+        QVERIFY(!main.isRunning());
+        QCOMPARE(mailbox->stateFor(mainId), QStringLiteral("idle"));
+
+        /* A discard on the idle main agent must not latch its queue shut. */
+        main.abortAndDiscardPendingRequests();
+        QCOMPARE(mailbox->stateFor(mainId), QStringLiteral("idle"));
+
+        const json receipt = mailbox->send(
+            child->agentIdentity(),
+            QStringLiteral("main"),
+            QStringLiteral("r1"),
+            QStringLiteral("child reply body"),
+            {},
+            false);
+        QCOMPARE(receipt.value("status", std::string()), std::string("ok"));
+        QCOMPARE(mailbox->pendingCount(mainId), 1);
+        QVERIFY(main.queueTaskNotification(QStringLiteral("child notification body")));
+        QCOMPARE(main.pendingRequestCount(), 1);
+
+        main.runStream(QStringLiteral("second request"));
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+        QCOMPARE(server.requestCount(), 2);
+        const QByteArray body = server.requestBody(1);
+        QVERIFY2(body.contains("child reply body"), body.constData());
+        QVERIFY2(body.contains("child notification body"), body.constData());
+        QCOMPARE(mailbox->pendingCount(mainId), 0);
     }
 
     void hardStopRejectsQueueAndClaimsOneTerminalPerRun()

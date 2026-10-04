@@ -569,6 +569,7 @@ bool QSocAgentRuntime::switchProject(const QString &directory, QString *error)
         d->goalCatalog->load(d->projectManager->getProjectPath());
     }
 
+    d->agent->clearPendingRequests();
     d->agent->clearHistory();
     d->sessionLock.reset();
     d->sessionLockPath.clear();
