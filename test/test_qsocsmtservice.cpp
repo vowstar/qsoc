@@ -10,6 +10,7 @@
 
 #include <future>
 #include <limits>
+#include <thread>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
@@ -532,16 +533,25 @@ private slots:
         QVERIFY(directory.isValid());
         std::stop_source                      stop;
         std::vector<std::future<QJsonObject>> calls;
+        std::vector<std::jthread>             threads;
         const auto                            cleanup = qScopeGuard([&] { stop.request_stop(); });
         QJsonArray                            results;
-        const auto                            collect = [&](bool wait) {
+        bool                                  busy   = false;
+        const auto                            launch = [&](auto function) {
+            std::packaged_task<QJsonObject()> task(std::move(function));
+            calls.push_back(task.get_future());
+            threads.emplace_back(std::move(task));
+        };
+        const auto collect = [&](bool wait) {
             for (size_t index = 0; index < calls.size(); ++index) {
                 auto &call = calls[index];
                 if (call.valid()
                     && (wait
                         || call.wait_for(std::chrono::milliseconds(0))
                                == std::future_status::ready)) {
-                    results.append(QJsonObject{{"call", int(index)}, {"result", call.get()}});
+                    const auto result = call.get();
+                    busy              = busy || result.value("execution").toString() == "busy";
+                    results.append(QJsonObject{{"call", int(index)}, {"result", result}});
                 }
             }
         };
@@ -549,9 +559,9 @@ private slots:
         for (int index = 0; index < 2; ++index) {
             const auto marker = directory.filePath(QString::number(index));
             markers.append(marker);
-            calls.push_back(std::async(std::launch::async, [marker, &stop] {
+            launch([marker, &stop] {
                 return probe("probe-solve\n; probe-ready: " + marker, 20000, stop.get_token());
-            }));
+            });
         }
         QElapsedTimer elapsed;
         elapsed.start();
@@ -578,30 +588,30 @@ private slots:
             pids.append(pid);
         }
         QVERIFY(pids[0] != pids[1]);
-        const auto input = request("; probe-solve\n" + QString(260000, '\n') + "(assert true)");
-        for (int i = 0; i < 36; ++i) {
-            calls.push_back(std::async(std::launch::async, [input, &stop] {
+        const auto    input = request("; probe-solve\n" + QString(260000, '\n') + "(assert true)");
+        constexpr int queuedCalls = 36;
+        const auto    queuedBytes = QJsonDocument(input).toJson(QJsonDocument::Compact).size();
+        QVERIFY(queuedBytes < 2 * 1024 * 1024);
+        QVERIFY(queuedBytes * queuedCalls > 16 * 1024 * 1024);
+        for (int i = 0; i < queuedCalls; ++i) {
+            launch([input, &stop] {
                 return QSocSmtService::solve(
                     input, stop.get_token(), QStringLiteral(QSOC_SMT_PROBE_PATH));
-            }));
+            });
         }
-        bool busy = false;
         elapsed.restart();
         while (!busy && elapsed.elapsed() < 5000) {
             collect(false);
-            for (const auto &entry : results) {
-                busy = entry.toObject().value("result").toObject().value("execution") == "busy"
-                       || busy;
-            }
             QTest::qWait(10);
         }
         collect(false);
-        const bool workersHeld = calls[0].valid() && calls[1].valid();
+        const bool observedBusy = busy;
+        const bool workersHeld  = calls[0].valid() && calls[1].valid();
         stop.request_stop();
         collect(true);
         const auto details = QJsonDocument(results).toJson(QJsonDocument::Compact);
         QVERIFY2(workersHeld, details.constData());
-        QVERIFY2(busy, details.constData());
+        QVERIFY2(observedBusy, details.constData());
         for (const auto &entry : results) {
             const auto completed = entry.toObject();
             if (completed.value("call").toInt() < 2)
