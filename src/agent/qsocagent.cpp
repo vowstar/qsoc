@@ -7,6 +7,7 @@
 #include "agent/qsocgoal.h"
 #include "agent/qsocgoalprompt.h"
 #include "agent/qsochookmanager.h"
+#include "agent/qsocprojectrules.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qlongtaskmonitor.h"
@@ -3170,23 +3171,7 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                 instructions = snapshot.text;
             }
         } else if (!agentConfig.projectPath.isEmpty()) {
-            QDir projectDir(agentConfig.projectPath);
-            for (const QString &name :
-                 {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
-                const QString path = projectDir.filePath(name);
-                QFile         file(path);
-                if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    QTextStream   stream(&file);
-                    const QString content = stream.readAll().trimmed();
-                    file.close();
-                    if (!content.isEmpty()) {
-                        if (!instructions.isEmpty()) {
-                            instructions += QStringLiteral("\n\n");
-                        }
-                        instructions += content;
-                    }
-                }
-            }
+            instructions = QSocProjectRules::loadLocal(agentConfig.projectPath);
         }
         if (!instructions.isEmpty()) {
             prompt += QStringLiteral(

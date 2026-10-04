@@ -157,6 +157,16 @@ public:
      */
     Presence linkPresence(const QString &path, QString *errorMessage = nullptr);
 
+    /** @brief Type and size of a path, as LSTAT reports them. */
+    struct LinkStat
+    {
+        bool   regular = false; /**< A regular file, not a link, directory or device. */
+        qint64 size    = -1;    /**< Byte size, -1 when the server sent none. */
+    };
+
+    /** @brief LSTAT @p path; @p stat is filled only when Present. */
+    Presence linkStat(const QString &path, LinkStat *stat, QString *errorMessage = nullptr);
+
     /**
      * @brief Ask the host for the canonical spelling of an existing path.
      * @details SSH_FXP_REALPATH: every symlink in @p path is followed, so the
@@ -307,7 +317,11 @@ private:
      */
     StepOutcome renameStep(const QByteArray &from, const QByteArray &to);
     /** @brief One STAT or LSTAT exchange; @p statType picks which. */
-    Presence statStep(const QString &path, int statType, QString *errorMessage);
+    Presence statStep(
+        const QString           &path,
+        int                      statType,
+        QString                 *errorMessage,
+        LIBSSH2_SFTP_ATTRIBUTES *attrsOut = nullptr);
     /** @brief Poison the session on a transport code, flagging uncertainty. */
     bool noteTransport(int rc);
     /* Drive a close / unlink to completion on the non-blocking session.

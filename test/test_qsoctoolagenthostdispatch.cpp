@@ -502,7 +502,7 @@ void Test::forkLoadsRemoteRulesAtTheBindingBoundary()
     const QString rebound = systemPromptOf(llm, 2);
     QCOMPARE(rebound.count(QStringLiteral("Rebound remote sentinel")), 1);
     QVERIFY(!rebound.contains(QStringLiteral("Bound remote sentinel")));
-    QVERIFY(writeRules(m_workspace, QByteArray(64 * 1024 + 1, 'x')));
+    QVERIFY(writeRules(m_workspace, QByteArray(256 * 1024 + 1, 'x')));
     llm.enqueueFinal(QStringLiteral("bounded rules"));
     const auto oversized = json::parse(tool.execute(args).toStdString());
     QCOMPARE(oversized.value("status", std::string()), std::string("ok"));

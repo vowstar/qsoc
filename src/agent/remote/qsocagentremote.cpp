@@ -5,6 +5,7 @@
 #include "agent/tool/qsoctooloutputread.h"
 
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocprojectrules.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocsftpclient.h"
@@ -36,36 +37,10 @@ void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *co
         || conn->workspace().isEmpty()) {
         return;
     }
-    auto &snapshot            = config->remoteProjectRules;
-    snapshot.target           = conn->target();
-    snapshot.workspace        = conn->workspace();
-    constexpr qint64 maxBytes = 64 * 1024;
-    for (const QString &name : {QStringLiteral("AGENTS.md"), QStringLiteral("AGENTS.local.md")}) {
-        const QString path     = QDir(snapshot.workspace).filePath(name);
-        const auto    presence = conn->sftp()->presence(path);
-        if (presence == QSocSftpClient::Presence::Absent) {
-            continue;
-        }
-        QString          error;
-        const QByteArray bytes = presence == QSocSftpClient::Presence::Present
-                                     ? conn->sftp()->readFile(path, maxBytes + 1, &error)
-                                     : QByteArray();
-        QString          content;
-        if (presence == QSocSftpClient::Presence::Unknown || !error.isEmpty()
-            || bytes.size() > maxBytes) {
-            content = QStringLiteral(
-                          "Project rules in %1 were not loaded: unavailable or larger than 64 KiB.")
-                          .arg(name);
-        } else {
-            content = QString::fromUtf8(bytes).trimmed();
-        }
-        if (!content.isEmpty()) {
-            if (!snapshot.text.isEmpty()) {
-                snapshot.text += QStringLiteral("\n\n");
-            }
-            snapshot.text += content;
-        }
-    }
+    auto &snapshot     = config->remoteProjectRules;
+    snapshot.target    = conn->target();
+    snapshot.workspace = conn->workspace();
+    snapshot.text      = QSocProjectRules::loadRemote(conn->sftp(), snapshot.workspace);
 }
 
 namespace {

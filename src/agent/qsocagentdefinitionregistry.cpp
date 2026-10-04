@@ -3,6 +3,7 @@
 
 #include "agent/qsocagentdefinitionregistry.h"
 
+#include "agent/qsocprojectrules.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "common/qsocconsole.h"
 
@@ -237,15 +238,20 @@ void QSocAgentDefinitionRegistry::scanFromRemoteSftp(
         if (!entry.name.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive)) {
             continue;
         }
-        const QString    fullPath = remoteDir + QLatin1Char('/') + entry.name;
-        QString          readErr;
-        const QByteArray bytes = sftp->readFile(fullPath, /*maxBytes*/ qint64{64} * 1024, &readErr);
-        if (!readErr.isEmpty()) {
-            QSocConsole::debug() << "agent definitions: remote read failed for " << fullPath << ": "
-                                 << readErr;
+        const QString                fullPath = remoteDir + QLatin1Char('/') + entry.name;
+        const QSocProjectRules::Read read = QSocProjectRules::readRemote(sftp, remoteDir, fullPath);
+        if (read.status != QSocProjectRules::Status::Loaded) {
+            QSocAgentDefinition refused;
+            refused.name       = entry.name.chopped(3);
+            refused.sourcePath = fullPath;
+            refused.scope      = scope;
+            refused.parseError
+                = QStringLiteral("not loaded: %1").arg(QSocProjectRules::reason(read.status));
+            QSocConsole::debug() << "agent definitions: " << fullPath << " " << refused.parseError;
+            broken_.append(refused);
             continue;
         }
-        const QString       content = QString::fromUtf8(bytes);
+        const QString       content = QString::fromUtf8(read.bytes);
         QSocAgentDefinition def     = parseAgentMarkdownContent(content, fullPath, scope);
         if (!def.parseError.isEmpty()) {
             broken_.append(def);

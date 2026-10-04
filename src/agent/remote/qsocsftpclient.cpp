@@ -910,7 +910,7 @@ QList<QSocSftpClient::Entry> QSocSftpClient::listDir(
 }
 
 QSocSftpClient::Presence QSocSftpClient::statStep(
-    const QString &path, int statType, QString *errorMessage)
+    const QString &path, int statType, QString *errorMessage, LIBSSH2_SFTP_ATTRIBUTES *attrsOut)
 {
     OpScope scope(this, m_opBudgetMs);
     if (!open(errorMessage)) {
@@ -932,6 +932,9 @@ QSocSftpClient::Presence QSocSftpClient::statStep(
         }
     }
     if (rc == 0) {
+        if (attrsOut != nullptr) {
+            *attrsOut = attrs;
+        }
         return Presence::Present;
     }
     /* Only a protocol-level reply carries a meaningful SFTP status code; on
@@ -955,6 +958,21 @@ QSocSftpClient::Presence QSocSftpClient::presence(const QString &path, QString *
 QSocSftpClient::Presence QSocSftpClient::linkPresence(const QString &path, QString *errorMessage)
 {
     return statStep(path, LIBSSH2_SFTP_LSTAT, errorMessage);
+}
+
+QSocSftpClient::Presence QSocSftpClient::linkStat(
+    const QString &path, LinkStat *stat, QString *errorMessage)
+{
+    LIBSSH2_SFTP_ATTRIBUTES attrs{};
+    const Presence          presence = statStep(path, LIBSSH2_SFTP_LSTAT, errorMessage, &attrs);
+    if (presence == Presence::Present && stat != nullptr) {
+        stat->regular = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) != 0
+                        && LIBSSH2_SFTP_S_ISREG(attrs.permissions);
+        stat->size    = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) != 0
+                            ? static_cast<qint64>(attrs.filesize)
+                            : -1;
+    }
+    return presence;
 }
 
 QSocSftpClient::Presence QSocSftpClient::realPath(

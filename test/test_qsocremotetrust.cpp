@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/qsocagentconfig.h"
+#include "agent/qsocagentdefinitionregistry.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshsession.h"
@@ -13,7 +15,8 @@
 
 /*
  * What a remote binding trusts before it uses anything the host sends: the
- * host key it accepts and what it records about it. Every case connects to a
+ * host key it accepts, what it records about it, and which project files it
+ * lets into the prompt. Every case connects to a
  * loopback sshd through the production connect path, with HOME redirected to
  * the fixture so the ssh config and known_hosts are written at runtime and the
  * real ~/.ssh is never read or written.
@@ -37,6 +40,7 @@ private slots:
     void aKnownKeyAfterAnUnparsableLineIsStillKnown();
     void aRevokedKeyIsRefusedUnderEveryPolicy_data();
     void aRevokedKeyIsRefusedUnderEveryPolicy();
+    void remoteProjectFilesStayInsideTheWorkspace();
 
 private:
     static constexpr const char *kAlias = "trust-box";
@@ -103,6 +107,12 @@ private:
         QFile file(knownHosts());
         return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
                && file.write(content) == content.size();
+    }
+
+    static bool spill(const QString &path, const QByteArray &content)
+    {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(content) == content.size();
     }
 
     static QByteArray slurp(const QString &path)
@@ -293,6 +303,60 @@ void Test::aRevokedKeyIsRefusedUnderEveryPolicy()
     QVERIFY(!asked);
     QVERIFY2(error.contains(QStringLiteral("revoked")), qPrintable(error));
     QCOMPARE(slurp(knownHosts()), recorded);
+}
+
+/* Counterexample: AGENTS.md and .qsoc/agents/*.md were opened over SFTP, which
+ * follows links, so a link planted in a shared workspace sent any file the
+ * user can read to the model. */
+void Test::remoteProjectFilesStayInsideTheWorkspace()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    QVERIFY(writeConfig(QStringLiteral("  StrictHostKeyChecking no\n")));
+    const QString base    = m_fixture.root() + QStringLiteral("/rules");
+    const QString work    = base + QStringLiteral("/work");
+    const QString outside = base + QStringLiteral("/outside");
+    const QString agents  = work + QStringLiteral("/.qsoc/agents");
+    QVERIFY(QDir().mkpath(agents) && QDir().mkpath(outside));
+    QVERIFY(spill(outside + QStringLiteral("/secret.md"), "Outside sentinel"));
+    QVERIFY(
+        QFile::link(outside + QStringLiteral("/secret.md"), work + QStringLiteral("/AGENTS.md")));
+    QVERIFY(spill(work + QStringLiteral("/AGENTS.local.md"), "Inside sentinel"));
+    const QByteArray definition = "---\nname: %1\ndescription: d\n---\nOutside sentinel\n";
+    QVERIFY(
+        spill(outside + QStringLiteral("/leak.md"), QByteArray(definition).replace("%1", "leak")));
+    QVERIFY(QFile::link(outside + QStringLiteral("/leak.md"), agents + QStringLiteral("/leak.md")));
+    QVERIFY(
+        spill(agents + QStringLiteral("/kept.md"), QByteArray(definition).replace("%1", "kept")));
+
+    QObject          parent;
+    AgentRemoteState state;
+    QString          error;
+    QVERIFY2(
+        connectAgentSshSession(QString::fromLatin1(kAlias), &parent, &state, &error),
+        qPrintable(error));
+    if (!prepareAgentRemoteWorkspace(work, &state, &error)) {
+        discardAgentRemoteState(&state);
+        QFAIL(qPrintable(error));
+    }
+    QSocRemoteConnection conn;
+    QVERIFY(conn.adopt(std::move(state)));
+
+    QSocAgentConfig config;
+    loadAgentRemoteProjectRules(&conn, &config);
+    const QString rules = config.remoteProjectRules.text;
+    QVERIFY2(!rules.contains(QStringLiteral("Outside sentinel")), qPrintable(rules));
+    QVERIFY2(rules.contains(QStringLiteral("Inside sentinel")), qPrintable(rules));
+    QVERIFY2(rules.contains(QStringLiteral("AGENTS.md were not loaded")), qPrintable(rules));
+
+    QSocAgentDefinitionRegistry definitions;
+    definitions.scanFromRemoteSftp(conn.sftp(), agents);
+    QVERIFY(definitions.find(QStringLiteral("kept")) != nullptr);
+    QVERIFY(definitions.find(QStringLiteral("leak")) == nullptr);
+    const auto broken = definitions.brokenDefinitions();
+    QCOMPARE(broken.size(), 1);
+    QVERIFY2(
+        broken.value(0).parseError.contains(QStringLiteral("outside the project")),
+        qPrintable(broken.value(0).parseError));
 }
 
 QSOC_TEST_MAIN(Test)

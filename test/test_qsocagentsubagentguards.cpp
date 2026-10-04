@@ -7,6 +7,7 @@
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
+#include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtCore>
@@ -387,6 +388,75 @@ private slots:
         QVERIFY(prompt.contains(QStringLiteral("# Remote Workspace")));
         QVERIFY(prompt.contains(QStringLiteral("user@host:22")));
         QVERIFY(prompt.contains(QStringLiteral("/remote/ws")));
+    }
+
+    /* Counterexample: AGENTS.md was read with whatever QFile opened, so a
+     * link to a file outside the project put that file in the prompt. */
+    void projectRulesStayInsideTheProject()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("symbolic links need privileges on Windows");
+#else
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QString project = root.filePath(QStringLiteral("project"));
+        QVERIFY(QDir().mkpath(project));
+        QFile secret(root.filePath(QStringLiteral("secret.txt")));
+        QVERIFY(secret.open(QIODevice::WriteOnly));
+        secret.write("Outside sentinel");
+        secret.close();
+        QVERIFY(QFile::link(secret.fileName(), project + QStringLiteral("/AGENTS.md")));
+        QFile local(project + QStringLiteral("/AGENTS.local.md"));
+        QVERIFY(local.open(QIODevice::WriteOnly));
+        local.write("Inside sentinel");
+        local.close();
+
+        QSocAgentConfig cfg;
+        cfg.projectPath          = project;
+        cfg.systemPromptOverride = QStringLiteral("HEAD");
+        cfg.isSubAgent           = true;
+        QSocAgent     agent(this, nullptr, makeRegistry(), cfg);
+        const QString prompt = agent.buildSystemPromptWithMemory();
+        QVERIFY(!prompt.contains(QStringLiteral("Outside sentinel")));
+        QVERIFY(prompt.contains(QStringLiteral("Inside sentinel")));
+        QVERIFY(prompt.contains(QStringLiteral("AGENTS.md were not loaded")));
+        QVERIFY(prompt.contains(QStringLiteral("outside the project")));
+
+        /* A link that stays inside the project is an ordinary file. */
+        QVERIFY(QFile::remove(project + QStringLiteral("/AGENTS.md")));
+        QVERIFY(QFile::link(local.fileName(), project + QStringLiteral("/AGENTS.md")));
+        QCOMPARE(agent.buildSystemPromptWithMemory().count(QStringLiteral("Inside sentinel")), 2);
+#endif
+    }
+
+    /* Counterexample: a local AGENTS.md of any size went into the prompt. */
+    void oversizedOrIrregularProjectRulesAreReported()
+    {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        QFile rules(project.filePath(QStringLiteral("AGENTS.md")));
+        QVERIFY(rules.open(QIODevice::WriteOnly));
+        rules.write(QByteArray(256 * 1024 + 1, 'x'));
+        rules.close();
+        QVERIFY(QDir(project.path()).mkdir(QStringLiteral("AGENTS.local.md")));
+
+        QSocAgentConfig cfg;
+        cfg.projectPath          = project.path();
+        cfg.systemPromptOverride = QStringLiteral("HEAD");
+        cfg.isSubAgent           = true;
+        QSocAgent     agent(this, nullptr, makeRegistry(), cfg);
+        const QString prompt = agent.buildSystemPromptWithMemory();
+        QVERIFY(!prompt.contains(QString(1024, QLatin1Char('x'))));
+        QVERIFY(prompt.contains(
+            QStringLiteral("AGENTS.md were not loaded: it is larger than 256 KiB")));
+        QVERIFY(prompt.contains(
+            QStringLiteral("AGENTS.local.md were not loaded: it is not a regular file")));
+
+        /* At the limit it still loads. */
+        QVERIFY(rules.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        rules.write(QByteArray(256 * 1024, 'y'));
+        rules.close();
+        QVERIFY(agent.buildSystemPromptWithMemory().contains(QString(1024, QLatin1Char('y'))));
     }
 
     /* When config.injectProjectMd is false the prompt assembler

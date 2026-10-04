@@ -1129,7 +1129,7 @@ until the service exits. Querying them makes no model request and does not
 add anything to the conversation.
 
 
-Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, with a 64 KiB limit per file. Missing files add no rules. Unavailable or oversized files add a notice. Remote prompts never substitute local project rules or skill paths.
+Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, under the same rules as local project instructions (see @agent-system-prompt). Remote prompts never substitute local project rules or skill paths. Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
 
 === Definitions
 <agent-subagents-defs>
@@ -1523,7 +1523,10 @@ The system prompt is composed from:
 
 - *Modular sections*: built-in role, decision flow, and tool usage guidance
 - *Project instructions*: `AGENTS.md` and `AGENTS.local.md` in the project
-  directory, injected verbatim
+  directory, injected verbatim. A file loads only when it is a regular file
+  of at most 256 KiB and, if it is a symbolic link, its target is inside the
+  project. Any other file adds a one-line notice with the reason instead of
+  its content. Missing files add nothing.
 - *Memory*: entries from the auto-memory store (see `memory_read` /
   `memory_write`), capped by `agent.memory_max_chars`
 - *Skill listing*: names and descriptions of installed skills so the agent
