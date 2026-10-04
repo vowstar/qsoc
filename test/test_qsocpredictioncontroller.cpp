@@ -91,8 +91,39 @@ public:
     int     requestCount() const { return models_.size(); }
     QString wireModel(int index) const { return models_.at(index); }
     QString body(int index) const { return bodies_.at(index); }
+    bool    hold = false;
+    void    release()
+    {
+        const auto pending = pending_;
+        pending_.clear();
+        for (const auto &entry : pending) {
+            if (entry.first) {
+                respond(entry.first, entry.second);
+            }
+        }
+    }
 
 private:
+    static void respond(QTcpSocket *socket, bool messages)
+    {
+        const json reply
+            = messages
+                  ? json{{"type", "message"}, {"role", "assistant"}, {"content", json::array({{{"type", "text"}, {"text", "run the tests"}}})}, {"stop_reason", "end_turn"}}
+                  : json{
+                        {"choices",
+                         json::array(
+                             {{{"message",
+                                {{"role", "assistant"}, {"content", "run the tests"}}}}})}};
+        const QByteArray body = QByteArray::fromStdString(reply.dump());
+        socket->write(
+            QByteArrayLiteral(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+            + QByteArray::number(body.size()) + QByteArrayLiteral("\r\nConnection: close\r\n\r\n")
+            + body);
+        socket->flush();
+        socket->disconnectFromHost();
+    }
+
     void consume(QTcpSocket *socket)
     {
         QByteArray &buffer = buffers_[socket];
@@ -118,23 +149,18 @@ private:
         bodies_.append(QString::fromStdString(payload.dump()));
         buffers_.remove(socket);
 
-        const json reply = {
-            {"choices",
-             json::array({{{"message", {{"role", "assistant"}, {"content", "run the tests"}}}}})}};
-        const QByteArray body    = QByteArray::fromStdString(reply.dump());
-        QByteArray       headers = QByteArrayLiteral(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ");
-        headers += QByteArray::number(body.size());
-        headers += QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
-        socket->write(headers + body);
-        socket->flush();
-        socket->disconnectFromHost();
+        if (hold) {
+            pending_.append({socket, payload.contains("max_tokens")});
+        } else {
+            respond(socket, payload.contains("max_tokens"));
+        }
     }
 
-    QHash<QTcpSocket *, QByteArray> buffers_;
-    QStringList                     models_;
-    QStringList                     bodies_;
-    QTcpServer                      server_;
+    QList<QPair<QPointer<QTcpSocket>, bool>> pending_;
+    QHash<QTcpSocket *, QByteArray>          buffers_;
+    QStringList                              models_;
+    QStringList                              bodies_;
+    QTcpServer                               server_;
 };
 
 json twoTurns()
@@ -195,6 +221,101 @@ private slots:
         QVERIFY(server.body(0).contains(QStringLiteral("do it")));
         QVERIFY(!server.body(0).contains(QStringLiteral("internal note")));
         QCOMPARE(main.getCurrentModelId(), QStringLiteral("flash-b"));
+    }
+
+    void effortAndEndpointSnapshot_data()
+    {
+        QTest::addColumn<bool>("messagesApi");
+        QTest::addColumn<bool>("reasoning");
+        QTest::newRow("chat-thinking") << false << true;
+        QTest::newRow("messages-thinking") << true << true;
+        QTest::newRow("chat-no-thinking") << false << false;
+        QTest::newRow("messages-no-thinking") << true << false;
+    }
+
+    void effortAndEndpointSnapshot()
+    {
+        QFETCH(bool, messagesApi);
+        QFETCH(bool, reasoning);
+        CaptureServer first;
+        CaptureServer second;
+        QVERIFY(first.listen());
+        QVERIFY(second.listen());
+        QLLMService    main;
+        LLMModelConfig model;
+        model.id        = QStringLiteral("selected");
+        model.model     = QStringLiteral("served-first");
+        model.url       = first.url();
+        model.timeout   = 3000;
+        model.api       = messagesApi ? LLMApi::AnthropicMessages : LLMApi::OpenAIChat;
+        model.reasoning = reasoning;
+        model.effort    = QStringLiteral("low");
+        main.setModel(model);
+        QSocPredictionController predictor(nullptr, &main);
+        QSignalSpy               ghosts(&predictor, &QSocPredictionController::ghostReady);
+        json                     messages = twoTurns();
+        predictor.requestPrediction(messages, QStringLiteral("high"));
+        QTRY_COMPARE(ghosts.count(), 1);
+        const json high = json::parse(first.body(0).toStdString());
+        if (messagesApi) {
+            QCOMPARE(high.contains("thinking"), reasoning);
+            if (reasoning) {
+                QCOMPARE(high["output_config"]["effort"].get<std::string>(), std::string("high"));
+            }
+        } else {
+            QCOMPARE(high.contains("reasoning_effort"), reasoning);
+            if (reasoning) {
+                QCOMPARE(high["reasoning_effort"].get<std::string>(), std::string("high"));
+                QCOMPARE(high["reasoning"]["effort"].get<std::string>(), std::string("high"));
+            }
+        }
+        QCOMPARE(high.contains("temperature"), !reasoning);
+
+        model.model = QStringLiteral("served-second");
+        model.url   = second.url();
+        main.setModel(model);
+        QVERIFY(!predictor.hasGhost());
+        messages.push_back({{"role", "assistant"}, {"content", "next turn"}});
+        predictor.requestPrediction(messages, QString());
+        QTRY_COMPARE(ghosts.count(), 2);
+        QCOMPARE(first.requestCount(), 1);
+        QCOMPARE(second.requestCount(), 1);
+        const json off = json::parse(second.body(0).toStdString());
+        QCOMPARE(off["model"].get<std::string>(), std::string("served-second"));
+        QVERIFY(!off.contains("reasoning_effort"));
+        QVERIFY(!off.contains("reasoning"));
+        QVERIFY(!off.contains("thinking"));
+        QVERIFY(!off.contains("output_config"));
+        QVERIFY(off.contains("temperature"));
+    }
+
+    void settingChangeDropsLateResponse()
+    {
+        CaptureServer server;
+        QVERIFY(server.listen());
+        server.hold = true;
+        QLLMService    main;
+        LLMModelConfig model;
+        model.model   = QStringLiteral("before");
+        model.url     = server.url();
+        model.timeout = 3000;
+        main.setModel(model);
+        QSocPredictionController predictor(nullptr, &main);
+        QSignalSpy               ghosts(&predictor, &QSocPredictionController::ghostReady);
+        predictor.requestPrediction(twoTurns(), QStringLiteral("high"));
+        QTRY_COMPARE(server.requestCount(), 1);
+        model.model = QStringLiteral("after");
+        main.setModel(model);
+        server.release();
+        server.hold   = false;
+        json messages = twoTurns();
+        messages.push_back({{"role", "assistant"}, {"content", "another turn"}});
+        predictor.requestPrediction(messages);
+        QTRY_COMPARE(server.requestCount(), 2);
+        QTRY_COMPARE(ghosts.count(), 1);
+        QCOMPARE(server.wireModel(1), QStringLiteral("after"));
+        QTest::qWait(50);
+        QCOMPARE(ghosts.count(), 1);
     }
 
     /* The filter is the core correctness surface: it decides whether a raw

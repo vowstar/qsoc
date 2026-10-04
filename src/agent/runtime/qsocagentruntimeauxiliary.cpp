@@ -36,11 +36,26 @@ void QSocAgentRuntime::wireAuxiliaryServices()
         event.text = text;
         emit eventRaised(event);
     });
+    connect(prediction, &QSocPredictionController::ghostCleared, this, [this] {
+        QSocAgentRuntimeEvent event;
+        event.kind = QSocAgentRuntimeEvent::Kind::InputPrediction;
+        emit eventRaised(event);
+    });
+    connect(
+        this,
+        &QSocAgentRuntime::eventRaised,
+        prediction,
+        [prediction](const QSocAgentRuntimeEvent &event) {
+            if (event.kind == QSocAgentRuntimeEvent::Kind::EffortChanged) {
+                prediction->cancel();
+            }
+        });
     connect(d->agent, &QSocAgent::runError, prediction, [prediction] { prediction->markError(); });
     connect(d->agent, &QSocAgent::runComplete, prediction, [this, prediction] {
         QTimer::singleShot(0, prediction, [this, prediction] {
             if (!isRunning())
-                prediction->requestPrediction(d->agent->getMessages());
+                prediction
+                    ->requestPrediction(d->agent->getMessages(), d->agent->getConfig().effortLevel);
         });
     });
     connect(this, &QSocAgentRuntime::sessionChanged, prediction, [prediction] {

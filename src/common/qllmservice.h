@@ -288,8 +288,9 @@ public slots:
         const std::function<void(LLMResponse &)> &callback,
         const QString                            &systemPrompt
         = "You are a helpful assistant that provides accurate and informative responses.",
-        double temperature = 0.2,
-        bool   jsonMode    = false);
+        double         temperature     = 0.2,
+        bool           jsonMode        = false,
+        const QString &reasoningEffort = QString());
 
     /* Utility methods */
 
@@ -438,7 +439,8 @@ private:
         const QString        &systemPrompt,
         double                temperature,
         bool                  jsonMode,
-        const LLMModelConfig &endpoint);
+        const LLMModelConfig &endpoint,
+        const QString        &reasoningEffort = QString());
 
     /**
      * @brief Parse the API response

@@ -39,6 +39,11 @@ QSocPredictionController::QSocPredictionController(QObject *parent, const QLLMSe
     if (mainLlm != nullptr) {
         llm           = mainLlm->clone(this);
         this->mainLlm = mainLlm;
+        connect(
+            mainLlm,
+            &QLLMService::modelConfigurationChanged,
+            this,
+            &QSocPredictionController::cancel);
     }
 }
 
@@ -102,10 +107,10 @@ QString QSocPredictionController::buildTranscript(const json &messages)
     return lines.join(QLatin1Char('\n'));
 }
 
-void QSocPredictionController::requestPrediction(const json &messages)
+void QSocPredictionController::requestPrediction(const json &messages, const QString &effort)
 {
     /* Suppression guards: bail before issuing any network request. */
-    if (!enabled || llm == nullptr || inFlight) {
+    if (!enabled || llm == nullptr || mainLlm.isNull() || !mainLlm->hasEndpoint() || inFlight) {
         return;
     }
     if (lastTurnError) {
@@ -128,11 +133,7 @@ void QSocPredictionController::requestPrediction(const json &messages)
         return;
     }
 
-    /* The clone was taken at startup; follow the model the user has
-     * since selected on the main service. */
-    if (!mainLlm.isNull() && llm->getCurrentModelId() != mainLlm->getCurrentModelId()) {
-        llm->setCurrentModel(mainLlm->getCurrentModelId());
-    }
+    llm->setModel(mainLlm->getCurrentModelConfig());
 
     /* Cancellation token: a callback whose token no longer matches is dropped. */
     const quint64 token = ++generation;
@@ -166,7 +167,8 @@ void QSocPredictionController::requestPrediction(const json &messages)
         },
         kPredictionSystemPrompt,
         /*temperature=*/0.3,
-        /*jsonMode=*/false);
+        /*jsonMode=*/false,
+        effort);
 }
 
 void QSocPredictionController::cancel()

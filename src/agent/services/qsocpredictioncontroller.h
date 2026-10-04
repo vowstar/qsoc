@@ -51,7 +51,7 @@ public:
      *          deduplicated by assistant-message count.
      * @param messages OpenAI-format conversation from QSocAgent::getMessages().
      */
-    void requestPrediction(const json &messages);
+    void requestPrediction(const json &messages, const QString &effort = QString());
 
     /**
      * @brief Invalidate any in-flight request and clear the current ghost.

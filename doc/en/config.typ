@@ -516,7 +516,8 @@ These settings can also be overridden by command-line options (see @agent-comman
     [Max cumulative tokens for restored skills (default: 25000)],
     [agent.system_prompt], [Custom system prompt override],
     [agent.predict_input],
-    [Predict next input as ghost text: true/false (default: true)],
+    [Predict next input as ghost text using the selected model and effort:
+     true/false (default: true). Suggestions run only after you submit them],
     [agent.status_line],
     [Shell command (or map with `command` and `timeout_ms`) whose stdout
      becomes an extra status row; see @agent-status-line. Read from the

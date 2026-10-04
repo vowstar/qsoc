@@ -478,7 +478,8 @@ void QLLMService::sendRequestAsync(
     const std::function<void(LLMResponse &)> &callback,
     const QString                            &systemPrompt,
     double                                    temperature,
-    bool                                      jsonMode)
+    bool                                      jsonMode,
+    const QString                            &reasoningEffort)
 {
     if (!hasEndpoint()) {
         LLMResponse response;
@@ -493,7 +494,8 @@ void QLLMService::sendRequestAsync(
     const LLMModelConfig endpoint = *active;
 
     QNetworkRequest request = prepareRequest(endpoint);
-    json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint);
+    json            payload
+        = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint, reasoningEffort);
 
     if (networkManager.isNull()) {
         LLMResponse response;
@@ -825,9 +827,11 @@ json QLLMService::buildRequestPayload(
     const QString        &systemPrompt,
     double                temperature,
     bool                  jsonMode,
-    const LLMModelConfig &endpoint)
+    const LLMModelConfig &endpoint,
+    const QString        &reasoningEffort)
 {
-    const QString &model = endpoint.model;
+    const QString &model  = endpoint.model;
+    const QString  effort = endpoint.reasoning ? reasoningEffort : QString();
     /* Build messages array (OpenAI Chat Completions format) */
     json messages = json::array();
 
@@ -849,6 +853,7 @@ json QLLMService::buildRequestPayload(
         QLLMAnthropic::RequestOptions options;
         options.temperature = temperature;
         options.jsonMode    = jsonMode;
+        options.effort      = effort;
         return QLLMAnthropic::buildRequest(messages, json::array(), endpoint, options);
     }
 
@@ -867,6 +872,7 @@ json QLLMService::buildRequestPayload(
     if (jsonMode) {
         payload["response_format"] = {{"type", "json_object"}};
     }
+    applyReasoningEffort(payload, effort);
     applyTemplateKwargs(payload, endpoint);
 
     return payload;
