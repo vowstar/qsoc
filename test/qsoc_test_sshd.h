@@ -271,6 +271,34 @@ public:
     /** @brief Config pointing at the fixture's own port. */
     QSocSshHostConfig hostConfig() const { return hostConfig(static_cast<quint16>(m_port)); }
 
+    /** @brief Write @p home/.ssh/config so @p alias reaches the fixture. */
+    bool writeClientSshConfig(const QString &home, const QString &alias) const
+    {
+        const QString dir = home + QStringLiteral("/.ssh");
+        if (!QDir().mkpath(dir)) {
+            return false;
+        }
+        QFile config(dir + QStringLiteral("/config"));
+        if (!config.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return false;
+        }
+        config.write(QStringLiteral(
+                         "Host %1\n"
+                         "  HostName 127.0.0.1\n"
+                         "  Port %2\n"
+                         "  User %3\n"
+                         "  IdentityFile %4\n"
+                         "  IdentitiesOnly yes\n"
+                         "  StrictHostKeyChecking no\n"
+                         "  UserKnownHostsFile /dev/null\n")
+                         .arg(alias)
+                         .arg(m_port)
+                         .arg(m_user, m_keyPath)
+                         .toUtf8());
+        config.close();
+        return config.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+
     /** @brief First existing path among @p candidates, empty when none is. */
     static QString findExe(const QStringList &candidates)
     {

@@ -75,11 +75,15 @@ QString runShellEscape(const QString &command, const QString &directory, std::st
     process.setChildProcessModifier([] { ::setsid(); });
 #endif
     process.setProcessChannelMode(QProcess::MergedChannels);
+    /* Policy: local `!` keeps the platform command shell. */
 #ifdef Q_OS_WIN
-    process.start(QStringLiteral("cmd.exe"), {QStringLiteral("/c"), command});
+    const QString     shell = QStringLiteral("cmd.exe");
+    const QStringList args{QStringLiteral("/c"), command};
 #else
-    process.start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), command});
+    const QString     shell = QStringLiteral("/bin/sh");
+    const QStringList args{QStringLiteral("-c"), command};
 #endif
+    process.start(shell, args);
     if (!process.waitForStarted())
         return process.errorString() + QLatin1Char('\n');
     QEventLoop loop;
@@ -101,7 +105,9 @@ QString runShellEscape(const QString &command, const QString &directory, std::st
     QString result = QString::fromLocal8Bit(process.readAll());
     if (process.exitCode() != 0)
         result += QStringLiteral("(exit code: %1)\n").arg(process.exitCode());
-    return result;
+    if (!result.isEmpty() && !result.endsWith(QLatin1Char('\n')))
+        result += QLatin1Char('\n');
+    return result + QStringLiteral("(shell: %1)\n").arg(shell);
 }
 
 QString runRemoteShellEscape(QSocRemoteConnection *conn, const QString &command)

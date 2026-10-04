@@ -57,6 +57,7 @@ void parseHostList(
         entry.workspace  = qstr(item["workspace"].as<std::string>(""));
         entry.capability = qstr(item["capability"].as<std::string>(""));
         entry.target     = qstr(item["target"].as<std::string>(""));
+        entry.shell      = qstr(item["shell"].as<std::string>("")).trimmed();
         entry.scope      = scope;
         entry.sourcePath = sourcePath;
         if (entry.alias.isEmpty()) {
@@ -92,6 +93,9 @@ YAML::Node toYamlEntry(const QSocHostProfile &profile)
     }
     if (!profile.target.isEmpty()) {
         entry["target"] = stds(profile.target);
+    }
+    if (!profile.shell.isEmpty()) {
+        entry["shell"] = stds(profile.shell);
     }
     return entry;
 }

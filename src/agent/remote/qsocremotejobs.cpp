@@ -376,7 +376,11 @@ QString pidStartProbe(const QString &pidRef)
 }
 
 QString jobLaunchScript(
-    const QString &jobDir, const QString &cwd, const QString &jobId, const QString &command)
+    const QString           &jobDir,
+    const QString           &cwd,
+    const QString           &jobId,
+    const QString           &command,
+    const QSocShellExecutor &shell)
 {
     /* The shell that waits for the payload is the one the link drop would
      * otherwise kill, so it ignores SIGHUP before it spawns anything. It also
@@ -390,7 +394,7 @@ QString jobLaunchScript(
                                 "date +%s > \"$__d\"/start_time\n"
                                 "__boot=$(%5)\n"
                                 "printf \"%s\" \"$__boot\" > \"$__d\"/boot_id\n"
-                                "nohup /bin/bash -lc %3 > \"$__d\"/output.log 2>&1 &\n"
+                                "nohup %7 -c %3 < /dev/null > \"$__d\"/output.log 2>&1 &\n"
                                 "__pid=$!\n"
                                 "printf \"%s\" \"$__pid\" > \"$__d\"/pid\n"
                                 "__start=$(%6)\n"
@@ -406,9 +410,10 @@ QString jobLaunchScript(
                                     shellQuote(command),
                                     shellQuote(jobId),
                                     bootIdentityProbe(),
-                                    pidStartProbe(QStringLiteral("\"$__pid\"")));
-    return QStringLiteral("mkdir %1 || exit 1\nnohup /bin/bash -c %2 &\n")
-        .arg(shellQuote(jobDir), shellQuote(wrapper));
+                                    pidStartProbe(QStringLiteral("\"$__pid\"")),
+                                    shell.invocation(true));
+    return QStringLiteral("mkdir %1 || exit 1\nnohup %3 -c %2 < /dev/null &\n")
+        .arg(shellQuote(jobDir), shellQuote(wrapper), shell.invocation(false));
 }
 
 QString jobStatusScript(const QString &jobDir, const QSocRemoteJobRecord &record)

@@ -148,6 +148,9 @@ struct QSocAgentConfig
     QString     remoteWorkspace;  /* Absolute remote workspace root. */
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
+    QString     remoteOs;    /* Probed `uname -s`, or "Windows"; empty when unknown. */
+    QString     remoteArch;  /* Probed `uname -m`. */
+    QString     remoteShell; /* Executor summary for the remote bash tool. */
 
     struct RemoteProjectRules
     {

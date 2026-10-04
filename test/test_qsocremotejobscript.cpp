@@ -149,6 +149,14 @@ private:
         return true;
     }
 
+    QSocShellExecutor shExecutor() const
+    {
+        QSocShellExecutor shell;
+        shell.kind = QSocShellExecutor::Kind::Sh;
+        shell.path = m_shell;
+        return shell;
+    }
+
     /* Run one generated script and return its stdout verbatim. */
     QString runScript(const QString &script) const
     {
@@ -478,8 +486,8 @@ void Test::aLaunchDoesNotFollowAnExistingJobDirectory()
     QVERIFY(QDir().mkpath(outside));
     QVERIFY(QFile::link(outside, jobDir));
 
-    (void) runScript(
-        jobLaunchScript(jobDir, root, QStringLiteral("opaque-job"), QStringLiteral("true")));
+    (void) runScript(jobLaunchScript(
+        jobDir, root, QStringLiteral("opaque-job"), QStringLiteral("true"), shExecutor()));
 
     for (const QString &name : {
              QStringLiteral("command"),

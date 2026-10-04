@@ -34,6 +34,16 @@ bool isUncertain(const QString &text)
     return QSocTool::classifyResult(text) == QSocTool::ResultStatus::Uncertain;
 }
 
+QSocShellExecutor bashExecutor()
+{
+    QSocShellExecutor shell;
+    shell.kind   = QSocShellExecutor::Kind::Bash;
+    shell.path   = QStringLiteral("/usr/local/bin/bash");
+    shell.launch = QStringLiteral("bash");
+    shell.login  = true;
+    return shell;
+}
+
 class Test : public QObject
 {
     Q_OBJECT
@@ -248,8 +258,13 @@ private slots:
             QStringLiteral("/srv/work/.qsoc-agent/jobs/1-1700000000000"),
             QStringLiteral("/srv/work"),
             QStringLiteral("1-1700000000000"),
-            QStringLiteral("make -j4"));
-        QVERIFY(script.contains(QStringLiteral("nohup /bin/bash -c")));
+            QStringLiteral("make -j4"),
+            bashExecutor());
+        /* The waiting shell and the payload both run under the probed
+         * executor, by name, and only the payload is a login shell. */
+        QVERIFY(script.contains(QStringLiteral("nohup bash -c")));
+        QVERIFY(script.contains(QStringLiteral("nohup bash -l -c")));
+        QVERIFY(!script.contains(QStringLiteral("/bin/bash")));
         const int hupAt  = script.indexOf(QStringLiteral("trap"));
         const int waitAt = script.indexOf(QStringLiteral("wait "));
         const int codeAt = script.indexOf(QStringLiteral("exit_code"));

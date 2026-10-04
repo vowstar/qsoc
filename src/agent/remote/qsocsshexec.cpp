@@ -92,7 +92,64 @@ void QSocSshExec::freeChannel(LIBSSH2_CHANNEL *channel)
     }
 }
 
-QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
+void QSocSshExec::drainOutput(LIBSSH2_CHANNEL *channel, Result &result)
+{
+    char buffer[4096];
+    for (ssize_t n = 0; (n = libssh2_channel_read(channel, buffer, sizeof(buffer))) > 0;) {
+        result.stdoutBytes.append(buffer, static_cast<int>(n));
+    }
+    for (ssize_t n = 0; (n = libssh2_channel_read_stderr(channel, buffer, sizeof(buffer))) > 0;) {
+        result.stderrBytes.append(buffer, static_cast<int>(n));
+    }
+}
+
+bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, Result &result)
+{
+    qsizetype offset = 0;
+    while (offset < input.size()) {
+        if (m_abort.load(std::memory_order_relaxed)) {
+            result.aborted = true;
+            return false;
+        }
+        const ssize_t sent = libssh2_channel_write(
+            channel, input.constData() + offset, static_cast<size_t>(input.size() - offset));
+        if (sent > 0) {
+            offset += sent;
+            continue;
+        }
+        if (sent != LIBSSH2_ERROR_EAGAIN) {
+            m_transportDead  = m_session.notePossibleTransportError(static_cast<int>(sent));
+            result.errorText = m_transportDead ? kTransportDeadText
+                                               : QStringLiteral("Failed to send command input");
+            return false;
+        }
+        drainOutput(channel, result);
+        if (!waitAbandonable()) {
+            result.timedOut = !m_transportDead;
+            return false;
+        }
+    }
+    int rc = 0;
+    while ((rc = libssh2_channel_send_eof(channel)) == LIBSSH2_ERROR_EAGAIN) {
+        if (m_abort.load(std::memory_order_relaxed)) {
+            result.aborted = true;
+            return false;
+        }
+        if (!waitAbandonable()) {
+            result.timedOut = !m_transportDead;
+            return false;
+        }
+    }
+    if (rc != 0) {
+        m_transportDead  = m_session.notePossibleTransportError(rc);
+        result.errorText = m_transportDead ? kTransportDeadText
+                                           : QStringLiteral("Failed to close command input");
+        return false;
+    }
+    return true;
+}
+
+QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs, const QByteArray &input)
 {
     Result result;
     m_abort.store(false, std::memory_order_relaxed);
@@ -161,8 +218,9 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs)
         return result;
     }
 
-    char buffer[4096];
-    while (true) {
+    const bool inputSent = sendInput(channel, input, result);
+    char       buffer[4096];
+    while (inputSent) {
         if (m_abort.load(std::memory_order_relaxed)) {
             result.aborted = true;
             break;

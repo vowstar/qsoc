@@ -5,6 +5,7 @@
 #define QSOCAGENTREMOTE_H
 
 #include "agent/qsocfilehistory.h"
+#include "agent/remote/qsocremotehost.h"
 #include "agent/remote/qsocremotejobs.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsshsession.h"
@@ -25,6 +26,9 @@ class QSocHostCatalog;
 class QSocSshConfigParser;
 
 class QSocRemoteConnection;
+
+/** @brief Copy the probed host description into @p config for the prompt. */
+void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *config);
 
 /** @brief Load bounded project rules once when binding a remote workspace. */
 void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *config);
@@ -225,6 +229,29 @@ public:
      */
     void setDirectoryProbe(std::function<bool(QSocSftpClient *, const QString &)> probe);
 
+    /**
+     * @brief Set the host.yml `shell:` value applied at the next probe.
+     * @details Belongs to the binding, so a reconnect keeps it.
+     * @return False, leaving the old value, when @p preference is invalid.
+     */
+    bool setShellPreference(const QString &preference, QString *errorMessage = nullptr);
+
+    /** @brief The `shell:` value in force, empty for auto. */
+    QString shellPreference() const { return m_shellPreference; }
+
+    /**
+     * @brief What the probe at the last adopt learned about the host.
+     * @details Every adopt, first bind and reconnect alike, probes once.
+     */
+    const QSocRemoteHost &host() const { return m_host; }
+
+    /**
+     * @brief Override how an adopt probes the host.
+     * @details Production installs none and gets @ref probeRemoteHost; a
+     *          test installs one to decide what the host is.
+     */
+    void setHostProbe(std::function<QSocRemoteHost(QSocSshSession *, const QString &)> probe);
+
     /** @brief Whether the last successful adopt kept the working directory. */
     bool lastReconnectKeptCwd() const { return m_lastReconnectKeptCwd; }
 
@@ -370,25 +397,28 @@ private:
     /** @brief Validate configured writable roots against their bound anchors. */
     bool canonicalWritableDirs(QStringList *dirs, QString *errorMessage) const;
 
-    QSocSshSession                                        *m_session = nullptr;
-    QSocSftpClient                                        *m_sftp    = nullptr;
-    QList<QSocSshSession *>                                m_jumps;
-    QSocRemotePathContext                                  m_path;
-    QString                                                m_target;
-    QString                                                m_endpointIdentity;
-    QString                                                m_workspace;
-    QString                                                m_canonicalWorkspace;
-    QString                                                m_workspaceTreeId;
-    QString                                                m_transportLink;
-    QHash<QString, QString>                                m_writableAnchors;
-    Rebuilder                                              m_rebuilder;
-    std::function<bool(QSocSftpClient *, const QString &)> m_directoryProbe;
-    std::function<bool()>                                  m_abortProbe;
-    QSocRemoteJobLedger                                    m_jobs;
-    Generation                                             m_generation           = 0;
-    int                                                    m_lastAttempts         = 0;
-    int                                                    m_reconnectsUsed       = 0;
-    bool                                                   m_lastReconnectKeptCwd = false;
+    QSocSshSession                                                  *m_session = nullptr;
+    QSocSftpClient                                                  *m_sftp    = nullptr;
+    QList<QSocSshSession *>                                          m_jumps;
+    QSocRemotePathContext                                            m_path;
+    QString                                                          m_target;
+    QString                                                          m_endpointIdentity;
+    QString                                                          m_workspace;
+    QString                                                          m_canonicalWorkspace;
+    QString                                                          m_workspaceTreeId;
+    QString                                                          m_transportLink;
+    QHash<QString, QString>                                          m_writableAnchors;
+    Rebuilder                                                        m_rebuilder;
+    std::function<bool(QSocSftpClient *, const QString &)>           m_directoryProbe;
+    std::function<bool()>                                            m_abortProbe;
+    std::function<QSocRemoteHost(QSocSshSession *, const QString &)> m_hostProbe;
+    QSocRemoteHost                                                   m_host;
+    QString                                                          m_shellPreference;
+    QSocRemoteJobLedger                                              m_jobs;
+    Generation                                                       m_generation           = 0;
+    int                                                              m_lastAttempts         = 0;
+    int                                                              m_reconnectsUsed       = 0;
+    bool                                                             m_lastReconnectKeptCwd = false;
 };
 
 /**
@@ -545,6 +575,7 @@ struct ResolvedHostTarget
     QString connectString; /**< Empty when not resolvable. */
     QString workspaceHint; /**< Non-empty when the catalog supplied a workspace. */
     QString capability;    /**< Non-empty when the catalog supplied a capability. */
+    QString shell;         /**< The catalog `shell:` value, empty for auto. */
     bool    fromCatalog   = false;
     bool    fromSshConfig = false;
 };

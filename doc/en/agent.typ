@@ -172,7 +172,12 @@ hostList:
     workspace: /home/alice/sim
     capability: |
       RTL simulation
+    shell: sh                   # optional: auto (default), bash or sh
 ```
+
+`shell:` chooses the interpreter for commands on that host (see
+@agent-remote-where). Any value other than `auto`, `bash` or `sh` makes
+`/ssh <alias>` fail with an error naming the entry.
 
 Two separate concerns share the file:
 
@@ -383,7 +388,9 @@ The following commands are available during an interactive session:
     [`/loop [cron] <prompt>`],
     [Schedule a recurring prompt. Subforms: `/loop list`, `/loop stop <id>`,
      `/loop clear`. See @agent-loop.],
-    [`!<command>`], [Execute a shell command directly],
+    [`!<command>`],
+    [Execute a shell command directly. Locally it runs under `/bin/sh`
+     (`cmd.exe` on Windows); the result names the shell that ran it.],
   )],
   caption: [INTERACTIVE COMMANDS],
   kind: table,
@@ -1377,17 +1384,23 @@ the status line) resolve the interpreter the same way on all platforms:
 
 - Unix: `/bin/bash`, else `bash` on `PATH`, else `/bin/sh`.
 - Windows: the `bash.exe` shipped with Git for Windows, derived from the
-  `git` executable on `PATH`. `bash` found directly on `PATH` is never
-  used there, because `System32\bash.exe` launches WSL instead of a
-  host shell.
+  `git` executable on `PATH`, else found under the standard install
+  folders: `%GIT_INSTALL_ROOT%`, `%ProgramFiles%\Git`,
+  `%ProgramFiles(x86)%\Git`, `%LOCALAPPDATA%\Programs\Git`, and scoop's
+  `apps\git\current`. `bash` found directly on `PATH` is never used
+  there, because `System32\bash.exe` launches WSL instead of a host
+  shell.
 - `QSOC_GIT_BASH_PATH` pins an explicit interpreter on any platform. If
   it is set but invalid, shell execution is disabled rather than
   silently falling back to a different interpreter.
 
 Executables inside the current working directory are rejected during
 discovery, so a checked-out repository cannot substitute its own shell.
-When no interpreter is found, the affected feature fails with a clear
-message and everything else keeps working.
+When no interpreter is found, the agent does not offer `bash`,
+`bash_manage` or `monitor`, the system prompt says shell execution is
+unavailable, and everything else keeps working. The system prompt names
+the shell in use: `bash` with its version, `sh` (POSIX only), or Git Bash
+(MSYS), which takes POSIX paths such as `/c/Users/...`.
 
 == Background Tasks
 <agent-tasks>
@@ -1709,6 +1722,44 @@ Control-plane tools stay on the local machine regardless of mode:
 
 - `query_docs`
 - `web_fetch`, `web_search`
+- SMT (`z3`) and MCP tools
+
+On every connect and reconnect QSoC probes the host once and picks the
+interpreter that runs `bash`, `bash_manage`, `monitor` and `!`:
+
+#figure(
+  align(center)[#table(
+    columns: (0.5fr, 1fr),
+    align: (auto, left),
+    table.header([Host], [Commands run under]),
+    table.hline(),
+    [POSIX with bash], [`bash -l`, found on the host's `PATH`],
+    [POSIX without bash], [`sh -l` (`sh` when `-l` is refused); tool
+      descriptions say only POSIX sh is available],
+    [Windows, or no answer], [Nothing. `bash`, `bash_manage` and `monitor`
+      are not offered; file tools keep working over SFTP],
+  )],
+  caption: [REMOTE SHELL SELECTION],
+  kind: table,
+)
+
+A probe that times out or gets no usable answer leaves the host's shell
+unknown: the connection stays up, file tools keep working, the shell tools
+refuse with the reason, and the next reconnect probes again.
+
+The catalog `shell:` field (@agent-host-catalog) forces `bash` or `sh`;
+when the forced shell is missing, no shell is used. Each command reaches
+the interpreter on standard input, so the remote login shell (csh, fish
+or any other) never parses it, and a command that reads standard input
+sees end of file. The command starts in the working directory and does
+not run if that directory cannot be entered.
+
+The system prompt reports the host's OS, architecture and shell, and
+states that the control-plane tools above run on the local machine.
+
+On a host with no shell, `!<command>` sends the line to the login shell
+unchanged, without changing to the working directory, and the output is
+preceded by a notice saying so.
 
 The following tools are intentionally unavailable in remote mode because
 they depend on local QSoC managers:

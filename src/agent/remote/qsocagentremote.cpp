@@ -30,6 +30,24 @@
 #include <type_traits>
 #include <utility>
 
+void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *config)
+{
+    if (conn == nullptr || config == nullptr) {
+        return;
+    }
+    const QSocRemoteHost &host = conn->host();
+    config->remoteOs           = host.kind == QSocRemoteHost::Kind::Unknown ? QString() : host.os;
+    config->remoteArch         = host.arch;
+    const QString offered      = QStringLiteral("; bash, bash_manage and monitor are not offered");
+    if (host.shellError.isEmpty()) {
+        config->remoteShell = host.shell.summary();
+    } else if (host.kind == QSocRemoteHost::Kind::Unknown) {
+        config->remoteShell = QStringLiteral("unknown (%1)").arg(host.shellError) + offered;
+    } else {
+        config->remoteShell = QStringLiteral("none (%1)").arg(host.shellError) + offered;
+    }
+}
+
 void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *config)
 {
     config->remoteProjectRules = {};
@@ -641,13 +659,16 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));
-    registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
-    registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemotePath(parent, conn, pathCtx));
-    if (monitorSource != nullptr) {
+    if (remoteHostOffersExecTools(conn->host())) {
+        registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
+        registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
+    }
+    if (monitorSource != nullptr && remoteHostOffersExecTools(conn->host())) {
         QSocMonitorTaskSource::RemoteSpec remote;
         remote.targetKey = conn->target();
         remote.workspace = conn->workspace();
+        remote.conn      = conn;
         registry->registerTool(new QSocToolMonitor(parent, monitorSource, remote));
         registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
     }
@@ -669,6 +690,9 @@ QSocToolRegistry *buildAgentRemoteRegistry(
 namespace {
 
 constexpr int kReconnectProbeMs = 3000;
+
+/* Budget for the host probe when the adopt has no deadline of its own. */
+constexpr int kHostProbeMs = 10000;
 
 } // namespace
 
@@ -777,9 +801,35 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
         m_writableAnchors.clear();
         m_writableAnchors.insert(m_path.root(), m_canonicalWorkspace);
     }
+    const qint64 left = deadline == nullptr ? -1 : deadline->remainingTime();
+    const int probeMs = left < 0
+                            ? kHostProbeMs
+                            : static_cast<int>(qMin<qint64>(qMax<qint64>(1, left), kHostProbeMs));
+    m_host            = m_hostProbe ? m_hostProbe(m_session, m_shellPreference)
+                                    : probeRemoteHost(m_session, m_shellPreference, probeMs);
     ++m_generation;
     m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
     return true;
+}
+
+bool QSocRemoteConnection::setShellPreference(const QString &preference, QString *errorMessage)
+{
+    const QString trimmed = preference.trimmed();
+    const QString why     = validateRemoteShellPreference(trimmed);
+    if (!why.isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = why;
+        }
+        return false;
+    }
+    m_shellPreference = trimmed;
+    return true;
+}
+
+void QSocRemoteConnection::setHostProbe(
+    std::function<QSocRemoteHost(QSocSshSession *, const QString &)> probe)
+{
+    m_hostProbe = std::move(probe);
 }
 
 void QSocRemoteConnection::closeTransport()
@@ -812,6 +862,7 @@ void QSocRemoteConnection::teardown()
     m_workspaceTreeId.clear();
     m_transportLink.clear();
     m_writableAnchors.clear();
+    m_host                 = QSocRemoteHost{};
     m_lastReconnectKeptCwd = false;
 }
 
@@ -1412,6 +1463,7 @@ bool resolveHostTarget(
                 if (entry != nullptr) {
                     out->workspaceHint = entry->workspace;
                     out->capability    = entry->capability;
+                    out->shell         = entry->shell;
                     out->fromCatalog   = true;
                 }
             }
@@ -1425,6 +1477,7 @@ bool resolveHostTarget(
             out->fromCatalog   = true;
             out->workspaceHint = entry->workspace;
             out->capability    = entry->capability;
+            out->shell         = entry->shell;
             if (!entry->target.isEmpty()) {
                 out->connectString = entry->target;
                 return true;

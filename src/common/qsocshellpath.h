@@ -4,6 +4,7 @@
 #ifndef QSOCSHELLPATH_H
 #define QSOCSHELLPATH_H
 
+#include <QHash>
 #include <QString>
 #include <QStringList>
 
@@ -14,7 +15,8 @@
  *          live in one place:
  *          - Unix: `/bin/bash`, else `bash` on PATH, else `/bin/sh`.
  *          - Windows: `QSOC_GIT_BASH_PATH` env override, else `bash.exe`
- *            derived from the `git` executable on PATH. `bash` found
+ *            derived from the `git` executable on PATH, else the standard
+ *            Git for Windows install roots. `bash` found
  *            directly on PATH is never used: `System32\bash.exe` is the
  *            WSL launcher, not a POSIX shell for the host.
  *          An empty result means no usable shell; callers must fail the
@@ -43,6 +45,18 @@ QString bashPath();
  * @return Candidate paths in probe order (may not exist).
  */
 QStringList gitBashCandidates(const QString &gitExePath);
+
+/**
+ * @brief bash.exe candidates under the standard Git for Windows install roots.
+ * @details Pure: reads only @p env. Roots, in order: `GIT_INSTALL_ROOT`,
+ *          `ProgramFiles\Git`, `ProgramFiles(x86)\Git`,
+ *          `LOCALAPPDATA\Programs\Git`, and scoop's `apps\git\current`
+ *          under `SCOOP` or `USERPROFILE\scoop`. Each yields
+ *          `bin/bash.exe` and `usr/bin/bash.exe`.
+ * @param env Environment variable values by name.
+ * @return Candidate paths with forward slashes (may not exist).
+ */
+QStringList gitBashInstallCandidates(const QHash<QString, QString> &env);
 
 /**
  * @brief Convert a Windows path to POSIX (MSYS/git-bash) form.

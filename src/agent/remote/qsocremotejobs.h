@@ -4,6 +4,8 @@
 #ifndef QSOCREMOTEJOBS_H
 #define QSOCREMOTEJOBS_H
 
+#include "common/qsocshellexecutor.h"
+
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -296,9 +298,15 @@ QString pidStartProbe(const QString &pidRef);
  * @param cwd Working directory for the payload.
  * @param jobId Id echoed back on stdout.
  * @param command Payload command, unescaped.
+ * @param shell Executor for the waiting shell and, with `-l` when it takes
+ *        one, for the payload.
  */
 QString jobLaunchScript(
-    const QString &jobDir, const QString &cwd, const QString &jobId, const QString &command);
+    const QString           &jobDir,
+    const QString           &cwd,
+    const QString           &jobId,
+    const QString           &command,
+    const QSocShellExecutor &shell);
 
 /**
  * @brief Script reporting one job's state.

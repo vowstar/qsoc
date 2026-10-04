@@ -14,6 +14,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsochooktypes.h"
 #include "common/qsocmessageauthority.h"
+#include "common/qsocshellexecutor.h"
 #include "common/qsoctokenizer.h"
 
 #include <algorithm>
@@ -3011,6 +3012,42 @@ void QSocAgent::appendRuntimeSystemSections(QString &prompt) const
             "messages. This ends that agent permanently.\n");
 }
 
+QString QSocAgent::environmentShellLines(const QSocAgentConfig &config)
+{
+    const auto orUnknown = [](const QString &value) {
+        return value.isEmpty() ? QStringLiteral("unknown") : value;
+    };
+    const QString local = QSysInfo::productType() + QStringLiteral(" ")
+                          + QSysInfo::productVersion();
+    if (config.remoteMode) {
+        return QStringLiteral(
+                   "- OS: %1\n- Arch: %2\n- Shell: %3\n- Executor: remote\n"
+                   "- This machine (%4, %5) runs web_fetch, web_search, query_docs, SMT/z3 "
+                   "and MCP tools; they do not reach the remote host\n")
+            .arg(
+                orUnknown(config.remoteOs),
+                orUnknown(config.remoteArch),
+                orUnknown(config.remoteShell),
+                local,
+                QSysInfo::currentCpuArchitecture());
+    }
+    const QSocShellExecutor shell     = localShellExecutor();
+    QString                 shellText = shell.summary();
+    if (!shell.available()) {
+#ifdef Q_OS_WIN
+        shellText = QStringLiteral(
+            "unavailable (install Git for Windows or set QSOC_GIT_BASH_PATH); bash, "
+            "bash_manage and monitor are not offered");
+#else
+        shellText = QStringLiteral(
+            "unavailable (no /bin/bash, bash on PATH or /bin/sh); bash, bash_manage and "
+            "monitor are not offered");
+#endif
+    }
+    return QStringLiteral("- OS: %1\n- Arch: %2\n- Shell: %3\n- Executor: local\n")
+        .arg(local, QSysInfo::currentCpuArchitecture(), shellText);
+}
+
 void QSocAgent::appendDynamicSystemSections(QString &prompt) const
 {
     /* Section 8: Environment */
@@ -3019,10 +3056,7 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         if (!agentConfig.modelId.isEmpty()) {
             envSection += QStringLiteral("- Model: ") + agentConfig.modelId + QStringLiteral("\n");
         }
-        envSection += QStringLiteral("- Platform: ") + QSysInfo::productType() + QStringLiteral(" ")
-                      + QSysInfo::productVersion() + QStringLiteral("\n");
-        envSection += QStringLiteral("- Architecture: ") + QSysInfo::currentCpuArchitecture()
-                      + QStringLiteral("\n");
+        envSection += environmentShellLines(agentConfig);
         if (!agentConfig.remoteMode && !agentConfig.projectPath.isEmpty()) {
             envSection += QStringLiteral("- Working directory: ") + agentConfig.projectPath
                           + QStringLiteral("\n");
@@ -3056,35 +3090,47 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                 remoteSection += QStringLiteral("  - ") + dir + QStringLiteral("\n");
             }
         }
-        remoteSection += QStringLiteral(
-            "\n"
-            "All workspace tools operate on the remote host:\n"
-            "- read_file, list_files, write_file, edit_file use remote SFTP.\n"
-            "- bash and bash_manage execute on the remote host.\n"
-            "- path_context reports and changes remote paths.\n"
-            "- todo tools read/write the remote workspace .qsoc/todos.md.\n"
-            "- project memory, project skills, and project instructions are loaded from the\n"
-            "  remote project when available.\n"
-            "\n"
-            "The following QSoC business tools are intentionally unavailable in remote mode:\n"
-            "project_*, module_*, bus_*, generate_*, lsp.\n"
-            "If a task requires these tools, explain that remote mode currently supports file,\n"
-            "shell, docs, web, project memory, project skills, skill creation in remote\n"
-            "project scope, and todo operations only.\n"
-            "\n"
-            "Use absolute remote paths in tool calls. Do not refer to local paths unless the\n"
-            "user explicitly asks for local-machine information.\n"
-            "\n"
-            "Local QSoC configuration remains authoritative for LLM endpoints, API keys,\n"
-            "proxy, remote profiles, SSH policy, tool policy, model selection, and safety\n"
-            "rules. Remote .qsoc.yml is project metadata only and must not override local\n"
-            "control configuration.\n"
-            "\n"
-            "# SSH Secret Handling\n"
-            "Never request, display, summarize, copy, or store SSH private key contents.\n"
-            "QSoC authenticates through ssh-agent or by passing an IdentityFile path to\n"
-            "libssh2; the private key file content is never exposed to tools, prompts, logs,\n"
-            "or memory.\n");
+        const bool remoteExec = toolRegistry && toolRegistry->getTool(QStringLiteral("bash"));
+        remoteSection
+            += QStringLiteral(
+                   "\n"
+                   "All workspace tools operate on the remote host:\n"
+                   "- read_file, list_files, write_file, edit_file use remote SFTP.\n")
+               + (remoteExec
+                      ? QStringLiteral("- bash and bash_manage execute on the remote host.\n")
+                      : QStringLiteral(
+                            "- bash, bash_manage and monitor are unavailable: "
+                            "the remote host has no POSIX shell.\n"))
+               + QStringLiteral(
+                   "- path_context reports and changes remote paths.\n"
+                   "- todo tools read/write the remote workspace .qsoc/todos.md.\n"
+                   "- project memory, project skills, and project instructions are loaded from "
+                   "the\n"
+                   "  remote project when available.\n"
+                   "\n"
+                   "The following QSoC business tools are intentionally unavailable in remote "
+                   "mode:\n"
+                   "project_*, module_*, bus_*, generate_*, lsp.\n"
+                   "If a task requires these tools, explain that remote mode currently supports "
+                   "file,\n"
+                   "shell, docs, web, project memory, project skills, skill creation in remote\n"
+                   "project scope, and todo operations only.\n"
+                   "\n"
+                   "Use absolute remote paths in tool calls. Do not refer to local paths unless "
+                   "the\n"
+                   "user explicitly asks for local-machine information.\n"
+                   "\n"
+                   "Local QSoC configuration remains authoritative for LLM endpoints, API keys,\n"
+                   "proxy, remote profiles, SSH policy, tool policy, model selection, and safety\n"
+                   "rules. Remote .qsoc.yml is project metadata only and must not override local\n"
+                   "control configuration.\n"
+                   "\n"
+                   "# SSH Secret Handling\n"
+                   "Never request, display, summarize, copy, or store SSH private key contents.\n"
+                   "QSoC authenticates through ssh-agent or by passing an IdentityFile path to\n"
+                   "libssh2; the private key file content is never exposed to tools, prompts, "
+                   "logs,\n"
+                   "or memory.\n");
         prompt += remoteSection;
     }
 

@@ -566,6 +566,13 @@ public:
     QString buildSystemPromptWithMemory(bool includeRuntime = true) const;
 
     /**
+     * @brief The Environment lines naming the OS, arch and shell bash runs in.
+     * @details Remote mode reports the probed host; local mode reports the
+     *          shell @ref localShellExecutor resolves.
+     */
+    static QString environmentShellLines(const QSocAgentConfig &config);
+
+    /**
      * @brief The system prompt the next request sends.
      * @details The main agent keeps the prompt it built at a rebuild point
      *          (a model, workspace, project or session change, /clear, or a

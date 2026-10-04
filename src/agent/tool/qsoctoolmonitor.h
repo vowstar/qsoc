@@ -16,6 +16,8 @@
 
 #include <optional>
 
+class QSocRemoteConnection;
+
 class QSocMonitorTaskSource final : public QSocTaskSource
 {
     Q_OBJECT
@@ -23,9 +25,21 @@ class QSocMonitorTaskSource final : public QSocTaskSource
 public:
     struct RemoteSpec
     {
-        QString targetKey; /* user@alias:port */
-        QString workspace;
+        QString               targetKey; /* user@alias:port */
+        QString               workspace;
+        QSocRemoteConnection *conn = nullptr; /* Supplies the host's executor. */
     };
+
+    /** @brief The ssh invocation for a remote monitor, or why there is none. */
+    struct RemoteLaunch
+    {
+        QStringList args;  /* ssh arguments; the last is the fixed exec line. */
+        QByteArray  input; /* Script written to ssh's stdin. */
+        QString     error;
+    };
+
+    /** @brief Build the ssh invocation that runs @p command for @p remote. */
+    static RemoteLaunch remoteLaunch(const RemoteSpec &remote, const QString &command);
 
     struct StartResult
     {
@@ -97,7 +111,8 @@ private:
         const QString     &program,
         const QStringList &args,
         const QString     &workingDir,
-        bool               remote);
+        bool               remote,
+        const QByteArray  &input = {});
     void drainProcess(Run *run, bool stderrStream);
     void acceptBytes(Run *run, QByteArray &buffer, const QByteArray &data, const QString &stream);
     void acceptLine(Run *run, const QString &stream, const QString &line);
@@ -109,7 +124,6 @@ private:
     void cleanupProcess(Run *run);
 
     static QString     readTail(const QString &path, int maxBytes);
-    static QString     shellQuote(const QString &value);
     static QStringList sshArgsForTarget(const QString &targetKey);
 
     QSocTaskEventQueue   *eventQueue_     = nullptr;

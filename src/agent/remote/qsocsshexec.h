@@ -58,8 +58,10 @@ public:
      *                  yields `timedOut` with `exitCode == -1`. <=0 disables
      *                  the timeout, leaving a dead transport as the only way
      *                  out.
+     * @param input Bytes written to the command's stdin before EOF is sent.
+     *              Empty sends EOF at once.
      */
-    Result run(const QString &command, int timeoutMs = 30000);
+    Result run(const QString &command, int timeoutMs = 30000, const QByteArray &input = {});
 
     /** @brief Flag a running `run()` call to stop reading and close channel. */
     void requestAbort();
@@ -97,6 +99,18 @@ private:
      *          ordinary timeout would cost the caller its workspace.
      */
     void freeChannel(LIBSSH2_CHANNEL *channel);
+
+    /**
+     * @brief Write @p input to the channel's stdin, then send EOF.
+     * @details Output that arrives while the window is full is read into
+     *          @p result, so a command that writes before it reads cannot
+     *          stall the send.
+     * @return False when the call was aborted, ran out of time or failed.
+     */
+    bool sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, Result &result);
+
+    /** @brief Read whatever output is already buffered, without waiting. */
+    void drainOutput(LIBSSH2_CHANNEL *channel, Result &result);
 
     QSocSshSession   &m_session;
     std::atomic<bool> m_abort{false};

@@ -78,6 +78,7 @@
 #include "common/qsocpaths.h"
 #include "common/qsocprojectmanager.h"
 #include "common/qsocproxy.h"
+#include "common/qsocshellexecutor.h"
 #include "common/qsoctaskregistry.h"
 
 #include <QCoreApplication>
@@ -808,13 +809,19 @@ void QSocAgentRuntime::registerTools()
     shellBashTool->setWorkingDirectoryProvider([this] { return workingDirectory(); });
     auto *bashManageTool = new QSocToolBashManage(this);
     bashManageTool->setOwner(shellBashTool);
-    d->toolRegistry->registerTool(shellBashTool);
-    d->toolRegistry->registerTool(bashManageTool);
+    /* With no local shell every call would fail, so the tools are not offered. */
+    const bool localShell = localShellExecutor().available();
+    if (localShell) {
+        d->toolRegistry->registerTool(shellBashTool);
+        d->toolRegistry->registerTool(bashManageTool);
+    }
 
     d->taskEventQueue    = new QSocTaskEventQueue(this);
     d->monitorTaskSource = new QSocMonitorTaskSource(this, d->taskEventQueue, d->projectManager);
-    d->toolRegistry->registerTool(new QSocToolMonitor(this, d->monitorTaskSource));
-    d->toolRegistry->registerTool(new QSocToolMonitorStop(this, d->monitorTaskSource));
+    if (localShell) {
+        d->toolRegistry->registerTool(new QSocToolMonitor(this, d->monitorTaskSource));
+        d->toolRegistry->registerTool(new QSocToolMonitorStop(this, d->monitorTaskSource));
+    }
 
     d->toolRegistry->registerTool(new QSocToolResources(this, [this] {
         return isRemote() ? QStringList{} : QStringList{workingDirectory()};

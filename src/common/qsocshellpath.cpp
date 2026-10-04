@@ -68,6 +68,21 @@ QString resolveBashPath()
             }
         }
     }
+    QHash<QString, QString> env;
+    for (const char *name :
+         {"GIT_INSTALL_ROOT",
+          "ProgramFiles",
+          "ProgramFiles(x86)",
+          "LOCALAPPDATA",
+          "SCOOP",
+          "USERPROFILE"}) {
+        env.insert(QString::fromLatin1(name), qEnvironmentVariable(name));
+    }
+    for (const QString &candidate : gitBashInstallCandidates(env)) {
+        if (isUsableCandidate(candidate)) {
+            return QFileInfo(candidate).absoluteFilePath();
+        }
+    }
     QSocConsole::warn() << "No git-bash found. Install Git for Windows or set"
                         << "QSOC_GIT_BASH_PATH to your bash.exe.";
     return {};
@@ -127,6 +142,34 @@ QStringList gitBashCandidates(const QString &gitExePath)
         }
         dir = dir.left(slash);
         out << dir + QStringLiteral("/bin/bash.exe") << dir + QStringLiteral("/usr/bin/bash.exe");
+    }
+    out.removeDuplicates();
+    return out;
+}
+
+QStringList gitBashInstallCandidates(const QHash<QString, QString> &env)
+{
+    const auto root = [&env](const QString &name, const QString &suffix) {
+        const QString base = env.value(name);
+        return base.isEmpty() ? QString()
+                              : QString(base).replace(QLatin1Char('\\'), QLatin1Char('/')) + suffix;
+    };
+    const QString     scoop = env.value(QStringLiteral("SCOOP")).isEmpty()
+                                  ? root(QStringLiteral("USERPROFILE"), QStringLiteral("/scoop"))
+                                  : root(QStringLiteral("SCOOP"), QString());
+    const QStringList roots{
+        root(QStringLiteral("GIT_INSTALL_ROOT"), QString()),
+        root(QStringLiteral("ProgramFiles"), QStringLiteral("/Git")),
+        root(QStringLiteral("ProgramFiles(x86)"), QStringLiteral("/Git")),
+        root(QStringLiteral("LOCALAPPDATA"), QStringLiteral("/Programs/Git")),
+        scoop.isEmpty() ? QString() : scoop + QStringLiteral("/apps/git/current"),
+    };
+    QStringList out;
+    for (const QString &base : roots) {
+        if (!base.isEmpty()) {
+            out << base + QStringLiteral("/bin/bash.exe")
+                << base + QStringLiteral("/usr/bin/bash.exe");
+        }
     }
     out.removeDuplicates();
     return out;

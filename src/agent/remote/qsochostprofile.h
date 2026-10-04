@@ -23,6 +23,7 @@ struct QSocHostProfile
     QString alias;      /**< Catalog key; matches ssh-config Host alias when available. */
     QString workspace;  /**< Absolute remote path for agent operations. */
     QString capability; /**< Free-form text advertised to the parent LLM. */
+    QString shell;      /**< `auto`, `bash`, `sh` or an absolute path; empty is auto. */
     QString target; /**< Optional [user@]host[:port] fallback when alias is not in ssh-config. */
     QString scope;  /**< "user" or "project" (diagnostic; project wins on conflict). */
     QString sourcePath; /**< Absolute path of the YAML file this entry came from. */

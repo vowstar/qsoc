@@ -127,6 +127,9 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
     }
 
     auto binding = std::make_shared<HostBinding>();
+    if (!binding->conn.setShellPreference(resolved.shell, errorMessage)) {
+        return nullptr;
+    }
     /* No Qt parent for the transport: the connection deletes it, and a second
      * owner in this tool's tree would free it under a binding that outlived
      * the tool. */
@@ -484,6 +487,7 @@ void bindConfigToHost(QSocRemoteConnection *conn, QSocAgentConfig *cfg)
     cfg->remoteWorkspace    = conn->workspace();
     cfg->remoteWorkingDir   = conn->path()->cwd();
     cfg->remoteWritableDirs = conn->path()->writableDirs();
+    applyRemoteHostToConfig(conn, cfg);
     cfg->skillListing.clear();
     loadAgentRemoteProjectRules(conn, cfg);
 }

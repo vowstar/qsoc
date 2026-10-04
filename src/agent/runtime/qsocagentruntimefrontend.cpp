@@ -12,6 +12,7 @@
 #include "agent/qsocmemoryrecall.h"
 #include "agent/qsocsession.h"
 #include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocremotejobs.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
@@ -112,6 +113,9 @@ QString remoteWorkspaceHealth(QSocRemoteConnection *conn, QSocAgent *agent = nul
     }
     if (outcome == QSocRemoteConnection::ReconnectOutcome::Reconnected) {
         if (agent != nullptr) {
+            auto cfg = agent->getConfig();
+            applyRemoteHostToConfig(conn, &cfg);
+            agent->setConfig(cfg);
             /* A continuation, not a user request: a user_prompt_submit hook
              * that blocks would otherwise drop this silently and leave the
              * model working from beliefs nothing has re-checked. */
@@ -202,6 +206,16 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
     if (target.isEmpty()) {
         if (error != nullptr) {
             *error = QStringLiteral("empty SSH target");
+        }
+        return false;
+    }
+    const QSocHostProfile *profile = d->hostCatalog != nullptr ? d->hostCatalog->find(target)
+                                                               : nullptr;
+    QString                shellError;
+    if (!d->remoteConn
+             ->setShellPreference(profile != nullptr ? profile->shell : QString(), &shellError)) {
+        if (error != nullptr) {
+            *error = QStringLiteral("host.yml entry %1: %2").arg(target, shellError);
         }
         return false;
     }
@@ -316,6 +330,7 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
         newCfg.remoteWorkspace    = d->remoteConn->workspace();
         newCfg.remoteWorkingDir   = d->remoteConn->path()->cwd();
         newCfg.remoteWritableDirs = d->remoteConn->path()->writableDirs();
+        applyRemoteHostToConfig(d->remoteConn, &newCfg);
         d->agent->setConfig(newCfg);
     }
     d->remoteConn->setWorkingDirectoryObserver([this](const QString &cwd) {
@@ -385,6 +400,9 @@ void QSocAgentRuntime::disconnectRemote()
         newCfg.remoteWorkspace.clear();
         newCfg.remoteWorkingDir.clear();
         newCfg.remoteWritableDirs.clear();
+        newCfg.remoteOs.clear();
+        newCfg.remoteArch.clear();
+        newCfg.remoteShell.clear();
         d->agent->setConfig(newCfg);
     }
 

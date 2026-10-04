@@ -3,6 +3,7 @@
 
 #include "agent/tool/qsoctoolmonitor.h"
 
+#include "agent/remote/qsocagentremote.h"
 #include "common/qsocshellpath.h"
 
 #include <QDateTime>
@@ -120,13 +121,10 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startRemote(
     const RemoteSpec &remote,
     const QString    &name)
 {
-    QStringList args = sshArgsForTarget(remote.targetKey);
-    if (args.isEmpty()) {
-        return {false, {}, {}, QStringLiteral("invalid remote target")};
+    const RemoteLaunch launch = remoteLaunch(remote, command);
+    if (!launch.error.isEmpty()) {
+        return {false, {}, {}, launch.error};
     }
-    const QString remoteScript = QStringLiteral("cd %1 && /bin/bash -lc %2")
-                                     .arg(shellQuote(remote.workspace), shellQuote(command));
-    args << remoteScript;
     return startProcess(
         command,
         description,
@@ -134,9 +132,32 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startRemote(
         persistent,
         name,
         QStringLiteral("ssh"),
-        args,
+        launch.args,
         QString(),
-        true);
+        true,
+        launch.input);
+}
+
+QSocMonitorTaskSource::RemoteLaunch QSocMonitorTaskSource::remoteLaunch(
+    const RemoteSpec &remote, const QString &command)
+{
+    RemoteLaunch launch;
+    launch.args = sshArgsForTarget(remote.targetKey);
+    if (launch.args.isEmpty()) {
+        launch.error = QStringLiteral("invalid remote target");
+        return launch;
+    }
+    const QSocRemoteExec request
+        = remote.conn == nullptr
+              ? QSocRemoteExec{}
+              : remoteCommandExec(remote.conn->host(), remote.workspace, command);
+    if (!request.isValid()) {
+        launch.error = QStringLiteral("the remote host has no POSIX shell to run a monitor");
+        return launch;
+    }
+    launch.args << request.command;
+    launch.input = request.input;
+    return launch;
 }
 
 QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
@@ -148,7 +169,8 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
     const QString     &program,
     const QStringList &args,
     const QString     &workingDir,
-    bool               remote)
+    bool               remote,
+    const QByteArray  &input)
 {
     auto *tempDir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/qsoc-monitor-XXXXXX"));
     if (!tempDir->isValid()) {
@@ -238,6 +260,10 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
         delete run;
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
         return {false, {}, {}, err};
+    }
+    if (!input.isEmpty()) {
+        process->write(input);
+        process->closeWriteChannel();
     }
 
     if (!persistent && timeoutMs > 0) {
@@ -463,12 +489,6 @@ QString QSocMonitorTaskSource::readTail(const QString &path, int maxBytes)
         file.seek(size - maxBytes);
     }
     return QString::fromUtf8(file.readAll());
-}
-
-QString QSocMonitorTaskSource::shellQuote(const QString &value)
-{
-    return QStringLiteral("'") + QString(value).replace(QLatin1Char('\''), QStringLiteral("'\\''"))
-           + QStringLiteral("'");
 }
 
 QStringList QSocMonitorTaskSource::sshArgsForTarget(const QString &targetKey)
