@@ -434,6 +434,278 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void responseBytesAreBounded_data()
+    {
+        QTest::addColumn<int>("kind");
+        QTest::newRow("prompt") << 0;
+        QTest::newRow("chat") << 1;
+        QTest::newRow("async") << 2;
+        QTest::newRow("stream") << 3;
+        QTest::newRow("messages") << 4;
+    }
+
+    void responseBytesAreBounded()
+    {
+        QFETCH(int, kind);
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        const QString text(4096, QLatin1Char('x'));
+        server.enqueue(
+            kind == 3 ? deltaResponse({{"content", text.toStdString()}}) : jsonResponse(text));
+        QLLMService service;
+        auto        endpoint                     = endpointFor(server);
+        endpoint.responseLimits.maxBytes         = 1024;
+        endpoint.responseLimits.maxEventBytes    = 512;
+        endpoint.responseLimits.maxArgumentBytes = 512;
+        if (kind == 4)
+            endpoint.api = LLMApi::AnthropicMessages;
+        service.setModel(endpoint);
+        QString error;
+        if (kind == 2) {
+            bool done = false;
+            service.sendRequestAsync(QStringLiteral("hello"), [&](const LLMResponse &response) {
+                error = response.errorMessage;
+                done  = true;
+            });
+            QVERIFY(waitUntil([&] { return done; }));
+        } else if (kind == 3) {
+            StreamEvents events;
+            recordStreamEvents(&service, &events);
+            service.sendChatCompletionStream(json::array());
+            QVERIFY(waitUntil([&] { return !events.errors.isEmpty(); }));
+            QCOMPARE(events.errors.size(), 1);
+            QVERIFY(events.completed.isEmpty());
+            error = events.errors.front();
+        } else {
+            error = sendSyncRequest(&service, kind != 0).error;
+        }
+        QVERIFY2(error.contains(QStringLiteral("limit exceeded")), qPrintable(error));
+        QVERIFY(waitForNoReplies(&service));
+        endpoint.api = LLMApi::OpenAIChat;
+        service.setModel(endpoint);
+        server.enqueue(jsonResponse(QStringLiteral("recovered")));
+        QCOMPARE(sendSyncRequest(&service, true).content, QStringLiteral("recovered"));
+    }
+
+    void streamedRecordAndTotalAreSeparate_data()
+    {
+        QTest::addColumn<bool>("unfinishedRecord");
+        QTest::newRow("no-newline") << true;
+        QTest::newRow("many-records") << false;
+    }
+
+    void streamedRecordAndTotalAreSeparate()
+    {
+        QFETCH(bool, unfinishedRecord);
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        QByteArray body;
+        if (unfinishedRecord) {
+            body = QByteArrayLiteral("data: ") + QByteArray(300, 'x');
+        } else {
+            for (int index = 0; index < 80; ++index)
+                body += dataLine({{"choices", json::array({{{"delta", {{"content", "line"}}}}})}});
+        }
+        server.enqueue({QByteArrayLiteral("text/event-stream"), body, 0, true});
+        auto endpoint                    = endpointFor(server);
+        endpoint.responseLimits.maxBytes = 2048;
+        if (!unfinishedRecord)
+            QVERIFY(body.size() > endpoint.responseLimits.maxBytes);
+        endpoint.responseLimits.maxEventBytes    = 256;
+        endpoint.responseLimits.maxArgumentBytes = 256;
+        QLLMService service;
+        service.setModel(endpoint);
+        StreamEvents events;
+        recordStreamEvents(&service, &events);
+        service.sendChatCompletionStream(json::array());
+        QVERIFY(waitUntil([&] { return !events.errors.isEmpty(); }));
+        QCOMPARE(events.errors.size(), 1);
+        QVERIFY(events.completed.isEmpty());
+        QVERIFY(events.errors.front().contains(unfinishedRecord ? "event limit" : "byte"));
+        QVERIFY(waitForNoReplies(&service));
+    }
+
+    void manySmallEventsCanShareOneRead()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        QByteArray body;
+        for (int index = 0; index < 20; ++index)
+            body += dataLine({{"choices", json::array({{{"delta", {{"content", "x"}}}}})}});
+        body += "data: [DONE]\n\n";
+        server.enqueue({QByteArrayLiteral("text/event-stream"), body});
+        auto endpoint                            = endpointFor(server);
+        endpoint.responseLimits.maxBytes         = 4096;
+        endpoint.responseLimits.maxEventBytes    = 128;
+        endpoint.responseLimits.maxArgumentBytes = 128;
+        QLLMService service;
+        service.setModel(endpoint);
+        StreamEvents events;
+        recordStreamEvents(&service, &events);
+        service.sendChatCompletionStream(json::array());
+        QVERIFY(waitUntil([&] { return !events.completed.isEmpty() || !events.errors.isEmpty(); }));
+        QVERIFY(events.errors.isEmpty());
+        QCOMPARE(completionContent(events.completed.front()), QString(20, QLatin1Char('x')));
+    }
+
+    void responseDepthIsBounded_data()
+    {
+        QTest::addColumn<bool>("streaming");
+        QTest::newRow("json") << false;
+        QTest::newRow("stream") << true;
+    }
+
+    void responseDepthIsBounded()
+    {
+        QFETCH(bool, streaming);
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        const QByteArray nested = QByteArray(100, '[') + "0" + QByteArray(100, ']');
+        const QByteArray record = "{\"extra\":" + nested
+                                  + ",\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+        server.enqueue(
+            {streaming ? QByteArrayLiteral("text/event-stream")
+                       : QByteArrayLiteral("application/json"),
+             streaming ? QByteArrayLiteral("data: ") + record + "\n\n" : record});
+        QLLMService service;
+        auto        endpoint                 = endpointFor(server);
+        endpoint.responseLimits.maxJsonDepth = 8;
+        service.setModel(endpoint);
+        if (streaming) {
+            StreamEvents events;
+            recordStreamEvents(&service, &events);
+            service.sendChatCompletionStream(json::array());
+            QVERIFY(waitUntil([&] { return !events.errors.isEmpty(); }));
+            QVERIFY(events.completed.isEmpty());
+            QVERIFY(events.errors.front().contains(QStringLiteral("depth limit")));
+        } else {
+            const auto result = sendSyncRequest(&service, true);
+            QVERIFY2(result.error.contains(QStringLiteral("depth limit")), qPrintable(result.error));
+        }
+    }
+
+    void defaultLimitsAcceptLargeToolBatch()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        json calls = json::array();
+        for (int index = 0; index < 256; ++index) {
+            json call                     = toolCall(index, QStringLiteral("large_tool"));
+            call["function"]["arguments"] = json({{"payload", std::string(4096, 'x')}}).dump();
+            calls.push_back(std::move(call));
+        }
+        server.enqueue(deltaResponse({{"tool_calls", calls}}));
+        QLLMService service;
+        service.setModel(endpointFor(server));
+        StreamEvents events;
+        recordStreamEvents(&service, &events);
+        service.sendChatCompletionStream(json::array());
+        QVERIFY(waitUntil([&] { return !events.completed.isEmpty() || !events.errors.isEmpty(); }));
+        QVERIFY(events.errors.isEmpty());
+        for (auto &call : calls)
+            call.erase("index");
+        QCOMPARE(events.completed.front()["choices"][0]["message"]["tool_calls"], calls);
+    }
+
+    void messagesArgumentsAreBounded()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        QByteArray body = dataLine(
+            {{"type", "message_start"}, {"message", {{"usage", json::object()}}}});
+        body += dataLine(
+            {{"type", "content_block_start"},
+             {"index", 0},
+             {"content_block",
+              {{"type", "tool_use"},
+               {"id", "runtime_call"},
+               {"name", "runtime_tool"},
+               {"input", json::object()}}}});
+        for (int index = 0; index < 8; ++index)
+            body += dataLine(
+                {{"type", "content_block_delta"},
+                 {"index", 0},
+                 {"delta", {{"type", "input_json_delta"}, {"partial_json", "abcdefgh"}}}});
+        server.enqueue({QByteArrayLiteral("text/event-stream"), body, 0, true});
+        QLLMService service;
+        auto        endpoint                     = endpointFor(server);
+        endpoint.api                             = LLMApi::AnthropicMessages;
+        endpoint.responseLimits.maxArgumentBytes = 32;
+        service.setModel(endpoint);
+        StreamEvents events;
+        recordStreamEvents(&service, &events);
+        service.sendChatCompletionStream(json::array());
+        QVERIFY(waitUntil([&] { return !events.errors.isEmpty(); }));
+        QVERIFY(events.completed.isEmpty());
+        QVERIFY2(
+            events.errors.front().contains(QStringLiteral("argument limit")),
+            qPrintable(events.errors.front()));
+    }
+
+    void toolBatchValidationIsAtomic()
+    {
+        QLLMResponseLimits limits;
+        limits.maxToolCalls     = 2;
+        limits.maxArgumentBytes = 32;
+        limits.maxJsonDepth     = 4;
+        json       first        = toolCall(0, QStringLiteral("first"));
+        json       second       = toolCall(1, QStringLiteral("second"));
+        const auto response     = [&](const json &calls) {
+            return assistantResponse({{"content", nullptr}, {"tool_calls", calls}});
+        };
+        json    message = {{"sentinel", true}};
+        QString error;
+        QVERIFY(
+            QLLMService::extractAssistantMessage(
+                response(json::array({first, second})), nullptr, &error, limits));
+        for (const std::string &arguments :
+             {std::string("[]"),
+              std::string("{"),
+              std::string("{\"x\":[[[[]]]]}"),
+              std::string(33, ' ')}) {
+            second["function"]["arguments"] = arguments;
+            QVERIFY(!QLLMService::extractAssistantMessage(
+                response(json::array({first, second})), &message, &error, limits));
+            QCOMPARE(message, json({{"sentinel", true}}));
+        }
+        second["function"]["arguments"] = "{}";
+        QVERIFY(!QLLMService::extractAssistantMessage(
+            response(json::array({first, second, toolCall(2, QStringLiteral("third"))})),
+            &message,
+            &error,
+            limits));
+        QVERIFY(error.contains(QStringLiteral("count limit")));
+        const std::string quoted = json({{"text", std::string(10, '[') + "\\\""}}).dump();
+        QVERIFY(qllmJsonDepthAllowed(quoted, 1));
+        QVERIFY(!qllmJsonDepthAllowed("[[[[[0]]]]]", 4));
+    }
+
+    void argumentLimitAppliesAcrossDeltas()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        json call                     = toolCall(0, QStringLiteral("first"));
+        call["function"]["arguments"] = "{\"x\":\"";
+        QByteArray body               = dataLine(
+            {{"choices", json::array({{{"delta", {{"tool_calls", json::array({call})}}}}})}});
+        for (int index = 0; index < 8; ++index) {
+            const json delta = {{"index", 0}, {"function", {{"arguments", "abcdefgh"}}}};
+            body += dataLine(
+                {{"choices", json::array({{{"delta", {{"tool_calls", json::array({delta})}}}}})}});
+        }
+        server.enqueue({QByteArrayLiteral("text/event-stream"), body, 0, true});
+        auto endpoint                            = endpointFor(server);
+        endpoint.responseLimits.maxArgumentBytes = 32;
+        QLLMService service;
+        service.setModel(endpoint);
+        StreamEvents events;
+        recordStreamEvents(&service, &events);
+        service.sendChatCompletionStream(json::array());
+        QVERIFY(waitUntil([&] { return !events.errors.isEmpty(); }));
+        QVERIFY(events.completed.isEmpty());
+        QVERIFY(events.errors.front().contains(QStringLiteral("argument limit")));
+    }
+
     /* clone() returns a distinct, non-null instance. */
     void testCloneReturnsDistinctPointer()
     {

@@ -162,6 +162,18 @@ public:
         responses_.enqueue({200, QByteArrayLiteral("text/event-stream"), std::move(body)});
     }
 
+    void enqueueRawToolStream(const json &calls)
+    {
+        const json chunk = {
+            {"choices",
+             json::array({{{"delta", {{"tool_calls", calls}}}, {"finish_reason", "tool_calls"}}})}};
+        responses_.enqueue(
+            {200,
+             QByteArrayLiteral("text/event-stream"),
+             QByteArrayLiteral("data: ") + QByteArray::fromStdString(chunk.dump())
+                 + QByteArrayLiteral("\n\ndata: [DONE]\n\n")});
+    }
+
     void enqueueToolCompletion(const QStringList &names)
     {
         enqueueRawToolCompletion(buildToolCalls(names));
@@ -1747,10 +1759,16 @@ private slots:
         QLLMService service;
         configureService(service, server);
         QSocAgent agent(nullptr, &service, &registry, testConfig());
-        QCOMPARE(agent.run("run once"), QStringLiteral("done"));
+        QVERIFY(agent.run("run once").contains(QStringLiteral("argument limit exceeded")));
         QCOMPARE(tool.executeCount(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        for (const auto &message : agent.getMessages()) {
+            QVERIFY(!message.contains("tool_calls"));
+            QVERIFY(message.value("role", std::string()) != "tool");
+        }
+        QCOMPARE(agent.run("continue"), QStringLiteral("done"));
         QCOMPARE(server.requestCount(), 2);
-        QVERIFY(toolBatchHasExactlyOneResultPerCall(agent.getMessages(), 1));
+        QCOMPARE(tool.executeCount(), 0);
     }
     void resultQuotaFailureDoesNotReplay()
     {
@@ -1779,6 +1797,68 @@ private slots:
         QVERIFY(result.contains("Completion: ok"));
         QVERIFY(QSocRequestUsage::estimateText(result) <= 4096);
     }
+    void rejectedBatchHasNoEffects_data()
+    {
+        QTest::addColumn<bool>("streaming");
+        QTest::addColumn<QString>("fault");
+        for (bool streaming : {false, true}) {
+            for (const QString &fault :
+                 {QStringLiteral("count"),
+                  QStringLiteral("arguments"),
+                  QStringLiteral("duplicate"),
+                  QStringLiteral("syntax")}) {
+                const QByteArray row = (fault + (streaming ? "-stream" : "-sync")).toUtf8();
+                QTest::newRow(row.constData()) << streaming << fault;
+            }
+        }
+    }
+
+    void rejectedBatchHasNoEffects()
+    {
+        QFETCH(bool, streaming);
+        QFETCH(QString, fault);
+        MockServer server;
+        QVERIFY(server.listen());
+        SideEffectTool   tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        json calls = buildToolCalls({tool.getName(), tool.getName()});
+        if (fault == "arguments")
+            calls[1]["function"]["arguments"] = json({{"data", std::string(80, 'x')}}).dump();
+        else if (fault == "duplicate")
+            calls[1]["id"] = calls[0]["id"];
+        else if (fault == "syntax")
+            calls[1]["function"]["arguments"] = "{";
+        if (streaming)
+            server.enqueueRawToolStream(calls);
+        else
+            server.enqueueRawToolCompletion(calls);
+        QLLMService service;
+        configureService(service, server);
+        auto endpoint                            = service.getCurrentModelConfig();
+        endpoint.responseLimits.maxToolCalls     = fault == "count" ? 1 : 2;
+        endpoint.responseLimits.maxArgumentBytes = 64;
+        service.setModel(endpoint);
+        auto config       = testConfig();
+        config.maxRetries = 0;
+        QSocAgent agent(nullptr, &service, &registry, config);
+        if (streaming) {
+            agent.runStream(QStringLiteral("run batch"));
+            QTRY_VERIFY_WITH_TIMEOUT(!agent.isRunning(), 5000);
+        } else {
+            agent.run(QStringLiteral("run batch"));
+        }
+        QCOMPARE(tool.executeCount(), 0);
+        QCOMPARE(server.requestCount(), 1);
+        for (const auto &message : agent.getMessages()) {
+            QVERIFY(!message.contains("tool_calls"));
+            QVERIFY(message.value("role", std::string()) != "tool");
+        }
+        server.enqueueCompletion(QStringLiteral("recovered"));
+        QCOMPARE(agent.run(QStringLiteral("continue")), QStringLiteral("recovered"));
+        QCOMPARE(tool.executeCount(), 0);
+    }
+
     void batchReservesEveryCallBeforeEffects()
     {
         MockServer server;

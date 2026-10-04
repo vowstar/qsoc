@@ -160,6 +160,12 @@ Every key under an entry is optional except `url`.
     under that header],
     [`timeout`], [Request timeout in milliseconds],
     [`context`], [Context window in tokens],
+    [`response_limits`],
+    [Local response ceilings: `bytes` (67108864), `event_bytes` (8388608),
+     `argument_bytes` (4194304), `tool_calls` (1024), `json_depth` (64).
+     Values must be positive. Event and argument limits cannot exceed bytes.
+     Maximum bytes is 536870912, calls 65536, and depth 256.
+     An exceeded limit ends the request before tools run],
     [`max_output_tokens`],
     [Reply cap; `0` defers to the backend (`anthropic-messages`: see
      @llm-anthropic)],

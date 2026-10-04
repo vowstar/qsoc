@@ -4,6 +4,7 @@
 #ifndef QLLMSERVICE_H
 #define QLLMSERVICE_H
 
+#include "common/qllmresponselimits.h"
 #include "common/qsocconfig.h"
 
 #include <cstdint>
@@ -53,12 +54,13 @@ struct LLMModelConfig
     QString key; /* API key (empty = no auth) */
     /* Auth header name. Empty or "Authorization" sends "Bearer <key>";
      * any other value sends the bare key under that header name. */
-    QString authHeader;
-    int     timeout         = 120000; /* Request timeout ms */
-    int     contextTokens   = 128000; /* Context window size */
-    int     maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
-    QString effort;                   /* Default effort: empty/off, "low", "medium", "high" */
-    bool    reasoning = true;         /* False: the model cannot reason, effort is never sent */
+    QString            authHeader;
+    int                timeout         = 120000; /* Request timeout ms */
+    int                contextTokens   = 128000; /* Context window size */
+    int                maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
+    QLLMResponseLimits responseLimits;
+    QString            effort;           /* Default effort: empty/off, "low", "medium", "high" */
+    bool               reasoning = true; /* False: the model cannot reason, effort is never sent */
     /* Sent as chat_template_kwargs on openai-chat requests when not empty. */
     nlohmann::json chatTemplateKwargs = nlohmann::json::object();
     /* Prompt token counter: auto, o200k, bytes, or a count endpoint URL */
@@ -309,7 +311,10 @@ public slots:
      * @return True only when the envelope and every tool call are valid.
      */
     static bool extractAssistantMessage(
-        const json &response, json *message, QString *errorMessage = nullptr);
+        const json               &response,
+        json                     *message,
+        QString                  *errorMessage = nullptr,
+        const QLLMResponseLimits &limits       = {});
 
     /**
      * @brief Send chat completion with tool definitions (Agent mode)
@@ -448,7 +453,12 @@ private:
      * @param api Wire API the reply is in
      * @return Parsed LLM response struct
      */
-    static LLMResponse parseResponse(QNetworkReply *reply, LLMApi api);
+    static LLMResponse parseResponse(
+        QNetworkReply            *reply,
+        LLMApi                    api,
+        const QByteArray         &body,
+        const QLLMResponseLimits &limits,
+        const QString            &limitError = {});
 
     /**
      * @brief Send request to a specific endpoint
@@ -468,6 +478,8 @@ private:
 
     bool        claimTerminal(const StreamStatePtr &state, StreamOutcome outcome);
     static bool isStreamActive(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+    static bool readStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state);
+
     static void scheduleStreamConsumption(
         const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static void consumeStream(const QPointer<QLLMService> &owner, const StreamStatePtr &state);

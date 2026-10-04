@@ -21,6 +21,9 @@ struct QLLMService::StreamState
     QPointer<QNetworkReply> reply;
     QPointer<QTimer>        timer;
     QByteArray              buffer;
+    QLLMResponseLimits      limits;
+    qint64                  receivedBytes = 0;
+    QMap<qint64, qint64>    messageArgumentBytes;
     QString                 content;
     QMap<int, json>         toolCalls;
     QString                 reasoning;
@@ -122,11 +125,51 @@ std::optional<QString> tokenizerSetting(const QString &value)
     return std::nullopt;
 }
 
+struct ResponseBuffer
+{
+    QByteArray         data;
+    QString            error;
+    QLLMResponseLimits limits;
+
+    void read(QNetworkReply *reply)
+    {
+        if (!reply || !reply->isOpen() || !error.isEmpty()) {
+            return;
+        }
+        const qint64 available = reply->bytesAvailable();
+        if (available > limits.maxBytes - data.size()) {
+            error = QStringLiteral("LLM response byte limit exceeded");
+            data.clear();
+            reply->abort();
+            return;
+        }
+        data += reply->read(available);
+    }
+};
+
+std::shared_ptr<ResponseBuffer> collectResponse(
+    QNetworkReply *reply, const QLLMResponseLimits &limits)
+{
+    auto buffer    = std::make_shared<ResponseBuffer>();
+    buffer->limits = limits;
+    if (!limits.valid()) {
+        buffer->error = QStringLiteral("Invalid LLM response limits");
+    }
+    if (reply) {
+        reply->setReadBufferSize(64 * 1024);
+        QObject::connect(reply, &QNetworkReply::readyRead, reply, [reply, buffer] {
+            buffer->read(reply);
+        });
+    }
+    return buffer;
+}
+
 struct AsyncRequestState
 {
-    QPointer<QNetworkReply> reply;
-    QPointer<QTimer>        timer;
-    bool                    terminal = false;
+    QPointer<QNetworkReply>         reply;
+    QPointer<QTimer>                timer;
+    bool                            terminal = false;
+    std::shared_ptr<ResponseBuffer> response;
 };
 
 bool isNullableString(const json &object, const char *field)
@@ -250,8 +293,9 @@ QString validateStreamChunk(const json &chunk)
 
 struct NetworkWaitResult
 {
-    QPointer<QNetworkReply> reply;
-    bool                    cancelled = false;
+    QPointer<QNetworkReply>         reply;
+    bool                            cancelled = false;
+    std::shared_ptr<ResponseBuffer> response;
 };
 
 void drainNetworkReply(QNetworkReply *reply)
@@ -279,11 +323,12 @@ void drainNetworkReply(QNetworkReply *reply)
 }
 
 NetworkWaitResult waitForNetworkReply(
-    QNetworkReply *reply, int timeout, std::stop_token stopToken = {})
+    QNetworkReply *reply, int timeout, std::stop_token stopToken, const QLLMResponseLimits &limits)
 {
     if (reply == nullptr) {
         return {};
     }
+    auto                    response = collectResponse(reply, limits);
     QPointer<QNetworkReply> guardedReply(reply);
     QEventLoop              loop;
     auto                   *timer = new QTimer(reply);
@@ -306,7 +351,8 @@ NetworkWaitResult waitForNetworkReply(
     if (!cancelled && !guardedReply.isNull()) {
         timer->stop();
     }
-    return {guardedReply, cancelled};
+    response->read(guardedReply.data());
+    return {guardedReply, cancelled, response};
 }
 
 } // namespace
@@ -411,7 +457,7 @@ void QLLMService::clearModel()
 
 bool QLLMService::hasEndpoint() const
 {
-    return active.has_value();
+    return active.has_value() && active->responseLimits.valid();
 }
 
 QStringList QLLMService::availableModels() const
@@ -459,7 +505,8 @@ LLMResponse QLLMService::sendRequest(
     if (!hasEndpoint()) {
         LLMResponse response;
         response.success      = false;
-        response.errorMessage = "No LLM endpoint configured";
+        response.errorMessage = active ? "Invalid LLM response limits"
+                                       : "No LLM endpoint configured";
         return response;
     }
 
@@ -484,7 +531,8 @@ void QLLMService::sendRequestAsync(
     if (!hasEndpoint()) {
         LLMResponse response;
         response.success      = false;
-        response.errorMessage = "No LLM endpoint configured";
+        response.errorMessage = active ? "Invalid LLM response limits"
+                                       : "No LLM endpoint configured";
         if (callback) {
             callback(response);
         }
@@ -520,9 +568,10 @@ void QLLMService::sendRequestAsync(
     /* Set timeout */
     auto *timer = new QTimer(reply);
     timer->setSingleShot(true);
-    auto state   = std::make_shared<AsyncRequestState>();
-    state->reply = reply;
-    state->timer = timer;
+    auto state      = std::make_shared<AsyncRequestState>();
+    state->reply    = reply;
+    state->timer    = timer;
+    state->response = collectResponse(reply, endpoint.responseLimits);
     const QPointer<QLLMService> owner(this);
 
     const auto complete = [owner, state, callback](LLMResponse response, bool abortReply) {
@@ -562,7 +611,13 @@ void QLLMService::sendRequestAsync(
         if (state->terminal || state->reply.isNull()) {
             return;
         }
-        LLMResponse response = parseResponse(state->reply.data(), api);
+        state->response->read(state->reply.data());
+        LLMResponse response = parseResponse(
+            state->reply.data(),
+            api,
+            state->response->data,
+            state->response->limits,
+            state->response->error);
         complete(response, false);
     };
 
@@ -712,6 +767,34 @@ void QLLMService::loadConfigSettings()
                 }
                 if (node["max_output_tokens"]) {
                     modelCfg.maxOutputTokens = node["max_output_tokens"].as<int>();
+                }
+                if (const auto limits = node["response_limits"]; limits) {
+                    try {
+                        if (!limits.IsMap()) {
+                            modelCfg.responseLimits.maxBytes = 0;
+                        } else {
+                            if (limits["bytes"])
+                                modelCfg.responseLimits.maxBytes = limits["bytes"].as<qint64>();
+                            if (limits["event_bytes"])
+                                modelCfg.responseLimits.maxEventBytes
+                                    = limits["event_bytes"].as<qint64>();
+                            if (limits["argument_bytes"])
+                                modelCfg.responseLimits.maxArgumentBytes
+                                    = limits["argument_bytes"].as<qint64>();
+                            if (limits["tool_calls"])
+                                modelCfg.responseLimits.maxToolCalls
+                                    = limits["tool_calls"].as<int>();
+                            if (limits["json_depth"])
+                                modelCfg.responseLimits.maxJsonDepth
+                                    = limits["json_depth"].as<int>();
+                        }
+                    } catch (const YAML::Exception &) {
+                        modelCfg.responseLimits.maxBytes = 0;
+                    }
+                    if (!modelCfg.responseLimits.valid()) {
+                        QSocConsole::warn() << "Model" << modelCfg.id
+                                            << "has invalid response_limits; requests are disabled";
+                    }
                 }
                 if (node["effort"]) {
                     modelCfg.effort = QString::fromStdString(node["effort"].as<std::string>());
@@ -878,20 +961,33 @@ json QLLMService::buildRequestPayload(
     return payload;
 }
 
-LLMResponse QLLMService::parseResponse(QNetworkReply *reply, LLMApi api)
+LLMResponse QLLMService::parseResponse(
+    QNetworkReply            *reply,
+    LLMApi                    api,
+    const QByteArray         &responseData,
+    const QLLMResponseLimits &limits,
+    const QString            &limitError)
 {
     LLMResponse response;
+    response.success = false;
+    if (!limitError.isEmpty()) {
+        response.errorMessage = limitError;
+        return response;
+    }
+    if (!qllmJsonDepthAllowed(
+            std::string_view(responseData.constData(), responseData.size()), limits.maxJsonDepth)) {
+        response.errorMessage = QStringLiteral("LLM response JSON depth limit exceeded");
+        return response;
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         response.success           = false;
         response.errorMessage      = reply->errorString();
-        const QByteArray errorData = reply->readAll();
+        const QByteArray errorData = responseData.left(64 * 1024);
         QSocConsole::warn() << "LLM API request failed:" << reply->errorString();
         QSocConsole::warn() << "received error response:" << errorData;
         return response;
     }
-
-    const QByteArray responseData = reply->readAll();
 
     try {
         json jsonResponse = json::parse(responseData.toStdString());
@@ -980,6 +1076,10 @@ std::optional<qint64> QLLMService::countTokens(
     std::stop_token       stopToken,
     QString              *error)
 {
+    if (!endpoint.responseLimits.valid()) {
+        *error = QStringLiteral("Invalid LLM response limits");
+        return std::nullopt;
+    }
     const QUrl target(countUrl(endpoint));
     if (!target.isValid() || target.host().isEmpty()) {
         *error = QStringLiteral("no count endpoint");
@@ -1023,7 +1123,8 @@ std::optional<qint64> QLLMService::countTokens(
     const int      timeout = endpoint.timeout > 0 ? qMin(endpoint.timeout, 10000) : 10000;
     QNetworkReply *networkReply
         = networkManager->post(request, QByteArray::fromStdString(body.dump()));
-    const NetworkWaitResult wait  = waitForNetworkReply(networkReply, timeout, stopToken);
+    const NetworkWaitResult wait
+        = waitForNetworkReply(networkReply, timeout, stopToken, endpoint.responseLimits);
     QPointer<QNetworkReply> reply = wait.reply;
     if (wait.cancelled || stopToken.stop_requested()) {
         drainNetworkReply(reply.data());
@@ -1044,8 +1145,17 @@ std::optional<qint64> QLLMService::countTokens(
         }
         return std::nullopt;
     }
+    if (!wait.response->error.isEmpty()) {
+        *error = wait.response->error;
+        return std::nullopt;
+    }
     try {
-        const json response = json::parse(reply->readAll().toStdString());
+        if (!qllmJsonDepthAllowed(
+                wait.response->data.toStdString(), endpoint.responseLimits.maxJsonDepth)) {
+            *error = QStringLiteral("LLM response JSON depth limit exceeded");
+            return std::nullopt;
+        }
+        const json response = json::parse(wait.response->data.toStdString());
         const auto count    = response.find(anthropic ? "input_tokens" : "count");
         if (count != response.end() && count->is_number_integer() && count->get<qint64>() >= 0) {
             return count->get<qint64>();
@@ -1076,7 +1186,9 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     }
     QNetworkReply *networkReply
         = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
-    QPointer<QNetworkReply> reply = waitForNetworkReply(networkReply, endpoint.timeout).reply;
+    const auto wait
+        = waitForNetworkReply(networkReply, endpoint.timeout, {}, endpoint.responseLimits);
+    QPointer<QNetworkReply> reply = wait.reply;
 
     if (owner.isNull()) {
         LLMResponse response;
@@ -1097,7 +1209,12 @@ LLMResponse QLLMService::sendRequestToEndpoint(
         return response;
     }
 
-    LLMResponse response = parseResponse(reply.data(), endpoint.api);
+    LLMResponse response = parseResponse(
+        reply.data(),
+        endpoint.api,
+        wait.response->data,
+        endpoint.responseLimits,
+        wait.response->error);
     reply->deleteLater();
 
     return response;
@@ -1120,7 +1237,9 @@ void QLLMService::sendChatCompletionStream(
     const json &messages, const json &tools, double temperature, const QString &reasoningEffort)
 {
     if (!hasEndpoint()) {
-        emit streamError(QStringLiteral("No LLM endpoint configured"));
+        emit streamError(
+            active ? QStringLiteral("Invalid LLM response limits")
+                   : QStringLiteral("No LLM endpoint configured"));
         return;
     }
     const quint64 generation = ++streamGeneration;
@@ -1187,7 +1306,9 @@ void QLLMService::sendChatCompletionStream(
     auto state           = std::make_shared<StreamState>();
     state->reply         = reply;
     state->reasoningMode = !effort.isEmpty();
-    state->generation    = generation;
+    state->limits        = endpoint.responseLimits;
+    reply->setReadBufferSize(64 * 1024);
+    state->generation = generation;
     if (anthropic) {
         state->anthropic.emplace();
     }
@@ -1227,8 +1348,8 @@ void QLLMService::sendChatCompletionStream(
         if (reply == nullptr) {
             return;
         }
-        active->buffer += reply->readAll();
-        scheduleStreamConsumption(owner, active);
+        if (readStreamReply(owner, active))
+            scheduleStreamConsumption(owner, active);
     });
 
     /* Handle completion */
@@ -1256,13 +1377,15 @@ void QLLMService::sendChatCompletionStream(
             const int httpStatus
                 = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             active->terminalError = QString("[HTTP %1] ").arg(httpStatus) + reply->errorString();
-            active->buffer += reply->readAll();
+            if (!readStreamReply(owner, active))
+                return;
             active->transportFailed = true;
             scheduleStreamConsumption(owner, active);
             return;
         }
 
-        active->buffer += reply->readAll();
+        if (!readStreamReply(owner, active))
+            return;
         if (!active->buffer.isEmpty() && !active->buffer.endsWith('\n')) {
             active->buffer += '\n';
         }
@@ -1301,6 +1424,25 @@ bool QLLMService::isStreamActive(const QPointer<QLLMService> &owner, const Strea
 {
     return !owner.isNull() && state && owner->currentStream == state
            && state->outcome == StreamOutcome::Active && !state->reply.isNull();
+}
+
+bool QLLMService::readStreamReply(const QPointer<QLLMService> &owner, const StreamStatePtr &state)
+{
+    if (!isStreamActive(owner, state))
+        return false;
+    auto        *reply     = state->reply.data();
+    const qint64 available = reply->bytesAvailable();
+    if (!state->limits.valid() || available > state->limits.maxBytes - state->receivedBytes
+        || available > state->limits.maxBytes - state->buffer.size()) {
+        failStream(owner, state, QStringLiteral("LLM response byte or event buffer limit exceeded"));
+        return false;
+    }
+    if (available > 0) {
+        const QByteArray chunk = reply->read(available);
+        state->buffer += chunk;
+        state->receivedBytes += chunk.size();
+    }
+    return true;
 }
 
 void QLLMService::scheduleStreamConsumption(
@@ -1352,7 +1494,7 @@ void QLLMService::consumeStream(const QPointer<QLLMService> &owner, const Stream
     const bool replyFinished = state->replyFinished;
     const json response      = buildStreamResponse(state);
     QString    validationError;
-    if (!extractAssistantMessage(response, nullptr, &validationError)) {
+    if (!extractAssistantMessage(response, nullptr, &validationError, state->limits)) {
         failStream(owner, state, validationError);
         return;
     }
@@ -1466,9 +1608,17 @@ QLLMService::ParseResult QLLMService::processStreamBuffer(
         }
         const qsizetype lineEnd = state->buffer.indexOf('\n');
         if (lineEnd == -1) {
+            if (state->buffer.size() > state->limits.maxEventBytes) {
+                state->terminalError = QStringLiteral("LLM response event limit exceeded");
+                return ParseResult::ProviderError;
+            }
             return state->transportFailed ? ParseResult::TransportError : ParseResult::NeedMore;
         }
 
+        if (lineEnd > state->limits.maxEventBytes) {
+            state->terminalError = QStringLiteral("LLM response event limit exceeded");
+            return ParseResult::ProviderError;
+        }
         QByteArray rawLine = state->buffer.left(lineEnd);
         state->buffer      = state->buffer.mid(lineEnd + 1);
         if (rawLine.endsWith('\r')) {
@@ -1513,6 +1663,11 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
         return ParseResult::Done;
     }
 
+    if (!qllmJsonDepthAllowed(
+            std::string_view(line.constData(), line.size()), state->limits.maxJsonDepth)) {
+        state->terminalError = QStringLiteral("LLM response JSON depth limit exceeded");
+        return ParseResult::ProviderError;
+    }
     json chunk;
     try {
         chunk = json::parse(line.constBegin(), line.constEnd());
@@ -1613,6 +1768,10 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
 
             /* Initialize tool call entry if needed */
             if (!state->toolCalls.contains(index)) {
+                if (state->toolCalls.size() >= state->limits.maxToolCalls) {
+                    state->terminalError = QStringLiteral("LLM tool call count limit exceeded");
+                    return ParseResult::ProviderError;
+                }
                 state->toolCalls[index]
                     = {{"id", ""},
                        {"type", "function"},
@@ -1654,9 +1813,15 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
 
                 if (toolCall["function"].contains("arguments")
                     && toolCall["function"]["arguments"].is_string()) {
-                    std::string args = accFunc["arguments"].get<std::string>();
-                    args += toolCall["function"]["arguments"].get<std::string>();
-                    accFunc["arguments"] = args;
+                    auto       &args = accFunc["arguments"].get_ref<std::string &>();
+                    const auto &fragment
+                        = toolCall["function"]["arguments"].get_ref<const std::string &>();
+                    if (fragment.size()
+                        > static_cast<std::size_t>(state->limits.maxArgumentBytes) - args.size()) {
+                        state->terminalError = QStringLiteral("LLM tool argument limit exceeded");
+                        return ParseResult::ProviderError;
+                    }
+                    args += fragment;
                 }
             }
 
@@ -1687,10 +1852,54 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
 QLLMService::ParseResult QLLMService::parseAnthropicEvent(
     const QPointer<QLLMService> &owner, const StreamStatePtr &state, const json &event)
 {
-    QLLMAnthropic::StreamDecoder::Delta delta;
-    QString                             error;
-    const auto                          status = state->anthropic->feed(event, &delta, &error);
-    state->sawAssistantChoice                  = state->anthropic->started();
+    const auto rejectLimit = [&state]() {
+        state->terminalError = QStringLiteral("LLM tool call or argument limit exceeded");
+        return ParseResult::ProviderError;
+    };
+    if (!event.is_object())
+        return ParseResult::Malformed;
+    try {
+        const std::string type = event.value("type", std::string());
+        if (type == "content_block_start") {
+            const auto &block = event.at("content_block");
+            if (block.value("type", std::string()) == "tool_use") {
+                const qint64 index = event.at("index").get<qint64>();
+                if (state->messageArgumentBytes.contains(index)
+                    || state->messageArgumentBytes.size() >= state->limits.maxToolCalls)
+                    return rejectLimit();
+                const auto input = block.find("input");
+                if (input != block.end()
+                    && input->dump().size()
+                           > static_cast<std::size_t>(state->limits.maxArgumentBytes))
+                    return rejectLimit();
+                state->messageArgumentBytes.insert(index, 0);
+            }
+        } else if (type == "content_block_delta") {
+            const auto &delta = event.at("delta");
+            if (delta.value("type", std::string()) == "input_json_delta") {
+                const qint64 index = event.at("index").get<qint64>();
+                const auto   found = state->messageArgumentBytes.find(index);
+                if (found == state->messageArgumentBytes.end())
+                    return ParseResult::Malformed;
+                const auto &fragment = delta.at("partial_json").get_ref<const std::string &>();
+                if (fragment.size()
+                    > static_cast<std::size_t>(state->limits.maxArgumentBytes - found.value()))
+                    return rejectLimit();
+                found.value() += static_cast<qint64>(fragment.size());
+            }
+        }
+    } catch (const json::exception &) {
+        return ParseResult::Malformed;
+    }
+    QLLMAnthropic::StreamDecoder::Delta  delta;
+    QString                              error;
+    QLLMAnthropic::StreamDecoder::Status status;
+    try {
+        status = state->anthropic->feed(event, &delta, &error);
+    } catch (const json::exception &) {
+        return ParseResult::Malformed;
+    }
+    state->sawAssistantChoice = state->anthropic->started();
     if (status == QLLMAnthropic::StreamDecoder::Status::Error) {
         state->terminalError = error;
         return ParseResult::ProviderError;
@@ -1774,7 +1983,8 @@ json QLLMService::buildStreamResponse(const StreamStatePtr &state)
     return response;
 }
 
-bool QLLMService::extractAssistantMessage(const json &response, json *message, QString *errorMessage)
+bool QLLMService::extractAssistantMessage(
+    const json &response, json *message, QString *errorMessage, const QLLMResponseLimits &limits)
 {
     const auto fail = [errorMessage](const QString &error) {
         if (errorMessage != nullptr) {
@@ -1822,6 +2032,9 @@ bool QLLMService::extractAssistantMessage(const json &response, json *message, Q
         if (!toolCalls->is_array()) {
             return fail(QStringLiteral("Invalid tool call from LLM"));
         }
+        if (toolCalls->size() > static_cast<std::size_t>(limits.maxToolCalls)) {
+            return fail(QStringLiteral("LLM tool call count limit exceeded"));
+        }
         QSet<QString> ids;
         for (const auto &call : *toolCalls) {
             if (!call.is_object()) {
@@ -1846,6 +2059,14 @@ bool QLLMService::extractAssistantMessage(const json &response, json *message, Q
             if (name == function->end() || !name->is_string() || name->get<std::string>().empty()
                 || arguments == function->end() || !arguments->is_string()) {
                 return fail(QStringLiteral("Invalid tool call from LLM"));
+            }
+            const auto &argumentText = arguments->get_ref<const std::string &>();
+            if (argumentText.size() > static_cast<std::size_t>(limits.maxArgumentBytes)
+                || !qllmJsonDepthAllowed(argumentText, limits.maxJsonDepth)) {
+                return fail(QStringLiteral("LLM tool argument limit exceeded"));
+            }
+            if (!json::parse(argumentText, nullptr, false).is_object()) {
+                return fail(QStringLiteral("Invalid tool arguments from LLM"));
             }
             hasToolCalls = true;
         }
@@ -1878,7 +2099,7 @@ json QLLMService::sendChatCompletion(
         return {{"error", "Request cancelled"}};
     }
     if (!hasEndpoint()) {
-        return {{"error", "No LLM endpoint configured"}};
+        return {{"error", active ? "Invalid LLM response limits" : "No LLM endpoint configured"}};
     }
 
     return sendChatCompletionTo(*active, messages, tools, temperature, stopToken, reasoningEffort);
@@ -1892,6 +2113,9 @@ json QLLMService::sendChatCompletionTo(
     std::stop_token stopToken,
     const QString  &reasoningEffort)
 {
+    if (!endpoint.responseLimits.valid())
+        return {{"error", "Invalid LLM response limits"}};
+
     if (stopToken.stop_requested()) {
         return {{"error", "Request cancelled"}};
     }
@@ -1936,7 +2160,8 @@ json QLLMService::sendChatCompletionTo(
     }
     QNetworkReply *networkReply
         = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
-    const NetworkWaitResult wait  = waitForNetworkReply(networkReply, endpoint.timeout, stopToken);
+    const NetworkWaitResult wait
+        = waitForNetworkReply(networkReply, endpoint.timeout, stopToken, endpoint.responseLimits);
     QPointer<QNetworkReply> reply = wait.reply;
 
     if (wait.cancelled || stopToken.stop_requested()) {
@@ -1955,6 +2180,11 @@ json QLLMService::sendChatCompletionTo(
         return {{"error", "Network reply destroyed"}};
     }
 
+    if (!wait.response->error.isEmpty()) {
+        reply->deleteLater();
+        return {{"error", wait.response->error.toStdString()}};
+    }
+
     if (reply->error() != QNetworkReply::NoError) {
         /* Only the wait timer aborts a reply that was not cancelled. */
         const QString error = reply->error() == QNetworkReply::OperationCanceledError
@@ -1968,8 +2198,13 @@ json QLLMService::sendChatCompletionTo(
         return {{"error", error.toStdString()}};
     }
 
-    const QByteArray responseData = reply->readAll();
+    const QByteArray responseData = wait.response->data;
     reply->deleteLater();
+    if (!qllmJsonDepthAllowed(
+            std::string_view(responseData.constData(), responseData.size()),
+            endpoint.responseLimits.maxJsonDepth)) {
+        return {{"error", "LLM response JSON depth limit exceeded"}};
+    }
 
     try {
         json response = json::parse(responseData.toStdString());
@@ -1977,7 +2212,7 @@ json QLLMService::sendChatCompletionTo(
             response = QLLMAnthropic::toChatResponse(response);
         }
         QString validationError;
-        if (!extractAssistantMessage(response, nullptr, &validationError)) {
+        if (!extractAssistantMessage(response, nullptr, &validationError, endpoint.responseLimits)) {
             QSocConsole::warn() << "Endpoint" << endpoint.name
                                 << "returned an invalid chat response";
             if (stopToken.stop_requested()) {

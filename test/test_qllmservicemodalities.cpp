@@ -67,6 +67,49 @@ class TestQLLMServiceModalities : public QObject
     Q_OBJECT
 
 private slots:
+    void responseLimitsDoNotChangeSelectedModel_data()
+    {
+        QTest::addColumn<QByteArray>("limits");
+        QTest::addColumn<bool>("valid");
+        QTest::newRow("valid") << QByteArray(
+            "{bytes: 8388608, event_bytes: 4096, argument_bytes: 1024, tool_calls: 8, json_depth: "
+            "12}") << true;
+        QTest::newRow("zero") << QByteArray("{bytes: 0}") << false;
+        QTest::newRow("negative") << QByteArray("{tool_calls: -1}") << false;
+        QTest::newRow("type") << QByteArray("{bytes: invalid}") << false;
+        QTest::newRow("not-map") << QByteArray("disabled") << false;
+        QTest::newRow("oversized") << QByteArray("{json_depth: 1000000}") << false;
+    }
+
+    void responseLimitsDoNotChangeSelectedModel()
+    {
+        QFETCH(QByteArray, limits);
+        QFETCH(bool, valid);
+        const QByteArray yaml = QByteArrayLiteral(
+                                    "llm:\n  model: selected\n  models:\n"
+                                    "    alternative:\n      url: https://example.invalid/other\n"
+                                    "    selected:\n      url: https://example.invalid/selected\n  "
+                                    "    response_limits: ")
+                                + limits + '\n';
+        ScopedConfig     scope(yaml);
+        QSocConfig       config;
+        QLLMService      service(nullptr, &config);
+        QCOMPARE(service.getCurrentModelId(), QStringLiteral("selected"));
+        QCOMPARE(service.hasEndpoint(), valid);
+        if (valid) {
+            const auto actual = service.getCurrentModelConfig().responseLimits;
+            QCOMPARE(actual.maxBytes, 8388608);
+            QCOMPARE(actual.maxEventBytes, 4096);
+            QCOMPARE(actual.maxArgumentBytes, 1024);
+            QCOMPARE(actual.maxToolCalls, 8);
+            QCOMPARE(actual.maxJsonDepth, 12);
+        } else {
+            const auto response = service.sendRequest(QStringLiteral("hello"));
+            QVERIFY(!response.success);
+            QVERIFY(response.errorMessage.contains(QStringLiteral("Invalid LLM response limits")));
+        }
+    }
+
     /* No modalities block at all -> all defaults: text-only, with the
      * canonical 5000-tok hard cap and 1568-px resize target. */
     void modelWithoutModalitiesBlockIsTextOnly()
