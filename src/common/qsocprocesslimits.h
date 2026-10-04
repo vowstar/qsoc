@@ -13,23 +13,21 @@ class QSocProcessLimits
 {
 public:
     enum class ApplyResult {
-        Success                  = 0,
-        Unsupported              = 30,
-        InvalidPageSize          = 31,
-        ProbeSizeOverflow        = 32,
-        ProbeMapping             = 33,
-        ProbeUnmapping           = 34,
-        TaskInfo                 = 35,
-        AddressSizeOverflow      = 36,
-        ReadAddressLimit         = 37,
-        SetAddressLimit          = 38,
-        SetCoreLimit             = 39,
-        ReadInstalledLimit       = 40,
-        InstalledLimitMismatch   = 41,
-        ProbeUnexpectedlyAllowed = 42,
-        ProbeUnexpectedError     = 43,
-        QueryJob                 = 44,
-        JobLimitMismatch         = 45
+        Success                       = 0,
+        Unsupported                   = 30,
+        TaskInfo                      = 35,
+        AddressSizeOverflow           = 36,
+        ReadAddressLimit              = 37,
+        SetAddressLimit               = 38,
+        SetCoreLimit                  = 39,
+        ReadInstalledLimit            = 40,
+        InstalledLimitMismatch        = 41,
+        QueryJob                      = 44,
+        JobLimitMismatch              = 45,
+        CapabilityUnexpectedlyAllowed = 46,
+        CapabilityUnexpectedError     = 47,
+        ReadCapabilityLimit           = 48,
+        CapabilityLimitChanged        = 49
     };
 
     QSocProcessLimits();

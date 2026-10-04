@@ -14,8 +14,6 @@
 #ifdef Q_OS_MACOS
 #include <cerrno>
 #include <mach/mach.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #endif
 #endif
 
@@ -105,18 +103,22 @@ QSocProcessLimits::ApplyResult QSocProcessLimits::apply(quint64 memoryBytes)
         return ApplyResult::JobLimitMismatch;
     return ApplyResult::Success;
 #elif defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+    rlimit existing{};
+    if (::getrlimit(RLIMIT_AS, &existing) != 0)
+        return ApplyResult::ReadAddressLimit;
 #ifdef Q_OS_MACOS
-    const long pageSize = ::sysconf(_SC_PAGESIZE);
-    if (pageSize <= 0)
-        return ApplyResult::InvalidPageSize;
-    if (memoryBytes > std::numeric_limits<size_t>::max() - static_cast<size_t>(pageSize))
-        return ApplyResult::ProbeSizeOverflow;
-    const size_t probeSize = static_cast<size_t>(memoryBytes) + static_cast<size_t>(pageSize);
-    void        *available = ::mmap(nullptr, probeSize, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (available == MAP_FAILED)
-        return ApplyResult::ProbeMapping;
-    if (::munmap(available, probeSize) != 0)
-        return ApplyResult::ProbeUnmapping;
+    const rlimit rejected{0, existing.rlim_max};
+    const int    probeResult = ::setrlimit(RLIMIT_AS, &rejected);
+    const int    probeError  = errno;
+    if (probeResult == 0)
+        return ApplyResult::CapabilityUnexpectedlyAllowed;
+    if (probeResult != -1 || probeError != EINVAL)
+        return ApplyResult::CapabilityUnexpectedError;
+    rlimit unchanged{};
+    if (::getrlimit(RLIMIT_AS, &unchanged) != 0)
+        return ApplyResult::ReadCapabilityLimit;
+    if (unchanged.rlim_cur != existing.rlim_cur || unchanged.rlim_max != existing.rlim_max)
+        return ApplyResult::CapabilityLimitChanged;
     mach_task_basic_info_data_t info{};
     mach_msg_type_number_t      count = MACH_TASK_BASIC_INFO_COUNT;
     if (::task_info(
@@ -127,9 +129,6 @@ QSocProcessLimits::ApplyResult QSocProcessLimits::apply(quint64 memoryBytes)
         return ApplyResult::AddressSizeOverflow;
     memoryBytes += info.virtual_size;
 #endif
-    rlimit existing{};
-    if (::getrlimit(RLIMIT_AS, &existing) != 0)
-        return ApplyResult::ReadAddressLimit;
     const auto   maximum = static_cast<rlim_t>(qMin<quint64>(memoryBytes, existing.rlim_max));
     const rlimit memory{maximum, maximum};
     const rlimit core{0, 0};
@@ -140,18 +139,9 @@ QSocProcessLimits::ApplyResult QSocProcessLimits::apply(quint64 memoryBytes)
     rlimit installed{};
     if (::getrlimit(RLIMIT_AS, &installed) != 0)
         return ApplyResult::ReadInstalledLimit;
-    if (installed.rlim_cur != maximum)
+    if (installed.rlim_cur != maximum || installed.rlim_max != maximum)
         return ApplyResult::InstalledLimitMismatch;
-#ifdef Q_OS_MACOS
-    void *probe = ::mmap(nullptr, probeSize, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (probe != MAP_FAILED) {
-        ::munmap(probe, probeSize);
-        return ApplyResult::ProbeUnexpectedlyAllowed;
-    }
-    return errno == ENOMEM ? ApplyResult::Success : ApplyResult::ProbeUnexpectedError;
-#else
     return ApplyResult::Success;
-#endif
 #else
     Q_UNUSED(memoryBytes)
     return ApplyResult::Unsupported;

@@ -9,6 +9,7 @@
 #include "smt/qsocsmtservice.h"
 
 #include <future>
+#include <limits>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QJsonArray>
@@ -103,6 +104,43 @@ private slots:
             QVERIFY2(reason.contains("exit code: "), details.constData());
         QVERIFY(QSocSmtService::isValidResponse(result));
     }
+
+#ifdef Q_OS_MACOS
+    void finiteInheritedAddressLimit()
+    {
+        const auto previous = qgetenv("QSOC_TEST_SMT_STARTUP");
+        const auto restore  = qScopeGuard([previous] {
+            if (previous.isNull())
+                qunsetenv("QSOC_TEST_SMT_STARTUP");
+            else
+                qputenv("QSOC_TEST_SMT_STARTUP", previous);
+        });
+        qputenv("QSOC_TEST_SMT_STARTUP", "finite-cap");
+        const auto result  = probe("probe-inherited-limit", 5000);
+        const auto details = QJsonDocument(result).toJson(QJsonDocument::Compact);
+        QVERIFY2(result.value("execution").toString() == "completed", details.constData());
+        QVERIFY2(result.value("solver_status").toString() == "sat", details.constData());
+        QVERIFY(QSocSmtService::isValidResponse(result));
+        const quint64     initial  = result.value("probe_initial_virtual").toString().toULongLong();
+        const quint64     original = result.value("probe_original_hard").toString().toULongLong();
+        const quint64     hard     = result.value("probe_inherited_hard").toString().toULongLong();
+        const quint64     soft     = result.value("probe_installed_soft").toString().toULongLong();
+        const quint64     installed = result.value("probe_installed_hard").toString().toULongLong();
+        constexpr quint64 budget    = QSocSmtService::memoryLimitMiB * 1024ULL * 1024ULL;
+        QVERIFY2(initial >= 2, details.constData());
+        QVERIFY2(initial <= (std::numeric_limits<quint64>::max() - budget) / 2, details.constData());
+        const quint64 target = initial + budget;
+        QVERIFY2(hard > target, details.constData());
+        QVERIFY2(hard < 2 * initial + budget, details.constData());
+        QVERIFY2(hard <= original, details.constData());
+        QVERIFY2(soft > 0, details.constData());
+        QCOMPARE(soft, installed);
+        QVERIFY2(installed < hard, details.constData());
+        const auto exhausted = probe("probe-memory", 5000);
+        const auto failure   = QJsonDocument(exhausted).toJson(QJsonDocument::Compact);
+        QVERIFY2(exhausted.value("execution").toString() == "resource_limit", failure.constData());
+    }
+#endif
 
     void repeatedWorkerStartup()
     {
