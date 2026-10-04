@@ -175,6 +175,9 @@ struct QSocAgentRuntime::Private
     bool                    awaySummaryShown   = false;
     bool                    awaySummaryPending = false;
 
+    /* The prompt's skill listing for the workspace bound now. */
+    QString skillListing() const;
+
     /* Stamp the run context (model, effort, dirs) onto a run record. */
     void applyRunContext(QSocAgentRuntime *runtime, QSocSession::RunRecord &record);
 

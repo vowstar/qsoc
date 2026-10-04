@@ -1129,9 +1129,11 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             emitOutput("Could not read skill.\n");
             return true;
         }
-        bool    consumed = false;
-        QString prompt   = QSocToolSkillFind::substitutePlaceholders(
-            content, rest, workingDirectory(), d->projectManager->getProjectPath(), &consumed);
+        const QString project  = isRemote() ? d->remoteConn->path()->root()
+                                            : d->projectManager->getProjectPath();
+        bool          consumed = false;
+        QString       prompt   = QSocToolSkillFind::substitutePlaceholders(
+            content, rest, workingDirectory(), project, &consumed);
         if (!rest.isEmpty() && !consumed)
             prompt += "\n\nArguments passed: " + rest;
         noteInvokedSkill(skill.name);

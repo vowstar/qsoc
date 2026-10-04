@@ -300,8 +300,8 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
 
     /* Build the remote registry and swap the agent onto it. */
     if (d->remoteRegistry == nullptr) {
-        d->remoteRegistry
-            = buildAgentRemoteRegistry(this, d->remoteConn, d->socConfig, d->monitorTaskSource);
+        d->remoteRegistry = buildAgentRemoteRegistry(
+            this, d->remoteConn, d->socConfig, d->monitorTaskSource, d->llmService);
         /* Re-register the spawn tool + companions so the parent LLM still
          * sees them after the swap. */
         for (const QString &name :
@@ -331,6 +331,7 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
         newCfg.remoteWorkingDir   = d->remoteConn->path()->cwd();
         newCfg.remoteWritableDirs = d->remoteConn->path()->writableDirs();
         applyRemoteHostToConfig(d->remoteConn, &newCfg);
+        newCfg.skillListing = d->skillListing();
         d->agent->setConfig(newCfg);
     }
     d->remoteConn->setWorkingDirectoryObserver([this](const QString &cwd) {
@@ -403,6 +404,7 @@ void QSocAgentRuntime::disconnectRemote()
         newCfg.remoteOs.clear();
         newCfg.remoteArch.clear();
         newCfg.remoteShell.clear();
+        newCfg.skillListing = d->skillListing();
         d->agent->setConfig(newCfg);
     }
 
@@ -560,6 +562,7 @@ bool QSocAgentRuntime::switchProject(const QString &directory, QString *error)
     {
         QSocAgentConfig cfg = d->agent->getConfig();
         cfg.projectPath     = d->projectManager->getProjectPath();
+        cfg.skillListing    = d->skillListing();
         d->agent->setConfig(cfg);
     }
     if (d->pathContext) {

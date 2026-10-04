@@ -7,6 +7,8 @@
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
+#include <cstdint>
+
 /**
  * @brief Tool to discover, search, and read user-defined skills (SKILL.md)
  * @details Skills are markdown prompt templates resolved across four layers
@@ -49,10 +51,15 @@ public:
      * to the user. Each entry's path is set; name is empty when broken. */
     QList<SkillInfo> scanAllSkillFiles() const;
 
+    /* Who can load a listed skill: the model through skill_find, or only the
+     * user as a /name command when skill_find is not in the tool set. */
+    enum class ListingAudience : std::uint8_t { Model, UserOnly };
+
     /* Build the system-prompt listing block. Each description is truncated
      * to keep the prefix small and stable so the prompt cache can hit even
      * when one skill's description grows by a few words. */
-    static QString formatPromptListing(const QList<SkillInfo> &skills);
+    static QString formatPromptListing(
+        const QList<SkillInfo> &skills, ListingAudience audience = ListingAudience::Model);
 
     /* Replace ${ARGS}, ${CWD} and ${PROJECT} placeholders in a skill body.
      * Returns the substituted text and sets argsConsumed to true if the

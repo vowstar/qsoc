@@ -6,6 +6,7 @@
 
 #include "agent/qsoctool.h"
 
+class QLLMService;
 class QSocRemoteConnection;
 class QSocSftpClient;
 class QSocSshSession;
@@ -18,16 +19,23 @@ QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &com
 
 /**
  * @brief Remote read_file. Same schema and name as the local tool.
- * @details Reads a remote file via SFTP. Relative paths resolve against the
- *          remote working directory in @ref QSocRemotePathContext.
+ * @details Streams a remote file via SFTP. Relative paths resolve against the
+ *          remote working directory in @ref QSocRemotePathContext. Image files
+ *          take the local tool's attachment path; text is paged by line and
+ *          each read buffers at most @ref kReadBytesLimit bytes.
  */
 class QSocToolRemoteFileRead : public QSocTool
 {
     Q_OBJECT
 
 public:
+    static constexpr qsizetype kReadBytesLimit = 16 * 1024 * 1024;
+
     QSocToolRemoteFileRead(
-        QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx);
+        QObject               *parent,
+        QSocRemoteConnection  *conn,
+        QSocRemotePathContext *pathCtx,
+        QLLMService           *llm = nullptr);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -38,6 +46,7 @@ public:
 private:
     QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
+    QLLMService           *m_llm     = nullptr;
 };
 
 /** @brief Remote write_file over SFTP (atomic temp+rename). */

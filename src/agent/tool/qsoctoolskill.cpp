@@ -236,8 +236,10 @@ QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkills() const
     return result;
 }
 
-QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
+QString QSocToolSkillFind::formatPromptListing(
+    const QList<SkillInfo> &skills, ListingAudience audience)
 {
+    const bool userOnly = audience == ListingAudience::UserOnly;
     if (skills.isEmpty()) {
         return {};
     }
@@ -248,7 +250,7 @@ QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
 
     QString body;
     for (const auto &skill : skills) {
-        if (skill.disableModelInvocation) {
+        if (skill.disableModelInvocation || (userOnly && !skill.userInvocable)) {
             continue;
         }
         QString desc = skill.description;
@@ -264,6 +266,13 @@ QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
     }
     if (body.isEmpty()) {
         return {};
+    }
+    if (userOnly) {
+        return QStringLiteral(
+                   "The following skills are installed on this machine, not in the remote "
+                   "workspace. skill_find is not available here; the user can invoke them "
+                   "as /<name> slash commands.\n\n")
+               + body;
     }
     return QStringLiteral(
                "The following skills are installed. Use skill_find(action:\"read\", "

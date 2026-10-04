@@ -20,6 +20,7 @@
 #include <QFile>
 #include <QHash>
 #include <QHostAddress>
+#include <QProcess>
 #include <QQueue>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -222,6 +223,7 @@ private slots:
     void aDispatchedChildIsToldTheWorkspaceItsToolsReach();
     void forkLoadsRemoteRulesAtTheBindingBoundary();
     void aDispatchedChildIsNotStoppedByTheParentHostHealth();
+    void worktreeIsolationIsRefusedOnRemoteWorkspaces();
 
 private:
     bool prepare();
@@ -566,6 +568,93 @@ void Test::aDispatchedChildIsNotStoppedByTheParentHostHealth()
     QCOMPARE(QString::fromStdString(response.value("status", std::string())), QStringLiteral("ok"));
     QCOMPARE(result, QStringLiteral("delegated work done"));
     QCOMPARE(llm.requestCount(), 2);
+}
+
+/* Count of the worktrees git knows for @p repo, or -1 when git fails. */
+int worktreeCount(const QString &repo)
+{
+    QProcess git;
+    git.setWorkingDirectory(repo);
+    git.start(QStringLiteral("git"), {QStringLiteral("worktree"), QStringLiteral("list")});
+    if (!git.waitForFinished(15000) || git.exitCode() != 0) {
+        return -1;
+    }
+    return static_cast<int>(git.readAllStandardOutput().count('\n'));
+}
+
+bool initRepo(const QString &repo)
+{
+    const QList<QStringList> steps
+        = {{QStringLiteral("init"), QStringLiteral("-q")},
+           {QStringLiteral("-c"),
+            QStringLiteral("user.name=qsoc-test"),
+            QStringLiteral("-c"),
+            QStringLiteral("user.email=qsoc-test@example.invalid"),
+            QStringLiteral("commit"),
+            QStringLiteral("-q"),
+            QStringLiteral("--allow-empty"),
+            QStringLiteral("-m"),
+            QStringLiteral("init")}};
+    for (const QStringList &args : steps) {
+        QProcess git;
+        git.setWorkingDirectory(repo);
+        git.start(QStringLiteral("git"), args);
+        if (!git.waitForFinished(15000) || git.exitCode() != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Counterexample: a remote child asked for worktree isolation got a git
+ * worktree of the local project, which none of its remote tools ever read. */
+void Test::worktreeIsolationIsRefusedOnRemoteWorkspaces()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    if (QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("git"));
+    }
+    const QString repo = m_dir.path() + QStringLiteral("/repo");
+    QVERIFY(QDir().mkpath(repo));
+    QVERIFY(initRepo(repo));
+    QCOMPARE(worktreeCount(repo), 1);
+
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueFinal(QStringLiteral("ran without isolation"));
+    llm.enqueueFinal(QStringLiteral("ran without isolation"));
+
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    definitions.registerBuiltins();
+    QSocSubAgentTaskSource tasks;
+    QSocToolRegistry       registry;
+    QSocHostCatalog        catalog;
+    QVERIFY(registerHostB(&catalog));
+    auto config        = parentOnItsOwnHost();
+    config.projectPath = repo;
+    QSocAgent     parent(nullptr, &service, &registry, config);
+    QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+    registry.registerTool(&tool);
+
+    auto onParentHost         = spawnArgs();
+    onParentHost["isolation"] = "worktree";
+    onParentHost.erase("host");
+    auto onDispatchHost         = spawnArgs();
+    onDispatchHost["isolation"] = "worktree";
+    for (const json &args : {onParentHost, onDispatchHost}) {
+        const json response = json::parse(tool.execute(args).toStdString());
+        QCOMPARE(response.value("status", std::string()), std::string("error"));
+        QCOMPARE(
+            response.value("error", std::string()),
+            std::string("isolation=worktree is not supported on remote workspaces"));
+    }
+    QCOMPARE(llm.requestCount(), 0);
+    QCOMPARE(worktreeCount(repo), 1);
 }
 
 } // namespace

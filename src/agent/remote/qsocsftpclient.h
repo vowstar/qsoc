@@ -85,6 +85,17 @@ public:
     QByteArray readFile(const QString &path, qint64 maxBytes = 0, QString *errorMessage = nullptr);
 
     /**
+     * @brief Stream a remote file from its first byte.
+     * @param sink Receives each chunk in order; returning false ends the read.
+     * @return False on an open or transport failure, true at end of file or
+     *         when @p sink stopped the read.
+     */
+    bool readStream(
+        const QString                                 &path,
+        const std::function<bool(const QByteArray &)> &sink,
+        QString                                       *errorMessage = nullptr);
+
+    /**
      * @brief Replace a remote file's content without ever unlinking it.
      * @details Writes a temp file, renames any existing target aside, then
      *          renames the temp into place and drops the saved copy. The

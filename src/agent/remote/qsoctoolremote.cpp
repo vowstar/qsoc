@@ -10,12 +10,16 @@
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
+#include "common/qllmservice.h"
+#include "common/qsocimageattach.h"
 
 #include <QDateTime>
 #include <QString>
 #include <QStringList>
 
 #include <cstdint>
+#include <optional>
+#include <utility>
 
 namespace {
 
@@ -65,6 +69,135 @@ ResolvedPath remoteResolve(QSocRemotePathContext *ctx, QSocRemoteConnection *con
     }
     return {{}, QStringLiteral("Error: %1").arg(err)};
 }
+
+/**
+ * @brief One streamed read_file: sniffs the leading bytes, then keeps either
+ *        the image body or the requested line window, never the whole file.
+ */
+class RemoteFileReader
+{
+public:
+    RemoteFileReader(int offset, int maxLines, qsizetype limit)
+        : m_offset(offset)
+        , m_maxLines(maxLines)
+        , m_limit(limit)
+    {}
+
+    /* SFTP sink: false ends the transfer. */
+    bool feed(const QByteArray &chunk)
+    {
+        if (m_sniffed) {
+            return m_mime.isEmpty() ? pageText(chunk) : keepImage(chunk);
+        }
+        m_head += chunk;
+        return m_head.size() < kMagicBytes || sniff();
+    }
+
+    /* End of file: decide a short file and close its last line. */
+    void finish()
+    {
+        if (!m_sniffed) {
+            sniff();
+        }
+        if (m_mime.isEmpty() && !m_stopped && !m_pending.isEmpty()) {
+            m_pending += '\n';
+            m_closedLastLine = true;
+            takeLine(m_pending);
+        }
+    }
+
+    const QString    &mime() const { return m_mime; }
+    const QByteArray &body() const { return m_body; }
+    bool              overLimit() const { return m_overLimit; }
+    bool              moreLines() const { return m_moreLines; }
+    int               nextOffset() const { return m_offset + m_emitted; }
+
+    /* The whole file when this read saw all of it from line 0, else null. */
+    std::optional<QByteArray> wholeFile() const
+    {
+        if (m_offset != 0 || m_stopped) {
+            return std::nullopt;
+        }
+        return m_closedLastLine ? m_body.chopped(1) : m_body;
+    }
+
+private:
+    static constexpr qsizetype kMagicBytes = 16;
+
+    bool sniff()
+    {
+        m_sniffed = true;
+        m_mime    = QSocImageAttach::detectMimeByMagic(m_head);
+        return feed(std::exchange(m_head, {}));
+    }
+
+    bool keepImage(const QByteArray &chunk)
+    {
+        m_body += chunk;
+        return m_body.size() <= m_limit || stop(&m_overLimit);
+    }
+
+    bool pageText(const QByteArray &chunk)
+    {
+        m_pending += chunk;
+        qsizetype start = 0;
+        for (qsizetype nl = m_pending.indexOf('\n'); nl >= 0; nl = m_pending.indexOf('\n', start)) {
+            if (!takeLine(m_pending.mid(start, nl + 1 - start))) {
+                return false;
+            }
+            start = nl + 1;
+        }
+        m_pending.remove(0, start);
+        if (m_lineNum < m_offset) {
+            m_pending.clear();
+            return true;
+        }
+        if (!m_pending.isEmpty() && m_emitted >= m_maxLines) {
+            return stop(&m_moreLines);
+        }
+        return m_body.size() + m_pending.size() <= m_limit || stop(&m_overLimit);
+    }
+
+    bool takeLine(const QByteArray &line)
+    {
+        if (m_lineNum < m_offset) {
+            ++m_lineNum;
+            return true;
+        }
+        if (m_emitted >= m_maxLines) {
+            return stop(&m_moreLines);
+        }
+        if (m_body.size() + line.size() > m_limit) {
+            return stop(&m_overLimit);
+        }
+        m_body += line;
+        ++m_emitted;
+        ++m_lineNum;
+        return true;
+    }
+
+    bool stop(bool *reason)
+    {
+        *reason   = true;
+        m_stopped = true;
+        return false;
+    }
+
+    int        m_offset   = 0;
+    int        m_maxLines = 0;
+    qsizetype  m_limit    = 0;
+    QByteArray m_head;
+    QString    m_mime;
+    QByteArray m_body;
+    QByteArray m_pending;
+    int        m_lineNum        = 0;
+    int        m_emitted        = 0;
+    bool       m_sniffed        = false;
+    bool       m_stopped        = false;
+    bool       m_overLimit      = false;
+    bool       m_moreLines      = false;
+    bool       m_closedLastLine = false;
+};
 
 ResolvedPath resolveRemoteJobPath(
     QSocRemoteConnection *conn, const QString &jobId, RemoteJobPathUse use)
@@ -277,10 +410,11 @@ QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &com
 /* read_file */
 
 QSocToolRemoteFileRead::QSocToolRemoteFileRead(
-    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx)
+    QObject *parent, QSocRemoteConnection *conn, QSocRemotePathContext *pathCtx, QLLMService *llm)
     : QSocTool(parent)
     , m_conn(conn)
     , m_pathCtx(pathCtx)
+    , m_llm(llm)
 {}
 
 QString QSocToolRemoteFileRead::getName() const
@@ -290,9 +424,15 @@ QString QSocToolRemoteFileRead::getName() const
 
 QString QSocToolRemoteFileRead::getDescription() const
 {
-    return QStringLiteral(
+    QString text = QStringLiteral(
         "Read the contents of a file on the remote workspace via SFTP. "
         "Paths are resolved against the remote working directory.");
+    if (m_llm != nullptr && m_llm->currentSupportsImage()) {
+        text += QStringLiteral(
+            " Image files (PNG, JPG, GIF, WebP) are returned as visual content that the "
+            "multimodal LLM can see directly.");
+    }
+    return text;
 }
 
 json QSocToolRemoteFileRead::getParametersSchema() const
@@ -338,38 +478,50 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
         }
     }
 
-    QString    err;
-    QByteArray bytes = m_conn->sftp()->readFile(remotePath, 0, &err);
-    if (bytes.isNull() && !err.isEmpty()) {
+    RemoteFileReader reader(offset, maxLines, kReadBytesLimit);
+    QString          err;
+    if (!m_conn->sftp()->readStream(
+            remotePath, [&reader](const QByteArray &chunk) { return reader.feed(chunk); }, &err)) {
         return QStringLiteral("Error: %1").arg(err);
     }
+    reader.finish();
 
-    const QStringList lines = QString::fromUtf8(bytes).split(QLatin1Char('\n'));
-    QString           snippet;
-    int               lineNum   = 0;
-    int               emitted   = 0;
-    bool              truncated = false;
-    for (const QString &line : lines) {
-        if (lineNum >= offset) {
-            if (emitted >= maxLines) {
-                truncated = true;
-                break;
-            }
-            snippet += line + QLatin1Char('\n');
-            ++emitted;
+    const qsizetype limitMiB = kReadBytesLimit / (1024 * 1024);
+    if (!reader.mime().isEmpty()) {
+        if (reader.overLimit()) {
+            return QStringLiteral("Error: image is larger than the %1 MiB read limit: %2")
+                .arg(QString::number(limitMiB), remotePath);
         }
-        ++lineNum;
+        return QSocImageAttach::buildAttachmentResult(remotePath, reader.mime(), reader.body(), m_llm);
     }
 
     /* Record a full read so the remote edit_file / write_file tools can
      * enforce read-before-edit and detect on-disk changes. Partial / offset
      * reads do not qualify: the agent has not seen the whole file. */
-    if (m_pathCtx && offset == 0 && !truncated) {
-        m_pathCtx->readState().recordRead(remotePath, QString::fromUtf8(bytes));
+    if (const auto whole = reader.wholeFile(); m_pathCtx && whole) {
+        m_pathCtx->readState().recordRead(remotePath, QString::fromUtf8(*whole));
     }
 
+    QString snippet = QString::fromUtf8(reader.body());
+    if (snippet.isEmpty() && reader.overLimit()) {
+        return QStringLiteral(
+                   "Error: line %1 of %2 is longer than the %3 MiB read limit; read part of it "
+                   "with bash, for example head -c or cut -c")
+            .arg(QString::number(reader.nextOffset()), remotePath, QString::number(limitMiB));
+    }
     if (snippet.isEmpty()) {
         return QStringLiteral("File is empty or offset beyond file length: %1").arg(remotePath);
+    }
+    if (reader.overLimit()) {
+        snippet += QStringLiteral(
+                       "[truncated: read stopped at the %1 MiB limit; rerun with offset=%2 to "
+                       "continue]\n")
+                       .arg(limitMiB)
+                       .arg(reader.nextOffset());
+    } else if (reader.moreLines()) {
+        snippet += QStringLiteral(
+                       "[truncated: more lines follow; rerun with offset=%1 to continue]\n")
+                       .arg(reader.nextOffset());
     }
     return snippet;
 }

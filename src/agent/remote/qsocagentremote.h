@@ -20,6 +20,7 @@ class QSocSshSession;
 class QSocSftpClient;
 class QSocToolRegistry;
 class QSocConfig;
+class QLLMService;
 struct QSocAgentConfig;
 class QSocMonitorTaskSource;
 class QSocHostCatalog;
@@ -482,13 +483,16 @@ bool prepareAgentRemoteWorkspace(
  * @param socConfig Used by the web tools; may be nullptr to skip search.
  * @param monitorSource Optional monitor task source; nullptr skips the
  *                      monitor tools.
+ * @param llm Active LLM service for read_file image gating; nullptr returns
+ *            images as a text summary.
  * @return New registry. Never null.
  */
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     QSocRemoteConnection  *conn,
     QSocConfig            *socConfig,
-    QSocMonitorTaskSource *monitorSource = nullptr);
+    QSocMonitorTaskSource *monitorSource = nullptr,
+    QLLMService           *llm           = nullptr);
 
 /**
  * @brief File-history accessor that follows a connection's transport.

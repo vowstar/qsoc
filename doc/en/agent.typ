@@ -828,6 +828,9 @@ body is sent to the LLM:
 - `${CWD}`: the agent working directory
 - `${PROJECT}`: the project directory
 
+In remote mode both name the remote workspace: `${CWD}` is the remote working
+directory and `${PROJECT}` is the remote workspace root.
+
 When `${ARGS}` is referenced anywhere in the body, the legacy
 "Arguments passed: ..." suffix is suppressed so the same value does not
 appear twice.
@@ -1081,7 +1084,8 @@ The `agent` tool accepts:
      its result is delivered later as a notification.],
     [`isolation`],
     [`worktree` runs the child in its own `git worktree --detach` under
-     `<runtime>/qsoc-worktrees/<task_id>`. Default is none.],
+     `<runtime>/qsoc-worktrees/<task_id>`. Default is none. Refused with an
+     error when the parent or the `host` is a remote workspace.],
   )],
   caption: [`agent` TOOL FIELDS],
   kind: table,
@@ -1563,7 +1567,10 @@ The system prompt is composed from:
 - *Memory*: entries from the auto-memory store (see `memory_read` /
   `memory_write`), capped by `agent.memory_max_chars`
 - *Skill listing*: names and descriptions of installed skills so the agent
-  can route to them via `skill_find`
+  can route to them via `skill_find`. In remote mode `skill_find` is not
+  available, so the listing names only the user-invocable skills on this
+  machine and says they are not in the remote workspace. The listing is
+  rebuilt on `/ssh`, `/local` and `/project`.
 
 Set `agent.system_prompt` in the config to replace the modular base with a
 literal string (useful for testing or custom deployments).
@@ -1737,6 +1744,12 @@ Workspace tools operate on the remote host (SFTP + SSH exec):
 - `bash_manage` (status/output/terminate/kill for backgrounded jobs)
 - `monitor`, `monitor_stop` (remote command, local notification stream)
 - `path_context` (remote root, cwd, writable dirs)
+
+Remote `read_file` returns image files (PNG, JPG, GIF, WebP) as image content,
+the same as the local tool. Text is paged with `offset` and `max_lines` at any
+file size. One read returns at most 16 MiB; a single longer line is refused
+with a hint to read part of it with `bash`, and an image larger than 16 MiB is
+refused.
 
 Control-plane tools stay on the local machine regardless of mode:
 

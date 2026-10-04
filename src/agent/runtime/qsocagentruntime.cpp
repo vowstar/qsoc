@@ -723,11 +723,7 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
     /* Project path for AGENTS.md injection. */
     config.projectPath = d->projectManager->getProjectPath();
 
-    /* Skill listing for system prompt injection. */
-    {
-        QSocToolSkillFind scanner(nullptr, d->projectManager);
-        config.skillListing = QSocToolSkillFind::formatPromptListing(scanner.scanAllSkills());
-    }
+    config.skillListing = d->skillListing();
 
     /* Model id + registry context sync. */
     if (d->llmService) {
@@ -1359,6 +1355,15 @@ void QSocAgentRuntime::wirePersistence()
             }
             return true;
         });
+}
+
+QString QSocAgentRuntime::Private::skillListing() const
+{
+    const auto        audience = remoteConn->session() != nullptr
+                                     ? QSocToolSkillFind::ListingAudience::UserOnly
+                                     : QSocToolSkillFind::ListingAudience::Model;
+    QSocToolSkillFind scanner(nullptr, projectManager);
+    return QSocToolSkillFind::formatPromptListing(scanner.scanAllSkills(), audience);
 }
 
 void QSocAgentRuntime::Private::applyRunContext(

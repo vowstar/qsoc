@@ -410,9 +410,27 @@ void QSocSftpClient::close()
 
 QByteArray QSocSftpClient::readFile(const QString &path, qint64 maxBytes, QString *errorMessage)
 {
+    QByteArray out;
+    const bool ok = readStream(
+        path,
+        [&out, maxBytes](const QByteArray &chunk) {
+            out.append(chunk);
+            if (maxBytes > 0 && out.size() >= maxBytes) {
+                out.truncate(static_cast<int>(maxBytes));
+                return false;
+            }
+            return true;
+        },
+        errorMessage);
+    return ok ? out : QByteArray();
+}
+
+bool QSocSftpClient::readStream(
+    const QString &path, const std::function<bool(const QByteArray &)> &sink, QString *errorMessage)
+{
     OpScope scope(this, m_opBudgetMs);
     if (!open(errorMessage)) {
-        return {};
+        return false;
     }
     const QByteArray pathBytes = path.toUtf8();
 
@@ -425,19 +443,18 @@ QByteArray QSocSftpClient::readFile(const QString &path, qint64 maxBytes, QStrin
             setError(
                 waitFailureText(QStringLiteral("SFTP open for read failed: %1").arg(path)),
                 errorMessage);
-            return {};
+            return false;
         }
         if (!wait()) {
             setError(
                 waitFailureText(QStringLiteral("Timed out opening %1 for read").arg(path)),
                 errorMessage);
-            return {};
+            return false;
         }
     }
 
-    QByteArray out;
-    char       buffer[16384];
-    bool       observed = false;
+    char buffer[16384];
+    bool observed = false;
     while (true) {
         if (!observed) {
             observed = true;
@@ -447,9 +464,7 @@ QByteArray QSocSftpClient::readFile(const QString &path, qint64 maxBytes, QStrin
         }
         const ssize_t nread = libssh2_sftp_read(handle, buffer, sizeof(buffer));
         if (nread > 0) {
-            out.append(buffer, static_cast<int>(nread));
-            if (maxBytes > 0 && out.size() >= maxBytes) {
-                out.truncate(static_cast<int>(maxBytes));
+            if (!sink(QByteArray(buffer, static_cast<qsizetype>(nread)))) {
                 break;
             }
             continue;
@@ -465,17 +480,17 @@ QByteArray QSocSftpClient::readFile(const QString &path, qint64 maxBytes, QStrin
                 (void) rebuildSubsystem();
                 setError(
                     waitFailureText(QStringLiteral("Timed out reading %1").arg(path)), errorMessage);
-                return {};
+                return false;
             }
             continue;
         }
         noteTransport(static_cast<int>(nread));
         setError(waitFailureText(QStringLiteral("SFTP read error on %1").arg(path)), errorMessage);
         (void) drainClose(handle);
-        return {};
+        return false;
     }
     (void) drainClose(handle);
-    return out;
+    return true;
 }
 
 bool QSocSftpClient::writeFile(const QString &path, const QByteArray &content, QString *errorMessage)

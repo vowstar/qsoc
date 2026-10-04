@@ -160,9 +160,9 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
     /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
      * dispatch only needs file/shell/path tools on the remote.
      * Web/doc are intentionally local-only for now. */
-    binding->owner = std::make_unique<QObject>();
-    binding->registry
-        = buildAgentRemoteRegistry(binding->owner.get(), &binding->conn, nullptr, nullptr);
+    binding->owner    = std::make_unique<QObject>();
+    binding->registry = buildAgentRemoteRegistry(
+        binding->owner.get(), &binding->conn, nullptr, nullptr, llmService_);
     hostCache_.insert(host, binding);
     return binding;
 }
@@ -355,7 +355,8 @@ json QSocToolAgent::getParametersSchema() const
             {"description",
              "When 'worktree', the child runs inside a fresh git worktree of the "
              "current project, so its file changes are isolated from the parent. "
-             "Silently falls back to 'none' if the project is not a git repo."}}},
+             "Silently falls back to 'none' if the project is not a git repo. "
+             "Not supported on remote workspaces."}}},
           {"host",
            {{"type", "string"},
             {"enum", hostEnum},
@@ -652,8 +653,13 @@ QString QSocToolAgent::execute(const json &arguments)
      * parent's binding; when set, the child's registry, its config and its
      * workspace health all come from this pointer, so they cannot disagree
      * about which host answers for the child. */
+    const bool remoteHost = !hostArg.isEmpty() && hostArg != QStringLiteral("local");
+    if (isolation == QStringLiteral("worktree") && (remoteHost || effectiveConfig.remoteMode)) {
+        return QStringLiteral(
+            R"({"status":"error","error":"isolation=worktree is not supported on remote workspaces"})");
+    }
     std::shared_ptr<HostBinding> childHost;
-    if (!hostArg.isEmpty() && hostArg != QStringLiteral("local")) {
+    if (remoteHost) {
         QString hostErr;
         childHost = resolveHostBinding(hostArg, &hostErr);
         if (childHost == nullptr) {
