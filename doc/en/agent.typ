@@ -1626,6 +1626,7 @@ failure rather than a wait:
   that simply outruns its own `timeout_ms` is *not* one of these: the read
   was abandoned, not a request, so the workspace stays usable and the next
   command runs normally.
+- An abandoned SFTP initialization makes the session unusable before a usable subsystem handle exists.
 - An abandoned SFTP transfer is narrower than a lost session. It leaves the
   file-transfer subsystem unusable, not the connection, so QSoC releases and
   reopens the subsystem and the workspace survives; it condemns the session

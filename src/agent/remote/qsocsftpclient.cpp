@@ -181,7 +181,10 @@ bool QSocSftpClient::rebuildSubsystem()
         return false;
     }
     if (m_sftp == nullptr) {
-        return true;
+        /* SFTP initialization keeps its unfinished exchange on the session
+         * before it returns a subsystem handle. */
+        m_session.markAbandonedExchange();
+        return false;
     }
     LIBSSH2_SFTP *sftp = m_sftp;
     /* Dropped either way: on success libssh2 freed it, and on failure it

@@ -85,7 +85,7 @@ extern "C" int __wrap_libssh2_session_free(LIBSSH2_SESSION *session)
  * asserted here, because condemning the session either always or never is
  * wrong in one of them.
  *
- * Every case enters the data phase through the client's own observer seam
+ * Data-transfer cases enter through the client's own observer seam
  * rather than by racing a transfer. Budgets keep the files small; the one
  * exception is the case that has to leave an SSH packet half sent, which needs
  * more payload than the socket can swallow.
@@ -98,6 +98,7 @@ class Test : public QObject
 private slots:
     void initTestCase();
     void cleanupTestCase();
+    void anAbandonedInitializationCondemnsTheSession();
     void anAbandonedWriteLeavesTheNextWriteWorking();
     void aWriteAbandonedOnADeadLinkCondemnsTheSession();
     void anAbandonedReadCondemnsTheSessionItStranded();
@@ -169,6 +170,47 @@ void Test::cleanupTestCase()
 {
     m_fixture.stop();
     QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
+}
+
+void Test::anAbandonedInitializationCondemnsTheSession()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    QSocTestRelay relay(static_cast<quint16>(m_fixture.port()));
+    relay.start();
+    QVERIFY(relay.waitUntilListening(5000));
+    const auto relayGuard = qScopeGuard([&relay] { relay.stop(); });
+
+    QSocSshSession session;
+    QVERIFY(connectOrFail(&session, relay.port()));
+    relay.blackhole();
+
+    QSocSftpClient sftp(session);
+    sftp.setOperationTimeoutMs(400);
+    QString err;
+    QVERIFY(!sftp.open(&err));
+    QVERIFY2(err.contains(QStringLiteral("Timed out opening SFTP subsystem")), qPrintable(err));
+    QVERIFY(!sftp.isOpen());
+    QVERIFY(sftp.lastFailureUncertain());
+    QCOMPARE(session.unusableReason(), QSocSshSession::Unusable::AbandonedExchange);
+    QVERIFY(!session.isConnected());
+
+    QElapsedTimer clock;
+    clock.start();
+    QVERIFY(!sftp.open(&err));
+    QSocSftpClient another(session);
+    QVERIFY(!another.open(&err));
+    QVERIFY(!err.isEmpty());
+    QVERIFY2(
+        clock.elapsed() < 200,
+        qPrintable(
+            QStringLiteral("an abandoned initialization retried for %1 ms").arg(clock.elapsed())));
+
+    relay.heal();
+    QSocSshSession recovery;
+    QVERIFY(connectOrFail(&recovery, relay.port()));
+    QSocSftpClient recovered(recovery);
+    QVERIFY2(recovered.open(&err), qPrintable(err));
 }
 
 /*
