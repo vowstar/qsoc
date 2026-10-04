@@ -50,6 +50,9 @@ kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 key_scan = ctypes.WinDLL("user32", use_last_error=True).VkKeyScanW
 key_scan.argtypes = [wintypes.WCHAR]
 key_scan.restype = wintypes.SHORT
+map_key = ctypes.WinDLL("user32", use_last_error=True).MapVirtualKeyW
+map_key.argtypes = [wintypes.UINT, wintypes.UINT]
+map_key.restype = wintypes.UINT
 
 
 def api(name, arguments, result=wintypes.BOOL):
@@ -69,6 +72,7 @@ open_console = api("CreateFileW", [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DW
 close_handle = api("CloseHandle", [wintypes.HANDLE])
 write_input = api("WriteConsoleInputW", [wintypes.HANDLE, ctypes.POINTER(InputRecord),
                                        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)])
+console_mode = api("GetConsoleMode", [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)])
 screen_info = api("GetConsoleScreenBufferInfo", [wintypes.HANDLE, ctypes.POINTER(ScreenInfo)])
 read_screen = api("ReadConsoleOutputCharacterW", [wintypes.HANDLE, wintypes.LPWSTR,
                                                 wintypes.DWORD, Coord,
@@ -128,6 +132,35 @@ def type_text(input_file, text):
         raise RuntimeError("The console did not accept every input record")
 
 
+def unicode_records(input_file, units, repeat=1, down=True):
+    records = (InputRecord * len(units))()
+    for record, unit in zip(records, units):
+        record.kind = 1
+        record.event.key = KeyEvent(down, repeat, 0, 0, chr(unit), 0)
+    written = wintypes.DWORD()
+    require(write_input(msvcrt.get_osfhandle(input_file.fileno()), records, len(records),
+                        ctypes.byref(written)), "Write Unicode console records")
+    if written.value != len(records):
+        raise RuntimeError("The console did not accept every Unicode record")
+
+
+def special_key(input_file, virtual_key, character="\0", state=0):
+    scan = map_key(virtual_key, 4)
+    if not scan:
+        raise RuntimeError("The keyboard layout cannot map the editing key")
+    if scan & 0xff00:
+        state |= 0x0100
+    records = (InputRecord * 2)()
+    for record, down in zip(records, (True, False)):
+        record.kind = 1
+        record.event.key = KeyEvent(down, 1, virtual_key, scan & 0xff, character, state)
+    written = wintypes.DWORD()
+    require(write_input(msvcrt.get_osfhandle(input_file.fileno()), records, len(records),
+                        ctypes.byref(written)), "Write console editing key")
+    if written.value != len(records):
+        raise RuntimeError("The console did not accept the editing key records")
+
+
 def wait_for(condition, process, label):
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
@@ -160,6 +193,13 @@ def main(program):
                         raise RuntimeError("The CLI did not inherit the configured model")
                     if any(tool.get("function", {}).get("name") == "z3_solve"
                            for tool in request.get("tools", [])):
+                        expected = "Wait for the interrupt probe."
+                        if mode != "query":
+                            expected = "H" + expected + "aXEVR\nA\n你你好好🚀🚀"
+                        if not any(message.get("role") == "user"
+                                   and message.get("content") == expected
+                                   for message in request.get("messages", [])):
+                            raise RuntimeError("The console input did not reach the model unchanged")
                         started.set()
                         if not release.wait(60):
                             raise RuntimeError("The console probe did not release its LLM request")
@@ -192,8 +232,16 @@ def main(program):
                             require(control(None, True), "Protect the controller from its broadcast")
                             if mode != "query":
                                 wait_for(lambda: "Ready" in screen(), process, "the interactive prompt")
+                                input_mode = wintypes.DWORD()
+                                require(console_mode(msvcrt.get_osfhandle(input_file.fileno()),
+                                                     ctypes.byref(input_mode)), "Read input mode")
+                                if input_mode.value & 0x0200:
+                                    raise RuntimeError("Console input still translates native key records")
                                 draft = "draft-" + mode + "-" + mock.call_id[:12]
                                 type_text(input_file, draft)
+                                unicode_records(input_file, [0x4f60, 0x597d], repeat=2)
+                                unicode_records(input_file, [0x78], down=False)
+                                draft += "你你好好"
                                 wait_for(lambda: draft in screen(), process, "the rendered idle draft")
                                 type_text(input_file, "\x03")
                                 def draft_cleared():
@@ -204,7 +252,33 @@ def main(program):
                                 wait_for(draft_cleared, process, "the live session after clearing its draft")
                                 if started.is_set():
                                     raise RuntimeError("Clearing the idle draft unexpectedly started a turn")
-                                type_text(input_file, "Wait for the interrupt probe.\r")
+                                type_text(input_file, "Wait for the interrupt probe.ab")
+                                special_key(input_file, 0x25, state=0x08)
+                                special_key(input_file, 0x25, state=0x10)
+                                special_key(input_file, 0x24, state=0x02)
+                                special_key(input_file, 0x2e, state=0x08)
+                                special_key(input_file, 0x25)
+                                special_key(input_file, 0x2e)
+                                type_text(input_file, "X")
+                                special_key(input_file, 0x24)
+                                type_text(input_file, "H")
+                                special_key(input_file, 0x23)
+                                type_text(input_file, "E")
+                                special_key(input_file, 0x25)
+                                special_key(input_file, 0x27)
+                                type_text(input_file, "R")
+                                unicode_records(input_file, [0x1b, 0x5b, 0x44])
+                                type_text(input_file, "V")
+                                special_key(input_file, 0x27)
+                                special_key(input_file, 0x0d, "\r", 0x10)
+                                type_text(input_file, "A")
+                                special_key(input_file, 0x0d, "\r", 0x02)
+                                unicode_records(input_file, [0x4f60, 0x597d], repeat=2)
+                                unicode_records(input_file, [0x78], down=False)
+                                unicode_records(input_file, [0xd83d], repeat=2)
+                                time.sleep(0.1)
+                                unicode_records(input_file, [0xde80], repeat=2)
+                                type_text(input_file, "\r")
                             wait_for(started.is_set, process, "the active LLM request")
                             if mode != "query":
                                 def busy():

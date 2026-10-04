@@ -11,8 +11,11 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <cstring>
+#include <utility>
 
+#include <QPointer>
 #include <QTimer>
 
 QAgentInputMonitor::QAgentInputMonitor(QObject *parent)
@@ -23,6 +26,170 @@ QAgentInputMonitor::~QAgentInputMonitor()
 {
     (void) stop();
 }
+
+void QAgentInputMonitor::processConsoleCharacter(char16_t character, quint16 repeat)
+{
+    if (repeat == 0)
+        return;
+    const QPointer<QAgentInputMonitor> self(this);
+    const quint64                      generation = consoleGeneration;
+    const auto deliver = [self, generation](const QString &text, quint16 count) {
+        const QByteArray bytes = text.toUtf8();
+        for (quint16 index = 0; index < count; ++index) {
+            if (!self || self->consoleGeneration != generation)
+                return false;
+            self->processBytes(bytes.constData(), static_cast<int>(bytes.size()));
+        }
+        return self && self->consoleGeneration == generation;
+    };
+    if (consoleHighSurrogate != 0) {
+        const char16_t high     = std::exchange(consoleHighSurrogate, 0);
+        const quint16  previous = std::exchange(consoleHighRepeat, 0);
+        if (QChar::isLowSurrogate(character)) {
+            const char16_t pair[] = {high, character};
+            const quint16  paired = std::min<quint16>(previous, repeat);
+            if (!deliver(QString::fromUtf16(pair, 2), paired))
+                return;
+            deliver(
+                QString(QChar::ReplacementCharacter), std::max<quint16>(previous, repeat) - paired);
+            return;
+        }
+        if (!deliver(QString(QChar::ReplacementCharacter), previous))
+            return;
+    }
+    if (QChar::isHighSurrogate(character)) {
+        consoleHighSurrogate = character;
+        consoleHighRepeat    = repeat;
+        return;
+    }
+    deliver(
+        QString(QChar(QChar::isLowSurrogate(character) ? QChar::ReplacementCharacter : character)),
+        repeat);
+}
+
+#ifdef Q_OS_WIN
+void QAgentInputMonitor::processConsoleSequence(const QByteArray &bytes, quint16 repeat)
+{
+    const QPointer<QAgentInputMonitor> self(this);
+    const quint64                      generation = consoleGeneration;
+    for (quint16 count = 0; count < repeat; ++count) {
+        for (const char byte : bytes) {
+            if (!self || self->consoleGeneration != generation)
+                return;
+            processConsoleCharacter(static_cast<unsigned char>(byte));
+        }
+    }
+}
+
+void QAgentInputMonitor::processConsoleKey(const KEY_EVENT_RECORD &key)
+{
+    const DWORD state     = key.dwControlKeyState;
+    const bool  control   = state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED);
+    const bool  alt       = state & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED);
+    const bool  shift     = state & SHIFT_PRESSED;
+    char16_t    character = key.uChar.UnicodeChar;
+    if (!key.bKeyDown) {
+        if (key.wVirtualKeyCode == VK_MENU && (state & NUMLOCK_ON) && character != 0)
+            processConsoleCharacter(character, key.wRepeatCount);
+        return;
+    }
+    if (character == '\r' && (shift || alt || control))
+        character = '\n';
+    if (character == '\t' && shift) {
+        processConsoleSequence("\033[Z", key.wRepeatCount);
+        return;
+    }
+    if (character != 0) {
+        const bool altPrefix = alt && !control && character != '\n' && key.wVirtualKeyCode != 0
+                               && key.wVirtualKeyCode != VK_PACKET;
+        if (altPrefix) {
+            const QPointer<QAgentInputMonitor> self(this);
+            const quint64                      generation = consoleGeneration;
+            for (quint16 count = 0; count < key.wRepeatCount; ++count) {
+                if (!self || self->consoleGeneration != generation)
+                    return;
+                processConsoleCharacter(u'\033');
+                if (!self || self->consoleGeneration != generation)
+                    return;
+                processConsoleCharacter(character);
+            }
+        } else {
+            processConsoleCharacter(character, key.wRepeatCount);
+        }
+        return;
+    }
+    if (shift || alt || control)
+        return;
+    const char *sequence = nullptr;
+    switch (key.wVirtualKeyCode) {
+    case VK_UP:
+        sequence = "\033[A";
+        break;
+    case VK_DOWN:
+        sequence = "\033[B";
+        break;
+    case VK_RIGHT:
+        sequence = "\033[C";
+        break;
+    case VK_LEFT:
+        sequence = "\033[D";
+        break;
+    case VK_HOME:
+        sequence = "\033[H";
+        break;
+    case VK_END:
+        sequence = "\033[F";
+        break;
+    case VK_DELETE:
+        sequence = "\033[3~";
+        break;
+    case VK_PRIOR:
+        sequence = "\033[5~";
+        break;
+    case VK_NEXT:
+        sequence = "\033[6~";
+        break;
+    default:
+        break;
+    }
+    if (sequence)
+        processConsoleSequence(sequence, key.wRepeatCount);
+}
+
+void QAgentInputMonitor::processConsoleRecord(const INPUT_RECORD &record, int left, int top)
+{
+    if (record.EventType == KEY_EVENT) {
+        processConsoleKey(record.Event.KeyEvent);
+        return;
+    }
+    if (record.EventType == FOCUS_EVENT) {
+        const bool focused = record.Event.FocusEvent.bSetFocus != FALSE;
+        if (focused != focused_) {
+            focused_ = focused;
+            emit terminalFocusChanged(focused);
+        }
+        return;
+    }
+    if (record.EventType != MOUSE_EVENT)
+        return;
+    const auto &mouse   = record.Event.MouseEvent;
+    const DWORD buttons = mouse.dwButtonState & 0xffff;
+    const DWORD changed = buttons ^ consoleMouseButtons;
+    consoleMouseButtons = buttons;
+    const int col       = mouse.dwMousePosition.X - left + 1;
+    const int row       = mouse.dwMousePosition.Y - top + 1;
+    if (mouse.dwEventFlags == MOUSE_WHEELED) {
+        const auto delta = static_cast<short>(HIWORD(mouse.dwButtonState));
+        if (delta != 0)
+            emit mouseWheel(delta > 0 ? 0 : 1);
+    } else if (mouse.dwEventFlags == MOUSE_MOVED) {
+        if (buttons & FROM_LEFT_1ST_BUTTON_PRESSED)
+            emit mouseDrag(col, row);
+    } else if (changed & FROM_LEFT_1ST_BUTTON_PRESSED) {
+        emit mouseClick(0, col, row, buttons & FROM_LEFT_1ST_BUTTON_PRESSED);
+    }
+}
+#endif
 
 int QAgentInputMonitor::utf8SeqLen(unsigned char lead)
 {
@@ -928,12 +1095,16 @@ void QAgentInputMonitor::start(bool monitorInterrupt)
     if (active) {
         return;
     }
+    ++consoleGeneration;
+    consoleHighSurrogate = 0;
+    consoleHighRepeat    = 0;
     if (!QSocInterrupt::finishForegroundHandoff()) {
         return;
     }
 
 #ifdef Q_OS_WIN
-    origStdinHandle = GetStdHandle(STD_INPUT_HANDLE);
+    consoleMouseButtons = 0;
+    origStdinHandle     = GetStdHandle(STD_INPUT_HANDLE);
     /* A real console gets raw mode; a redirected or headless stdin (pipes,
      * the test harness) has no console to configure, so skip it and still
      * activate, mirroring the POSIX non-tty path below. */
@@ -941,8 +1112,10 @@ void QAgentInputMonitor::start(bool monitorInterrupt)
                                 && GetConsoleMode(origStdinHandle, &origConsoleMode);
     if (stdinIsConsole) {
         DWORD mode = origConsoleMode;
-        mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
-        mode |= ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
+        mode &= ~(
+            ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT
+            | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_QUICK_EDIT_MODE);
+        mode |= ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS;
         if (!SetConsoleMode(origStdinHandle, mode)) {
             return;
         }
@@ -968,25 +1141,21 @@ void QAgentInputMonitor::start(bool monitorInterrupt)
         if (!GetNumberOfConsoleInputEvents(origStdinHandle, &numEvents) || numEvents == 0) {
             return;
         }
-        std::vector<INPUT_RECORD> records(numEvents);
+        std::vector<INPUT_RECORD> records(std::min<DWORD>(numEvents, 128));
         DWORD                     numRead = 0;
-        if (!ReadConsoleInput(
+        if (!ReadConsoleInputW(
                 origStdinHandle, records.data(), static_cast<DWORD>(records.size()), &numRead)) {
             return;
         }
+        const QPointer<QAgentInputMonitor> self(this);
+        const quint64                      generation = consoleGeneration;
         for (DWORD i = 0; i < numRead; ++i) {
-            if (records[i].EventType != KEY_EVENT || !records[i].Event.KeyEvent.bKeyDown) {
-                continue;
-            }
-            char ch = records[i].Event.KeyEvent.uChar.AsciiChar;
-            /* Shift+Enter: the console reports CR with SHIFT_PRESSED set.
-             * Remap to LF so it takes the newline-insert path like Ctrl+J. */
-            if (ch == '\r' && (records[i].Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED)) {
-                ch = '\n';
-            }
-            if (ch != 0) {
-                processBytes(&ch, 1);
-            }
+            if (!self || self->consoleGeneration != generation)
+                return;
+            CONSOLE_SCREEN_BUFFER_INFO output = {};
+            if (records[i].EventType == MOUSE_EVENT)
+                GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &output);
+            processConsoleRecord(records[i], output.srWindow.Left, output.srWindow.Top);
         }
     });
     pollTimer->start();
@@ -1075,11 +1244,15 @@ void QAgentInputMonitor::start(bool monitorInterrupt)
 
 bool QAgentInputMonitor::stop()
 {
+    ++consoleGeneration;
+    consoleHighSurrogate = 0;
+    consoleHighRepeat    = 0;
     if (!active) {
         return true;
     }
 
 #ifdef Q_OS_WIN
+    consoleMouseButtons = 0;
     if (termiosSaved && !SetConsoleMode(origStdinHandle, origConsoleMode)) {
         return false;
     }
@@ -1122,6 +1295,8 @@ bool QAgentInputMonitor::stop()
     inputBuffer.clear();
     cursorPos = 0;
     utf8Pending.clear();
+    consoleHighSurrogate = 0;
+    consoleHighRepeat    = 0;
     resetEscBuffer();
     pastedBuffer.clear();
     clearUndoStack();

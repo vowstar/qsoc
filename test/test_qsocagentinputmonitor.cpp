@@ -39,6 +39,179 @@ private slots:
         QCOMPARE(events.at(1), true);
     }
 
+    void consoleUnicodeRecords()
+    {
+        QAgentInputMonitor monitor;
+        QSignalSpy         changed(&monitor, &QAgentInputMonitor::inputChanged);
+        QSignalSpy         submitted(&monitor, &QAgentInputMonitor::inputReady);
+        monitor.processConsoleCharacter(u'你');
+        monitor.processConsoleCharacter(u'好', 2);
+        monitor.processConsoleCharacter(0xd83d, 2);
+        QCOMPARE(changed.last().at(0).toString(), QString::fromUtf8("你好好"));
+        monitor.processConsoleCharacter(0xde80, 2);
+        QCOMPARE(changed.last().at(0).toString(), QString::fromUtf8("你好好🚀🚀"));
+        monitor.processConsoleCharacter(u'\r');
+        QCOMPARE(submitted.size(), 1);
+        QCOMPARE(submitted.first().at(0).toString(), QString::fromUtf8("你好好🚀🚀"));
+    }
+
+#ifdef Q_OS_WIN
+    void nativeConsoleRecords()
+    {
+        QAgentInputMonitor monitor;
+        const auto         key = [&](WORD  virtualKey,
+                                     WCHAR character,
+                                     WORD  repeat = 1,
+                                     DWORD state  = 0,
+                                     bool  down   = true) {
+            INPUT_RECORD record                     = {};
+            record.EventType                        = KEY_EVENT;
+            record.Event.KeyEvent.bKeyDown          = down;
+            record.Event.KeyEvent.wRepeatCount      = repeat;
+            record.Event.KeyEvent.wVirtualKeyCode   = virtualKey;
+            record.Event.KeyEvent.uChar.UnicodeChar = character;
+            record.Event.KeyEvent.dwControlKeyState = state;
+            monitor.processConsoleRecord(record);
+        };
+        key(VK_PACKET, 0x4f60, 2);
+        key(0, 0xd83d, 2);
+        key(0, 0xde80, 2);
+        key(0, L'x', 1, 0, false);
+        QCOMPARE(monitor.getInputBuffer(), QString::fromUtf8("你你🚀🚀"));
+        monitor.setInputBuffer("ab");
+        for (const QChar byte : QStringLiteral("\033[D"))
+            key(0, byte.unicode());
+        key(0, L'X');
+        QCOMPARE(monitor.getInputBuffer(), QString("aXb"));
+        monitor.setInputBuffer("ab");
+        key(VK_LEFT, 0, 1, LEFT_CTRL_PRESSED);
+        QCOMPARE(monitor.getCursorPos(), 2);
+        key(VK_LEFT, 0);
+        key(VK_DELETE, 0);
+        QCOMPARE(monitor.getInputBuffer(), QString("a"));
+        key(VK_RETURN, L'\r', 1, SHIFT_PRESSED);
+        key(VK_RETURN, L'\r', 1, LEFT_ALT_PRESSED);
+        key(VK_RETURN, L'\r', 1, LEFT_CTRL_PRESSED);
+        QCOMPARE(monitor.getInputBuffer(), QString("a\n\n\n"));
+        QSignalSpy plan(&monitor, &QAgentInputMonitor::planModeToggleRequested);
+        key(VK_TAB, L'\t', 1, SHIFT_PRESSED);
+        QCOMPARE(plan.size(), 1);
+        QSignalSpy escape(&monitor, &QAgentInputMonitor::escPressed);
+        key('X', L'x', 1, LEFT_ALT_PRESSED);
+        QCOMPARE(escape.size(), 1);
+        QCOMPARE(monitor.getInputBuffer(), QString("a\n\n\n"));
+        key('Q', L'@', 1, LEFT_CTRL_PRESSED | RIGHT_ALT_PRESSED);
+        key(VK_MENU, 0xe9, 1, NUMLOCK_ON, false);
+        QCOMPARE(monitor.getInputBuffer(), QString::fromUtf8("a\n\n\n@é"));
+        QSignalSpy interrupted(&monitor, &QAgentInputMonitor::ctrlCPressed);
+        key('C', 3, 1, LEFT_CTRL_PRESSED);
+        QCOMPARE(interrupted.size(), 1);
+        QVERIFY(interrupted.first().first().toBool());
+        QVERIFY(monitor.getInputBuffer().isEmpty());
+    }
+
+    void nativeConsoleFocusAndMouse()
+    {
+        QAgentInputMonitor monitor;
+        QSignalSpy         focus(&monitor, &QAgentInputMonitor::terminalFocusChanged);
+        QSignalSpy         clicks(&monitor, &QAgentInputMonitor::mouseClick);
+        QSignalSpy         drags(&monitor, &QAgentInputMonitor::mouseDrag);
+        QSignalSpy         wheels(&monitor, &QAgentInputMonitor::mouseWheel);
+        INPUT_RECORD       record         = {};
+        record.EventType                  = FOCUS_EVENT;
+        record.Event.FocusEvent.bSetFocus = FALSE;
+        monitor.processConsoleRecord(record);
+        monitor.processConsoleRecord(record);
+        QCOMPARE(focus.size(), 1);
+        record.Event.FocusEvent.bSetFocus = TRUE;
+        monitor.processConsoleRecord(record);
+        QCOMPARE(focus.size(), 2);
+        record.EventType                        = MOUSE_EVENT;
+        record.Event.MouseEvent                 = {};
+        record.Event.MouseEvent.dwMousePosition = {12, 24};
+        record.Event.MouseEvent.dwButtonState   = FROM_LEFT_1ST_BUTTON_PRESSED;
+        monitor.processConsoleRecord(record, 10, 20);
+        QCOMPARE(clicks.size(), 1);
+        QCOMPARE(clicks.first().at(1).toInt(), 3);
+        QCOMPARE(clicks.first().at(2).toInt(), 5);
+        QVERIFY(clicks.first().at(3).toBool());
+        record.Event.MouseEvent.dwEventFlags = MOUSE_MOVED;
+        monitor.processConsoleRecord(record, 10, 20);
+        QCOMPARE(drags.size(), 1);
+        record.Event.MouseEvent.dwEventFlags  = 0;
+        record.Event.MouseEvent.dwButtonState = 0;
+        monitor.processConsoleRecord(record, 10, 20);
+        QCOMPARE(clicks.size(), 2);
+        QVERIFY(!clicks.last().at(3).toBool());
+        record.Event.MouseEvent.dwEventFlags  = MOUSE_WHEELED;
+        record.Event.MouseEvent.dwButtonState = DWORD(WHEEL_DELTA) << 16;
+        monitor.processConsoleRecord(record);
+        QCOMPARE(wheels.last().first().toInt(), 0);
+        record.Event.MouseEvent.dwButtonState = DWORD(WORD(-WHEEL_DELTA)) << 16;
+        monitor.processConsoleRecord(record);
+        QCOMPARE(wheels.last().first().toInt(), 1);
+    }
+#endif
+
+    void consoleMalformedSurrogates()
+    {
+        QAgentInputMonitor monitor;
+        QSignalSpy         changed(&monitor, &QAgentInputMonitor::inputChanged);
+        monitor.processConsoleCharacter(0xdc00);
+        monitor.processConsoleCharacter(0xd800);
+        monitor.processConsoleCharacter(u'x');
+        QCOMPARE(changed.last().at(0).toString(), QString::fromUtf8("��x"));
+        monitor.processConsoleCharacter(0xd800, 2);
+        monitor.processConsoleCharacter(0xdc00);
+        const char16_t expected[] = {0xfffd, 0xfffd, u'x', 0xd800, 0xdc00, 0xfffd};
+        QCOMPARE(changed.last().at(0).toString(), QString::fromUtf16(expected, 6));
+    }
+
+    void consoleRepeatStopsAfterRestart()
+    {
+        QAgentInputMonitor monitor;
+        monitor.start();
+        bool restarted = false;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, &monitor, [&](const QString &text) {
+            if (text == "x" && !restarted) {
+                restarted = true;
+                monitor.stop();
+                monitor.start();
+            }
+        });
+        monitor.processConsoleCharacter(u'x', 3);
+        QSignalSpy submitted(&monitor, &QAgentInputMonitor::inputReady);
+        monitor.processConsoleCharacter(u'\r');
+        QVERIFY(restarted);
+        QCOMPARE(submitted.size(), 0);
+        QVERIFY(monitor.stop());
+    }
+
+    void consoleRepeatStopsAfterDestruction()
+    {
+        QPointer<QAgentInputMonitor> monitor(new QAgentInputMonitor);
+        connect(monitor, &QAgentInputMonitor::inputChanged, this, [&] { delete monitor.data(); });
+        monitor->processConsoleCharacter(u'x', 3);
+        QVERIFY(monitor.isNull());
+    }
+
+    void consoleSurrogateStateResets()
+    {
+        QAgentInputMonitor monitor;
+        monitor.start();
+        QVERIFY(monitor.isActive());
+        monitor.processConsoleCharacter(0xd83d);
+        QVERIFY(monitor.stop());
+        monitor.start();
+        QVERIFY(monitor.isActive());
+        QSignalSpy changed(&monitor, &QAgentInputMonitor::inputChanged);
+        monitor.processConsoleCharacter(0xde80);
+        QCOMPARE(changed.last().at(0).toString(), QString(QChar::ReplacementCharacter));
+        monitor.processConsoleCharacter(3);
+        QCOMPARE(changed.last().at(0).toString(), QString());
+        QVERIFY(monitor.stop());
+    }
+
     /* Lifecycle tests */
 
     void testStartStop()

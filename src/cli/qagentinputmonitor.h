@@ -63,6 +63,12 @@ public:
      */
     void processBytes(const char *data, int len);
 
+    /** Decode UTF-16 console records, preserving split surrogate pairs. */
+    void processConsoleCharacter(char16_t character, quint16 repeat = 1);
+#ifdef Q_OS_WIN
+    void processConsoleRecord(const INPUT_RECORD &record, int left = 0, int top = 0);
+#endif
+
     /**
      * @brief Install a printable-byte consumer that takes precedence over
      *        the buffer state machine.
@@ -192,6 +198,11 @@ signals:
     void terminalFocusChanged(bool focused);
 
 private:
+#ifdef Q_OS_WIN
+    void  processConsoleKey(const KEY_EVENT_RECORD &key);
+    void  processConsoleSequence(const QByteArray &bytes, quint16 repeat);
+    DWORD consoleMouseButtons = 0;
+#endif
     ExternalKeyConsumer externalKeyConsumer_;
 
     static int  utf8SeqLen(unsigned char lead);
@@ -265,6 +276,9 @@ private:
     QString             inputBuffer;
     int                 cursorPos = 0; /* Insertion point in inputBuffer (QChar index) */
     QByteArray          utf8Pending;
+    quint64             consoleGeneration    = 0;
+    char16_t            consoleHighSurrogate = 0;
+    quint16             consoleHighRepeat    = 0;
     QByteArray          escBuffer;     /* Buffer for ESC sequence parsing */
     QByteArray          pastedBuffer;  /* Accumulator for bracketed paste payload */
     QRegularExpression  atomicPattern; /* Matches glyphs that delete as a unit */
