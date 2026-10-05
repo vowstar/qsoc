@@ -15,5 +15,9 @@ jobs:
           for flags, name in ((0, "inherit console"), (0x08000000, "CREATE_NO_WINDOW"), (0x00000008, "DETACHED_PROCESS")):
               r = subprocess.run(cmd, capture_output=True, creationflags=flags)
               print(name, r.returncode, r.stdout.hex(" "), r.stderr.hex(" "))
+          child = "import ctypes;k=ctypes.windll.kernel32;print('child window', bool(k.GetConsoleWindow()), 'cp', k.GetConsoleOutputCP())"
+          for flags, name in ((0, "inherit"), (0x08000000, "no window")):
+              r = subprocess.run([sys.executable, "-c", child], capture_output=True, creationflags=flags)
+              print(name, r.stdout)
           r = subprocess.run('cmd.exe /d /s /c "chcp"', capture_output=True)
           print("chcp", r.stdout)
