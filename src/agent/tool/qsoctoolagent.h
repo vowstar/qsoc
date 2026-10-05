@@ -88,7 +88,7 @@ public:
      *        `/remote`, and the child must inherit that swap rather
      *        than a stale local pointer.
      */
-    void setParentAgent(QSocAgent *agent) { parentAgent_ = agent; }
+    void setParentAgent(QSocAgent *agent);
 
     /** Bus that carries background completions to the parent. */
     void setTaskEventQueue(QSocTaskEventQueue *queue);
@@ -248,12 +248,12 @@ private:
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
     QSocAgentConfig              parentConfig_;
-    QSocAgentDefinitionRegistry *defRegistry_     = nullptr;
-    QSocSubAgentTaskSource      *taskSource_      = nullptr;
-    QSocMemoryManager           *memoryManager_   = nullptr;
-    QSocHookManager             *hookManager_     = nullptr;
-    QSocLoopScheduler           *loopScheduler_   = nullptr;
-    QSocAgent                   *parentAgent_     = nullptr;
+    QSocAgentDefinitionRegistry *defRegistry_   = nullptr;
+    QSocSubAgentTaskSource      *taskSource_    = nullptr;
+    QSocMemoryManager           *memoryManager_ = nullptr;
+    QSocHookManager             *hookManager_   = nullptr;
+    QSocLoopScheduler           *loopScheduler_ = nullptr;
+    QPointer<QSocAgent>          parentAgent_;
     QSocHostCatalog             *hostCatalog_     = nullptr;
     QSocSshConfigParser         *sshConfigParser_ = nullptr;
     QPointer<QSocTaskEventQueue> eventQueue_;

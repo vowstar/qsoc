@@ -932,7 +932,7 @@ QString QSocToolAgent::execute(const json &arguments)
      * real time. Routes only the DELTA on each emission to avoid
      * double counting. */
     if (parentAgent_ != nullptr) {
-        auto      *parent     = parentAgent_;
+        QSocAgent *parent     = parentAgent_.data();
         auto       prevIn     = std::make_shared<qint64>(0);
         auto       prevOut    = std::make_shared<qint64>(0);
         const auto resetUsage = [prevIn, prevOut](const QString &) {
@@ -1364,6 +1364,11 @@ void QSocToolAgent::abort()
     if (taskSource_ != nullptr) {
         taskSource_->abortAll();
     }
+}
+
+void QSocToolAgent::setParentAgent(QSocAgent *agent)
+{
+    parentAgent_ = agent;
 }
 
 void QSocToolAgent::setTaskEventQueue(QSocTaskEventQueue *queue)

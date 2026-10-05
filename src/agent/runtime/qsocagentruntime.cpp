@@ -493,6 +493,10 @@ void QSocAgentRuntime::assembleInfrastructure(const QSocAgentRuntimeOptions &opt
 
     /* Agent construction. */
     d->agent = new QSocAgent(this, d->llmService, d->toolRegistry, config);
+    if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
+            d->localRegistry->getTool(QStringLiteral("agent")))) {
+        spawnTool->setParentAgent(d->agent);
+    }
     d->subAgentTaskSource->enableMessaging(d->agent);
     d->agent->setRequestBoundaryHandler([] { QSocInterrupt::clearRequest(); });
     d->agent->setMemoryManager(d->memoryManager);

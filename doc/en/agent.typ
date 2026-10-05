@@ -1895,6 +1895,9 @@ they are unavailable in remote mode:
 - `project_*`, `module_*`, `bus_*`, `generate_*`, `lsp`
 - `todo_*`, `skill_find`, `skill_create`
 
+A sub-agent spawned in remote mode gets the same tools on the same remote
+workspace, unless its `host` parameter names another catalog host.
+
 === Authentication and Host Keys
 <agent-remote-auth>
 

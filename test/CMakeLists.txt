@@ -360,6 +360,7 @@ set_property(TARGET test_qsocagentclient PROPERTY LINK_LIBRARIES qsoc_agent_clie
 qt_add_test_target("test_qsocagentruntime" LABELS "agent-runtime")
 qt_add_test_target("test_qsocagentruntimeremotetools" LABELS "agent-runtime")
 qt_add_test_target("test_qsocagentwake" LABELS "agent-runtime")
+qt_add_test_target("test_qsocagentruntimeparent" LOCK qsoc_loopback_sshd LABELS "agent-runtime")
 qt_add_test_target("test_qsocdaemonresources" LABELS "agent-runtime")
 set_property(TARGET test_qsocdaemonresources PROPERTY LINK_LIBRARIES qsoc_platform Qt${QT_VERSION_MAJOR}::Test)
 target_sources(test_qsocdaemonresources PRIVATE "${CMAKE_SOURCE_DIR}/src/agent/daemon/qsocdaemonresources.cpp")
