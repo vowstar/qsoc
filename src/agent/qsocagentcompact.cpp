@@ -183,6 +183,18 @@ QString summarizedUserRequest(const json &history, int start, int boundary)
     return {};
 }
 
+/* A pruned result that was saved still names where its text lives. */
+QString prunedStub(const json &message)
+{
+    const auto refs = message.find("_qsoc_artifact_refs");
+    if (refs == message.end() || !refs->is_array() || refs->empty() || !refs->front().is_object()
+        || !refs->front().contains("artifact_id") || !refs->front()["artifact_id"].is_string()) {
+        return QStringLiteral("[output pruned]");
+    }
+    return QStringLiteral("[output pruned; read artifact %1 with tool_output_read]")
+        .arg(QString::fromStdString(refs->front()["artifact_id"].get<std::string>()));
+}
+
 bool pruneHistory(json &history, const QSocAgentConfig &config, QSocTokenizer::Mode counter)
 {
     qint64 protectedTokens = 0;
@@ -190,7 +202,7 @@ bool pruneHistory(json &history, const QSocAgentConfig &config, QSocTokenizer::M
     for (int i = static_cast<int>(history.size()) - 1; i >= 0; --i) {
         const auto &message = history[static_cast<size_t>(i)];
         if (message.value("role", "") != "tool" || !message.contains("content")
-            || !message["content"].is_string() || message.value("_qsoc_result_bounded", false)) {
+            || !message["content"].is_string()) {
             continue;
         }
         protectedTokens += QSocRequestUsage::estimateText(
@@ -205,7 +217,7 @@ bool pruneHistory(json &history, const QSocAgentConfig &config, QSocTokenizer::M
     for (int i = 0; i < boundary; ++i) {
         auto &message = proposed[static_cast<size_t>(i)];
         if (message.value("role", "") != "tool" || !message.contains("content")
-            || !message["content"].is_string() || message.value("_qsoc_result_bounded", false)) {
+            || !message["content"].is_string()) {
             continue;
         }
         const auto tokens = QSocRequestUsage::estimateText(
@@ -213,9 +225,9 @@ bool pruneHistory(json &history, const QSocAgentConfig &config, QSocTokenizer::M
         if (tokens <= 100) {
             continue;
         }
-        saved += tokens
-                 - QSocRequestUsage::estimateText(QStringLiteral("[output pruned]"), counter);
-        message["content"] = "[output pruned]";
+        const QString stub = prunedStub(message);
+        saved += tokens - QSocRequestUsage::estimateText(stub, counter);
+        message["content"] = stub.toStdString();
     }
     if (saved <= 0 || saved < config.pruneMinimumSavings) {
         return false;

@@ -232,12 +232,13 @@ private:
             assistantMsg["tool_calls"] = toolCallsJson;
             msgs.push_back(assistantMsg);
 
-            /* Tool response with large content */
+            /* Tool response with large content, flagged as earlier releases wrote it */
             QString bigContent = QString("x").repeated(contentSize);
             msgs.push_back(
                 {{"role", "tool"},
                  {"tool_call_id", toolCallId.toStdString()},
-                 {"content", bigContent.toStdString()}});
+                 {"content", bigContent.toStdString()},
+                 {"_qsoc_result_bounded", true}});
         }
 
         /* Final assistant message */
@@ -767,6 +768,51 @@ private slots:
             }
         }
         QVERIFY(prunedCount > 0);
+
+        delete agent;
+    }
+
+    void testPruneKeepsArtifactReference()
+    {
+        QSocAgentConfig config;
+        config.maxContextTokens    = 100000;
+        config.pruneThreshold      = 0.3;
+        config.pruneProtectTokens  = 5000;
+        config.pruneMinimumSavings = 1000;
+        config.compactThreshold    = 0.99;
+        config.keepRecentMessages  = 200;
+
+        auto *agent = createAgent(config);
+        populateWithToolMessages(agent, 50, 2000);
+        json       msgs      = agent->getMessages();
+        const auto toolIndex = [](const json &history, const std::string &id) {
+            for (size_t i = 0; i < history.size(); ++i)
+                if (history[i].value("tool_call_id", std::string()) == id)
+                    return i;
+            return history.size();
+        };
+        QVERIFY(agent->toolResultStore());
+        const auto saved = agent->toolResultStore()->publish(QString(2000, 'x'), "ok");
+        QVERIFY(saved);
+        const json refs = json::array({QSocAgent::artifactReferenceJson(*saved)});
+        msgs[toolIndex(msgs, "call_10")]["_qsoc_artifact_refs"] = refs;
+        agent->setMessages(msgs);
+
+        QVERIFY(agent->compact() > 0);
+        const json  after  = agent->getMessages();
+        const json &first  = after[toolIndex(after, "call_10")];
+        const json &second = after[toolIndex(after, "call_11")];
+        QCOMPARE(
+            QString::fromStdString(first["content"].get<std::string>()),
+            QStringLiteral("[output pruned; read artifact %1 with tool_output_read]").arg(saved->id));
+        QVERIFY(first["_qsoc_artifact_refs"] == refs);
+        const auto kept = QSocAgent::artifactReferences(after);
+        QVERIFY(std::any_of(kept.cbegin(), kept.cend(), [&](const auto &reference) {
+            return reference.id == saved->id;
+        }));
+        QCOMPARE(
+            QString::fromStdString(second["content"].get<std::string>()),
+            QStringLiteral("[output pruned]"));
 
         delete agent;
     }

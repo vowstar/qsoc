@@ -938,7 +938,7 @@ The status bar shows the context use as `[ctx N%]`. In the last 15 points before
     table.header([Step], [Effect]),
     table.hline(),
     [Tool output pruning],
-    [Above `agent.prune_threshold` (default 0.4), older tool outputs become `[output pruned]`. Saved results keep their `artifact_id`.],
+    [Above `agent.prune_threshold` (default 0.4), older tool outputs become `[output pruned]`. A saved result becomes `[output pruned; read artifact <id> with tool_output_read]` and keeps its `artifact_id`.],
     [Summary],
     [Above `agent.compact_threshold` (default 0.6), the model replaces older messages with one summary. Recent messages stay unchanged.],
   )],

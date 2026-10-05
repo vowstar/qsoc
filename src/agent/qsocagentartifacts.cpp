@@ -262,10 +262,7 @@ void QSocAgent::appendBoundedToolMessage(
         view = QSocTokenizer::elideMiddle(content, budget, notice, tokenCounter());
     }
     json message
-        = {{"role", "tool"},
-           {"tool_call_id", id.toStdString()},
-           {"content", view.toStdString()},
-           {"_qsoc_result_bounded", true}};
+        = {{"role", "tool"}, {"tool_call_id", id.toStdString()}, {"content", view.toStdString()}};
     if (!state.isEmpty())
         message["_qsoc_tool_state"] = state.toStdString();
     if (!refs.empty())
