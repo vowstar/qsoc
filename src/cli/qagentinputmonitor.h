@@ -266,6 +266,9 @@ private:
     QTimer *pollTimer       = nullptr;
 #else
     struct termios origTermios;
+    /* Bytes the terminal queued before raw mode, still in cooked form. */
+    int  cookedBacklog = 0;
+    void restoreCookedEnter(char *bytes, int size);
 #endif
     QSocketNotifier *notifier = nullptr;
     /* Self-pipe edge listener: one SIGINT byte in, one Ctrl-C flow out. Only

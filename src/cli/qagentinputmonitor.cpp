@@ -8,6 +8,7 @@
 #ifdef Q_OS_WIN
 #include <io.h>
 #else
+#include <sys/ioctl.h>
 #include <unistd.h>
 #endif
 
@@ -1205,6 +1206,10 @@ void QAgentInputMonitor::start(bool monitorInterrupt)
             termiosSaved = false;
             return;
         }
+        /* ICRNL already turned an Enter typed before raw mode into LF. */
+        int queued = 0;
+        if ((origTermios.c_iflag & ICRNL) != 0 && ioctl(STDIN_FILENO, FIONREAD, &queued) == 0)
+            cookedBacklog = queued;
     }
 
     notifier = new QSocketNotifier(STDIN_FILENO, QSocketNotifier::Read, this);
@@ -1212,6 +1217,7 @@ void QAgentInputMonitor::start(bool monitorInterrupt)
         char buf[4096];
         auto bytesRead = read(STDIN_FILENO, buf, sizeof(buf));
         if (bytesRead > 0) {
+            restoreCookedEnter(buf, static_cast<int>(bytesRead));
             processBytes(buf, static_cast<int>(bytesRead));
         }
     });
@@ -1272,7 +1278,8 @@ bool QAgentInputMonitor::stop()
     if (termiosSaved && tcsetattr(STDIN_FILENO, TCSANOW, &origTermios) != 0) {
         return false;
     }
-    termiosSaved = false;
+    termiosSaved  = false;
+    cookedBacklog = 0;
 
     if (notifier) {
         delete notifier;
@@ -1307,6 +1314,15 @@ bool QAgentInputMonitor::stop()
     active = false;
     return true;
 }
+
+#ifndef Q_OS_WIN
+void QAgentInputMonitor::restoreCookedEnter(char *bytes, int size)
+{
+    const int count = qMin(size, cookedBacklog);
+    std::replace(bytes, bytes + count, '\n', '\r');
+    cookedBacklog -= count;
+}
+#endif
 
 bool QAgentInputMonitor::isActive() const
 {

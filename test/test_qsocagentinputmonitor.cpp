@@ -7,6 +7,7 @@
 #include "agent/tool/qsoctoolshell.h"
 #include "cli/qagentinputmonitor.h"
 #include "common/qllmservice.h"
+#include "common/qsocinterrupt.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
@@ -14,6 +15,14 @@
 #include <QTemporaryDir>
 #include <QtCore>
 #include <QtTest>
+
+#ifdef Q_OS_UNIX
+#include <fcntl.h>
+#include <poll.h>
+#include <stdlib.h>
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -150,6 +159,60 @@ private slots:
         record.Event.MouseEvent.dwButtonState = DWORD(WORD(-WHEEL_DELTA)) << 16;
         monitor.processConsoleRecord(record);
         QCOMPARE(wheels.last().first().toInt(), 1);
+    }
+#endif
+
+#ifdef Q_OS_UNIX
+    /* A line typed while the terminal is still cooked reaches raw mode with
+     * its Enter already turned into LF; it must still submit. */
+    void enterTypedBeforeStartSubmits()
+    {
+        QVERIFY(QSocInterrupt::bridgeReady() || QSocInterrupt::installBridge());
+        const int master = ::posix_openpt(O_RDWR | O_NOCTTY);
+        QVERIFY(master >= 0);
+        const auto closeMaster = qScopeGuard([master] { ::close(master); });
+        QCOMPARE(::grantpt(master), 0);
+        QCOMPARE(::unlockpt(master), 0);
+        const char *slaveName = ::ptsname(master);
+        QVERIFY(slaveName != nullptr);
+        const int slave = ::open(slaveName, O_RDWR | O_NOCTTY);
+        QVERIFY(slave >= 0);
+        const auto     closeSlave = qScopeGuard([slave] { ::close(slave); });
+        struct termios cooked;
+        QCOMPARE(::tcgetattr(slave, &cooked), 0);
+        cooked.c_iflag |= ICRNL;
+        cooked.c_iflag &= ~static_cast<tcflag_t>(INLCR | IGNCR);
+        cooked.c_lflag |= ICANON;
+        cooked.c_lflag &= ~static_cast<tcflag_t>(ECHO);
+        QCOMPARE(::tcsetattr(slave, TCSANOW, &cooked), 0);
+
+        const int savedStdin = ::dup(STDIN_FILENO);
+        QVERIFY(savedStdin >= 0);
+        const auto restoreStdin = qScopeGuard([savedStdin] {
+            ::dup2(savedStdin, STDIN_FILENO);
+            ::close(savedStdin);
+        });
+        QVERIFY(::dup2(slave, STDIN_FILENO) >= 0);
+
+        const QByteArray early("typed early\r");
+        QCOMPARE(::write(master, early.constData(), early.size()), ssize_t(early.size()));
+        /* Canonical mode reports input only once the translated line is in. */
+        struct pollfd ready = {STDIN_FILENO, POLLIN, 0};
+        QCOMPARE(::poll(&ready, 1, 5000), 1);
+
+        QAgentInputMonitor monitor;
+        QSignalSpy         submitted(&monitor, &QAgentInputMonitor::inputReady);
+        monitor.start(false);
+        QVERIFY(monitor.isActive());
+        const auto stopMonitor = qScopeGuard([&monitor] { (void) monitor.stop(); });
+        QTRY_COMPARE_WITH_TIMEOUT(submitted.size(), 1, 5000);
+        QCOMPARE(submitted.first().first().toString(), QStringLiteral("typed early"));
+
+        /* Once raw, LF is Ctrl+J again: a newline inside the prompt. */
+        const QByteArray late("a\nb\r");
+        QCOMPARE(::write(master, late.constData(), late.size()), ssize_t(late.size()));
+        QTRY_COMPARE_WITH_TIMEOUT(submitted.size(), 2, 5000);
+        QCOMPARE(submitted.last().first().toString(), QStringLiteral("a\nb"));
     }
 #endif
 

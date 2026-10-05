@@ -590,6 +590,7 @@ Completion and interrupt:
 - `@<name>`: Fuzzy-complete a project file path
 - *ESC*: Request cancellation of the current operation
 
+Input typed while the agent is still starting, *Enter* included, is kept.
 While the agent is executing, *Enter* submits input for the next iteration and
 *ESC* requests cancellation. With queued input, the agent stops the current
 step and continues with that input; otherwise it stops the run. Conversation
