@@ -347,8 +347,8 @@ public:
 
     /**
      * @brief Install the plan-mode shell safety judge
-     * @details Called at dispatch for bash / remote_shell_bash while in
-     *          plan mode. Unset means fail-closed (all shell blocked).
+     * @details Called at dispatch for bash while in plan mode. Unset
+     *          means fail-closed (all shell blocked).
      */
     void setBashSafetyJudge(QSocBashSafetyJudge judge)
     {
@@ -1037,6 +1037,8 @@ private:
      */
     QString buildIdentitySystemPrompt() const;
     void    appendDynamicSystemSections(QString &prompt) const;
+    QString remoteToolLines() const;
+    QString projectInstructionsSection() const;
     void    appendRuntimeSystemSections(QString &prompt) const;
 
     /**

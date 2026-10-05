@@ -134,6 +134,7 @@ struct QSocAgentRuntime::Private
     QSocToolRegistry     *remoteRegistry = nullptr;
     QSocToolRegistry     *localRegistry  = nullptr;
     QString               hostBindingDir;
+    QString               remoteAlias; /* The target as the user named it. */
 
     /* Session state. */
     std::unique_ptr<QSocSession>          currentSession;

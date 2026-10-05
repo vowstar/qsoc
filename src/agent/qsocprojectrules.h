@@ -66,8 +66,8 @@ QString render(const QList<Read> &reads);
 /** @brief Every instruction file under the local @p root, rendered. */
 QString loadLocal(const QString &root);
 
-/** @brief Every instruction file under the remote @p root, rendered. */
-QString loadRemote(QSocSftpClient *sftp, const QString &root);
+/** @brief Every instruction file under the remote @p root. */
+QList<Read> readAllRemote(QSocSftpClient *sftp, const QString &root);
 
 } // namespace QSocProjectRules
 

@@ -3,8 +3,11 @@
 
 #include "agent/protocol/qsocagentruntimeevent.h"
 #include "agent/qsocagent.h"
+#include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/runtime/qsocagentruntime.h"
+#include "agent/tool/qsoctoolagent.h"
 #include "common/qsoclocalendpoint.h"
 #include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
@@ -67,6 +70,20 @@ bool spill(const QString &path, const QByteArray &content)
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
            && file.write(content) == content.size();
 }
+
+bool spillDefinition(const QString &root, const QString &name, const QString &body)
+{
+    const QString dir = root + QStringLiteral("/.qsoc/agents");
+    return QDir().mkpath(dir)
+           && spill(
+               dir + '/' + name + QStringLiteral(".md"),
+               QStringLiteral("---\nname: %1\ndescription: %2\n---\n\n%2 body\n")
+                   .arg(name, body)
+                   .toUtf8());
+}
+
+constexpr const char *kRemoteRules = "Remote rules sentinel";
+constexpr const char *kLocalRules  = "Local rules sentinel";
 
 QByteArray slurp(const QString &path)
 {
@@ -194,6 +211,9 @@ private slots:
     void aSingleQueryNeverAutoConnects();
     void shellEscapeRefusesARetargetedCwd();
     void shellEscapeReportsStderrAndExitCode();
+    void remoteInstructionsLoadOnBindWithANotice();
+    void localInstructionsComeFirstAndRemoteWins();
+    void remoteDefinitionsShadowLocalOnes();
 
 private:
     static constexpr const char *kAlias = "menu-box";
@@ -301,6 +321,39 @@ private:
             dataHome() + QStringLiteral("/QSoC/host-bindings"),
             projectDir,
             {QString::fromLatin1(kAlias), workspace});
+    }
+
+    /* A remote workspace holding an AGENTS.md with the remote sentinel. */
+    QString rulesWorkspace(const QString &name) const
+    {
+        const QString dir = remote(name);
+        QDir().mkpath(dir);
+        spill(dir + QStringLiteral("/AGENTS.md"), QByteArray(kRemoteRules) + '\n');
+        return dir;
+    }
+
+    /* A local project holding an AGENTS.md with the local sentinel. */
+    QString rulesProject(const QString &name) const
+    {
+        const QString dir = project(name);
+        spill(dir + QStringLiteral("/AGENTS.md"), QByteArray(kLocalRules) + '\n');
+        return dir;
+    }
+
+    static QString prompt(QSocAgentRuntime *session)
+    {
+        return session->agent()->buildSystemPromptWithMemory();
+    }
+
+    /* The description the session's definition named @p name carries, or empty. */
+    static QString definition(QSocAgentRuntime *session, const QString &name)
+    {
+        auto *spawn = dynamic_cast<QSocToolAgent *>(
+            session->agent()->getToolRegistry()->getTool(QStringLiteral("agent")));
+        const QSocAgentDefinition *def = spawn != nullptr && spawn->definitionRegistry() != nullptr
+                                             ? spawn->definitionRegistry()->find(name)
+                                             : nullptr;
+        return def != nullptr ? def->description : QString();
     }
 
     QSocTestSshd  m_fixture;
@@ -692,6 +745,69 @@ void Test::shellEscapeReportsStderrAndExitCode()
     QVERIFY2(m_output.contains(QStringLiteral("(exit code: 4)")), qPrintable(m_output));
     QVERIFY2(m_output.contains(QStringLiteral("(shell: ")), qPrintable(m_output));
     session->disconnectRemote();
+}
+
+/* Counterexample: /ssh never loaded the remote project's AGENTS.md into the
+ * main session. */
+void Test::remoteInstructionsLoadOnBindWithANotice()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    const QString ws      = rulesWorkspace(QStringLiteral("rules"));
+    auto          session = boundRuntime(QStringLiteral("rules"), ws);
+    QVERIFY(session);
+    QVERIFY2(
+        prompt(session.get()).contains(QLatin1String(kRemoteRules)),
+        "AGENTS.md is not in the prompt");
+    QVERIFY2(
+        m_output.contains(
+            QStringLiteral("Loaded AGENTS.md from %1:%2 (").arg(QString::fromLatin1(kAlias), ws)),
+        qPrintable(m_output));
+    QVERIFY2(!m_output.contains(QStringLiteral("AGENTS.local.md")), qPrintable(m_output));
+
+    /* /local drops what the remote workspace supplied. */
+    session->disconnectRemote();
+    QVERIFY(!prompt(session.get()).contains(QLatin1String(kRemoteRules)));
+}
+
+/* Counterexample: binding a remote workspace replaced the local project's
+ * AGENTS.md instead of adding the remote one after it. */
+void Test::localInstructionsComeFirstAndRemoteWins()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    rulesProject(QStringLiteral("layered"));
+    auto session
+        = boundRuntime(QStringLiteral("layered"), rulesWorkspace(QStringLiteral("layered")));
+    QVERIFY(session);
+    const QString text   = prompt(session.get());
+    const auto    local  = text.indexOf(QLatin1String(kLocalRules));
+    const auto    remote = text.indexOf(QLatin1String(kRemoteRules));
+    QVERIFY2(local >= 0 && remote > local, qPrintable(text));
+    QCOMPARE(text.count(QStringLiteral("# Project instructions")), 1);
+    QVERIFY2(
+        text.indexOf(QStringLiteral("remote workspace instructions win")) > remote,
+        qPrintable(text));
+
+    session->disconnectRemote();
+    const QString back = prompt(session.get());
+    QVERIFY(back.contains(QLatin1String(kLocalRules)));
+    QVERIFY(!back.contains(QLatin1String(kRemoteRules)));
+}
+
+void Test::remoteDefinitionsShadowLocalOnes()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    const QString ws  = remote(QStringLiteral("defs"));
+    const QString dir = project(QStringLiteral("defs"));
+    QVERIFY(spillDefinition(ws, QStringLiteral("remote-only"), QStringLiteral("Remote def")));
+    QVERIFY(spillDefinition(dir, QStringLiteral("local-only"), QStringLiteral("Local def")));
+    QVERIFY(spillDefinition(ws, QStringLiteral("shared"), QStringLiteral("Remote shared")));
+    QVERIFY(spillDefinition(dir, QStringLiteral("shared"), QStringLiteral("Local shared")));
+
+    auto session = boundRuntime(QStringLiteral("defs"), ws);
+    QVERIFY(session);
+    QCOMPARE(definition(session.get(), QStringLiteral("remote-only")), QStringLiteral("Remote def"));
+    QCOMPARE(definition(session.get(), QStringLiteral("shared")), QStringLiteral("Remote shared"));
+    QCOMPARE(definition(session.get(), QStringLiteral("local-only")), QStringLiteral("Local def"));
 }
 
 QSOC_TEST_MAIN(Test)

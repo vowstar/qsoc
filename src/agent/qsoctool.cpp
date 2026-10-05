@@ -185,14 +185,21 @@ constexpr const char *kWorkspaceBound[] = {
 
 } // namespace
 
-bool QSocToolRegistry::isWorkspaceBound(const QString &name)
+QString QSocToolRegistry::workspaceBoundFamily(const QString &name)
 {
     for (const char *entry : kWorkspaceBound) {
         const QLatin1String bound(entry);
-        if (name == bound || (bound.endsWith(QLatin1Char('_')) && name.startsWith(bound)))
-            return true;
+        if (name == bound)
+            return name;
+        if (bound.endsWith(QLatin1Char('_')) && name.startsWith(bound))
+            return QString(bound) + QLatin1Char('*');
     }
-    return false;
+    return {};
+}
+
+bool QSocToolRegistry::isWorkspaceBound(const QString &name)
+{
+    return !workspaceBoundFamily(name).isEmpty();
 }
 
 void QSocToolRegistry::setFallback(QSocToolRegistry *base)
@@ -202,6 +209,16 @@ void QSocToolRegistry::setFallback(QSocToolRegistry *base)
     /* Keep revision() moving forward when the base changes. */
     revision_ += 1 + (fallback_ ? fallback_->revision() : 0);
     fallback_ = base;
+}
+
+bool QSocToolRegistry::reachesBase(const QString &name) const
+{
+    return fallback_ && !isWorkspaceBound(name);
+}
+
+bool QSocToolRegistry::isBaseTool(const QString &name) const
+{
+    return tools_.value(name).isNull() && reachesBase(name) && fallback_->getTool(name) != nullptr;
 }
 
 quint64 QSocToolRegistry::revision() const
@@ -215,7 +232,7 @@ QMap<QString, QPointer<QSocTool>> QSocToolRegistry::visibleTools() const
     if (fallback_) {
         const auto base = fallback_->visibleTools();
         for (auto it = base.constBegin(); it != base.constEnd(); ++it) {
-            if (!isWorkspaceBound(it.key()))
+            if (reachesBase(it.key()))
                 visible.insert(it.key(), it.value());
         }
     }
@@ -235,7 +252,7 @@ QSocTool *QSocToolRegistry::getTool(const QString &name) const
 {
     if (QSocTool *own = tools_.value(name).data())
         return own;
-    if (fallback_ && !isWorkspaceBound(name))
+    if (reachesBase(name))
         return fallback_->getTool(name);
     return nullptr;
 }

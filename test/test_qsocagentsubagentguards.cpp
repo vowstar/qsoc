@@ -118,7 +118,7 @@ private slots:
                QStringLiteral("Remote project sentinel")};
         QSocAgent agent(nullptr, nullptr, makeRegistry(), cfg);
         QString   prompt = agent.buildSystemPromptWithMemory();
-        QVERIFY(!prompt.contains(QStringLiteral("Local project sentinel")));
+        QCOMPARE(prompt.count(QStringLiteral("Local project sentinel")), 1);
         QVERIFY(!prompt.contains(QStringLiteral("Remote project sentinel")));
         QVERIFY(!prompt.contains(project.path()));
         cfg.remoteProjectRules.target = cfg.remoteName;

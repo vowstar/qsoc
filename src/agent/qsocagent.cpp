@@ -681,11 +681,10 @@ QString QSocAgent::toolDenyReasonForRegistry(
      * plan tools and every other read-only tool pass via isReadOnly().
      * Everything that can mutate is rejected. */
     if (modeGates && agentConfig.planMode) {
-        const bool shellJudged
-            = (name == QStringLiteral("bash") || name == QStringLiteral("remote_shell_bash"));
-        const bool      child   = agentConfig.isSubAgent;
-        const bool      spawnOk = (name == QStringLiteral("agent"));
-        const QSocTool *tool    = registry != nullptr ? registry->getTool(name) : nullptr;
+        const bool      shellJudged = (name == QStringLiteral("bash"));
+        const bool      child       = agentConfig.isSubAgent;
+        const bool      spawnOk     = (name == QStringLiteral("agent"));
+        const QSocTool *tool        = registry != nullptr ? registry->getTool(name) : nullptr;
         if (!shellJudged && !spawnOk && (tool == nullptr || !tool->isReadOnly())) {
             if (child) {
                 return QStringLiteral(
@@ -2271,9 +2270,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 continue;
             }
 
-            if (agentConfig.planMode
-                && (functionName == QStringLiteral("bash")
-                    || functionName == QStringLiteral("remote_shell_bash"))) {
+            if (agentConfig.planMode && functionName == QStringLiteral("bash")) {
                 QString command;
                 if (arguments.contains("command") && arguments["command"].is_string()) {
                     command = QString::fromStdString(arguments["command"].get<std::string>());
@@ -2758,6 +2755,7 @@ QString QSocAgent::systemRebuildKey() const
            {"display", agentConfig.remoteDisplay.toStdString()},
            {"workspace", agentConfig.remoteWorkspace.toStdString()},
            {"remote_cwd", agentConfig.remoteWorkingDir.toStdString()},
+           {"rules", qHash(agentConfig.remoteProjectRules.text)},
            {"identity", agentIdentity_.toStdString()},
            {"override", agentConfig.systemPromptOverride.toStdString()}};
     return QString::fromStdString(key.dump());
@@ -3028,9 +3026,96 @@ QString QSocAgent::environmentShellLines(const QSocAgentConfig &config)
     const QSocMachine local = localMachine();
     return machineEnvironmentLines(config.remoteMachine, true)
            + QStringLiteral(
-                 "- This machine (%1, %2) runs web_fetch, web_search, query_docs, SMT/z3 "
-                 "and MCP tools; they do not reach the remote host\n")
+                 "- This machine (%1, %2) runs the tools listed under Remote Workspace as "
+                 "running on this machine; they do not reach the remote host\n")
                  .arg(local.os, local.arch);
+}
+
+QString QSocAgent::remoteToolLines() const
+{
+    const QSocToolRegistry *registry = toolRegistry.data();
+    if (registry == nullptr) {
+        return {};
+    }
+    QStringList onHost;
+    QStringList onThisMachine;
+    bool        mcp = false;
+    for (const QString &name : registry->toolNames()) {
+        if (!isToolPresented(name, registry)) {
+            continue;
+        }
+        if (!registry->isBaseTool(name)) {
+            onHost << name;
+        } else if (name.startsWith(QStringLiteral("mcp__"))) {
+            mcp = true;
+        } else {
+            onThisMachine << name;
+        }
+    }
+    QStringList absent;
+    if (const QSocToolRegistry *base = registry->fallback()) {
+        for (const QString &name : base->toolNames()) {
+            const QString family = QSocToolRegistry::workspaceBoundFamily(name);
+            if (!family.isEmpty() && !registry->hasTool(name) && !absent.contains(family)) {
+                absent << family;
+            }
+        }
+    }
+    if (mcp) {
+        onThisMachine << QStringLiteral("the tools under External MCP servers");
+    }
+    const QString none = QStringLiteral("none");
+    QString       text = QStringLiteral("\nTools that act on the remote host: %1.\n")
+                             .arg(onHost.isEmpty() ? none : onHost.join(QStringLiteral(", ")));
+    text += QStringLiteral("Tools that run on this machine: %1.\n")
+                .arg(onThisMachine.isEmpty() ? none : onThisMachine.join(QStringLiteral(", ")));
+    if (!absent.isEmpty()) {
+        text += QStringLiteral("Not available in this workspace: %1.\n")
+                    .arg(absent.join(QStringLiteral(", ")));
+    }
+    if (!registry->hasTool(QStringLiteral("bash"))) {
+        text += QStringLiteral(
+            "The remote host has no usable shell (see Environment), so no tool runs commands "
+            "there.\n");
+    }
+    return text;
+}
+
+QString QSocAgent::projectInstructionsSection() const
+{
+    const QString local = agentConfig.projectPath.isEmpty()
+                              ? QString()
+                              : QSocProjectRules::loadLocal(agentConfig.projectPath);
+    if (!agentConfig.remoteMode) {
+        return local.isEmpty() ? QString()
+                               : QStringLiteral(
+                                     "\n# Project instructions\n"
+                                     "The following rules were loaded from AGENTS.md / "
+                                     "AGENTS.local.md in the project root. Follow them "
+                                     "precisely.\n\n")
+                                     + local + QStringLiteral("\n");
+    }
+    const auto   &snapshot = agentConfig.remoteProjectRules;
+    const bool    current  = snapshot.target == agentConfig.remoteName
+                             && snapshot.workspace == agentConfig.remoteWorkspace;
+    const QString remote   = current ? snapshot.text : QString();
+    if (local.isEmpty() && remote.isEmpty()) {
+        return {};
+    }
+    QString text = QStringLiteral(
+        "\n# Project instructions\n"
+        "The following rules were loaded from AGENTS.md / AGENTS.local.md of the local "
+        "project and of the remote workspace. Follow them precisely.");
+    if (!local.isEmpty()) {
+        text += QStringLiteral("\n\n## Local project\n\n") + local;
+    }
+    if (!remote.isEmpty()) {
+        text += QStringLiteral("\n\n## Remote workspace\n\n") + remote;
+    }
+    if (!local.isEmpty() && !remote.isEmpty()) {
+        text += QStringLiteral("\n\nWhere the two conflict, the remote workspace instructions win.");
+    }
+    return text + QStringLiteral("\n");
 }
 
 void QSocAgent::appendDynamicSystemSections(QString &prompt) const
@@ -3075,47 +3160,24 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                 remoteSection += QStringLiteral("  - ") + dir + QStringLiteral("\n");
             }
         }
-        const bool remoteExec = toolRegistry && toolRegistry->getTool(QStringLiteral("bash"));
-        remoteSection
-            += QStringLiteral(
-                   "\n"
-                   "All workspace tools operate on the remote host:\n"
-                   "- read_file, list_files, write_file, edit_file use remote SFTP.\n")
-               + (remoteExec
-                      ? QStringLiteral("- bash and bash_manage execute on the remote host.\n")
-                      : QStringLiteral(
-                            "- bash, bash_manage and monitor are unavailable: "
-                            "the remote host has no usable shell (see Environment).\n"))
-               + QStringLiteral(
-                   "- path_context reports and changes remote paths.\n"
-                   "- todo tools read/write the remote workspace .qsoc/todos.md.\n"
-                   "- project memory, project skills, and project instructions are loaded from "
-                   "the\n"
-                   "  remote project when available.\n"
-                   "\n"
-                   "The following QSoC business tools are intentionally unavailable in remote "
-                   "mode:\n"
-                   "project_*, module_*, bus_*, generate_*, lsp.\n"
-                   "If a task requires these tools, explain that remote mode currently supports "
-                   "file,\n"
-                   "shell, docs, web, project memory, project skills, skill creation in remote\n"
-                   "project scope, and todo operations only.\n"
-                   "\n"
-                   "Use absolute remote paths in tool calls. Do not refer to local paths unless "
-                   "the\n"
-                   "user explicitly asks for local-machine information.\n"
-                   "\n"
-                   "Local QSoC configuration remains authoritative for LLM endpoints, API keys,\n"
-                   "proxy, remote profiles, SSH policy, tool policy, model selection, and safety\n"
-                   "rules. Remote .qsoc.yml is project metadata only and must not override local\n"
-                   "control configuration.\n"
-                   "\n"
-                   "# SSH Secret Handling\n"
-                   "Never request, display, summarize, copy, or store SSH private key contents.\n"
-                   "QSoC authenticates through ssh-agent or by passing an IdentityFile path to\n"
-                   "libssh2; the private key file content is never exposed to tools, prompts, "
-                   "logs,\n"
-                   "or memory.\n");
+        remoteSection += remoteToolLines();
+        remoteSection += QStringLiteral(
+            "\n"
+            "Use absolute remote paths in tool calls. Do not refer to local paths unless "
+            "the\n"
+            "user explicitly asks for local-machine information.\n"
+            "\n"
+            "Local QSoC configuration remains authoritative for LLM endpoints, API keys,\n"
+            "proxy, remote profiles, SSH policy, tool policy, model selection, and safety\n"
+            "rules. Remote .qsoc.yml is project metadata only and must not override local\n"
+            "control configuration.\n"
+            "\n"
+            "# SSH Secret Handling\n"
+            "Never request, display, summarize, copy, or store SSH private key contents.\n"
+            "QSoC authenticates through ssh-agent or by passing an IdentityFile path to\n"
+            "libssh2; the private key file content is never exposed to tools, prompts, "
+            "logs,\n"
+            "or memory.\n");
         prompt += remoteSection;
     }
 
@@ -3185,23 +3247,7 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
 
     /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md). */
     if (agentConfig.injectProjectMd) {
-        QString instructions;
-        if (agentConfig.remoteMode) {
-            const auto &snapshot = agentConfig.remoteProjectRules;
-            if (snapshot.target == agentConfig.remoteName
-                && snapshot.workspace == agentConfig.remoteWorkspace) {
-                instructions = snapshot.text;
-            }
-        } else if (!agentConfig.projectPath.isEmpty()) {
-            instructions = QSocProjectRules::loadLocal(agentConfig.projectPath);
-        }
-        if (!instructions.isEmpty()) {
-            prompt += QStringLiteral(
-                          "\n# Project instructions\n"
-                          "The following rules were loaded from AGENTS.md / AGENTS.local.md "
-                          "in the project root. Follow them precisely.\n\n")
-                      + instructions + QStringLiteral("\n");
-        }
+        prompt += projectInstructionsSection();
     }
 
     /* Section 10: Available skills */

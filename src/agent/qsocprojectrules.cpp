@@ -142,13 +142,13 @@ QString loadLocal(const QString &root)
     return render(reads);
 }
 
-QString loadRemote(QSocSftpClient *sftp, const QString &root)
+QList<Read> readAllRemote(QSocSftpClient *sftp, const QString &root)
 {
     QList<Read> reads;
     for (const QString &name : fileNames()) {
         reads.append(readRemote(sftp, root, root + QLatin1Char('/') + name));
     }
-    return render(reads);
+    return reads;
 }
 
 } // namespace QSocProjectRules

@@ -494,7 +494,10 @@ void Test::forkLoadsRemoteRulesAtTheBindingBoundary()
     const QString prompt = systemPromptOf(llm, 0);
     QCOMPARE(prompt, systemPromptOf(llm, 1));
     QCOMPARE(prompt.count(QStringLiteral("Bound remote sentinel")), 1);
-    QVERIFY(!prompt.contains(QStringLiteral("Local parent sentinel")));
+    QCOMPARE(prompt.count(QStringLiteral("Local parent sentinel")), 1);
+    QVERIFY(
+        prompt.indexOf(QStringLiteral("Local parent sentinel"))
+        < prompt.indexOf(QStringLiteral("Bound remote sentinel")));
     QVERIFY(!prompt.contains(QStringLiteral("Parent skill sentinel")));
     QVERIFY(!prompt.contains(QStringLiteral("Other remote sentinel")));
     QVERIFY(!prompt.contains(QStringLiteral("Rebound remote sentinel")));

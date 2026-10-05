@@ -617,6 +617,13 @@ private:
         const QString &connectString, bool unattended, AgentRemoteState *staged, QString *error);
     void installRemoteTools();
     void rememberRemoteBinding(const QString &target);
+
+    /* Remote workspace project files */
+    QString remoteWorkspaceLabel() const;
+    void    loadRemoteProjectFiles();
+
+    /* Sub-agent definitions of every layer the bound workspace offers. */
+    void reloadAgentDefinitions();
 };
 
 #endif /* QSOCAGENTRUNTIME_H */

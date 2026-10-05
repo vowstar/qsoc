@@ -1154,7 +1154,7 @@ until the service exits. Querying them makes no model request and does not
 add anything to the conversation.
 
 
-Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, under the same rules as local project instructions (see @agent-system-prompt). Remote prompts never substitute local project rules or skill paths. Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
+Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, under the same rules as local project instructions (see @agent-system-prompt). Each file prints one line, for example `Loaded AGENTS.md from <target>:<workspace> (812 bytes)`, or the reason it did not load. The local project's instructions stay in the prompt. Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
 
 === Definitions
 <agent-subagents-defs>
@@ -1162,9 +1162,8 @@ Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bo
 Three scopes exist, in shadowing order from highest to lowest:
 
 - *Project*: `<project>/.qsoc/agents/*.md`. In remote-workspace mode the
-  files are scanned over SFTP from the same path under the remote
-  workspace, so a remote project's definitions are seen without
-  uploading anything from the local host.
+  files are also scanned over SFTP from the same path under the remote
+  workspace, and a remote definition shadows a local one of the same name.
 - *User*: `~/.config/qsoc/agents/*.md`
 - *Builtin*: compiled in. The shipped names are `general-purpose`
   (full tool set), `explore` (read-only), and `verification` (adds
@@ -1659,7 +1658,9 @@ The system prompt is composed from:
   directory, injected verbatim. A file loads only when it is a regular file
   of at most 256 KiB and, if it is a symbolic link, its target is inside the
   project. Any other file adds a one-line notice with the reason instead of
-  its content. Missing files add nothing.
+  its content. Missing files add nothing. In remote mode the local project's
+  files come first and the remote workspace's files follow, and the prompt
+  says that the remote workspace's instructions win where the two conflict.
 - *Memory*: entries from the auto-memory store (see `memory_read` /
   `memory_write`), capped by `agent.memory_max_chars`
 - *Skill listing*: names and descriptions of installed skills so the agent
@@ -1886,8 +1887,9 @@ it, and a command that reads standard input sees end of file. The command
 starts in the working directory and does not run if that directory
 cannot be entered.
 
-The system prompt states that the web, docs, SMT and MCP tools run on the
-local machine.
+The system prompt lists, from the tools registered at that moment, the
+tools that act on the remote host, the tools that run on this machine, and
+the workspace tools that are not available.
 
 The following tools act on the workspace tree and have no remote form, so
 they are unavailable in remote mode:

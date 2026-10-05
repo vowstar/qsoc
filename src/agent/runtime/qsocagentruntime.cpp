@@ -889,18 +889,7 @@ void QSocAgentRuntime::registerTools()
 
     /* Sub-agent definitions + spawn tool. */
     d->agentDefinitions = new QSocAgentDefinitionRegistry(this);
-    d->agentDefinitions->registerBuiltins();
-    {
-        const QString userAgentsDir = QStandardPaths::writableLocation(
-                                          QStandardPaths::AppConfigLocation)
-                                      + QStringLiteral("/agents");
-        const QString projectRoot   = d->projectManager->getProjectPath();
-        QString       projectAgentsDir;
-        if (!projectRoot.isEmpty()) {
-            projectAgentsDir = QDir(projectRoot).filePath(QStringLiteral(".qsoc/agents"));
-        }
-        d->agentDefinitions->scanFromDisk(userAgentsDir, projectAgentsDir);
-    }
+    reloadAgentDefinitions();
     QSocToolAgent::sweepStaleWorktrees();
 
     /* Host catalog. */

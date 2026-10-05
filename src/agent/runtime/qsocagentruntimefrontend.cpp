@@ -264,7 +264,9 @@ bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QS
         discardAgentRemoteState(&staged);
         return fail(QStringLiteral("internal error: incomplete remote transport"));
     }
+    d->remoteAlias = request.target.trimmed();
     installRemoteTools();
+    loadRemoteProjectFiles();
     if (request.remember) {
         rememberRemoteBinding(request.target);
     }
@@ -418,6 +420,53 @@ QString QSocAgentRuntime::pickRemoteWorkspace(QSocSftpClient *sftp)
         [listError] { return *listError; });
 }
 
+QString QSocAgentRuntime::remoteWorkspaceLabel() const
+{
+    return d->remoteAlias + QLatin1Char(':') + d->remoteConn->workspace();
+}
+
+void QSocAgentRuntime::loadRemoteProjectFiles()
+{
+    auto       cfg   = d->agent->getConfig();
+    const auto reads = loadAgentRemoteProjectRules(d->remoteConn, &cfg);
+    d->agent->setConfig(cfg);
+    reloadAgentDefinitions();
+
+    const QString label = remoteWorkspaceLabel();
+    for (const auto &read : reads) {
+        if (read.status == QSocProjectRules::Status::Loaded) {
+            emitOutput(
+                QStringLiteral("Loaded %1 from %2 (%3 bytes)\n")
+                    .arg(read.name, label)
+                    .arg(read.bytes.size()),
+                static_cast<int>(QSocAgentRuntimeStyle::Dim));
+        } else {
+            emitOutput(
+                QStringLiteral("Did not load %1 from %2: %3\n")
+                    .arg(read.name, label, QSocProjectRules::reason(read.status)),
+                static_cast<int>(QSocAgentRuntimeStyle::Warning));
+        }
+    }
+}
+
+void QSocAgentRuntime::reloadAgentDefinitions()
+{
+    QSocAgentDefinitionRegistry *defs = d->agentDefinitions;
+    defs->removeByScope(QStringLiteral("user"));
+    defs->removeByScope(QStringLiteral("project"));
+    defs->registerBuiltins();
+    const QString userDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
+                            + QStringLiteral("/agents");
+    const QString project = d->projectManager->getProjectPath();
+    defs->scanFromDisk(
+        userDir,
+        project.isEmpty() ? QString() : QDir(project).filePath(QStringLiteral(".qsoc/agents")));
+    if (isRemote() && d->remoteConn->sftp() != nullptr && !d->remoteConn->workspace().isEmpty()) {
+        defs->scanFromRemoteSftp(
+            d->remoteConn->sftp(), d->remoteConn->workspace() + QStringLiteral("/.qsoc/agents"));
+    }
+}
+
 void QSocAgentRuntime::installRemoteTools()
 {
     d->remoteConn->setRebuilder([this](
@@ -489,12 +538,6 @@ void QSocAgentRuntime::installRemoteTools()
         return reason;
     });
 
-    /* Pull the remote project's agent definitions. */
-    if (d->remoteConn->sftp() != nullptr && !d->remoteConn->workspace().isEmpty()) {
-        d->agentDefinitions->scanFromRemoteSftp(
-            d->remoteConn->sftp(), d->remoteConn->workspace() + QStringLiteral("/.qsoc/agents"));
-    }
-
     QSocAgentRuntimeEvent event;
     event.kind      = QSocAgentRuntimeEvent::Kind::RemoteChanged;
     event.flag      = true;
@@ -532,8 +575,9 @@ void QSocAgentRuntime::disconnectRemote()
         newCfg.remoteWorkspace.clear();
         newCfg.remoteWorkingDir.clear();
         newCfg.remoteWritableDirs.clear();
-        newCfg.remoteMachine = QSocMachine{};
-        newCfg.skillListing  = d->skillListing();
+        newCfg.remoteMachine      = QSocMachine{};
+        newCfg.remoteProjectRules = {};
+        newCfg.skillListing       = d->skillListing();
         d->agent->setConfig(newCfg);
     }
 

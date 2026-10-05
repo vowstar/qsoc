@@ -120,7 +120,6 @@ bool QSocToolCatalog::alwaysDirect(const QString &name)
            "edit_file",
            "list_files",
            "bash",
-           "remote_shell_bash",
            "bash_manage",
            "path_context",
            "ask_user",

@@ -5,6 +5,7 @@
 #define QSOCAGENTREMOTE_H
 
 #include "agent/qsocfilehistory.h"
+#include "agent/qsocprojectrules.h"
 #include "agent/remote/qsocremotehost.h"
 #include "agent/remote/qsocremotejobs.h"
 #include "agent/remote/qsocremotepathcontext.h"
@@ -30,8 +31,12 @@ class QSocRemoteConnection;
 /** @brief Copy the probed host description into @p config for the prompt. */
 void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *config);
 
-/** @brief Load bounded project rules once when binding a remote workspace. */
-void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *config);
+/**
+ * @brief Load bounded project rules once when binding a remote workspace.
+ * @return One entry per instruction file present in the workspace.
+ */
+QList<QSocProjectRules::Read> loadAgentRemoteProjectRules(
+    QSocRemoteConnection *conn, QSocAgentConfig *config);
 
 /**
  * @brief Short-lived staging bundle for one connect attempt.

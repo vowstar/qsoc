@@ -32,17 +32,23 @@ void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *
     config->remoteMachine = conn->host();
 }
 
-void loadAgentRemoteProjectRules(QSocRemoteConnection *conn, QSocAgentConfig *config)
+QList<QSocProjectRules::Read> loadAgentRemoteProjectRules(
+    QSocRemoteConnection *conn, QSocAgentConfig *config)
 {
     config->remoteProjectRules = {};
     if (!config->injectProjectMd || conn == nullptr || conn->sftp() == nullptr
         || conn->workspace().isEmpty()) {
-        return;
+        return {};
     }
     auto &snapshot     = config->remoteProjectRules;
     snapshot.target    = conn->target();
     snapshot.workspace = conn->workspace();
-    snapshot.text      = QSocProjectRules::loadRemote(conn->sftp(), snapshot.workspace);
+    auto reads         = QSocProjectRules::readAllRemote(conn->sftp(), snapshot.workspace);
+    snapshot.text      = QSocProjectRules::render(reads);
+    reads.removeIf([](const QSocProjectRules::Read &read) {
+        return read.status == QSocProjectRules::Status::Absent;
+    });
+    return reads;
 }
 
 namespace {

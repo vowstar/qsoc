@@ -212,12 +212,23 @@ public:
     void              setFallback(QSocToolRegistry *base);
     QSocToolRegistry *fallback() const { return fallback_.data(); }
 
+    /** @brief Whether @p name resolves to a tool of the base registry. */
+    bool isBaseTool(const QString &name) const;
+
     /**
      * @brief Whether a tool name acts on the bound workspace tree
      * @param name Tool name
      * @return true when the name must come from the workspace's own registry
      */
     static bool isWorkspaceBound(const QString &name);
+
+    /**
+     * @brief The workspace-bound entry a tool name belongs to
+     * @param name Tool name
+     * @return The name itself, a family such as `module_*`, or empty when the
+     *         name is not workspace-bound
+     */
+    static QString workspaceBoundFamily(const QString &name);
 
     /**
      * @brief Get a tool by name
@@ -306,6 +317,7 @@ private:
 
     QMap<QString, QPointer<QSocTool>> visibleTools() const;
     bool                              ownsTool(const QString &name, const QSocTool *tool) const;
+    bool                              reachesBase(const QString &name) const;
 
     QMap<QString, QPointer<QSocTool>> tools_;
     QSet<ActiveCall *>                activeCalls_;

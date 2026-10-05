@@ -481,7 +481,7 @@ private slots:
         QVERIFY(lines.contains(QStringLiteral("- Arch: amd64\n")));
         QVERIFY(lines.contains(QStringLiteral("- Shell: sh (POSIX only")));
         QVERIFY(lines.contains(QStringLiteral("- Executor: remote\n")));
-        QVERIFY(lines.contains(QStringLiteral("MCP")));
+        QVERIFY(lines.contains(QStringLiteral("- This machine (")));
 
         FakeBinding windows(windowsHost());
         applyRemoteHostToConfig(&windows.conn, &config);
