@@ -11,7 +11,6 @@
 #include "cli/qsocresourceformat.h"
 #include "common/qsocinterrupt.h"
 #include "common/qsocmessageauthority.h"
-#include "tui/qtuiimagepreviewblock.h"
 #include <QSocketNotifier>
 
 #include "agent/protocol/qsocagentoptions.h"
@@ -20,18 +19,15 @@
 #include "cli/qagenthistorysearch.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
-#include "cli/qsocsessiontranscript.h"
+#include "cli/qsoctranscriptrenderer.h"
 #include "cli/qterminalcapability.h"
 #include "common/qsocconsole.h"
-#include "common/qsoclinediff.h"
 #include "tui/qtuicompositor.h"
-#include "tui/qtuidiffblock.h"
 #include "tui/qtuilineinput.h"
 #include "tui/qtuimenu.h"
 #include "tui/qtuipathpicker.h"
 #include "tui/qtuiscrollview.h"
 #include "tui/qtuisecretprompt.h"
-#include "tui/qtuitodoblock.h"
 #include <QDir>
 #include <QElapsedTimer>
 #include <QRegularExpression>
@@ -55,92 +51,6 @@
 #endif
 
 using json = nlohmann::json;
-
-namespace {
-
-QList<QTuiTodoList::TodoItem> parseTodoListResult(const QString &result)
-{
-    QList<QTuiTodoList::TodoItem> items;
-
-    /* Match pattern: [x] or [ ] followed by ID. Title (priority) */
-    QRegularExpression regex(R"(\[([ x])\]\s*(\d+)\.\s*(.+?)\s*\((\w+)\))");
-
-    const QStringList lines = result.split('\n');
-    for (const QString &line : lines) {
-        QRegularExpressionMatch match = regex.match(line);
-        if (match.hasMatch()) {
-            QTuiTodoList::TodoItem item;
-            item.status   = (match.captured(1) == "x") ? "done" : "pending";
-            item.id       = match.captured(2).toInt();
-            item.title    = match.captured(3).trimmed();
-            item.priority = match.captured(4);
-            items.append(item);
-        }
-    }
-
-    return items;
-}
-
-/**
- * @brief Parse todo_add result into a single TodoItem
- * @param result The result string from todo_add tool
- *        Format: "Added todo #37: Title here (priority)"
- * @return TodoItem if parsed successfully, empty item if not
- */
-QTuiTodoList::TodoItem parseTodoAddResult(const QString &result)
-{
-    QTuiTodoList::TodoItem item;
-    item.id = -1; /* Invalid by default */
-
-    /* Match: "Added todo #ID: Title (priority)" */
-    QRegularExpression      regex(R"(Added todo #(\d+):\s*(.+?)\s*\((\w+)(?:\s+priority)?\))");
-    QRegularExpressionMatch match = regex.match(result);
-
-    if (match.hasMatch()) {
-        item.id       = match.captured(1).toInt();
-        item.title    = match.captured(2).trimmed();
-        item.priority = match.captured(3);
-        item.status   = "pending";
-    }
-
-    return item;
-}
-
-/**
- * @brief Parse todo_update result to extract ID and new status
- * @param result The result string from todo_update tool
- *        Format: "Updated todo #37 status to: done"
- * @return Pair of (todoId, newStatus), todoId=-1 if parse failed
- */
-QPair<int, QString> parseTodoUpdateResult(const QString &result)
-{
-    /* Match: "Updated todo #ID: Title (status: STATUS)" */
-    QRegularExpression      regex(R"(Updated todo #(\d+):\s*.+?\(status:\s*(\w+)\))");
-    QRegularExpressionMatch match = regex.match(result);
-
-    if (match.hasMatch()) {
-        return qMakePair(match.captured(1).toInt(), match.captured(2));
-    }
-
-    return qMakePair(-1, QString());
-}
-
-QTuiScrollView::LineStyle styleFor(QSocAgentRuntimeStyle style)
-{
-    switch (style) {
-    case QSocAgentRuntimeStyle::Dim:
-        return QTuiScrollView::Dim;
-    case QSocAgentRuntimeStyle::Bold:
-        return QTuiScrollView::Bold;
-    case QSocAgentRuntimeStyle::Warning:
-        return QTuiScrollView::DiffHunk;
-    case QSocAgentRuntimeStyle::Normal:
-        break;
-    }
-    return QTuiScrollView::Normal;
-}
-
-} // namespace
 
 /* ---------------------------------------------------------------------- */
 /* The TUI client loop. */
@@ -220,7 +130,7 @@ bool QSocCliWorker::runAgentClientLoop(
     QTimer     resourceDeadline;
     resourceDeadline.setSingleShot(true);
     QString               resumeHint;
-    bool                  streamedContent = false;
+    bool                  queryStreamed = false;
     QSocAgentInputHistory inputHistory;
     QStringList           history;
     QString               ghost;
@@ -243,8 +153,8 @@ bool QSocCliWorker::runAgentClientLoop(
         completionStart = -1;
     };
 
-    QHash<QString, QJsonObject> pendingTools;
-    QElapsedTimer               lastInterrupt;
+    QSocTranscriptRenderer renderer(compositor);
+    QElapsedTimer          lastInterrupt;
     const auto send = [&](const QString &method, const QJsonObject &values = QJsonObject()) {
         client.send({{"id", client.nextId()}, {"method", method}, {"params", values}});
     };
@@ -300,11 +210,10 @@ bool QSocCliWorker::runAgentClientLoop(
             resourceWorkspace = cwd;
         statusBarWidget.setRemoteState(remote, !remote.isEmpty());
         if (state.contains("messages")) {
-            compositor.contentView().clear();
             const auto messages = json::parse(QJsonDocument(state.value("messages").toArray())
                                                   .toJson(QJsonDocument::Compact)
                                                   .toStdString());
-            QSocSessionTranscript::appendTo(messages, compositor.contentView());
+            renderer.replaceHistory(messages);
             history.clear();
             for (const auto &message : messages) {
                 if (QSocMessageAuthority::isUserRequest(message) && message.contains("content")
@@ -410,122 +319,36 @@ bool QSocCliWorker::runAgentClientLoop(
                 return;
             }
             if (singleQuery) {
-                if (event.kind == QSocAgentRuntimeEvent::Kind::ContentChunk) {
-                    streamedContent = true;
-                    compositor.appendAssistantChunk(event.text);
-                } else if (event.kind == QSocAgentRuntimeEvent::Kind::ReasoningChunk) {
-                    streamedContent = true;
-                    compositor.appendReasoningChunk(event.text);
+                if (event.kind == QSocAgentRuntimeEvent::Kind::ContentChunk
+                    || event.kind == QSocAgentRuntimeEvent::Kind::ReasoningChunk) {
+                    queryStreamed = true;
+                    renderer.apply(event);
                 } else if (event.kind == QSocAgentRuntimeEvent::Kind::Output) {
                     QSocConsole::out() << event.text << Qt::flush;
                 }
                 return;
             }
+            renderer.apply(event);
             switch (event.kind) {
             case QSocAgentRuntimeEvent::Kind::ContentChunk:
-                streamedContent = true;
-                compositor.appendAssistantChunk(event.text);
-                compositor.render();
-                break;
             case QSocAgentRuntimeEvent::Kind::ReasoningChunk:
-                compositor.appendReasoningChunk(event.text);
+            case QSocAgentRuntimeEvent::Kind::ToolOutput:
+            case QSocAgentRuntimeEvent::Kind::ToolFinished:
+            case QSocAgentRuntimeEvent::Kind::Output:
+            case QSocAgentRuntimeEvent::Kind::TaskNotification:
+            case QSocAgentRuntimeEvent::Kind::SessionStarted:
+            case QSocAgentRuntimeEvent::Kind::SessionCleared:
                 compositor.render();
                 break;
             case QSocAgentRuntimeEvent::Kind::ToolStarted:
-                pendingTools
-                    .insert(event.callId, QJsonDocument::fromJson(event.text.toUtf8()).object());
                 statusBarWidget.toolCalled(event.secondary, event.text.left(60));
-                compositor.beginToolUse(event.secondary, event.text.left(60), event.callId);
                 compositor.render();
                 break;
-            case QSocAgentRuntimeEvent::Kind::ToolOutput:
-                compositor.appendToolUseBody(event.text, event.callId);
-                compositor.render();
-                break;
-            case QSocAgentRuntimeEvent::Kind::ToolFinished: {
-                const auto    args = pendingTools.take(event.callId);
-                const QString name = event.secondary;
-                if (name == "todo_list") {
-                    const auto items = parseTodoListResult(event.text);
-                    compositor.todoList().setItems(items);
-                    compositor.contentView().appendBlock(std::make_unique<QTuiTodoBlock>(items));
-                } else if (name == "todo_add") {
-                    const auto item = parseTodoAddResult(event.text);
-                    if (item.id >= 0)
-                        compositor.todoList().addItem(item);
-                } else if (name == "todo_update" || name == "todo_delete") {
-                    const auto [id, status] = parseTodoUpdateResult(event.text);
-                    if (id >= 0) {
-                        if (name == "todo_delete")
-                            compositor.todoList().removeItem(id);
-                        else
-                            compositor.todoList().updateStatus(id, status);
-                    }
-                }
-                if (event.ok && (name == "edit_file" || name == "write_file")) {
-                    const QString path  = args.value("file_path").toString();
-                    const auto    lines = QSocLineDiff::computeLineDiff(
-                        args.value("old_string").toString(),
-                        args.value(name == "edit_file" ? "new_string" : "content").toString());
-                    auto block = std::make_unique<QTuiDiffBlock>("--- a/" + path, "+++ b/" + path);
-                    for (const auto &line : lines) {
-                        const auto kind = line.kind == QSocLineDiff::Kind::Add
-                                              ? QTuiDiffBlock::Kind::Add
-                                          : line.kind == QSocLineDiff::Kind::Del
-                                              ? QTuiDiffBlock::Kind::Del
-                                          : line.kind == QSocLineDiff::Kind::Hunk
-                                              ? QTuiDiffBlock::Kind::Hunk
-                                              : QTuiDiffBlock::Kind::Context;
-                        block->addRow(kind, line.text);
-                    }
-                    compositor.contentView().appendBlock(std::move(block));
-                }
-                compositor.replaceToolUseBody(event.text, event.callId);
-                compositor.finishToolUse(
-                    event.ok ? QTuiToolBlock::Status::Success : QTuiToolBlock::Status::Failure,
-                    {},
-                    event.callId);
-                compositor.render();
-                break;
-            }
             case QSocAgentRuntimeEvent::Kind::RunComplete:
-                if (!streamedContent && !event.text.isEmpty())
-                    compositor.appendAssistantChunk(event.text);
-                streamedContent = false;
-                compositor.finishStream();
-                compositor.resetExecution();
-                compositor.printContent(QStringLiteral("\n"));
-                statusBarWidget.setStatus(QStringLiteral("Ready"));
-                compositor.render();
-                break;
             case QSocAgentRuntimeEvent::Kind::RunError:
-                streamedContent = false;
-                compositor.finishStream();
-                compositor.resetExecution();
-                compositor.printContent(QStringLiteral("\nError: %1\n").arg(event.text));
-                statusBarWidget.setStatus(QStringLiteral("Ready"));
-                compositor.render();
-                break;
             case QSocAgentRuntimeEvent::Kind::RunAborted:
-                compositor.resetExecution();
-                compositor.printContent(QStringLiteral("\n%1\n").arg(
-                    event.text.isEmpty() ? QStringLiteral("(interrupted)") : event.text));
                 statusBarWidget.setStatus(QStringLiteral("Ready"));
                 compositor.render();
-                break;
-            case QSocAgentRuntimeEvent::Kind::ImagePreview:
-                if (event.json.is_object()) {
-                    compositor.contentView().appendBlock(
-                        std::make_unique<QTuiImagePreviewBlock>(
-                            event.text,
-                            QString::fromStdString(event.json.value("mime", std::string())),
-                            event.json.value("width", 0),
-                            event.json.value("height", 0),
-                            QByteArray::fromBase64(
-                                QByteArray::fromStdString(
-                                    event.json.value("data", std::string())))));
-                    compositor.invalidate();
-                }
                 break;
             case QSocAgentRuntimeEvent::Kind::UserStatusLine:
                 statusBarWidget.setUserLine(event.text);
@@ -539,27 +362,6 @@ bool QSocCliWorker::runAgentClientLoop(
                     compositor.invalidate();
                 }
                 break;
-            case QSocAgentRuntimeEvent::Kind::Diff: {
-                const QString before = QString::fromStdString(
-                    event.json.value("before", std::string()));
-                const QString after = QString::fromStdString(
-                    event.json.value("after", std::string()));
-                auto block
-                    = std::make_unique<QTuiDiffBlock>("--- a/" + event.text, "+++ b/" + event.text);
-                for (const auto &line : QSocLineDiff::computeLineDiff(before, after)) {
-                    const auto kind = line.kind == QSocLineDiff::Kind::Add
-                                          ? QTuiDiffBlock::Kind::Add
-                                      : line.kind == QSocLineDiff::Kind::Del
-                                          ? QTuiDiffBlock::Kind::Del
-                                      : line.kind == QSocLineDiff::Kind::Hunk
-                                          ? QTuiDiffBlock::Kind::Hunk
-                                          : QTuiDiffBlock::Kind::Context;
-                    block->addRow(kind, line.text);
-                }
-                compositor.contentView().appendBlock(std::move(block));
-                compositor.invalidate();
-                break;
-            }
             case QSocAgentRuntimeEvent::Kind::Retrying:
                 statusBarWidget.setStatus(
                     QString("Retrying (%1/%2)").arg(event.attempt).arg(event.maxAttempts));
@@ -587,10 +389,6 @@ bool QSocCliWorker::runAgentClientLoop(
                 statusBarWidget.setStatus(event.text);
                 compositor.render();
                 break;
-            case QSocAgentRuntimeEvent::Kind::Output:
-                compositor.printContent(event.text, styleFor(event.style));
-                compositor.render();
-                break;
             case QSocAgentRuntimeEvent::Kind::Tokens:
                 statusBarWidget.updateTokens(event.inputTokens, event.outputTokens);
                 compositor.render();
@@ -601,22 +399,10 @@ bool QSocCliWorker::runAgentClientLoop(
                 compositor.render();
                 break;
             case QSocAgentRuntimeEvent::Kind::SessionResumed:
-                if (event.json.is_object() && event.json.contains("messages")) {
-                    compositor.contentView().clear();
-                    QSocSessionTranscript::appendTo(event.json["messages"], compositor.contentView());
-                    if (event.json.contains("input") && event.json["input"].is_string())
-                        inputMonitor.setInputBuffer(
-                            QString::fromStdString(event.json["input"].get<std::string>()));
-                }
-                [[fallthrough]];
-            case QSocAgentRuntimeEvent::Kind::SessionStarted:
-            case QSocAgentRuntimeEvent::Kind::SessionCleared:
-                compositor.printContent(event.text);
-                compositor.render();
-                break;
-            case QSocAgentRuntimeEvent::Kind::TaskNotification:
-                compositor.printContent(
-                    QStringLiteral("(task: %1)\n").arg(event.text.left(80)), QTuiScrollView::Dim);
+                if (event.json.is_object() && event.json.contains("messages")
+                    && event.json.contains("input") && event.json["input"].is_string())
+                    inputMonitor.setInputBuffer(
+                        QString::fromStdString(event.json["input"].get<std::string>()));
                 compositor.render();
                 break;
             case QSocAgentRuntimeEvent::Kind::ModelChanged:
@@ -692,7 +478,7 @@ bool QSocCliWorker::runAgentClientLoop(
                     : result.value("stop_notice").toString());
         if (result.contains("persisted") && !result.value("persisted").toBool())
             return showError(1, "Session persistence failed.");
-        if (streamedContent) {
+        if (queryStreamed) {
             compositor.finishStream();
             QString content = compositor.contentView().toAnsi(
                 qMax(20, compositor.getTerminalWidth() - 1));
