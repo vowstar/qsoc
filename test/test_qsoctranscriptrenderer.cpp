@@ -292,6 +292,7 @@ private slots:
     void fillsTheTodoPane();
     void showsArgumentDetailAndOutcome();
     void echoesUserMessages();
+    void queuedPromptMatchesReplay();
     void stripsControlsFromExternalText();
     void replaceHistoryClearsTheScrollback();
 };
@@ -389,12 +390,43 @@ void Test::echoesUserMessages()
 {
     QTuiCompositor         compositor;
     QSocTranscriptRenderer renderer(compositor);
-    renderer.apply(make(Kind::ContentChunk, QStringLiteral("streaming")));
     renderer.apply(make(Kind::UserMessage, QStringLiteral("typed prompt")));
+    renderer.apply(make(Kind::UserMessage, QStringLiteral("queued prompt")));
     QTuiCompositor expected;
-    expected.appendAssistantChunk(QStringLiteral("streaming"));
     expected.appendUserMessage(QStringLiteral("typed prompt"));
+    expected.appendUserMessage(QStringLiteral("queued prompt"));
     QCOMPARE(compositor.contentView().toAnsi(80), expected.contentView().toAnsi(80));
+}
+
+/* A prompt taken up inside a run ends the answer before it, as on replay. */
+void Test::queuedPromptMatchesReplay()
+{
+    QTuiCompositor         live;
+    QSocTranscriptRenderer renderer(live);
+    for (const Event &event :
+         {make(Kind::UserMessage, QStringLiteral("first")),
+          make(Kind::ReasoningChunk, QStringLiteral("thinking")),
+          make(Kind::ContentChunk, QStringLiteral("FIRSTANSWER")),
+          make(Kind::ProcessingQueued, QStringLiteral("second")),
+          make(Kind::UserMessage, QStringLiteral("second")),
+          make(Kind::ContentChunk, QStringLiteral("SECONDANSWER")),
+          make(Kind::RunComplete)})
+        renderer.apply(event);
+
+    const json history = json::array(
+        {{{"role", "user"}, {"content", "first"}},
+         {{"role", "assistant"}, {"content", "FIRSTANSWER"}, {"reasoning_content", "thinking"}},
+         {{"role", "user"}, {"content", "second"}},
+         {{"role", "assistant"}, {"content", "SECONDANSWER"}}});
+    QTuiCompositor         replay;
+    QSocTranscriptRenderer replayRenderer(replay);
+    replayRenderer.replaceHistory(history);
+
+    QCOMPARE(live.contentView().toAnsi(80), replay.contentView().toAnsi(80));
+    const QString plain = live.contentView().toPlainText();
+    QVERIFY(!plain.contains(QStringLiteral("FIRSTANSWERSECONDANSWER")));
+    QVERIFY(plain.indexOf(QStringLiteral("FIRSTANSWER")) < plain.indexOf(QStringLiteral("second")));
+    QVERIFY(plain.indexOf(QStringLiteral("second")) < plain.indexOf(QStringLiteral("SECONDANSWER")));
 }
 
 void Test::stripsControlsFromExternalText()

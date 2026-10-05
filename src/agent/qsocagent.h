@@ -737,6 +737,12 @@ signals:
     void processingQueuedRequest(const QString &request, int queueSize);
 
     /**
+     * @brief A request the user typed entered the history
+     * @param request The request text after the user_prompt_submit hook
+     */
+    void userRequestAdded(const QString &request);
+
+    /**
      * @brief Signal emitted when operation is aborted by user
      * @param partialResult Any partial result accumulated so far
      */
@@ -1105,6 +1111,8 @@ private:
     void addMessage(const QString &role, const QString &content);
     /* A user-role message the user did not type, marked by its origin. */
     void addNotificationMessage(const QString &content);
+    /* A request the user typed, after the prompt hook. */
+    void addUserRequest(const QString &request);
 
 public:
     /**

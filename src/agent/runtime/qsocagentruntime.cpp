@@ -1151,6 +1151,13 @@ void QSocAgentRuntime::wireAgentCallbacks()
         event.at   = QDateTime::currentDateTimeUtc();
         emit eventRaised(event);
     });
+    connect(d->agent, &QSocAgent::userRequestAdded, this, [this](const QString &request) {
+        QSocAgentRuntimeEvent event;
+        event.kind = QSocAgentRuntimeEvent::Kind::UserMessage;
+        event.text = request;
+        event.at   = QDateTime::currentDateTimeUtc();
+        emit eventRaised(event);
+    });
     connect(d->agent, &QSocAgent::processingQueuedRequest, this, [this](const QString &request, int) {
         const auto notice = d->agent->takeStopNotice();
         if (!notice.isEmpty())

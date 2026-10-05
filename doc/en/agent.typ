@@ -592,10 +592,11 @@ Completion and interrupt:
 
 Input typed while the agent is still starting, *Enter* included, is kept.
 While the agent is executing, *Enter* submits input for the next iteration and
-*ESC* requests cancellation. With queued input, the agent stops the current
-step and continues with that input; otherwise it stops the run. Conversation
-history and completed tool results are preserved. The active tool may already
-have changed external state.
+*ESC* requests cancellation. Queued input waits below the transcript and enters
+it as a separate prompt when the agent reads it. With queued input, the agent
+stops the current step and continues with that input; otherwise it stops the
+run. Conversation history and completed tool results are preserved. The active
+tool may already have changed external state.
 
 *ESC* is not processed while a synchronous remote command is running. Losing
 its SSH channel does not guarantee that the remote process has stopped.

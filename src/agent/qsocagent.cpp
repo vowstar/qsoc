@@ -619,7 +619,7 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
         if (!canContinue()) {
             return false;
         }
-        owner->addMessage("user", request);
+        owner->addUserRequest(request);
         owner->appendTurnContext(true);
     }
     return false;
@@ -815,7 +815,7 @@ QString QSocAgent::run(const QString &userQuery)
     }
 
     /* Add user message to history */
-    owner->addMessage("user", prompt);
+    owner->addUserRequest(prompt);
 
     owner->planNudgeUsed = false;
 
@@ -1046,7 +1046,7 @@ void QSocAgent::startStream(const std::optional<QString> &userQuery, bool restor
                 QStringLiteral("user_prompt_submit hook blocked: %1").arg(blockReason));
             return;
         }
-        addMessage("user", prompt);
+        addUserRequest(prompt);
         recallQuery = prompt;
     } else {
         for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
@@ -3266,6 +3266,12 @@ void QSocAgent::addMessage(const QString &role, const QString &content)
     }
     messages.push_back({{"role", role.toStdString()}, {"content", content.toStdString()}});
     ++historyRevision_;
+}
+
+void QSocAgent::addUserRequest(const QString &request)
+{
+    addMessage("user", request);
+    emit userRequestAdded(request);
 }
 
 void QSocAgent::addNotificationMessage(const QString &content)

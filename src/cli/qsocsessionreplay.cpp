@@ -187,7 +187,6 @@ void Builder::user(const json &message)
     } else if (!text.isEmpty() && !isSyntheticUserMessage(text)) {
         endTurn();
         push(Kind::UserMessage, text);
-        open = true;
     }
     images(*content);
 }

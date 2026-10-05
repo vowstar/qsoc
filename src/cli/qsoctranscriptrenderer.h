@@ -25,7 +25,8 @@ public:
     explicit QSocTranscriptRenderer(QTuiCompositor &compositor);
 
     /**
-     * Add the blocks for one event. Kinds without blocks are ignored. Text
+     * Add the blocks for one event. Kinds without blocks are ignored. A user
+     * message first ends the answer still open, as a finished run does. Text
      * from the model, tools, files and providers loses its terminal control
      * sequences first.
      */
@@ -42,6 +43,7 @@ private:
     void render(const QSocAgentRuntimeEvent &event);
     void startTool(const QSocAgentRuntimeEvent &event);
     void finishTool(const QSocAgentRuntimeEvent &event);
+    void closeAnswer();
     void resetExecution();
     void updateTodos(const QString &name, const QString &result);
     void appendDiff(const QString &path, const QString &before, const QString &after);
@@ -51,6 +53,7 @@ private:
     QTuiCompositor                &compositor;
     QHash<QString, nlohmann::json> pendingArgs;
     bool                           streamedContent = false;
+    bool                           answerOpen      = false;
     bool                           replaying       = false;
     bool                           todoPaneKnown   = true;
 };

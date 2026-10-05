@@ -663,12 +663,15 @@ bool QSocCliWorker::runAgentClientLoop(
             options.sshTarget.isEmpty() ? "local" : options.sshTarget);
         historyPosition = history.size();
         compositor.dismissTopBanner();
-        QSocAgentRuntimeEvent echo;
-        echo.kind = QSocAgentRuntimeEvent::Kind::UserMessage;
-        echo.text = text;
-        renderer.apply(echo);
         const bool command = trimmed.startsWith('/') || trimmed.startsWith('!')
                              || trimmed.startsWith('#');
+        /* A prompt echoes when the runtime adds it to the history. */
+        if (command) {
+            QSocAgentRuntimeEvent echo;
+            echo.kind = QSocAgentRuntimeEvent::Kind::UserMessage;
+            echo.text = text;
+            renderer.apply(echo);
+        }
         statusBarWidget.setStatus(running ? "Queued" : "Reasoning");
         statusBarWidget.startTimers();
         send(command ? "command" : "turn", {{"input", inputHistory.expand(text)}});

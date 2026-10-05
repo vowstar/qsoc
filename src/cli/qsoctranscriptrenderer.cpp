@@ -216,35 +216,39 @@ void QSocTranscriptRenderer::render(const QSocAgentRuntimeEvent &event)
     switch (event.kind) {
     case Kind::ContentChunk:
         streamedContent = true;
+        answerOpen      = true;
         compositor.appendAssistantChunk(event.text);
         break;
     case Kind::ReasoningChunk:
+        answerOpen = true;
         compositor.appendReasoningChunk(event.text);
         break;
     case Kind::ToolStarted:
+        answerOpen = true;
         startTool(event);
         break;
     case Kind::ToolOutput:
         compositor.appendToolUseBody(event.text, event.callId);
         break;
     case Kind::ToolFinished:
+        answerOpen = true;
         finishTool(event);
         break;
     case Kind::RunComplete:
         if (!streamedContent && !event.text.isEmpty())
             compositor.appendAssistantChunk(event.text);
-        streamedContent = false;
-        compositor.finishStream();
+        closeAnswer();
         resetExecution();
-        compositor.printContent(QStringLiteral("\n"));
         break;
     case Kind::RunError:
         streamedContent = false;
+        answerOpen      = false;
         compositor.finishStream();
         resetExecution();
         compositor.printContent(QStringLiteral("\nError: %1\n").arg(event.text));
         break;
     case Kind::RunAborted:
+        answerOpen = false;
         resetExecution();
         compositor.printContent(QStringLiteral("\n%1\n").arg(
             event.text.isEmpty() ? QStringLiteral("(interrupted)") : event.text));
@@ -272,6 +276,8 @@ void QSocTranscriptRenderer::render(const QSocAgentRuntimeEvent &event)
             QStringLiteral("(task: %1)\n").arg(event.text.left(80)), QTuiScrollView::Dim);
         break;
     case Kind::UserMessage:
+        if (answerOpen)
+            closeAnswer();
         compositor.appendUserMessage(event.text);
         break;
     case Kind::Compacted:
@@ -288,6 +294,7 @@ void QSocTranscriptRenderer::replaceHistory(const nlohmann::json &messages)
     compositor.todoList().setItems({});
     pendingArgs.clear();
     streamedContent = false;
+    answerOpen      = false;
     replaying       = true;
     todoPaneKnown   = false;
     for (const auto &event : QSocSessionReplay::events(messages))
@@ -317,6 +324,14 @@ void QSocTranscriptRenderer::finishTool(const QSocAgentRuntimeEvent &event)
             jsonString(args, name == "edit_file" ? "new_string" : "content"));
     compositor.replaceToolUseBody(event.text, event.callId);
     compositor.finishToolUse(status, {}, event.callId);
+}
+
+void QSocTranscriptRenderer::closeAnswer()
+{
+    streamedContent = false;
+    answerOpen      = false;
+    compositor.finishStream();
+    compositor.printContent(QStringLiteral("\n"));
 }
 
 void QSocTranscriptRenderer::resetExecution()

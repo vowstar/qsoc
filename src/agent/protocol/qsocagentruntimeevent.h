@@ -98,7 +98,7 @@ struct QSocAgentRuntimeEvent
         InputPrediction,   /**< Suggested next input (text). */
         Diff,              /**< Unified diff source (text, secondary, json). */
         StopNotice,        /**< Why a run stopped on its own (text). */
-        UserMessage,       /**< A request the user typed (text). */
+        UserMessage,       /**< A request the user typed entered the history (text). */
     };
 
     Kind           kind = Kind::Output;

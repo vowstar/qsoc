@@ -114,6 +114,13 @@ QByteArray config(int port)
         .toUtf8();
 }
 
+QByteArray queueScript()
+{
+    const QJsonArray steps{step("Read the question.", "FIRSTANSWER"), step({}, "SECONDANSWER")};
+    const QJsonArray routes{QJsonObject{{"contains", "QUEUECHECK"}, {"responses", steps}}};
+    return QJsonDocument(routes).toJson();
+}
+
 QString todoPane(QTuiCompositor &compositor)
 {
     QTuiWidget &widget = compositor.todoList();
@@ -144,6 +151,7 @@ class Test : public QObject
 private slots:
     void cleanupTestCase();
     void replayMatchesTheLiveTranscript();
+    void queuedPromptEchoesWhereItIsRead();
 };
 
 void Test::cleanupTestCase()
@@ -194,10 +202,6 @@ void Test::replayMatchesTheLiveTranscript()
         QSignalSpy events(&runtime, &QSocAgentRuntime::eventRaised);
         for (const QString &prompt :
              {QStringLiteral("REPLAYCHECK first"), QStringLiteral("second")}) {
-            Event echo;
-            echo.kind = Kind::UserMessage;
-            echo.text = prompt;
-            liveRenderer.apply(echo);
             events.clear();
             const auto result = runtime.runTurn(prompt);
             QVERIFY2(!result.error, qPrintable(result.finalText));
@@ -228,6 +232,81 @@ void Test::replayMatchesTheLiveTranscript()
     QVERIFY(plain.contains(QStringLiteral("│ name │ value │")));
     QVERIFY(live.contentView().toPlainText().contains(QStringLiteral("Summarize the result.")));
     QVERIFY(todoPane(live).contains(QStringLiteral("Write tests")));
+}
+
+/* A prompt queued while the answer streams is its own message, echoed where
+ * the runtime reads it, and the live transcript equals the replay. */
+void Test::queuedPromptEchoesWhereItIsRead()
+{
+    QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_runtime_replay_XXXXXX"));
+    QVERIFY(fixture.isValid());
+    const QString project = QDir(fixture.path()).filePath(QStringLiteral("project"));
+    QVERIFY(QDir().mkpath(project));
+    const QString scriptPath = QDir(fixture.path()).filePath(QStringLiteral("script.json"));
+    QFile         scriptFile(scriptPath);
+    QVERIFY(scriptFile.open(QIODevice::WriteOnly));
+    scriptFile.write(queueScript());
+    scriptFile.close();
+
+    const int port = pickFreePort();
+    QVERIFY(port > 0);
+    QFile configFile(QDir(g_env.root).filePath(QStringLiteral("config/qsoc/qsoc.yml")));
+    QVERIFY(configFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    configFile.write(config(port));
+    configFile.close();
+
+    auto mockEnvironment = isolatedEnvironment(fixture.path());
+    mockEnvironment.insert(QStringLiteral("MOCK_TTL"), QStringLiteral("120"));
+    mockEnvironment.insert(QStringLiteral("MOCK_SCRIPT"), scriptPath);
+    BoundedProcess mock;
+    mock.setProcessEnvironment(mockEnvironment);
+    mock.setStandardOutputFile(QDir(fixture.path()).filePath(QStringLiteral("mock.out")));
+    mock.setStandardErrorFile(QDir(fixture.path()).filePath(QStringLiteral("mock.err")));
+    mock.start(QString::fromUtf8(QSOC_MOCK_LLM_PATH), {QString::number(port), QStringLiteral("none")});
+    QVERIFY(mock.waitForStarted(5000));
+    QVERIFY(waitForMockReady(mock, port, 45000));
+
+    QSocAgentRuntimeOptions options;
+    options.projectDirectory = project;
+
+    QTuiCompositor         live;
+    QSocTranscriptRenderer liveRenderer(live);
+    QString                sessionId;
+    {
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+        sessionId   = runtime.sessionId();
+        bool queued = false;
+        connect(&runtime, &QSocAgentRuntime::eventRaised, &runtime, [&](const Event &event) {
+            liveRenderer.apply(event);
+            if (event.kind == Kind::ContentChunk && !queued)
+                queued = runtime.queueRequest(QStringLiteral("second"));
+        });
+        const auto result = runtime.runTurn(QStringLiteral("QUEUECHECK first"));
+        QVERIFY2(!result.error, qPrintable(result.errorText));
+        QVERIFY(result.persistedOk);
+        QVERIFY(queued);
+    }
+
+    QSocAgentRuntime resumed(options);
+    QVERIFY(resumed.openSessionById(sessionId));
+    QTuiCompositor         replay;
+    QSocTranscriptRenderer replayRenderer(replay);
+    replayRenderer.replaceHistory(resumed.messages());
+
+    QStringList users;
+    for (const auto &message : resumed.messages())
+        if (message.value("role", "") == "user")
+            users.append(QString::fromStdString(message.value("content", "")));
+    QCOMPARE(users, QStringList({QStringLiteral("QUEUECHECK first"), QStringLiteral("second")}));
+
+    QCOMPARE(live.contentView().toAnsi(100), replay.contentView().toAnsi(100));
+    const QString plain = live.contentView().toPlainText();
+    QVERIFY2(!plain.contains(QStringLiteral("FIRSTANSWERSECONDANSWER")), qPrintable(plain));
+    const auto firstAnswer = plain.indexOf(QStringLiteral("FIRSTANSWER"));
+    const auto echo        = plain.indexOf(QStringLiteral("second"));
+    QVERIFY2(firstAnswer >= 0 && firstAnswer < echo, qPrintable(plain));
+    QVERIFY2(echo < plain.indexOf(QStringLiteral("SECONDANSWER")), qPrintable(plain));
 }
 
 QSOC_TEST_MAIN(Test)
