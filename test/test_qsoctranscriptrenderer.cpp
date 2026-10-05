@@ -125,7 +125,8 @@ void Client::apply(const Event &event)
         break;
     case Kind::TaskNotification:
         compositor.printContent(
-            QStringLiteral("(task: %1)\n").arg(event.text.left(80)), QTuiScrollView::Dim);
+            QStringLiteral("(task: %1)\n").arg(event.text.section(QLatin1Char('\n'), 0, 0).left(160)),
+            QTuiScrollView::Dim);
         break;
     default:
         break;
@@ -231,7 +232,7 @@ QList<Event> toolScript()
 
 QList<Event> script()
 {
-    const QString longNote = QString(120, QLatin1Char('n'));
+    const QString longNote = QString(200, QLatin1Char('n')) + QStringLiteral("\nsecond line");
     return {
         make(Kind::SessionStarted, QStringLiteral("Session started.\n")),
         make(Kind::ReasoningChunk, QStringLiteral("Thinking about ")),

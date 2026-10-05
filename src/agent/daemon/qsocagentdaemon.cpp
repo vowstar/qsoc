@@ -70,6 +70,7 @@ QSocAgentRuntimeOptions optionsFromParams(const QJsonObject &params)
     options.streaming           = params.value(QStringLiteral("streaming")).toBool(true);
     options.streamingFromConfig = params.value("streaming_from_config").toBool(false);
     options.verbose             = params.value(QStringLiteral("verbose")).toBool(false);
+    options.singleQuery         = params.value(QStringLiteral("single_query")).toBool(false);
     return options;
 }
 
@@ -321,27 +322,63 @@ private:
                     daemon_->removeConnection(this);
                 return;
             }
-            if (!runtime_->hasPendingAutoInputs())
+            if (runtime_->hasPendingAutoInputs()) {
+                dispatchAutoInputs();
                 return;
-            const auto inputs = runtime_->takePendingAutoInputs();
-            for (const auto &input : inputs) {
-                if (disconnected_)
-                    break;
-                const auto payload = QJsonDocument(
-                                         QJsonObject{
-                                             {"id", 0},
-                                             {"method",
-                                              runtime_->handlesCommand(input) ? "command" : "turn"},
-                                             {"params", QJsonObject{{"input", input}}}})
-                                         .toJson(QJsonDocument::Compact);
-                ++dispatchDepth_;
-                handleFrame(payload);
-                --dispatchDepth_;
             }
-            if (disconnected_ && dispatchDepth_ == 0)
-                daemon_->removeConnection(this);
+            if (pendingAsk_ == nullptr && runtime_->hasPendingWake())
+                dispatchWake();
         });
         timer->start();
+    }
+
+    void dispatchAutoInputs()
+    {
+        const auto inputs = runtime_->takePendingAutoInputs();
+        for (const auto &input : inputs) {
+            if (disconnected_)
+                break;
+            const auto payload = QJsonDocument(
+                                     QJsonObject{
+                                         {"id", 0},
+                                         {"method",
+                                          runtime_->handlesCommand(input) ? "command" : "turn"},
+                                         {"params", QJsonObject{{"input", input}, {"auto", true}}}})
+                                     .toJson(QJsonDocument::Compact);
+            ++dispatchDepth_;
+            handleFrame(payload);
+            --dispatchDepth_;
+        }
+        if (disconnected_ && dispatchDepth_ == 0)
+            daemon_->removeConnection(this);
+    }
+
+    /* A wake is not a client method: only the idle timer starts one. */
+    void dispatchWake()
+    {
+        ++dispatchDepth_;
+        {
+            const QScopedValueRollback<bool> busyGuard(busy_, true);
+            replyTurn(0, runtime_->runWakeTurn());
+        }
+        --dispatchDepth_;
+        if (disconnected_ && dispatchDepth_ == 0)
+            daemon_->removeConnection(this);
+    }
+
+    void replyTurn(qint64 id, const QSocAgentTurnResult &turn)
+    {
+        QJsonObject result;
+        result.insert(QStringLiteral("final_text"), turn.finalText);
+        result.insert(QStringLiteral("stop_notice"), turn.stopNotice);
+        result.insert(QStringLiteral("error"), turn.error);
+        result.insert(QStringLiteral("error_text"), turn.errorText);
+        result.insert(QStringLiteral("aborted"), turn.aborted);
+        result.insert(QStringLiteral("persisted"), turn.persistedOk);
+        result.insert("snapshot", snapshot());
+        sendReply(id, result);
+        if (!disconnected_ && !turn.aborted && !turn.error)
+            runtime_->finishTurnMaintenance();
     }
 
     QJsonObject askFrontend(const QString &type, const QString &text, json data = json::object())
@@ -562,20 +599,14 @@ private:
         }
 
         if (method == QStringLiteral("turn") || method == "recover") {
-            const QString             input = params.value(QStringLiteral("input")).toString();
-            const QSocAgentTurnResult turn  = method == "recover" ? runtime_->recoverPendingTurn()
-                                                                  : runtime_->runTurn(input);
-            QJsonObject               result;
-            result.insert(QStringLiteral("final_text"), turn.finalText);
-            result.insert(QStringLiteral("stop_notice"), turn.stopNotice);
-            result.insert(QStringLiteral("error"), turn.error);
-            result.insert(QStringLiteral("error_text"), turn.errorText);
-            result.insert(QStringLiteral("aborted"), turn.aborted);
-            result.insert(QStringLiteral("persisted"), turn.persistedOk);
-            result.insert("snapshot", snapshot());
-            sendReply(id, result);
-            if (!disconnected_ && !turn.aborted && !turn.error)
-                runtime_->finishTurnMaintenance();
+            const QString input  = params.value(QStringLiteral("input")).toString();
+            const auto    origin = params.value(QStringLiteral("auto")).toBool(false)
+                                       ? QSocAgentRuntime::TurnOrigin::Auto
+                                       : QSocAgentRuntime::TurnOrigin::User;
+            replyTurn(
+                id,
+                method == "recover" ? runtime_->recoverPendingTurn()
+                                    : runtime_->runTurn(input, origin));
             return;
         }
 

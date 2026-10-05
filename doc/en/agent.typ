@@ -78,7 +78,7 @@ On Windows, use a pipe name such as `qsoc-agent` for `--socket` and `--connect`.
 
 An agent request starts a separate session process for its connection. Sessions have separate event loops and share the daemon's SMT task budget (@agent-smt). Closing an attached TUI cancels its session's work and leaves the daemon running. Saved sessions remain available through `--resume` and `--continue`.
 
-Different OS users can run their own daemons. One user can run multiple daemons on distinct endpoints. Only processes of the same user can connect. Windows also requires matching process integrity levels. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object.
+Different OS users can run their own daemons. One user can run multiple daemons on distinct endpoints. Only processes of the same user can connect. Windows also requires matching process integrity levels. Linux and macOS use Unix domain sockets. Windows uses local named pipes. All three platforms use the same protocol: eight hexadecimal length bytes followed by a UTF-8 JSON object. The length counts JSON bytes. The greeting identifies `qsoc-agentd`, protocol version `1`, and available capabilities. Requests carry `id`, `method`, and `params`. Replies carry the same `id` and either `result` or `error`. Events use an `event` object. A turn the session starts by itself, for a scheduled prompt or a background notification (@agent-task-wake), replies with `id` `0`. A `task_notification` event carries a one-line summary in `text` and the model-facing envelope in `json.body`.
 
 When the greeting advertises `smt`, clients can submit `smt.solve` without opening an agent session or configuring an LLM. Its `params` object accepts the same fields as `z3_solve` (@agent-smt). Multiple requests can remain outstanding, and results can arrive out of order. Keep each outstanding request ID unique within its connection.
 
@@ -660,7 +660,9 @@ The agent provides the following tools through natural language:
   Terminate requests a graceful stop and force-kills after five seconds; a
   process that does not stop remains tracked. A background or timed-out job
   that writes more than `max_output` bytes (default 5 MB) is killed; a
-  blocking call is never stopped for its output size
+  blocking call is never stopped for its output size. A job that ends
+  before the agent reads its terminal status or stops it sends that agent a
+  task notification with the exit status and the output tail
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
@@ -1113,7 +1115,8 @@ default `120000`, `0` disables) is independently configurable.
 When a detached child reaches a terminal state, the parent receives a
 `task-notification` carrying the status, a capped result body, and the
 transcript path; it is injected at the next turn boundary, never
-interrupting an in-progress turn.
+interrupting an in-progress turn. An idle main agent starts a turn for it
+(@agent-task-wake).
 
 === Fork Mode
 <agent-subagents-fork>
@@ -1296,6 +1299,9 @@ a new task ID when it wakes an idle child.
 - Esc on the main agent does not cancel its mailbox. Replies and task
   notifications that arrive while it is idle stay queued and reach it on
   its next turn.
+- A reply to a request the main agent sent starts a turn for an idle main
+  agent (@agent-task-wake). Other messages to the main agent wait for its
+  next turn.
 
 `send_message` accepts four target forms:
 
@@ -1558,13 +1564,49 @@ Tool output stays attached to its invocation when messages arrive between output
 Local foreground bash output appears while the command runs. Its exit status controls the result marker, independently of printed text.
 Background launches show a dispatched marker. Check their task rows for execution results.
 
+=== Notifications and Wake
+<agent-task-wake>
+
+Background work reports to the agent through task notifications: a
+sub-agent that ends, monitor output and exit, a background `bash` job that
+ends, and a reply to a request the main agent sent. While a turn runs, a
+notification reaches the model at the next step boundary. While the agent
+is idle, it starts a turn by itself about half a second after the first
+notification arrives, so a burst becomes one turn. The dim line
+`(background: N waiting, continuing)` marks such a turn. It adds no user
+input and does not count as a user turn. Input typed while it runs is
+queued like input during any other turn.
+
+The agent does not start a turn by itself:
+
+- in plan mode, or in a `-q` query;
+- after a turn ended by Esc, an error, or a stop notice, until the next
+  prompt you send;
+- while a question, plan approval, or password prompt is open;
+- after `agent.background_wake_limit` turns in a row that you did not start
+  (default `50`, `0` for no limit). Goal continuations count toward it, and
+  the limit ends a goal continuation inside such a turn. Your next prompt
+  resets the count;
+- when `agent.background_wake` is `false`.
+
+Notifications that do not start a turn wait for the next one. Plain peer
+messages and group messages never start a turn. Background jobs the agent
+did not start never notify the model.
+
+Waiting notifications are bounded. Later events of a task merge into its
+waiting notification, which keeps an event count and the newest 8 KiB of
+output. Beyond 32 waiting tasks, new tasks are counted in one
+`N more background events dropped` notification. Waiting notifications are
+not saved: they are lost when the process exits.
+
 === Output Monitors
 <agent-task-monitors>
 
 `monitor` runs a shell command in the background and watches stdout/stderr
-as a line stream. Each output line becomes a `<task-notification>` user
-message queued for the current agent turn; partial trailing lines are
-flushed on exit, and high-volume bursts are coalesced before injection.
+as a line stream. Output lines become `<task-notification>` user messages
+for the agent; partial trailing lines are flushed on exit, and high-volume
+bursts are coalesced before injection. An idle agent starts a turn for
+them (@agent-task-wake).
 The full stream is also written to an `output.log` path returned by the
 tool and shown in the task overlay.
 

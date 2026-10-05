@@ -689,6 +689,13 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
         if (!autoBackgroundMsStr.isEmpty()) {
             config.autoBackgroundMs = autoBackgroundMsStr.toInt();
         }
+        readBool(QStringLiteral("agent.background_wake"), config.backgroundWake);
+        bool      wakeLimitOk = false;
+        const int wakeLimit
+            = d->socConfig->getValue("agent.background_wake_limit").toInt(&wakeLimitOk);
+        if (wakeLimitOk && wakeLimit >= 0) {
+            config.backgroundWakeLimit = wakeLimit;
+        }
         config.hooks = d->socConfig->agentHooks();
     }
 
@@ -862,7 +869,9 @@ void QSocAgentRuntime::registerTools()
     /* Task registry */
     d->taskRegistry = new QSocTaskRegistry(this);
     d->taskRegistry->registerSource(new QSocLoopTaskSource(d->loopScheduler, this));
-    d->taskRegistry->registerSource(new QSocBashTaskSource(shellBashTool, this));
+    d->bashTaskSource = new QSocBashTaskSource(shellBashTool, this);
+    d->bashTaskSource->setTaskEventQueue(d->taskEventQueue);
+    d->taskRegistry->registerSource(d->bashTaskSource);
     d->taskRegistry->registerSource(d->monitorTaskSource);
     d->subAgentTaskSource = new QSocSubAgentTaskSource(this);
     d->subAgentTaskSource->loadHistoricalRuns();
@@ -928,6 +937,7 @@ void QSocAgentRuntime::registerTools()
         }
     }
     agentTool->setSshConfigParser(d->sshConfig.get());
+    agentTool->setTaskEventQueue(d->taskEventQueue);
     d->toolRegistry->registerTool(agentTool);
 
     auto *agentStatusTool = new QSocToolAgentStatus(this, d->subAgentTaskSource);
@@ -1169,26 +1179,7 @@ void QSocAgentRuntime::wireAgentCallbacks()
         emit eventRaised(event);
     });
 
-    /* Task notifications from the event queue. */
-    if (d->taskEventQueue != nullptr) {
-        connect(
-            d->taskEventQueue,
-            &QSocTaskEventQueue::taskNotificationReady,
-            this,
-            [this](const QString &message, const QString &agentId) {
-                if (!agentId.isEmpty()) {
-                    return;
-                }
-                if (d->agent->isRunning() && d->agent->queueTaskNotification(message)) {
-                    return;
-                }
-                QSocAgentRuntimeEvent event;
-                event.kind = QSocAgentRuntimeEvent::Kind::TaskNotification;
-                event.text = message;
-                event.at   = QDateTime::currentDateTimeUtc();
-                emit eventRaised(event);
-            });
-    }
+    wireTaskBus();
 
     /* Loop scheduler fires. */
     connect(
@@ -1775,7 +1766,7 @@ bool QSocAgentRuntime::persistNow()
     return ok;
 }
 
-QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input)
+QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input, TurnOrigin origin)
 {
     QSocAgentTurnResult result;
     if (isRunning()) {
@@ -1783,6 +1774,13 @@ QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input)
         result.errorText = QStringLiteral("a turn is already running; queue the input instead");
         return result;
     }
+    if (origin == TurnOrigin::User) {
+        d->wake.consecutive = 0;
+        d->wake.latched     = false;
+    }
+    d->wake.origin    = origin;
+    d->wake.dueAtMs   = 0;
+    const auto settle = qScopeGuard([this, &result] { settleWake(result); });
     if (d->historyInputBlocked) {
         result.error     = true;
         result.errorText = QStringLiteral(
@@ -2015,7 +2013,10 @@ void QSocAgentRuntime::abort()
 
 bool QSocAgentRuntime::queueRequest(const QString &text)
 {
-    return isRunning() && d->agent->queueRequest(text);
+    if (!isRunning() || !d->agent->queueRequest(text))
+        return false;
+    d->wake.consecutive = 0;
+    return true;
 }
 
 int QSocAgentRuntime::compactNow()

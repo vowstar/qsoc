@@ -30,7 +30,9 @@
  *            {"id":N,"method":"smt.cancel","params":{"request_id":N}}
  *
  *          Replies carry {"id":N,"result":...} or {"id":N,"error":"..."}.
- *          Events arrive as {"event":{...QSocAgentRuntimeEvent}}.
+ *          Events arrive as {"event":{...QSocAgentRuntimeEvent}}. A turn the
+ *          session starts by itself (scheduled input, background wake)
+ *          replies with id 0.
  */
 
 #ifndef QSOCAGENTDAEMON_H

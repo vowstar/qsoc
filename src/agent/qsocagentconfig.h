@@ -216,6 +216,12 @@ struct QSocAgentConfig
      * matter how long it takes). */
     int autoBackgroundMs = 120000;
 
+    /* An idle agent starts a turn for a background notification. The
+     * limit counts turns the user did not start, goal continuations
+     * included, since the last user turn; 0 means no limit. */
+    bool backgroundWake      = true;
+    int  backgroundWakeLimit = 50;
+
     /* Plan mode. When true the agent may only run read-only tools (plus
      * the shell, whose per-command safety is LLM-judged, and the spawn
      * tool, whose children inherit this flag); all mutating tools are

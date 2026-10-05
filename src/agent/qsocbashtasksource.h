@@ -6,6 +6,9 @@
 
 #include "common/qsoctasksource.h"
 
+#include <QPointer>
+
+class QSocTaskEventQueue;
 class QSocToolShellBash;
 
 /**
@@ -14,7 +17,9 @@ class QSocToolShellBash;
  *          ::processStuckDetected so the overlay refreshes when processes
  *          exit or get flagged. The bash tool's activeProcesses map is
  *          static so multiple sources would step on each other; the
- *          design intentionally has one source instance per agent.
+ *          design intentionally has one source instance per agent. A job
+ *          that ends on its own, unread and not stopped, is reported once
+ *          as a terminal task and a task event for its owner.
  */
 class QSocBashTaskSource : public QSocTaskSource
 {
@@ -29,8 +34,14 @@ public:
     QString              tailFor(const QString &id, int maxBytes) const override;
     bool                 killTask(const QString &id) override;
 
+    /** Bus that carries background completions to the owning agent. */
+    void setTaskEventQueue(QSocTaskEventQueue *queue);
+
 private:
-    QSocToolShellBash *bashTool_ = nullptr;
+    void settle(int processId);
+
+    QSocToolShellBash           *bashTool_ = nullptr;
+    QPointer<QSocTaskEventQueue> eventQueue_;
 };
 
 #endif /* QSOCBASHTASKSOURCE_H */

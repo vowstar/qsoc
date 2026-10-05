@@ -3,6 +3,8 @@
 
 #include "agent/qsocbashtasksource.h"
 
+#include "agent/qsocagent.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/tool/qsoctoolshell.h"
 
 #include <QDateTime>
@@ -16,7 +18,10 @@ QSocBashTaskSource::QSocBashTaskSource(QSocToolShellBash *bashTool, QObject *par
             bashTool_,
             &QSocToolShellBash::backgroundProcessFinished,
             this,
-            [this](int, int, const QString &) { emit tasksChanged(); });
+            [this](int processId, int, const QString &) {
+                settle(processId);
+                emit tasksChanged();
+            });
         connect(
             bashTool_,
             &QSocToolShellBash::processStuckDetected,
@@ -25,22 +30,62 @@ QSocBashTaskSource::QSocBashTaskSource(QSocToolShellBash *bashTool, QObject *par
     }
 }
 
+namespace {
+
+QSocTask::Status statusOf(const QSocToolShellBash::BackgroundSnapshot &snap)
+{
+    if (snap.isRunning)
+        return snap.isStuck ? QSocTask::Status::Stuck : QSocTask::Status::Running;
+    if (snap.stopRequested)
+        return QSocTask::Status::Aborted;
+    return snap.crashed || snap.exitCode != 0 ? QSocTask::Status::Failed
+                                              : QSocTask::Status::Completed;
+}
+
+/* A process no live agent started belongs to the user. */
+QString ownerOf(QObject *scope)
+{
+    const auto *agent = qobject_cast<QSocAgent *>(scope);
+    return agent != nullptr ? agent->agentIdentity() : QSocTaskEvent::userOwner();
+}
+
+} // namespace
+
+void QSocBashTaskSource::settle(int processId)
+{
+    for (const auto &snap : QSocToolShellBash::snapshotActive(bashTool_)) {
+        const QSocTask::Status status = statusOf(snap);
+        if (snap.id != processId || !QSocTask::isTerminal(status))
+            continue;
+        const QString tail = QSocToolShellBash::tailActive(processId, 4000);
+        emit          taskTerminal(QString::number(processId), status, tail);
+        /* A stopped job was stopped by its owner, who already knows. */
+        if (eventQueue_.isNull() || status == QSocTask::Status::Aborted)
+            return;
+        QSocTaskEvent event;
+        event.taskId      = QString::number(processId);
+        event.sourceTag   = sourceTag();
+        event.kind        = QStringLiteral("task_notification");
+        event.status      = QSocTask::statusWord(status);
+        event.description = snap.command.left(120);
+        event.content     = tail;
+        event.outputFile  = snap.outputPath;
+        event.agentId     = ownerOf(snap.scope.data());
+        eventQueue_->enqueue(event);
+        return;
+    }
+}
+
 QList<QSocTask::Row> QSocBashTaskSource::listTasks() const
 {
     QList<QSocTask::Row> out;
     for (const auto &snap : QSocToolShellBash::snapshotActive(bashTool_)) {
         QSocTask::Row row;
-        row.id      = QString::number(snap.id);
-        row.label   = snap.command;
-        row.summary = snap.outputPath;
-        row.kind    = QSocTask::Kind::BackgroundBash;
-        if (snap.isRunning)
-            row.status = snap.isStuck ? QSocTask::Status::Stuck : QSocTask::Status::Running;
-        else if (snap.stopRequested)
-            row.status = QSocTask::Status::Aborted;
-        else
-            row.status = snap.crashed || snap.exitCode != 0 ? QSocTask::Status::Failed
-                                                            : QSocTask::Status::Completed;
+        row.id          = QString::number(snap.id);
+        row.label       = snap.command;
+        row.summary     = snap.outputPath;
+        row.kind        = QSocTask::Kind::BackgroundBash;
+        row.status      = statusOf(snap);
         row.startedAtMs = snap.startedAtMs;
         row.canKill     = snap.isRunning;
         out.append(row);
@@ -70,6 +115,11 @@ bool QSocBashTaskSource::killTask(const QString &id)
     if (result)
         emit tasksChanged();
     return result;
+}
+
+void QSocBashTaskSource::setTaskEventQueue(QSocTaskEventQueue *queue)
+{
+    eventQueue_ = queue;
 }
 
 #include "moc_qsocbashtasksource.cpp"

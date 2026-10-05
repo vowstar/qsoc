@@ -16,16 +16,19 @@
 #include "agent/qsocmemoryextractor.h"
 #include "agent/qsocsession.h"
 #include "agent/qsocsessionrecovery.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsshconfigparser.h"
 
 #include <nlohmann/json.hpp>
 
+#include <QDeadlineTimer>
 #include <QHash>
 #include <QLockFile>
 #include <QPointer>
 #include <QString>
 
+#include <functional>
 #include <memory>
 #include <stop_token>
 
@@ -51,6 +54,7 @@ class QSocToolRegistry;
 class QSocPathContext;
 class QSocMonitorTaskSource;
 class QSocHookManager;
+class QSocBashTaskSource;
 
 namespace QSocAgentRuntimeInternal {
 
@@ -117,6 +121,7 @@ struct QSocAgentRuntime::Private
     QSocTaskEventQueue                  *taskEventQueue     = nullptr;
     QSocSubAgentTaskSource              *subAgentTaskSource = nullptr;
     QSocMonitorTaskSource               *monitorTaskSource  = nullptr;
+    QSocBashTaskSource                  *bashTaskSource     = nullptr;
     QSocAgentDefinitionRegistry         *agentDefinitions   = nullptr;
     QSocMcpManager                      *mcpManager         = nullptr;
     QSocPathContext                     *pathContext        = nullptr;
@@ -165,6 +170,19 @@ struct QSocAgentRuntime::Private
     bool                  runTerminalPersisted      = false;
     bool                  planApprovalShownThisTurn = false;
     QString               lastErrorText;
+
+    /* Background notifications and the idle wake gate. */
+    struct Wake
+    {
+        static constexpr qint64 debounceMs  = 500;
+        int                     consecutive = 0;     /* turns the user did not start */
+        bool                    latched     = false; /* last run aborted or failed */
+        qint64                  dueAtMs     = 0;     /* 0 = nothing armed */
+        TurnOrigin              origin      = TurnOrigin::User;
+        std::function<qint64()> clock       = [] { return QDeadlineTimer::current().deadline(); };
+    };
+    Wake            wake;
+    QSocTaskNotices notices;
 
     /* Idle maintenance state. */
     QStringList             pendingAutoInputs;

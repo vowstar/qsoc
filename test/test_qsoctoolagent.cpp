@@ -549,8 +549,8 @@ private slots:
         QCOMPARE(spy.count(), 2);
     }
 
-    /* Completed background runs wrap the result in a <result> body and
-     * carry the task id, subagent type, and transcript path so the
+    /* Completed background runs carry the task id, subagent type, the
+     * result as content and the transcript path as output file, so the
      * parent can read the full run on demand. */
     void testTaskNotificationCompletedFormat()
     {
@@ -562,18 +562,17 @@ private slots:
             QStringLiteral("/run/user/1000/qsoc/agents/a7.jsonl"));
         QVERIFY(note.startsWith(QStringLiteral("<task-notification>")));
         QVERIFY(note.contains(QStringLiteral("<task-id>a7</task-id>")));
+        QVERIFY(note.contains(QStringLiteral("<source>agent</source>")));
         QVERIFY(note.contains(QStringLiteral("<subagent-type>explorer</subagent-type>")));
         QVERIFY(note.contains(QStringLiteral("<status>completed</status>")));
         QVERIFY(note.contains(QStringLiteral(
-            "<transcript>/run/user/1000/qsoc/agents/a7.jsonl"
-            "</transcript>")));
-        QVERIFY(note.contains(QStringLiteral("<result>")));
-        QVERIFY(note.contains(QStringLiteral("found three call sites")));
-        QVERIFY(!note.contains(QStringLiteral("<error>")));
+            "<output-file>/run/user/1000/qsoc/agents/a7.jsonl"
+            "</output-file>")));
+        QVERIFY(note.contains(QStringLiteral("<content>found three call sites</content>")));
     }
 
-    /* Failed / aborted runs use an <error> body instead of <result>. */
-    void testTaskNotificationFailedUsesErrorTag()
+    /* Failed and aborted runs say so in the status; the error is the content. */
+    void testTaskNotificationFailedCarriesStatus()
     {
         const QString failed = QSocToolAgent::buildTaskNotification(
             QStringLiteral("a8"),
@@ -582,9 +581,7 @@ private slots:
             QStringLiteral("compile error"),
             QString());
         QVERIFY(failed.contains(QStringLiteral("<status>failed</status>")));
-        QVERIFY(failed.contains(QStringLiteral("<error>")));
-        QVERIFY(failed.contains(QStringLiteral("compile error")));
-        QVERIFY(!failed.contains(QStringLiteral("<result>")));
+        QVERIFY(failed.contains(QStringLiteral("<content>compile error</content>")));
 
         const QString aborted = QSocToolAgent::buildTaskNotification(
             QStringLiteral("a9"),
@@ -593,10 +590,9 @@ private slots:
             QStringLiteral("aborted"),
             QString());
         QVERIFY(aborted.contains(QStringLiteral("<status>aborted</status>")));
-        QVERIFY(aborted.contains(QStringLiteral("<error>")));
     }
 
-    /* An empty transcript path emits no <transcript> tag. */
+    /* An empty transcript path emits no <output-file> tag. */
     void testTaskNotificationOmitsEmptyTranscript()
     {
         const QString note = QSocToolAgent::buildTaskNotification(
@@ -605,7 +601,7 @@ private slots:
             QStringLiteral("completed"),
             QStringLiteral("ok"),
             QString());
-        QVERIFY(!note.contains(QStringLiteral("<transcript>")));
+        QVERIFY(!note.contains(QStringLiteral("<output-file>")));
     }
 
     /* Oversized bodies are capped with a pointer to the transcript so a
@@ -623,10 +619,8 @@ private slots:
         QVERIFY(note.contains(QStringLiteral("truncated")));
     }
 
-    /* queueTaskNotification feeds the parent's request queue exactly
-     * like the background terminal-state callbacks do: one pending
-     * entry per terminal child. This is the seam the spawn tool drives
-     * via QSocToolAgent::buildTaskNotification + parent->queueTask... */
+    /* queueTaskNotification feeds the parent's request queue: one pending
+     * entry per terminal child, the seam the runtime's task bus drives. */
     void testParentQueuesTaskNotification()
     {
         auto *parent = new QSocAgent(this, nullptr, nullptr, QSocAgentConfig());

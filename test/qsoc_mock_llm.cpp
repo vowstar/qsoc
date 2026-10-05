@@ -54,7 +54,8 @@ struct MockConfig
     QString     toolGate;
     QString     requestLog;
     QByteArray  hold;
-    int         holdMax       = 0;
+    int         holdMax = 0;
+    QString     holdGate;
     qsizetype   overflowBytes = 0;
     QJsonArray  script;
     QString     failMode = QStringLiteral("none");
@@ -133,6 +134,7 @@ bool loadConfig(QString *error)
     config.requestLog        = QString::fromLocal8Bit(qgetenv("MOCK_REQUEST_LOG"));
     config.hold              = qgetenv("MOCK_HOLD");
     config.holdMax           = envInt("MOCK_HOLD_MAX", 0);
+    config.holdGate          = QString::fromLocal8Bit(qgetenv("MOCK_HOLD_GATE"));
     config.overflowBytes     = envInt("MOCK_OVERFLOW_BYTES", 0);
     config.reasoning         = QString::fromUtf8(qgetenv("MOCK_REASONING"));
     config.reasoningFields   = QString::fromLatin1(envBytes("MOCK_REASONING_FIELD", "reasoning"))
@@ -405,19 +407,43 @@ void respondFailure(
     socket->disconnectFromHost();
 }
 
+void answerPost(QTcpSocket *socket, const QByteArray &body, Wire wire);
+
+/* MOCK_HOLD_GATE answers a held request once the gate file exists. */
+void releaseAtGate(QTcpSocket *socket, const QByteArray &body, Wire wire)
+{
+    auto *poll = new QTimer(socket);
+    poll->setInterval(20);
+    QObject::connect(poll, &QTimer::timeout, socket, [poll, socket, body, wire]() {
+        if (!QFile::exists(config.holdGate))
+            return;
+        poll->stop();
+        poll->deleteLater();
+        answerPost(socket, body, wire);
+    });
+    poll->start();
+}
+
 void respondPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
 {
-    const QJsonObject request = parseBody(body);
-    const bool streaming = request.value("stream").isBool() && request.value("stream").toBool();
-    appendRequestLog(request);
+    appendRequestLog(parseBody(body));
 
     /* MOCK_HOLD stalls matching requests: the connection stays open and no
-     * reply is ever sent, so only a client timeout or cancel ends it. */
+     * reply is sent until MOCK_HOLD_GATE appears, or never without one. */
     if (!config.hold.isEmpty() && body.contains(config.hold)
         && (config.holdMax <= 0 || hits["held"] < config.holdMax)) {
         ++hits["held"];
+        if (!config.holdGate.isEmpty())
+            releaseAtGate(socket, body, wire);
         return;
     }
+    answerPost(socket, body, wire);
+}
+
+void answerPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
+{
+    const QJsonObject request = parseBody(body);
+    const bool streaming = request.value("stream").isBool() && request.value("stream").toBool();
 
     /* MOCK_OVERFLOW_BYTES rejects a larger streaming body as too long. */
     if (streaming && config.overflowBytes > 0 && body.size() > config.overflowBytes) {

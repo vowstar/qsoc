@@ -10,6 +10,7 @@
 #include "agent/qsocmemoryextractor.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocsubagenttasksource.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
 #include "agent/tool/qsoctooloutputread.h"
@@ -4865,6 +4866,9 @@ private slots:
         QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
         tool.setParentAgent(&parent);
         tool.setHookManager(&hooks);
+        QSocTaskEventQueue bus;
+        QSignalSpy         delivered(&bus, &QSocTaskEventQueue::taskEventQueued);
+        tool.setTaskEventQueue(&bus);
         registry.registerTool(&tool);
 
         QElapsedTimer clock;
@@ -4884,8 +4888,9 @@ private slots:
         QCOMPARE(
             QString::fromStdString(response["status"].get<std::string>()),
             QStringLiteral("async_launched"));
-        /* The promised notification arrives once the child finishes. */
-        QTRY_COMPARE_WITH_TIMEOUT(parent.pendingRequestCount(), 1, 5000);
+        /* The promised notification reaches the task bus once the child finishes. */
+        QTRY_COMPARE_WITH_TIMEOUT(delivered.count(), 1, 5000);
+        QCOMPARE(delivered.first().first().value<QSocTaskEvent>().status, QStringLiteral("completed"));
     }
 
     /* COUNTEREXAMPLE, decided is decided. A cancellation lands before the

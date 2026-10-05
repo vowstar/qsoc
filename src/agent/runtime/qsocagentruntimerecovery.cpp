@@ -84,5 +84,5 @@ QSocAgentTurnResult QSocAgentRuntime::recoverPendingTurn()
     QScopedValueRollback<bool>
         resume(d->resumeHistory, plan.action == QSocSessionRecovery::Action::ResumeHistory);
     emitOutput("(Continuing interrupted run)\n");
-    return runTurn(input);
+    return runTurn(input, TurnOrigin::Auto);
 }

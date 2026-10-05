@@ -489,6 +489,18 @@ agent:
         self.assertTrue(diffs, 'file tool must populate the runtime file history')
         self.assertEqual(diffs[-1]['json']['after'], 'a new line\n')
 
+    def test_idle_monitor_line_wakes_the_session(self):
+        _, path = self.daemon()
+        client = self.client(path)
+        Mock.tool = ('monitor', {'command': 'sleep 0.5; echo IDLE_WAKE_LINE', 'description': 'watch'})
+        self.assertFalse(client.call('turn', {'input': 'watch the log'})['result']['error'])
+        sent = len(Mock.requests)
+        seen = lambda: any('IDLE_WAKE_LINE' in json.dumps(r['messages']) for r in Mock.requests[sent:])
+        while not seen():
+            self.assertEqual(client.reply(0)['result']['final_text'], 'MOCKDONE')
+        notes = [e['event'] for e in client.events if e.get('event', {}).get('kind') == 'task_notification']
+        self.assertTrue(notes and all('<task-notification>' not in e['text'] for e in notes))
+
     def test_query_sigint_aborts(self):
         Mock.delay = 3
         query = subprocess.Popen([str(BIN / 'qsoc'), 'agent', '-q', 'cancel me'],

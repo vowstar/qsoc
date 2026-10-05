@@ -112,7 +112,8 @@ bool QSocCliWorker::runAgentClientLoop(
         {"tool_presentation", options.toolPresentation},
         {"streaming", options.streaming},
         {"streaming_from_config", options.streamingFromConfig},
-        {"verbose", options.verbose}};
+        {"verbose", options.verbose},
+        {"single_query", singleQuery}};
 
     QTuiCompositor     compositor;
     auto              &statusBarWidget = compositor.statusBar();

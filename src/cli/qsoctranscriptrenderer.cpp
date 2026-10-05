@@ -273,7 +273,8 @@ void QSocTranscriptRenderer::render(const QSocAgentRuntimeEvent &event)
         break;
     case Kind::TaskNotification:
         compositor.printContent(
-            QStringLiteral("(task: %1)\n").arg(event.text.left(80)), QTuiScrollView::Dim);
+            QStringLiteral("(task: %1)\n").arg(event.text.section(QLatin1Char('\n'), 0, 0).left(160)),
+            QTuiScrollView::Dim);
         break;
     case Kind::UserMessage:
         if (answerOpen)

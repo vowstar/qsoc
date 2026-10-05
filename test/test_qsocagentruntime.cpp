@@ -5,6 +5,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsocsession.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/qsoctool.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "agent/tool/qsoctoolshell.h"
@@ -137,6 +138,9 @@ struct EnvBootstrap
         qputenv("QSOC_HOME", qsocHome.toUtf8());
         qputenv("XDG_CONFIG_HOME", (root + QStringLiteral("/config")).toUtf8());
         qputenv("HOME", root.toUtf8());
+        QFile::setPermissions(
+            root, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+        qputenv("XDG_RUNTIME_DIR", root.toUtf8());
         /* An empty (but present) file stops QSocConfig from seeding the
          * commented template into the isolated root; tests that need a
          * model registry write their own before constructing a runtime. */
@@ -542,6 +546,46 @@ private slots:
         QCOMPARE(runtime.agent()->pendingRequestCount(), 0);
     }
 
+    void idleMonitorEventReachesTheModel()
+    {
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = fixture.path();
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+        QSocTaskEvent event;
+        event.taskId    = QStringLiteral("m1");
+        event.sourceTag = QStringLiteral("monitor");
+        event.kind      = QStringLiteral("monitor_line");
+        event.status    = QStringLiteral("running");
+        event.content   = QStringLiteral("IDLE_LINE");
+        runtime.taskEventQueue()->enqueue(event);
+        QCOMPARE(runtime.agent()->pendingRequestCount(), 1);
+    }
+
+    void idleSubAgentCompletionQueuesForMain()
+    {
+        EchoServer server;
+        QVERIFY(server.listen());
+        QTemporaryDir fixture;
+        QVERIFY(fixture.isValid());
+        writeMockConfig(server.port());
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = fixture.path();
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+        const QString launch = runtime.toolRegistry()->executeTool(
+            QStringLiteral("agent"),
+            {{"subagent_type", "general-purpose"},
+             {"description", "child"},
+             {"prompt", "reply"},
+             {"run_in_background", true}},
+            runtime.agent());
+        QVERIFY2(launch.contains(QStringLiteral("task_id")), qPrintable(launch));
+        QTRY_COMPARE_WITH_TIMEOUT(runtime.agent()->pendingRequestCount(), 1, 10000);
+    }
+
     void clearSessionStartsFresh()
     {
         QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/rt_clear_XXXXXX"));
@@ -563,6 +607,22 @@ private slots:
     }
 
 private:
+    static void writeMockConfig(quint16 port)
+    {
+        QFile configFile(QDir(configRoot()).filePath(QStringLiteral("qsoc/qsoc.yml")));
+        QVERIFY(configFile.open(QIODevice::WriteOnly | QIODevice::Text));
+        configFile.write(QStringLiteral(
+                             "llm:\n"
+                             "  models:\n"
+                             "    mock: {name: mock, model: mock-model, "
+                             "url: \"http://127.0.0.1:%1/v1/chat/completions\", key: none}\n"
+                             "  model: mock\n"
+                             "agent: {session_title: false, away_summary: false, "
+                             "memory_extract: false, memory_dream: false}\n")
+                             .arg(port)
+                             .toUtf8());
+    }
+
     static QString configRoot()
     {
         return QDir(EnvBootstrap::instanceRoot).filePath(QStringLiteral("config"));

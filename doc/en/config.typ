@@ -94,7 +94,7 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
     [`QSOC_WEB_SEARCH_API_KEY`], [`web.search_api_key`],
     [`QSOC_SKILLS_PATH`], [Extra skill search roots],
     [`QSOC_MAX_CONCURRENT_SUBAGENTS`], [Sub-agent concurrency ceiling],
-    [`QSOC_AUTO_BACKGROUND_MS`], [Delay before a shell call moves to the background],
+    [`QSOC_AUTO_BACKGROUND_MS`], [`agent.auto_background_ms`: delay before a foreground sub-agent moves to the background],
     [`QSOC_NO_IMAGE_GRAPHICS`], [Disables inline image rendering when set to any value],
     [`XDG_CONFIG_HOME`], [Moves the user configuration root off `~/.config`],
   )],
@@ -520,6 +520,12 @@ These settings can also be overridden by command-line options (see @agent-comman
     [Max tokens of each restored skill body (default: 5000)],
     [agent.context_restore_skill_budget],
     [Max cumulative tokens for restored skills (default: 25000)],
+    [agent.background_wake],
+    [An idle agent starts a turn for a background notification (default:
+     true); see @agent-task-wake],
+    [agent.background_wake_limit],
+    [Turns in a row the user did not start before the agent stops starting
+     them, goal continuations included (default: 50, 0 = no limit)],
     [agent.system_prompt], [Custom system prompt override],
     [agent.predict_input],
     [Predict next input as ghost text using the selected model and effort:

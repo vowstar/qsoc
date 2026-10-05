@@ -1006,7 +1006,9 @@ void QSocAgent::startStream(const std::optional<QString> &userQuery, bool restor
         emit runError("LLM service or tool registry not configured");
         return;
     }
-    if (!userQuery.has_value() && messages.empty()) {
+    const bool nothingQueued = pendingRequestCount() == 0
+                               && (!mailbox_ || mailbox_->pendingCount(agentIdentity_) == 0);
+    if (!userQuery.has_value() && messages.empty() && nothingQueued) {
         emit runError("No persisted history to resume");
         return;
     }
@@ -3418,6 +3420,9 @@ bool QSocAgent::maybeQueueGoalContinuation(const ActiveRunPtr &run)
         return finish(false);
     }
     if (currentGoal.has_value() && currentGoal->status == QSocGoalStatus::Active) {
+        if (goalGate_ && !goalGate_()) {
+            return finish(false);
+        }
         if (currentGoal->tokenBudget > 0 && currentGoal->tokensUsed >= currentGoal->tokenBudget) {
             QString    innerErr;
             const bool updated = catalog->setStatus(QSocGoalStatus::BudgetLimited, &innerErr);
@@ -3481,14 +3486,37 @@ bool QSocAgent::queueRequest(const QString &request)
     return true;
 }
 
-bool QSocAgent::queueTaskNotification(const QString &notification)
+bool QSocAgent::queueTaskNotification(const QString &notification, const QString &key)
 {
     QMutexLocker locker(&queueMutex);
     if (rejectQueuedRequests_) {
         return false;
     }
-    requestQueue.append({notification, QueuedRequest::Kind::Notification});
+    for (auto &item : requestQueue) {
+        if (!key.isEmpty() && item.key == key) {
+            item.text = notification;
+            return true;
+        }
+    }
+    requestQueue.append({notification, QueuedRequest::Kind::Notification, key});
     return true;
+}
+
+bool QSocAgent::hasQueuedNotification(const QString &key) const
+{
+    QMutexLocker locker(&queueMutex);
+    return std::any_of(requestQueue.cbegin(), requestQueue.cend(), [&key](const auto &item) {
+        return item.key == key;
+    });
+}
+
+int QSocAgent::pendingNotificationCount() const
+{
+    QMutexLocker locker(&queueMutex);
+    return static_cast<int>(
+        std::count_if(requestQueue.cbegin(), requestQueue.cend(), [](const auto &item) {
+            return item.kind == QueuedRequest::Kind::Notification;
+        }));
 }
 
 bool QSocAgent::queueContinuation(const QString &instruction)

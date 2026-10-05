@@ -500,6 +500,7 @@ QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive(
         snap.crashed = info.process == nullptr || info.process->exitStatus() == QProcess::CrashExit;
         snap.stopRequested = info.groupStopState
                              != QSocBashProcessInfo::GroupStopState::NotRequested;
+        snap.scope         = info.scope;
         out.append(snap);
     }
     std::sort(out.begin(), out.end(), [](const BackgroundSnapshot &a, const BackgroundSnapshot &b) {
@@ -807,6 +808,7 @@ QString QSocToolShellBash::execute(const json &arguments)
         QSocBashProcessInfo info;
         info.process        = process;
         info.owner          = this;
+        info.scope          = callContext ? callContext->executionScope() : nullptr;
         info.output         = outputLog;
         info.command        = command;
         info.processGroupId = processGroup;
@@ -926,6 +928,7 @@ QString QSocToolShellBash::execute(const json &arguments)
     QSocBashProcessInfo info;
     info.process        = processGuard.data();
     info.owner          = owner;
+    info.scope          = callContext ? callContext->executionScope() : nullptr;
     info.output         = outputLog;
     info.command        = command;
     info.processGroupId = processGroup;

@@ -270,14 +270,39 @@ public:
     /* ------------------------------------------------------------------ */
     /* Turn execution. */
 
+    /** Who started a turn: the user, a scheduled input, or a wake. */
+    enum class TurnOrigin : quint8 { User, Auto, Wake };
+
     /**
      * @brief Submit one user turn and run it to completion.
      * @details Streams progress through @ref eventRaised; returns the
      *          terminal state. Re-entrant input arriving while a turn runs
      *          is queued on the agent exactly like the REPL did.
      * @param input Fully expanded user input (paste chips resolved).
+     * @param origin User turns reset the wake limit and latch; Auto turns
+     *        (scheduled inputs, recovery) leave both alone.
      */
-    QSocAgentTurnResult runTurn(const QString &input);
+    QSocAgentTurnResult runTurn(const QString &input, TurnOrigin origin = TurnOrigin::User);
+
+    /**
+     * @brief Whether an idle agent should start a turn on its own now.
+     * @details True when a task notification or a reply to a main request
+     *          waits, the debounce has passed, and nothing blocks a wake:
+     *          `agent.background_wake`, the consecutive limit, the latch set
+     *          by an aborted or failed run, plan mode, a single-query session,
+     *          pending recovery.
+     */
+    [[nodiscard]] bool hasPendingWake() const;
+
+    /**
+     * @brief Run one turn from history for the pending notifications.
+     * @details Adds no user input and does not advance the user turn counter.
+     *          Fails without running when @ref hasPendingWake is false.
+     */
+    QSocAgentTurnResult runWakeTurn();
+
+    /** Replace the monotonic millisecond clock the wake debounce reads. */
+    void setWakeClock(std::function<qint64()> clock);
 
     /**
      * @brief Idle work after a turn settles.
@@ -573,10 +598,15 @@ private:
     void connectLocalWorkspace(const QString &workspacePath);
     bool openSessionInternal(const QString &sessionId, bool fresh);
     void emitOutput(const QString &text, int style = static_cast<int>(QSocAgentRuntimeStyle::Normal));
-    void emitStatus(const QString &status);
-    void fillContextUsage(QSocAgentRuntimeEvent &event) const;
-    void maybeGenerateSessionTitle();
-    void maybeGenerateAwaySummary();
+    void              emitStatus(const QString &status);
+    void              fillContextUsage(QSocAgentRuntimeEvent &event) const;
+    void              maybeGenerateSessionTitle();
+    void              maybeGenerateAwaySummary();
+    void              wireTaskBus();
+    void              deliverTaskEvent(const struct QSocTaskEvent &event);
+    void              armWake();
+    void              settleWake(const QSocAgentTurnResult &result);
+    [[nodiscard]] int pendingWakeWork() const;
 
     /* Remote connect steps */
     QString pickRemoteHost();

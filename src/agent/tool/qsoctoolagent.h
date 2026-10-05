@@ -22,6 +22,8 @@ class QSocMemoryManager;
 class QSocSubAgentTaskSource;
 class QSocHostCatalog;
 class QSocSshConfigParser;
+class QSocTaskEventQueue;
+struct QSocTaskEvent;
 
 /**
  * @brief LLM-facing `agent` tool that spawns a child sub-agent.
@@ -33,9 +35,8 @@ class QSocSshConfigParser;
  *          `QSocSubAgentTaskSource` so it shows up in the Ctrl+B
  *          task overlay. Synchronous execution blocks until the
  *          child returns; asynchronous returns immediately with a
- *          `task_id` and pushes a `<task-notification>` into the
- *          parent's request queue when the child reaches a terminal
- *          state. Each child clones the parent's `QLLMService` for
+ *          `task_id` and enqueues a task event on the runtime's task
+ *          bus when the child reaches a terminal state. Each child clones the parent's `QLLMService` for
  *          independent streaming state, so concurrent children are
  *          bounded only by `maxConcurrentSubagents`.
  */
@@ -89,6 +90,9 @@ public:
      */
     void setParentAgent(QSocAgent *agent) { parentAgent_ = agent; }
 
+    /** Bus that carries background completions to the parent. */
+    void setTaskEventQueue(QSocTaskEventQueue *queue);
+
     /**
      * @brief Accessor for the underlying definition registry. Used by
      *        the /agents slash command to enumerate definitions
@@ -115,7 +119,7 @@ public:
 
     /**
      * @brief Build the model-visible `<task-notification>` envelope
-     *        pushed into the parent's request queue when a background
+     *        delivered to the parent when a background
      *        sub-agent reaches a terminal state. Carries the status,
      *        a capped result/error body, and the transcript path so
      *        the parent reads the full run on demand rather than
@@ -124,6 +128,14 @@ public:
      * @param status One of "completed", "failed", "aborted".
      */
     static QString buildTaskNotification(
+        const QString &taskId,
+        const QString &subagentType,
+        const QString &status,
+        const QString &body,
+        const QString &transcriptPath);
+
+    /** The bus event behind buildTaskNotification(). */
+    static QSocTaskEvent taskEvent(
         const QString &taskId,
         const QString &subagentType,
         const QString &status,
@@ -244,6 +256,7 @@ private:
     QSocAgent                   *parentAgent_     = nullptr;
     QSocHostCatalog             *hostCatalog_     = nullptr;
     QSocSshConfigParser         *sshConfigParser_ = nullptr;
+    QPointer<QSocTaskEventQueue> eventQueue_;
 
     QMap<QString, std::shared_ptr<HostBinding>> hostCache_;
 };

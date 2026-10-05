@@ -188,9 +188,22 @@ public:
      *          when drained during a running turn because it is system
      *          generated, not human-authored input.
      * @param notification The task notification to queue
+     * @param key Non-empty: replace the queued notification with this key
      * @return True when queued; false after a hard stop until the next run
      */
-    bool queueTaskNotification(const QString &notification);
+    bool queueTaskNotification(const QString &notification, const QString &key = {});
+
+    /** Whether a notification queued under @p key is still waiting. */
+    bool hasQueuedNotification(const QString &key) const;
+
+    /** Number of task notifications waiting in the queue. */
+    int pendingNotificationCount() const;
+
+    /**
+     * @brief Consulted before each goal continuation.
+     * @details Returning false ends the run instead of continuing the goal.
+     */
+    void setGoalContinuationGate(std::function<bool()> gate) { goalGate_ = std::move(gate); }
 
     /**
      * @brief Queue an internal instruction the model must always receive.
@@ -876,6 +889,7 @@ private:
     QSocLoopScheduler              *loopScheduler = nullptr;
     class QSocHostCatalog          *hostCatalog   = nullptr;
     QPointer<class QSocGoalCatalog> goalCatalog;
+    std::function<bool()>           goalGate_;
     /* Re-entry guard for the goal-continuation hook. Atomic so the
      * sync run() and async runStream() paths cannot race. Mirrors
      * codex's continuation_lock semaphore. */
@@ -935,6 +949,7 @@ private:
 
         QString text;
         Kind    kind = Kind::User;
+        QString key;
     };
 
     /* Request queue for dynamic input during execution */

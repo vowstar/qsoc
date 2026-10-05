@@ -10,6 +10,7 @@
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsochookmanager.h"
 #include "agent/qsocsubagenttasksource.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
@@ -17,7 +18,6 @@
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
 #include "common/qsocinterrupt.h"
-#include "common/qsocmessageauthority.h"
 #include "common/qsocprojectmanager.h"
 
 #include <memory>
@@ -518,7 +518,7 @@ bool runGitFromInsideWorktree(const QStringList &args, const QString &cwd)
 
 } // namespace
 
-QString QSocToolAgent::buildTaskNotification(
+QSocTaskEvent QSocToolAgent::taskEvent(
     const QString &taskId,
     const QString &subagentType,
     const QString &status,
@@ -526,25 +526,31 @@ QString QSocToolAgent::buildTaskNotification(
     const QString &transcriptPath)
 {
     constexpr int kBodyCap = 4000;
-    QString       capped   = QSocMessageAuthority::escapeTags(body);
-    if (capped.size() > kBodyCap) {
-        capped = capped.left(kBodyCap)
-                 + QStringLiteral("\n[... truncated; read the transcript for the full output ...]");
+    QSocTaskEvent event;
+    event.taskId     = taskId;
+    event.sourceTag  = QStringLiteral("agent");
+    event.kind       = QStringLiteral("task_notification");
+    event.status     = status;
+    event.agentType  = subagentType;
+    event.outputFile = transcriptPath;
+    event.content    = body;
+    if (body.size() > kBodyCap) {
+        event.content = body.left(kBodyCap)
+                        + QStringLiteral(
+                            "\n[... truncated; read the transcript for the full output ...]");
     }
-    const bool isError = (status == QStringLiteral("failed") || status == QStringLiteral("aborted"));
-    const QString bodyTag = isError ? QStringLiteral("error") : QStringLiteral("result");
-    QString       out;
-    out += QStringLiteral("<task-notification>\n");
-    out += QStringLiteral("<task-id>") + taskId + QStringLiteral("</task-id>\n");
-    out += QStringLiteral("<subagent-type>") + subagentType + QStringLiteral("</subagent-type>\n");
-    out += QStringLiteral("<status>") + status + QStringLiteral("</status>\n");
-    if (!transcriptPath.isEmpty()) {
-        out += QStringLiteral("<transcript>") + transcriptPath + QStringLiteral("</transcript>\n");
-    }
-    out += QStringLiteral("<") + bodyTag + QStringLiteral(">\n") + capped + QStringLiteral("\n</")
-           + bodyTag + QStringLiteral(">\n");
-    out += QStringLiteral("</task-notification>");
-    return out;
+    return event;
+}
+
+QString QSocToolAgent::buildTaskNotification(
+    const QString &taskId,
+    const QString &subagentType,
+    const QString &status,
+    const QString &body,
+    const QString &transcriptPath)
+{
+    return QSocTaskEventQueue::formatTaskNotification(
+        taskEvent(taskId, subagentType, status, body, transcriptPath));
 }
 
 int QSocToolAgent::sweepStaleWorktrees(int maxAgeSec)
@@ -1063,9 +1069,8 @@ QString QSocToolAgent::execute(const json &arguments)
      * funnel into markTerminal, which emits taskTerminal exactly once. The one
      * consumer below caches that first event and delivers it through whichever
      * channel owns delivery, so there is a single producer of parent
-     * notifications and no second channel to double-report through.
-     * `parentGuard` tolerates a parent that died before the child finished. */
-    QPointer<QSocAgent> parentGuard(parentAgent_);
+     * notifications and no second channel to double-report through. The
+     * parent identity lets the bus drop a completion whose parent is gone. */
     QPointer<QSocAgent> childGuard(child);
     auto                delivery = std::make_shared<DeliveryState>();
     /* Why the child stopped, when it stopped for a reason rather than by
@@ -1074,21 +1079,22 @@ QString QSocToolAgent::execute(const json &arguments)
      * foreground one because it was connected first. */
     auto          abortReason    = std::make_shared<QString>();
     const QString parentIdentity = parentAgent_ ? parentAgent_->agentIdentity() : QString();
-    auto deliverAsync = [srcGuard, parentGuard, parentIdentity, taskId, effectiveType, delivery]() {
-        if (delivery->notified || !delivery->haveTerminal || parentGuard.isNull()) {
+    const QPointer<QSocTaskEventQueue> busGuard(eventQueue_);
+    auto deliverAsync = [srcGuard, busGuard, parentIdentity, taskId, effectiveType, delivery]() {
+        if (delivery->notified || !delivery->haveTerminal || busGuard.isNull()) {
             return;
         }
-        delivery->notified = true;
-        if (parentGuard->agentIdentity() != parentIdentity)
-            return;
+        delivery->notified           = true;
         const QString transcriptPath = srcGuard.isNull() ? QString()
                                                          : srcGuard->transcriptPathFor(taskId);
-        parentGuard->queueTaskNotification(buildTaskNotification(
+        QSocTaskEvent event          = taskEvent(
             taskId,
             effectiveType,
             QSocTask::statusWord(delivery->terminalState),
             delivery->terminalBody,
-            transcriptPath));
+            transcriptPath);
+        event.agentId = parentIdentity;
+        busGuard->enqueue(event);
     };
     QObject::connect(
         child, &QSocAgent::runComplete, taskSource_, [srcGuard, taskId](const QString &finalText) {
@@ -1358,6 +1364,11 @@ void QSocToolAgent::abort()
     if (taskSource_ != nullptr) {
         taskSource_->abortAll();
     }
+}
+
+void QSocToolAgent::setTaskEventQueue(QSocTaskEventQueue *queue)
+{
+    eventQueue_ = queue;
 }
 
 #include "moc_qsoctoolagent.cpp"

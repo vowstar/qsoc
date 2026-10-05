@@ -53,6 +53,7 @@ struct QSocBashProcessInfo
 
     QProcess                       *process = nullptr;
     QPointer<QSocToolShellBash>     owner;
+    QPointer<QObject>               scope; /* the caller that started it */
     std::shared_ptr<QSocBashOutput> output;
     QString                         command;
     qint64                          processGroupId  = 0;
@@ -128,15 +129,16 @@ public:
      */
     struct BackgroundSnapshot
     {
-        int     id;
-        QString command;
-        qint64  startedAtMs;
-        QString outputPath;
-        bool    isStuck;
-        bool    isRunning;
-        int     exitCode;
-        bool    crashed;
-        bool    stopRequested;
+        int               id;
+        QString           command;
+        qint64            startedAtMs;
+        QString           outputPath;
+        bool              isStuck;
+        bool              isRunning;
+        int               exitCode;
+        bool              crashed;
+        bool              stopRequested;
+        QPointer<QObject> scope;
     };
     static QList<BackgroundSnapshot> snapshotActive(const QSocToolShellBash *owner = nullptr);
     static int                       activeProcessCount();

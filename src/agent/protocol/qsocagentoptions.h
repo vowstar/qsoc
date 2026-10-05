@@ -45,6 +45,8 @@ struct QSocAgentRuntimeOptions
     bool streamingFromConfig = false;
     /** Verbose logging to QSocConsole::debug(). */
     bool verbose = false;
+    /** One query, then exit (`-q`): the agent never wakes on its own. */
+    bool singleQuery = false;
 };
 
 #endif
