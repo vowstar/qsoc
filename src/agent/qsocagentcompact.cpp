@@ -167,8 +167,7 @@ QString summarizedUserRequest(const json &history, int start, int boundary)
 {
     for (int i = static_cast<int>(history.size()) - 1; i >= start; --i) {
         const auto &message = history[static_cast<size_t>(i)];
-        if (message.value("role", "") != "user"
-            || QSocMessageAuthority::isRuntimeReminder(message)) {
+        if (!QSocMessageAuthority::isUserRequest(message)) {
             continue;
         }
         if (i >= boundary) {

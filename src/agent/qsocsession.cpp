@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocsession.h"
+#include "common/qsocmessageauthority.h"
 
 #include "agent/qsocprivatefile.h"
 
@@ -943,9 +944,8 @@ QSocSession::Info QSocSession::readInfo(const QString &filePath)
                 info.messageCount++;
                 /* Backfill first_prompt from the first user message if no
                  * explicit meta record exists. */
-                if (info.firstPrompt.isEmpty() && doc.contains("role")
-                    && doc["role"].get<std::string>() == "user" && doc.contains("content")
-                    && doc["content"].is_string()) {
+                if (info.firstPrompt.isEmpty() && QSocMessageAuthority::isUserRequest(doc)
+                    && doc.contains("content") && doc["content"].is_string()) {
                     info.firstPrompt = QString::fromStdString(doc["content"].get<std::string>());
                 }
             } else if (type == "snapshot" && doc.contains("messages") && doc["messages"].is_array()) {

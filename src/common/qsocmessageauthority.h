@@ -41,6 +41,19 @@ std::string escapeTags(const std::string &text);
 bool isRuntimeReminder(const nlohmann::json &message);
 
 /**
+ * @brief Whether a history message is a request the user typed.
+ * @details A user-role message that is neither a runtime reminder nor
+ *          marked with an @c _qsoc_origin, such as a drained task
+ *          notification or peer message.
+ */
+bool isUserRequest(const nlohmann::json &message);
+
+/**
+ * @brief Drop QSoC-internal @c _ keys from a message QSoC did not write.
+ */
+nlohmann::json withoutInternalKeys(nlohmann::json message);
+
+/**
  * @brief Copy a history message into its on-the-wire form.
  * @details Drops QSoC-internal @c _ keys and escapes authority tags in
  *          tool-result content, for both string and text-part content.

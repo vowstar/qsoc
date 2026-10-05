@@ -199,7 +199,7 @@ void appendTo(const json &messages, QTuiScrollView &view)
         }
 
         pending.clear();
-        if (role != QStringLiteral("user") || QSocMessageAuthority::isRuntimeReminder(message)) {
+        if (!QSocMessageAuthority::isUserRequest(message)) {
             continue;
         }
 

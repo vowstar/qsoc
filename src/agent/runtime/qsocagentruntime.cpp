@@ -1611,9 +1611,7 @@ bool QSocAgentRuntime::openSessionInternal(const QString &sessionId, bool fresh)
             d->turnCounter  = d->currentFileHistory->latestTurn();
             int persistedUserTurns = 0;
             for (const auto &msg : d->persistedMessages) {
-                if (msg.is_object() && msg.contains("role") && msg["role"].is_string()
-                    && msg["role"].get<std::string>() == "user"
-                    && !QSocMessageAuthority::isRuntimeReminder(msg)) {
+                if (QSocMessageAuthority::isUserRequest(msg)) {
                     persistedUserTurns++;
                 }
             }
@@ -2218,8 +2216,7 @@ void QSocAgentRuntime::maybeGenerateSessionTitle()
     const json msgs = d->agent->getMessages();
     if (msgs.is_array()) {
         for (const auto &msg : msgs) {
-            if (msg.value("role", std::string()) == "user"
-                && !QSocMessageAuthority::isRuntimeReminder(msg) && msg.contains("content")
+            if (QSocMessageAuthority::isUserRequest(msg) && msg.contains("content")
                 && msg["content"].is_string()) {
                 firstPrompt = QString::fromStdString(msg["content"].get<std::string>());
                 break;

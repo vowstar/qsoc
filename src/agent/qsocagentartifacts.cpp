@@ -214,22 +214,22 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &attachments
 void QSocAgent::appendBoundedToolMessage(
     const QString &id, const QString &content, const QString &state, const QString &toolName)
 {
-    const auto   run    = activeRun_;
-    const qint64 budget = toolResultBudgetTokens();
-    QString      view   = content;
-    json         refs   = json::array();
+    const auto   run        = activeRun_;
+    const qint64 budget     = toolResultBudgetTokens();
+    QString      view       = content;
+    json         refs       = json::array();
+    const auto   status     = run && run->executingToolStatus ? *run->executingToolStatus
+                                                              : QSocTool::classifyResult(content);
+    QString      completion = state.isEmpty() ? QStringLiteral("ok") : state;
+    if (state.isEmpty() && status == QSocToolResultStatus::Failed)
+        completion = QStringLiteral("failed");
+    else if (state.isEmpty() && status == QSocToolResultStatus::Uncertain)
+        completion = QStringLiteral("uncertain");
+    else if (state.isEmpty() && status == QSocToolResultStatus::Dispatched)
+        completion = QStringLiteral("dispatched");
     if (QSocRequestUsage::estimateText(content, tokenCounter()) > budget) {
         QString                                       error;
         std::optional<QSocToolResultStore::Reference> saved;
-        const auto status     = run && run->executingToolStatus ? *run->executingToolStatus
-                                                                : QSocTool::classifyResult(content);
-        QString    completion = state.isEmpty() ? QStringLiteral("ok") : state;
-        if (state.isEmpty() && status == QSocToolResultStatus::Failed)
-            completion = QStringLiteral("failed");
-        else if (state.isEmpty() && status == QSocToolResultStatus::Uncertain)
-            completion = QStringLiteral("uncertain");
-        else if (state.isEmpty() && status == QSocToolResultStatus::Dispatched)
-            completion = QStringLiteral("dispatched");
         /* A return the store cannot hold whole is saved as its head and tail. */
         const QString stored = QSocBoundedCapture::bound(content, agentConfig.toolArtifactBytes);
         const bool    sourceTruncated = QSocBoundedCapture::isElided(stored)
@@ -262,7 +262,10 @@ void QSocAgent::appendBoundedToolMessage(
         view = QSocTokenizer::elideMiddle(content, budget, notice, tokenCounter());
     }
     json message
-        = {{"role", "tool"}, {"tool_call_id", id.toStdString()}, {"content", view.toStdString()}};
+        = {{"role", "tool"},
+           {"tool_call_id", id.toStdString()},
+           {"content", view.toStdString()},
+           {"_qsoc_status", completion.toStdString()}};
     if (!state.isEmpty())
         message["_qsoc_tool_state"] = state.toStdString();
     if (!refs.empty())

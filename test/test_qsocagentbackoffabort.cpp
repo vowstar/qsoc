@@ -18,6 +18,7 @@
 #include "common/qlongtaskmonitor.h"
 #include "common/qsocboundedcapture.h"
 #include "common/qsocimageattach.h"
+#include "common/qsocmessageauthority.h"
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
@@ -1797,12 +1798,48 @@ private slots:
         server.enqueueRawToolCompletion(
             buildToolCalls({tool.getName()}),
             {{"_qsoc_artifact_refs", json::array({QSocAgent::artifactReferenceJson(*hidden)})},
-             {"_qsoc_result_bounded", true}});
+             {"_qsoc_result_bounded", true},
+             {"_qsoc_origin", {{"kind", "task_notification"}}},
+             {"_qsoc_status", "failed"},
+             {"_qsoc_tool_state", "skipped"},
+             {"_qsoc_reminder", {{"kind", "turn"}}},
+             {"_qsoc_shell", {{"command", "id"}}}});
         server.enqueueCompletion("done");
         QCOMPARE(agent.run("run once"), QStringLiteral("done"));
         QVERIFY(QSocAgent::artifactReferences(agent.getMessages()).isEmpty());
-        QVERIFY(!agent.getMessages()[1].contains("_qsoc_result_bounded"));
+        for (const auto &[key, value] : agent.getMessages()[1].items())
+            QVERIFY2(!key.starts_with('_') || key == "_usage", key.c_str());
         QVERIFY(agent.captureForkSnapshot().artifactRefs.isEmpty());
+    }
+    void drainedNotificationsAreNotUserRequests()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        SideEffectTool   tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        server.enqueueToolCompletion({tool.getName()});
+        server.enqueueCompletion("done");
+        QLLMService service;
+        configureService(service, server);
+        QSocAgent agent(nullptr, &service, &registry, testConfig());
+        connect(&agent, &QSocAgent::toolResult, &agent, [&](const QString &, const QString &) {
+            agent.queueTaskNotification(QStringLiteral("<task-notification>x</task-notification>"));
+        });
+        QCOMPARE(agent.run("real prompt"), QStringLiteral("done"));
+        int notifications = 0;
+        for (const auto &message : agent.getMessages()) {
+            if (message.value("content", json())
+                == json("<task-notification>x</task-notification>")) {
+                ++notifications;
+                QVERIFY(message["_qsoc_origin"] == json({{"kind", "task_notification"}}));
+                QVERIFY(!QSocMessageAuthority::isUserRequest(message));
+            }
+            if (message.value("role", std::string()) == "tool")
+                QCOMPARE(message.value("_qsoc_status", std::string()), std::string("ok"));
+        }
+        QCOMPARE(notifications, 1);
+        QVERIFY(QSocMessageAuthority::isUserRequest(agent.getMessages()[0]));
     }
     void deeplyNestedToolArgumentsAreRejected()
     {

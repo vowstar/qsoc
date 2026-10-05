@@ -1346,8 +1346,10 @@ The main agent's runtime reminders (plan mode, focus, the approved plan,
 recalled memory) are user-role `<system-reminder>` messages that qsoc adds
 after your message at the start of a turn. They are saved with the session,
 and the resumed transcript, the rewind picker, prompt prediction and
-compaction summaries skip them. Sub-agents receive their critical reminder,
-plan mode and approved plan in the system message.
+compaction summaries skip them. Task notifications and peer messages are also
+saved as user-role messages. The resumed transcript, the rewind picker, prompt
+history, the session title and the turn count skip them. Sub-agents receive
+their critical reminder, plan mode and approved plan in the system message.
 Coordinate overlapping file work before editing, continue independent work
 while peers run, and wait only when their answer is needed.
 

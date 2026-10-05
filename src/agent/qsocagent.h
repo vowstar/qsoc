@@ -1103,6 +1103,8 @@ private:
      * @param content The message content
      */
     void addMessage(const QString &role, const QString &content);
+    /* A user-role message the user did not type, marked by its origin. */
+    void addNotificationMessage(const QString &content);
 
 public:
     /**

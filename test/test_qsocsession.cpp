@@ -238,6 +238,26 @@ private slots:
         QCOMPARE(info.messageCount, 3);
     }
 
+    void testReadInfoSkipsMessagesTheUserDidNotType()
+    {
+        QTemporaryDir tempDir;
+        QVERIFY(tempDir.isValid());
+
+        const QString id   = QSocSession::generateId();
+        const QString path = QDir(QSocSession::sessionsDir(tempDir.path())).filePath(id + ".jsonl");
+        QSocSession   session(id, path);
+
+        session.appendMessage(
+            {{"role", "user"},
+             {"content", "<task-notification>done</task-notification>"},
+             {"_qsoc_origin", {{"kind", "task_notification"}}}});
+        session.appendMessage(
+            {{"role", "user"}, {"content", "turn context"}, {"_qsoc_reminder", {{"kind", "turn"}}}});
+        session.appendMessage({{"role", "user"}, {"content", "describe the bus"}});
+
+        QCOMPARE(QSocSession::readInfo(path).firstPrompt, QStringLiteral("describe the bus"));
+    }
+
     void testListAllReturnsNewestFirst()
     {
         QTemporaryDir tempDir;

@@ -59,6 +59,27 @@ bool isRuntimeReminder(const nlohmann::json &message)
     return message.is_object() && message.contains("_qsoc_reminder");
 }
 
+bool isUserRequest(const nlohmann::json &message)
+{
+    if (!message.is_object()) {
+        return false;
+    }
+    const auto role = message.find("role");
+    return role != message.end() && *role == "user" && !isRuntimeReminder(message)
+           && !message.contains("_qsoc_origin");
+}
+
+nlohmann::json withoutInternalKeys(nlohmann::json message)
+{
+    if (!message.is_object()) {
+        return message;
+    }
+    for (auto it = message.begin(); it != message.end();) {
+        it = it.key().starts_with('_') ? message.erase(it) : std::next(it);
+    }
+    return message;
+}
+
 nlohmann::json toWire(nlohmann::json message)
 {
     if (!message.is_object()) {
@@ -68,9 +89,7 @@ nlohmann::json toWire(nlohmann::json message)
     if (const auto it = message.find("_qsoc_notice"); it != message.end() && it->is_object()) {
         notice = it->value("text", std::string());
     }
-    for (auto it = message.begin(); it != message.end();) {
-        it = it.key().starts_with('_') ? message.erase(it) : std::next(it);
-    }
+    message = withoutInternalKeys(std::move(message));
     if (message.value("role", std::string()) != "tool") {
         return message;
     }

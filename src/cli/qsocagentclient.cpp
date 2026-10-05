@@ -307,9 +307,8 @@ bool QSocCliWorker::runAgentClientLoop(
             QSocSessionTranscript::appendTo(messages, compositor.contentView());
             history.clear();
             for (const auto &message : messages) {
-                if (message.value("role", std::string()) == "user" && message.contains("content")
-                    && message["content"].is_string()
-                    && !QSocMessageAuthority::isRuntimeReminder(message))
+                if (QSocMessageAuthority::isUserRequest(message) && message.contains("content")
+                    && message["content"].is_string())
                     history.append(QString::fromStdString(message["content"].get<std::string>()));
             }
             historyPosition = history.size();

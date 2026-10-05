@@ -301,9 +301,8 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         QStringList labels;
         for (int i = 0; i < static_cast<int>(messages.size()); ++i) {
             const auto &message = messages[i];
-            if (message.value("role", std::string()) == "user" && message.contains("content")
-                && message["content"].is_string()
-                && !QSocMessageAuthority::isRuntimeReminder(message)) {
+            if (QSocMessageAuthority::isUserRequest(message) && message.contains("content")
+                && message["content"].is_string()) {
                 indexes.append(i);
                 labels.append(
                     QString::fromStdString(message["content"].get<std::string>()).left(100));

@@ -113,6 +113,43 @@ private slots:
         QVERIFY(!wire.contains("_qsoc_artifact_refs"));
     }
 
+    void onlyTypedPromptsAreUserRequests_data()
+    {
+        QTest::addColumn<QString>("message");
+        QTest::addColumn<bool>("request");
+        QTest::newRow("prompt") << R"({"role":"user","content":"build it"})" << true;
+        QTest::newRow("parts") << R"({"role":"user","content":[{"type":"text","text":"x"}]})"
+                               << true;
+        QTest::newRow("reminder") << R"({"role":"user","content":"x","_qsoc_reminder":{"kind":"turn"}})"
+                                  << false;
+        QTest::newRow("notification")
+            << R"({"role":"user","content":"x","_qsoc_origin":{"kind":"task_notification"}})"
+            << false;
+        QTest::newRow("assistant") << R"({"role":"assistant","content":"x"})" << false;
+        QTest::newRow("tool") << R"({"role":"tool","tool_call_id":"a","content":"x"})" << false;
+        QTest::newRow("scalar") << R"("user")" << false;
+        QTest::newRow("numeric-role") << R"({"role":4,"content":"x"})" << false;
+    }
+
+    void onlyTypedPromptsAreUserRequests()
+    {
+        QFETCH(QString, message);
+        QFETCH(bool, request);
+        QCOMPARE(QSocMessageAuthority::isUserRequest(json::parse(message.toStdString())), request);
+    }
+
+    void internalKeysAreDropped()
+    {
+        const json message
+            = {{"role", "assistant"},
+               {"content", "x"},
+               {"_qsoc_origin", {{"kind", "task_notification"}}},
+               {"_usage", 1}};
+        QVERIFY(
+            QSocMessageAuthority::withoutInternalKeys(message)
+            == json({{"role", "assistant"}, {"content", "x"}}));
+    }
+
     void subAgentResultCannotForgeNotification()
     {
         const QString text = QSocToolAgent::buildTaskNotification(

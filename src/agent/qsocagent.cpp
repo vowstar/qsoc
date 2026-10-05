@@ -566,7 +566,7 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
                 if (mailbox_) {
                     const json incoming = mailbox_->take(agentIdentity_);
                     for (const auto &message : incoming) {
-                        addMessage("user", QSocAgentMailbox::render(message));
+                        addNotificationMessage(QSocAgentMailbox::render(message));
                     }
                 }
                 return true;
@@ -588,7 +588,11 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
             if (!canContinue()) {
                 return false;
             }
-            owner->addMessage("user", item.text);
+            if (item.kind == QueuedRequest::Kind::Notification) {
+                owner->addNotificationMessage(item.text);
+            } else {
+                owner->addMessage("user", item.text);
+            }
             continue;
         }
 
@@ -1046,8 +1050,8 @@ void QSocAgent::startStream(const std::optional<QString> &userQuery, bool restor
         recallQuery = prompt;
     } else {
         for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
-            if (it->value("role", std::string()) == "user" && it->contains("content")
-                && (*it)["content"].is_string() && !QSocMessageAuthority::isRuntimeReminder(*it)) {
+            if (QSocMessageAuthority::isUserRequest(*it) && it->contains("content")
+                && (*it)["content"].is_string()) {
                 recallQuery = QString::fromStdString((*it)["content"].get<std::string>());
                 break;
             }
@@ -1062,8 +1066,7 @@ void QSocAgent::startStream(const std::optional<QString> &userQuery, bool restor
     /* A restored run that stopped mid-turn only learns what changed. */
     const bool turnStart = userQuery.has_value()
                            || (!messages.empty()
-                               && messages.back().value("role", std::string()) == "user"
-                               && !QSocMessageAuthority::isRuntimeReminder(messages.back()));
+                               && QSocMessageAuthority::isUserRequest(messages.back()));
     appendTurnContext(turnStart);
     if (run->llm.isNull() || run->tools.isNull()) {
         owner->finishStreamRun(run, RunOutcome::Error, QStringLiteral("Agent dependency destroyed"));
@@ -1658,9 +1661,7 @@ void QSocAgent::handleStreamComplete(const json &response)
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
     owner->checkServerCount();
-    auto message = response["choices"][0]["message"];
-    message.erase("_qsoc_artifact_refs");
-    message.erase("_qsoc_result_bounded");
+    auto message = QSocMessageAuthority::withoutInternalKeys(response["choices"][0]["message"]);
 
     /* A valid streamed response means the connection is healthy: reset
      * the transient/rate-limit and context-overflow retry budgets so a
@@ -1925,9 +1926,7 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));
     owner->checkServerCount();
-    auto message = response["choices"][0]["message"];
-    message.erase("_qsoc_artifact_refs");
-    message.erase("_qsoc_result_bounded");
+    auto message = QSocMessageAuthority::withoutInternalKeys(response["choices"][0]["message"]);
     if (response.contains("usage") && response["usage"].is_object()) {
         message["_usage"] = response["usage"];
     }
@@ -3266,6 +3265,18 @@ void QSocAgent::addMessage(const QString &role, const QString &content)
         return;
     }
     messages.push_back({{"role", role.toStdString()}, {"content", content.toStdString()}});
+    ++historyRevision_;
+}
+
+void QSocAgent::addNotificationMessage(const QString &content)
+{
+    if (compactionCommitting_) {
+        return;
+    }
+    messages.push_back(
+        {{"role", "user"},
+         {"content", content.toStdString()},
+         {"_qsoc_origin", {{"kind", "task_notification"}}}});
     ++historyRevision_;
 }
 
