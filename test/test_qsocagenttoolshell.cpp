@@ -3,6 +3,7 @@
 
 #include "agent/qsocbashtasksource.h"
 #include "agent/tool/qsoctoolshell.h"
+#include "common/qsocboundedcapture.h"
 #include "qsoc_test.h"
 
 #include <QtCore>
@@ -110,6 +111,68 @@ private slots:
         QVERIFY2(result.contains("second"), qPrintable(result));
         QVERIFY(output.contains("first\n"));
         QVERIFY(output.contains("second\n"));
+    }
+
+    void foregroundLongOutputKeepsHeadAndTail()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolShellBash bash;
+        const QString     result = bash.execute(
+            {{"command", "seq 1 1000000; echo ERROR_TAIL; exit 3"}, {"timeout", 30000}});
+        QVERIFY2(
+            result.startsWith("Command exited with code 3:\n1\n2\n3\n"),
+            qPrintable(result.left(80)));
+        QVERIFY(result.endsWith("ERROR_TAIL\n"));
+        QVERIFY(QSocBoundedCapture::isElided(result));
+        QVERIFY(result.toUtf8().size() <= QSocBoundedCapture::kDefaultLimit + 64);
+#endif
+    }
+
+    void foregroundOutputPastTheCapStaysAliveWithBoundedDisk()
+    {
+#ifndef Q_OS_LINUX
+        QSKIP("Releasing consumed capture blocks needs Linux");
+#else
+        QSocToolShellBash bash;
+        const QString     result = bash.execute(
+            {{"command",
+              "yes | head -c 20000000; sleep 1; printf 'BLOCKS=%s\\n' \"$(stat -L -c %b "
+              "/proc/$$/fd/1)\""},
+             {"max_output", 1000000},
+             {"timeout", 30000}});
+        QVERIFY2(result.startsWith("y\ny\n"), qPrintable(result.left(80)));
+        const QRegularExpressionMatch blocks
+            = QRegularExpression(QStringLiteral("BLOCKS=(\\d+)\n$")).match(result);
+        QVERIFY2(blocks.hasMatch(), qPrintable(result.right(200)));
+        QVERIFY2(
+            blocks.captured(1).toLongLong() * 512 < 4 * 1024 * 1024, qPrintable(blocks.captured(1)));
+        QVERIFY(QSocBoundedCapture::isElided(result));
+        QVERIFY(QSocToolShellBash::snapshotActive().isEmpty());
+#endif
+    }
+
+    void backgroundCollectedOutputKeepsTheTail()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolShellBash  bash;
+        QSocToolBashManage manage;
+        const QString      reply = bash.execute(
+            {{"command", "seq 1 1000000; echo BG_TAIL"},
+             {"background", true},
+             {"max_output", 50000000}});
+        const int processId = backgroundProcessId(reply);
+        QVERIFY2(processId >= 0, qPrintable(reply));
+        const QString result = manage.execute(
+            {{"process_id", processId}, {"action", "wait"}, {"timeout", 30000}});
+        QVERIFY2(
+            result.startsWith("Process completed (exit code 0):\n1\n2\n"),
+            qPrintable(result.left(80)));
+        QVERIFY(result.endsWith("BG_TAIL\n"));
+#endif
     }
 
     void processOutcomeIsIndependentOfOutputText()

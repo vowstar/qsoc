@@ -3,6 +3,7 @@
 
 #include "common/qsoctokenizer.h"
 
+#include <algorithm>
 #include <functional>
 #include <limits>
 #include <tuple>
@@ -370,6 +371,57 @@ QString QSocTokenizer::truncate(const QString &text, qint64 maxTokens, Mode mode
         --low;
     }
     return text.left(low);
+}
+
+namespace {
+
+/* Characters scanned per budget token; a shorter piece only shrinks a share. */
+constexpr qsizetype kCharsPerToken = 32;
+
+/* Longest suffix of @p text that is at most @p maxTokens long. */
+QString tokenSuffix(const QString &text, qint64 maxTokens, QSocTokenizer::Mode mode)
+{
+    if (maxTokens <= 0)
+        return {};
+    qsizetype low  = 0;
+    qsizetype high = text.size();
+    while (low < high) {
+        const qsizetype middle = low + (high - low) / 2;
+        if (QSocTokenizer::count(text.mid(middle), mode) <= maxTokens)
+            high = middle;
+        else
+            low = middle + 1;
+    }
+    if (low < text.size() && text.at(low).isLowSurrogate())
+        ++low;
+    return text.mid(low);
+}
+
+} // namespace
+
+QString QSocTokenizer::elideMiddle(
+    const QString &text, qint64 maxTokens, const QString &marker, Mode mode)
+{
+    if (count(text, mode) <= maxTokens)
+        return text;
+    const qint64 room = maxTokens - count(marker, mode);
+    if (room <= 0)
+        return marker;
+    qint64 headTokens = room / 2;
+    qint64 tailTokens = room - headTokens;
+    /* A join can retokenize across its edges, so verify and retry. */
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        const QString   head = truncate(text.left(headTokens * kCharsPerToken), headTokens, mode);
+        const qsizetype window
+            = std::min(text.size() - head.size(), qsizetype(tailTokens * kCharsPerToken));
+        const QString joined = head + marker + tokenSuffix(text.right(window), tailTokens, mode);
+        const qint64  excess = count(joined, mode) - maxTokens;
+        if (excess <= 0)
+            return joined;
+        headTokens = std::max(qint64(0), headTokens - excess);
+        tailTokens = std::max(qint64(0), tailTokens - excess);
+    }
+    return truncate(text, maxTokens, mode);
 }
 
 std::vector<int> QSocTokenizer::encode(const QString &text)

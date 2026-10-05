@@ -5,9 +5,11 @@
 #define QSOCTOOLSHELL_H
 
 #include "agent/qsoctool.h"
+#include "common/qsocboundedcapture.h"
 #include "common/qsocprojectmanager.h"
 
 #include <functional>
+#include <memory>
 #include <QEventLoop>
 #include <QMap>
 #include <QPointer>
@@ -16,6 +18,27 @@
 #include <QTimer>
 
 class QSocToolShellBash;
+
+/**
+ * @brief Capture file of one bash process, read into a bounded head and tail.
+ */
+struct QSocBashOutput
+{
+    QString            path;
+    qint64             offset = 0; /* bytes of path already in capture */
+    QSocBoundedCapture capture;
+
+    /**
+     * @brief Move new bytes of path into capture.
+     * @details Each raw chunk also goes to @p sink. Once offset passes
+     *          @p releaseAfter (negative: never), the consumed part of the
+     *          file is released where the filesystem supports it, so disk
+     *          use stays bounded while the process keeps writing.
+     */
+    void drain(const std::function<void(const QByteArray &)> &sink = {}, qint64 releaseAfter = -1);
+    QString text();
+    QString lastLines(int count);
+};
 
 /**
  * @brief Info for a background bash process that timed out but is still running
@@ -28,15 +51,15 @@ struct QSocBashProcessInfo
         Stopped,
     };
 
-    QProcess                   *process = nullptr;
-    QPointer<QSocToolShellBash> owner;
-    QString                     outputPath;
-    QString                     command;
-    qint64                      processGroupId  = 0;
-    GroupStopState              groupStopState  = GroupStopState::NotRequested;
-    bool                        groupPollActive = false;
-    qint64                      startTime       = 0;
-    qint64                      maxOutputBytes  = 0; /* 0 means "use default cap" */
+    QProcess                       *process = nullptr;
+    QPointer<QSocToolShellBash>     owner;
+    std::shared_ptr<QSocBashOutput> output;
+    QString                         command;
+    qint64                          processGroupId  = 0;
+    GroupStopState                  groupStopState  = GroupStopState::NotRequested;
+    bool                            groupPollActive = false;
+    qint64                          startTime       = 0;
+    qint64                          maxOutputBytes  = 0; /* 0 means "use default cap" */
     /* Watchdog state. lastKnownSize/lastSizeChangeAt feed both the
      * output-size kill rule and the no-progress stuck detector. */
     qint64  lastKnownSize    = 0;
@@ -157,7 +180,6 @@ private:
 
     static QMap<int, QSocBashProcessInfo> activeProcesses;
     static int                            nextProcessId;
-    static QString                        readLastLines(const QString &path, int count);
     static void                           killTracked(const QSocToolShellBash *owner);
     static void markTrackedStopped(int processId, const QPointer<QProcess> &expectedProcess);
     static void requestTrackedStop(int processId);

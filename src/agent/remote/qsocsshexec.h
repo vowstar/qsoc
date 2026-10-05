@@ -60,13 +60,22 @@ public:
      *                  out.
      * @param input Bytes written to the command's stdin before EOF is sent.
      *              Empty sends EOF at once.
+     * @param captureBytes When positive, stdout and stderr each keep at most
+     *                     this many bytes as head and tail around a marker.
      */
-    Result run(const QString &command, int timeoutMs = 30000, const QByteArray &input = {});
+    Result run(
+        const QString    &command,
+        int               timeoutMs    = 30000,
+        const QByteArray &input        = {},
+        qint64            captureBytes = 0);
 
     /** @brief Flag a running `run()` call to stop reading and close channel. */
     void requestAbort();
 
 private:
+    /* Where a run's output goes: raw into its Result, or bounded. */
+    struct Capture;
+
     /**
      * @brief Wait during a request exchange, bounded by the call deadline.
      * @details Giving up strands libssh2 mid-request, so the session is
@@ -103,14 +112,14 @@ private:
     /**
      * @brief Write @p input to the channel's stdin, then send EOF.
      * @details Output that arrives while the window is full is read into
-     *          @p result, so a command that writes before it reads cannot
+     *          @p capture, so a command that writes before it reads cannot
      *          stall the send.
      * @return False when the call was aborted, ran out of time or failed.
      */
-    bool sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, Result &result);
+    bool sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, Capture &capture);
 
     /** @brief Read whatever output is already buffered, without waiting. */
-    void drainOutput(LIBSSH2_CHANNEL *channel, Result &result);
+    void drainOutput(LIBSSH2_CHANNEL *channel, Capture &capture);
 
     QSocSshSession   &m_session;
     std::atomic<bool> m_abort{false};

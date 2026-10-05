@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "common/qsocboundedcapture.h"
+#include "common/qsoctokenizer.h"
 
 #include <QMap>
 #include <QSet>
@@ -228,45 +230,36 @@ void QSocAgent::appendBoundedToolMessage(
             completion = QStringLiteral("uncertain");
         else if (state.isEmpty() && status == QSocToolResultStatus::Dispatched)
             completion = QStringLiteral("dispatched");
-        const bool sourceTruncated = (toolName == QStringLiteral("bash")
-                                      && content.endsWith("... (output truncated)"))
-                                     || (toolName == QStringLiteral("web_fetch")
-                                         && content.endsWith("... (content truncated)"));
+        /* A return the store cannot hold whole is saved as its head and tail. */
+        const QString stored = QSocBoundedCapture::bound(content, agentConfig.toolArtifactBytes);
+        const bool    sourceTruncated = QSocBoundedCapture::isElided(stored)
+                                        || (toolName == QStringLiteral("web_fetch")
+                                            && content.endsWith("... (content truncated)"));
         if (toolResultStore_ && toolName != QStringLiteral("tool_output_read"))
             saved = toolResultStore_->publish(
-                content,
+                stored,
                 completion,
                 sourceTruncated ? QStringLiteral("truncated") : QStringLiteral("unknown"),
                 &error,
                 [run] { return !run || run->stop.load() == StopMode::None; });
+        QString notice;
         if (saved) {
             refs.push_back(artifactReferenceJson(*saved));
-            const QString notice = QStringLiteral(
-                                       "\n[Captured tool return saved locally: %1. Use "
-                                       "tool_output_read when available.]")
-                                       .arg(QString::fromStdString(refs.front().dump()));
-            view                 = truncateTokens(
-                                       content,
-                                       std::max(
-                                           qint64(0),
-                                           budget - QSocRequestUsage::estimateText(notice, tokenCounter())))
-                                   + notice;
+            notice = QStringLiteral(
+                         "\n[Middle of the output omitted; read artifact %1 (%2 bytes) with "
+                         "tool_output_read.]\n")
+                         .arg(saved->id)
+                         .arg(saved->capturedBytes);
         } else {
-            const QString notice
-                = QStringLiteral(
-                      "\n[Return text omitted. No readable artifact was saved. Completion: %1. %2 "
-                      "Do not repeat side effects without checking state.]")
-                      .arg(
-                          completion,
-                          error.isEmpty() ? QStringLiteral("Result storage is unavailable.")
-                                          : error);
-            view = truncateTokens(
-                       content,
-                       std::max(
-                           qint64(0),
-                           budget - QSocRequestUsage::estimateText(notice, tokenCounter())))
-                   + notice;
+            notice = QStringLiteral(
+                         "\n[Middle of the output omitted. No readable artifact was saved. "
+                         "Completion: %1. %2 Do not repeat side effects without checking state.]\n")
+                         .arg(
+                             completion,
+                             error.isEmpty() ? QStringLiteral("Result storage is unavailable.")
+                                             : error);
         }
+        view = QSocTokenizer::elideMiddle(content, budget, notice, tokenCounter());
     }
     json message
         = {{"role", "tool"},

@@ -224,6 +224,33 @@ private slots:
             }
         }
     }
+
+    void elideMiddleKeepsBothEndsWithinTheLimit()
+    {
+        QString text;
+        for (int line = 1; line <= 20000; ++line)
+            text += QStringLiteral("line %1 \u4f60\U0001F600 payload\n").arg(line);
+        text += QStringLiteral("ERROR_TAIL\n");
+        const QString marker = QStringLiteral("\n[middle omitted]\n");
+        for (const auto mode : {QSocTokenizer::Mode::O200k, QSocTokenizer::Mode::Bytes}) {
+            QCOMPARE(
+                QSocTokenizer::elideMiddle(QStringLiteral("short"), 100, marker, mode),
+                QStringLiteral("short"));
+            QCOMPARE(QSocTokenizer::elideMiddle(text, 2, marker, mode), marker);
+            for (const qint64 limit : {qint64(64), qint64(1000), qint64(4096)}) {
+                const QString view = QSocTokenizer::elideMiddle(text, limit, marker, mode);
+                QVERIFY(QSocTokenizer::count(view, mode) <= limit);
+                QVERIFY(QSocTokenizer::count(view, mode) + 16 >= limit);
+                const qsizetype cut = view.indexOf(marker);
+                QVERIFY(cut > 0);
+                QVERIFY(text.startsWith(view.left(cut)));
+                QVERIFY(text.endsWith(view.mid(cut + marker.size())));
+                QVERIFY(view.startsWith(QStringLiteral("line 1 ")));
+                QVERIFY(view.endsWith(QStringLiteral("ERROR_TAIL\n")));
+                QVERIFY(!view.at(cut + marker.size()).isLowSurrogate());
+            }
+        }
+    }
 };
 
 } // namespace

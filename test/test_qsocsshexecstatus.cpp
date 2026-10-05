@@ -4,6 +4,7 @@
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
+#include "common/qsocboundedcapture.h"
 #include "qsoc_test.h"
 #include "qsoc_test_relay.h"
 #include "qsoc_test_sshd.h"
@@ -38,6 +39,8 @@ private slots:
     void execReportsUnknownWhenOutputClosesEarlyAndTheProcessOutrunsTheBudget();
     void aHalfClosedLinkInventsNoExitStatus();
     void aChannelClosedWithoutAStatusIsNotACleanExit();
+    void aCaptureLimitKeepsHeadAndTailOfEachStream();
+    void aCaptureLimitBoundsOutputReadWhileSendingInput();
 
 private:
     /** @brief Connect to the fixture, failing the case with the sshd log. */
@@ -228,6 +231,58 @@ void Test::aChannelClosedWithoutAStatusIsNotACleanExit()
     /* The command outlives the report: proof that the exit 7 it eventually
      * reaches was never available to be reported. */
     QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(finished), 30000);
+}
+
+void Test::aCaptureLimitKeepsHeadAndTailOfEachStream()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    QSocSshSession session;
+    connectOrFail(session);
+
+    QSocSshExec exec(session);
+    const auto  result = exec.run(
+        QStringLiteral("seq 1 300000; echo OUT_TAIL; (seq 1 300000; echo ERR_TAIL) >&2"),
+        60000,
+        {},
+        65536);
+    QVERIFY2(result.errorText.isEmpty(), qPrintable(result.errorText));
+    QCOMPARE(result.exitCode, 0);
+    for (const auto &[bytes, tail] :
+         {std::pair{result.stdoutBytes, QByteArray("OUT_TAIL\n")},
+          std::pair{result.stderrBytes, QByteArray("ERR_TAIL\n")}}) {
+        QVERIFY(bytes.size() <= 65536);
+        QVERIFY(bytes.startsWith("1\n2\n3\n"));
+        QVERIFY(bytes.endsWith(tail));
+        QVERIFY(QSocBoundedCapture::isElided(QString::fromUtf8(bytes)));
+    }
+    QVERIFY(session.isConnected());
+}
+
+/* `cat` echoes stdin while it is still being sent, so the head of the output
+ * arrives before EOF and must enter the same bounded capture. */
+void Test::aCaptureLimitBoundsOutputReadWhileSendingInput()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+
+    QSocSshSession session;
+    connectOrFail(session);
+
+    QByteArray input("INPUT_HEAD\n");
+    while (input.size() < 4 * 1024 * 1024) {
+        input += "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n";
+    }
+    input += "INPUT_TAIL\n";
+
+    QSocSshExec exec(session);
+    const auto  result = exec.run(QStringLiteral("cat"), 60000, input, 65536);
+    QVERIFY2(result.errorText.isEmpty(), qPrintable(result.errorText));
+    QCOMPARE(result.exitCode, 0);
+    QVERIFY(result.stdoutBytes.size() <= 65536);
+    QVERIFY(result.stdoutBytes.startsWith("INPUT_HEAD\n"));
+    QVERIFY(result.stdoutBytes.endsWith("INPUT_TAIL\n"));
+    QVERIFY(QSocBoundedCapture::isElided(QString::fromUtf8(result.stdoutBytes)));
+    QVERIFY(session.isConnected());
 }
 
 QSOC_TEST_MAIN(Test)

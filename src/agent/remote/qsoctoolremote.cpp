@@ -11,6 +11,7 @@
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
 #include "common/qllmservice.h"
+#include "common/qsocboundedcapture.h"
 #include "common/qsocimageattach.h"
 #include "common/qsocshellpath.h"
 
@@ -947,9 +948,10 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
     const QSocRemoteExec request = remoteCommandExec(m_conn->host(), cwd, cmd);
 
     QSocSshExec exec(*m_conn->session());
-    m_running         = &exec;
-    const auto result = exec.run(request.command, timeoutMs, request.input);
-    m_running         = nullptr;
+    m_running = &exec;
+    const auto result
+        = exec.run(request.command, timeoutMs, request.input, QSocBoundedCapture::kDefaultLimit / 2);
+    m_running = nullptr;
 
     /* Every field the reader needs to judge the call goes ahead of the
      * body. Metadata after an unbounded stdout is metadata nobody can find:

@@ -16,6 +16,7 @@
 #include "agent/tool/qsoctoolshell.h"
 #include "common/qllmservice.h"
 #include "common/qlongtaskmonitor.h"
+#include "common/qsocboundedcapture.h"
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
 
@@ -506,8 +507,9 @@ public:
         ++calls;
         return value;
     }
-    QString value = QStringLiteral("α中🙂 generated line\n").repeated(4000)
-                    + QStringLiteral("\n... (output truncated)");
+    QString value = QStringLiteral("α中🙂 generated line\n").repeated(2000)
+                    + QSocBoundedCapture::marker(4096)
+                    + QStringLiteral("α中🙂 generated line\n").repeated(2000);
     int     calls = 0;
 };
 
@@ -1617,7 +1619,7 @@ private slots:
         QTest::newRow("synchronous") << false << 0;
         QTest::newRow("failed-image") << true << 2;
 #ifdef Q_OS_UNIX
-        QTest::newRow("bash-truncated-return") << true << 1;
+        QTest::newRow("bash-full-return") << true << 1;
 #endif
     }
     void boundedToolReturn()
@@ -1635,8 +1637,7 @@ private slots:
                 {{"command", "printf '%060000d' 0"},
                  {"working_directory", root.path().toStdString()},
                  {"timeout", 5000}});
-            QVERIFY(tool.value.endsWith("... (output truncated)"));
-            QVERIFY(tool.value.size() < 60000);
+            QCOMPARE(tool.value, QString(60000, QLatin1Char('0')));
             captured = tool.value;
         } else if (sourceKind == 2) {
             AttachmentTool attachment;
@@ -1674,7 +1675,7 @@ private slots:
         QCOMPARE(refs.size(), 1);
         QCOMPARE(
             refs.first().sourceCompleteness,
-            sourceKind == 2 ? QStringLiteral("unknown") : QStringLiteral("truncated"));
+            sourceKind == 1 ? QStringLiteral("unknown") : QStringLiteral("truncated"));
         QCOMPARE(
             refs.first().completion,
             sourceKind == 2 ? QStringLiteral("failed") : QStringLiteral("ok"));
@@ -1720,6 +1721,65 @@ private slots:
         QVERIFY(!child.toolResultStore()->read(later->id, 0, 100));
         QVERIFY(QDir(agent.toolResultStore()->directory()).removeRecursively());
         QVERIFY(child.toolResultStore()->read(refs.first().id, 0, 100));
+    }
+    void longBashOutputKeepsItsLastLineForTheModel()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("The bash tool needs a POSIX shell");
+#else
+        QTemporaryDir root;
+        MockServer    server;
+        QVERIFY(server.listen());
+        QSocToolShellBash bash;
+        QSocToolRegistry  registry;
+        registry.registerTool(&bash);
+        auto calls                        = buildToolCalls({"bash"});
+        calls[0]["function"]["arguments"] = json{
+            {"command", "seq 1 30000; echo ERROR_TAIL; exit 3"},
+            {"working_directory",
+             root.path().toStdString()}}.dump();
+        server.enqueueRawToolCompletion(calls);
+        server.enqueueCompletion(QStringLiteral("done"));
+        QLLMService service;
+        configureService(service, server);
+        QSocAgent agent(nullptr, &service, &registry, testConfig());
+        QVERIFY(agent.bindToolResultStore(root.filePath("artifacts"), "session"));
+        QCOMPARE(agent.run("run once"), QStringLiteral("done"));
+
+        QString expected = QStringLiteral("Command exited with code 3:\n");
+        for (int line = 1; line <= 30000; ++line)
+            expected += QString::number(line) + QLatin1Char('\n');
+        expected += QStringLiteral("ERROR_TAIL\n");
+
+        const auto    history = agent.getMessages();
+        const QString view    = QString::fromStdString(history[2]["content"].get<std::string>());
+        QVERIFY2(view.startsWith("Command exited with code 3:\n1\n2\n"), qPrintable(view.left(80)));
+        QVERIFY2(view.endsWith("ERROR_TAIL\n"), qPrintable(view.right(80)));
+        QVERIFY(QSocRequestUsage::estimateText(view) <= 4096);
+        const auto refs = QSocAgent::artifactReferences(history);
+        QCOMPARE(refs.size(), 1);
+        QVERIFY(view.contains(refs.first().id));
+        QVERIFY(view.contains("tool_output_read"));
+        QVERIFY(!view.contains("Captured tool return saved locally"));
+        const auto wire = json::parse(server.requestBody(1).toStdString());
+        const auto tool
+            = std::find_if(wire["messages"].begin(), wire["messages"].end(), [](const json &message) {
+                  return message.value("role", std::string()) == "tool";
+              });
+        QVERIFY(tool != wire["messages"].end());
+        QCOMPARE(QString::fromStdString((*tool)["content"].get<std::string>()), view);
+
+        QString restored;
+        for (qint64 offset = 0;;) {
+            const auto page = agent.toolResultStore()->read(refs.first().id, offset, 32768);
+            QVERIFY(page);
+            restored += page->text;
+            if (page->eof)
+                break;
+            offset = page->nextOffset;
+        }
+        QCOMPARE(restored, expected);
+#endif
     }
     void providerCannotForgeArtifactReferences()
     {
@@ -1771,6 +1831,41 @@ private slots:
         QCOMPARE(agent.run("continue"), QStringLiteral("done"));
         QCOMPARE(server.requestCount(), 2);
         QCOMPARE(tool.executeCount(), 0);
+    }
+    void oversizeReturnIsSavedAsHeadAndTail()
+    {
+        MockServer server;
+        QVERIFY(server.listen());
+        LargeResultTool  tool;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        server.enqueueToolCall(tool.getName());
+        server.enqueueStream("done");
+        QLLMService service;
+        configureService(service, server);
+        auto config              = testConfig();
+        config.toolArtifactBytes = 20000;
+        QSocAgent     agent(nullptr, &service, &registry, config);
+        QTemporaryDir root;
+        QVERIFY(agent.bindToolResultStore(root.filePath("artifacts"), "session"));
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        agent.runStream("run once");
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+        const auto refs = QSocAgent::artifactReferences(agent.getMessages());
+        QCOMPARE(refs.size(), 1);
+        QVERIFY(refs.first().capturedBytes <= 20000);
+        QCOMPARE(refs.first().sourceCompleteness, QStringLiteral("truncated"));
+        QString saved;
+        for (qint64 offset = 0;;) {
+            const auto page = agent.toolResultStore()->read(refs.first().id, offset, 32768);
+            QVERIFY(page);
+            saved += page->text;
+            if (page->eof)
+                break;
+            offset = page->nextOffset;
+        }
+        QVERIFY(tool.value.startsWith(saved.left(saved.indexOf(QStringLiteral("\n[... ")))));
+        QVERIFY(tool.value.endsWith(saved.right(100)));
     }
     void resultQuotaFailureDoesNotReplay()
     {

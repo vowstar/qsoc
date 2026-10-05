@@ -4,6 +4,7 @@
 #include "agent/remote/qsocsshexec.h"
 
 #include "agent/remote/qsocsshsession.h"
+#include "common/qsocboundedcapture.h"
 
 namespace {
 
@@ -92,19 +93,61 @@ void QSocSshExec::freeChannel(LIBSSH2_CHANNEL *channel)
     }
 }
 
-void QSocSshExec::drainOutput(LIBSSH2_CHANNEL *channel, Result &result)
+struct QSocSshExec::Capture
+{
+    Capture(Result &result, qint64 limit)
+        : result(result)
+        , limit(limit)
+        , out(limit)
+        , err(limit)
+    {}
+
+    void stdoutData(QByteArrayView data)
+    {
+        if (limit > 0) {
+            out.append(data);
+        } else {
+            result.stdoutBytes.append(data);
+        }
+    }
+
+    void stderrData(QByteArrayView data)
+    {
+        if (limit > 0) {
+            err.append(data);
+        } else {
+            result.stderrBytes.append(data);
+        }
+    }
+
+    void finish()
+    {
+        if (limit > 0) {
+            result.stdoutBytes = out.bytes();
+            result.stderrBytes = err.bytes();
+        }
+    }
+
+    Result            &result;
+    qint64             limit;
+    QSocBoundedCapture out;
+    QSocBoundedCapture err;
+};
+
+void QSocSshExec::drainOutput(LIBSSH2_CHANNEL *channel, Capture &capture)
 {
     char buffer[4096];
     for (ssize_t n = 0; (n = libssh2_channel_read(channel, buffer, sizeof(buffer))) > 0;) {
-        result.stdoutBytes.append(buffer, static_cast<int>(n));
+        capture.stdoutData(QByteArrayView(buffer, n));
     }
     for (ssize_t n = 0; (n = libssh2_channel_read_stderr(channel, buffer, sizeof(buffer))) > 0;) {
-        result.stderrBytes.append(buffer, static_cast<int>(n));
+        capture.stderrData(QByteArrayView(buffer, n));
     }
 }
 
-bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, Result &result)
+bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, Capture &capture)
 {
+    Result   &result = capture.result;
     qsizetype offset = 0;
     while (offset < input.size()) {
         if (m_abort.load(std::memory_order_relaxed)) {
@@ -123,7 +166,7 @@ bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, R
                                                : QStringLiteral("Failed to send command input");
             return false;
         }
-        drainOutput(channel, result);
+        drainOutput(channel, capture);
         if (!waitAbandonable()) {
             result.timedOut = !m_transportDead;
             return false;
@@ -149,7 +192,8 @@ bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, R
     return true;
 }
 
-QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs, const QByteArray &input)
+QSocSshExec::Result QSocSshExec::run(
+    const QString &command, int timeoutMs, const QByteArray &input, qint64 captureBytes)
 {
     Result result;
     m_abort.store(false, std::memory_order_relaxed);
@@ -218,7 +262,8 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs, cons
         return result;
     }
 
-    const bool inputSent = sendInput(channel, input, result);
+    Capture    capture(result, captureBytes);
+    const bool inputSent = sendInput(channel, input, capture);
     char       buffer[4096];
     while (inputSent) {
         if (m_abort.load(std::memory_order_relaxed)) {
@@ -232,13 +277,13 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs, cons
 
         const ssize_t nout = libssh2_channel_read(channel, buffer, sizeof(buffer));
         if (nout > 0) {
-            result.stdoutBytes.append(buffer, static_cast<int>(nout));
+            capture.stdoutData(QByteArrayView(buffer, nout));
             continue;
         }
 
         const ssize_t nerr = libssh2_channel_read_stderr(channel, buffer, sizeof(buffer));
         if (nerr > 0) {
-            result.stderrBytes.append(buffer, static_cast<int>(nerr));
+            capture.stderrData(QByteArrayView(buffer, nerr));
             continue;
         }
 
@@ -274,6 +319,7 @@ QSocSshExec::Result QSocSshExec::run(const QString &command, int timeoutMs, cons
                                             : QStringLiteral("Remote read error during exec");
         break;
     }
+    capture.finish();
 
     /* The close handshake is where the remote status arrives, so it runs on
      * whatever is left of the call budget. Only a budget already spent falls

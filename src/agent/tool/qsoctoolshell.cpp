@@ -18,7 +18,6 @@
 #include <QScopeGuard>
 #include <QStringDecoder>
 #include <QTemporaryDir>
-#include <QTextStream>
 #include <QThread>
 #include <QTimer>
 
@@ -29,6 +28,9 @@
 #include <cerrno>
 #include <csignal>
 #include <unistd.h>
+#endif
+#ifdef Q_OS_LINUX
+#include <fcntl.h>
 #endif
 
 namespace {
@@ -101,9 +103,9 @@ void destroyProcessInfo(QSocBashProcessInfo &info)
     info.process      = nullptr;
     delete process;
 
-    if (!info.outputPath.isEmpty()) {
-        QDir(QFileInfo(info.outputPath).absolutePath()).removeRecursively();
-        info.outputPath.clear();
+    if (info.output && !info.output->path.isEmpty()) {
+        QDir(QFileInfo(info.output->path).absolutePath()).removeRecursively();
+        info.output->path.clear();
     }
 }
 
@@ -295,7 +297,65 @@ bool forceStopProcess(
     return groupTookSignal && (process.isNull() || process->state() == QProcess::NotRunning);
 }
 
+#ifdef Q_OS_LINUX
+constexpr bool kCanReleasePrefix = true;
+#else
+constexpr bool kCanReleasePrefix = false;
+#endif
+
+/* Free the disk blocks before @p end; offsets and the file size stay. */
+void releasePrefix(const QFile &file, const qint64 end)
+{
+#ifdef Q_OS_LINUX
+    const off_t aligned = static_cast<off_t>(end) & ~off_t(4095);
+    if (aligned > 0) {
+        ::fallocate(file.handle(), FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, 0, aligned);
+    }
+#else
+    Q_UNUSED(file);
+    Q_UNUSED(end);
+#endif
+}
+
 } /* namespace */
+
+void QSocBashOutput::drain(
+    const std::function<void(const QByteArray &)> &sink, const qint64 releaseAfter)
+{
+    const bool release = kCanReleasePrefix && releaseAfter >= 0;
+    QFile      file(path);
+    if (!file.open(release ? QIODevice::ReadWrite : QIODevice::ReadOnly) || !file.seek(offset)) {
+        return;
+    }
+    for (QByteArray chunk = file.read(65536); !chunk.isEmpty(); chunk = file.read(65536)) {
+        offset += chunk.size();
+        /* Carriage returns are dropped as a text-mode read would drop them. */
+        capture.append(QByteArray(chunk).replace('\r', QByteArrayView()));
+        if (sink) {
+            sink(chunk);
+        }
+    }
+    if (release && offset > releaseAfter) {
+        releasePrefix(file, offset);
+    }
+}
+
+QString QSocBashOutput::text()
+{
+    drain();
+    return capture.text();
+}
+
+QString QSocBashOutput::lastLines(const int count)
+{
+    drain();
+    QString tail = QString::fromUtf8(capture.tailBytes(65536));
+    if (tail.endsWith(QLatin1Char('\n'))) {
+        tail.chop(1);
+    }
+    const QStringList lines = tail.split(QLatin1Char('\n'));
+    return lines.mid(qMax(qsizetype(0), lines.size() - count)).join(QLatin1Char('\n'));
+}
 
 /* Static members */
 QMap<int, QSocBashProcessInfo> QSocToolShellBash::activeProcesses;
@@ -433,7 +493,7 @@ QList<QSocToolShellBash::BackgroundSnapshot> QSocToolShellBash::snapshotActive(
         snap.id          = it.key();
         snap.command     = info.command;
         snap.startedAtMs = info.startTime;
-        snap.outputPath  = info.outputPath;
+        snap.outputPath  = info.output ? info.output->path : QString();
         snap.isStuck     = !info.stuckReason.isEmpty();
         snap.isRunning   = trackedProcessRunning(info);
         snap.exitCode    = info.process != nullptr ? info.process->exitCode() : -1;
@@ -492,18 +552,10 @@ bool QSocToolShellBash::killActive(int processId)
 QString QSocToolShellBash::tailActive(int processId, int maxBytes)
 {
     auto it = activeProcesses.constFind(processId);
-    if (it == activeProcesses.constEnd())
+    if (it == activeProcesses.constEnd() || !it->output)
         return QString();
-    const QString &path = it.value().outputPath;
-    QFile          file(path);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly))
-        return QString();
-    const qint64 size = file.size();
-    if (size > maxBytes)
-        file.seek(size - maxBytes);
-    const QByteArray bytes = file.readAll();
-    file.close();
-    return QString::fromUtf8(bytes);
+    it->output->drain();
+    return QString::fromUtf8(it->output->capture.tailBytes(maxBytes));
 }
 
 QString QSocToolShellBash::getName() const
@@ -546,9 +598,10 @@ json QSocToolShellBash::getParametersSchema() const
           {"max_output",
            {{"type", "integer"},
             {"description",
-             "Cap on captured stdout+stderr bytes (default: 5242880 = 5 MB). "
-             "When the watchdog sees the file grow past this, the process is "
-             "killed and bash_manage reports the kill reason."}}}}},
+             "Cap on stdout+stderr bytes of a background or timed-out process "
+             "(default: 5242880 = 5 MB). When the watchdog sees the output grow "
+             "past this, the process is killed and bash_manage reports the kill "
+             "reason. Long output keeps its head and tail."}}}}},
         {"required", json::array({"command"})}};
 }
 
@@ -604,7 +657,7 @@ void QSocToolShellBash::tickWatchdog()
             continue;
 
         const qint64 cap  = info.maxOutputBytes > 0 ? info.maxOutputBytes : kDefaultMaxOutputBytes;
-        const qint64 size = QFileInfo(info.outputPath).size();
+        const qint64 size = QFileInfo(info.output->path).size();
 
         if (size != info.lastKnownSize) {
             info.lastKnownSize    = size;
@@ -624,7 +677,7 @@ void QSocToolShellBash::tickWatchdog()
         }
 
         if (!info.stuckNotified && now - info.lastSizeChangeAt >= kStuckThresholdMs) {
-            const QString tail   = readLastLines(info.outputPath, 20);
+            const QString tail   = info.output->lastLines(20);
             const QString prompt = detectInteractivePrompt(tail);
             if (!prompt.isEmpty()) {
                 info.stuckReason = QStringLiteral("no output for %1s; tail looks interactive (%2)")
@@ -641,26 +694,9 @@ void QSocToolShellBash::tickWatchdog()
         if (it == activeProcesses.end())
             continue;
         const QString reason = it->stuckReason;
-        const QString tail   = readLastLines(it->outputPath, 5);
+        const QString tail   = it->output->lastLines(5);
         emit          processStuckDetected(id, reason, tail);
     }
-}
-
-QString QSocToolShellBash::readLastLines(const QString &path, int count)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-
-    QStringList allLines;
-    QTextStream stream(&file);
-    while (!stream.atEnd()) {
-        allLines.append(stream.readLine());
-    }
-
-    int start = static_cast<int>(qMax(qsizetype(0), allLines.size() - count));
-    return allLines.mid(start).join('\n');
 }
 
 QString QSocToolShellBash::execute(const json &arguments)
@@ -732,6 +768,8 @@ QString QSocToolShellBash::execute(const json &arguments)
     tempDir->setAutoRemove(false);
     QString outputPath = tempDir->path() + "/output.log";
     delete tempDir;
+    auto outputLog  = std::make_shared<QSocBashOutput>();
+    outputLog->path = outputPath;
 
     /* Touch the file so bash_manage can tail it before any output lands. */
     {
@@ -769,7 +807,7 @@ QString QSocToolShellBash::execute(const json &arguments)
         QSocBashProcessInfo info;
         info.process        = process;
         info.owner          = this;
-        info.outputPath     = outputPath;
+        info.output         = outputLog;
         info.command        = command;
         info.processGroupId = processGroup;
         info.startTime      = QDateTime::currentMSecsSinceEpoch();
@@ -800,23 +838,22 @@ QString QSocToolShellBash::execute(const json &arguments)
     QEventLoop                  loop;
     bool                        finished = false;
     ForegroundWaitContext       wait{processGuard, &loop, processGroup, false};
-    qint64                      outputOffset = 0;
+    qint64                      reported = 0;
     const qint64   outputLimit = maxOutputBytes > 0 ? maxOutputBytes : kDefaultMaxOutputBytes;
     QStringDecoder decoder(QStringDecoder::Utf8);
-    QTimer         outputTimer;
-    const auto     publishOutput = [&]() {
-        if (!callContext || callContext->isCancellationRequested() || outputOffset >= outputLimit)
+    const auto     report = [&](const QByteArray &bytes) {
+        if (!callContext || callContext->isCancellationRequested() || reported >= outputLimit)
             return;
-        QFile outputFile(outputPath);
-        if (!outputFile.open(QIODevice::ReadOnly) || !outputFile.seek(outputOffset))
-            return;
-        const QByteArray bytes = outputFile.read(qMin(qint64(65536), outputLimit - outputOffset));
-        outputOffset += bytes.size();
-        callContext->reportOutput(decoder(bytes));
+        const QByteArray shown = bytes.left(outputLimit - reported);
+        reported += shown.size();
+        callContext->reportOutput(decoder(shown));
     };
-    QObject::connect(&outputTimer, &QTimer::timeout, &loop, publishOutput);
-    if (callContext)
-        outputTimer.start(100);
+    /* The capture holds head and tail in memory, so past the output cap the
+       file only needs the bytes not yet drained. */
+    const auto drainOutput = [&]() { outputLog->drain(report, outputLimit); };
+    QTimer     outputTimer;
+    QObject::connect(&outputTimer, &QTimer::timeout, &loop, drainOutput);
+    outputTimer.start(100);
 
     QObject::connect(
         process,
@@ -844,7 +881,7 @@ QString QSocToolShellBash::execute(const json &arguments)
         loop.exec();
     }
     outputTimer.stop();
-    publishOutput();
+    drainOutput();
     const bool aborted = wait.aborted;
     if (!owner.isNull()) {
         owner->foregroundWaits_.remove(&wait);
@@ -863,26 +900,14 @@ QString QSocToolShellBash::execute(const json &arguments)
         /* Process completed within timeout. Output is already on disk
          * because setStandardOutputFile redirected stdout+stderr there
          * before start; just read the capture file. */
-        QFile   readFile(outputPath);
-        QString output;
-        if (readFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            output = QString::fromUtf8(readFile.readAll());
-            readFile.close();
-        }
-
-        const int  exitCode = processGuard->exitCode();
-        const bool crashed  = processGuard->exitStatus() == QProcess::CrashExit;
+        const QString output   = outputLog->text();
+        const int     exitCode = processGuard->exitCode();
+        const bool    crashed  = processGuard->exitStatus() == QProcess::CrashExit;
         if (callContext)
             callContext->setResultStatus(
                 exitCode != 0 || crashed ? ResultStatus::Failed : ResultStatus::Ok);
         delete processGuard.data();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
-
-        /* Truncate output if too large */
-        constexpr int maxOutputSize = 50000;
-        if (output.size() > maxOutputSize) {
-            output = output.left(maxOutputSize) + "\n... (output truncated)";
-        }
 
         if (exitCode != 0) {
             return QString("Command exited with code %1:\n%2").arg(exitCode).arg(output);
@@ -901,7 +926,7 @@ QString QSocToolShellBash::execute(const json &arguments)
     QSocBashProcessInfo info;
     info.process        = processGuard.data();
     info.owner          = owner;
-    info.outputPath     = outputPath;
+    info.output         = outputLog;
     info.command        = command;
     info.processGroupId = processGroup;
     if (wait.stopRequested) {
@@ -927,7 +952,7 @@ QString QSocToolShellBash::execute(const json &arguments)
     }
 
     /* Read last lines for immediate feedback */
-    QString lastOutput = readLastLines(outputPath, 50);
+    QString lastOutput = outputLog->lastLines(50);
 
     if (aborted) {
         return QString(
@@ -1057,22 +1082,9 @@ json QSocToolBashManage::getParametersSchema() const
 QString QSocToolBashManage::collectOutput(const QSocBashProcessInfo &info, int exitCode)
 {
     /* No buffered remainder to flush: the process redirects stdout+stderr
-     * straight to info.outputPath via setStandardOutputFile, so the file
+     * straight to the capture file via setStandardOutputFile, so the file
      * already contains everything that was emitted up to exit. */
-
-    /* Read full output */
-    QFile   readFile(info.outputPath);
-    QString output;
-    if (readFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        output = QString::fromUtf8(readFile.readAll());
-        readFile.close();
-    }
-
-    /* Truncate if too large */
-    constexpr int maxOutputSize = 50000;
-    if (output.size() > maxOutputSize) {
-        output = output.left(maxOutputSize) + "\n... (output truncated)";
-    }
+    const QString output = info.output->text();
 
     if (exitCode != 0) {
         return QString("Command exited with code %1:\n%2").arg(exitCode).arg(output);
@@ -1120,10 +1132,8 @@ QString QSocToolBashManage::execute(const json &arguments)
         auto   &info      = it.value();
         bool    running   = trackedProcessRunning(info);
         qint64  elapsed   = QDateTime::currentMSecsSinceEpoch() - info.startTime;
-        QString lastLines = QSocToolShellBash::readLastLines(info.outputPath, 10);
-
-        QFile  outputFile(info.outputPath);
-        qint64 fileSize = outputFile.size();
+        QString lastLines = info.output->lastLines(10);
+        qint64  fileSize  = QFileInfo(info.output->path).size();
 
         QString result = QString(
                              "Process ID: %1\n"
@@ -1190,7 +1200,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             return kBlockingWaitBusy;
         }
 
-        /* Process stdout is already redirected to info.outputPath at the
+        /* Process stdout is already redirected to the capture file at the
          * OS level by setStandardOutputFile, so the file grows on its own
          * while we wait. */
         QEventLoop                   loop;
@@ -1258,7 +1268,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             return "Wait aborted; process is still running.";
         }
 
-        const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
+        const QString lastOutput = it->output->lastLines(50);
         const QString result     = QString(
                                        "Process still running after additional %1ms wait.\n"
                                        "Last output:\n%2")
@@ -1270,7 +1280,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
     if (action == "output") {
         auto   &info       = QSocToolShellBash::activeProcesses[processId];
-        QString lastOutput = QSocToolShellBash::readLastLines(info.outputPath, 200);
+        QString lastOutput = info.output->lastLines(200);
         bool    running    = trackedProcessRunning(info);
         return QString("Process %1 (%2):\n%3")
             .arg(processId)
@@ -1300,7 +1310,7 @@ QString QSocToolBashManage::execute(const json &arguments)
             return QString("Error: Process %1 was removed while killing.").arg(processId);
         }
         if (!stopped) {
-            const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
+            const QString lastOutput = it->output->lastLines(50);
             return QString("Kill requested, but process is still running.\nLast output:\n%1")
                 .arg(lastOutput);
         }
@@ -1398,7 +1408,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
         const bool stopped = forceStopProcess(process, processGroupId, true);
         if (!stopped) {
-            const QString lastOutput = QSocToolShellBash::readLastLines(it->outputPath, 50);
+            const QString lastOutput = it->output->lastLines(50);
             releaseProcessWaiter(QSocToolShellBash::activeProcesses, processId, false);
             return QString(
                        "Terminate timed out and force kill was requested, but the process "

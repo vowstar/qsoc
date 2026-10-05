@@ -26,6 +26,15 @@ public:
     /** @brief Prefix of @p text cut at a token boundary, at most @p maxTokens long. */
     static QString truncate(const QString &text, qint64 maxTokens, Mode mode = Mode::O200k);
 
+    /**
+     * @brief Head and tail of @p text joined by @p marker, at most @p maxTokens long.
+     * @details Text that already fits is returned unchanged. Head and tail get
+     *          equal shares of the budget left after the marker, and a marker
+     *          that alone exceeds the budget is returned whole.
+     */
+    static QString elideMiddle(
+        const QString &text, qint64 maxTokens, const QString &marker, Mode mode = Mode::O200k);
+
     /** @brief o200k token ids of @p text, empty when the table is unavailable. */
     static std::vector<int> encode(const QString &text);
 

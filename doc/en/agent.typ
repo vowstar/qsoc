@@ -656,7 +656,9 @@ The agent provides the following tools through natural language:
   wait leaves a running job tracked. A non-positive wait timeout selects the
   60-second default. Stopping a managed job stops its process group.
   Terminate requests a graceful stop and force-kills after five seconds; a
-  process that does not stop remains tracked
+  process that does not stop remains tracked. A background or timed-out job
+  that writes more than `max_output` bytes (default 5 MB) is killed; a
+  blocking call is never stopped for its output size
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
@@ -872,15 +874,21 @@ request of a tool loop sends it back unchanged. A model entry with
 
 == Saved Tool Results
 
-Large tool returns enter history as a fixed preview and an `artifact_id`.
+Large tool returns enter history as their start and end, with a note at the
+cut that names the `artifact_id`.
 `tool_output_read` reads the captured text with UTF-8 byte offsets. Continue
 at `next_offset` until `eof` is true. Each page contains complete characters.
 Repeated reads do not create new artifacts.
 
 The capture contains the text that reached the agent. A source tool can
-truncate its output before returning it. `source_completeness` is `unknown`
-unless the source reports truncation. `captured_bytes` describes the saved
-return, not the original command output. Images remain separate attachments.
+truncate its output before returning it. Local `bash` keeps the first and last
+2 MiB of output longer than 4 MiB, and remote `bash` keeps the first and last
+1 MiB of each stream longer than 2 MiB. The cut reads
+`[... N bytes omitted ...]`. A return larger than `agent.tool_artifact_bytes`
+is saved the same way. `source_completeness` is `truncated` when the saved
+text has such a cut or the source reports truncation, and `unknown`
+otherwise. `captured_bytes` describes the saved return, not the original
+command output. Images remain separate attachments.
 
 After per-image processing, a tool batch admits new images within the
 remaining request context and a combined 16 MiB of encoded data URLs. This

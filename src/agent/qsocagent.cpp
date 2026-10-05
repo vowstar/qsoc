@@ -11,6 +11,7 @@
 #include "agent/remote/qsochostprofile.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/qlongtaskmonitor.h"
+#include "common/qsocboundedcapture.h"
 #include "common/qsocconsole.h"
 #include "common/qsochooktypes.h"
 #include "common/qsocmachine.h"
@@ -36,6 +37,9 @@
 #include <QTextStream>
 
 namespace {
+
+/* Tool returns shown to the client stay well inside one protocol frame. */
+constexpr qint64 kToolDisplayBytes = qint64{1} * 1024 * 1024;
 
 void addTokenCount(std::atomic<qint64> &counter, qint64 increment)
 {
@@ -2148,7 +2152,11 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             const auto status = run->executingToolStatus.value_or(QSocTool::classifyResult(value));
             emit       owner->toolResult(functionName, value);
             if (!owner.isNull() && owner->isCurrentRun(run))
-                emit owner->toolCallFinished(displayId, functionName, value, status);
+                emit owner->toolCallFinished(
+                    displayId,
+                    functionName,
+                    QSocBoundedCapture::bound(value, kToolDisplayBytes),
+                    status);
         };
         const auto publishOutput = [owner, run, displayId, toolCallId](const QString &text) {
             if (owner && owner->isCurrentRun(run) && run->stop.load() == StopMode::None
