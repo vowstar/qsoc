@@ -10,7 +10,8 @@
  *          request's id.
  *
  *          Requests:
- *            {"id":N,"method":"open",   "params":{...QSocAgentRuntimeOptions}}
+ *            {"id":N,"method":"open",   "params":{...QSocAgentRuntimeOptions,
+ *                                                 "single_query":false}}
  *            {"id":N,"method":"turn",   "params":{"input":"..."}}
  *            {"id":N,"method":"command","params":{"input":"..."}}
  *            {"id":N,"method":"abort"}

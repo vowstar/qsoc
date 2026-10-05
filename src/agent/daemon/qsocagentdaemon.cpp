@@ -537,7 +537,9 @@ private:
             ensureRuntime(options);
             QString startupError = runtime_->lastError();
             if (startupError.isEmpty() && !options.sshTarget.isEmpty())
-                runtime_->connectRemote(options.sshTarget, &startupError);
+                runtime_->connectRemote(
+                    {.target = options.sshTarget, .workspace = options.workspace, .remember = false},
+                    &startupError);
             const bool  ok = startupError.isEmpty() && runtime_->openSession();
             QJsonObject result;
             result.insert(QStringLiteral("ok"), ok);
@@ -547,6 +549,10 @@ private:
                 QStringLiteral("error"),
                 startupError.isEmpty() ? runtime_->lastError() : startupError);
             sendReply(id, result);
+            /* A client that does not say it is interactive never auto-connects. */
+            if (ok && options.sshTarget.isEmpty() && options.workspace.isEmpty()
+                && !params.value(QStringLiteral("single_query")).toBool(true))
+                runtime_->connectRememberedRemote();
             return;
         }
 

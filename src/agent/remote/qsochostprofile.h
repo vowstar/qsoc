@@ -50,20 +50,38 @@ struct QSocHostCatalogOp
 };
 
 /**
- * @brief Active binding for the project: either references a catalog entry
- *        by alias, or carries an ad-hoc target+workspace pair for a
- *        one-shot connect that was not saved into the catalog.
+ * @brief The remote host a project was last bound to with `/ssh`.
+ * @details Lives in the user's local data directory, one file per project,
+ *          never in the project tree: a cloned repository must not be able
+ *          to choose where qsoc connects.
  */
-struct QSocHostActiveBinding
+struct QSocHostBinding
 {
-    QString alias;          /**< Non-empty when bound to a catalog entry. */
-    QString adHocTarget;    /**< Non-empty when bound to an ad-hoc target. */
-    QString adHocWorkspace; /**< Workspace for the ad-hoc binding. */
+    QString target;    /**< Alias or [user@]host[:port] as typed. Empty means local. */
+    QString workspace; /**< Remote workspace the binding used. */
 
-    bool isLocal() const { return alias.isEmpty() && adHocTarget.isEmpty(); }
-    bool isAlias() const { return !alias.isEmpty(); }
-    bool isAdHoc() const { return alias.isEmpty() && !adHocTarget.isEmpty(); }
+    bool isLocal() const { return target.isEmpty(); }
 };
+
+namespace QSocHostBindingStore {
+
+/** @brief Default store directory under the user's local data location. */
+QString defaultDir();
+
+/** @brief Binding file of @p projectPath; empty when either argument is. */
+QString filePath(const QString &storeDir, const QString &projectPath);
+
+/** @brief Remembered binding of @p projectPath; local when none is stored. */
+QSocHostBinding load(const QString &storeDir, const QString &projectPath);
+
+/** @brief Remember @p binding for @p projectPath, readable by the owner only. */
+bool save(
+    const QString         &storeDir,
+    const QString         &projectPath,
+    const QSocHostBinding &binding,
+    QString               *errorMessage = nullptr);
+
+} // namespace QSocHostBindingStore
 
 /**
  * @brief Host catalog loader, writer, and live mutator.
@@ -74,7 +92,9 @@ struct QSocHostActiveBinding
  *          (`host_register`, `host_update`, `host_remove`) edit only
  *          through this class. Emits `catalogChanged()` after every
  *          successful mutation so the parent agent's system prompt and the
- *          spawn tool's enum can regenerate on the next LLM turn.
+ *          spawn tool's enum can regenerate on the next LLM turn. An
+ *          `active:` key in either file is never acted on; the binding is
+ *          kept by @ref QSocHostBindingStore.
  */
 class QSocHostCatalog : public QObject
 {
@@ -99,18 +119,8 @@ public:
     /** @brief Lookup by alias; returns nullptr when absent. */
     const QSocHostProfile *find(const QString &alias) const;
 
-    /** @brief Current binding (alias-ref, ad-hoc, or local). */
-    QSocHostActiveBinding active() const;
-
-    /** @brief Set active to a catalog alias. */
-    bool setActiveAlias(const QString &alias, QString *errorMessage = nullptr);
-
-    /** @brief Set active to an ad-hoc target+workspace pair. */
-    bool setActiveAdHoc(
-        const QString &target, const QString &workspace, QString *errorMessage = nullptr);
-
-    /** @brief Clear active (back to local). */
-    bool clearActive(QString *errorMessage = nullptr);
+    /** @brief Whether the project file carries a legacy `active:` key. */
+    bool projectNamesActive() const { return projectNamesActive_; }
 
     /**
      * @brief Insert or update a catalog entry. Writes to project scope.
@@ -133,7 +143,7 @@ public:
         const QList<QSocHostCatalogOp> &opList,
         QString                        *errorMessage = nullptr);
 
-    /** @brief Remove a catalog entry. Clears active if it was bound. */
+    /** @brief Remove a catalog entry. */
     bool remove(const QString &alias, QString *errorMessage = nullptr);
 
     /** @brief Absolute path of the project-scope file (writable target). */
@@ -152,9 +162,9 @@ signals:
 private:
     bool writeProject(QString *errorMessage);
 
-    QList<QSocHostProfile> userList_;      /**< Entries loaded from user scope. */
-    QList<QSocHostProfile> projectList_;   /**< Entries loaded from project scope. */
-    QSocHostActiveBinding  activeBinding_; /**< Project-scope active selection. */
+    QList<QSocHostProfile> userList_;    /**< Entries loaded from user scope. */
+    QList<QSocHostProfile> projectList_; /**< Entries loaded from project scope. */
+    bool                   projectNamesActive_ = false;
     QString                userDir_;
     QString                projectDir_;
 };

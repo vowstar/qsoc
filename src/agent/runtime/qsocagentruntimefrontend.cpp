@@ -50,8 +50,10 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <fstream>
 #include <limits>
+#include <memory>
 
 using json = nlohmann::json;
 
@@ -203,73 +205,221 @@ void QSocAgentRuntime::setUserWatchingProbe(std::function<bool()> probe)
 
 bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
 {
-    if (target.isEmpty()) {
+    return connectRemote(QSocRemoteConnectRequest{.target = target}, error);
+}
+
+bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QString *error)
+{
+    const auto fail = [error](const QString &text) {
         if (error != nullptr) {
-            *error = QStringLiteral("empty SSH target");
+            *error = text;
         }
         return false;
+    };
+    if (request.target.trimmed().isEmpty()) {
+        return fail(QStringLiteral("empty SSH target"));
     }
-    const QSocHostProfile *profile = d->hostCatalog != nullptr ? d->hostCatalog->find(target)
-                                                               : nullptr;
+    ResolvedHostTarget resolved;
+    QString            failure;
+    if (!resolveHostTarget(request.target, d->hostCatalog, d->sshConfig.get(), &resolved, &failure)) {
+        return fail(failure);
+    }
+    const QSocHostProfile *profile = d->hostCatalog != nullptr
+                                         ? d->hostCatalog->find(request.target)
+                                         : nullptr;
     QString                shellError;
     if (!d->remoteConn
              ->setShellPreference(profile != nullptr ? profile->shell : QString(), &shellError)) {
-        if (error != nullptr) {
-            *error = QStringLiteral("host.yml entry %1: %2").arg(target, shellError);
-        }
-        return false;
+        return fail(QStringLiteral("host.yml entry %1: %2").arg(request.target, shellError));
     }
     d->cancelRequested = false;
     AgentRemoteState staged;
-    QString          connectError;
-    const auto       cancelled = [this] {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        return d->cancelRequested;
-    };
-    const auto confirmHostKey = [this](const QString &prompt) {
-        return d->menu
-               && d->menu(
-                      prompt,
-                      {QStringLiteral("No, cancel the connection"),
-                       QStringLiteral("Yes, trust this host key")},
-                      {},
-                      {})
-                      == 1;
-    };
-    if (!connectAgentSshSession(
-            target,
-            this,
-            &staged,
-            &connectError,
-            [this](const QString &prompt) { return d->secret ? d->secret(prompt) : QString(); },
-            cancelled,
-            QDeadlineTimer(30000),
-            confirmHostKey)) {
-        if (error)
-            *error = connectError;
-        return false;
+    if (!dialRemote(resolved.connectString, request.unattended, &staged, &failure)) {
+        return fail(failure);
     }
-    for (const QString &notice : staged.hostKeyNotices) {
-        emitOutput(notice + QLatin1Char('\n'), static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    QString workspace = request.workspace;
+    if (workspace.isEmpty()) {
+        workspace = resolved.workspaceHint;
     }
-    const QString workspace = d->options.workspace.isEmpty() ? QStringLiteral("/")
-                                                             : d->options.workspace;
-    if (cancelled() || !prepareAgentRemoteWorkspace(workspace, &staged, &connectError)) {
+    if (workspace.isEmpty()) {
+        workspace = rememberedWorkspace(request.target);
+    }
+    if (workspace.isEmpty() && !request.unattended) {
+        workspace = pickRemoteWorkspace(staged.sftp);
+    }
+    if (workspace.isEmpty()) {
         discardAgentRemoteState(&staged);
-        if (error)
-            *error = d->cancelRequested ? QStringLiteral("SSH connection cancelled") : connectError;
-        return false;
+        return fail(QStringLiteral("No remote workspace selected; nothing was connected."));
     }
+    if (remoteConnectCancelled() || !prepareAgentRemoteWorkspace(workspace, &staged, &failure)) {
+        discardAgentRemoteState(&staged);
+        return fail(d->cancelRequested ? QStringLiteral("SSH connection cancelled") : failure);
+    }
+    /* A switch replaces the previous binding only once the new one is ready. */
+    disconnectRemote();
     if (!d->remoteConn->adopt(std::move(staged))) {
         /* A refused adopt consumes nothing, so the transport is still
          * ours to free. */
         // cppcheck-suppress accessMoved
         discardAgentRemoteState(&staged);
-        if (error != nullptr) {
-            *error = QStringLiteral("internal error: incomplete remote transport");
-        }
+        return fail(QStringLiteral("internal error: incomplete remote transport"));
+    }
+    installRemoteTools();
+    if (request.remember) {
+        rememberRemoteBinding(request.target);
+    }
+    return true;
+}
+
+void QSocAgentRuntime::connectRememberedRemote()
+{
+    if (d->hostCatalog->projectNamesActive()) {
+        emitOutput(
+            QStringLiteral("Ignoring active: in %1. /ssh keeps the binding per user.\n")
+                .arg(d->hostCatalog->projectFilePath()),
+            static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    }
+    const QSocHostBinding binding
+        = QSocHostBindingStore::load(d->hostBindingDir, d->projectManager->getProjectPath());
+    if (binding.isLocal()) {
+        return;
+    }
+    emitOutput(
+        QStringLiteral("Auto-connecting %1\n").arg(binding.target),
+        static_cast<int>(QSocAgentRuntimeStyle::Dim));
+    QString error;
+    if (!connectRemote({.target = binding.target, .remember = false, .unattended = true}, &error)) {
+        emitOutput(
+            QStringLiteral("Auto-connect to %1 failed: %2. Staying local.\n")
+                .arg(binding.target, error),
+            static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    }
+}
+
+bool QSocAgentRuntime::remoteConnectCancelled()
+{
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    return d->cancelRequested;
+}
+
+bool QSocAgentRuntime::dialRemote(
+    const QString &connectString, bool unattended, AgentRemoteState *staged, QString *error)
+{
+    QSocSshSession::HostKeyConfirm confirmHostKey;
+    if (!unattended) {
+        confirmHostKey = [this](const QString &prompt) {
+            return d->menu
+                   && d->menu(
+                          prompt,
+                          {QStringLiteral("No, cancel the connection"),
+                           QStringLiteral("Yes, trust this host key")},
+                          {},
+                          {})
+                          == 1;
+        };
+    }
+    if (!connectAgentSshSession(
+            connectString,
+            this,
+            staged,
+            error,
+            [this](const QString &prompt) { return d->secret ? d->secret(prompt) : QString(); },
+            [this] { return remoteConnectCancelled(); },
+            QDeadlineTimer(30000),
+            confirmHostKey)) {
         return false;
     }
+    for (const QString &notice : staged->hostKeyNotices) {
+        emitOutput(notice + QLatin1Char('\n'), static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    }
+    return true;
+}
+
+QString QSocAgentRuntime::rememberedWorkspace(const QString &target) const
+{
+    const QSocHostBinding binding
+        = QSocHostBindingStore::load(d->hostBindingDir, d->projectManager->getProjectPath());
+    return binding.target == target ? binding.workspace : QString();
+}
+
+void QSocAgentRuntime::rememberRemoteBinding(const QString &target)
+{
+    const QString project = d->projectManager->getProjectPath();
+    QString       error;
+    if (!project.isEmpty()
+        && !QSocHostBindingStore::save(
+            d->hostBindingDir, project, {target, d->remoteConn->workspace()}, &error)) {
+        emitOutput(
+            QStringLiteral("Could not remember the SSH binding: %1\n").arg(error),
+            static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    }
+}
+
+QString QSocAgentRuntime::pickRemoteHost()
+{
+    QStringList targets;
+    QStringList hints;
+    for (const auto &entry : d->hostCatalog->allList()) {
+        targets << entry.alias;
+        hints
+            << (entry.capability.isEmpty()
+                    ? QStringLiteral("catalog")
+                    : QStringLiteral("catalog: ") + entry.capability.section('\n', 0, 0));
+    }
+    for (const QString &alias : d->sshConfig->listMenuHosts()) {
+        if (!targets.contains(alias)) {
+            targets << alias;
+            hints << QStringLiteral("ssh-config");
+        }
+    }
+    QStringList labels = targets;
+    labels << QStringLiteral("(type /ssh [user@]host[:port])");
+    hints << QString();
+    const int picked = d->menu ? d->menu(QStringLiteral("Remote target"), labels, hints, {})
+                               : static_cast<int>(targets.size());
+    if (picked == targets.size()) {
+        emitOutput(QStringLiteral(
+            "Usage: /ssh [user@]host[:port] | <alias>\n"
+            "  User defaults to the current OS user and port defaults to 22.\n"
+            "  A host without a catalog workspace asks for one in a directory browser.\n"
+            "  The choice is remembered for this project. /local returns to the local\n"
+            "  workspace.\n"));
+    }
+    return targets.value(picked);
+}
+
+QString QSocAgentRuntime::pickRemoteWorkspace(QSocSftpClient *sftp)
+{
+    if (!d->dirPicker || sftp == nullptr) {
+        return {};
+    }
+    QString home;
+    if (sftp->realPath(QStringLiteral("."), &home) != QSocSftpClient::Presence::Present) {
+        home = QStringLiteral("/");
+    }
+    auto listError = std::make_shared<QString>();
+    return d->dirPicker(
+        QStringLiteral("Remote workspace"),
+        home,
+        home,
+        [sftp, listError](const QString &path) {
+            QString     err;
+            const auto  entries = sftp->listDir(path, 500, &err);
+            QStringList names;
+            for (const auto &entry : entries) {
+                if (entry.isDirectory) {
+                    names.append(entry.name);
+                }
+            }
+            *listError = entries.isEmpty() ? err : QString();
+            std::sort(names.begin(), names.end());
+            return names;
+        },
+        [listError] { return *listError; });
+}
+
+void QSocAgentRuntime::installRemoteTools()
+{
     d->remoteConn->setRebuilder([this](
                                     const QString    &target,
                                     const QString    &workspace,
@@ -372,7 +522,6 @@ bool QSocAgentRuntime::connectRemote(const QString &target, QString *error)
     emit eventRaised(event);
     wireSessionTools();
     emit statusChanged();
-    return true;
 }
 
 void QSocAgentRuntime::disconnectRemote()

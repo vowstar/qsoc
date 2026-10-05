@@ -3130,33 +3130,19 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
             "  about that image; do not pretend to have seen its contents.\n");
     }
 
-    /* Host catalog: emitted when the catalog has entries OR the
-     * active binding is non-local, so the LLM knows what hosts it
-     * can dispatch sub-agents to and where it is currently bound.
-     * Capability text is fed verbatim from the user-curated YAML. */
+    /* Host catalog: emitted when the catalog has entries or a remote
+     * workspace is bound, so the LLM knows what hosts it can dispatch
+     * sub-agents to and where this session works now. Capability text is
+     * fed verbatim from the user-curated YAML. */
     if (hostCatalog != nullptr) {
         const auto entries = hostCatalog->allList();
-        const auto active  = hostCatalog->active();
-        if (!entries.isEmpty() || !active.isLocal()) {
+        if (!entries.isEmpty() || agentConfig.remoteMode) {
             QString section = QStringLiteral("\n# Host Catalog\n\n");
             section += QStringLiteral("## Current host binding\n\n");
-            if (active.isAlias()) {
-                section += QStringLiteral("Active: ") + active.alias + QStringLiteral("\n");
-                for (const auto &entry : entries) {
-                    if (entry.alias == active.alias) {
-                        section += QStringLiteral("Workspace: ") + entry.workspace
-                                   + QStringLiteral("\n");
-                        break;
-                    }
-                }
-            } else if (active.isAdHoc()) {
-                section += QStringLiteral("Active: ") + active.adHocTarget
-                           + QStringLiteral(" (ad-hoc)\n");
-                section += QStringLiteral("Workspace: ") + active.adHocWorkspace
-                           + QStringLiteral("\n");
-            } else {
-                section += QStringLiteral("Active: local\nWorkspace: (none)\n");
-            }
+            section += agentConfig.remoteMode
+                           ? QStringLiteral("Active: %1\nWorkspace: %2\n")
+                                 .arg(agentConfig.remoteName, agentConfig.remoteWorkspace)
+                           : QStringLiteral("Active: local (this machine)\n");
             if (!entries.isEmpty()) {
                 section += QStringLiteral("\n## Available execution host\n\n");
                 section += QStringLiteral("- local: this machine\n");
@@ -3169,7 +3155,8 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                 }
                 section += QStringLiteral(
                     "\nWhen spawning an `agent` tool call, set `host` to a name above when "
-                    "the capability matches the task. Omit `host` to use the active binding.\n");
+                    "the capability matches the task. Omit `host` to run the child in the "
+                    "current workspace.\n");
             }
             section += QStringLiteral(
                 "\n## Host catalog learning\n\n"
@@ -3177,9 +3164,13 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                 "you OBSERVE a material change: the user states or retracts a capability, a run "
                 "reveals a tool not yet listed, or a failure contradicts a listed capability. "
                 "Do not log every successful command. When in doubt, ask the user before "
-                "recording. To save the currently-bound ad-hoc target, call host_register with "
-                "the active target+workspace shown above.\n");
-            prompt += section;
+                "recording.");
+            if (agentConfig.remoteMode) {
+                section += QStringLiteral(
+                    " To save the current remote binding, call host_register with the "
+                    "target and workspace shown above.");
+            }
+            prompt += section + QStringLiteral("\n");
         }
     }
 

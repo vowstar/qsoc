@@ -515,7 +515,9 @@ void QSocAgentRuntime::assembleInfrastructure(const QSocAgentRuntimeOptions &opt
     /* Remote workspace: connect before the first prompt when requested. */
     if (!options.sshTarget.isEmpty() && !options.deferRemoteConnection) {
         QString error;
-        if (!connectRemote(options.sshTarget, &error)) {
+        if (!connectRemote(
+                {.target = options.sshTarget, .workspace = options.workspace, .remember = false},
+                &error)) {
             d->lastErrorText = error;
         }
     }
@@ -896,6 +898,7 @@ void QSocAgentRuntime::registerTools()
         const QString projectRoot = d->projectManager->getProjectPath();
         d->hostCatalog->load(userHostDir, projectRoot);
     }
+    d->hostBindingDir = QSocHostBindingStore::defaultDir();
 
     /* Goal catalog. */
     d->goalCatalog = new QSocGoalCatalog(this);

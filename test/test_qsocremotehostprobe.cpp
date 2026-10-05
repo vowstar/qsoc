@@ -97,6 +97,11 @@ private:
         return options;
     }
 
+    static QSocRemoteConnectRequest requestFor(const Paths &paths)
+    {
+        return {.target = kAlias, .workspace = paths.work, .remember = false};
+    }
+
     /* A binding over the loopback session, with the host the hook decides. */
     bool bind(
         QSocRemoteConnection                                         *conn,
@@ -183,7 +188,7 @@ private slots:
         QSocAgentRuntime runtime(optionsFor(paths));
         QVERIFY(runtime.openSession());
         QString err;
-        QVERIFY2(runtime.connectRemote(kAlias, &err), qPrintable(err));
+        QVERIFY2(runtime.connectRemote(requestFor(paths), &err), qPrintable(err));
 
         /* `cat` would wait for EOF forever under the old exec line; the
          * script line gives it /dev/null and runs on. */
@@ -212,7 +217,7 @@ private slots:
         QSocAgentRuntime runtime(optionsFor(paths));
         QVERIFY(runtime.openSession());
         QString err;
-        QVERIFY2(runtime.connectRemote(kAlias, &err), qPrintable(err));
+        QVERIFY2(runtime.connectRemote(requestFor(paths), &err), qPrintable(err));
 
         const QString launched
             = runTool(runtime, "bash", json{{"command", "echo job-ran; pwd"}, {"background", true}});
@@ -237,7 +242,7 @@ private slots:
         QSocAgentRuntime runtime(optionsFor(paths));
         QVERIFY(runtime.openSession());
         QString err;
-        QVERIFY2(runtime.connectRemote(kAlias, &err), qPrintable(err));
+        QVERIFY2(runtime.connectRemote(requestFor(paths), &err), qPrintable(err));
         const QString prompt = runtime.agent()->buildSystemPromptWithMemory();
         QVERIFY2(prompt.contains(QStringLiteral("- Executor: remote\n")), qPrintable(prompt));
         QVERIFY(prompt.contains(QStringLiteral("- OS: ")));

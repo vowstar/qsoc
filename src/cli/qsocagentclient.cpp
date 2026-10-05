@@ -193,6 +193,7 @@ bool QSocCliWorker::runAgentClientLoop(
         {"project_name", options.projectName},
         {"workspace", options.workspace},
         {"ssh_target", options.sshTarget},
+        {"single_query", singleQuery},
         {"resume_session_id", options.resumeSessionId},
         {"continue_latest_session", options.continueLatestSession},
         {"max_context_tokens", options.maxContextTokens},

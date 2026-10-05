@@ -128,6 +128,7 @@ struct QSocAgentRuntime::Private
     QSocRemoteConnection *remoteConn     = &remoteConnStorage;
     QSocToolRegistry     *remoteRegistry = nullptr;
     QSocToolRegistry     *localRegistry  = nullptr;
+    QString               hostBindingDir;
 
     /* Session state. */
     std::unique_ptr<QSocSession>          currentSession;

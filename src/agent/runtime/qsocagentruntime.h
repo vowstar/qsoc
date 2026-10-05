@@ -53,7 +53,9 @@ class QSocPathContext;
 class QSocMonitorTaskSource;
 class QSocHookManager;
 class QSocRemoteConnection;
+class QSocSftpClient;
 class QSocTaskForecast;
+struct AgentRemoteState;
 struct QSocAskUserOption;
 struct QSocAskUserResult;
 struct QSocPlanApproval;
@@ -72,6 +74,20 @@ struct QSocAgentSessionInfo
     QString   title;
     QString   branch;
     int       messageCount = 0;
+};
+
+/**
+ * @brief One remote connect: what to dial and how the workspace is chosen.
+ * @details An empty @ref workspace is resolved in order from the host
+ *          catalog entry, the binding remembered for this project with the
+ *          same target, then the directory picker. Nothing defaults to `/`.
+ */
+struct QSocRemoteConnectRequest
+{
+    QString target;             /**< Catalog alias, ssh-config alias, or [user@]host[:port]. */
+    QString workspace;          /**< Explicit remote workspace (--ssh); empty resolves it. */
+    bool    remember   = true;  /**< Remember the binding for this project. */
+    bool    unattended = false; /**< No picker and no host key question. */
 };
 
 /**
@@ -425,12 +441,23 @@ public:
     /**
      * @brief Handler for remote connect (the /ssh action).
      * @details Runs the whole connect + workspace selection flow, using the
-     *          secret and directory-picker handlers for interaction.
-     * @param target Raw target string.
+     *          secret and directory-picker handlers for interaction. A
+     *          failure leaves the previous binding, local or remote, in place.
+     * @param request Target, workspace and interaction policy.
      * @param[out] error UI-safe failure text.
      * @retval true Connected; the runtime swapped to remote tools.
      */
+    bool connectRemote(const QSocRemoteConnectRequest &request, QString *error = nullptr);
+
+    /** @brief `/ssh <target>`: resolve the workspace, remember the binding. */
     bool connectRemote(const QString &target, QString *error = nullptr);
+
+    /**
+     * @brief Reconnect the binding remembered for this project, if any.
+     * @details Startup auto-connect for interactive sessions. A failure is
+     *          reported as a warning and the session stays local.
+     */
+    void connectRememberedRemote();
 
     /**
      * @brief Drop the remote binding and return to local tools (/local).
@@ -550,6 +577,16 @@ private:
     void fillContextUsage(QSocAgentRuntimeEvent &event) const;
     void maybeGenerateSessionTitle();
     void maybeGenerateAwaySummary();
+
+    /* Remote connect steps */
+    QString pickRemoteHost();
+    QString pickRemoteWorkspace(QSocSftpClient *sftp);
+    QString rememberedWorkspace(const QString &target) const;
+    bool    remoteConnectCancelled();
+    bool    dialRemote(
+        const QString &connectString, bool unattended, AgentRemoteState *staged, QString *error);
+    void installRemoteTools();
+    void rememberRemoteBinding(const QString &target);
 };
 
 #endif /* QSOCAGENTRUNTIME_H */

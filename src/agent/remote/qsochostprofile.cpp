@@ -5,11 +5,15 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSaveFile>
+#include <QStandardPaths>
 
 namespace {
 
@@ -68,21 +72,6 @@ void parseHostList(
     }
 }
 
-void parseActive(const YAML::Node &node, QSocHostActiveBinding &binding)
-{
-    if (!node) {
-        return;
-    }
-    if (node.IsScalar()) {
-        binding.alias = qstr(node.as<std::string>("")).trimmed();
-        return;
-    }
-    if (node.IsMap()) {
-        binding.adHocTarget    = qstr(node["target"].as<std::string>(""));
-        binding.adHocWorkspace = qstr(node["workspace"].as<std::string>(""));
-    }
-}
-
 YAML::Node toYamlEntry(const QSocHostProfile &profile)
 {
     YAML::Node entry(YAML::NodeType::Map);
@@ -128,7 +117,7 @@ void QSocHostCatalog::load(const QString &userDir, const QString &projectDir)
     projectDir_ = projectDir;
     userList_.clear();
     projectList_.clear();
-    activeBinding_ = {};
+    projectNamesActive_ = false;
 
     const auto readFile =
         [](const QString &path, const QString &scope, QList<QSocHostProfile> &out) {
@@ -150,9 +139,7 @@ void QSocHostCatalog::load(const QString &userDir, const QString &projectDir)
     readFile(userFilePath(), QStringLiteral("user"), userList_);
     const YAML::Node projectRoot
         = readFile(projectFilePath(), QStringLiteral("project"), projectList_);
-    if (projectRoot && projectRoot.IsMap()) {
-        parseActive(projectRoot["active"], activeBinding_);
-    }
+    projectNamesActive_ = projectRoot && projectRoot.IsMap() && projectRoot["active"];
 }
 
 QList<QSocHostProfile> QSocHostCatalog::allList() const
@@ -186,63 +173,6 @@ const QSocHostProfile *QSocHostCatalog::find(const QString &alias) const
         }
     }
     return nullptr;
-}
-
-QSocHostActiveBinding QSocHostCatalog::active() const
-{
-    return activeBinding_;
-}
-
-bool QSocHostCatalog::setActiveAlias(const QString &alias, QString *errorMessage)
-{
-    if (alias.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("alias is empty");
-        }
-        return false;
-    }
-    if (!find(alias)) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("alias %1 not found in catalog").arg(alias);
-        }
-        return false;
-    }
-    activeBinding_       = {};
-    activeBinding_.alias = alias;
-    if (!writeProject(errorMessage)) {
-        return false;
-    }
-    emit catalogChanged();
-    return true;
-}
-
-bool QSocHostCatalog::setActiveAdHoc(
-    const QString &target, const QString &workspace, QString *errorMessage)
-{
-    if (target.isEmpty() || workspace.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("ad-hoc binding requires target and workspace");
-        }
-        return false;
-    }
-    activeBinding_                = {};
-    activeBinding_.adHocTarget    = target;
-    activeBinding_.adHocWorkspace = workspace;
-    if (!writeProject(errorMessage)) {
-        return false;
-    }
-    emit catalogChanged();
-    return true;
-}
-
-bool QSocHostCatalog::clearActive(QString *errorMessage)
-{
-    activeBinding_ = {};
-    if (!writeProject(errorMessage)) {
-        return false;
-    }
-    emit catalogChanged();
-    return true;
 }
 
 bool QSocHostCatalog::upsert(
@@ -419,9 +349,6 @@ bool QSocHostCatalog::remove(const QString &alias, QString *errorMessage)
         return false;
     }
     projectList_.removeAt(projectIndex);
-    if (activeBinding_.isAlias() && activeBinding_.alias == alias) {
-        activeBinding_ = {};
-    }
     if (!writeProject(errorMessage)) {
         load(userDir_, projectDir_);
         return false;
@@ -461,17 +388,6 @@ bool QSocHostCatalog::writeProject(QString *errorMessage)
         root = YAML::Node(YAML::NodeType::Map);
     }
 
-    if (activeBinding_.isLocal()) {
-        root.remove("active");
-    } else if (activeBinding_.isAlias()) {
-        root["active"] = stds(activeBinding_.alias);
-    } else {
-        YAML::Node adHoc(YAML::NodeType::Map);
-        adHoc["target"]    = stds(activeBinding_.adHocTarget);
-        adHoc["workspace"] = stds(activeBinding_.adHocWorkspace);
-        root["active"]     = adHoc;
-    }
-
     if (projectList_.isEmpty()) {
         root.remove("hostList");
     } else {
@@ -508,6 +424,87 @@ bool QSocHostCatalog::writeProject(QString *errorMessage)
             *errorMessage = QStringLiteral("atomic commit failed for %1").arg(path);
         }
         return false;
+    }
+    return true;
+}
+
+namespace {
+
+QString canonicalProject(const QString &projectPath)
+{
+    const QString canonical = QFileInfo(projectPath).canonicalFilePath();
+    return canonical.isEmpty() ? QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath())
+                               : canonical;
+}
+
+} // namespace
+
+QString QSocHostBindingStore::defaultDir()
+{
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    return base.isEmpty() ? QString() : QDir(base).filePath(QStringLiteral("host-bindings"));
+}
+
+QString QSocHostBindingStore::filePath(const QString &storeDir, const QString &projectPath)
+{
+    if (storeDir.isEmpty() || projectPath.isEmpty()) {
+        return {};
+    }
+    const QByteArray digest
+        = QCryptographicHash::hash(canonicalProject(projectPath).toUtf8(), QCryptographicHash::Sha256)
+              .toHex()
+              .left(32);
+    return QDir(storeDir).filePath(QString::fromLatin1(digest) + QStringLiteral(".json"));
+}
+
+QSocHostBinding QSocHostBindingStore::load(const QString &storeDir, const QString &projectPath)
+{
+    QFile file(filePath(storeDir, projectPath));
+    if (file.fileName().isEmpty() || !file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonObject object = QJsonDocument::fromJson(file.read(64 * 1024)).object();
+    if (object.value(QStringLiteral("project")).toString() != canonicalProject(projectPath)) {
+        return {};
+    }
+    return {
+        object.value(QStringLiteral("target")).toString(),
+        object.value(QStringLiteral("workspace")).toString()};
+}
+
+bool QSocHostBindingStore::save(
+    const QString         &storeDir,
+    const QString         &projectPath,
+    const QSocHostBinding &binding,
+    QString               *errorMessage)
+{
+    const auto fail = [errorMessage](const QString &text) {
+        if (errorMessage != nullptr) {
+            *errorMessage = text;
+        }
+        return false;
+    };
+    const QString path = filePath(storeDir, projectPath);
+    if (path.isEmpty()) {
+        return fail(QStringLiteral("no project or no local data directory"));
+    }
+    if (!QDir().mkpath(storeDir)) {
+        return fail(QStringLiteral("cannot create %1").arg(storeDir));
+    }
+    QFile::setPermissions(
+        storeDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    const QJsonObject object{
+        {QStringLiteral("project"), canonicalProject(projectPath)},
+        {QStringLiteral("target"), binding.target},
+        {QStringLiteral("workspace"), binding.workspace}};
+    QSaveFile saver(path);
+    if (!saver.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return fail(QStringLiteral("cannot open %1 for write").arg(path));
+    }
+    saver.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    saver.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
+    if (!saver.commit()) {
+        return fail(QStringLiteral("atomic commit failed for %1").arg(path));
     }
     return true;
 }

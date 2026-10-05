@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -52,7 +53,7 @@ private slots:
         QSocHostCatalog catalog;
         catalog.load(userDir.path(), projectDir.path());
         QVERIFY(catalog.allList().isEmpty());
-        QVERIFY(catalog.active().isLocal());
+        QVERIFY(!catalog.projectNamesActive());
     }
 
     void testUpsertWriteThenReload()
@@ -165,59 +166,75 @@ private slots:
         QCOMPARE(list.first().alias, QStringLiteral("good"));
     }
 
-    void testActiveAliasRoundTrip()
+    /* Counterexample: `active:` in the project file chose where qsoc
+     * connected, so a cloned repository could aim it at any host. It is
+     * reported, never acted on, and a catalog write leaves it as written. */
+    void testProjectActiveIsReportedAndPreserved()
     {
-        QTemporaryDir   userDir;
-        QTemporaryDir   projectDir;
+        QTemporaryDir userDir;
+        QTemporaryDir projectDir;
+        QVERIFY(QDir().mkpath(joinPath(projectDir.path(), QStringLiteral(".qsoc"))));
+        const QString path = joinPath(projectDir.path(), QStringLiteral(".qsoc/host.yml"));
+        QVERIFY(writeAll(path, QStringLiteral("active:\n  target: t1\n  workspace: /w1\n")));
+
         QSocHostCatalog catalog;
         catalog.load(userDir.path(), projectDir.path());
+        QVERIFY(catalog.projectNamesActive());
 
         QSocHostProfile entry;
         entry.alias     = QStringLiteral("a1");
         entry.workspace = QStringLiteral("/w1");
         QVERIFY(catalog.upsert(entry));
-
-        QVERIFY(catalog.setActiveAlias(QStringLiteral("a1")));
-        QVERIFY(catalog.active().isAlias());
-        QCOMPARE(catalog.active().alias, QStringLiteral("a1"));
-
-        QSocHostCatalog reloaded;
-        reloaded.load(userDir.path(), projectDir.path());
-        QVERIFY(reloaded.active().isAlias());
-        QCOMPARE(reloaded.active().alias, QStringLiteral("a1"));
+        const QString written = readAll(path);
+        QVERIFY2(written.contains(QStringLiteral("target: t1")), qPrintable(written));
+        QVERIFY2(written.contains(QStringLiteral("alias: a1")), qPrintable(written));
     }
 
-    void testActiveAdHocRoundTrip()
+    void testUserActiveIsNotReported()
     {
-        QTemporaryDir   userDir;
-        QTemporaryDir   projectDir;
+        QTemporaryDir userDir;
+        QTemporaryDir projectDir;
+        QVERIFY(writeAll(
+            joinPath(userDir.path(), QStringLiteral("host.yml")), QStringLiteral("active: a1\n")));
         QSocHostCatalog catalog;
         catalog.load(userDir.path(), projectDir.path());
-
-        QVERIFY(
-            catalog.setActiveAdHoc(QStringLiteral("bob@fpga.lab"), QStringLiteral("/home/bob/work")));
-        QVERIFY(catalog.active().isAdHoc());
-
-        QSocHostCatalog reloaded;
-        reloaded.load(userDir.path(), projectDir.path());
-        QVERIFY(reloaded.active().isAdHoc());
-        QCOMPARE(reloaded.active().adHocTarget, QStringLiteral("bob@fpga.lab"));
-        QCOMPARE(reloaded.active().adHocWorkspace, QStringLiteral("/home/bob/work"));
+        QVERIFY(!catalog.projectNamesActive());
     }
 
-    void testClearActive()
+    void testBindingRoundTripPerProject()
     {
-        QTemporaryDir   userDir;
-        QTemporaryDir   projectDir;
-        QSocHostCatalog catalog;
-        catalog.load(userDir.path(), projectDir.path());
-        QVERIFY(catalog.setActiveAdHoc(QStringLiteral("u@h"), QStringLiteral("/w")));
-        QVERIFY(catalog.clearActive());
-        QVERIFY(catalog.active().isLocal());
+        QTemporaryDir store;
+        QTemporaryDir first;
+        QTemporaryDir second;
+        QVERIFY(QSocHostBindingStore::load(store.path(), first.path()).isLocal());
 
-        QSocHostCatalog reloaded;
-        reloaded.load(userDir.path(), projectDir.path());
-        QVERIFY(reloaded.active().isLocal());
+        QString error;
+        QVERIFY2(
+            QSocHostBindingStore::save(
+                store.path(), first.path(), {QStringLiteral("t1"), QStringLiteral("/w1")}, &error),
+            qPrintable(error));
+        const QSocHostBinding loaded = QSocHostBindingStore::load(store.path(), first.path());
+        QCOMPARE(loaded.target, QStringLiteral("t1"));
+        QCOMPARE(loaded.workspace, QStringLiteral("/w1"));
+        QVERIFY(QSocHostBindingStore::load(store.path(), second.path()).isLocal());
+
+        /* The binding lives in the store, never in the project tree. */
+        QVERIFY(!QFileInfo::exists(joinPath(first.path(), QStringLiteral(".qsoc"))));
+#ifdef Q_OS_UNIX
+        const QString file = QSocHostBindingStore::filePath(store.path(), first.path());
+        QCOMPARE(
+            QFileInfo(file).permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther),
+            QFileDevice::Permissions());
+#endif
+    }
+
+    void testBindingWithoutProjectIsNotStored()
+    {
+        QTemporaryDir store;
+        QString       error;
+        QVERIFY(!QSocHostBindingStore::save(
+            store.path(), QString(), {QStringLiteral("t1"), QStringLiteral("/w1")}, &error));
+        QVERIFY(QDir(store.path()).isEmpty());
     }
 
     void testApplyOpsCapability()
@@ -316,24 +333,6 @@ private slots:
         const QString userYaml = readAll(joinPath(userDir.path(), QStringLiteral("host.yml")));
         QVERIFY(userYaml.contains(QStringLiteral("user text")));
         QVERIFY(!userYaml.contains(QStringLiteral("project addition")));
-    }
-
-    void testRemoveProjectClearsActive()
-    {
-        QTemporaryDir   userDir;
-        QTemporaryDir   projectDir;
-        QSocHostCatalog catalog;
-        catalog.load(userDir.path(), projectDir.path());
-
-        QSocHostProfile entry;
-        entry.alias     = QStringLiteral("ax");
-        entry.workspace = QStringLiteral("/w");
-        QVERIFY(catalog.upsert(entry));
-        QVERIFY(catalog.setActiveAlias(QStringLiteral("ax")));
-
-        QVERIFY(catalog.remove(QStringLiteral("ax")));
-        QVERIFY(catalog.find(QStringLiteral("ax")) == nullptr);
-        QVERIFY(catalog.active().isLocal());
     }
 
     void testRemoveUserScopeRefused()

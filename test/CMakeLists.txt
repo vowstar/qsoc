@@ -450,6 +450,8 @@ qt_add_test_target("test_qsocremoteconnection")
 qt_add_test_target("test_qsocreconnectbudget")
 qt_add_test_target("test_qsocremotecwdowner" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocagentruntimeremote" LOCK qsoc_loopback_sshd)
+add_dependencies(test_qsocagentruntimeremote qsoc-agentd)
+target_compile_definitions(test_qsocagentruntimeremote PRIVATE QSOC_AGENTD_PATH="$<TARGET_FILE:qsoc-agentd>")
 qt_add_test_target("test_qsocremotecwdpublish" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocremotedeadlinkcost" LOCK qsoc_loopback_sshd)
 qt_add_test_target("test_qsocsshabortlatency")
@@ -509,6 +511,7 @@ foreach(_mock_test
     test_qsocagentcompactcancel
     test_qsocagentlazystorage
     test_qsocagentremoterecovery
+    test_qsocagentruntimeremote
     test_qsoctokencount
     test_qsocremotecwdowner
     test_qsocremotedeadlinkcost

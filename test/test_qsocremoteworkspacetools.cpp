@@ -243,7 +243,11 @@ void Test::readFileAttachesARemoteImage()
 {
     REQUIRE_WORKSPACE_FIXTURE();
     QString error;
-    QVERIFY2(m_runtime->connectRemote(QString::fromLatin1(kAlias), &error), qPrintable(error));
+    QVERIFY2(
+        m_runtime->connectRemote(
+            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
+            &error),
+        qPrintable(error));
     QVERIFY(writeFile(m_workspace + QStringLiteral("/shot.txt"), makePng(64, 48)));
 
     const QString result = readRemote({{"file_path", "shot.txt"}});
@@ -258,7 +262,11 @@ void Test::readFilePagesALargeLogWithoutReadingItAll()
 {
     REQUIRE_WORKSPACE_FIXTURE();
     QString error;
-    QVERIFY2(m_runtime->connectRemote(QString::fromLatin1(kAlias), &error), qPrintable(error));
+    QVERIFY2(
+        m_runtime->connectRemote(
+            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
+            &error),
+        qPrintable(error));
     QByteArray log;
     const int  lines = 300000;
     log.reserve(lines * 64);
@@ -286,7 +294,11 @@ void Test::readFileBoundsOneOversizedLine()
 {
     REQUIRE_WORKSPACE_FIXTURE();
     QString error;
-    QVERIFY2(m_runtime->connectRemote(QString::fromLatin1(kAlias), &error), qPrintable(error));
+    QVERIFY2(
+        m_runtime->connectRemote(
+            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
+            &error),
+        qPrintable(error));
     QVERIFY(writeFile(m_workspace + QStringLiteral("/one.line"), QByteArray(17 * 1024 * 1024, 'y')));
 
     const QString result = readRemote({{"file_path", "one.line"}});
@@ -300,7 +312,11 @@ void Test::skillPlaceholdersNameTheRemoteWorkspace()
 {
     REQUIRE_WORKSPACE_FIXTURE();
     QString error;
-    QVERIFY2(m_runtime->connectRemote(QString::fromLatin1(kAlias), &error), qPrintable(error));
+    QVERIFY2(
+        m_runtime->connectRemote(
+            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
+            &error),
+        qPrintable(error));
 
     QVERIFY(m_runtime->executeCommand(QStringLiteral("/probe")));
     const QStringList queued = m_runtime->takePendingAutoInputs();
@@ -322,7 +338,11 @@ void Test::skillListingFollowsTheBinding()
     QVERIFY(listing().contains(QStringLiteral("**modelonly**")));
 
     QString error;
-    QVERIFY2(m_runtime->connectRemote(QString::fromLatin1(kAlias), &error), qPrintable(error));
+    QVERIFY2(
+        m_runtime->connectRemote(
+            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
+            &error),
+        qPrintable(error));
     QVERIFY(m_runtime->agent()->getToolRegistry()->getTool(QStringLiteral("skill_find")) == nullptr);
     QVERIFY2(listing().contains(QStringLiteral("not in the remote workspace")), qPrintable(listing()));
     QVERIFY(!listing().contains(QStringLiteral("skill_find(action")));

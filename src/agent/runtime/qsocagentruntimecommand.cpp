@@ -205,7 +205,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             "  /model [id] /effort [off|low|medium|high] /plan\n"
             "  /resume [id] /rewind /branch [name] /rename <title> /diff /btw <question>\n"
             "  /memory /goal /agents /agents-history /mcp /loop\n"
-            "  /cwd [path] /project [path] /ssh <target> /local\n"
+            "  /cwd [path] /project [path] /ssh [target] /local\n"
             "  !command runs a shell command; #fact saves memory\n"
             "Keyboard shortcuts:\n"
             "  /exit quits; Esc stops; Ctrl+R searches history\n"
@@ -536,10 +536,17 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
     }
 
     if (cmd == QStringLiteral("/ssh")) {
-        QString error;
-        if (!connectRemote(rest, &error)) {
-            emitOutput(error + QStringLiteral("\n"));
+        const QString target = rest.isEmpty() ? pickRemoteHost() : rest;
+        if (target.isEmpty()) {
+            return true;
         }
+        emitOutput(QStringLiteral("Connecting to %1 ...\n").arg(target));
+        QString error;
+        if (!connectRemote(target, &error)) {
+            emitOutput(error + QStringLiteral("\n"));
+            return true;
+        }
+        emitOutput(QStringLiteral("Connected. Remote workspace: %1\n").arg(remoteWorkspace()));
         return true;
     }
 

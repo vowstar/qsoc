@@ -144,9 +144,9 @@ qsoc agent --ssh myalias --workspace /home/me/proj          # picker skipped, RE
 The workspace is created on demand via SFTP `mkdir -p`. Tool calls (shell,
 file, path) execute remotely; hooks still run on the local host but
 their JSON payload includes a `remote` section so scripts can branch on
-it. `/local` inside the REPL returns to the local workspace; the sticky
-binding (`<project>/.qsoc/host.yml`) is *not* written for one-shot
-`--ssh` runs.
+it. `/local` inside the REPL returns to the local workspace. `--ssh`
+also accepts a catalog alias, and an `--ssh` run never changes the
+remembered binding (@agent-remote-connect).
 
 === Host Catalog
 <agent-host-catalog>
@@ -161,7 +161,6 @@ The catalog lives in two YAML files:
 - Project scope: `<project>/.qsoc/host.yml` (overrides user by alias)
 
 ```yaml
-active: fpga-build              # currently-bound alias, or ad-hoc {target,workspace}
 hostList:
   - alias: fpga-build           # matches Host fpga-build in ~/.ssh/config
     workspace: /home/bob/build
@@ -181,13 +180,11 @@ Windows path to a `bash.exe` such as `C:\Program Files\Git\bin\bash.exe`,
 which applies to Windows hosts only. Any other value makes `/ssh <alias>`
 fail with an error naming the entry.
 
-Two separate concerns share the file:
-
-+ The *catalog* (`hostList:`) holds named entries. Add, update, and
-  remove are driven by natural-language dialogue with the agent
-  through three tools; no slash command edits the list.
-+ The *active binding* (`active:`) is the project's currently-bound
-  target. `/ssh` and `/local` manage it directly.
+The catalog (`hostList:`) holds named entries. Add, update, and remove
+are driven by natural-language dialogue with the agent through three
+tools; no slash command edits the list. The current binding is not kept
+in either file (@agent-remote-connect). An `active:` key is ignored. In a
+project file it prints a one-line notice at startup.
 
 The three LLM-facing catalog tools edit `hostList:` atomically:
 
@@ -198,20 +195,18 @@ The three LLM-facing catalog tools edit `hostList:` atomically:
   `capability_remove`, `capability_replace`, `set_workspace`,
   `set_target`. Ops apply atomically; partial failure leaves the file
   unchanged.
-- `host_remove` drops an entry and clears `active:` when it was bound.
+- `host_remove` drops an entry.
 
-Bare `/ssh` opens a TUI menu that merges both sources: catalog aliases
-appear first (with a `catalog` hint and a one-line capability excerpt),
-then `~/.ssh/config` aliases (with the `ssh-config` hint). Catalog
-aliases shadow ssh-config aliases of the same name.
+Bare `/ssh` opens a searchable menu: catalog aliases first (with a
+`catalog` hint and the first capability line), then concrete
+`~/.ssh/config` aliases (with the `ssh-config` hint). Wildcard and
+negated patterns are not listed. A catalog alias hides an ssh-config
+alias of the same name. The last row prints the `/ssh` usage.
 
-`/ssh <alias>` connects through the catalog when the alias matches one
-above; the catalog workspace is reused, skipping the SFTP picker. The
-post-connect sticky binding writes the alias (or the raw target as
-ad-hoc with the picker-selected workspace) into `host.yml`'s `active:`
-field. `/local` returns to the local workspace but *keeps* `active:`
-so the next `qsoc agent` launch auto-reconnects via a synthesized
-`/ssh` step printed as "Auto-connecting <alias>".
+`/ssh <alias>` resolves the name like the `agent` tool's `host`
+parameter: an alias in `~/.ssh/config` is dialed through it, and a
+catalog alias that is not there dials its `target`. A catalog
+`workspace` is used without asking.
 
 When spawning a sub-agent through the `agent` tool, set the optional
 `host` parameter to a catalog alias to run the child on that machine.
@@ -351,9 +346,9 @@ The following commands are available during an interactive session:
     [`/diff`], [Review file edits turn-by-turn],
     [`/effort [level]`], [Show or set effort (off/low/medium/high)],
     [`/local`],
-    [Leave SSH remote mode and return to local workspace. The sticky binding
-     stays on disk so the next `/ssh <same target>` or next startup can
-     auto-reuse it.],
+    [Leave SSH remote mode and return to local workspace. The remembered
+     binding stays, so the next `/ssh <same target>` or the next interactive
+     startup reuses it.],
     [`/memory [name|rm name]`],
     [List memory topics; `/memory <name>` edits the body in `$EDITOR`;
      `/memory rm <name>` deletes a topic. `#<fact>` saves a project memory
@@ -369,13 +364,12 @@ The following commands are available during an interactive session:
     [`/rename <title>`], [Set session title for the resume picker],
     [`/resume [id]`],
     [Switch to another saved session of this project (@agent-persistence)],
-    [`/ssh [[user\@]host[:port]]`],
-    [Connect to an SSH remote workspace. Empty opens a picker of
-     `~/.ssh/config` aliases plus the saved binding. The user defaults
-     to the current OS user, the port defaults to 22. After the session
-     comes up a two-column directory browser asks for the workspace; the
-     choice is remembered in `<project>/.qsoc/host.yml` and reused on
-     later connects.],
+    [`/ssh [target]`],
+    [Connect to an SSH remote workspace. The target is a catalog alias, a
+     `~/.ssh/config` alias, or `[user\@]host[:port]`. Empty opens a menu of
+     catalog and `~/.ssh/config` hosts. The workspace comes from the catalog
+     or the remembered binding, else a directory browser asks for it
+     (@agent-remote-connect).],
     [`/status`],
     [Show the selected model, the name it sends in requests, effort, and
      session. In remote mode it also
@@ -1647,16 +1641,27 @@ Use `/ssh` from the interactive REPL:
 
 User and port are optional: if omitted, user falls back to the current
 OS user (`USERNAME` on Windows, `USER`/`LOGNAME` on POSIX) and port falls
-back to 22. The workspace is never part of the command line; after the
-session comes up a two-column directory browser opens starting at the
-remote home directory, and the chosen path becomes both the initial cwd
-and the sole writable root for remote file tools. The selection is
-written to `<project>/.qsoc/host.yml` and reused on subsequent
-`/ssh <same target>` invocations without prompting the picker.
+back to 22. Bare `/ssh` opens a menu of catalog and `~/.ssh/config` hosts
+(@agent-host-catalog).
 
-Bare `/ssh` opens a picker listing the saved binding plus concrete aliases
-parsed from `~/.ssh/config`. `/local` returns to local mode but keeps the
-binding on disk so the next session can auto-connect.
+The workspace is never part of the command line. It is the first of:
+
++ The catalog entry's `workspace`.
++ The workspace remembered for this project with the same target.
++ A two-column directory browser that opens at the remote home directory.
+
+The chosen path becomes both the initial cwd and the sole writable root
+for remote file tools. Cancelling the browser connects nothing. A local
+`--workspace` is never used as the remote workspace.
+
+After a successful `/ssh`, the target and workspace are remembered for
+this project in the user's local data directory
+(`~/.local/share/QSoC/host-bindings/` on Linux), never in the project
+tree. `/local` keeps the binding. The next interactive `qsoc agent` in
+the project prints `Auto-connecting <target>` and reconnects without
+showing the browser or asking about an unknown host key. If that fails,
+a warning is printed and the session stays local. A run with `-q`,
+`--ssh`, or `--workspace` never auto-connects.
 
 === Writable Root and Symlinks
 <agent-remote-writable>
@@ -1877,7 +1882,8 @@ rewritten.
     [`ask` (default)],
     [`/ssh` and `--ssh` in an interactive session show the SHA256
      fingerprint and ask. Yes saves the key. Refused when nobody can
-     answer: `-q`, reconnects, and sub-agents sent to a host.],
+     answer: `-q`, reconnects, startup auto-connect, and sub-agents sent to
+     a host.],
     [`accept-new`],
     [Accepted and saved.],
     [`no`, `off`],
