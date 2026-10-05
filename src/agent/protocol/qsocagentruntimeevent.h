@@ -55,7 +55,7 @@ struct QSocAgentRuntimeEvent
         /* ---- tool traffic ---- */
         ToolStarted,  /**< Tool call started (toolName, callId, arguments). */
         ToolOutput,   /**< Live tool output line (callId, text). */
-        ToolFinished, /**< Tool call finished (toolName, callId, text, ok). */
+        ToolFinished, /**< Tool call finished (toolName, callId, text, ok, json.status). */
 
         /* ---- status / progress ---- */
         Status,     /**< Transient status line text (text). */
@@ -72,7 +72,7 @@ struct QSocAgentRuntimeEvent
         SessionPersisted, /**< Persistence outcome (ok). */
 
         /* ---- context management ---- */
-        Compacted,       /**< Compaction committed (savedTokens). */
+        Compacted,       /**< Compaction committed (savedTokens, json.summary on replay). */
         ContextRestored, /**< Post-compaction supplies restored (files, skills, agents). */
         ContextUsage,    /**< Context chip numbers (usedTokens, maxTokens, threshold, flag). */
 
@@ -98,6 +98,7 @@ struct QSocAgentRuntimeEvent
         InputPrediction,   /**< Suggested next input (text). */
         Diff,              /**< Unified diff source (text, secondary, json). */
         StopNotice,        /**< Why a run stopped on its own (text). */
+        UserMessage,       /**< A request the user typed (text). */
     };
 
     Kind           kind = Kind::Output;

@@ -99,6 +99,9 @@ public:
      * blockquote-formatted markdown string. */
     void appendUserMessage(const QString &text);
 
+    /* Empty the scrollback and drop every stream and tool cursor into it. */
+    void clearTranscript();
+
     /* Retire the top banner; freed rows fold into scroll viewport. */
     void dismissTopBanner();
 
@@ -199,6 +202,9 @@ private:
      * matching active text block or a freshly-created QTuiCodeBlock,
      * depending on whether triple-backtick fences are open. */
     void feedSplitChunk(const QString &chunk, StreamMode mode);
+
+    /* Fold every tracked reasoning group and stop tracking it. */
+    void foldReasoningHistory();
 
     /* Flush remaining pending-line content into whichever active block
      * is current, then clear the splitter cursors and group id for the

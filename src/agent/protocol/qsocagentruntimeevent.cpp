@@ -54,6 +54,7 @@ const KindName kKindNames[] = {
     {"goal_changed", QSocAgentRuntimeEvent::Kind::GoalChanged},
     {"tasks_changed", QSocAgentRuntimeEvent::Kind::TasksChanged},
     {"stop_notice", QSocAgentRuntimeEvent::Kind::StopNotice},
+    {"user_message", QSocAgentRuntimeEvent::Kind::UserMessage},
 };
 
 } // namespace

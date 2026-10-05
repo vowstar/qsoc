@@ -1347,8 +1347,9 @@ recalled memory) are user-role `<system-reminder>` messages that qsoc adds
 after your message at the start of a turn. They are saved with the session,
 and the resumed transcript, the rewind picker, prompt prediction and
 compaction summaries skip them. Task notifications and peer messages are also
-saved as user-role messages. The resumed transcript, the rewind picker, prompt
-history, the session title and the turn count skip them. Sub-agents receive
+saved as user-role messages. The resumed transcript shows them as task
+notices. The rewind picker, prompt history, the session title and the turn
+count skip them. Sub-agents receive
 their critical reminder, plan mode and approved plan in the system message.
 Coordinate overlapping file work before editing, continue independent work
 while peers run, and wait only when their answer is needed.
@@ -1995,8 +1996,16 @@ Saved sessions enable:
 
 - `qsoc agent --continue`: resume the most recent session
 - `qsoc agent --resume [id]`: pick a session from a list, or load one by id /
-  unique prefix; readable conversation messages and paired tool results are
-  restored from the persisted model context into the TUI scrollback
+  unique prefix. The TUI scrollback is rebuilt from the saved model context
+  the way it looked live: code blocks, tables, folded reasoning, tool blocks
+  with their outcome, `write_file` and `edit_file` diffs, todo lists, images
+  kept in the context and task notices. A tool result cut to fit the context
+  shows its kept part and one line naming the saved full output. The todo
+  pane shows the latest todo list still in the context. Slash command and `!`
+  output, run errors and interrupt notices are not restored. Sessions from
+  older versions show tool outcomes inferred from their results. Terminal
+  control sequences in model, tool and file text are removed, live and on
+  resume
 - `/resume [id]`: the same selection inside a running agent. The picker
   leaves out the current session, which is saved before the switch. It is
   refused while a turn or a sub-agent runs, or when another agent holds the

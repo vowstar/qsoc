@@ -148,12 +148,18 @@ void QTuiCompositor::printContent(const QString &content, QTuiScrollView::LineSt
     sealStream(StreamMode::Reasoning);
     /* Old reasoning monologue (across all groups) collapses since the
      * user is clearly past it. */
+    foldReasoningHistory();
+    scrollView.appendPartial(content, style);
+}
+
+void QTuiCompositor::foldReasoningHistory()
+{
     for (const auto &group : reasoningHistory) {
         for (auto *block : group.blocks) {
             block->setFolded(true);
         }
     }
-    scrollView.appendPartial(content, style);
+    reasoningHistory.clear();
 }
 
 void QTuiCompositor::appendAssistantChunk(const QString &chunk)
@@ -222,11 +228,7 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
             /* Starting a new reasoning run collapses every prior
              * reasoning group so only the freshest monologue stays
              * expanded in the scrollback. */
-            for (const auto &group : reasoningHistory) {
-                for (auto *block : group.blocks) {
-                    block->setFolded(true);
-                }
-            }
+            foldReasoningHistory();
             reasoningHistory.push_back({.groupId = currentGroup, .blocks = {}});
         }
     };
@@ -416,6 +418,16 @@ void QTuiCompositor::appendUserMessage(const QString &text)
     sealStream(StreamMode::Reasoning);
     activeTool = nullptr;
     scrollView.appendBlock(std::make_unique<QTuiUserBlock>(text));
+}
+
+void QTuiCompositor::clearTranscript()
+{
+    sealStream(StreamMode::Assistant);
+    sealStream(StreamMode::Reasoning);
+    reasoningHistory.clear();
+    toolBlocks.clear();
+    activeTool = nullptr;
+    scrollView.clear();
 }
 
 void QTuiCompositor::focusBlockAtScreenRow(int screenRow)

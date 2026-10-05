@@ -433,7 +433,8 @@ qt_add_test_target("test_qsocstatusline")
 qt_add_test_target("test_qtuiansi")
 qt_add_test_target("test_qsocsession")
 qt_add_test_target("test_qsocsessionrecovery")
-qt_add_test_target("test_qsocsessiontranscript")
+qt_add_test_target("test_qsocsessionreplay")
+qt_add_test_target("test_qsocagentruntimereplay")
 qt_add_test_target("test_qsocagentprivatemodes")
 qt_add_test_target("test_qsoctranscriptrenderer")
 qt_add_test_target("test_qsocagentlazystorage")
@@ -515,6 +516,7 @@ foreach(_mock_test
     test_qsocagentlazystorage
     test_qsocagentremoterecovery
     test_qsocagentruntimeremote
+    test_qsocagentruntimereplay
     test_qsoctokencount
     test_qsocremotecwdowner
     test_qsocremotedeadlinkcost

@@ -1085,6 +1085,7 @@ void QSocAgentRuntime::wireAgentCallbacks()
             event.secondary = name;
             event.text      = result;
             event.ok        = outcome == QSocToolResultStatus::Ok;
+            event.json      = {{"status", QSocTool::statusName(outcome).toStdString()}};
             event.at        = QDateTime::currentDateTimeUtc();
             emit eventRaised(event);
         });

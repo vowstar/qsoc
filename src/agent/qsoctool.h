@@ -4,6 +4,8 @@
 #ifndef QSOCTOOL_H
 #define QSOCTOOL_H
 
+#include "common/qsoctoolresultstatus.h"
+
 #include <functional>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -14,9 +16,6 @@
 #include <QString>
 
 using json = nlohmann::json;
-
-enum class QSocToolResultStatus { Ok, Failed, Uncertain, Dispatched };
-Q_DECLARE_METATYPE(QSocToolResultStatus)
 
 /**
  * @brief Cancellation state for one tool invocation
@@ -123,6 +122,9 @@ public:
      *          mistaken for a success.
      */
     static ResultStatus classifyResult(const QString &result);
+
+    /** @brief The stored and wire name of a status: ok, failed, uncertain or dispatched. */
+    static QString statusName(ResultStatus status);
 
     /** @brief Prefix a tool result with its machine-readable status line. */
     static QString statusLine(ResultStatus status);

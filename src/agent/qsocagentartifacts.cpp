@@ -214,19 +214,13 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &attachments
 void QSocAgent::appendBoundedToolMessage(
     const QString &id, const QString &content, const QString &state, const QString &toolName)
 {
-    const auto   run        = activeRun_;
-    const qint64 budget     = toolResultBudgetTokens();
-    QString      view       = content;
-    json         refs       = json::array();
-    const auto   status     = run && run->executingToolStatus ? *run->executingToolStatus
-                                                              : QSocTool::classifyResult(content);
-    QString      completion = state.isEmpty() ? QStringLiteral("ok") : state;
-    if (state.isEmpty() && status == QSocToolResultStatus::Failed)
-        completion = QStringLiteral("failed");
-    else if (state.isEmpty() && status == QSocToolResultStatus::Uncertain)
-        completion = QStringLiteral("uncertain");
-    else if (state.isEmpty() && status == QSocToolResultStatus::Dispatched)
-        completion = QStringLiteral("dispatched");
+    const auto    run        = activeRun_;
+    const qint64  budget     = toolResultBudgetTokens();
+    QString       view       = content;
+    json          refs       = json::array();
+    const auto    status     = run && run->executingToolStatus ? *run->executingToolStatus
+                                                               : QSocTool::classifyResult(content);
+    const QString completion = state.isEmpty() ? QSocTool::statusName(status) : state;
     if (QSocRequestUsage::estimateText(content, tokenCounter()) > budget) {
         QString                                       error;
         std::optional<QSocToolResultStore::Reference> saved;

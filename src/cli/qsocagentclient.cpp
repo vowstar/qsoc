@@ -458,7 +458,7 @@ bool QSocCliWorker::runAgentClientLoop(
     if (singleQuery) {
         // The runtime sends exactly the same events as interactive mode; render
         // once for redirected output and report early/persistence errors too.
-        compositor.contentView().clear();
+        compositor.clearTranscript();
         connect(&inputMonitor, &QAgentInputMonitor::escPressed, &client, [&] { send("abort"); });
         connect(&inputMonitor, &QAgentInputMonitor::ctrlCPressed, &client, [&] { send("abort"); });
         connect(&inputMonitor, &QAgentInputMonitor::inputReady, &client, [&](const QString &text) {
@@ -663,7 +663,10 @@ bool QSocCliWorker::runAgentClientLoop(
             options.sshTarget.isEmpty() ? "local" : options.sshTarget);
         historyPosition = history.size();
         compositor.dismissTopBanner();
-        compositor.appendUserMessage(text);
+        QSocAgentRuntimeEvent echo;
+        echo.kind = QSocAgentRuntimeEvent::Kind::UserMessage;
+        echo.text = text;
+        renderer.apply(echo);
         const bool command = trimmed.startsWith('/') || trimmed.startsWith('!')
                              || trimmed.startsWith('#');
         statusBarWidget.setStatus(running ? "Queued" : "Reasoning");

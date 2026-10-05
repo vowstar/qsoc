@@ -2,16 +2,15 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoctranscriptrenderer.h"
-#include "cli/qsocsessiontranscript.h"
+#include "cli/qsocsessionreplay.h"
+#include "cli/qsocterminaltext.h"
 #include "common/qsoclinediff.h"
+#include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuidiffblock.h"
 #include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuitodoblock.h"
 
-#include <nlohmann/json.hpp>
-
-#include <QJsonDocument>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -120,7 +119,82 @@ QTuiDiffBlock::Kind diffKind(QSocLineDiff::Kind kind)
 
 QString jsonString(const nlohmann::json &object, const char *key)
 {
-    return QString::fromStdString(object.value(key, std::string()));
+    if (!object.is_object())
+        return {};
+    const auto it = object.find(key);
+    if (it == object.end() || !it->is_string())
+        return {};
+    return QString::fromStdString(it->get<std::string>());
+}
+
+/* The argument a tool header shows: the first well-known field, or the id. */
+QString toolDetail(const nlohmann::json &arguments)
+{
+    static const QStringList fields{
+        QStringLiteral("command"),
+        QStringLiteral("title"),
+        QStringLiteral("file_path"),
+        QStringLiteral("path"),
+        QStringLiteral("name"),
+        QStringLiteral("regex"),
+        QStringLiteral("query"),
+        QStringLiteral("url"),
+    };
+    for (const QString &field : fields) {
+        const QString value = jsonString(arguments, field.toUtf8().constData());
+        if (!value.isEmpty())
+            return field == QStringLiteral("title") ? QStringLiteral("\"%1\"").arg(value) : value;
+    }
+    const auto id = arguments.is_object() ? arguments.find("id") : arguments.end();
+    if (id != arguments.end() && id->is_number_unsigned())
+        return QStringLiteral("#%1").arg(id->get<qulonglong>());
+    if (id != arguments.end() && id->is_number_integer())
+        return QStringLiteral("#%1").arg(id->get<qlonglong>());
+    return {};
+}
+
+QTuiToolBlock::Status toolStatus(const QSocAgentRuntimeEvent &event)
+{
+    using Status = QTuiToolBlock::Status;
+    static const QHash<QString, Status> statuses{
+        {QStringLiteral("ok"), Status::Success},
+        {QStringLiteral("failed"), Status::Failure},
+        {QStringLiteral("uncertain"), Status::Uncertain},
+        {QStringLiteral("dispatched"), Status::Background},
+        {QStringLiteral("skipped"), Status::Skipped},
+    };
+    return statuses
+        .value(jsonString(event.json, "status"), event.ok ? Status::Success : Status::Failure);
+}
+
+/* Kinds whose text came from the model, a tool, a file or a provider. */
+bool isExternal(Kind kind)
+{
+    switch (kind) {
+    case Kind::ContentChunk:
+    case Kind::ReasoningChunk:
+    case Kind::ToolStarted:
+    case Kind::ToolOutput:
+    case Kind::ToolFinished:
+    case Kind::RunError:
+    case Kind::TaskNotification:
+    case Kind::UserMessage:
+    case Kind::Diff:
+    case Kind::Compacted:
+    case Kind::ImagePreview:
+        return true;
+    default:
+        return false;
+    }
+}
+
+QSocAgentRuntimeEvent plainEvent(QSocAgentRuntimeEvent event)
+{
+    event.text      = QSocTerminalText::plain(event.text);
+    event.secondary = QSocTerminalText::plain(event.secondary);
+    if (event.kind != Kind::ImagePreview)
+        event.json = QSocTerminalText::plain(std::move(event.json));
+    return event;
 }
 
 } // namespace
@@ -130,6 +204,14 @@ QSocTranscriptRenderer::QSocTranscriptRenderer(QTuiCompositor &compositor)
 {}
 
 void QSocTranscriptRenderer::apply(const QSocAgentRuntimeEvent &event)
+{
+    if (isExternal(event.kind))
+        render(plainEvent(event));
+    else
+        render(event);
+}
+
+void QSocTranscriptRenderer::render(const QSocAgentRuntimeEvent &event)
 {
     switch (event.kind) {
     case Kind::ContentChunk:
@@ -153,17 +235,17 @@ void QSocTranscriptRenderer::apply(const QSocAgentRuntimeEvent &event)
             compositor.appendAssistantChunk(event.text);
         streamedContent = false;
         compositor.finishStream();
-        compositor.resetExecution();
+        resetExecution();
         compositor.printContent(QStringLiteral("\n"));
         break;
     case Kind::RunError:
         streamedContent = false;
         compositor.finishStream();
-        compositor.resetExecution();
+        resetExecution();
         compositor.printContent(QStringLiteral("\nError: %1\n").arg(event.text));
         break;
     case Kind::RunAborted:
-        compositor.resetExecution();
+        resetExecution();
         compositor.printContent(QStringLiteral("\n%1\n").arg(
             event.text.isEmpty() ? QStringLiteral("(interrupted)") : event.text));
         break;
@@ -189,6 +271,12 @@ void QSocTranscriptRenderer::apply(const QSocAgentRuntimeEvent &event)
         compositor.printContent(
             QStringLiteral("(task: %1)\n").arg(event.text.left(80)), QTuiScrollView::Dim);
         break;
+    case Kind::UserMessage:
+        compositor.appendUserMessage(event.text);
+        break;
+    case Kind::Compacted:
+        appendSummary(event);
+        break;
     default:
         break;
     }
@@ -196,31 +284,45 @@ void QSocTranscriptRenderer::apply(const QSocAgentRuntimeEvent &event)
 
 void QSocTranscriptRenderer::replaceHistory(const nlohmann::json &messages)
 {
-    compositor.contentView().clear();
-    QSocSessionTranscript::appendTo(messages, compositor.contentView());
+    compositor.clearTranscript();
+    compositor.todoList().setItems({});
+    pendingArgs.clear();
+    streamedContent = false;
+    replaying       = true;
+    todoPaneKnown   = false;
+    for (const auto &event : QSocSessionReplay::events(messages))
+        apply(event);
+    replaying     = false;
+    todoPaneKnown = true;
 }
 
 void QSocTranscriptRenderer::startTool(const QSocAgentRuntimeEvent &event)
 {
-    pendingArgs.insert(event.callId, QJsonDocument::fromJson(event.text.toUtf8()).object());
-    compositor.beginToolUse(event.secondary, event.text.left(60), event.callId);
+    auto arguments = QSocTerminalText::plain(
+        nlohmann::json::parse(event.text.toStdString(), nullptr, false));
+    compositor.beginToolUse(event.secondary, toolDetail(arguments), event.callId);
+    pendingArgs.insert(event.callId, std::move(arguments));
 }
 
 void QSocTranscriptRenderer::finishTool(const QSocAgentRuntimeEvent &event)
 {
-    const auto    args = pendingArgs.take(event.callId);
-    const QString name = event.secondary;
+    const auto    args   = pendingArgs.take(event.callId);
+    const QString name   = event.secondary;
+    const auto    status = toolStatus(event);
     updateTodos(name, event.text);
-    if (event.ok && (name == "edit_file" || name == "write_file"))
+    if (status == QTuiToolBlock::Status::Success && (name == "edit_file" || name == "write_file"))
         appendDiff(
-            args.value("file_path").toString(),
-            args.value("old_string").toString(),
-            args.value(name == "edit_file" ? "new_string" : "content").toString());
+            jsonString(args, "file_path"),
+            jsonString(args, "old_string"),
+            jsonString(args, name == "edit_file" ? "new_string" : "content"));
     compositor.replaceToolUseBody(event.text, event.callId);
-    compositor.finishToolUse(
-        event.ok ? QTuiToolBlock::Status::Success : QTuiToolBlock::Status::Failure,
-        {},
-        event.callId);
+    compositor.finishToolUse(status, {}, event.callId);
+}
+
+void QSocTranscriptRenderer::resetExecution()
+{
+    if (!replaying)
+        compositor.resetExecution();
 }
 
 void QSocTranscriptRenderer::updateTodos(const QString &name, const QString &result)
@@ -229,7 +331,10 @@ void QSocTranscriptRenderer::updateTodos(const QString &name, const QString &res
     if (name == "todo_list") {
         const auto items = parseTodoListResult(result);
         todos.setItems(items);
+        todoPaneKnown = true;
         compositor.contentView().appendBlock(std::make_unique<QTuiTodoBlock>(items));
+    } else if (!todoPaneKnown) {
+        return;
     } else if (name == "todo_add") {
         const auto item = parseTodoAddResult(result);
         if (item.id >= 0)
@@ -267,4 +372,15 @@ void QSocTranscriptRenderer::appendImage(const QSocAgentRuntimeEvent &event)
             QByteArray::fromBase64(
                 QByteArray::fromStdString(event.json.value("data", std::string())))));
     compositor.invalidate();
+}
+
+void QSocTranscriptRenderer::appendSummary(const QSocAgentRuntimeEvent &event)
+{
+    const QString summary = jsonString(event.json, "summary");
+    if (summary.isEmpty())
+        return;
+    auto block = std::make_unique<QTuiAssistantTextBlock>(
+        QStringLiteral("*Conversation summary*\n\n") + summary);
+    block->setDimAll(true);
+    compositor.contentView().appendBlock(std::move(block));
 }

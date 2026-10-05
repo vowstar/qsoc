@@ -4,7 +4,6 @@
 #include "qsoc_test.h"
 
 #include "agent/protocol/qsocagentruntimeevent.h"
-#include "cli/qsocsessiontranscript.h"
 #include "cli/qsoctranscriptrenderer.h"
 #include "common/qsoclinediff.h"
 #include "tui/qtuicompositor.h"
@@ -32,51 +31,9 @@ using Kind  = QSocAgentRuntimeEvent::Kind;
 namespace {
 
 /* Reference: the client's event switch as it was before the renderer
- * existed, reduced to its scrollback and todo pane writes. */
+ * existed, reduced to its scrollback writes. Tool events and resume are
+ * left out: their header detail, outcome styling and replay changed. */
 namespace Reference {
-
-QList<QTuiTodoList::TodoItem> parseTodoListResult(const QString &result)
-{
-    QList<QTuiTodoList::TodoItem> items;
-    QRegularExpression            regex(R"(\[([ x])\]\s*(\d+)\.\s*(.+?)\s*\((\w+)\))");
-    const QStringList             lines = result.split('\n');
-    for (const QString &line : lines) {
-        QRegularExpressionMatch match = regex.match(line);
-        if (match.hasMatch()) {
-            QTuiTodoList::TodoItem item;
-            item.status   = (match.captured(1) == "x") ? "done" : "pending";
-            item.id       = match.captured(2).toInt();
-            item.title    = match.captured(3).trimmed();
-            item.priority = match.captured(4);
-            items.append(item);
-        }
-    }
-    return items;
-}
-
-QTuiTodoList::TodoItem parseTodoAddResult(const QString &result)
-{
-    QTuiTodoList::TodoItem item;
-    item.id = -1;
-    QRegularExpression      regex(R"(Added todo #(\d+):\s*(.+?)\s*\((\w+)(?:\s+priority)?\))");
-    QRegularExpressionMatch match = regex.match(result);
-    if (match.hasMatch()) {
-        item.id       = match.captured(1).toInt();
-        item.title    = match.captured(2).trimmed();
-        item.priority = match.captured(3);
-        item.status   = "pending";
-    }
-    return item;
-}
-
-QPair<int, QString> parseTodoUpdateResult(const QString &result)
-{
-    QRegularExpression      regex(R"(Updated todo #(\d+):\s*.+?\(status:\s*(\w+)\))");
-    QRegularExpressionMatch match = regex.match(result);
-    if (match.hasMatch())
-        return qMakePair(match.captured(1).toInt(), match.captured(2));
-    return qMakePair(-1, QString());
-}
 
 QTuiScrollView::LineStyle styleFor(QSocAgentRuntimeStyle style)
 {
@@ -95,9 +52,8 @@ QTuiScrollView::LineStyle styleFor(QSocAgentRuntimeStyle style)
 
 struct Client
 {
-    QTuiCompositor             &compositor;
-    QHash<QString, QJsonObject> pendingTools;
-    bool                        streamedContent = false;
+    QTuiCompositor &compositor;
+    bool            streamedContent = false;
 
     void apply(const Event &event);
 };
@@ -112,56 +68,6 @@ void Client::apply(const Event &event)
     case Kind::ReasoningChunk:
         compositor.appendReasoningChunk(event.text);
         break;
-    case Kind::ToolStarted:
-        pendingTools.insert(event.callId, QJsonDocument::fromJson(event.text.toUtf8()).object());
-        compositor.beginToolUse(event.secondary, event.text.left(60), event.callId);
-        break;
-    case Kind::ToolOutput:
-        compositor.appendToolUseBody(event.text, event.callId);
-        break;
-    case Kind::ToolFinished: {
-        const auto    args = pendingTools.take(event.callId);
-        const QString name = event.secondary;
-        if (name == "todo_list") {
-            const auto items = parseTodoListResult(event.text);
-            compositor.todoList().setItems(items);
-            compositor.contentView().appendBlock(std::make_unique<QTuiTodoBlock>(items));
-        } else if (name == "todo_add") {
-            const auto item = parseTodoAddResult(event.text);
-            if (item.id >= 0)
-                compositor.todoList().addItem(item);
-        } else if (name == "todo_update" || name == "todo_delete") {
-            const auto [id, status] = parseTodoUpdateResult(event.text);
-            if (id >= 0) {
-                if (name == "todo_delete")
-                    compositor.todoList().removeItem(id);
-                else
-                    compositor.todoList().updateStatus(id, status);
-            }
-        }
-        if (event.ok && (name == "edit_file" || name == "write_file")) {
-            const QString path  = args.value("file_path").toString();
-            const auto    lines = QSocLineDiff::computeLineDiff(
-                args.value("old_string").toString(),
-                args.value(name == "edit_file" ? "new_string" : "content").toString());
-            auto block = std::make_unique<QTuiDiffBlock>("--- a/" + path, "+++ b/" + path);
-            for (const auto &line : lines) {
-                const auto kind = line.kind == QSocLineDiff::Kind::Add   ? QTuiDiffBlock::Kind::Add
-                                  : line.kind == QSocLineDiff::Kind::Del ? QTuiDiffBlock::Kind::Del
-                                  : line.kind == QSocLineDiff::Kind::Hunk
-                                      ? QTuiDiffBlock::Kind::Hunk
-                                      : QTuiDiffBlock::Kind::Context;
-                block->addRow(kind, line.text);
-            }
-            compositor.contentView().appendBlock(std::move(block));
-        }
-        compositor.replaceToolUseBody(event.text, event.callId);
-        compositor.finishToolUse(
-            event.ok ? QTuiToolBlock::Status::Success : QTuiToolBlock::Status::Failure,
-            {},
-            event.callId);
-        break;
-    }
     case Kind::RunComplete:
         if (!streamedContent && !event.text.isEmpty())
             compositor.appendAssistantChunk(event.text);
@@ -213,12 +119,6 @@ void Client::apply(const Event &event)
     case Kind::Output:
         compositor.printContent(event.text, styleFor(event.style));
         break;
-    case Kind::SessionResumed:
-        if (event.json.is_object() && event.json.contains("messages")) {
-            compositor.contentView().clear();
-            QSocSessionTranscript::appendTo(event.json["messages"], compositor.contentView());
-        }
-        [[fallthrough]];
     case Kind::SessionStarted:
     case Kind::SessionCleared:
         compositor.printContent(event.text);
@@ -282,34 +182,14 @@ Event diff(const QString &path, const char *before, const char *after)
     return event;
 }
 
-Event resumed()
-{
-    Event event = make(Kind::SessionResumed, QStringLiteral("Resumed session.\n"));
-    event.json  = {
-        {"messages",
-         json::array(
-             {{{"role", "user"}, {"content", "earlier question"}},
-              {{"role", "assistant"}, {"content", "earlier answer"}}})}};
-    return event;
-}
-
 QString args(const json &value)
 {
     return QString::fromStdString(value.dump());
 }
 
-QList<Event> script()
+QList<Event> toolScript()
 {
-    const QString longNote = QString(120, QLatin1Char('n'));
     return {
-        make(Kind::SessionStarted, QStringLiteral("Session started.\n")),
-        make(Kind::ReasoningChunk, QStringLiteral("Thinking about ")),
-        make(Kind::ReasoningChunk, QStringLiteral("the plan.\n")),
-        make(Kind::ContentChunk, QStringLiteral("Here is **code**:\n\n```cpp\nint ")),
-        make(
-            Kind::ContentChunk,
-            QStringLiteral("main() { return 0; }\n```\n\n| a | b |\n|---|---|\n")),
-        make(Kind::ContentChunk, QStringLiteral("| 1 | 2 |\n\nDone.\n")),
         make(
             Kind::ToolStarted,
             args({{"file_path", "src/hello.c"}, {"content", "int x;\nint y;\n"}}),
@@ -345,8 +225,23 @@ QList<Event> script()
         make(Kind::ToolStarted, args({{"id", 3}}), "todo_delete", "c8"),
         finished("todo_delete", "c8", QStringLiteral("Updated todo #3: Drop (status: x)"), true),
         make(Kind::ToolStarted, QStringLiteral("not json"), "read_file", "c9"),
-        imagePreview(),
         finished("read_file", "c9", QStringLiteral("binary image"), true),
+    };
+}
+
+QList<Event> script()
+{
+    const QString longNote = QString(120, QLatin1Char('n'));
+    return {
+        make(Kind::SessionStarted, QStringLiteral("Session started.\n")),
+        make(Kind::ReasoningChunk, QStringLiteral("Thinking about ")),
+        make(Kind::ReasoningChunk, QStringLiteral("the plan.\n")),
+        make(Kind::ContentChunk, QStringLiteral("Here is **code**:\n\n```cpp\nint ")),
+        make(
+            Kind::ContentChunk,
+            QStringLiteral("main() { return 0; }\n```\n\n| a | b |\n|---|---|\n")),
+        make(Kind::ContentChunk, QStringLiteral("| 1 | 2 |\n\nDone.\n")),
+        imagePreview(),
         diff(QStringLiteral("doc/notes.txt"), "a\nb\nc\n", "a\nB\nc\nd\n"),
         output(QStringLiteral("plain line\n"), QSocAgentRuntimeStyle::Normal),
         output(QStringLiteral("dim line\n"), QSocAgentRuntimeStyle::Dim),
@@ -365,8 +260,7 @@ QList<Event> script()
         make(Kind::RunComplete, QStringLiteral("final text after an abort")),
         make(Kind::RunAborted, QStringLiteral("Stopped by user.")),
         make(Kind::SessionCleared, QStringLiteral("Cleared.\n")),
-        resumed(),
-        make(Kind::ContentChunk, QStringLiteral("after resume")),
+        make(Kind::ContentChunk, QStringLiteral("after clear")),
         make(Kind::RunComplete),
     };
 }
@@ -396,6 +290,9 @@ private slots:
     void matchesThePreviousClientOutput();
     void rendersEditAndWriteDiffsOnlyOnSuccess();
     void fillsTheTodoPane();
+    void showsArgumentDetailAndOutcome();
+    void echoesUserMessages();
+    void stripsControlsFromExternalText();
     void replaceHistoryClearsTheScrollback();
 };
 
@@ -433,7 +330,7 @@ void Test::rendersEditAndWriteDiffsOnlyOnSuccess()
 {
     QTuiCompositor         compositor;
     QSocTranscriptRenderer renderer(compositor);
-    for (const auto &event : script().mid(0, 12))
+    for (const auto &event : toolScript().mid(0, 6))
         renderer.apply(event);
     const QString text = compositor.contentView().toPlainText();
     QCOMPARE(text.count(QStringLiteral("+++ b/src/hello.c")), 2);
@@ -445,12 +342,95 @@ void Test::fillsTheTodoPane()
 {
     QTuiCompositor         compositor;
     QSocTranscriptRenderer renderer(compositor);
-    for (const auto &event : script())
+    for (const auto &event : toolScript())
         renderer.apply(event);
     const QString pane = screenText(compositor.todoList(), 80);
     QVERIFY(pane.contains(QStringLiteral("Review")));
     QVERIFY(pane.contains(QStringLiteral("Ship it")));
     QVERIFY(!pane.contains(QStringLiteral("Drop")));
+}
+
+void Test::showsArgumentDetailAndOutcome()
+{
+    QTuiCompositor         compositor;
+    QSocTranscriptRenderer renderer(compositor);
+    for (const auto &event : toolScript())
+        renderer.apply(event);
+    const QStringList outcomes{"dispatched", "uncertain", "skipped", "ok"};
+    for (const QString &status : outcomes) {
+        const QString id = QStringLiteral("s-") + status;
+        renderer.apply(
+            make(Kind::ToolStarted, args({{"command", status.toStdString()}}), "bash", id));
+        Event done = finished("bash", id, status, false);
+        done.json  = {{"status", status.toStdString()}};
+        renderer.apply(done);
+    }
+    QTuiScreen screen(100, 200);
+    compositor.contentView().render(screen, 0, 200, 100);
+    QString text;
+    for (int row = 0; row < 200; ++row) {
+        for (int col = 0; col < 100; ++col)
+            text += screen.at(col, row).character;
+        text += QLatin1Char('\n');
+    }
+    const QString plain = compositor.contentView().toPlainText();
+    QVERIFY(plain.contains(QStringLiteral("$ write_file src/hello.c\n")));
+    QVERIFY(plain.contains(QStringLiteral("$ bash false && echo unreachable\n")));
+    QVERIFY(plain.contains(QStringLiteral("$ todo_update #1\n")));
+    QVERIFY(plain.contains(QStringLiteral("$ read_file\n")));
+    QVERIFY(!plain.contains(QStringLiteral("$ write_file {")));
+    QVERIFY(text.contains(QStringLiteral("dispatched, check task status")));
+    QVERIFY(text.contains(QStringLiteral("completion uncertain")));
+    QVERIFY(text.contains(QStringLiteral("not executed")));
+    QCOMPARE(text.count(QStringLiteral("✗ failed")), 2);
+}
+
+void Test::echoesUserMessages()
+{
+    QTuiCompositor         compositor;
+    QSocTranscriptRenderer renderer(compositor);
+    renderer.apply(make(Kind::ContentChunk, QStringLiteral("streaming")));
+    renderer.apply(make(Kind::UserMessage, QStringLiteral("typed prompt")));
+    QTuiCompositor expected;
+    expected.appendAssistantChunk(QStringLiteral("streaming"));
+    expected.appendUserMessage(QStringLiteral("typed prompt"));
+    QCOMPARE(compositor.contentView().toAnsi(80), expected.contentView().toAnsi(80));
+}
+
+void Test::stripsControlsFromExternalText()
+{
+    const QString          osc52 = QStringLiteral("\x1b]52;c;cHduZWQ=\x07");
+    const QString          csi   = QStringLiteral("\x1b[2J");
+    QTuiCompositor         compositor;
+    QSocTranscriptRenderer renderer(compositor);
+    renderer.apply(
+        make(Kind::ReasoningChunk, QStringLiteral("think") + osc52 + QStringLiteral("\n")));
+    renderer.apply(make(Kind::ContentChunk, QStringLiteral("say") + csi + QStringLiteral("\x1b")));
+    renderer.apply(make(Kind::ContentChunk, QStringLiteral("]0;split title\x07 more\n")));
+    renderer.apply(make(Kind::ToolStarted, args({{"command", "ls\x1b]0;owned\x07"}}), "bash", "t"));
+    renderer.apply(
+        make(Kind::ToolOutput, QStringLiteral("line") + osc52 + QStringLiteral("\n"), {}, "t"));
+    renderer.apply(
+        finished("bash", "t", QStringLiteral("out") + csi + QStringLiteral("put\r"), true));
+    renderer.apply(diff(QStringLiteral("a.txt"), "x\n", "y\x1b]52;c;eA==\x07\n"));
+    renderer.apply(make(Kind::RunError, QStringLiteral("bad") + osc52));
+    const QString ansi = compositor.contentView().toAnsi(100);
+    QVERIFY(!ansi.contains(QStringLiteral("\x1b]")));
+    QVERIFY(!ansi.contains(QStringLiteral("[2J")));
+    QVERIFY(!ansi.contains(QStringLiteral("cHduZWQ")));
+    QVERIFY(!ansi.contains(QStringLiteral("owned")));
+    QVERIFY(!ansi.contains(QLatin1Char('\r')));
+    const QString plain = compositor.contentView().toPlainText();
+    QVERIFY(plain.contains(QStringLiteral("$ bash ls\n")));
+    QVERIFY(plain.contains(QStringLiteral("output")));
+    QVERIFY(plain.contains(QStringLiteral("Error: bad")));
+
+    /* Runtime output carries QSoC's own text and passes through. */
+    QTuiCompositor         own;
+    QSocTranscriptRenderer ownRenderer(own);
+    ownRenderer.apply(
+        output(QStringLiteral("\x1b[1mstatus\x1b[0m\n"), QSocAgentRuntimeStyle::Normal));
+    QVERIFY(own.contentView().toPlainText().contains(QStringLiteral("\x1b[1mstatus")));
 }
 
 void Test::replaceHistoryClearsTheScrollback()
