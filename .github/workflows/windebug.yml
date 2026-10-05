@@ -11,7 +11,7 @@ jobs:
           import subprocess, ctypes, sys
           k = ctypes.windll.kernel32
           print("console out cp", k.GetConsoleOutputCP(), "oem", k.GetOEMCP(), "ansi", k.GetACP())
-          cmd = 'cmd.exe /d /s /c "echo "quoted words" café"'
+          cmd = 'cmd.exe /d /s /c "chcp 65001 >/dev/null 2>&1 & echo "quoted words" café"'
           for flags, name in ((0, "inherit console"), (0x08000000, "CREATE_NO_WINDOW"), (0x00000008, "DETACHED_PROCESS")):
               r = subprocess.run(cmd, capture_output=True, creationflags=flags)
               print(name, r.returncode, r.stdout.hex(" "), r.stderr.hex(" "))
