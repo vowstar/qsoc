@@ -157,12 +157,9 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
      * siblings dispatched onto this shared connection each track its working
      * directory instead of the last one replacing the others. */
     installCwdFanout(&binding->conn, binding->cwdChildren);
-    /* Pass nullptr for socConfig + monitorTaskSource: sub-agent
-     * dispatch only needs file/shell/path tools on the remote.
-     * Web/doc are intentionally local-only for now. */
     binding->owner    = std::make_unique<QObject>();
     binding->registry = buildAgentRemoteRegistry(
-        binding->owner.get(), &binding->conn, nullptr, nullptr, llmService_);
+        binding->owner.get(), &binding->conn, parentRegistry_, nullptr, llmService_);
     hostCache_.insert(host, binding);
     return binding;
 }
@@ -782,18 +779,6 @@ QString QSocToolAgent::execute(const json &arguments)
     childLlm->setModel(effectiveLlm->getCurrentModelConfig());
     if (!childModel.isEmpty()) {
         childLlm->setCurrentModel(childModel);
-    }
-    if (taskSource_->mailbox() != nullptr && parentAgent_ != nullptr) {
-        for (const auto *name :
-             {"send_message",
-              "agent_list",
-              "agent_inbox",
-              "wait_agent",
-              "followup_task",
-              "interrupt_agent"}) {
-            if (auto *tool = parentAgent_->getToolRegistry()->getTool(QString::fromLatin1(name)))
-                effectiveRegistry->registerTool(tool);
-        }
     }
     auto *child = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */

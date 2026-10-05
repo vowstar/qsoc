@@ -3228,6 +3228,11 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
                 const QString unit  = count == 1 ? QStringLiteral("tool") : QStringLiteral("tools");
                 prompt += QStringLiteral("- %1 (%2 %3)\n").arg(srv).arg(count).arg(unit);
             }
+            if (agentConfig.remoteMode) {
+                prompt += QStringLiteral(
+                    "These MCP tools run on this machine, not on the remote host, "
+                    "and act with this machine's credentials.\n");
+            }
         }
     }
 

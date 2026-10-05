@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotehost.h"
 #include "agent/remote/qsocremotejobs.h"
@@ -145,6 +146,24 @@ struct FakeBinding
         state.workspaceTreeId    = QStringLiteral("tree-id");
         conn.adopt(std::move(state));
     }
+};
+
+/* Stands in for a local tool the remote registry must never borrow. */
+class LocalStubTool : public QSocTool
+{
+public:
+    explicit LocalStubTool(QString name, QObject *parent = nullptr)
+        : QSocTool(parent)
+        , name_(std::move(name))
+    {}
+
+    QString getName() const override { return name_; }
+    QString getDescription() const override { return QStringLiteral("local ") + name_; }
+    json    getParametersSchema() const override { return {{"type", "object"}}; }
+    QString execute(const json &) override { return QStringLiteral("ran locally"); }
+
+private:
+    QString name_;
 };
 
 } // namespace
@@ -393,13 +412,18 @@ private slots:
     void aShellLessHostGetsNoExecTools()
     {
         QSocMonitorTaskSource source;
+        QSocToolRegistry      local;
+        for (const char *name : {"bash", "bash_manage", "monitor", "monitor_stop"}) {
+            local.registerTool(new LocalStubTool(QString::fromLatin1(name), &local));
+        }
         for (const QSocMachine &host : {windowsHost(), parseRemoteHostProbe({}, {}, {})}) {
             FakeBinding       binding(host);
             QObject           owner;
             QSocToolRegistry *registry
-                = buildAgentRemoteRegistry(&owner, &binding.conn, nullptr, &source);
+                = buildAgentRemoteRegistry(&owner, &binding.conn, &local, &source);
             for (const char *name : {"bash", "bash_manage", "monitor", "monitor_stop"}) {
                 QVERIFY2(registry->getTool(QString::fromLatin1(name)) == nullptr, name);
+                QVERIFY2(!registry->toolNames().contains(QString::fromLatin1(name)), name);
             }
             for (const char *name : {"read_file", "write_file", "list_files", "edit_file"}) {
                 QVERIFY2(registry->getTool(QString::fromLatin1(name)) != nullptr, name);

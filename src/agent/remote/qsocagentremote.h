@@ -19,7 +19,6 @@
 class QSocSshSession;
 class QSocSftpClient;
 class QSocToolRegistry;
-class QSocConfig;
 class QLLMService;
 struct QSocAgentConfig;
 class QSocMonitorTaskSource;
@@ -472,15 +471,17 @@ bool prepareAgentRemoteWorkspace(
 
 /**
  * @brief Build the remote-mode tool registry.
- * @details Registers same-named replacements for file, shell, and path
- *          tools that route through the SSH/SFTP backends, plus the
- *          control-plane tools (docs, web fetch, web search) that stay on
- *          the local side. Result is owned by @p parent.
+ * @details Holds same-named replacements for the file, shell, path and
+ *          monitor tools that route through the SSH/SFTP backends. Every
+ *          other name resolves through @p base and runs on this machine,
+ *          except workspace-bound names (QSocToolRegistry::isWorkspaceBound),
+ *          which are absent when the remote side has no replacement.
+ *          Result is owned by @p parent.
  * @param parent QObject parent for the new registry and tools.
  * @param conn The binding's connection. Transport, identity and path context
  *             are all resolved through it on every tool call, so it must
  *             outlive the registry.
- * @param socConfig Used by the web tools; may be nullptr to skip search.
+ * @param base Local registry consulted for every other name; may be nullptr.
  * @param monitorSource Optional monitor task source; nullptr skips the
  *                      monitor tools.
  * @param llm Active LLM service for read_file image gating; nullptr returns
@@ -490,7 +491,7 @@ bool prepareAgentRemoteWorkspace(
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     QSocRemoteConnection  *conn,
-    QSocConfig            *socConfig,
+    QSocToolRegistry      *base,
     QSocMonitorTaskSource *monitorSource = nullptr,
     QLLMService           *llm           = nullptr);
 

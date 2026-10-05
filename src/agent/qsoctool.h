@@ -201,6 +201,23 @@ public:
     bool unregisterTool(QSocTool *tool);
 
     /**
+     * @brief Resolve names this registry lacks through a base registry
+     * @details Own tools win. A workspace-bound name never resolves through
+     *          the base, so a remote workspace cannot reach a local tool
+     *          that acts on the project tree.
+     * @param base Registry consulted after this one, or nullptr for none
+     */
+    void              setFallback(QSocToolRegistry *base);
+    QSocToolRegistry *fallback() const { return fallback_.data(); }
+
+    /**
+     * @brief Whether a tool name acts on the bound workspace tree
+     * @param name Tool name
+     * @return true when the name must come from the workspace's own registry
+     */
+    static bool isWorkspaceBound(const QString &name);
+
+    /**
      * @brief Get a tool by name
      * @param name The name of the tool to retrieve
      * @return Pointer to the tool, or nullptr if not found
@@ -244,8 +261,10 @@ public:
      * @brief Get the number of registered tools
      * @return Number of tools in the registry
      */
-    int     count() const;
-    quint64 revision() const { return revision_; }
+    int count() const;
+
+    /** @brief Changes whenever this registry or its base changes. */
+    quint64 revision() const;
 
     /**
      * @brief Get list of all registered tool names
@@ -255,12 +274,15 @@ public:
 
     /**
      * @brief Abort all currently executing tools
-     * @details Calls abort() on every registered or in-flight tool
+     * @details Cancels every call made through this registry and calls
+     *          abort() on this registry's own tools. Base tools are shared
+     *          with other registries, so they are never aborted from here.
      */
     void abortAll();
 
     /**
      * @brief Cancel active calls belonging to one execution owner
+     * @details Reaches the base registry too.
      * @param owner Owner passed to executeTool()
      */
     void abortCalls(QObject *owner);
@@ -268,17 +290,24 @@ public:
 private:
     struct ActiveCall : QObject
     {
-        ActiveCall(QSocTool *tool, QObject *owner, QObject *fallbackScope)
+        ActiveCall(QSocTool *tool, QObject *owner, QObject *fallbackScope, bool borrowed)
             : tool(tool)
             , context(owner, fallbackScope)
+            , borrowed(borrowed)
         {}
 
         QPointer<QSocTool>  tool;
         QSocToolCallContext context;
+        /* The tool came from the base registry. */
+        bool borrowed = false;
     };
+
+    QMap<QString, QPointer<QSocTool>> visibleTools() const;
+    bool                              ownsTool(const QString &name, const QSocTool *tool) const;
 
     QMap<QString, QPointer<QSocTool>> tools_;
     QSet<ActiveCall *>                activeCalls_;
+    QPointer<QSocToolRegistry>        fallback_;
     quint64                           revision_ = 0;
 };
 

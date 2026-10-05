@@ -213,7 +213,9 @@ When spawning a sub-agent through the `agent` tool, set the optional
 A per-parent-run SSH session cache keeps sibling spawns to the same
 alias on the same session, so a second child to the same host does not
 re-authenticate. Pure `~/.ssh/config` aliases that lack a catalog
-entry are not dispatchable because they have no workspace.
+entry are not dispatchable because they have no workspace. The child's
+workspace tools act on that host; its other tools are the same local tools
+a remote main session has (@agent-remote-where), except `monitor`.
 
 Sub-agent dispatch never prompts for credentials. If a host needs an
 interactive secret (encrypted private-key passphrase or `password`
@@ -1801,11 +1803,17 @@ file size. One read returns at most 16 MiB; a single longer line is refused
 with a hint to read part of it with `bash`, and an image larger than 16 MiB is
 refused.
 
-Control-plane tools stay on the local machine regardless of mode:
+Every other tool runs on the local machine, in both modes:
 
-- `query_docs`
+- `agent`, `agent_status`, `agent_resume`, `send_message`, `agent_list`,
+  `agent_inbox`, `wait_agent`, `followup_task`, `interrupt_agent`
+- `schedule_create`, `schedule_list`, `schedule_delete`
+- `host_register`, `host_update`, `host_remove`
+- `memory_read`, `memory_write`, `memory_delete` (local memory directories)
+- `query_docs`, `z3_solve`, `system_resources`, `tool_output_read`
 - `web_fetch`, `web_search`
-- SMT (`z3`) and MCP tools
+- `ask_user`, `enter_plan_mode`, `exit_plan_mode`, `goal_complete`
+- MCP tools (`mcp__<server>__<tool>`), with this machine's credentials
 
 On every connect and reconnect QSoC probes the host once and picks the
 interpreter that runs `bash`, `bash_manage`, `monitor` and `!` by the
@@ -1823,13 +1831,14 @@ it, and a command that reads standard input sees end of file. The command
 starts in the working directory and does not run if that directory
 cannot be entered.
 
-The system prompt states that the control-plane tools above run on the
+The system prompt states that the web, docs, SMT and MCP tools run on the
 local machine.
 
-The following tools are intentionally unavailable in remote mode because
-they depend on local QSoC managers:
+The following tools act on the workspace tree and have no remote form, so
+they are unavailable in remote mode:
 
 - `project_*`, `module_*`, `bus_*`, `generate_*`, `lsp`
+- `todo_*`, `skill_find`, `skill_create`
 
 === Authentication and Host Keys
 <agent-remote-auth>
@@ -2213,6 +2222,9 @@ available.
 - MCP tools call out to processes (stdio) or remote endpoints (http) you
   configured yourself. Treat them with the same care as any other piece of
   third-party code.
+- MCP tools stay available in an SSH remote workspace and still run on
+  this machine, with its credentials. Content read from the remote host can
+  steer the agent into calling them.
 - Tools inherit the agent's permission rails (read unrestricted, write
   restricted to allowlisted directories). The MCP server can still touch
   resources outside the agent (a stdio server may write anywhere it has

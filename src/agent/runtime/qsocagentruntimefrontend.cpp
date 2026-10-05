@@ -451,25 +451,7 @@ void QSocAgentRuntime::installRemoteTools()
     /* Build the remote registry and swap the agent onto it. */
     if (d->remoteRegistry == nullptr) {
         d->remoteRegistry = buildAgentRemoteRegistry(
-            this, d->remoteConn, d->socConfig, d->monitorTaskSource, d->llmService);
-        /* Re-register the spawn tool + companions so the parent LLM still
-         * sees them after the swap. */
-        for (const QString &name :
-             {QStringLiteral("agent"),
-              QStringLiteral("agent_status"),
-              QStringLiteral("send_message"),
-              QStringLiteral("agent_resume"),
-              QStringLiteral("memory_read"),
-              QStringLiteral("memory_write"),
-              QStringLiteral("memory_delete"),
-              QStringLiteral("ask_user"),
-              QStringLiteral("enter_plan_mode"),
-              QStringLiteral("exit_plan_mode"),
-              QStringLiteral("goal_complete")}) {
-            if (QSocTool *tool = d->localRegistry->getTool(name)) {
-                d->remoteRegistry->registerTool(tool);
-            }
-        }
+            this, d->remoteConn, d->localRegistry, d->monitorTaskSource, d->llmService);
     }
     d->agent->setToolRegistry(d->remoteRegistry);
     {

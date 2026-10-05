@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/remote/qsocagentremote.h"
-#include "agent/tool/qsoctooloutputread.h"
 
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocprojectrules.h"
@@ -13,12 +12,7 @@
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
-#include "agent/tool/qsoctooldoc.h"
 #include "agent/tool/qsoctoolmonitor.h"
-#include "agent/tool/qsoctoolresources.h"
-#include "agent/tool/qsoctoolsmt.h"
-#include "agent/tool/qsoctoolweb.h"
-#include "common/qsocconfig.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -637,7 +631,7 @@ void discardAgentRemoteState(AgentRemoteState *state)
 QSocToolRegistry *buildAgentRemoteRegistry(
     QObject               *parent,
     QSocRemoteConnection  *conn,
-    QSocConfig            *socConfig,
+    QSocToolRegistry      *base,
     QSocMonitorTaskSource *monitorSource,
     QLLMService           *llm)
 {
@@ -645,7 +639,6 @@ QSocToolRegistry *buildAgentRemoteRegistry(
      * place, so the address the tools bind to never changes. */
     QSocRemotePathContext *pathCtx  = conn->path();
     auto                  *registry = new QSocToolRegistry(parent);
-    registry->registerTool(new QSocToolOutputRead(registry));
     registry->registerTool(new QSocToolRemoteFileRead(parent, conn, pathCtx, llm));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
@@ -663,18 +656,7 @@ QSocToolRegistry *buildAgentRemoteRegistry(
         registry->registerTool(new QSocToolMonitor(parent, monitorSource, remote));
         registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
     }
-    /* Control-plane tools stay local even in remote mode. */
-    registry->registerTool(new QSocToolResources(parent));
-    registry->registerTool(new QSocToolDocQuery(parent));
-    if (QSocToolSmt::supported())
-        registry->registerTool(new QSocToolSmt(parent));
-    /* Remote-mode web_fetch has no QLLMService handle (the model lives on the
-     * client). Image inlining therefore falls back to alt-text; users who want
-     * vision should fetch locally. */
-    registry->registerTool(new QSocToolWebFetch(parent, socConfig, /*llm=*/nullptr));
-    if (socConfig != nullptr && !socConfig->getValue("web.search_api_url").isEmpty()) {
-        registry->registerTool(new QSocToolWebSearch(parent, socConfig));
-    }
+    registry->setFallback(base);
     return registry;
 }
 

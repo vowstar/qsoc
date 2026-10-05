@@ -189,9 +189,84 @@ bool QSocToolRegistry::unregisterTool(QSocTool *tool)
     return removed;
 }
 
+namespace {
+
+/* A trailing underscore names a whole family. */
+constexpr const char *kWorkspaceBound[] = {
+    "read_file",
+    "list_files",
+    "write_file",
+    "edit_file",
+    "bash",
+    "bash_manage",
+    "path_context",
+    "monitor",
+    "monitor_stop",
+    "lsp",
+    "todo_",
+    "skill_",
+    "project_",
+    "module_",
+    "bus_",
+    "generate_",
+    "schematic_",
+};
+
+} // namespace
+
+bool QSocToolRegistry::isWorkspaceBound(const QString &name)
+{
+    for (const char *entry : kWorkspaceBound) {
+        const QLatin1String bound(entry);
+        if (name == bound || (bound.endsWith(QLatin1Char('_')) && name.startsWith(bound)))
+            return true;
+    }
+    return false;
+}
+
+void QSocToolRegistry::setFallback(QSocToolRegistry *base)
+{
+    if (base == this || base == fallback_.data())
+        return;
+    /* Keep revision() moving forward when the base changes. */
+    revision_ += 1 + (fallback_ ? fallback_->revision() : 0);
+    fallback_ = base;
+}
+
+quint64 QSocToolRegistry::revision() const
+{
+    return revision_ + (fallback_ ? fallback_->revision() : 0);
+}
+
+QMap<QString, QPointer<QSocTool>> QSocToolRegistry::visibleTools() const
+{
+    QMap<QString, QPointer<QSocTool>> visible;
+    if (fallback_) {
+        const auto base = fallback_->visibleTools();
+        for (auto it = base.constBegin(); it != base.constEnd(); ++it) {
+            if (!isWorkspaceBound(it.key()))
+                visible.insert(it.key(), it.value());
+        }
+    }
+    for (auto it = tools_.constBegin(); it != tools_.constEnd(); ++it) {
+        if (!it.value().isNull())
+            visible.insert(it.key(), it.value());
+    }
+    return visible;
+}
+
+bool QSocToolRegistry::ownsTool(const QString &name, const QSocTool *tool) const
+{
+    return tools_.value(name).data() == tool;
+}
+
 QSocTool *QSocToolRegistry::getTool(const QString &name) const
 {
-    return tools_.value(name).data();
+    if (QSocTool *own = tools_.value(name).data())
+        return own;
+    if (fallback_ && !isWorkspaceBound(name))
+        return fallback_->getTool(name);
+    return nullptr;
 }
 
 bool QSocToolRegistry::hasTool(const QString &name) const
@@ -202,11 +277,10 @@ bool QSocToolRegistry::hasTool(const QString &name) const
 json QSocToolRegistry::getToolDefinitions() const
 {
     json       definitions = json::array();
-    const auto tools       = tools_.values();
+    const auto tools       = visibleTools();
     for (const auto &tool : tools) {
-        if (!tool.isNull()) {
+        if (!tool.isNull())
             definitions.push_back(tool->getDefinition());
-        }
     }
     return definitions;
 }
@@ -229,7 +303,7 @@ QString QSocToolRegistry::executeTool(
         return QString("Error: Tool '%1' not found").arg(name);
     }
 
-    ActiveCall call(tool, owner, this);
+    ActiveCall call(tool, owner, this, !ownsTool(name, tool));
     if (output)
         connect(&call.context, &QSocToolCallContext::outputReady, &call.context, std::move(output));
     // cppcheck-suppress danglingLifetime
@@ -263,7 +337,7 @@ std::optional<QString> QSocToolRegistry::executeToolDeferred(
         return QString("Error: Tool '%1' not found").arg(name);
     if (!tool->supportsDeferred())
         return executeTool(name, arguments, owner, std::move(output), std::move(outcome));
-    auto *call = new ActiveCall(tool, owner, this);
+    auto *call = new ActiveCall(tool, owner, this, !ownsTool(name, tool));
     call->setParent(this);
     call->context.canDefer_ = true;
     if (output)
@@ -320,24 +394,12 @@ std::optional<QString> QSocToolRegistry::executeToolDeferred(
 
 int QSocToolRegistry::count() const
 {
-    int total = 0;
-    for (const auto &tool : tools_) {
-        if (!tool.isNull()) {
-            ++total;
-        }
-    }
-    return total;
+    return static_cast<int>(visibleTools().size());
 }
 
 QStringList QSocToolRegistry::toolNames() const
 {
-    QStringList names;
-    for (auto it = tools_.constBegin(); it != tools_.constEnd(); ++it) {
-        if (!it.value().isNull()) {
-            names.append(it.key());
-        }
-    }
-    return names;
+    return visibleTools().keys();
 }
 
 void QSocToolRegistry::abortAll()
@@ -345,7 +407,8 @@ void QSocToolRegistry::abortAll()
     QList<QPointer<QSocTool>>            tools = tools_.values();
     QList<QPointer<QSocToolCallContext>> contexts;
     for (ActiveCall *call : std::as_const(activeCalls_)) {
-        tools.append(call->tool);
+        if (!call->borrowed)
+            tools.append(call->tool);
         contexts.append(&call->context);
     }
 
@@ -372,6 +435,7 @@ void QSocToolRegistry::abortCalls(QObject *owner)
         return;
     }
 
+    const QPointer<QSocToolRegistry>     base = fallback_;
     QList<QPointer<QSocToolCallContext>> contexts;
     for (ActiveCall *call : std::as_const(activeCalls_)) {
         if (call->context.owner_.data() == owner) {
@@ -383,6 +447,8 @@ void QSocToolRegistry::abortCalls(QObject *owner)
             context->requestCancellation();
         }
     }
+    if (base)
+        base->abortCalls(owner);
 }
 
 #include "moc_qsoctool.cpp"
