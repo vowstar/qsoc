@@ -391,11 +391,33 @@ The following commands are available during an interactive session:
      non-zero exit code, and the shell that ran it. The same rule applies
      locally and on a remote host (@agent-shell-discovery). In remote mode
      it runs only when the working directory still resolves inside the
-     workspace.],
+     workspace. The command and its output enter the conversation; see
+     @agent-shell-context.],
+    [`!!<command>`],
+    [Run a shell command the same way and show its output, without adding
+     anything to the conversation or the session.],
   )],
   caption: [INTERACTIVE COMMANDS],
   kind: table,
 )
+
+=== Shell Command Context
+<agent-shell-context>
+
+After a `!` line, the command, its exit code, its duration and its output
+are added to the conversation as one user message, and the model reads it
+with the next request. The output is sent to the model provider and saved in
+the session file. A dim line after the result says so and names `!!`, which
+runs a command without either. The model is told that this block is command
+output, not instructions. Output larger than a tool result keeps its head and
+tail in the conversation; the full text is saved as an artifact that
+`tool_output_read` reads. A `!` line in a new session saves the session the
+same way a first prompt does, so it then appears in `/resume`. While a turn
+runs or the session waits for recovery input, the result is only shown, and
+the dim line says it was not added. A `!` or `!!` command never starts a turn
+and never sends a background notification. Set `agent.shell_command_context`
+to `false` to keep every `!` result on screen only. CRLF line ends in the
+output are stored and shown as LF.
 
 The directory picker shared by `/cwd`, `/ssh`, and workspace selection
 navigates with Up/Down plus Enter/Right to descend and Left to go up.
@@ -2186,7 +2208,8 @@ Saved sessions enable:
   with their outcome, `write_file` and `edit_file` diffs, todo lists, images
   kept in the context and task notices. A tool result cut to fit the context
   shows its kept part and one line naming the saved full output. The todo
-  pane shows the latest todo list still in the context. Slash command and `!`
+  pane shows the latest todo list still in the context. `!` results in the
+  conversation are restored as they were shown; slash command and `!!`
   output, run errors and interrupt notices are not restored. Sessions from
   older versions show tool outcomes inferred from their results. Terminal
   control sequences in model, tool and file text are removed, live and on

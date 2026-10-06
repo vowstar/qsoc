@@ -526,6 +526,10 @@ These settings can also be overridden by command-line options (see @agent-comman
     [agent.background_wake_limit],
     [Turns in a row the user did not start before the agent stops starting
      them, goal continuations included (default: 50, 0 = no limit)],
+    [agent.shell_command_context],
+    [A `!` line's command and output enter the conversation and the session
+     (default: true); `false` keeps them on screen only. See
+     @agent-shell-context],
     [agent.system_prompt], [Custom system prompt override],
     [agent.predict_input],
     [Predict next input as ghost text using the selected model and effort:

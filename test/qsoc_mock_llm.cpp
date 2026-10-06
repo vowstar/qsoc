@@ -258,9 +258,12 @@ QJsonObject scriptedReply(const QJsonObject &request)
 {
     QString firstUser;
     for (const auto &value : request.value(QStringLiteral("messages")).toArray()) {
-        const auto message = value.toObject();
-        if (message.value(QStringLiteral("role")).toString() == QStringLiteral("user")) {
-            firstUser = message.value(QStringLiteral("content")).toString();
+        const auto    message = value.toObject();
+        const QString content = message.value(QStringLiteral("content")).toString();
+        /* A `!` line result is not the prompt a script routes on. */
+        if (message.value(QStringLiteral("role")).toString() == QStringLiteral("user")
+            && !content.startsWith(QStringLiteral("<user_shell_command>"))) {
+            firstUser = content;
             break;
         }
     }

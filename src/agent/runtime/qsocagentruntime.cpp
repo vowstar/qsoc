@@ -715,6 +715,7 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
             config.autoBackgroundMs = autoBackgroundMsStr.toInt();
         }
         readBool(QStringLiteral("agent.background_wake"), config.backgroundWake);
+        readBool(QStringLiteral("agent.shell_command_context"), config.shellCommandContext);
         bool      wakeLimitOk = false;
         const int wakeLimit
             = d->socConfig->getValue("agent.background_wake_limit").toInt(&wakeLimitOk);

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsoctaskeventqueue.h"
+#include "agent/protocol/qsocmessagemarkup.h"
 
 #include <QDateTime>
 
@@ -50,12 +51,6 @@ QSocTaskEvent merged(const QSocTaskEvent &older, const QSocTaskEvent &newer)
     return out;
 }
 
-QString lastLine(const QString &text)
-{
-    const QString trimmed = text.trimmed();
-    return trimmed.mid(trimmed.lastIndexOf(QLatin1Char('\n')) + 1);
-}
-
 } /* namespace */
 
 QSocTaskEventQueue::QSocTaskEventQueue(QObject *parent)
@@ -100,17 +95,14 @@ QString QSocTaskEventQueue::formatTaskNotification(const QSocTaskEvent &event)
 
 QString QSocTaskEventQueue::summaryLine(const QSocTaskEvent &event)
 {
-    QString line = event.sourceTag + QLatin1Char(' ') + event.taskId;
-    if (event.kind == QStringLiteral("monitor_line")) {
-        line += QStringLiteral(": ") + lastLine(event.content);
-    } else {
-        line += QLatin1Char(' ') + event.status;
-        if (!event.agentType.isEmpty())
-            line += QStringLiteral(" [") + event.agentType + QLatin1Char(']');
-        if (!event.description.isEmpty())
-            line += QStringLiteral(": ") + event.description;
-    }
-    return line.simplified().left(160);
+    return QSocTaskNotificationText::summaryLine(
+        {event.taskId,
+         event.sourceTag,
+         event.kind,
+         event.status,
+         event.agentType,
+         event.description,
+         event.content});
 }
 
 void QSocTaskNotices::forgetTaken(const std::function<bool(const QString &)> &stillQueued)

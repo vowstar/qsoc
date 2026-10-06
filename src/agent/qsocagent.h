@@ -193,6 +193,26 @@ public:
      */
     bool queueTaskNotification(const QString &notification, const QString &key = {});
 
+    /** The model's view of a long text and the artifact holding all of it. */
+    struct BoundedText
+    {
+        QString view;
+        json    refs = json::array();
+    };
+    /**
+     * @brief Head and tail of @p content when it exceeds the result budget.
+     * @details The full text is saved as an artifact first, and the notice at
+     *          the cut names it, or says why none was saved.
+     */
+    BoundedText boundText(
+        const QString &content, const QString &completion, const QString &toolName = {});
+
+    /**
+     * @brief Append a whole message QSoC built to the history.
+     * @return False while a compaction commits.
+     */
+    bool addContextMessage(json message);
+
     /** Whether a notification queued under @p key is still waiting. */
     bool hasQueuedNotification(const QString &key) const;
 

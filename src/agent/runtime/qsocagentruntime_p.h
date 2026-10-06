@@ -31,6 +31,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stop_token>
 
 class QLspService;
@@ -88,8 +89,13 @@ bool persistRecoverySnapshot(
  * @details The local machine's `!` rule: its executor (`-c`) on POSIX,
  *          `cmd.exe` on Windows, which receives the line unchanged. Ends with
  *          the exit code when non-zero and with the shell that ran it.
+ *          @p exitCode stays empty when the line did not exit normally.
  */
-QString runLocalShellEscape(const QString &command, const QString &directory, std::stop_token stop);
+QString runLocalShellEscape(
+    const QString      &command,
+    const QString      &directory,
+    std::stop_token     stop,
+    std::optional<int> *exitCode = nullptr);
 
 } // namespace QSocAgentRuntimeInternal
 

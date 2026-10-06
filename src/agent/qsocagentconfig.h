@@ -222,6 +222,10 @@ struct QSocAgentConfig
     bool backgroundWake      = true;
     int  backgroundWakeLimit = 50;
 
+    /* A `!` line's command and output enter the conversation and the
+     * session; `!!` and false keep them on screen only. */
+    bool shellCommandContext = true;
+
     /* Plan mode. When true the agent may only run read-only tools (plus
      * the shell, whose per-command safety is LLM-judged, and the spawn
      * tool, whose children inherit this flag); all mutating tools are

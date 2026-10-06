@@ -7,6 +7,8 @@
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocremotejobs.h"
 
+#include <optional>
+
 class QLLMService;
 class QSocRemoteConnection;
 class QSocSftpClient;
@@ -15,8 +17,12 @@ class QSocSshExec;
 class QSocRemotePathContext;
 class QSocFileHistory;
 
-/** @brief Run a remote shell escape only from the currently verified cwd. */
-QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &command);
+/**
+ * @brief Run a remote shell escape only from the currently verified cwd.
+ * @param exitCode Set when the command reported an exit status.
+ */
+QString runBoundRemoteShellEscape(
+    QSocRemoteConnection *conn, const QString &command, std::optional<int> *exitCode = nullptr);
 
 /**
  * @brief Remote read_file. Same schema and name as the local tool.

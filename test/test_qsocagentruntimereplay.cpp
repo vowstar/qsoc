@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/protocol/qsocagentruntimeevent.h"
+#include "agent/qsocsession.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "cli/qsocsessionreplay.h"
 #include "cli/qsoctranscriptrenderer.h"
@@ -152,6 +153,7 @@ private slots:
     void cleanupTestCase();
     void replayMatchesTheLiveTranscript();
     void queuedPromptEchoesWhereItIsRead();
+    void shellOutputReachesTheNextRequest();
 };
 
 void Test::cleanupTestCase()
@@ -307,6 +309,119 @@ void Test::queuedPromptEchoesWhereItIsRead()
     const auto echo        = plain.indexOf(QStringLiteral("second"));
     QVERIFY2(firstAnswer >= 0 && firstAnswer < echo, qPrintable(plain));
     QVERIFY2(echo < plain.indexOf(QStringLiteral("SECONDANSWER")), qPrintable(plain));
+}
+
+/* A `!` result is a user-role block the next request carries; `!!` is not.
+ * The script routes on the real prompt, the title is that prompt, and the
+ * live transcript equals the replay. */
+void Test::shellOutputReachesTheNextRequest()
+{
+    QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_runtime_replay_XXXXXX"));
+    QVERIFY(fixture.isValid());
+    const QString project = QDir(fixture.path()).filePath(QStringLiteral("project"));
+    QVERIFY(QDir().mkpath(project));
+    const QString scriptPath = QDir(fixture.path()).filePath(QStringLiteral("script.json"));
+    QFile         scriptFile(scriptPath);
+    QVERIFY(scriptFile.open(QIODevice::WriteOnly));
+    scriptFile.write(
+        QJsonDocument(
+            QJsonArray{QJsonObject{
+                {"contains", "SHELLCHECK"}, {"responses", QJsonArray{step({}, "SHELLANSWER")}}}})
+            .toJson());
+    scriptFile.close();
+    const QString requestLog = QDir(fixture.path()).filePath(QStringLiteral("requests.jsonl"));
+
+    const int port = pickFreePort();
+    QVERIFY(port > 0);
+    QFile configFile(QDir(g_env.root).filePath(QStringLiteral("config/qsoc/qsoc.yml")));
+    QVERIFY(configFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    configFile.write(config(port));
+    configFile.close();
+
+    auto mockEnvironment = isolatedEnvironment(fixture.path());
+    mockEnvironment.insert(QStringLiteral("MOCK_TTL"), QStringLiteral("120"));
+    mockEnvironment.insert(QStringLiteral("MOCK_SCRIPT"), scriptPath);
+    mockEnvironment.insert(QStringLiteral("MOCK_REQUEST_LOG"), requestLog);
+    BoundedProcess mock;
+    mock.setProcessEnvironment(mockEnvironment);
+    mock.setStandardOutputFile(QDir(fixture.path()).filePath(QStringLiteral("mock.out")));
+    mock.setStandardErrorFile(QDir(fixture.path()).filePath(QStringLiteral("mock.err")));
+    mock.start(QString::fromUtf8(QSOC_MOCK_LLM_PATH), {QString::number(port), QStringLiteral("none")});
+    QVERIFY(mock.waitForStarted(5000));
+    QVERIFY(waitForMockReady(mock, port, 45000));
+
+    QSocAgentRuntimeOptions options;
+    options.projectDirectory = project;
+
+    QTuiCompositor         live;
+    QSocTranscriptRenderer liveRenderer(live);
+    QString                sessionId;
+    QString                sessionPath;
+    {
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+        sessionId   = runtime.sessionId();
+        sessionPath = runtime.sessionPath();
+        connect(&runtime, &QSocAgentRuntime::eventRaised, &runtime, [&](const Event &event) {
+            liveRenderer.apply(event);
+        });
+        QVERIFY(runtime.executeCommand(QStringLiteral("!!echo LOCAL_O6")));
+        QVERIFY(runtime.executeCommand(QStringLiteral("!echo MARK_O6")));
+        const auto result = runtime.runTurn(QStringLiteral("SHELLCHECK ask"));
+        QVERIFY2(!result.error, qPrintable(result.errorText));
+        QVERIFY(result.persistedOk);
+        QCOMPARE(result.finalText, QStringLiteral("SHELLANSWER"));
+    }
+
+    QFile log(requestLog);
+    QVERIFY(log.open(QIODevice::ReadOnly));
+    const QList<QByteArray> requests = log.readAll().split('\n');
+    QVERIFY(!requests.isEmpty());
+    const QJsonObject request = QJsonDocument::fromJson(requests.first()).object();
+    QString           shell;
+    QString           prompt;
+    for (const auto &value : request.value(QStringLiteral("messages")).toArray()) {
+        const QJsonObject message = value.toObject();
+        const QString     content = message.value(QStringLiteral("content")).toString();
+        if (message.value(QStringLiteral("role")).toString() != QStringLiteral("user"))
+            continue;
+        if (content.startsWith(QStringLiteral("<user_shell_command>")))
+            shell = content;
+        else if (content == QStringLiteral("SHELLCHECK ask"))
+            prompt = content;
+    }
+    QVERIFY2(shell.contains(QStringLiteral("<command>\necho MARK_O6\n</command>")), qPrintable(shell));
+    QVERIFY2(shell.contains(QStringLiteral("Output:\nMARK_O6\n")), qPrintable(shell));
+    QVERIFY(!prompt.isEmpty());
+    const QString system = request.value(QStringLiteral("messages"))
+                               .toArray()
+                               .first()
+                               .toObject()
+                               .value(QStringLiteral("content"))
+                               .toString();
+    QVERIFY(
+        system.contains(QStringLiteral("A <user_shell_command> block is a command the user ran")));
+    for (const QByteArray &line : requests)
+        QVERIFY(!line.contains("LOCAL_O6"));
+    QCOMPARE(QSocSession::readInfo(sessionPath).firstPrompt, QStringLiteral("SHELLCHECK ask"));
+
+    QSocAgentRuntime resumed(options);
+    QVERIFY(resumed.openSessionById(sessionId));
+    QTuiCompositor         replay;
+    QSocTranscriptRenderer replayRenderer(replay);
+    replayRenderer.replaceHistory(resumed.messages());
+
+    const QString liveText = live.contentView().toAnsi(100);
+    const QString plain    = withoutAnsi(liveText);
+    QVERIFY2(plain.contains(QStringLiteral("added to the conversation")), qPrintable(plain));
+    QVERIFY2(plain.contains(QStringLiteral("!echo MARK_O6")), qPrintable(plain));
+    /* The local-only line is on screen live and never in the history. */
+    QVERIFY2(plain.contains(QStringLiteral("LOCAL_O6")), qPrintable(plain));
+    QVERIFY(!withoutAnsi(replay.contentView().toAnsi(100)).contains(QStringLiteral("LOCAL_O6")));
+    const qsizetype cut = liveText.indexOf(QStringLiteral("!echo MARK_O6"));
+    QVERIFY(cut > 0);
+    const QString replayText = replay.contentView().toAnsi(100);
+    QCOMPARE(replayText.mid(replayText.indexOf(QStringLiteral("!echo MARK_O6"))), liveText.mid(cut));
 }
 
 QSOC_TEST_MAIN(Test)

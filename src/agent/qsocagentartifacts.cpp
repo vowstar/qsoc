@@ -211,59 +211,75 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &attachments
         .arg(reasons.join(QStringLiteral(", ")), source);
 }
 
+QSocAgent::BoundedText QSocAgent::boundText(
+    const QString &content, const QString &completion, const QString &toolName)
+{
+    const auto   run    = activeRun_;
+    const qint64 budget = toolResultBudgetTokens();
+    BoundedText  out{content};
+    if (QSocRequestUsage::estimateText(content, tokenCounter()) <= budget)
+        return out;
+    QString                                       error;
+    std::optional<QSocToolResultStore::Reference> saved;
+    /* A return the store cannot hold whole is saved as its head and tail. */
+    const QString stored = QSocBoundedCapture::bound(content, agentConfig.toolArtifactBytes);
+    const bool    sourceTruncated = QSocBoundedCapture::isElided(stored)
+                                    || (toolName == QStringLiteral("web_fetch")
+                                        && content.endsWith("... (content truncated)"));
+    if (toolResultStore_ && toolName != QStringLiteral("tool_output_read"))
+        saved = toolResultStore_->publish(
+            stored,
+            completion,
+            sourceTruncated ? QStringLiteral("truncated") : QStringLiteral("unknown"),
+            &error,
+            [run] { return !run || run->stop.load() == StopMode::None; });
+    QString notice;
+    if (saved) {
+        out.refs.push_back(artifactReferenceJson(*saved));
+        notice = QStringLiteral(
+                     "\n[Middle of the output omitted; read artifact %1 (%2 bytes) with "
+                     "tool_output_read.]\n")
+                     .arg(saved->id)
+                     .arg(saved->capturedBytes);
+    } else {
+        notice = QStringLiteral(
+                     "\n[Middle of the output omitted. No readable artifact was saved. "
+                     "Completion: %1. %2 Do not repeat side effects without checking state.]\n")
+                     .arg(
+                         completion,
+                         error.isEmpty() ? QStringLiteral("Result storage is unavailable.") : error);
+    }
+    out.view = QSocTokenizer::elideMiddle(content, budget, notice, tokenCounter());
+    return out;
+}
+
+bool QSocAgent::addContextMessage(json message)
+{
+    if (compactionCommitting_)
+        return false;
+    messages.push_back(std::move(message));
+    ++historyRevision_;
+    return true;
+}
+
 void QSocAgent::appendBoundedToolMessage(
     const QString &id, const QString &content, const QString &state, const QString &toolName)
 {
     const auto    run        = activeRun_;
     const qint64  budget     = toolResultBudgetTokens();
-    QString       view       = content;
-    json          refs       = json::array();
     const auto    status     = run && run->executingToolStatus ? *run->executingToolStatus
                                                                : QSocTool::classifyResult(content);
     const QString completion = state.isEmpty() ? QSocTool::statusName(status) : state;
-    if (QSocRequestUsage::estimateText(content, tokenCounter()) > budget) {
-        QString                                       error;
-        std::optional<QSocToolResultStore::Reference> saved;
-        /* A return the store cannot hold whole is saved as its head and tail. */
-        const QString stored = QSocBoundedCapture::bound(content, agentConfig.toolArtifactBytes);
-        const bool    sourceTruncated = QSocBoundedCapture::isElided(stored)
-                                        || (toolName == QStringLiteral("web_fetch")
-                                            && content.endsWith("... (content truncated)"));
-        if (toolResultStore_ && toolName != QStringLiteral("tool_output_read"))
-            saved = toolResultStore_->publish(
-                stored,
-                completion,
-                sourceTruncated ? QStringLiteral("truncated") : QStringLiteral("unknown"),
-                &error,
-                [run] { return !run || run->stop.load() == StopMode::None; });
-        QString notice;
-        if (saved) {
-            refs.push_back(artifactReferenceJson(*saved));
-            notice = QStringLiteral(
-                         "\n[Middle of the output omitted; read artifact %1 (%2 bytes) with "
-                         "tool_output_read.]\n")
-                         .arg(saved->id)
-                         .arg(saved->capturedBytes);
-        } else {
-            notice = QStringLiteral(
-                         "\n[Middle of the output omitted. No readable artifact was saved. "
-                         "Completion: %1. %2 Do not repeat side effects without checking state.]\n")
-                         .arg(
-                             completion,
-                             error.isEmpty() ? QStringLiteral("Result storage is unavailable.")
-                                             : error);
-        }
-        view = QSocTokenizer::elideMiddle(content, budget, notice, tokenCounter());
-    }
-    json message
+    BoundedText   bounded    = boundText(content, completion, toolName);
+    json          message
         = {{"role", "tool"},
            {"tool_call_id", id.toStdString()},
-           {"content", view.toStdString()},
+           {"content", bounded.view.toStdString()},
            {"_qsoc_status", completion.toStdString()}};
     if (!state.isEmpty())
         message["_qsoc_tool_state"] = state.toStdString();
-    if (!refs.empty())
-        message["_qsoc_artifact_refs"] = std::move(refs);
+    if (!bounded.refs.empty())
+        message["_qsoc_artifact_refs"] = std::move(bounded.refs);
     messages.push_back(std::move(message));
     if (run && run->toolBatchStart && budget < 256) {
         lastStopNotice_ = QStringLiteral(

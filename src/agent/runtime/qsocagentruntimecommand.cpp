@@ -14,6 +14,7 @@
 
 #include "agent/mcp/qsocmcpclient.h"
 #include "agent/mcp/qsocmcpmanager.h"
+#include "agent/protocol/qsocmessagemarkup.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocfilehistory.h"
@@ -38,7 +39,9 @@
 #include "common/qsocmessageauthority.h"
 #include "common/qsocshellpath.h"
 
+#include <QDateTime>
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QProcess>
 #include <QTimer>
 #ifdef Q_OS_UNIX
@@ -71,7 +74,10 @@ using QSocAgentRuntimeInternal::persistSessionState;
 using QSocAgentRuntimeInternal::sessionProjectPath;
 
 QString QSocAgentRuntimeInternal::runLocalShellEscape(
-    const QString &command, const QString &directory, std::stop_token stop)
+    const QString      &command,
+    const QString      &directory,
+    std::stop_token     stop,
+    std::optional<int> *exitCode)
 {
     QProcess process;
     process.setWorkingDirectory(directory);
@@ -111,6 +117,8 @@ QString QSocAgentRuntimeInternal::runLocalShellEscape(
     cancellation.start();
     if (process.state() != QProcess::NotRunning)
         loop.exec();
+    if (exitCode != nullptr && process.exitStatus() == QProcess::NormalExit)
+        *exitCode = process.exitCode();
     QString    result;
     const auto append = [&result](const QString &text) {
         result += text;
@@ -136,6 +144,63 @@ QString fmtTok(qint64 tokens)
 
 } // namespace
 
+/* The typed line shows at once; the result and hint follow from the stored
+ * message, so the live view is the replay view. */
+void QSocAgentRuntime::runShellEscape(const QString &command, bool local)
+{
+    const bool    record = !local && d->agent->getConfig().shellCommandContext;
+    const QString typed  = QString(local ? QStringLiteral("!!") : QStringLiteral("!")) + command;
+    auto          shown  = QSocShellCommandMessage::events(typed, {}, {});
+    shown.first().at     = QDateTime::currentDateTimeUtc();
+    emit eventRaised(shown.first());
+
+    QElapsedTimer clock;
+    clock.start();
+    std::optional<int> exitCode;
+    const QString      output
+        = isRemote() ? runBoundRemoteShellEscape(d->remoteConn, command, &exitCode)
+                     : QSocAgentRuntimeInternal::runLocalShellEscape(
+                           command, workingDirectory(), d->commandStop.get_token(), &exitCode);
+    const QString result = QSocShellCommandMessage::resultText(exitCode, clock.elapsed(), output);
+    const QString completion = !exitCode        ? QStringLiteral("uncertain")
+                               : *exitCode == 0 ? QStringLiteral("ok")
+                                                : QStringLiteral("failed");
+    json          stored;
+    const QString refusal = record ? recordShellEscape(command, result, completion, &stored)
+                                   : QString();
+    shown = stored.is_null() ? QSocShellCommandMessage::events(typed, result, refusal)
+                             : QSocShellCommandMessage::events(stored);
+    for (int index = 1; index < shown.size(); ++index) {
+        shown[index].at = QDateTime::currentDateTimeUtc();
+        emit eventRaised(shown[index]);
+    }
+}
+
+/* The full write barrier runs first, so the artifact of a long output lands
+ * in this locked session; an empty return means the message was added. */
+QString QSocAgentRuntime::recordShellEscape(
+    const QString &command, const QString &result, const QString &completion, json *stored)
+{
+    if (isRunning() || hasPendingRecovery() || d->recoveryRequiresInput || d->historyInputBlocked)
+        return QStringLiteral("(not added to the conversation: the session cannot take input now)");
+    if (d->currentSession && !d->currentSession->prepareWrite())
+        return QStringLiteral("(not added to the conversation: the session cannot be saved)");
+    auto       bounded = d->agent->boundText(result, completion);
+    const bool forged  = QSocMessageAuthority::escapeTags(command) != command
+                         || QSocMessageAuthority::escapeTags(bounded.view) != bounded.view;
+    json       message = QSocShellCommandMessage::message(command, bounded.view, forged);
+    if (!bounded.refs.empty())
+        message["_qsoc_artifact_refs"] = std::move(bounded.refs);
+    if (!d->agent->addContextMessage(message))
+        return QStringLiteral("(not added to the conversation: a compaction is committing)");
+    if (!persistNow())
+        emitOutput(
+            QStringLiteral("Session persistence failed.\n"),
+            static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    *stored = std::move(message);
+    return {};
+}
+
 bool QSocAgentRuntime::executeCommand(const QString &input)
 {
     d->commandStop        = std::stop_source();
@@ -145,22 +210,14 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         return false;
     }
 
-    /* `!command`: shell escape on the active workspace. */
+    /* `!command`: shell escape on the active workspace; `!!` keeps it local. */
     if (trimmed.startsWith(QLatin1Char('!'))) {
-        const QString shellCmd = trimmed.mid(1).trimmed();
+        const bool    local    = trimmed.startsWith(QStringLiteral("!!"));
+        const QString shellCmd = trimmed.mid(local ? 2 : 1).trimmed();
         if (shellCmd.isEmpty()) {
             return true;
         }
-        emitOutput(
-            QStringLiteral("$ ") + shellCmd + QStringLiteral("\n"),
-            static_cast<int>(QSocAgentRuntimeStyle::Bold));
-        const QString output = isRemote()
-                                   ? runBoundRemoteShellEscape(d->remoteConn, shellCmd)
-                                   : QSocAgentRuntimeInternal::runLocalShellEscape(
-                                         shellCmd, workingDirectory(), d->commandStop.get_token());
-        if (!output.isEmpty()) {
-            emitOutput(output, static_cast<int>(QSocAgentRuntimeStyle::Dim));
-        }
+        runShellEscape(shellCmd, local);
         return true;
     }
 
@@ -206,7 +263,8 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             "  /resume [id] /rewind /branch [name] /rename <title> /diff /btw <question>\n"
             "  /memory /goal /agents /agents-history /mcp /loop\n"
             "  /cwd [path] /project [path] /ssh [target] /local\n"
-            "  !command runs a shell command; #fact saves memory\n"
+            "  !command runs a shell command and adds its output to the conversation\n"
+            "  !!command runs it without adding the output; #fact saves memory\n"
             "Keyboard shortcuts:\n"
             "  /exit quits; Esc stops; Ctrl+R searches history\n"
             "  Ctrl+G opens the editor; Shift+Tab toggles plan mode\n"));

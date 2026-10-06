@@ -167,10 +167,12 @@ QTuiToolBlock::Status toolStatus(const QSocAgentRuntimeEvent &event)
         .value(jsonString(event.json, "status"), event.ok ? Status::Success : Status::Failure);
 }
 
-/* Kinds whose text came from the model, a tool, a file or a provider. */
-bool isExternal(Kind kind)
+/* Events whose text came from the model, a tool, a file, a provider or a shell. */
+bool isExternal(const QSocAgentRuntimeEvent &event)
 {
-    switch (kind) {
+    switch (event.kind) {
+    case Kind::Output:
+        return jsonString(event.json, "origin") == QStringLiteral("shell");
     case Kind::ContentChunk:
     case Kind::ReasoningChunk:
     case Kind::ToolStarted:
@@ -205,7 +207,7 @@ QSocTranscriptRenderer::QSocTranscriptRenderer(QTuiCompositor &compositor)
 
 void QSocTranscriptRenderer::apply(const QSocAgentRuntimeEvent &event)
 {
-    if (isExternal(event.kind))
+    if (isExternal(event))
         render(plainEvent(event));
     else
         render(event);

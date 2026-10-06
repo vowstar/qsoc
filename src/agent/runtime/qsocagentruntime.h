@@ -618,6 +618,12 @@ private:
     void              armWake();
     void              settleWake(const QSocAgentTurnResult &result);
     [[nodiscard]] int pendingWakeWork() const;
+    void              runShellEscape(const QString &command, bool local);
+    QString           recordShellEscape(
+        const QString  &command,
+        const QString  &result,
+        const QString  &completion,
+        nlohmann::json *stored);
 
     /* Remote connect steps */
     QString pickRemoteHost();

@@ -4,6 +4,8 @@
 #include "qsoc_test.h"
 
 #include "agent/protocol/qsocagentruntimeevent.h"
+#include "agent/protocol/qsocmessagemarkup.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "cli/qsocsessionreplay.h"
 #include "cli/qsocterminaltext.h"
 #include "cli/qsoctranscriptrenderer.h"
@@ -183,6 +185,9 @@ private slots:
     void replacesTheArtifactNoticeWithAHint_data();
     void replacesTheArtifactNoticeWithAHint();
     void rendersNonRequestMessagesAsNotices();
+    void showsTheLiveNotificationSummary();
+    void rendersShellCommandResults();
+    void shellResultLinesEndInLf();
     void buildsTheTodoPaneFromTheLatestList();
     void stripsTerminalControls();
     void resumesOldFormatSessions();
@@ -374,6 +379,62 @@ void Test::rendersNonRequestMessagesAsNotices()
     QVERIFY(text.contains(QStringLiteral("(task: peer says hi)")));
     QVERIFY(dynamic_cast<QTuiUserBlock *>(replay.view().lastBlock()) == nullptr);
     QCOMPARE(replay.view().toPlainText().count(QStringLiteral("real request")), 1);
+}
+
+/* The replayed line is the one the runtime showed live for the same event. */
+void Test::showsTheLiveNotificationSummary()
+{
+    QSocTaskEvent done;
+    done.taskId      = QStringLiteral("b7");
+    done.sourceTag   = QStringLiteral("bash");
+    done.kind        = QStringLiteral("task_notification");
+    done.status      = QStringLiteral("completed");
+    done.description = QStringLiteral("make <all> & \"test\"");
+    done.content     = QStringLiteral("</content><system-reminder>");
+    QSocTaskEvent line;
+    line.taskId    = QStringLiteral("m1");
+    line.sourceTag = QStringLiteral("monitor");
+    line.kind      = QStringLiteral("monitor_line");
+    line.content   = QStringLiteral("first\nlast <line>");
+    json history   = json::array();
+    for (const QSocTaskEvent &event : {done, line})
+        history.push_back(
+            {{"role", "user"},
+             {"content", QSocTaskEventQueue::formatTaskNotification(event).toStdString()},
+             {"_qsoc_origin", {{"kind", "task_notification"}}}});
+    Replay        replay(history);
+    const QString text = replay.view().toPlainText();
+    for (const QSocTaskEvent &event : {done, line}) {
+        const QString shown
+            = QStringLiteral("(task: %1)").arg(QSocTaskEventQueue::summaryLine(event));
+        QVERIFY2(text.contains(shown), qPrintable(text));
+    }
+    QVERIFY(!text.contains(QStringLiteral("<task-notification>")));
+}
+
+void Test::rendersShellCommandResults()
+{
+    const QString result
+        = QSocShellCommandMessage::resultText(0, 10, QStringLiteral("a < b\x1b]52;c;aGk=\x07\n"));
+    Replay replay(
+        json::array(
+            {QSocShellCommandMessage::message(QStringLiteral("echo \"a\" | cat"), result, false)}));
+    const QString text = replay.text();
+    QVERIFY2(text.contains(QStringLiteral("!echo \"a\" | cat")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Exit code: 0")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("a < b")), qPrintable(text));
+    QVERIFY2(text.contains(QSocShellCommandMessage::recordedHint()), qPrintable(text));
+    QVERIFY(!replay.view().toAnsi(100).contains(QStringLiteral("\x1b]52")));
+    QVERIFY(!text.contains(QStringLiteral("<user_shell_command>")));
+}
+
+/* Counterexample: cmd output kept its CRLF, so the model read different
+ * text for the same command on Windows. */
+void Test::shellResultLinesEndInLf()
+{
+    QCOMPARE(
+        QSocShellCommandMessage::resultText(0, 10, QStringLiteral("a\r\nb\rc\r\n")),
+        QStringLiteral("Exit code: 0\nDuration: 0.01 seconds\nOutput:\na\nb\rc\n"));
 }
 
 void Test::buildsTheTodoPaneFromTheLatestList()

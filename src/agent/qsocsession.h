@@ -126,6 +126,9 @@ public:
     /** @brief Install a guard that must succeed immediately before any disk write. */
     void setWriteBarrier(std::function<bool()> barrier);
 
+    /** @brief Run that guard now: lock the session and bind its storage. */
+    bool prepareWrite() const;
+
     /**
      * @brief Append a single OpenAI-style message to the session JSONL.
      * @details On the first call, any buffered meta entries are flushed
@@ -269,7 +272,6 @@ public:
     static QString generateId();
 
 private:
-    bool prepareWrite() const;
     bool flushPendingMeta();
     bool appendRecord(const nlohmann::json &line);
     bool writeFreshPayload(const QByteArray &payload);

@@ -29,7 +29,7 @@ const QRegularExpression &tagPattern()
     static const QRegularExpression pattern(
         QStringLiteral(
             "<(?=\\s*/?\\s*(?:system[-_]reminder|approved[-_]plan|task[-_]notification"
-            "|goal[-_]context|recalled[-_]memory)(?![\\w-]))"),
+            "|goal[-_]context|recalled[-_]memory|user[-_]shell[-_]command)(?![\\w-]))"),
         QRegularExpression::CaseInsensitiveOption);
     return pattern;
 }

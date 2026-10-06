@@ -17,6 +17,7 @@
 #include "agent/protocol/qsocagentoptions.h"
 #include "agent/protocol/qsocagentprotocol.h"
 #include "agent/protocol/qsocagentruntimeevent.h"
+#include "agent/protocol/qsocmessagemarkup.h"
 #include "cli/qagenthistorysearch.h"
 #include "cli/qagentinputmonitor.h"
 #include "cli/qsocexternaleditor.h"
@@ -227,7 +228,10 @@ bool QSocCliWorker::runAgentClientLoop(
             renderer.replaceHistory(messages);
             history.clear();
             for (const auto &message : messages) {
-                if (QSocMessageAuthority::isUserRequest(message) && message.contains("content")
+                if (const auto shell = QSocShellCommandMessage::parse(message))
+                    history.append(QLatin1Char('!') + shell->command);
+                else if (
+                    QSocMessageAuthority::isUserRequest(message) && message.contains("content")
                     && message["content"].is_string())
                     history.append(QString::fromStdString(message["content"].get<std::string>()));
             }
@@ -681,8 +685,8 @@ bool QSocCliWorker::runAgentClientLoop(
             compositor.render();
             return;
         }
-        /* A prompt echoes when the runtime adds it to the history. */
-        if (command) {
+        /* A prompt or `!` line echoes when the runtime takes it. */
+        if (command && !trimmed.startsWith('!')) {
             QSocAgentRuntimeEvent echo;
             echo.kind = QSocAgentRuntimeEvent::Kind::UserMessage;
             echo.text = text;

@@ -475,7 +475,8 @@ QSocRemoteJobStart startRemoteJob(
     return start;
 }
 
-QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &command)
+QString runBoundRemoteShellEscape(
+    QSocRemoteConnection *conn, const QString &command, std::optional<int> *exitCode)
 {
     if (conn == nullptr || !conn->isUsable()) {
         return sessionRefusal(conn) + QLatin1Char('\n');
@@ -483,10 +484,17 @@ QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &com
 
     constexpr int      kRemoteShellEscapeMs = 30 * 1000;
     QSocSshExec        exec(*conn->session());
-    const QSocMachine &host = conn->host();
+    const QSocMachine &host   = conn->host();
+    const auto         report = [exitCode](const QSocSshExec::Result &result) {
+        const bool exited = !result.transportDead && !result.timedOut && !result.aborted
+                            && result.exitSignal.isEmpty() && result.exitCode >= 0;
+        if (exitCode != nullptr && exited)
+            *exitCode = result.exitCode;
+        return shellEscapeText(result);
+    };
     if (machineShellEscapeMode(host) == QSocShellEscapeMode::Passthrough) {
         return remoteShellEscapePassthroughNotice() + QLatin1Char('\n')
-               + shellEscapeText(exec.run(command, kRemoteShellEscapeMs));
+               + report(exec.run(command, kRemoteShellEscapeMs));
     }
 
     QString cwd;
@@ -495,7 +503,7 @@ QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &com
         return QStringLiteral("Error: %1\n").arg(err);
     }
     const QSocRemoteExec request = remoteShellEscapeExec(host, cwd, command);
-    return shellEscapeText(exec.run(request.command, kRemoteShellEscapeMs, request.input))
+    return report(exec.run(request.command, kRemoteShellEscapeMs, request.input))
            + QStringLiteral("(shell: %1)\n").arg(shellEscapeShellName(host));
 }
 

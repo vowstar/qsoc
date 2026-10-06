@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsocsessionreplay.h"
+#include "agent/protocol/qsocmessagemarkup.h"
 #include "common/qsocmessageauthority.h"
 #include "common/qsoctoolresultstatus.h"
 
@@ -177,9 +178,14 @@ void Builder::user(const json &message)
     const auto content = message.find("content");
     if (QSocMessageAuthority::isRuntimeReminder(message) || content == message.end())
         return;
-    const QString text = textOf(*content);
-    if (!QSocMessageAuthority::isUserRequest(message) || text.startsWith(kNotification)) {
-        push(Kind::TaskNotification, text);
+    const QString text  = textOf(*content);
+    const auto    shell = QSocShellCommandMessage::events(message);
+    if (!shell.isEmpty()) {
+        endTurn();
+        out.append(shell);
+    } else if (!QSocMessageAuthority::isUserRequest(message) || text.startsWith(kNotification)) {
+        const auto fields = QSocTaskNotificationText::parse(text);
+        push(Kind::TaskNotification, fields ? QSocTaskNotificationText::summaryLine(*fields) : text);
     } else if (text.startsWith(kSummaryPrefix)) {
         endTurn();
         push(Kind::Compacted, {}).json = {
