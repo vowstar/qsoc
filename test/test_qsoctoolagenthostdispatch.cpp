@@ -6,14 +6,18 @@
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocagentmailbox.h"
 #include "agent/qsocdispatchpolicy.h"
+#include "agent/qsocmemorymanager.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
+#include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/remote/qsocsshconfigparser.h"
 #include "agent/tool/qsoctoolagent.h"
+#include "agent/tool/qsoctoolmemory.h"
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
 #include "common/qsocinterrupt.h"
+#include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
 
@@ -105,7 +109,7 @@ public:
         return result;
     }
 
-    void enqueueToolCall(const QString &name)
+    void enqueueToolCall(const QString &name, const json &arguments = json::object())
     {
         const json chunk = {
             {"choices",
@@ -116,7 +120,8 @@ public:
                           {{{"index", 0},
                             {"id", "call_0"},
                             {"type", "function"},
-                            {"function", {{"name", name.toStdString()}, {"arguments", "{}"}}}}})}}},
+                            {"function",
+                             {{"name", name.toStdString()}, {"arguments", arguments.dump()}}}}})}}},
                    {"finish_reason", "tool_calls"}}})}};
         enqueueEventStream(chunk);
     }
@@ -240,6 +245,8 @@ private slots:
     void aResumedRunReturnsToItsAliasAndWorkspace();
     void aGrantedSshConfigAliasDispatchesWithAWorkspace();
     void aNamedWorkspaceMustBeAProjectDirectory();
+    void aDispatchedChildWritesItsHostsProjectMemory();
+    void aDispatchedForkListsItsHostsSkills();
 
 private:
     bool prepare();
@@ -279,6 +286,26 @@ private:
         profile.capability = QStringLiteral("loopback dispatch target");
         profile.target     = QString::fromLatin1(kAlias);
         return catalog->upsert(profile, /*allowOverwrite=*/true);
+    }
+
+    /* The key the dispatch target's project memory is stored under. */
+    QString dispatchTargetMemoryDir() const
+    {
+        AgentRemoteState state;
+        QString          error;
+        if (!connectAgentSshSession(QString::fromLatin1(kAlias), nullptr, &state, &error)) {
+            return {};
+        }
+        if (!prepareAgentRemoteWorkspace(m_workspace, &state, &error)) {
+            discardAgentRemoteState(&state);
+            return {};
+        }
+        QSocRemoteConnection conn;
+        if (!conn.adopt(std::move(state))) {
+            return {};
+        }
+        return QSocMemoryManager::remoteProjectMemoryDir(
+            conn.endpointIdentity(), conn.canonicalWorkspace());
     }
 
     /* A parent bound to a host that is not the dispatch target. */
@@ -884,6 +911,108 @@ void Test::aNamedWorkspaceMustBeAProjectDirectory()
 }
 
 } // namespace
+
+/* Counterexample: a child sent to another host wrote project memory into the
+ * main workspace's store, because the memory tools fell through to the main
+ * agent's registry. */
+void Test::aDispatchedChildWritesItsHostsProjectMemory()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const QString expected = dispatchTargetMemoryDir();
+    QVERIFY(!expected.isEmpty());
+
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueToolCall(
+        QStringLiteral("memory_write"),
+        json{
+            {"name", "dispatched-fact"},
+            {"type", "project"},
+            {"description", "written by the dispatched child"},
+            {"scope", "project"},
+            {"content", "the dispatch host keeps this"}});
+    llm.enqueueFinal(QStringLiteral("remembered"));
+
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    definitions.registerBuiltins();
+    QSocSubAgentTaskSource tasks;
+    QSocHostCatalog        catalog;
+    QVERIFY(registerHostB(&catalog));
+    QSocProjectManager project;
+    project.setProjectPath(m_project);
+    QSocMemoryManager mainMemory(nullptr, &project);
+    mainMemory.setRemoteWorkspace(
+        QStringLiteral("operator@parent-host"), QString::fromLatin1(kParentWorkspace));
+    QSocToolRegistry    registry;
+    QSocToolMemoryRead  memoryRead(nullptr, &mainMemory);
+    QSocToolMemoryWrite memoryWrite(nullptr, &mainMemory);
+    registry.registerTool(&memoryRead);
+    registry.registerTool(&memoryWrite);
+
+    const QSocAgentConfig config = parentOnItsOwnHost();
+    QSocAgent             parent(nullptr, &service, &registry, config);
+    QSocToolAgent         tool(nullptr, &service, &registry, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+    tool.setMemoryManager(&mainMemory);
+    registry.registerTool(&tool);
+
+    const QString raw = registry.executeTool(QStringLiteral("agent"), spawnArgs());
+    QCOMPARE(
+        QString::fromStdString(json::parse(raw.toStdString()).value("status", std::string())),
+        QStringLiteral("ok"));
+    QCOMPARE(llm.requestCount(), 2);
+    QVERIFY2(
+        QFile::exists(expected + QStringLiteral("/dispatched-fact.md")),
+        qPrintable(QStringLiteral("not under the dispatch host's store %1").arg(expected)));
+    QVERIFY2(
+        !QFile::exists(mainMemory.projectMemoryDir() + QStringLiteral("/dispatched-fact.md")),
+        "the child wrote into the main workspace's memory");
+}
+
+/* Counterexample: a fork sent to another host had no skill listing at all, so
+ * the project skills of the workspace it works in went unseen. */
+void Test::aDispatchedForkListsItsHostsSkills()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const QString skillDir = m_workspace + QStringLiteral("/.qsoc/skills/hostskill");
+    QVERIFY(QDir().mkpath(skillDir));
+    QFile skill(skillDir + QStringLiteral("/SKILL.md"));
+    QVERIFY(skill.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    skill.write("---\nname: hostskill\ndescription: Dispatch host skill sentinel\n---\nbody\n");
+    skill.close();
+
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueFinal(QStringLiteral("done"));
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    QSocSubAgentTaskSource      tasks;
+    QSocToolRegistry            registry;
+    QSocHostCatalog             catalog;
+    QVERIFY(registerHostB(&catalog));
+    auto config         = parentOnItsOwnHost();
+    config.skillListing = QStringLiteral("Parent skill sentinel");
+    QSocAgent     parent(nullptr, &service, &registry, config);
+    QSocToolAgent tool(nullptr, &service, &registry, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+    registry.registerTool(&tool);
+    auto args             = spawnArgs();
+    args["subagent_type"] = "fork";
+    const auto result     = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(result.value("status", std::string()), std::string("ok"));
+
+    const QString prompt = systemPromptOf(llm, 0);
+    QVERIFY2(prompt.contains(QStringLiteral("Dispatch host skill sentinel")), qPrintable(prompt));
+    QVERIFY(!prompt.contains(QStringLiteral("Parent skill sentinel")));
+    QDir(m_workspace + QStringLiteral("/.qsoc")).removeRecursively();
+}
 
 QSOC_TEST_MAIN(Test)
 #include "test_qsoctoolagenthostdispatch.moc"

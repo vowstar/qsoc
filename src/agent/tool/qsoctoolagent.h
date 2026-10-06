@@ -240,8 +240,9 @@ private:
          * so the whole tool tree is gone before the connection those tools
          * resolve through. */
         std::unique_ptr<QObject> owner;
-        /* Handle into owner's tree, not a second owner. */
-        QSocToolRegistry *registry = nullptr;
+        /* Handles into owner's tree, not second owners. */
+        QSocToolRegistry  *registry = nullptr;
+        QSocMemoryManager *memory   = nullptr; /* this binding's project memory */
         /* The children a cwd change fans out to. Shared so the observer
          * installCwdFanout puts on conn and every bindChildCwd name one list. */
         CwdFanout cwdChildren = std::make_shared<QList<QPointer<QSocAgent>>>();
@@ -257,13 +258,13 @@ private:
     class HostBindingHold : public QObject
     {
     public:
-        HostBindingHold(QObject *parent, std::shared_ptr<HostBinding> binding)
+        HostBindingHold(QObject *parent, std::shared_ptr<void> binding)
             : QObject(parent)
             , binding_(std::move(binding))
         {}
 
     private:
-        std::shared_ptr<HostBinding> binding_;
+        std::shared_ptr<void> binding_;
     };
 
     /**
@@ -300,6 +301,17 @@ private:
     QSocDispatchPolicy           dispatchPolicy_;
 
     QMap<QString, std::shared_ptr<HostBinding>> hostCache_;
+
+    /* What a child sent to this machine from a remote main agent runs on:
+     * the local registry with memory tools over the local project store. */
+    struct LocalBinding
+    {
+        std::unique_ptr<QObject> owner;
+        QSocToolRegistry        *registry = nullptr;
+        QSocMemoryManager       *memory   = nullptr;
+    };
+    std::shared_ptr<LocalBinding> localBinding_;
+    std::shared_ptr<LocalBinding> localBinding();
 };
 
 #endif /* QSOCTOOLAGENT_H */

@@ -261,12 +261,22 @@ goal:
   seconds_used: 412
   created_at: 2026-05-16T22:00:00+08:00
   updated_at: 2026-05-16T22:06:52+08:00
+  binding:
+    target: sim1
+    workspace: /work/proj
 ```
 
 Status values: `active`, `paused`, `budget_limited`, `complete`. The
 runtime auto-trips `budget_limited` when `tokens_used` reaches
 `token_budget`; `complete` is terminal and drops the record so a fresh
 goal can be set without an extra clear step.
+
+A goal belongs to the binding it was set on: this machine (empty `target`
+and `workspace`), or the `/ssh` alias and remote workspace. While another
+binding is live, the goal does not auto-continue. The first turn that would
+continue it prints `Goal paused: it was set on <binding> ...`, and `/goal`
+adds `(waits for <binding>)`. It continues when its binding is live again. A
+`goal.yml` without `binding` continues on every binding.
 
 ==== Lifecycle
 
@@ -1157,7 +1167,9 @@ workspace: `<user root>/remote-memory/<key>/`, where `<key>` is derived from
 the SSH endpoint (user and host key) and the workspace path. Only the user
 can read the directory and its files. Nothing is written to the remote host.
 Recall, extraction and consolidation use the same store, and `/local` returns
-to `<project>/.qsoc/memory/`. Project memory that earlier versions saved
+to `<project>/.qsoc/memory/`. A sub-agent uses the store of the workspace it
+runs on: a child dispatched with `host` uses that workspace's store, and a
+child sent to `local` from a remote session uses `<project>/.qsoc/memory/`. Project memory that earlier versions saved
 during remote sessions stays in the local project's `.qsoc/memory/` and is
 not shown in remote mode.
 
@@ -1371,7 +1383,7 @@ until the service exits. Querying them makes no model request and does not
 add anything to the conversation.
 
 
-Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, under the same rules as local project instructions (see @agent-system-prompt). Each file prints one line, for example `Loaded AGENTS.md from <target>:<workspace> (812 bytes)`, or the reason it did not load. The local project's instructions stay in the prompt, and its skills stay available next to the remote workspace's (see @agent-skills). Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
+Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP when bound and again on reconnect, under the same rules as local project instructions (see @agent-system-prompt). Each file prints one line, for example `Loaded AGENTS.md from <target>:<workspace> (812 bytes)`, or the reason it did not load. The local project's instructions stay in the prompt, and its skills stay available next to the remote workspace's (see @agent-skills). Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
 
 === Definitions
 <agent-subagents-defs>
@@ -1424,7 +1436,9 @@ group with the offending path.
     [`inject_memory`],
     [`true` adds the auto-memory store. Default `false` for sub-agents.],
     [`inject_skills`],
-    [`true` adds the skill listing. Default `false`.],
+    [`true` adds the skill listing. Default `false`. With `host`, this
+     listing and a fork's hold the user skills and the project skills of that
+     workspace.],
     [`inject_project_md`],
     [`true` (default) injects `AGENTS.md`. `false` skips it.],
     [`model`],
@@ -1933,7 +1947,14 @@ untouched until its first durable job is added.
 )
 
 Each fire is queued as a normal user prompt; the agent processes it
-between turns of any in-flight conversation. If another qsoc session
+between turns of any in-flight conversation.
+
+A job belongs to the binding it was added on (this machine, or the `/ssh`
+alias and remote workspace) and stores it in `loops.json`. A job that comes
+due while another binding is live does not fire. One warning names it,
+`Loop <id> waits: it was scheduled on <binding> ...`, and the job fires once
+when its binding is live again. `/loop list` adds `(on <binding>)`. A job
+saved without a binding fires on every binding. If another qsoc session
 already holds the loop lock, `/loop add/stop/clear` reports the conflict
 and exits without modifying state.
 
@@ -1949,6 +1970,10 @@ The system prompt is composed from:
   its content. Missing files add nothing. In remote mode the local project's
   files come first and the remote workspace's files follow, and the prompt
   says that the remote workspace's instructions win where the two conflict.
+- *Environment*: model, operating system and shell, working directory, and
+  `Git repository: yes` when the project is in a git work tree. In remote
+  mode the remote workspace is checked through the remote shell each time the
+  link is made.
 - *Memory*: entries from the auto-memory store (see `memory_read` /
   `memory_write`), capped by `agent.memory_max_chars`
 - *Skill listing*: names and descriptions of installed skills so the agent
@@ -2008,6 +2033,37 @@ the project prints `Auto-connecting <target>` and reconnects without
 showing the browser or asking about an unknown host key. If that fails,
 a warning is printed and the session stays local. A run with `-q`,
 `--ssh`, or `--workspace` never auto-connects.
+
+=== Resuming a Remote Session
+<agent-remote-resume>
+
+A session records the binding of each run. When `/resume`, `--resume` or
+`--continue` opens a session whose last run was on a remote workspace that is
+not the live binding, an interactive frontend asks:
+
+#figure(
+  align(center)[#table(
+    columns: (0.4fr, 1fr),
+    align: (auto, left),
+    table.header([Choice], [Effect]),
+    table.hline(),
+    [Rebind to `<alias>:<workspace>`],
+    [Connects that workspace as `/ssh` does, then opens the session.],
+    [Continue here],
+    [Opens the session on the live binding.],
+    [Cancel the resume],
+    [Keeps the current session.],
+  )],
+  caption: [RESUME ON ANOTHER BINDING],
+  kind: table,
+)
+
+Without a menu, for example with `-q`, the session opens on the live binding
+and a warning names both bindings. Every tool call then ends the turn with
+the same text until `/ssh` or `/local` chooses a binding. Remote paths are
+never sent to local tools. `--ssh <alias> --workspace <dir> --resume <id>`
+opens the session on its binding directly. A choice made when resuming
+replaces the startup auto-connect.
 
 === Writable Root and Symlinks
 <agent-remote-writable>
@@ -2109,7 +2165,9 @@ telling the agent to verify remote state before acting: re-read any file it
 means to edit, check named background jobs, and never re-run a command whose
 effect it has not confirmed. Believed file contents are discarded on
 reconnect, which makes the read-before-overwrite guard refuse an edit until
-the file has actually been read again.
+the file has actually been read again. `AGENTS.md` and `AGENTS.local.md` are
+read again on reconnect; when they changed, the turn-ending notice says so
+and the next turn uses the new text.
 
 When the reconnect itself does not come up, the workspace stays unusable and
 you reconnect with `/ssh` yourself.
@@ -2748,8 +2806,11 @@ Common payload fields:
     [`prompt`],           [User prompt text, for `user_prompt_submit` only.],
     [`final_content`],    [Final assistant content, for `stop` only.],
     [`cwd`],              [Local working directory at fire time.],
+    [`project_dir`],      [Local project directory; the launch directory
+                           when there is no project.],
     [`remote`],           [Present only when the agent is in remote mode;
-                           carries `display`, `workspace`, `cwd`.],
+                           carries `target` (the alias the binding was made
+                           by), `display`, `workspace`, `cwd`.],
   ),
   caption: [HOOK PAYLOAD FIELDS],
   kind: table,

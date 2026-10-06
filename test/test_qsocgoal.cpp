@@ -75,6 +75,42 @@ private slots:
         QCOMPARE(reload.current()->status, QSocGoalStatus::Active);
     }
 
+    void aGoalKeepsTheBindingItWasSetOn()
+    {
+        QTemporaryDir              dir;
+        const QSocWorkspaceBinding box{QStringLiteral("box"), QStringLiteral("/work/a")};
+        QSocGoalCatalog            catalog;
+        catalog.load(dir.path());
+        catalog.setBinding(box);
+        QVERIFY(catalog.create(QStringLiteral("port the bus"), 0, nullptr));
+        QVERIFY(!catalog.foreignBinding().has_value());
+        catalog.setBinding({});
+        QVERIFY(catalog.foreignBinding() == box);
+
+        QSocGoalCatalog reload;
+        reload.load(dir.path());
+        QVERIFY(reload.current()->binding == box);
+        QVERIFY(reload.foreignBinding() == box);
+        reload.setBinding(box);
+        QVERIFY(!reload.foreignBinding().has_value());
+    }
+
+    /* A goal file written before bindings belongs to every binding. */
+    void aGoalWithoutABindingIsNeverForeign()
+    {
+        QTemporaryDir dir;
+        QVERIFY(QDir(dir.path()).mkpath(QStringLiteral(".qsoc")));
+        QFile file(dir.filePath(QStringLiteral(".qsoc/goal.yml")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("goal:\n  id: old\n  objective: legacy goal\n  status: active\n");
+        file.close();
+        QSocGoalCatalog catalog;
+        catalog.load(dir.path());
+        QVERIFY(!catalog.current()->binding.has_value());
+        catalog.setBinding({QStringLiteral("box"), QStringLiteral("/work/a")});
+        QVERIFY(!catalog.foreignBinding().has_value());
+    }
+
     void createRefusesWhenActive()
     {
         QTemporaryDir   dir;

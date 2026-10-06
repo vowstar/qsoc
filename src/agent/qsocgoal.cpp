@@ -42,7 +42,7 @@ QByteArray emitYaml(const YAML::Node &node)
     return payload;
 }
 
-QSocGoal makeGoal(const QString &objective, int tokenBudget)
+QSocGoal makeGoal(const QString &objective, int tokenBudget, const QSocWorkspaceBinding &binding)
 {
     QSocGoal goal;
     goal.id          = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -51,6 +51,7 @@ QSocGoal makeGoal(const QString &objective, int tokenBudget)
     goal.tokenBudget = tokenBudget > 0 ? tokenBudget : 0;
     goal.createdAt   = QDateTime::currentDateTime();
     goal.updatedAt   = goal.createdAt;
+    goal.binding     = binding;
     return goal;
 }
 
@@ -150,6 +151,11 @@ void QSocGoalCatalog::load(const QString &projectDir)
             goal.updatedAt
                 = QDateTime::fromString(stds(node["updated_at"].as<std::string>("")), Qt::ISODate);
         }
+        if (node["binding"] && node["binding"].IsMap()) {
+            goal.binding = QSocWorkspaceBinding{
+                stds(node["binding"]["target"].as<std::string>("")),
+                stds(node["binding"]["workspace"].as<std::string>(""))};
+        }
         if (goal.objective.isEmpty()) {
             return;
         }
@@ -198,6 +204,12 @@ bool QSocGoalCatalog::writeYaml(QString *errorMessage)
         }
         if (goal.updatedAt.isValid()) {
             node["updated_at"] = asStd(goal.updatedAt.toString(Qt::ISODate));
+        }
+        if (goal.binding.has_value()) {
+            YAML::Node binding(YAML::NodeType::Map);
+            binding["target"]    = asStd(goal.binding->target);
+            binding["workspace"] = asStd(goal.binding->workspace);
+            node["binding"]      = binding;
         }
         root["goal"] = node;
     }
@@ -274,7 +286,7 @@ bool QSocGoalCatalog::create(const QString &objective, int tokenBudget, QString 
         return false;
     }
 
-    const QSocGoal goal = makeGoal(trimmed, tokenBudget);
+    const QSocGoal goal = makeGoal(trimmed, tokenBudget, binding_);
     current_            = goal;
 
     if (!writeYaml(errorMessage)) {
@@ -305,7 +317,7 @@ bool QSocGoalCatalog::replace(const QString &newObjective, int tokenBudget, QStr
     }
 
     const QSocGoal previous    = *current_;
-    const QSocGoal replacement = makeGoal(trimmed, tokenBudget);
+    const QSocGoal replacement = makeGoal(trimmed, tokenBudget, binding_);
     current_                   = replacement;
     if (!writeYaml(errorMessage)) {
         current_ = previous;
@@ -505,3 +517,16 @@ bool QSocGoalCatalog::setTokenBudget(int newBudget, QString *errorMessage)
 }
 
 #include "moc_qsocgoal.cpp"
+
+void QSocGoalCatalog::setBinding(const QSocWorkspaceBinding &binding)
+{
+    binding_ = binding;
+}
+
+std::optional<QSocWorkspaceBinding> QSocGoalCatalog::foreignBinding() const
+{
+    if (!current_.has_value() || !current_->binding.has_value() || *current_->binding == binding_) {
+        return std::nullopt;
+    }
+    return current_->binding;
+}

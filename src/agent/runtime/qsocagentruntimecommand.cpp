@@ -591,6 +591,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
     }
 
     if (cmd == QStringLiteral("/local")) {
+        d->staleBinding.reset();
         if (!isRemote()) {
             emitOutput(QStringLiteral("Already in local mode.\n"));
             return true;
@@ -616,6 +617,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             emitOutput(error + QStringLiteral("\n"));
             return true;
         }
+        d->staleBinding.reset();
         emitOutput(QStringLiteral("Connected. Remote workspace: %1\n").arg(remoteWorkspace()));
         return true;
     }
@@ -664,8 +666,13 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
                     "  /goal clear                drop the active goal\n"));
                 return true;
             }
-            QString line = QStringLiteral("Goal [%1]: %2\n")
-                               .arg(qSocGoalStatusToString(cur->status), cur->objective);
+            const auto foreign = d->goalCatalog->foreignBinding();
+            QString line = QStringLiteral("Goal [%1]: %2%3\n")
+                               .arg(
+                                   qSocGoalStatusToString(cur->status),
+                                   cur->objective,
+                                   foreign ? QStringLiteral(" (waits for %1)").arg(foreign->label())
+                                           : QString());
             emitOutput(line);
             return true;
         }
@@ -1028,13 +1035,16 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
                                                         : QStringLiteral("once");
                     const QString where = job.durable ? QStringLiteral("disk")
                                                       : QStringLiteral("sess");
-                    emitOutput(QStringLiteral("  %1  %2  %3 %4  next %5  %6\n")
+                    const QString on = job.binding
+                                           ? QStringLiteral("  (on %1)").arg(job.binding->label())
+                                           : QString();
+                    emitOutput(QStringLiteral("  %1  %2  %3 %4  next %5  %6%7\n")
                                    .arg(job.id, -8)
                                    .arg(QSocCron::cronToHuman(job.cron), -16)
                                    .arg(kind, -4)
                                    .arg(where, -4)
                                    .arg(eta, -5)
-                                   .arg(promptSummary));
+                                   .arg(promptSummary, on));
                 }
             }
             return true;

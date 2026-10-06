@@ -17,6 +17,7 @@
 #include "agent/protocol/qsocagentoptions.h"
 #include "agent/protocol/qsocagentruntimeevent.h"
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocworkspacebinding.h"
 
 #include <nlohmann/json.hpp>
 
@@ -634,6 +635,18 @@ private:
         const QString &connectString, bool unattended, AgentRemoteState *staged, QString *error);
     void installRemoteTools();
     void rememberRemoteBinding(const QString &target);
+
+    /* Workspace binding of project state */
+    enum class ResumeBinding : std::uint8_t { Keep, Rebind, Undecided, Cancel };
+    QSocWorkspaceBinding liveBinding() const;
+    bool                 isLiveBinding(const QSocWorkspaceBinding &binding) const;
+    void                 publishBinding();
+    QString              staleBindingText(const QSocWorkspaceBinding &recorded) const;
+    QString              workspaceFence();
+    bool                 goalBelongsHere();
+    std::optional<QSocWorkspaceBinding> foreignSessionBinding(const QString &sessionPath) const;
+    ResumeBinding                       chooseResumeBinding(const QSocWorkspaceBinding &recorded);
+    void applyResumeBinding(const QSocWorkspaceBinding &recorded, ResumeBinding choice);
 
     /* Remote workspace project files */
     QString remoteWorkspaceLabel() const;

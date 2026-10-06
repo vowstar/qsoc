@@ -4,10 +4,15 @@
 #ifndef QSOCLOOPSCHEDULER_H
 #define QSOCLOOPSCHEDULER_H
 
+#include "agent/qsocworkspacebinding.h"
+
 #include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QTimer>
+
+#include <optional>
 
 #include <memory>
 
@@ -54,6 +59,8 @@ public:
         bool    durable;     /* true=persist to loops.json; false=session-only */
         qint64  createdAt;   /* epoch ms */
         qint64  lastFiredAt; /* 0 if never fired */
+        /* Where it was scheduled; empty for a task written before bindings. */
+        std::optional<QSocWorkspaceBinding> binding;
     };
 
     static constexpr int kMaxJobs = 50;
@@ -139,6 +146,15 @@ public:
     static bool scheduledInputRequiresCliDispatch(const QString &input);
 
     /**
+     * @brief Record the workspace the session is bound to now.
+     * @details Tasks added afterwards belong to it. A due task that belongs
+     *          to another binding does not fire: it stays due, is reported
+     *          once through promptSkipped(), and fires when its binding is
+     *          live again.
+     */
+    void setBinding(const QSocWorkspaceBinding &binding);
+
+    /**
      * @brief Parse the `/loop` argument string into (cron, prompt).
      * @details Rules (priority order):
      *          1. Leading token matches `^\d+[smhd]$` and converts cleanly
@@ -161,6 +177,9 @@ public:
 signals:
     /** @brief A task is due. The receiver must dispatch prompt verbatim. */
     void promptDue(const QString &prompt, const QString &jobId);
+
+    /** @brief A due task waits because it belongs to @p binding. */
+    void promptSkipped(const QString &jobId, const QSocWorkspaceBinding &binding);
 
     /**
      * @brief Emitted whenever the job list changes shape (add / remove /
@@ -218,6 +237,8 @@ private:
     StorageState               storageState_ = StorageState::MemoryOnly;
     std::unique_ptr<QLockFile> lockFile_;
     bool                       persistDegraded_ = false;
+    QSocWorkspaceBinding       binding_;
+    QSet<QString>              skipReported_;
 };
 
 #endif /* QSOCLOOPSCHEDULER_H */

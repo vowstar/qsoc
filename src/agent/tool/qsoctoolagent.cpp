@@ -18,6 +18,7 @@
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
 #include "agent/remote/qsocsshsession.h"
+#include "agent/tool/qsoctoolmemory.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
 #include "common/qsocinterrupt.h"
@@ -127,6 +128,34 @@ bool acceptNamedWorkspace(
     return true;
 }
 
+/* Memory tools in front of @p base, bound to @p memory, so a child on this
+ * registry reads and writes the project store of the binding it runs on. */
+void overlayMemoryTools(
+    QSocToolRegistry *registry, QSocToolRegistry *base, QObject *owner, QSocMemoryManager *memory)
+{
+    if (base == nullptr) {
+        return;
+    }
+    if (base->getTool(QStringLiteral("memory_read")) != nullptr) {
+        registry->registerTool(new QSocToolMemoryRead(owner, memory));
+    }
+    if (base->getTool(QStringLiteral("memory_write")) != nullptr) {
+        registry->registerTool(new QSocToolMemoryWrite(owner, memory));
+    }
+    if (base->getTool(QStringLiteral("memory_delete")) != nullptr) {
+        registry->registerTool(new QSocToolMemoryDelete(owner, memory));
+    }
+}
+
+/* The skill listing the skill tools of @p registry would show. */
+QString skillListingOf(QSocToolRegistry *registry)
+{
+    const auto *finder = dynamic_cast<QSocToolSkillFind *>(
+        registry != nullptr ? registry->getTool(QStringLiteral("skill_find")) : nullptr);
+    return finder != nullptr ? QSocToolSkillFind::formatPromptListing(finder->scanAllSkills())
+                             : QString();
+}
+
 } // namespace
 
 std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
@@ -210,8 +239,30 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
     binding->owner    = std::make_unique<QObject>();
     binding->registry = buildAgentRemoteRegistry(
         binding->owner.get(), &binding->conn, parentRegistry_, nullptr, llmService_);
+    binding->memory = new QSocMemoryManager(
+        binding->owner.get(),
+        memoryManager_ != nullptr ? memoryManager_->getProjectManager() : nullptr);
+    binding->memory
+        ->setRemoteWorkspace(binding->conn.endpointIdentity(), binding->conn.canonicalWorkspace());
+    overlayMemoryTools(binding->registry, parentRegistry_, binding->owner.get(), binding->memory);
     hostCache_.insert(cacheKey, binding);
     return binding;
+}
+
+std::shared_ptr<QSocToolAgent::LocalBinding> QSocToolAgent::localBinding()
+{
+    if (localBinding_ == nullptr) {
+        auto binding      = std::make_shared<LocalBinding>();
+        binding->owner    = std::make_unique<QObject>();
+        binding->registry = new QSocToolRegistry(binding->owner.get());
+        binding->memory   = new QSocMemoryManager(
+            binding->owner.get(),
+            memoryManager_ != nullptr ? memoryManager_->getProjectManager() : nullptr);
+        overlayMemoryTools(binding->registry, parentRegistry_, binding->owner.get(), binding->memory);
+        binding->registry->setFallback(parentRegistry_);
+        localBinding_ = binding;
+    }
+    return localBinding_;
 }
 
 void QSocToolAgent::installBindingRecovery(QSocRemoteConnection *conn)
@@ -561,9 +612,10 @@ void unbindConfigFromHost(const QSocAgentConfig &local, QSocAgentConfig *cfg)
     cfg->remoteWorkspace.clear();
     cfg->remoteWorkingDir.clear();
     cfg->remoteWritableDirs.clear();
-    cfg->remoteMachine      = QSocMachine{};
-    cfg->remoteProjectRules = {};
-    cfg->skillListing       = local.skillListing;
+    cfg->remoteMachine       = QSocMachine{};
+    cfg->remoteGitRepository = false;
+    cfg->remoteProjectRules  = {};
+    cfg->skillListing        = local.skillListing;
 }
 
 /* Where a child built from @p cfg runs: the alias it was bound by, the SSH
@@ -817,7 +869,8 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
      * parent's binding; when set, the child's registry, its config and its
      * workspace health all come from this pointer, so they cannot disagree
      * about which host answers for the child. */
-    std::shared_ptr<HostBinding> childHost;
+    std::shared_ptr<HostBinding>  childHost;
+    std::shared_ptr<LocalBinding> localHost;
     if (remoteHost) {
         QString       hostErr;
         const QString workspace = seed != nullptr ? seed->dispatch.workspace : plan->workspace;
@@ -838,7 +891,8 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
         }
         effectiveRegistry = childHost->registry;
     } else if (toLocal) {
-        effectiveRegistry = parentRegistry_;
+        localHost         = localBinding();
+        effectiveRegistry = localHost->registry;
     }
 
     /* When isolation == "worktree" and the parent is a git repo,
@@ -897,6 +951,9 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     }
     if (childHost != nullptr) {
         bindConfigToHost(&childHost->conn, hostArg, &childCfg);
+        if (isFork || def->injectSkills) {
+            childCfg.skillListing = skillListingOf(childHost->registry);
+        }
     }
     QSocSubAgentTaskSource::Dispatch placed = placementOf(childCfg);
     placed.model                            = request.model;
@@ -936,6 +993,9 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
          * rewind cannot leave the system prompt naming a directory host B has
          * left. */
         bindChildCwd(childHost->cwdChildren, child);
+    }
+    if (localHost != nullptr) {
+        new HostBindingHold(child, localHost);
     }
     /* planMode rides childCfg (copied from the parent). The shell safety
      * judge is a separate member, so hand it down too: a read-only
@@ -988,7 +1048,12 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
             return probeParent.isNull() ? QString() : probeParent->probeWorkspaceHealth();
         });
     }
-    if (isFork && worktreePath.isEmpty() && childHost == nullptr && !toLocal) {
+    QSocMemoryManager *placedMemory = childHost != nullptr   ? childHost->memory
+                                      : localHost != nullptr ? localHost->memory
+                                                             : nullptr;
+    if (placedMemory != nullptr && (isFork || def->injectMemory)) {
+        child->setMemoryManager(placedMemory);
+    } else if (isFork && worktreePath.isEmpty() && placedMemory == nullptr) {
         child->setMemoryManager(parentAgent_->getMemoryManager());
     } else if (memoryManager_ != nullptr && def != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);

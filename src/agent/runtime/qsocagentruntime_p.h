@@ -149,6 +149,12 @@ struct QSocAgentRuntime::Private
     QString               hostBindingDir;
     QString               remoteAlias; /* The target as the user named it. */
 
+    /* A resumed session's last binding while the live one differs and the
+     * user has not chosen; tool calls are refused until then. */
+    std::optional<QSocWorkspaceBinding> staleBinding;
+    bool                                resumeBindingChosen = false;
+    bool                                goalWaitNoticed     = false;
+
     /* Session state. */
     std::unique_ptr<QSocSession>          currentSession;
     std::unique_ptr<QSocFileHistory>      currentFileHistory;

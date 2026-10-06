@@ -431,6 +431,42 @@ private slots:
         QVERIFY(jobs.first().lastFiredAt > 0);
     }
 
+    /* A task written before bindings fires on every binding. */
+    void unboundTaskFiresOnAnyBinding()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(!writePastRecurringLoopFile(tmp.path(), "ping").isEmpty());
+        QSocLoopScheduler sched;
+        sched.setBinding({QStringLiteral("box"), QStringLiteral("/work/a")});
+        QSignalSpy spy(&sched, &QSocLoopScheduler::promptDue);
+        sched.setProjectDir(tmp.path());
+        QVERIFY(spy.wait(2500));
+    }
+
+    void aDurableTaskRecordsItsBinding()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QSocLoopScheduler sched;
+        sched.setProjectDir(tmp.path());
+        sched.setBinding({QStringLiteral("box"), QStringLiteral("/work/a")});
+        QVERIFY(
+            !sched.addJob(QStringLiteral("*/5 * * * *"), QStringLiteral("x"), true, true).isEmpty());
+        QFile file(QDir(tmp.path()).filePath(QStringLiteral(".qsoc/loops.json")));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QJsonObject binding = QJsonDocument::fromJson(file.readAll())
+                                        .object()
+                                        .value(QStringLiteral("tasks"))
+                                        .toArray()
+                                        .first()
+                                        .toObject()
+                                        .value(QStringLiteral("binding"))
+                                        .toObject();
+        QCOMPARE(binding.value(QStringLiteral("target")).toString(), QStringLiteral("box"));
+        QCOMPARE(binding.value(QStringLiteral("workspace")).toString(), QStringLiteral("/work/a"));
+    }
+
     void oneShotFire_eraseFromJobsAfterFire()
     {
         /* One-shot pinned to the very-recent past: fires once on the next

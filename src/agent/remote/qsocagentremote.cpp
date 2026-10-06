@@ -7,6 +7,7 @@
 #include "agent/qsocprojectrules.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocremotehost.h"
 #include "agent/remote/qsocremotejobwatcher.h"
 #include "agent/remote/qsocremoteworkspacefs.h"
 #include "agent/remote/qsocsftpclient.h"
@@ -33,7 +34,8 @@ void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *
     if (conn == nullptr || config == nullptr) {
         return;
     }
-    config->remoteMachine = conn->host();
+    config->remoteMachine       = conn->host();
+    config->remoteGitRepository = conn->workspaceIsGitRepository();
 }
 
 QList<QSocProjectRules::Read> loadAgentRemoteProjectRules(
@@ -683,6 +685,18 @@ namespace {
 
 constexpr int kReconnectProbeMs = 3000;
 
+bool probeWorkspaceGit(
+    QSocSshSession *session, const QSocMachine &host, const QString &root, int budgetMs)
+{
+    const QSocRemoteExec exec
+        = remoteCommandExec(host, root, QStringLiteral("git rev-parse --is-inside-work-tree"));
+    if (session == nullptr || !exec.isValid()) {
+        return false;
+    }
+    const auto result = QSocSshExec(*session).run(exec.command, budgetMs, exec.input);
+    return result.exitCode == 0 && result.stdoutBytes.trimmed() == "true";
+}
+
 /* Budget for the host probe when the adopt has no deadline of its own. */
 constexpr int kHostProbeMs = 10000;
 
@@ -822,6 +836,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
         verifyRemoteShellRoot(m_session, &m_host, m_canonicalWorkspace, probeMs);
     }
     m_path.setHostStyle(m_host.kind == QSocMachine::Kind::Windows, m_host.rootFrom, m_host.rootTo);
+    m_workspaceGit = probeWorkspaceGit(m_session, m_host, m_path.root(), probeMs);
     ++m_generation;
     m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_watcher->kick();
@@ -880,6 +895,7 @@ void QSocRemoteConnection::teardown()
     m_writableAnchors.clear();
     m_host                 = QSocMachine{};
     m_lastReconnectKeptCwd = false;
+    m_workspaceGit         = false;
     m_watcher->kick();
 }
 

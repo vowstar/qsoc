@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "agent/qsocworkspacebinding.h"
+
 #include <QDateTime>
 #include <QObject>
 #include <QString>
@@ -42,6 +44,8 @@ struct QSocGoal
     qint64         secondsUsed = 0;
     QDateTime      createdAt;
     QDateTime      updatedAt;
+    /** Where the goal was set; empty for a goal written before bindings. */
+    std::optional<QSocWorkspaceBinding> binding;
 };
 
 /**
@@ -151,6 +155,19 @@ public:
      */
     bool setTokenBudget(int newBudget, QString *errorMessage = nullptr);
 
+    /**
+     * @brief Record the workspace the session is bound to now.
+     * @details A goal created or replaced afterwards belongs to it.
+     */
+    void setBinding(const QSocWorkspaceBinding &binding);
+
+    /**
+     * @brief The binding the current goal belongs to, when it is not the
+     *        live one. Empty when there is no goal, the goal has no binding,
+     *        or it matches.
+     */
+    std::optional<QSocWorkspaceBinding> foreignBinding() const;
+
 signals:
     /**
      * @brief Fired after every successful state mutation. Listeners
@@ -165,6 +182,7 @@ private:
 
     std::optional<QSocGoal> current_;
     QString                 projectDir_;
+    QSocWorkspaceBinding    binding_;
 };
 
 #endif // QSOCGOAL_H

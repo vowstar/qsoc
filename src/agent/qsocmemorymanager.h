@@ -102,6 +102,9 @@ public:
 
     void setProjectManager(QSocProjectManager *projectManager);
 
+    /** @brief The project whose local memory directory this manager uses. */
+    QSocProjectManager *getProjectManager() const { return projectManager; }
+
     /**
      * @brief Keep project memory for a remote workspace on this machine.
      * @details The project scope moves to @ref remoteProjectMemoryDir for the

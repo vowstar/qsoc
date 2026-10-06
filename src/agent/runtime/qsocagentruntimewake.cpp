@@ -24,6 +24,8 @@ void QSocAgentRuntime::wireTaskBus()
             armWake();
     });
     d->agent->setGoalContinuationGate([this]() {
+        if (!goalBelongsHere())
+            return false;
         const int limit = d->agent->getConfig().backgroundWakeLimit;
         if (d->wake.origin == TurnOrigin::Wake && limit > 0 && d->wake.consecutive >= limit)
             return false;

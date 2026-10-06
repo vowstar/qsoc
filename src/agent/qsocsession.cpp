@@ -208,6 +208,11 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
         return false;
     }
 
+    if (context.contains("remote_alias")) {
+        if (!context["remote_alias"].is_string())
+            return false;
+        record->remoteAlias = QString::fromStdString(context["remote_alias"].get<std::string>());
+    }
     if (context.contains("tool_presentation")) {
         if (!context["tool_presentation"].is_string())
             return false;
@@ -459,6 +464,7 @@ bool QSocSession::appendRun(const RunRecord &record)
             {"plan_mode", record.planMode},
             {"remote_mode", record.remoteMode},
             {"remote_name", record.remoteName.toStdString()},
+            {"remote_alias", record.remoteAlias.toStdString()},
             {"project_root", record.projectRoot.toStdString()},
             {"working_dir", record.workingDir.toStdString()},
         };

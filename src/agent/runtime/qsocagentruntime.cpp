@@ -539,6 +539,7 @@ void QSocAgentRuntime::assembleInfrastructure(const QSocAgentRuntimeOptions &opt
     }
 
     wireAgentCallbacks();
+    d->agent->setWorkspaceHealthProbe([this] { return workspaceFence(); });
     wirePersistence();
     wireContextRestore();
     wireAuxiliaryServices();
@@ -1216,6 +1217,20 @@ void QSocAgentRuntime::wireAgentCallbacks()
 
     wireTaskBus();
 
+    /* A due loop task that belongs to another binding waits for it. */
+    connect(
+        d->loopScheduler,
+        &QSocLoopScheduler::promptSkipped,
+        this,
+        [this](const QString &jobId, const QSocWorkspaceBinding &binding) {
+            emitOutput(
+                QStringLiteral(
+                    "Loop %1 waits: it was scheduled on %2 and this session is on %3. It runs "
+                    "when %2 is bound again.\n")
+                    .arg(jobId, binding.label(), liveBinding().label()),
+                static_cast<int>(QSocAgentRuntimeStyle::Warning));
+        });
+
     /* Loop scheduler fires. */
     connect(
         d->loopScheduler,
@@ -1436,6 +1451,7 @@ void QSocAgentRuntime::Private::applyRunContext(
     record.planMode         = config.planMode;
     record.remoteMode       = config.remoteMode;
     record.remoteName       = config.remoteName;
+    record.remoteAlias      = config.remoteAlias;
     if (config.remoteMode) {
         record.projectRoot = remoteConn->path()->root();
         record.workingDir  = workingDir;
@@ -1564,7 +1580,20 @@ bool QSocAgentRuntime::openSessionById(const QString &sessionId)
             return false;
         }
     }
-    return openSessionInternal(resolved, false);
+    const auto recorded = foreignSessionBinding(
+        QDir(QSocSession::sessionsDir(projectPath)).filePath(resolved + ".jsonl"));
+    const auto choice = recorded ? chooseResumeBinding(*recorded) : ResumeBinding::Keep;
+    if (choice == ResumeBinding::Cancel) {
+        d->lastErrorText = QStringLiteral("Resume cancelled.");
+        return false;
+    }
+    if (!openSessionInternal(resolved, false)) {
+        return false;
+    }
+    if (recorded) {
+        applyResumeBinding(*recorded, choice);
+    }
+    return true;
 }
 
 bool QSocAgentRuntime::openSessionInternal(const QString &sessionId, bool fresh)
@@ -1632,6 +1661,7 @@ bool QSocAgentRuntime::openSessionInternal(const QString &sessionId, bool fresh)
     d->activeRunId.clear();
     d->recoveryRun.reset();
     d->recoveryRequiresInput = false;
+    d->staleBinding.reset();
     d->installSessionWriteBarrier(this, d->currentSession.get(), d->currentFileHistory.get());
     wireSessionTools();
     if (fresh) {

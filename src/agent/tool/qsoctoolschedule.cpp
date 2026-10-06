@@ -184,13 +184,15 @@ QString QSocToolScheduleList::execute(const json &arguments)
         if (promptSummary.size() > 60) {
             promptSummary = promptSummary.left(57) + QStringLiteral("...");
         }
-        out += QString("- %1  cron=\"%2\"  %3  %4  %5  next=%6  prompt=%7\n")
+        const QString on = job.binding ? QStringLiteral("  on=%1").arg(job.binding->label())
+                                       : QString();
+        out += QString("- %1  cron=\"%2\"  %3  %4  %5  next=%6%7  prompt=%8\n")
                    .arg(job.id)
                    .arg(job.cron)
                    .arg(QSocCron::cronToHuman(job.cron))
                    .arg(job.recurring ? QStringLiteral("recurring") : QStringLiteral("one-shot"))
                    .arg(job.durable ? QStringLiteral("durable") : QStringLiteral("session"))
-                   .arg(eta, promptSummary);
+                   .arg(eta, on, promptSummary);
     }
     return out;
 }

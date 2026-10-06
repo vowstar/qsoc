@@ -156,6 +156,7 @@ struct QSocAgentConfig
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
     QSocMachine remoteMachine; /* What the host probe learned; Unknown when not bound. */
+    bool        remoteGitRepository = false; /* The remote workspace is a git work tree. */
 
     struct RemoteProjectRules
     {

@@ -2572,6 +2572,7 @@ namespace {
 nlohmann::json buildRemoteSection(const QSocAgentConfig &cfg)
 {
     return nlohmann::json{
+        {"target", cfg.remoteAlias.toStdString()},
         {"display", cfg.remoteDisplay.toStdString()},
         {"workspace", cfg.remoteWorkspace.toStdString()},
         {"cwd", cfg.remoteWorkingDir.toStdString()},
@@ -2584,6 +2585,9 @@ nlohmann::json QSocAgent::buildHookEnvelope() const
 {
     nlohmann::json env = nlohmann::json::object();
     env["cwd"]         = QDir::currentPath().toStdString();
+    env["project_dir"] = (agentConfig.projectPath.isEmpty() ? QDir::currentPath()
+                                                            : agentConfig.projectPath)
+                             .toStdString();
     if (agentConfig.remoteMode) {
         env["remote"] = buildRemoteSection(agentConfig);
     }
@@ -2773,6 +2777,7 @@ QString QSocAgent::systemRebuildKey() const
            {"display", agentConfig.remoteDisplay.toStdString()},
            {"workspace", agentConfig.remoteWorkspace.toStdString()},
            {"remote_cwd", agentConfig.remoteWorkingDir.toStdString()},
+           {"git", agentConfig.remoteGitRepository},
            {"rules", qHash(agentConfig.remoteProjectRules.text)},
            {"identity", agentIdentity_.toStdString()},
            {"override", agentConfig.systemPromptOverride.toStdString()}};
@@ -3169,6 +3174,9 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
             envSection += QStringLiteral("- Model: ") + agentConfig.modelId + QStringLiteral("\n");
         }
         envSection += environmentShellLines(agentConfig);
+        if (agentConfig.remoteMode && agentConfig.remoteGitRepository) {
+            envSection += QStringLiteral("- Git repository: yes\n");
+        }
         if (!agentConfig.remoteMode && !agentConfig.projectPath.isEmpty()) {
             envSection += QStringLiteral("- Working directory: ") + agentConfig.projectPath
                           + QStringLiteral("\n");

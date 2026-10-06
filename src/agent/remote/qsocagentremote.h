@@ -295,6 +295,13 @@ public:
     const QSocMachine &host() const { return m_host; }
 
     /**
+     * @brief Whether the workspace is inside a git work tree.
+     * @details Asked once per adopt through the executor; false when the host
+     *          has none or git does not answer.
+     */
+    bool workspaceIsGitRepository() const { return m_workspaceGit; }
+
+    /**
      * @brief Override how an adopt probes the host.
      * @details Production installs none and gets @ref probeRemoteHost; a
      *          test installs one to decide what the host is.
@@ -524,6 +531,7 @@ private:
     int                                                           m_lastAttempts         = 0;
     int                                                           m_reconnectsUsed       = 0;
     bool                                                          m_lastReconnectKeptCwd = false;
+    bool                                                          m_workspaceGit         = false;
 };
 
 /**

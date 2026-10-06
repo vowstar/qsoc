@@ -124,6 +124,12 @@ void QSocLoopScheduler::loadFromDisk()
         job.durable     = true; /* Anything on disk is durable by definition. */
         job.createdAt   = obj.value(QStringLiteral("createdAt")).toVariant().toLongLong();
         job.lastFiredAt = obj.value(QStringLiteral("lastFiredAt")).toVariant().toLongLong();
+        if (obj.value(QStringLiteral("binding")).isObject()) {
+            const QJsonObject binding = obj.value(QStringLiteral("binding")).toObject();
+            job.binding               = QSocWorkspaceBinding{
+                binding.value(QStringLiteral("target")).toString(),
+                binding.value(QStringLiteral("workspace")).toString()};
+        }
         if (job.id.isEmpty() || job.prompt.isEmpty() || !QSocCron::isValid(job.cron)) {
             qDebug().noquote() << QStringLiteral("[loop] skipping malformed task entry");
             continue;
@@ -199,6 +205,11 @@ bool QSocLoopScheduler::persist()
         obj[QStringLiteral("recurring")]   = job.recurring;
         obj[QStringLiteral("createdAt")]   = QString::number(job.createdAt);
         obj[QStringLiteral("lastFiredAt")] = QString::number(job.lastFiredAt);
+        if (job.binding.has_value()) {
+            obj[QStringLiteral("binding")] = QJsonObject{
+                {QStringLiteral("target"), job.binding->target},
+                {QStringLiteral("workspace"), job.binding->workspace}};
+        }
         arr.append(obj);
     }
     QJsonObject root;
@@ -352,6 +363,7 @@ QString QSocLoopScheduler::addJob(
     job.durable     = durable;
     job.createdAt   = QDateTime::currentMSecsSinceEpoch();
     job.lastFiredAt = 0;
+    job.binding     = binding_;
     jobs_.append(job);
     if (durable && !persist()) {
         jobs_.removeLast();
@@ -441,12 +453,22 @@ void QSocLoopScheduler::tick()
      * /loop dispatch). One-shot tasks must be erased from jobs_ BEFORE
      * emit so a re-entrant tick cannot fire them again with lastFiredAt
      * advanced; recurring tasks update lastFiredAt to anchor next match. */
-    QList<QPair<QString, QString>> due;
-    QList<QString>                 oneShotsToErase;
-    bool                           anyDurableMutation = false;
+    QList<QPair<QString, QString>>              due;
+    QList<QString>                              oneShotsToErase;
+    QList<QPair<QString, QSocWorkspaceBinding>> skipped;
+    bool                                        anyDurableMutation = false;
     for (auto &job : jobs_) {
         if (job.durable && storageState_ == StorageState::NonOwner)
             continue;
+        if (job.binding.has_value() && *job.binding != binding_) {
+            const qint64 anchor = job.lastFiredAt > 0 ? job.lastFiredAt : job.createdAt;
+            const qint64 next   = QSocCron::nextRunMs(job.cron, anchor);
+            if (next != 0 && now >= next && !skipReported_.contains(job.id)) {
+                skipReported_.insert(job.id);
+                skipped.append(qMakePair(job.id, *job.binding));
+            }
+            continue;
+        }
         const qint64 anchor = job.lastFiredAt > 0 ? job.lastFiredAt : job.createdAt;
         const qint64 next   = QSocCron::nextRunMs(job.cron, anchor);
         if (next == 0 || now < next)
@@ -476,8 +498,16 @@ void QSocLoopScheduler::tick()
      * lastFiredAt updates alone. */
     if (!oneShotsToErase.isEmpty())
         emit jobsChanged();
+    for (const auto &pair : skipped)
+        emit promptSkipped(pair.first, pair.second);
     for (const auto &pair : due)
         emit promptDue(pair.first, pair.second);
+}
+
+void QSocLoopScheduler::setBinding(const QSocWorkspaceBinding &binding)
+{
+    binding_ = binding;
+    skipReported_.clear();
 }
 
 #include "moc_qsocloopscheduler.cpp"

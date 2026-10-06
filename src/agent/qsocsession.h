@@ -69,6 +69,7 @@ public:
         bool        planMode         = false;
         bool        remoteMode       = false;
         QString     remoteName;
+        QString     remoteAlias; /* The name the user bound by; empty in older records. */
         QString     projectRoot;
         QString     workingDir;
 

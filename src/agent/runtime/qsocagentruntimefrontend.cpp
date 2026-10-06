@@ -115,9 +115,13 @@ QString remoteWorkspaceHealth(QSocRemoteConnection *conn, QSocAgent *agent = nul
         return {};
     }
     if (outcome == QSocRemoteConnection::ReconnectOutcome::Reconnected) {
+        bool rulesChanged = false;
         if (agent != nullptr) {
-            auto cfg = agent->getConfig();
+            auto          cfg   = agent->getConfig();
+            const QString rules = cfg.remoteProjectRules.text;
             applyRemoteHostToConfig(conn, &cfg);
+            loadAgentRemoteProjectRules(conn, &cfg);
+            rulesChanged = cfg.remoteProjectRules.text != rules;
             agent->setConfig(cfg);
             /* A continuation, not a user request: a user_prompt_submit hook
              * that blocks would otherwise drop this silently and leave the
@@ -127,9 +131,14 @@ QString remoteWorkspaceHealth(QSocRemoteConnection *conn, QSocAgent *agent = nul
         return QStringLiteral(
                    "The SSH link was re-established after %1 attempt%2. Remote state has not been "
                    "observed since it broke, so this turn stops here and the next one starts by "
-                   "re-checking it.")
+                   "re-checking it.%3")
             .arg(conn->lastReconnectAttempts())
-            .arg(conn->lastReconnectAttempts() == 1 ? QString() : QStringLiteral("s"));
+            .arg(conn->lastReconnectAttempts() == 1 ? QString() : QStringLiteral("s"))
+            .arg(
+                rulesChanged ? QStringLiteral(
+                                   " The project instructions changed on the host and were "
+                                   "reloaded.")
+                             : QString());
     }
     QString text = conn->unusableText();
     switch (outcome) {
@@ -278,6 +287,9 @@ bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QS
 
 void QSocAgentRuntime::connectRememberedRemote()
 {
+    if (isRemote() || d->resumeBindingChosen) {
+        return;
+    }
     if (d->hostCatalog->projectNamesActive()) {
         emitOutput(
             QStringLiteral("Ignoring active: in %1. /ssh keeps the binding per user.\n")
@@ -540,15 +552,6 @@ void QSocAgentRuntime::installRemoteTools()
         QSocInterrupt::clearRequest();
         conn->resetReconnectBudget();
     });
-    d->agent->setWorkspaceHealthProbe([this] {
-        const QString         reason = remoteWorkspaceHealth(d->remoteConn, d->agent);
-        QSocAgentRuntimeEvent event;
-        event.kind = QSocAgentRuntimeEvent::Kind::RemoteChanged;
-        event.text = d->remoteConn->target();
-        event.flag = d->remoteConn->isUsable();
-        emit eventRaised(event);
-        return reason;
-    });
 
     QSocAgentRuntimeEvent event;
     event.kind      = QSocAgentRuntimeEvent::Kind::RemoteChanged;
@@ -557,8 +560,26 @@ void QSocAgentRuntime::installRemoteTools()
     event.secondary = d->remoteConn->workspace();
     event.at        = QDateTime::currentDateTimeUtc();
     emit eventRaised(event);
+    publishBinding();
     wireSessionTools();
     emit statusChanged();
+}
+
+QString QSocAgentRuntime::workspaceFence()
+{
+    if (d->staleBinding) {
+        return staleBindingText(*d->staleBinding);
+    }
+    if (!isRemote()) {
+        return {};
+    }
+    const QString         reason = remoteWorkspaceHealth(d->remoteConn, d->agent);
+    QSocAgentRuntimeEvent event;
+    event.kind = QSocAgentRuntimeEvent::Kind::RemoteChanged;
+    event.text = d->remoteConn->target();
+    event.flag = d->remoteConn->isUsable();
+    emit eventRaised(event);
+    return reason;
 }
 
 void QSocAgentRuntime::disconnectRemote()
@@ -567,7 +588,6 @@ void QSocAgentRuntime::disconnectRemote()
         return;
     }
     d->agent->setToolRegistry(d->localRegistry);
-    d->agent->setWorkspaceHealthProbe({});
     if (d->remoteRegistry != nullptr) {
         d->remoteRegistry->deleteLater();
         d->remoteRegistry = nullptr;
@@ -585,9 +605,10 @@ void QSocAgentRuntime::disconnectRemote()
         newCfg.remoteWorkspace.clear();
         newCfg.remoteWorkingDir.clear();
         newCfg.remoteWritableDirs.clear();
-        newCfg.remoteMachine      = QSocMachine{};
-        newCfg.remoteProjectRules = {};
-        newCfg.skillListing       = d->skillListing();
+        newCfg.remoteMachine       = QSocMachine{};
+        newCfg.remoteGitRepository = false;
+        newCfg.remoteProjectRules  = {};
+        newCfg.skillListing        = d->skillListing();
         d->agent->setConfig(newCfg);
     }
     reloadAgentDefinitions();
@@ -597,6 +618,7 @@ void QSocAgentRuntime::disconnectRemote()
     event.flag = false;
     event.at   = QDateTime::currentDateTimeUtc();
     emit eventRaised(event);
+    publishBinding();
     wireSessionTools();
     emit statusChanged();
 }
