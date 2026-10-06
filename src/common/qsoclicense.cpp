@@ -9,6 +9,12 @@ const QList<QSocLicense::Component> &QSocLicense::components()
 {
     static const QList<Component> list = {
         {"antlr4", "BSD-3-Clause", "https://github.com/antlr/antlr4", {"antlr4.txt"}, {}},
+        {"aws-lc",
+         "Apache-2.0 AND ISC",
+         "https://github.com/aws/aws-lc",
+         {"aws-lc.txt", "aws-lc-notice.txt"},
+         "New AWS-LC files are Apache-2.0 OR ISC. AWS-LC bundles fiat-crypto "
+         "under MIT and the jitterentropy library under BSD-3-Clause."},
         {"bigint", "Public domain", "http://mattmccutchen.net/bigint/", {"bigint.txt"}, {}},
         {"cmark-gfm", "BSD-2-Clause", "https://github.com/github/cmark-gfm", {"cmark-gfm.txt"}, {}},
         {"csv", "BSD-3-Clause", "https://github.com/d99kris/rapidcsv", {"csv.txt"}, {}},

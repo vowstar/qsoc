@@ -291,7 +291,7 @@ void Test::aRevokedKeyIsRefusedUnderEveryPolicy()
     QSOC_REQUIRE_SSHD(m_fixture);
     QFETCH(QString, policy);
     QVERIFY(writeConfig(policy));
-    const QByteArray hostKey  = slurp(m_fixture.root() + QStringLiteral("/host_rsa.pub"));
+    const QByteArray hostKey  = slurp(m_fixture.hostKeyPath() + QStringLiteral(".pub"));
     const QByteArray recorded = "@revoked * " + hostKey + hostEntryName() + ' ' + hostKey;
     QVERIFY(writeKnownHosts(recorded));
 

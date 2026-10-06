@@ -1996,7 +1996,7 @@ puts the change into the system prompt.
 <agent-remote>
 QSoC can drive a workspace on a remote host over SSH without installing
 anything on that host. The transport is `libssh2` linked statically against
-`mbedTLS 3.6 LTS` (shipped as git submodules).
+the AWS-LC `libcrypto` (shipped as git submodules).
 
 === Connecting
 <agent-remote-connect>
@@ -2277,6 +2277,32 @@ Authentication order:
 + Each `IdentityFile` from the config in order
 + If none configured, QSoC enumerates `~/.ssh/id_*` by filename and lets
   libssh2 try each key in turn
+
+#figure(
+  align(center)[#table(
+    columns: (0.32fr, 1fr),
+    align: (auto, left),
+    table.header([Item], [Supported]),
+    table.hline(),
+    [Host keys],
+    [ECDSA (NIST P-256, P-384, P-521), RSA (`rsa-sha2-512`,
+     `rsa-sha2-256`, `ssh-rsa`), Ed25519, in that order of preference.],
+    [Identity files],
+    [Ed25519, ECDSA and RSA, in OpenSSH or PEM format. The `.pub` file
+     next to the key is not needed.],
+    [Key exchange],
+    [`curve25519-sha256`, `ecdh-sha2-nistp256/384/521`,
+     `diffie-hellman-group-exchange-sha256`, `diffie-hellman-group16-sha512`,
+     `diffie-hellman-group18-sha512`, `diffie-hellman-group14-sha256`, and
+     the SHA-1 variants for old servers.],
+  )],
+  caption: [SSH ALGORITHMS],
+  kind: table,
+)
+
+Post-quantum key exchange (`mlkem768x25519-sha256`,
+`sntrup761x25519-sha512`) is not supported. A server that offers only those
+methods cannot be reached.
 
 The agent is tried for `ProxyJump` hops too: QSoC speaks the agent protocol on
 its own socket, so a hop's keys come from the local agent as usual.

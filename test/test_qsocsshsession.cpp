@@ -57,7 +57,7 @@ private slots:
         fixture.start();
         QSOC_REQUIRE_SSHD(fixture);
 
-        QFile publicKey(fixture.root() + QStringLiteral("/host_rsa.pub"));
+        QFile publicKey(fixture.hostKeyPath() + QStringLiteral(".pub"));
         QVERIFY(publicKey.open(QIODevice::ReadOnly));
         const QByteArray knownHost = QByteArrayLiteral("[127.0.0.1]:")
                                      + QByteArray::number(fixture.port()) + QByteArrayLiteral(" ")

@@ -64,7 +64,8 @@ constexpr char kHostKeyMethods[]
       "ecdsa-sha2-nistp521-cert-v01@openssh.com,"
       "rsa-sha2-512,rsa-sha2-256,"
       "rsa-sha2-512-cert-v01@openssh.com,rsa-sha2-256-cert-v01@openssh.com,"
-      "ssh-rsa,ssh-rsa-cert-v01@openssh.com";
+      "ssh-rsa,ssh-rsa-cert-v01@openssh.com,"
+      "ssh-ed25519,ssh-ed25519-cert-v01@openssh.com";
 
 void configureSessionMethods(LIBSSH2_SESSION *session)
 {

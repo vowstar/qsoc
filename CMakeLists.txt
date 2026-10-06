@@ -339,18 +339,46 @@ set(MBEDTLS_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/external/mbedtls/include")
 set(MBEDTLS_LIBRARIES    mbedcrypto)
 message(STATUS "Use local mbedtls library: ${MBEDTLS_LIBRARIES} ${MBEDTLS_INCLUDE_DIRS}")
 
-# LIBSSH2 (bundled, always static, mbedTLS backend)
-set(MBEDTLS_INCLUDE_DIR      "${MBEDTLS_INCLUDE_DIRS}" CACHE PATH     "libssh2 mbedtls include" FORCE)
-set(MBEDCRYPTO_LIBRARY       "${MBEDTLS_LIBRARIES}"    CACHE FILEPATH "libssh2 mbedtls lib"     FORCE)
-set(CRYPTO_BACKEND           "mbedTLS" CACHE STRING "libssh2 crypto backend"  FORCE)
-set(BUILD_SHARED_LIBS        OFF       CACHE BOOL   "libssh2 no shared"       FORCE)
+# AWS-LC (bundled, always static, libcrypto for the libssh2 OpenSSL backend)
+# Assembly needs NASM on MSVC and a single target on macOS; use C otherwise.
+if(MSVC OR CMAKE_OSX_ARCHITECTURES MATCHES ";")
+    set(OPENSSL_NO_ASM ON)
+endif()
+set(BUILD_SHARED_LIBS          OFF CACHE BOOL "static third-party libs"  FORCE)
+set(BUILD_TESTING              OFF CACHE BOOL "no third-party tests"     FORCE)
+set(BUILD_LIBSSL               OFF CACHE BOOL "aws-lc no libssl"         FORCE)
+set(BUILD_TOOL                 OFF CACHE BOOL "aws-lc no bssl tool"      FORCE)
+set(DISABLE_GO                 ON  CACHE BOOL "aws-lc pregenerated src"  FORCE)
+set(DISABLE_PERL               ON  CACHE BOOL "aws-lc pregenerated asm"  FORCE)
+set(ENABLE_SOURCE_MODIFICATION OFF CACHE BOOL "aws-lc read-only source"  FORCE)
+# aws-lc builds with -Werror; a new compiler or fortify level must not fail it.
+get_directory_property(QSOC_COMPILE_OPTIONS COMPILE_OPTIONS)
+if(NOT MSVC)
+    add_compile_options(-Wno-error)
+endif()
+# EXCLUDE_FROM_ALL also keeps it out of the install set: its headers and
+# pkg-config files would shadow a system OpenSSL in the same prefix.
+add_subdirectory(external/aws-lc EXCLUDE_FROM_ALL)
+set_directory_properties(PROPERTIES COMPILE_OPTIONS "${QSOC_COMPILE_OPTIONS}")
+set_target_properties(crypto PROPERTIES SYSTEM ON)
+# libssh2 exports its build tree, which needs crypto in a build-tree export.
+export(TARGETS crypto NAMESPACE AWS:: FILE "${CMAKE_CURRENT_BINARY_DIR}/aws-lc-targets.cmake")
+message(STATUS "Use local aws-lc library: crypto")
+
+# LIBSSH2 (bundled, always static, OpenSSL backend on AWS-LC)
+# cmake/openssl resolves find_package(OpenSSL) to AWS-LC, never the system.
+set(CRYPTO_BACKEND           "OpenSSL" CACHE STRING "libssh2 crypto backend"  FORCE)
+# Preset: its try_compile cannot link a target that is not built yet.
+set(HAVE_BORINGSSL           OFF       CACHE BOOL   "aws-lc is not boringssl" FORCE)
+set(QSOC_MODULE_PATH "${CMAKE_MODULE_PATH}")
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/openssl")
 set(BUILD_STATIC_LIBS        ON        CACHE BOOL   "libssh2 static"          FORCE)
 set(BUILD_EXAMPLES           OFF       CACHE BOOL   "libssh2 no examples"     FORCE)
-set(BUILD_TESTING            OFF       CACHE BOOL   "libssh2 no tests"        FORCE)
 set(LIBSSH2_BUILD_DOCS       OFF       CACHE BOOL   "libssh2 no docs"         FORCE)
 set(LIBSSH2_USE_PKGCONFIG    OFF       CACHE BOOL   "libssh2 no pkg-config"   FORCE)
 set(ENABLE_ZLIB_COMPRESSION  OFF       CACHE BOOL   "libssh2 no zlib"         FORCE)
-add_subdirectory(external/libssh2)
+add_subdirectory(external/libssh2 EXCLUDE_FROM_ALL)
+set(CMAKE_MODULE_PATH "${QSOC_MODULE_PATH}")
 target_compile_definitions(libssh2_static PRIVATE
     LIBSSH2_3DES_ENABLE
     LIBSSH2_HMAC_RIPEMD_ENABLE
@@ -527,6 +555,10 @@ target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_age
 target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}" "${MBEDTLS_INCLUDE_DIRS}")
 target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES} ${MBEDTLS_LIBRARIES})
 target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
+# A system libcrypto or libssh2 that Qt loads must never bind to these copies.
+if(UNIX AND NOT APPLE)
+    target_link_options(qsoc_agent INTERFACE "LINKER:--exclude-libs,libcrypto.a:libssh2.a")
+endif()
 target_compile_definitions(qsoc_agent PUBLIC QSOC_AGENT_STATIC_DEFINE)
 
 # The daemon: one process hosting agent sessions behind a unix socket.

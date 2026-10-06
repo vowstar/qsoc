@@ -519,6 +519,7 @@ jobs:
         test_qsocremotewritabledirs
         test_qsocsftp_loopback
         test_qsocsftpstranded
+        test_qsocsshcrypto
         test_qsocsshexecstatus
         test_qsocworkspacebinding
 
@@ -530,7 +531,7 @@ jobs:
       run: |
         set -o pipefail
         ctest --test-dir build -C ${{env.BUILD_TYPE}} --verbose \
-          -R '^test_qsoc(agentremoterecovery|agentruntimeremote|remoteexecabort|remoteguardafterreconnect|remotehostprobe|remotejobwatcher|remotetrust|remoteworkspacetools|remotewritabledirs|sftp_loopback|sftpstranded|sshexecstatus|workspacebinding)$' \
+          -R '^test_qsoc(agentremoterecovery|agentruntimeremote|remoteexecabort|remoteguardafterreconnect|remotehostprobe|remotejobwatcher|remotetrust|remoteworkspacetools|remotewritabledirs|sftp_loopback|sftpstranded|sshcrypto|sshexecstatus|workspacebinding)$' \
           2>&1 | tee loopback.log
         # QtTest exits 0 on a skip, so a case that never ran would read as a
         # pass. A skip here is a missing dependency or a fixture that would not
@@ -643,7 +644,7 @@ jobs:
         # POSIX-only (sshd path lookup, the password database, /bin/sh on the
         # target, POSIX signals), so Windows has no remote coverage. Excluded
         # by name: letting them skip would look green.
-        ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocgui(licensedialog|buseditorwindow|schematicsnapshot|prccontrollergrouping|prcnetlist|moduleeditorwindow|moduleeditormodels|schematicwindow)$|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocagentruntimeremote|test_qsocremoteguardafterreconnect|test_qsocremotehostprobe|test_qsocremotetrust|test_qsocremoteworkspacetools|test_qsocremotewritabledirs|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript|test_qsocremotejobwatcher|test_qsocremoteexecabort|test_qsocworkspacebinding" | Tee-Object -FilePath ctest.log
+        ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocgui(licensedialog|buseditorwindow|schematicsnapshot|prccontrollergrouping|prcnetlist|moduleeditorwindow|moduleeditormodels|schematicwindow)$|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocagentruntimeremote|test_qsocremoteguardafterreconnect|test_qsocremotehostprobe|test_qsocremotetrust|test_qsocremoteworkspacetools|test_qsocremotewritabledirs|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshcrypto|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript|test_qsocremotejobwatcher|test_qsocremoteexecabort|test_qsocworkspacebinding" | Tee-Object -FilePath ctest.log
         exit $LASTEXITCODE
 
     - name: Full Test report
@@ -799,7 +800,7 @@ jobs:
         find external -mindepth 1 -maxdepth 1 | sort | head -25
         echo
         echo "missing submodule check:"
-        for d in libssh2 cmark-gfm lexbor mbedtls slang; do
+        for d in aws-lc libssh2 cmark-gfm lexbor mbedtls slang; do
           if [ ! -d "external/$d" ]; then
             echo "MISSING: external/$d"
             exit 1

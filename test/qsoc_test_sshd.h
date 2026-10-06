@@ -67,6 +67,30 @@ public:
     /** @brief Offer a runtime-generated host certificate with the raw key. */
     void enableHostCertificate() { m_hostCertificate = true; }
 
+    /** @brief ssh-keygen arguments for the host key. Call before start(). */
+    void setHostKeyArgs(const QStringList &args) { m_hostKeyArgs = args; }
+
+    /**
+     * @brief Generate a client key with ssh-keygen @p args and authorize it.
+     * @details Call after start(); sshd reads authorized_keys per connection.
+     * @return The private key path, empty on failure.
+     */
+    QString addClientKey(const QString &name, const QStringList &args)
+    {
+        const QString keyPath = m_dir.path() + QLatin1Char('/') + name;
+        QFile         pub(keyPath + QStringLiteral(".pub"));
+        if (!runKeygen(m_keygen, keyPath, args) || !pub.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        const QByteArray line = pub.readAll();
+        pub.close();
+        QFile authorized(m_dir.path() + QStringLiteral("/authorized_keys"));
+        if (!authorized.open(QIODevice::Append) || authorized.write(line) != line.size()) {
+            return {};
+        }
+        return keyPath;
+    }
+
     /** @brief Bring up sshd. False unless state() becomes Ready. */
     bool start()
     {
@@ -79,12 +103,12 @@ public:
         } else if (!QFile::exists(sshd)) {
             sshd.clear();
         }
-        const QString keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
-        m_user               = loginName();
+        m_keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
+        m_user   = loginName();
         if (sshd.isEmpty()) {
             absent << QStringLiteral("sshd");
         }
-        if (keygen.isEmpty()) {
+        if (m_keygen.isEmpty()) {
             absent << QStringLiteral("ssh-keygen");
         }
         if (m_user.isEmpty()) {
@@ -100,20 +124,20 @@ public:
             return fail(QStringLiteral("temporary directory: %1").arg(m_dir.errorString()));
         }
         const QString root     = m_dir.path();
-        const QString hostKey  = root + QStringLiteral("/host_rsa");
+        const QString hostKey  = root + QStringLiteral("/host_key");
         const QString authKeys = root + QStringLiteral("/authorized_keys");
         const QString cfgPath  = root + QStringLiteral("/sshd_config");
         m_keyPath              = root + QStringLiteral("/client_rsa");
         m_workDir              = root + QStringLiteral("/work");
         QDir().mkpath(m_workDir);
 
-        if (!runKeygen(keygen, hostKey)) {
+        if (!runKeygen(m_keygen, hostKey, m_hostKeyArgs)) {
             return fail(QStringLiteral("could not generate the host key"));
         }
-        if (m_hostCertificate && !generateHostCertificate(keygen, root, hostKey)) {
+        if (m_hostCertificate && !generateHostCertificate(m_keygen, root, hostKey)) {
             return fail(QStringLiteral("could not generate the host certificate"));
         }
-        if (!runKeygen(keygen, m_keyPath)) {
+        if (!runKeygen(m_keygen, m_keyPath, kClientKeyArgs)) {
             return fail(QStringLiteral("could not generate the client key"));
         }
         QFile pub(m_keyPath + QStringLiteral(".pub"));
@@ -243,6 +267,7 @@ public:
     QString user() const { return m_user; }
     QString workDir() const { return m_workDir; }
     QString root() const { return m_dir.path(); }
+    QString hostKeyPath() const { return m_dir.path() + QStringLiteral("/host_key"); }
 
     /** @brief The sshd log, for diagnosing a handshake that failed. */
     QString log() const
@@ -358,22 +383,22 @@ private:
      * libssh2 build signs RSA pubkey auth reliably only from a classic
      * "BEGIN RSA PRIVATE KEY" file; an OpenSSH-format key aborts the
      * signature step after the server's PK_OK. */
-    static bool runKeygen(const QString &keygen, const QString &keyPath)
+    static inline const QStringList kClientKeyArgs = {
+        QStringLiteral("-t"),
+        QStringLiteral("rsa"),
+        QStringLiteral("-b"),
+        QStringLiteral("3072"),
+        QStringLiteral("-m"),
+        QStringLiteral("PEM"),
+    };
+
+    static bool runKeygen(const QString &keygen, const QString &keyPath, const QStringList &args)
     {
         QProcess proc;
         proc.start(
             keygen,
-            {QStringLiteral("-t"),
-             QStringLiteral("rsa"),
-             QStringLiteral("-b"),
-             QStringLiteral("3072"),
-             QStringLiteral("-m"),
-             QStringLiteral("PEM"),
-             QStringLiteral("-N"),
-             QString(),
-             QStringLiteral("-q"),
-             QStringLiteral("-f"),
-             keyPath});
+            QStringList(args) << QStringLiteral("-N") << QString() << QStringLiteral("-q")
+                              << QStringLiteral("-f") << keyPath);
         return proc.waitForStarted(5000) && proc.waitForFinished(15000)
                && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0
                && QFile::exists(keyPath);
@@ -383,7 +408,7 @@ private:
         const QString &keygen, const QString &root, const QString &hostKey)
     {
         const QString caKey = root + QStringLiteral("/host_ca");
-        if (!runKeygen(keygen, caKey)) {
+        if (!runKeygen(keygen, caKey, kClientKeyArgs)) {
             return false;
         }
         QProcess proc;
@@ -419,7 +444,9 @@ private:
     QString       m_user;
     QString       m_workDir;
     QString       m_logPath;
+    QString       m_keygen;
     QStringList   m_extraConfig;
+    QStringList   m_hostKeyArgs     = kClientKeyArgs;
     bool          m_hostCertificate = false;
     int           m_port            = 0;
     qint64        m_sshdPid         = 0;

@@ -2,6 +2,8 @@
     <qresource prefix="/license">
         <file alias="antlr4.txt">../external/antlr4/LICENSE.txt</file>
         <file alias="apache-2.0.txt">license/apache-2.0.txt</file>
+        <file alias="aws-lc-notice.txt">../external/aws-lc/NOTICE</file>
+        <file alias="aws-lc.txt">../external/aws-lc/LICENSE</file>
         <file alias="bigint.txt">license/bigint.txt</file>
         <file alias="cmark-gfm.txt">../external/cmark-gfm/COPYING</file>
         <file alias="csv.txt">../external/csv/LICENSE</file>

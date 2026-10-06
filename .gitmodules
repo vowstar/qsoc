@@ -49,3 +49,6 @@
 [submodule "external/z3"]
 	path = external/z3
 	url = https://github.com/Z3Prover/z3.git
+[submodule "external/aws-lc"]
+	path = external/aws-lc
+	url = https://github.com/aws/aws-lc.git
