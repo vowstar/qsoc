@@ -753,6 +753,128 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
 
 /* Private methods */
 
+std::optional<LLMModelConfig> QLLMService::parseModelEntry(const QString &id, const YAML::Node &node)
+{
+    try {
+        LLMModelConfig modelCfg;
+        modelCfg.id = id;
+        if (node["name"]) {
+            modelCfg.name = QString::fromStdString(node["name"].as<std::string>());
+        }
+        if (node["model"]) {
+            modelCfg.model = QString::fromStdString(node["model"].as<std::string>());
+        }
+        if (node["url"]) {
+            modelCfg.url = QString::fromStdString(node["url"].as<std::string>());
+        }
+        if (node["api"]) {
+            const QString name = QString::fromStdString(node["api"].as<std::string>());
+            const auto    api  = llmApiFromName(name);
+            if (!api) {
+                QSocConsole::warn() << "Skipping model" << modelCfg.id << ": unknown api" << name
+                                    << "(expected openai-chat or anthropic-messages)";
+                return std::nullopt;
+            }
+            modelCfg.api = *api;
+        }
+        if (node["key"]) {
+            modelCfg.key = QString::fromStdString(node["key"].as<std::string>());
+        }
+        if (node["auth_header"]) {
+            modelCfg.authHeader = QString::fromStdString(node["auth_header"].as<std::string>());
+        }
+        if (node["timeout"]) {
+            modelCfg.timeout = node["timeout"].as<int>();
+        }
+        if (node["context"]) {
+            modelCfg.contextTokens = node["context"].as<int>();
+        }
+        if (node["max_output_tokens"]) {
+            modelCfg.maxOutputTokens = node["max_output_tokens"].as<int>();
+        }
+        if (const auto limits = node["response_limits"]; limits) {
+            try {
+                if (!limits.IsMap()) {
+                    modelCfg.responseLimits.maxBytes = 0;
+                } else {
+                    if (limits["bytes"])
+                        modelCfg.responseLimits.maxBytes = limits["bytes"].as<qint64>();
+                    if (limits["event_bytes"])
+                        modelCfg.responseLimits.maxEventBytes = limits["event_bytes"].as<qint64>();
+                    if (limits["argument_bytes"])
+                        modelCfg.responseLimits.maxArgumentBytes
+                            = limits["argument_bytes"].as<qint64>();
+                    if (limits["tool_calls"])
+                        modelCfg.responseLimits.maxToolCalls = limits["tool_calls"].as<int>();
+                    if (limits["json_depth"])
+                        modelCfg.responseLimits.maxJsonDepth = limits["json_depth"].as<int>();
+                }
+            } catch (const YAML::Exception &) {
+                modelCfg.responseLimits.maxBytes = 0;
+            }
+            if (!modelCfg.responseLimits.valid()) {
+                QSocConsole::warn() << "Model" << modelCfg.id
+                                    << "has invalid response_limits; requests are disabled";
+            }
+        }
+        if (node["effort"]) {
+            modelCfg.effort    = QString::fromStdString(node["effort"].as<std::string>());
+            modelCfg.effortSet = true;
+        }
+        if (node["reasoning"]) {
+            modelCfg.reasoning = node["reasoning"].as<bool>();
+        }
+        if (node["chat_template_kwargs"] && node["chat_template_kwargs"].IsMap()) {
+            modelCfg.chatTemplateKwargs = yamlToJson(node["chat_template_kwargs"]);
+        }
+        if (node["tokenizer"]) {
+            const QString value
+                = QString::fromStdString(node["tokenizer"].as<std::string>()).trimmed();
+            if (const auto setting = tokenizerSetting(value)) {
+                modelCfg.tokenizer = *setting;
+            } else {
+                QSocConsole::warn() << "Model" << modelCfg.id << "has invalid tokenizer" << value
+                                    << "(expected auto, o200k, bytes or a URL); using auto";
+            }
+        }
+
+        /* Modality block: opt-in only. Absent or non-map -> all
+         * defaults (text-only). The block's keys are flat
+         * because the only modality we currently route is image;
+         * audio / video / pdf would extend this map. */
+        if (node["modalities"] && node["modalities"].IsMap()) {
+            YAML::Node mod = node["modalities"];
+            if (mod["image"]) {
+                modelCfg.acceptsImage = mod["image"].as<bool>();
+            }
+            if (mod["image_max_tokens"]) {
+                modelCfg.imageMaxTokens = mod["image_max_tokens"].as<int>();
+            }
+            if (mod["image_max_dimension"]) {
+                modelCfg.imageMaxDimension = mod["image_max_dimension"].as<int>();
+            }
+            if (mod["image_max_bytes"]) {
+                modelCfg.imageMaxBytes = mod["image_max_bytes"].as<int>();
+            }
+            if (mod["image_provider_hint"]) {
+                modelCfg.imageProviderHint = QString::fromStdString(
+                    mod["image_provider_hint"].as<std::string>());
+            }
+        }
+
+        if (modelCfg.name.isEmpty()) {
+            modelCfg.name = modelCfg.id;
+        }
+        if (modelCfg.model.isEmpty()) {
+            modelCfg.model = modelCfg.id;
+        }
+        return modelCfg;
+    } catch (const YAML::Exception &err) {
+        QSocConsole::warn() << "Failed to parse model config:" << err.what();
+        return std::nullopt;
+    }
+}
+
 void QLLMService::loadConfigSettings()
 {
     active.reset();
@@ -765,132 +887,12 @@ void QLLMService::loadConfigSettings()
     }
 
     /* Load model registry from llm.models (YAML 3-level nesting) */
-    YAML::Node modelsNode = config->getYamlNode("llm.models");
+    const YAML::Node modelsNode = config->getYamlNode("llm.models");
     if (modelsNode.IsDefined() && modelsNode.IsMap()) {
         for (const auto &item : modelsNode) {
-            try {
-                LLMModelConfig modelCfg;
-                modelCfg.id = QString::fromStdString(item.first.as<std::string>());
-
-                YAML::Node node = item.second;
-                if (node["name"]) {
-                    modelCfg.name = QString::fromStdString(node["name"].as<std::string>());
-                }
-                if (node["model"]) {
-                    modelCfg.model = QString::fromStdString(node["model"].as<std::string>());
-                }
-                if (node["url"]) {
-                    modelCfg.url = QString::fromStdString(node["url"].as<std::string>());
-                }
-                if (node["api"]) {
-                    const QString name = QString::fromStdString(node["api"].as<std::string>());
-                    const auto    api  = llmApiFromName(name);
-                    if (!api) {
-                        QSocConsole::warn()
-                            << "Skipping model" << modelCfg.id << ": unknown api" << name
-                            << "(expected openai-chat or anthropic-messages)";
-                        continue;
-                    }
-                    modelCfg.api = *api;
-                }
-                if (node["key"]) {
-                    modelCfg.key = QString::fromStdString(node["key"].as<std::string>());
-                }
-                if (node["auth_header"]) {
-                    modelCfg.authHeader = QString::fromStdString(
-                        node["auth_header"].as<std::string>());
-                }
-                if (node["timeout"]) {
-                    modelCfg.timeout = node["timeout"].as<int>();
-                }
-                if (node["context"]) {
-                    modelCfg.contextTokens = node["context"].as<int>();
-                }
-                if (node["max_output_tokens"]) {
-                    modelCfg.maxOutputTokens = node["max_output_tokens"].as<int>();
-                }
-                if (const auto limits = node["response_limits"]; limits) {
-                    try {
-                        if (!limits.IsMap()) {
-                            modelCfg.responseLimits.maxBytes = 0;
-                        } else {
-                            if (limits["bytes"])
-                                modelCfg.responseLimits.maxBytes = limits["bytes"].as<qint64>();
-                            if (limits["event_bytes"])
-                                modelCfg.responseLimits.maxEventBytes
-                                    = limits["event_bytes"].as<qint64>();
-                            if (limits["argument_bytes"])
-                                modelCfg.responseLimits.maxArgumentBytes
-                                    = limits["argument_bytes"].as<qint64>();
-                            if (limits["tool_calls"])
-                                modelCfg.responseLimits.maxToolCalls
-                                    = limits["tool_calls"].as<int>();
-                            if (limits["json_depth"])
-                                modelCfg.responseLimits.maxJsonDepth
-                                    = limits["json_depth"].as<int>();
-                        }
-                    } catch (const YAML::Exception &) {
-                        modelCfg.responseLimits.maxBytes = 0;
-                    }
-                    if (!modelCfg.responseLimits.valid()) {
-                        QSocConsole::warn() << "Model" << modelCfg.id
-                                            << "has invalid response_limits; requests are disabled";
-                    }
-                }
-                if (node["effort"]) {
-                    modelCfg.effort = QString::fromStdString(node["effort"].as<std::string>());
-                }
-                if (node["reasoning"]) {
-                    modelCfg.reasoning = node["reasoning"].as<bool>();
-                }
-                if (node["chat_template_kwargs"] && node["chat_template_kwargs"].IsMap()) {
-                    modelCfg.chatTemplateKwargs = yamlToJson(node["chat_template_kwargs"]);
-                }
-                if (node["tokenizer"]) {
-                    const QString value
-                        = QString::fromStdString(node["tokenizer"].as<std::string>()).trimmed();
-                    if (const auto setting = tokenizerSetting(value)) {
-                        modelCfg.tokenizer = *setting;
-                    } else {
-                        QSocConsole::warn()
-                            << "Model" << modelCfg.id << "has invalid tokenizer" << value
-                            << "(expected auto, o200k, bytes or a URL); using auto";
-                    }
-                }
-
-                /* Modality block: opt-in only. Absent or non-map -> all
-                 * defaults (text-only). The block's keys are flat
-                 * because the only modality we currently route is image;
-                 * audio / video / pdf would extend this map. */
-                if (node["modalities"] && node["modalities"].IsMap()) {
-                    YAML::Node mod = node["modalities"];
-                    if (mod["image"]) {
-                        modelCfg.acceptsImage = mod["image"].as<bool>();
-                    }
-                    if (mod["image_max_tokens"]) {
-                        modelCfg.imageMaxTokens = mod["image_max_tokens"].as<int>();
-                    }
-                    if (mod["image_max_dimension"]) {
-                        modelCfg.imageMaxDimension = mod["image_max_dimension"].as<int>();
-                    }
-                    if (mod["image_max_bytes"]) {
-                        modelCfg.imageMaxBytes = mod["image_max_bytes"].as<int>();
-                    }
-                    if (mod["image_provider_hint"]) {
-                        modelCfg.imageProviderHint = QString::fromStdString(
-                            mod["image_provider_hint"].as<std::string>());
-                    }
-                }
-
-                if (modelCfg.name.isEmpty()) {
-                    modelCfg.name = modelCfg.id;
-                }
-                if (modelCfg.model.isEmpty()) {
-                    modelCfg.model = modelCfg.id;
-                }
-                modelConfigs[modelCfg.id] = modelCfg;
-            } catch (const YAML::Exception &err) {
-                QSocConsole::warn() << "Failed to parse model config:" << err.what();
+            const auto key = QString::fromStdString(item.first.as<std::string>());
+            if (const auto entry = parseModelEntry(key, item.second)) {
+                modelConfigs[entry->id] = *entry;
             }
         }
     }

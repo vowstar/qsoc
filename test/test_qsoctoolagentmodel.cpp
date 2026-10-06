@@ -25,6 +25,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <tuple>
+
 using json = nlohmann::json;
 
 /*
@@ -585,6 +587,45 @@ private slots:
         QCOMPARE(response.value("status", std::string()), std::string("ok"));
         QCOMPARE(llm.requestCount(), 1);
         QCOMPARE(llm.wireModel(0), QStringLiteral("child-wire"));
+    }
+
+    /* Counterexample: a child on another entry kept the main agent's context
+     * window and effort, so it compacted on the wrong budget and reasoned at a
+     * level that belongs to a different model. */
+    void aChildOnAnotherModelTakesThatModelsWindowAndEffort()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        ScopedConfig scope(
+            parentAndChildModels(llm.url())
+            + QByteArrayLiteral(
+                "      context: 400000\n"
+                "      effort: high\n"
+                "    plain-model:\n"
+                "      model: plain-wire\n"
+                "      context: 32000\n"
+                "      url: ")
+            + llm.url().toUtf8() + QByteArrayLiteral("\n"));
+        for (const auto &[key, window, effort] :
+             {std::tuple{"child-model", 400000, "high"}, std::tuple{"plain-model", 32000, "low"}}) {
+            Harness h(definitionOn(QString::fromLatin1(key)));
+            h.tasks.enableMessaging(&h.parent);
+            auto cfg             = h.parent.getConfig();
+            cfg.maxContextTokens = 64000;
+            cfg.effortLevel      = QStringLiteral("low");
+            h.parent.setConfig(cfg);
+            const json response = h.spawn();
+            QCOMPARE(response.value("status", std::string()), std::string("ok"));
+            const QString taskId = QString::fromStdString(response.value("task_id", std::string()));
+            QSocAgent    *child  = h.tasks.liveAgentFor(taskId);
+            QVERIFY(child != nullptr);
+            QCOMPARE(child->getConfig().maxContextTokens, window);
+            QCOMPARE(child->getConfig().effortLevel, QString::fromLatin1(effort));
+            QCOMPARE(
+                llm.requestBody(llm.requestCount() - 1).value("reasoning_effort", std::string()),
+                std::string(effort));
+            QCOMPARE(h.parent.getConfig().maxContextTokens, 64000);
+        }
     }
 
     void unknownDefinitionModelFailsTheSpawn()

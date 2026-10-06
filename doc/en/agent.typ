@@ -1346,8 +1346,9 @@ group with the offending path.
     [`inject_project_md`],
     [`true` (default) injects `AGENTS.md`. `false` skips it.],
     [`model`],
-    [An `llm.models` key the child runs on. Empty inherits the parent;
-     an unknown key fails the spawn.],
+    [An `llm.models` key the child runs on, with that entry's `context`
+     and `effort` (the parent's effort when the entry sets none). Empty
+     inherits the parent; an unknown key fails the spawn.],
   )],
   caption: [SUB-AGENT DEFINITION FRONTMATTER],
   kind: table,

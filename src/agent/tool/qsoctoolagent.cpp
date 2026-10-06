@@ -495,6 +495,23 @@ void bindConfigToHost(QSocRemoteConnection *conn, const QString &alias, QSocAgen
     loadAgentRemoteProjectRules(conn, cfg);
 }
 
+/* A child on @p entry gets that model's context window, and its effort when
+ * the entry names one. A child on the main agent's own model keeps the main
+ * agent's live window and effort. */
+void sizeConfigToModel(const LLMModelConfig &entry, bool mainModel, QSocAgentConfig *cfg)
+{
+    cfg->modelId = entry.id;
+    if (mainModel) {
+        return;
+    }
+    if (entry.contextTokens > 0) {
+        cfg->maxContextTokens = entry.contextTokens;
+    }
+    if (entry.effortSet) {
+        cfg->effortLevel = entry.effort;
+    }
+}
+
 /* Where a child built from @p cfg runs: the alias it was bound by, the SSH
  * target behind that alias, and the workspace root. */
 QSocSubAgentTaskSource::Dispatch placementOf(const QSocAgentConfig &cfg)
@@ -783,9 +800,12 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
         if (!def->injectSkills) {
             childCfg.skillListing.clear();
         }
-        if (!def->model.isEmpty()) {
-            childCfg.modelId = def->model;
-        }
+    }
+    if (!childModel.isEmpty()) {
+        sizeConfigToModel(
+            effectiveLlm->getModelConfig(childModel),
+            childModel == effectiveLlm->getCurrentModelId(),
+            &childCfg);
     }
     if (!worktreePath.isEmpty()) {
         childCfg.projectPath = worktreePath;

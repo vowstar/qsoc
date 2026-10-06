@@ -60,8 +60,9 @@ struct LLMModelConfig
     int                contextTokens   = 128000; /* Context window size */
     int                maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
     QLLMResponseLimits responseLimits;
-    QString            effort;           /* Default effort: empty/off, "low", "medium", "high" */
-    bool               reasoning = true; /* False: the model cannot reason, effort is never sent */
+    QString            effort;            /* Default effort: empty/off, "low", "medium", "high" */
+    bool               effortSet = false; /* The entry names an effort, even an empty one */
+    bool               reasoning = true;  /* False: the model cannot reason, effort is never sent */
     /* Sent as chat_template_kwargs on openai-chat requests when not empty. */
     nlohmann::json chatTemplateKwargs = nlohmann::json::object();
     /* Prompt token counter: auto, o200k, bytes, or a count endpoint URL */
@@ -133,6 +134,14 @@ public:
      *          single-flight invariant.
      */
     QLLMService *clone(QObject *parent = nullptr) const;
+
+    /**
+     * @brief Parse one llm.models entry
+     * @param id The entry's key
+     * @param node The entry's mapping
+     * @return The entry, or nothing when it is unusable (a warning is printed)
+     */
+    static std::optional<LLMModelConfig> parseModelEntry(const QString &id, const YAML::Node &node);
 
     json requestDiagnostics() const;
     void setDiagnosticsEnabled(bool enabled);
