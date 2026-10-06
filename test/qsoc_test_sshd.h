@@ -127,7 +127,7 @@ public:
         const QString hostKey  = root + QStringLiteral("/host_key");
         const QString authKeys = root + QStringLiteral("/authorized_keys");
         const QString cfgPath  = root + QStringLiteral("/sshd_config");
-        m_keyPath              = root + QStringLiteral("/client_rsa");
+        m_keyPath              = root + QStringLiteral("/client_key");
         m_workDir              = root + QStringLiteral("/work");
         QDir().mkpath(m_workDir);
 
@@ -137,7 +137,7 @@ public:
         if (m_hostCertificate && !generateHostCertificate(m_keygen, root, hostKey)) {
             return fail(QStringLiteral("could not generate the host certificate"));
         }
-        if (!runKeygen(m_keygen, m_keyPath, kClientKeyArgs)) {
+        if (!runKeygen(m_keygen, m_keyPath, kDefaultKeyArgs)) {
             return fail(QStringLiteral("could not generate the client key"));
         }
         QFile pub(m_keyPath + QStringLiteral(".pub"));
@@ -378,19 +378,8 @@ private:
         return port;
     }
 
-    /* RSA in classic PEM. qsoc pins userauth to the rsa-sha2 family and every
-     * real server offers an RSA host key. PEM matters for the client key: this
-     * libssh2 build signs RSA pubkey auth reliably only from a classic
-     * "BEGIN RSA PRIVATE KEY" file; an OpenSSH-format key aborts the
-     * signature step after the server's PK_OK. */
-    static inline const QStringList kClientKeyArgs = {
-        QStringLiteral("-t"),
-        QStringLiteral("rsa"),
-        QStringLiteral("-b"),
-        QStringLiteral("3072"),
-        QStringLiteral("-m"),
-        QStringLiteral("PEM"),
-    };
+    static inline const QStringList kDefaultKeyArgs
+        = {QStringLiteral("-t"), QStringLiteral("ed25519")};
 
     static bool runKeygen(const QString &keygen, const QString &keyPath, const QStringList &args)
     {
@@ -408,7 +397,7 @@ private:
         const QString &keygen, const QString &root, const QString &hostKey)
     {
         const QString caKey = root + QStringLiteral("/host_ca");
-        if (!runKeygen(keygen, caKey, kClientKeyArgs)) {
+        if (!runKeygen(keygen, caKey, kDefaultKeyArgs)) {
             return false;
         }
         QProcess proc;
@@ -446,7 +435,7 @@ private:
     QString       m_logPath;
     QString       m_keygen;
     QStringList   m_extraConfig;
-    QStringList   m_hostKeyArgs     = kClientKeyArgs;
+    QStringList   m_hostKeyArgs     = kDefaultKeyArgs;
     bool          m_hostCertificate = false;
     int           m_port            = 0;
     qint64        m_sshdPid         = 0;

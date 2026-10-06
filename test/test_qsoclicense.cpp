@@ -110,9 +110,9 @@ private slots:
     void cliPrintsFullText()
     {
         int           exitCode = 0;
-        const QString output   = runCli({"--licenses", "mbedtls", "z3"}, &exitCode);
+        const QString output   = runCli({"--licenses", "aws-lc", "z3"}, &exitCode);
         QCOMPARE(exitCode, 0);
-        QVERIFY(output.contains("QSoC uses it under Apache-2.0."));
+        QVERIFY(output.contains("New AWS-LC files are Apache-2.0 OR ISC."));
         QVERIFY(output.contains("Apache License"));
         QVERIFY(output.contains("Microsoft Corporation"));
     }

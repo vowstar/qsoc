@@ -140,9 +140,10 @@ void Test::anIdentityFileAuthenticates_data()
     }
 }
 
-/* Counterexample: only classic PEM RSA and ECDSA files were readable, and a
- * key file without its .pub sibling worked for PEM RSA alone. A server per
- * row, so one rejected key cannot penalize the next row's source address. */
+/* Counterexample: only classic PEM RSA and ECDSA files were readable, a key
+ * file without its .pub sibling worked for PEM RSA alone, and qsoc wrote the
+ * missing .pub into the user's key directory. A server per row, so one
+ * rejected key cannot penalize the next row's source address. */
 void Test::anIdentityFileAuthenticates()
 {
     QFETCH(QStringList, args);
@@ -158,6 +159,7 @@ void Test::anIdentityFileAuthenticates()
     }
     const QString error = connectWith(fixture, key);
     QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(QFile::exists(key + QStringLiteral(".pub")), withPub);
     fixture.stop();
     QVERIFY(fixture.removeRoot());
 }

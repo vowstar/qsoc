@@ -43,12 +43,6 @@ const QList<QSocLicense::Component> &QSocLicense::components()
          "https://github.com/google/material-design-icons",
          {"material-icons.txt", "apache-2.0.txt"},
          {}},
-        {"mbedtls",
-         "Apache-2.0",
-         "https://github.com/Mbed-TLS/mbedtls",
-         {"mbedtls.txt"},
-         "Mbed TLS is dual licensed under Apache-2.0 OR GPL-2.0-or-later. "
-         "QSoC uses it under Apache-2.0."},
         {"mimalloc", "MIT", "https://github.com/microsoft/mimalloc", {"mimalloc.txt"}, {}},
         {"msvc-runtime",
          "Microsoft Software License Terms",

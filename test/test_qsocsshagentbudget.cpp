@@ -551,8 +551,8 @@ private slots:
     }
 
 private:
-    /* A throwaway RSA key in classic PEM, generated at runtime like every other
-     * key these fixtures use. */
+    /* A throwaway key, generated at runtime like every other key these
+     * fixtures use. */
     static bool makeKey(const QString &path)
     {
         const QString keygen = QStandardPaths::findExecutable(QStringLiteral("ssh-keygen"));
@@ -563,11 +563,7 @@ private:
         proc.start(
             keygen,
             {QStringLiteral("-t"),
-             QStringLiteral("rsa"),
-             QStringLiteral("-b"),
-             QStringLiteral("3072"),
-             QStringLiteral("-m"),
-             QStringLiteral("PEM"),
+             QStringLiteral("ed25519"),
              QStringLiteral("-N"),
              QString(),
              QStringLiteral("-q"),

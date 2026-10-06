@@ -22,7 +22,6 @@
         <file alias="libssh2.txt">../external/libssh2/COPYING</file>
         <file alias="linux-runtime.txt">license/linux-runtime.txt</file>
         <file alias="material-icons.txt">license/material-icons.txt</file>
-        <file alias="mbedtls.txt">../external/mbedtls/LICENSE</file>
         <file alias="mimalloc.txt">license/mimalloc.txt</file>
         <file alias="msvc-runtime.txt">license/msvc-runtime.txt</file>
         <file alias="openssl-1.1.1.txt">license/openssl-1.1.1.txt</file>

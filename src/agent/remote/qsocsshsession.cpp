@@ -4,7 +4,6 @@
 #include "agent/remote/qsocsshsession.h"
 
 #include "agent/remote/qsoclibssh2init.h"
-#include "agent/remote/qsocsshpubderive.h"
 
 #include <libssh2.h>
 
@@ -253,35 +252,6 @@ bool connectWithTimeout(
         return false;
     }
     return true;
-}
-
-/* Materialize the public half of a private key alongside the private
- * file so libssh2 (on the mbedTLS backend, which cannot derive one in
- * memory) has a concrete path to feed to the server. The derivation
- * itself happens in QSocSshPubDerive via mbedTLS; we only write the
- * resulting line. Returns the .pub path on success, empty on failure. */
-QString derivePubkeyPath(const QString &privateKeyPath)
-{
-    const QString pubPath = privateKeyPath + QStringLiteral(".pub");
-    if (QFileInfo::exists(pubPath)) {
-        return pubPath;
-    }
-    const QString line = QSocSshPubDerive::fromPrivateKeyFile(privateKeyPath);
-    if (line.isEmpty()) {
-        return {};
-    }
-    QFile file(pubPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return {};
-    }
-    file.write(line.toUtf8());
-    file.write("\n");
-    file.close();
-    QFile::setPermissions(
-        pubPath,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup
-            | QFileDevice::ReadOther);
-    return pubPath;
 }
 
 #ifndef Q_OS_WIN
@@ -1686,20 +1656,14 @@ bool QSocSshSession::tryIdentityFileAuth(
      * into any log or error message. */
     const QByteArray userBytes = user.toUtf8();
     const QByteArray keyBytes  = privateKeyPath.toUtf8();
-    /* The mbedTLS crypto backend cannot derive a public key from an EC or
-     * Ed25519 private-key file (NULL pubkey works only for classic PEM
-     * RSA), so we ask ssh-keygen to emit the sibling .pub when missing.
-     * ssh-keygen, not QSoC, is the one that reads the private-key bytes. */
-    const QString    pubPath      = derivePubkeyPath(privateKeyPath);
-    const QByteArray pubPathBytes = pubPath.toUtf8();
-    const char      *pubArg       = pubPath.isEmpty() ? nullptr : pubPathBytes.constData();
-    const QByteArray phBytes      = passphrase.toUtf8();
-    int              rc           = 0;
+    const QByteArray phBytes   = passphrase.toUtf8();
+    int              rc        = 0;
+    /* A null public key path: libssh2 derives it from the private key. */
     while ((rc = libssh2_userauth_publickey_fromfile_ex(
                 m_session,
                 userBytes.constData(),
                 static_cast<unsigned int>(userBytes.size()),
-                pubArg,
+                nullptr,
                 keyBytes.constData(),
                 phBytes.isEmpty() ? nullptr : phBytes.constData()))
            == LIBSSH2_ERROR_EAGAIN) {

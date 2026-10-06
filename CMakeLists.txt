@@ -327,18 +327,6 @@ else()
     message(STATUS "Use existing fmt target: ${FMT_LIBRARIES}")
 endif()
 
-# MBEDTLS (bundled, always static, drives libssh2 crypto backend)
-set(ENABLE_TESTING              OFF CACHE BOOL "disable mbedtls tests"    FORCE)
-set(ENABLE_PROGRAMS             OFF CACHE BOOL "disable mbedtls programs" FORCE)
-set(MBEDTLS_FATAL_WARNINGS      OFF CACHE BOOL "no -Werror for mbedtls"   FORCE)
-set(USE_STATIC_MBEDTLS_LIBRARY  ON  CACHE BOOL "mbedtls static"           FORCE)
-set(USE_SHARED_MBEDTLS_LIBRARY  OFF CACHE BOOL "mbedtls no shared"        FORCE)
-set(DISABLE_PACKAGE_CONFIG_AND_INSTALL OFF CACHE BOOL "mbedtls export set" FORCE)
-add_subdirectory(external/mbedtls)
-set(MBEDTLS_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/external/mbedtls/include")
-set(MBEDTLS_LIBRARIES    mbedcrypto)
-message(STATUS "Use local mbedtls library: ${MBEDTLS_LIBRARIES} ${MBEDTLS_INCLUDE_DIRS}")
-
 # AWS-LC (bundled, always static, libcrypto for the libssh2 OpenSSL backend)
 # Assembly needs NASM on MSVC and a single target on macOS; use C otherwise.
 if(MSVC OR CMAKE_OSX_ARCHITECTURES MATCHES ";")
@@ -552,8 +540,8 @@ endif()
 
 
 target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_agent_client qsoc_smt)
-target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}" "${MBEDTLS_INCLUDE_DIRS}")
-target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES} ${MBEDTLS_LIBRARIES})
+target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}")
+target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES})
 target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
 # A system libcrypto or libssh2 that Qt loads must never bind to these copies.
 if(UNIX AND NOT APPLE)

@@ -800,7 +800,7 @@ jobs:
         find external -mindepth 1 -maxdepth 1 | sort | head -25
         echo
         echo "missing submodule check:"
-        for d in aws-lc libssh2 cmark-gfm lexbor mbedtls slang; do
+        for d in aws-lc libssh2 cmark-gfm lexbor slang; do
           if [ ! -d "external/$d" ]; then
             echo "MISSING: external/$d"
             exit 1

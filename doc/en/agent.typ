@@ -2360,7 +2360,8 @@ certificates are not supported.
 
 QSoC code never opens, reads, copies, logs, or displays SSH private key
 contents. IdentityFile paths are handed to libssh2 and only libssh2 (or
-ssh-agent) reads the key material internally during authentication. Logs
+ssh-agent) reads the key material internally during authentication. QSoC
+never writes next to a key file, not even a missing `.pub`. Logs
 refer to "configured IdentityFile" rather than literal paths where
 practical, and passphrases are kept in memory only for the duration needed
 to authenticate.
