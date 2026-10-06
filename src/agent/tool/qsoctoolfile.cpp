@@ -4,16 +4,132 @@
 #include "agent/tool/qsoctoolfile.h"
 
 #include "agent/qsocfilehistory.h"
+#include "agent/tool/qsoctoolfilecore.h"
 #include "common/qlspservice.h"
-#include "common/qsocimageattach.h"
 
 #include <QDir>
-#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QRegularExpression>
 #include <QSaveFile>
-#include <QTextStream>
+
+#include <optional>
+
+namespace {
+
+namespace Core = QSocToolFileCore;
+
+#ifdef Q_OS_WIN
+constexpr bool kWindows = true;
+#else
+constexpr bool kWindows = false;
+#endif
+
+const QString kWriteScope = QStringLiteral(
+    "an allowed directory (project, working, user dirs, or temp)");
+
+/* The home `~` names in bash: $HOME when set (Git Bash on Windows sets it),
+ * else the platform home directory. */
+QString bashHome()
+{
+    const QString home = qEnvironmentVariable("HOME");
+    return home.isEmpty() ? QDir::homePath() : QDir::fromNativeSeparators(home);
+}
+
+/* A path argument as the local machine names it: relative to the working
+ * directory bash runs in, `~` the local home. */
+QString resolvePath(const QSocPathContext *pathContext, const QString &raw)
+{
+    QString base = pathContext != nullptr ? pathContext->getWorkingDir() : QString();
+    if (base.isEmpty() && pathContext != nullptr) {
+        base = pathContext->getProjectDir();
+    }
+    if (base.isEmpty()) {
+        base = QDir::currentPath();
+    }
+    return Core::localPath(raw, base, bashHome(), kWindows);
+}
+
+/* Stream @p path into @p reader; false when the file could not be read. */
+bool streamFile(const QString &path, Core::Reader *reader)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    constexpr qint64 kChunk = 64 * 1024;
+    while (!file.atEnd()) {
+        const QByteArray chunk = file.read(kChunk);
+        if (file.error() != QFileDevice::NoError) {
+            return false;
+        }
+        if (!reader->feed(chunk)) {
+            return true;
+        }
+    }
+    reader->finish();
+    return file.error() == QFileDevice::NoError;
+}
+
+bool listLocalDir(const QString &dir, QList<Core::ListEntry> *entries, QString *error)
+{
+    const QFileInfo info(dir);
+    if (!info.isDir() || !info.isReadable()) {
+        *error = QStringLiteral("cannot read directory");
+        return false;
+    }
+    const QDir::Filters filters = QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden;
+    for (const QFileInfo &entry : QDir(dir).entryInfoList(filters, QDir::Unsorted)) {
+        entries->append(
+            {.name        = entry.fileName(),
+             .isDirectory = entry.isDir(),
+             .isSymlink   = entry.isSymLink(),
+             .hidden      = entry.isHidden()});
+    }
+    return true;
+}
+
+/* The whole file, or nullopt when it cannot be read completely. */
+std::optional<QByteArray> readWhole(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return std::nullopt;
+    }
+    QByteArray bytes = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        return std::nullopt;
+    }
+    return bytes;
+}
+
+/* Write @p bytes atomically; the error text, or empty on success. */
+QString saveFile(const QString &path, const QByteArray &bytes)
+{
+    QSaveFile file(path);
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) {
+        file.cancelWriting();
+        return QStringLiteral("Error: Cannot open file for writing: %1").arg(path);
+    }
+    if (!file.commit()) {
+        return QStringLiteral("Error: Cannot finish writing file: %1").arg(path);
+    }
+    return {};
+}
+
+/* The writable spelling of @p raw, or the refusal. */
+QString resolveWritable(QSocPathContext *pathContext, const QString &raw, QString *path)
+{
+    *path = resolvePath(pathContext, raw);
+    if (pathContext != nullptr && !pathContext->resolveWritablePath(*path, path)) {
+        return QStringLiteral(
+            "Error: Access denied. File must be within an allowed directory "
+            "(project, working, user, or temp).");
+    }
+    return {};
+}
+
+} // namespace
 
 /* QSocToolFileRead Implementation */
 
@@ -32,39 +148,12 @@ QString QSocToolFileRead::getName() const
 
 QString QSocToolFileRead::getDescription() const
 {
-    /* Only advertise image-reading when the active model actually
-     * accepts image content blocks. A text-only model would either
-     * silently drop the image attachment or refuse the call after
-     * seeing it; better to keep the tool description honest so the
-     * model never asks for a capability it does not have. */
-    const bool image = llmService != nullptr && llmService->currentSupportsImage();
-    if (image) {
-        return "Read the contents of a file. Any file on the system can be "
-               "read. Image files (PNG, JPG, GIF, WebP) are returned as visual "
-               "content that the multimodal LLM can see directly. When the "
-               "user attaches or references a screenshot or image path, "
-               "ALWAYS use this tool to view the file at the path; the tool "
-               "result will contain the actual image, not a description. "
-               "This tool will work with all temporary file paths.";
-    }
-    return "Read the contents of a file. Any file on the system can be "
-           "read. This tool will work with all temporary file paths.";
+    return Core::readDescription(llmService != nullptr && llmService->currentSupportsImage());
 }
 
 json QSocToolFileRead::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"file_path",
-           {{"type", "string"},
-            {"description", "Path to the file to read (relative to project or absolute)"}}},
-          {"max_lines",
-           {{"type", "integer"}, {"description", "Maximum number of lines to read (default: 500)"}}},
-          {"offset",
-           {{"type", "integer"},
-            {"description", "Line number to start reading from (0-indexed, default: 0)"}}}}},
-        {"required", json::array({"file_path"})}};
+    return Core::readSchema();
 }
 
 QString QSocToolFileRead::execute(const json &arguments)
@@ -73,143 +162,34 @@ QString QSocToolFileRead::execute(const json &arguments)
         return "Error: file_path is required";
     }
 
-    QString filePath = QString::fromStdString(arguments["file_path"].get<std::string>());
-
-    /* Make path absolute if relative */
-    QFileInfo fileInfo(filePath);
-    if (!fileInfo.isAbsolute()) {
-        QString basePath;
-        if (pathContext) {
-            basePath = pathContext->getProjectDir();
-        }
-        if (basePath.isEmpty()) {
-            basePath = QDir::currentPath();
-        }
-        filePath = QDir(basePath).absoluteFilePath(filePath);
-    }
+    QString filePath
+        = resolvePath(pathContext, QString::fromStdString(arguments["file_path"].get<std::string>()));
     /* Canonicalize so read_file / edit_file / write_file key the read-state
      * on one path spelling (./x, x, a/../x all fold together). */
-    filePath = QDir::cleanPath(filePath);
-    fileInfo = QFileInfo(filePath);
+    QFileInfo fileInfo(filePath);
     if (!fileInfo.canonicalFilePath().isEmpty()) {
         filePath = fileInfo.canonicalFilePath();
         fileInfo = QFileInfo(filePath);
     }
-
-    /* Check if file exists */
     if (!fileInfo.exists()) {
-        return QString("Error: File not found: %1").arg(filePath);
+        return Core::fileNotFound(filePath);
     }
-
     if (!fileInfo.isFile()) {
-        return QString("Error: Path is not a file: %1").arg(filePath);
+        return Core::notAFile(filePath);
     }
 
-    /* Get parameters */
-    int maxLines = 500;
-    int offset   = 0;
-
-    if (arguments.contains("max_lines") && arguments["max_lines"].is_number_integer()) {
-        maxLines = arguments["max_lines"].get<int>();
-        if (maxLines <= 0) {
-            maxLines = 500;
-        }
-    }
-
-    if (arguments.contains("offset") && arguments["offset"].is_number_integer()) {
-        offset = arguments["offset"].get<int>();
-        if (offset < 0) {
-            offset = 0;
-        }
-    }
-
-    /* Image branch: peek the first bytes raw and let QSocImageAttach
-     * validate via magic signature, not extension. A misnamed `.txt`
-     * with a JPEG header still attaches; a `.png` that is actually
-     * Markdown still falls through to the text reader. */
-    {
-        QFile probe(filePath);
-        if (probe.open(QIODevice::ReadOnly)) {
-            const QByteArray head     = probe.peek(16);
-            const QString    detected = QSocImageAttach::detectMimeByMagic(head);
-            if (!detected.isEmpty()) {
-                const QByteArray body = probe.readAll();
-                if (probe.error() != QFileDevice::NoError) {
-                    probe.close();
-                    return QString("Error: Cannot read file completely: %1").arg(filePath);
-                }
-                probe.close();
-                return QSocImageAttach::buildAttachmentResult(filePath, detected, body, llmService);
-            }
-            probe.close();
-        }
-    }
-
-    /* Read file */
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return QString("Error: Cannot open file: %1").arg(filePath);
-    }
-
-    QTextStream in(&file);
-    QString     result;
-    int         lineNum   = 0;
-    int         linesRead = 0;
-
-    while (!in.atEnd() && linesRead < maxLines) {
-        QString line = in.readLine();
-        if (lineNum >= offset) {
-            result += line + "\n";
-            linesRead++;
-        }
-        lineNum++;
-    }
-
-    /* Count remaining lines so the caller can tell silent truncation
-     * from a clean end-of-file. The agent uses this marker to decide
-     * whether a follow-up read with a larger offset is warranted. */
-    int truncatedLines = 0;
-    while (!in.atEnd()) {
-        in.readLine();
-        truncatedLines++;
-    }
-    const bool readComplete = in.status() == QTextStream::Ok
-                              && file.error() == QFileDevice::NoError;
-    file.close();
-    if (!readComplete) {
+    Core::Reader reader(Core::readWindow(arguments));
+    if (!streamFile(filePath, &reader)) {
         return QString("Error: Cannot read file completely: %1").arg(filePath);
     }
 
     /* Record a full read so edit_file / write_file can enforce
-     * read-before-edit and detect on-disk changes. Hash the whole file the
-     * same way the edit tools do; partial / offset reads do not qualify
-     * because the agent has not seen the entire file. */
-    if (pathContext && offset == 0 && truncatedLines == 0) {
-        QFile whole(filePath);
-        if (!whole.open(QIODevice::ReadOnly)) {
-            return QString("Error: Cannot reopen file to record its content: %1").arg(filePath);
-        }
-        const QByteArray bytes    = whole.readAll();
-        const bool       complete = whole.error() == QFileDevice::NoError;
-        whole.close();
-        if (!complete) {
-            return QString("Error: Cannot read file completely: %1").arg(filePath);
-        }
-        pathContext->readState()
-            .recordRead(filePath, QString::fromUtf8(bytes.constData(), bytes.size()));
+     * read-before-edit and detect on-disk changes. Partial / offset reads
+     * do not qualify because the agent has not seen the entire file. */
+    if (const auto whole = reader.wholeFile(); pathContext && whole) {
+        pathContext->readState().recordRead(filePath, QString::fromUtf8(*whole));
     }
-
-    if (result.isEmpty()) {
-        return QString("File is empty or offset beyond file length: %1").arg(filePath);
-    }
-
-    if (truncatedLines > 0) {
-        result += QString("[truncated: %1 more line(s) omitted; rerun with offset=%2 to continue]\n")
-                      .arg(truncatedLines)
-                      .arg(offset + linesRead);
-    }
-
-    return result;
+    return reader.result(filePath, llmService);
 }
 
 void QSocToolFileRead::setPathContext(QSocPathContext *pathContext)
@@ -238,114 +218,22 @@ QString QSocToolFileList::getName() const
 
 QString QSocToolFileList::getDescription() const
 {
-    return "List files in a directory. Any directory on the system can be listed.";
+    return Core::listDescription();
 }
 
 json QSocToolFileList::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"directory",
-           {{"type", "string"},
-            {"description",
-             "Directory path to list (relative to project or absolute, default: project root)"}}},
-          {"pattern",
-           {{"type", "string"},
-            {"description", "Glob pattern to filter files (e.g., '*.v', '*.yaml')"}}},
-          {"recursive",
-           {{"type", "boolean"}, {"description", "List files recursively (default: false)"}}},
-          {"include_hidden",
-           {{"type", "boolean"}, {"description", "Include hidden files (default: false)"}}}}},
-        {"required", json::array()}};
+    return Core::listSchema();
 }
 
 QString QSocToolFileList::execute(const json &arguments)
 {
-    /* Get directory path */
-    QString dirPath;
-    if (arguments.contains("directory") && arguments["directory"].is_string()) {
-        dirPath = QString::fromStdString(arguments["directory"].get<std::string>());
+    const Core::ListCall call    = Core::listCall(arguments);
+    const QString        dirPath = resolvePath(pathContext, call.directory);
+    if (!QFileInfo(dirPath).isDir()) {
+        return Core::directoryNotFound(dirPath);
     }
-
-    /* Make path absolute if relative or empty */
-    if (dirPath.isEmpty()) {
-        if (pathContext) {
-            dirPath = pathContext->getProjectDir();
-        }
-        if (dirPath.isEmpty()) {
-            dirPath = QDir::currentPath();
-        }
-    } else {
-        QFileInfo dirInfo(dirPath);
-        if (!dirInfo.isAbsolute()) {
-            QString basePath;
-            if (pathContext) {
-                basePath = pathContext->getProjectDir();
-            }
-            if (basePath.isEmpty()) {
-                basePath = QDir::currentPath();
-            }
-            dirPath = QDir(basePath).absoluteFilePath(dirPath);
-        }
-    }
-
-    QDir dir(dirPath);
-    if (!dir.exists()) {
-        return QString("Error: Directory not found: %1").arg(dirPath);
-    }
-
-    /* Get parameters */
-    QString pattern       = "*";
-    bool    recursive     = false;
-    bool    includeHidden = false;
-
-    if (arguments.contains("pattern") && arguments["pattern"].is_string()) {
-        pattern = QString::fromStdString(arguments["pattern"].get<std::string>());
-    }
-
-    if (arguments.contains("recursive") && arguments["recursive"].is_boolean()) {
-        recursive = arguments["recursive"].get<bool>();
-    }
-
-    if (arguments.contains("include_hidden") && arguments["include_hidden"].is_boolean()) {
-        includeHidden = arguments["include_hidden"].get<bool>();
-    }
-
-    /* List files */
-    QStringList   files;
-    QDir::Filters filters = QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot;
-
-    if (includeHidden) {
-        filters |= QDir::Hidden;
-    }
-
-    if (recursive) {
-        QDirIterator it(dirPath, QStringList() << pattern, filters, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QString path = it.next();
-            /* Make path relative to the requested directory */
-            files.append(dir.relativeFilePath(path));
-        }
-    } else {
-        dir.setNameFilters(QStringList() << pattern);
-        dir.setFilter(filters);
-        for (const QFileInfo &info : dir.entryInfoList()) {
-            QString entry = info.fileName();
-            if (info.isDir()) {
-                entry += "/";
-            }
-            files.append(entry);
-        }
-    }
-
-    files.sort();
-
-    if (files.isEmpty()) {
-        return QString("No files found in: %1").arg(dirPath);
-    }
-
-    return QString("Files in %1:\n%2").arg(dirPath, files.join("\n"));
+    return Core::listFiles(dirPath, call, !kWindows, listLocalDir);
 }
 
 void QSocToolFileList::setPathContext(QSocPathContext *pathContext)
@@ -369,62 +257,26 @@ QString QSocToolFileWrite::getName() const
 
 QString QSocToolFileWrite::getDescription() const
 {
-    return "Write content to a file. "
-           "Creates the file if it doesn't exist, overwrites if it does. "
-           "Overwriting an existing file requires reading it first with read_file; "
-           "a file changed on disk since it was read is rejected. "
-           "File must be within an allowed directory (project, working, user dirs, or temp).";
+    return Core::writeDescription(kWriteScope);
 }
 
 json QSocToolFileWrite::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"file_path",
-           {{"type", "string"},
-            {"description", "Path to the file to write (relative to project or absolute)"}}},
-          {"content", {{"type", "string"}, {"description", "Content to write to the file"}}}}},
-        {"required", json::array({"file_path", "content"})}};
+    return Core::writeSchema();
 }
 
 QString QSocToolFileWrite::execute(const json &arguments)
 {
-    if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
-        return "Error: file_path is required";
+    const Core::WriteCall call = Core::writeCall(arguments);
+    if (!call.error.isEmpty()) {
+        return call.error;
     }
-
-    if (!arguments.contains("content") || !arguments["content"].is_string()) {
-        return "Error: content is required";
+    QString filePath;
+    if (const QString refusal = resolveWritable(pathContext, call.path, &filePath);
+        !refusal.isEmpty()) {
+        return refusal;
     }
-
-    QString filePath = QString::fromStdString(arguments["file_path"].get<std::string>());
-    QString content  = QString::fromStdString(arguments["content"].get<std::string>());
-
-    /* Make path absolute if relative */
-    QFileInfo fileInfo(filePath);
-    if (!fileInfo.isAbsolute()) {
-        QString basePath;
-        if (pathContext) {
-            basePath = pathContext->getProjectDir();
-        }
-        if (basePath.isEmpty()) {
-            basePath = QDir::currentPath();
-        }
-        filePath = QDir(basePath).absoluteFilePath(filePath);
-    }
-    /* Canonicalize so read_file / edit_file / write_file key the read-state
-     * on one path spelling (./x, x, a/../x all fold together). */
-    filePath = QDir::cleanPath(filePath);
-    if (pathContext) {
-        QString resolved;
-        if (!pathContext->resolveWritablePath(filePath, &resolved)) {
-            return "Error: Access denied. File must be within an allowed directory "
-                   "(project, working, user, or temp).";
-        }
-        filePath = resolved;
-    }
-    fileInfo = QFileInfo(filePath);
+    const QFileInfo fileInfo(filePath);
 
     /* Read-before-overwrite + stale guard for EXISTING files: write_file
      * replaces the whole file, so it must not clobber content the agent
@@ -432,28 +284,16 @@ QString QSocToolFileWrite::execute(const json &arguments)
     const bool existedBefore = fileInfo.exists() && fileInfo.isFile();
     QString    beforeContent;
     if (existedBefore) {
-        QFile cur(filePath);
-        if (!cur.open(QIODevice::ReadOnly)) {
-            return QString("Error: Cannot open file to verify before overwrite: %1").arg(filePath);
-        }
-        const QByteArray bytes    = cur.readAll();
-        const bool       complete = cur.error() == QFileDevice::NoError;
-        cur.close();
-        if (!complete) {
+        const auto bytes = readWhole(filePath);
+        if (!bytes) {
             return QString("Error: Cannot read file completely before overwrite: %1").arg(filePath);
         }
-        beforeContent = QString::fromUtf8(bytes.constData(), bytes.size());
+        beforeContent = QString::fromUtf8(*bytes);
         if (pathContext && !pathContext->readState().wasRead(filePath)) {
-            return QString(
-                       "Error: File not read yet: %1. Read it with read_file "
-                       "before overwriting.")
-                .arg(filePath);
+            return Core::notReadYet(filePath, QStringLiteral("overwriting"));
         }
         if (pathContext && pathContext->readState().changedSinceRead(filePath, beforeContent)) {
-            return QString(
-                       "Error: File changed on disk since last read: %1. "
-                       "Read it again before overwriting.")
-                .arg(filePath);
+            return Core::changedSinceRead(filePath, QStringLiteral("overwriting"));
         }
     }
 
@@ -469,27 +309,21 @@ QString QSocToolFileWrite::execute(const json &arguments)
         return QString("Error: Cannot create directory: %1").arg(parentDir.absolutePath());
     }
 
-    const QByteArray bytes = content.toUtf8();
-    QSaveFile        file(filePath);
-    file.setDirectWriteFallback(false);
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) {
-        file.cancelWriting();
-        return QString("Error: Cannot open file for writing: %1").arg(filePath);
-    }
-    if (!file.commit()) {
-        return QString("Error: Cannot finish writing file: %1").arg(filePath);
+    const QByteArray bytes = call.content.toUtf8();
+    if (const QString failure = saveFile(filePath, bytes); !failure.isEmpty()) {
+        return failure;
     }
 
     /* The written content is now the agent's known state, so a follow-up
      * edit / overwrite in the same session needs no re-read. */
     if (pathContext) {
-        pathContext->readState().recordRead(filePath, content);
+        pathContext->readState().recordRead(filePath, call.content);
     }
 
     /* Notify LSP service about the file change. */
     (lspService ? lspService : QLspService::instance())->didSave(filePath);
 
-    return QString("Successfully wrote %1 bytes to: %2").arg(bytes.size()).arg(filePath);
+    return Core::wroteText(bytes.size(), filePath);
 }
 
 void QSocToolFileWrite::setPathContext(QSocPathContext *pathContext)
@@ -518,167 +352,74 @@ QString QSocToolFileEdit::getName() const
 
 QString QSocToolFileEdit::getDescription() const
 {
-    return "Edit a file by replacing a specific string with new content. "
-           "Read the file with read_file first: editing an unread file, or one "
-           "changed on disk since it was read, is rejected. "
-           "The old_string must be unique in the file for the replacement to succeed. "
-           "File must be within an allowed directory (project, working, user dirs, or temp).";
+    return Core::editDescription(kWriteScope);
 }
 
 json QSocToolFileEdit::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"file_path",
-           {{"type", "string"},
-            {"description", "Path to the file to edit (relative to project or absolute)"}}},
-          {"old_string", {{"type", "string"}, {"description", "The text to replace"}}},
-          {"new_string", {{"type", "string"}, {"description", "The replacement text"}}},
-          {"replace_all",
-           {{"type", "boolean"},
-            {"description", "Replace all occurrences (default: false, requires unique match)"}}}}},
-        {"required", json::array({"file_path", "old_string", "new_string"})}};
+    return Core::editSchema();
 }
 
 QString QSocToolFileEdit::execute(const json &arguments)
 {
-    if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
-        return "Error: file_path is required";
+    Core::EditCall call = Core::editCall(arguments);
+    if (!call.error.isEmpty()) {
+        return call.error;
     }
-
-    if (!arguments.contains("old_string") || !arguments["old_string"].is_string()) {
-        return "Error: old_string is required";
+    QString filePath;
+    if (const QString refusal = resolveWritable(pathContext, call.path, &filePath);
+        !refusal.isEmpty()) {
+        return refusal;
     }
-
-    if (!arguments.contains("new_string") || !arguments["new_string"].is_string()) {
-        return "Error: new_string is required";
-    }
-
-    QString filePath  = QString::fromStdString(arguments["file_path"].get<std::string>());
-    QString oldString = QString::fromStdString(arguments["old_string"].get<std::string>());
-    QString newString = QString::fromStdString(arguments["new_string"].get<std::string>());
-
-    bool replaceAll = false;
-    if (arguments.contains("replace_all") && arguments["replace_all"].is_boolean()) {
-        replaceAll = arguments["replace_all"].get<bool>();
-    }
-
-    /* Make path absolute if relative */
-    QFileInfo fileInfo(filePath);
-    if (!fileInfo.isAbsolute()) {
-        QString basePath;
-        if (pathContext) {
-            basePath = pathContext->getProjectDir();
-        }
-        if (basePath.isEmpty()) {
-            basePath = QDir::currentPath();
-        }
-        filePath = QDir(basePath).absoluteFilePath(filePath);
-    }
-    /* Canonicalize so read_file / edit_file / write_file key the read-state
-     * on one path spelling (./x, x, a/../x all fold together). */
-    filePath = QDir::cleanPath(filePath);
-    if (pathContext) {
-        QString resolved;
-        if (!pathContext->resolveWritablePath(filePath, &resolved)) {
-            return "Error: Access denied. File must be within an allowed directory "
-                   "(project, working, user, or temp).";
-        }
-        filePath = resolved;
-    }
-    fileInfo = QFileInfo(filePath);
-
-    /* Check if file exists */
+    call.path = filePath;
+    const QFileInfo fileInfo(filePath);
     if (!fileInfo.exists() || !fileInfo.isFile()) {
-        return QString("Error: File not found: %1").arg(filePath);
+        return Core::fileNotFound(filePath);
     }
 
-    /* Read file */
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return QString("Error: Cannot open file for reading: %1").arg(filePath);
-    }
-    const QByteArray bytes    = file.readAll();
-    const bool       complete = file.error() == QFileDevice::NoError;
-    file.close();
-    if (!complete) {
+    const auto bytes = readWhole(filePath);
+    if (!bytes) {
         return QString("Error: Cannot read file completely: %1").arg(filePath);
     }
-    QString content = QString::fromUtf8(bytes.constData(), bytes.size());
+    const QString content = QString::fromUtf8(*bytes);
 
     /* Read-before-edit + stale-on-disk guard: the agent must have read this
      * exact file via read_file first, and it must not have changed on disk
      * since, so an edit never blindly clobbers content the agent never saw
      * or a concurrent modification. */
-    if (pathContext) {
-        if (!pathContext->readState().wasRead(filePath)) {
-            return QString(
-                       "Error: File not read yet: %1. Read it with read_file "
-                       "before editing.")
-                .arg(filePath);
-        }
-        if (pathContext->readState().changedSinceRead(filePath, content)) {
-            return QString(
-                       "Error: File changed on disk since last read: %1. "
-                       "Read it again before editing.")
-                .arg(filePath);
-        }
+    if (pathContext && !pathContext->readState().wasRead(filePath)) {
+        return Core::notReadYet(filePath, QStringLiteral("editing"));
+    }
+    if (pathContext && pathContext->readState().changedSinceRead(filePath, content)) {
+        return Core::changedSinceRead(filePath, QStringLiteral("editing"));
     }
 
-    /* Check for old_string */
-    int count = content.count(oldString);
-    if (count == 0) {
-        return QString("Error: old_string not found in file: %1").arg(filePath);
-    }
-
-    if (!replaceAll && count > 1) {
-        return QString(
-                   "Error: old_string found %1 times. Use replace_all=true or provide more "
-                   "context for unique match.")
-            .arg(count);
-    }
-
-    /* Perform replacement */
-    QString newContent;
-    if (replaceAll) {
-        newContent = content.replace(oldString, newString);
-    } else {
-        int pos    = content.indexOf(oldString);
-        newContent = content.left(pos) + newString + content.mid(pos + oldString.length());
+    const Core::EditOutcome edit = Core::applyEdit(content, call);
+    if (!edit.error.isEmpty()) {
+        return edit.error;
     }
 
     /* Pre-edit snapshot: we just finished reading the original content,
      * so it's the exact pre-mutation state the history store needs. */
-    if (fileHistory != nullptr && fileHistory->isPathInScope(filePath)) {
-        if (!fileHistory->trackEdit(filePath, true, content)) {
-            return QString("Error: Cannot save file history before editing: %1").arg(filePath);
-        }
+    if (fileHistory != nullptr && fileHistory->isPathInScope(filePath)
+        && !fileHistory->trackEdit(filePath, true, content)) {
+        return QString("Error: Cannot save file history before editing: %1").arg(filePath);
     }
 
-    const QByteArray newBytes = newContent.toUtf8();
-    QSaveFile        output(filePath);
-    output.setDirectWriteFallback(false);
-    if (!output.open(QIODevice::WriteOnly) || output.write(newBytes) != newBytes.size()) {
-        output.cancelWriting();
-        return QString("Error: Cannot open file for writing: %1").arg(filePath);
-    }
-    if (!output.commit()) {
-        return QString("Error: Cannot finish writing file: %1").arg(filePath);
+    if (const QString failure = saveFile(filePath, edit.content.toUtf8()); !failure.isEmpty()) {
+        return failure;
     }
 
     /* The agent now knows the post-edit content, so a follow-up edit in the
      * same session is allowed without a re-read. */
     if (pathContext) {
-        pathContext->readState().recordRead(filePath, newContent);
+        pathContext->readState().recordRead(filePath, edit.content);
     }
 
     /* Notify LSP service about the file change. */
     (lspService ? lspService : QLspService::instance())->didSave(filePath);
 
-    return QString("Successfully edited file: %1 (%2 replacement(s))")
-        .arg(filePath)
-        .arg(replaceAll ? count : 1);
+    return Core::editedText(filePath, edit.count);
 }
 
 void QSocToolFileEdit::setPathContext(QSocPathContext *pathContext)

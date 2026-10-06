@@ -3,6 +3,11 @@
 
 #include "agent/remote/qsocremotepathcontext.h"
 
+#include "agent/tool/qsoctoolfilecore.h"
+#include "common/qsocshellpath.h"
+
+#include <QRegularExpression>
+
 namespace {
 
 constexpr QChar kSep = QLatin1Char('/');
@@ -49,7 +54,54 @@ void QSocRemotePathContext::reset()
     m_root.clear();
     m_cwd.clear();
     m_writableDirs.clear();
+    m_home.clear();
+    m_sftpRoot.clear();
+    m_shellRoot.clear();
+    m_windows = false;
     m_readState.clear();
+}
+
+void QSocRemotePathContext::setHostStyle(
+    bool windows, const QString &sftpRoot, const QString &shellRoot)
+{
+    m_windows   = windows;
+    m_sftpRoot  = sftpRoot;
+    m_shellRoot = shellRoot;
+}
+
+void QSocRemotePathContext::setHome(const QString &home)
+{
+    m_home = home;
+}
+
+bool QSocRemotePathContext::namesHome(const QString &path)
+{
+    return path == QStringLiteral("~") || path.startsWith(QStringLiteral("~/"))
+           || path.startsWith(QStringLiteral("~\\"));
+}
+
+QString QSocRemotePathContext::windowsSftpPath(
+    const QString &path, const QString &sftpRoot, const QString &shellRoot)
+{
+    static const QRegularExpression drive(QStringLiteral(R"(^/?[A-Za-z]:?(/|$))"));
+    QString                         out = path;
+    out.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const bool underShellRoot = !shellRoot.isEmpty() && !sftpRoot.isEmpty()
+                                && (out.compare(shellRoot, Qt::CaseInsensitive) == 0
+                                    || out.startsWith(shellRoot + kSep, Qt::CaseInsensitive));
+    if (underShellRoot) {
+        return sftpRoot + out.mid(shellRoot.size());
+    }
+    /* A relative `a/b` matches the pattern too; only `/c/...` and `c:` are drives. */
+    const bool isDrive = drive.match(out).hasMatch()
+                         && (out.startsWith(kSep) || out.at(1) == QLatin1Char(':'));
+    return isDrive ? QSocShellPath::toSftpPath(out) : out;
+}
+
+QString QSocRemotePathContext::hostSpelling(const QString &path) const
+{
+    const QString expanded = QSocToolFileCore::expandHome(path, m_home);
+    return m_windows ? windowsSftpPath(expanded, m_sftpRoot, m_shellRoot) : expanded;
 }
 
 void QSocRemotePathContext::setWritableDirs(const QStringList &dirs)
@@ -123,8 +175,9 @@ QString QSocRemotePathContext::lexicalNormalize(const QString &path)
     return joinPosix(out, absolute);
 }
 
-QString QSocRemotePathContext::normalize(const QString &path) const
+QString QSocRemotePathContext::normalize(const QString &raw) const
 {
+    const QString path = hostSpelling(raw);
     if (path.isEmpty()) {
         return m_cwd.isEmpty() ? m_root : m_cwd;
     }
@@ -137,11 +190,11 @@ QString QSocRemotePathContext::normalize(const QString &path) const
 
 bool QSocRemotePathContext::isWritable(const QString &normalizedPath) const
 {
-    return isWithinAny(normalizedPath, m_writableDirs);
+    return isWithinAny(normalizedPath, m_writableDirs, pathCase());
 }
 
 bool QSocRemotePathContext::isWithinAny(
-    const QString &normalizedPath, const QStringList &normalizedDirs)
+    const QString &normalizedPath, const QStringList &normalizedDirs, Qt::CaseSensitivity cs)
 {
     if (normalizedPath.isEmpty() || !normalizedPath.startsWith(kSep)) {
         return false;
@@ -150,13 +203,13 @@ bool QSocRemotePathContext::isWithinAny(
         if (dir.isEmpty()) {
             continue;
         }
-        if (normalizedPath == dir) {
+        if (normalizedPath.compare(dir, cs) == 0) {
             return true;
         }
         if (dir == QStringLiteral("/")) {
             return true;
         }
-        if (normalizedPath.startsWith(dir + kSep)) {
+        if (normalizedPath.startsWith(dir + kSep, cs)) {
             return true;
         }
     }
@@ -169,10 +222,7 @@ QString QSocRemotePathContext::resolveCwdRequest(const QString &requested) const
     if (m_root.isEmpty() || m_root == QStringLiteral("/")) {
         return candidate;
     }
-    if (candidate == m_root) {
-        return candidate;
-    }
-    if (candidate.startsWith(m_root + kSep)) {
+    if (isWithinAny(candidate, {m_root}, pathCase())) {
         return candidate;
     }
     return m_root;

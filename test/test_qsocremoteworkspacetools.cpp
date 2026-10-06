@@ -4,8 +4,11 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocmemorymanager.h"
 #include "agent/qsoctool.h"
+#include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsocsftpclient.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "common/qsocimageattach.h"
+#include "common/qsocmachine.h"
 #include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
 
@@ -92,6 +95,10 @@ private slots:
     void readFileAttachesARemoteImage();
     void readFilePagesALargeLogWithoutReadingItAll();
     void readFileBoundsOneOversizedLine();
+    void listFilesTakesTheLocalArgumentsAndSaysWhenItStops();
+    void editFileReplacesAllLikeTheLocalTool();
+    void tildeIsTheRemoteHome();
+    void windowsSpellingsReachTheWorkspace();
     void skillPlaceholdersNameTheRemoteWorkspace();
     void skillListingFollowsTheBinding();
     void todoAddWritesTheRemoteWorkspace();
@@ -337,6 +344,107 @@ void Test::readFileBoundsOneOversizedLine()
     const QString result = readRemote({{"file_path", "one.line"}});
     QVERIFY2(result.size() < 4096, qPrintable(QString::number(result.size())));
     QVERIFY2(result.startsWith(QStringLiteral("Error: line 0 ")), qPrintable(result));
+}
+
+/* Counterexample: remote list_files required `directory_path`, ignored
+ * `pattern`, and cut the listing at `limit` without saying so. */
+void Test::listFilesTakesTheLocalArgumentsAndSaysWhenItStops()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    const QString dir = m_workspace + QStringLiteral("/listing");
+    QVERIFY(QDir().mkpath(dir + QStringLiteral("/sub")));
+    for (const char *name : {"a.v", "b.v", "c.txt", "sub/d.v", ".hidden.v"}) {
+        QVERIFY(writeFile(dir + QLatin1Char('/') + QString::fromLatin1(name), "x\n"));
+    }
+
+    const QString all = call(QStringLiteral("list_files"), {{"directory", "listing"}});
+    QCOMPARE(
+        all,
+        QStringLiteral("Files in %1:\na.v\nb.v\nc.txt\nsub/")
+            .arg(QFileInfo(dir).canonicalFilePath()));
+
+    const QString cut = call(QStringLiteral("list_files"), {{"directory", "listing"}, {"limit", 2}});
+    QVERIFY2(cut.contains(QStringLiteral("a.v\nb.v\n[truncated:")), qPrintable(cut));
+    QVERIFY2(!cut.contains(QStringLiteral("c.txt")), qPrintable(cut));
+
+    const QString deep = call(
+        QStringLiteral("list_files"),
+        {{"directory", "listing"}, {"pattern", "*.v"}, {"recursive", true}});
+    QVERIFY2(deep.endsWith(QStringLiteral("a.v\nb.v\nsub/d.v")), qPrintable(deep));
+    QVERIFY(!deep.contains(QStringLiteral(".hidden.v")));
+
+    const QString legacy = call(QStringLiteral("list_files"), {{"directory_path", "listing"}});
+    QCOMPARE(legacy, all);
+}
+
+/* Counterexample: remote edit_file refused every repeated string, so the
+ * replace_all call the local tool takes had no remote equivalent. */
+void Test::editFileReplacesAllLikeTheLocalTool()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    const QString path = m_workspace + QStringLiteral("/many.txt");
+    QVERIFY(writeFile(path, "x x x\n"));
+    QVERIFY(!readRemote({{"file_path", "many.txt"}}).startsWith(QStringLiteral("Error")));
+
+    const QString once = call(
+        QStringLiteral("edit_file"),
+        {{"file_path", "many.txt"}, {"old_string", "x"}, {"new_string", "y"}});
+    QVERIFY2(once.startsWith(QStringLiteral("Error: old_string found 3 times")), qPrintable(once));
+
+    const QString all = call(
+        QStringLiteral("edit_file"),
+        {{"file_path", "many.txt"}, {"old_string", "x"}, {"new_string", "y"}, {"replace_all", true}});
+    QCOMPARE(
+        all,
+        QStringLiteral("Successfully edited file: %1 (3 replacement(s))")
+            .arg(QFileInfo(path).canonicalFilePath()));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), QByteArray("y y y\n"));
+}
+
+/* Counterexample: `~/x` resolved to `<cwd>/~/x`, a directory nobody has. */
+void Test::tildeIsTheRemoteHome()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    QString home;
+    QString err;
+    QCOMPARE(
+        m_runtime->remoteConnection()->sftp()->realPath(QStringLiteral("."), &home, &err),
+        QSocSftpClient::Presence::Present);
+
+    const QString listed = call(QStringLiteral("list_files"), {{"directory", "~"}});
+    QVERIFY2(listed.startsWith(QStringLiteral("Files in %1:").arg(home)), qPrintable(listed));
+    const QString missing = readRemote({{"file_path", "~/qsoc-no-such-file"}});
+    QCOMPARE(missing, QStringLiteral("Error: File not found: %1/qsoc-no-such-file").arg(home));
+}
+
+/* Counterexample: on a Windows host the Git Bash spelling of a workspace
+ * path, which is what bash prints, read as a path relative to the cwd. */
+void Test::windowsSpellingsReachTheWorkspace()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    const QString root = QFileInfo(m_workspace).canonicalFilePath();
+    QSocMachine   host;
+    host.kind     = QSocMachine::Kind::Windows;
+    host.os       = QStringLiteral("Windows");
+    host.rootFrom = root;
+    host.rootTo   = QStringLiteral("/c/ws");
+    m_runtime->remoteConnection()->setHostProbe(
+        [host](QSocSshSession *, const QString &) { return host; });
+    QVERIFY(bind(m_workspace));
+    QVERIFY(writeFile(m_workspace + QStringLiteral("/win.txt"), "windows\n"));
+
+    for (const char *spelling : {"/c/ws/win.txt", "/C/WS/win.txt"}) {
+        const QString read = readRemote({{"file_path", spelling}});
+        QCOMPARE(read, QStringLiteral("windows\n"));
+    }
+    const QString wrote
+        = call(QStringLiteral("write_file"), {{"file_path", "/c/ws/fresh.txt"}, {"content", "new"}});
+    QCOMPARE(wrote, QStringLiteral("Successfully wrote 3 bytes to: %1/fresh.txt").arg(root));
 }
 
 /* Counterexample: ${PROJECT} named the local project while ${CWD} named the

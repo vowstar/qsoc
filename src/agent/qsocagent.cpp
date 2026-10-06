@@ -2912,7 +2912,8 @@ QString QSocAgent::buildIdentitySystemPrompt() const
         "- Read: unrestricted (any path)\n"
         "- Write: allowed directories only (project, working, user-added, temp)\n"
         "- Use path_context to manage allowed directories\n"
-        "- Always use absolute paths\n");
+        "- Relative paths resolve against the working directory, for file tools and bash "
+        "alike; ~ is the home directory. Prefer absolute paths\n");
 
     /* Section 5: Using tools */
     prompt += QStringLiteral(
@@ -3198,9 +3199,10 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         remoteSection += remoteToolLines();
         remoteSection += QStringLiteral(
             "\n"
-            "Use absolute remote paths in tool calls. Do not refer to local paths unless "
-            "the\n"
-            "user explicitly asks for local-machine information.\n"
+            "Use absolute remote paths in tool calls; a relative path resolves against the\n"
+            "remote working directory and ~ is the remote home, for file tools and bash alike.\n"
+            "Do not refer to local paths unless the user explicitly asks for local-machine\n"
+            "information.\n"
             "\n"
             "Local QSoC configuration remains authoritative for LLM endpoints, API keys,\n"
             "proxy, remote profiles, SSH policy, tool policy, model selection, and safety\n"

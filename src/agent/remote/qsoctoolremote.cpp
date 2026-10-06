@@ -14,10 +14,10 @@
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
+#include "agent/tool/qsoctoolfilecore.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
 #include "common/qsocboundedcapture.h"
-#include "common/qsocimageattach.h"
 #include "common/qsocshellpath.h"
 
 #include <QDateTime>
@@ -65,6 +65,7 @@ ResolvedPath remoteResolve(QSocRemotePathContext *ctx, QSocRemoteConnection *con
     if (conn == nullptr || conn->sftp() == nullptr) {
         return {{}, QStringLiteral("Error: remote SFTP client is not connected")};
     }
+    conn->learnHome(raw);
     const QString lexical = ctx->normalize(raw);
     QString       canonical;
     QString       err;
@@ -78,134 +79,43 @@ ResolvedPath remoteResolve(QSocRemotePathContext *ctx, QSocRemoteConnection *con
     return {{}, QStringLiteral("Error: %1").arg(err)};
 }
 
-/**
- * @brief One streamed read_file: sniffs the leading bytes, then keeps either
- *        the image body or the requested line window, never the whole file.
- */
-class RemoteFileReader
+namespace Core = QSocToolFileCore;
+
+const QString kWriteScope = QStringLiteral("the writable directories path_context lists");
+
+/* The refusal for @p path when it is not a regular file, or empty. */
+QString regularFileRefusal(QSocSftpClient *sftp, const QString &path)
 {
-public:
-    RemoteFileReader(int offset, int maxLines, qsizetype limit)
-        : m_offset(offset)
-        , m_maxLines(maxLines)
-        , m_limit(limit)
-    {}
-
-    /* SFTP sink: false ends the transfer. */
-    bool feed(const QByteArray &chunk)
-    {
-        if (m_sniffed) {
-            return m_mime.isEmpty() ? pageText(chunk) : keepImage(chunk);
-        }
-        m_head += chunk;
-        return m_head.size() < kMagicBytes || sniff();
+    QSocSftpClient::LinkStat stat;
+    QString                  err;
+    switch (sftp->linkStat(path, &stat, &err)) {
+    case QSocSftpClient::Presence::Absent:
+        return Core::fileNotFound(path);
+    case QSocSftpClient::Presence::Unknown:
+        return QStringLiteral("Error: %1").arg(err);
+    case QSocSftpClient::Presence::Present:
+        break;
     }
+    return stat.regular ? QString() : Core::notAFile(path);
+}
 
-    /* End of file: decide a short file and close its last line. */
-    void finish()
-    {
-        if (!m_sniffed) {
-            sniff();
-        }
-        if (m_mime.isEmpty() && !m_stopped && !m_pending.isEmpty()) {
-            m_pending += '\n';
-            m_closedLastLine = true;
-            takeLine(m_pending);
-        }
-    }
-
-    const QString    &mime() const { return m_mime; }
-    const QByteArray &body() const { return m_body; }
-    bool              overLimit() const { return m_overLimit; }
-    bool              moreLines() const { return m_moreLines; }
-    int               nextOffset() const { return m_offset + m_emitted; }
-
-    /* The whole file when this read saw all of it from line 0, else null. */
-    std::optional<QByteArray> wholeFile() const
-    {
-        if (m_offset != 0 || m_stopped) {
-            return std::nullopt;
-        }
-        return m_closedLastLine ? m_body.chopped(1) : m_body;
-    }
-
-private:
-    static constexpr qsizetype kMagicBytes = 16;
-
-    bool sniff()
-    {
-        m_sniffed = true;
-        m_mime    = QSocImageAttach::detectMimeByMagic(m_head);
-        return feed(std::exchange(m_head, {}));
-    }
-
-    bool keepImage(const QByteArray &chunk)
-    {
-        m_body += chunk;
-        return m_body.size() <= m_limit || stop(&m_overLimit);
-    }
-
-    bool pageText(const QByteArray &chunk)
-    {
-        m_pending += chunk;
-        qsizetype start = 0;
-        for (qsizetype nl = m_pending.indexOf('\n'); nl >= 0; nl = m_pending.indexOf('\n', start)) {
-            if (!takeLine(m_pending.mid(start, nl + 1 - start))) {
-                return false;
-            }
-            start = nl + 1;
-        }
-        m_pending.remove(0, start);
-        if (m_lineNum < m_offset) {
-            m_pending.clear();
-            return true;
-        }
-        if (!m_pending.isEmpty() && m_emitted >= m_maxLines) {
-            return stop(&m_moreLines);
-        }
-        return m_body.size() + m_pending.size() <= m_limit || stop(&m_overLimit);
-    }
-
-    bool takeLine(const QByteArray &line)
-    {
-        if (m_lineNum < m_offset) {
-            ++m_lineNum;
-            return true;
-        }
-        if (m_emitted >= m_maxLines) {
-            return stop(&m_moreLines);
-        }
-        if (m_body.size() + line.size() > m_limit) {
-            return stop(&m_overLimit);
-        }
-        m_body += line;
-        ++m_emitted;
-        ++m_lineNum;
-        return true;
-    }
-
-    bool stop(bool *reason)
-    {
-        *reason   = true;
-        m_stopped = true;
+/* One SFTP directory listing in the shared entry form. */
+bool listRemoteDir(
+    QSocSftpClient *sftp, const QString &dir, QList<Core::ListEntry> *entries, QString *error)
+{
+    const QList<QSocSftpClient::Entry> found = sftp->listDir(dir, 0, error);
+    if (found.isEmpty() && !error->isEmpty()) {
         return false;
     }
-
-    int        m_offset   = 0;
-    int        m_maxLines = 0;
-    qsizetype  m_limit    = 0;
-    QByteArray m_head;
-    QString    m_mime;
-    QByteArray m_body;
-    QByteArray m_pending;
-    int        m_lineNum        = 0;
-    int        m_emitted        = 0;
-    bool       m_sniffed        = false;
-    bool       m_stopped        = false;
-    bool       m_overLimit      = false;
-    bool       m_moreLines      = false;
-    bool       m_closedLastLine = false;
-};
+    for (const QSocSftpClient::Entry &entry : found) {
+        entries->append(
+            {.name        = entry.name,
+             .isDirectory = entry.isDirectory,
+             .isSymlink   = entry.isSymlink,
+             .hidden      = entry.name.startsWith(QLatin1Char('.'))});
+    }
+    return true;
+}
 
 /* `<workspace>/.qsoc-agent/jobs`, verified to resolve to itself; created
  * first for RemoteJobPathUse::Create. */
@@ -591,31 +501,12 @@ QString QSocToolRemoteFileRead::getName() const
 
 QString QSocToolRemoteFileRead::getDescription() const
 {
-    QString text = QStringLiteral(
-        "Read the contents of a file on the remote workspace via SFTP. "
-        "Paths are resolved against the remote working directory.");
-    if (m_llm != nullptr && m_llm->currentSupportsImage()) {
-        text += QStringLiteral(
-            " Image files (PNG, JPG, GIF, WebP) are returned as visual content that the "
-            "multimodal LLM can see directly.");
-    }
-    return text;
+    return Core::readDescription(m_llm != nullptr && m_llm->currentSupportsImage());
 }
 
 json QSocToolRemoteFileRead::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"file_path",
-           {{"type", "string"},
-            {"description", "Remote path (absolute or relative to remote cwd)"}}},
-          {"max_lines",
-           {{"type", "integer"}, {"description", "Maximum number of lines to read (default: 500)"}}},
-          {"offset",
-           {{"type", "integer"},
-            {"description", "Line number to start reading from (0-indexed, default: 0)"}}}}},
-        {"required", json::array({"file_path"})}};
+    return Core::readSchema();
 }
 
 QString QSocToolRemoteFileRead::execute(const json &arguments)
@@ -629,38 +520,17 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
         return resolved.error;
     }
     const QString remotePath = resolved.path;
-
-    int maxLines = 500;
-    int offset   = 0;
-    if (arguments.contains("max_lines") && arguments["max_lines"].is_number_integer()) {
-        maxLines = arguments["max_lines"].get<int>();
-        if (maxLines <= 0) {
-            maxLines = 500;
-        }
-    }
-    if (arguments.contains("offset") && arguments["offset"].is_number_integer()) {
-        offset = arguments["offset"].get<int>();
-        if (offset < 0) {
-            offset = 0;
-        }
+    if (const QString refusal = regularFileRefusal(m_conn->sftp(), remotePath); !refusal.isEmpty()) {
+        return refusal;
     }
 
-    RemoteFileReader reader(offset, maxLines, kReadBytesLimit);
-    QString          err;
+    Core::Reader reader(Core::readWindow(arguments));
+    QString      err;
     if (!m_conn->sftp()->readStream(
             remotePath, [&reader](const QByteArray &chunk) { return reader.feed(chunk); }, &err)) {
         return QStringLiteral("Error: %1").arg(err);
     }
     reader.finish();
-
-    const qsizetype limitMiB = kReadBytesLimit / (1024 * 1024);
-    if (!reader.mime().isEmpty()) {
-        if (reader.overLimit()) {
-            return QStringLiteral("Error: image is larger than the %1 MiB read limit: %2")
-                .arg(QString::number(limitMiB), remotePath);
-        }
-        return QSocImageAttach::buildAttachmentResult(remotePath, reader.mime(), reader.body(), m_llm);
-    }
 
     /* Record a full read so the remote edit_file / write_file tools can
      * enforce read-before-edit and detect on-disk changes. Partial / offset
@@ -668,29 +538,7 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
     if (const auto whole = reader.wholeFile(); m_pathCtx && whole) {
         m_pathCtx->readState().recordRead(remotePath, QString::fromUtf8(*whole));
     }
-
-    QString snippet = QString::fromUtf8(reader.body());
-    if (snippet.isEmpty() && reader.overLimit()) {
-        return QStringLiteral(
-                   "Error: line %1 of %2 is longer than the %3 MiB read limit; read part of it "
-                   "with bash, for example head -c or cut -c")
-            .arg(QString::number(reader.nextOffset()), remotePath, QString::number(limitMiB));
-    }
-    if (snippet.isEmpty()) {
-        return QStringLiteral("File is empty or offset beyond file length: %1").arg(remotePath);
-    }
-    if (reader.overLimit()) {
-        snippet += QStringLiteral(
-                       "[truncated: read stopped at the %1 MiB limit; rerun with offset=%2 to "
-                       "continue]\n")
-                       .arg(limitMiB)
-                       .arg(reader.nextOffset());
-    } else if (reader.moreLines()) {
-        snippet += QStringLiteral(
-                       "[truncated: more lines follow; rerun with offset=%1 to continue]\n")
-                       .arg(reader.nextOffset());
-    }
-    return snippet;
+    return reader.result(remotePath, m_llm);
 }
 
 /* write_file */
@@ -709,41 +557,27 @@ QString QSocToolRemoteFileWrite::getName() const
 
 QString QSocToolRemoteFileWrite::getDescription() const
 {
-    return QStringLiteral(
-        "Write (or overwrite) a remote file via SFTP. The parent directory is "
-        "created if missing. Overwriting an existing file requires reading it "
-        "first with read_file; a file changed since the read is rejected. "
-        "Writes are restricted to configured writable directories, checked "
-        "against the path the host resolves, so a symlink leading out of them "
-        "is refused.");
+    return Core::writeDescription(kWriteScope);
 }
 
 json QSocToolRemoteFileWrite::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"file_path",
-           {{"type", "string"}, {"description", "Remote path (absolute or relative to cwd)"}}},
-          {"content", {{"type", "string"}, {"description", "File content as UTF-8 text"}}}}},
-        {"required", json::array({"file_path", "content"})}};
+    return Core::writeSchema();
 }
 
 QString QSocToolRemoteFileWrite::execute(const json &arguments)
 {
-    if (!arguments.contains("file_path") || !arguments["file_path"].is_string()) {
-        return QStringLiteral("Error: file_path is required");
+    const Core::WriteCall call = Core::writeCall(arguments);
+    if (!call.error.isEmpty()) {
+        return call.error;
     }
-    if (!arguments.contains("content") || !arguments["content"].is_string()) {
-        return QStringLiteral("Error: content is required");
-    }
-    const QString raw = QString::fromStdString(arguments["file_path"].get<std::string>());
-    QString       remotePath;
-    QString       resolveError;
     if (m_conn == nullptr) {
         return QStringLiteral("Error: remote SSH connection is not configured");
     }
-    if (!m_conn->resolveWritablePath(raw, &remotePath, &resolveError)) {
+    QString remotePath;
+    QString resolveError;
+    m_conn->learnHome(call.path);
+    if (!m_conn->resolveWritablePath(call.path, &remotePath, &resolveError)) {
         return QStringLiteral("Error: %1").arg(resolveError);
     }
 
@@ -761,10 +595,7 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     QString    beforeContent;
     if (existedBefore) {
         if (!m_pathCtx->readState().wasRead(remotePath)) {
-            return QStringLiteral(
-                       "Error: File not read yet: %1. Read it with read_file "
-                       "before overwriting.")
-                .arg(remotePath);
+            return Core::notReadYet(remotePath, QStringLiteral("overwriting"));
         }
         QString          readErr;
         const QByteArray current = m_conn->sftp()->readFile(remotePath, 0, &readErr);
@@ -774,31 +605,24 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
         }
         beforeContent = QString::fromUtf8(current);
         if (m_pathCtx->readState().changedSinceRead(remotePath, beforeContent)) {
-            return QStringLiteral(
-                       "Error: File changed on disk since last read: %1. "
-                       "Read it again before overwriting.")
-                .arg(remotePath);
+            return Core::changedSinceRead(remotePath, QStringLiteral("overwriting"));
         }
     }
 
     /* Checkpoint the pre-write state so rewind can restore the remote file. */
-    if (m_fileHistory != nullptr && m_fileHistory->isPathInScope(remotePath)) {
-        if (!m_fileHistory->trackEdit(remotePath, existedBefore, beforeContent)) {
-            return QStringLiteral("Error: Cannot save file history before writing: %1")
-                .arg(remotePath);
-        }
+    if (m_fileHistory != nullptr && m_fileHistory->isPathInScope(remotePath)
+        && !m_fileHistory->trackEdit(remotePath, existedBefore, beforeContent)) {
+        return QStringLiteral("Error: Cannot save file history before writing: %1").arg(remotePath);
     }
 
-    const QString content = QString::fromStdString(arguments["content"].get<std::string>());
-    QString       err;
-    if (!m_conn->sftp()->writeFile(remotePath, content.toUtf8(), &err)) {
+    const QByteArray bytes = call.content.toUtf8();
+    QString          err;
+    if (!m_conn->sftp()->writeFile(remotePath, bytes, &err)) {
         return sftpWriteError(m_conn->sftp(), err);
     }
     /* The written content is now the agent's known state. */
-    m_pathCtx->readState().recordRead(remotePath, content);
-    return QStringLiteral("Wrote %1 (%2 bytes) on remote")
-        .arg(remotePath)
-        .arg(content.toUtf8().size());
+    m_pathCtx->readState().recordRead(remotePath, call.content);
+    return Core::wroteText(bytes.size(), remotePath);
 }
 
 /* list_files */
@@ -817,53 +641,38 @@ QString QSocToolRemoteFileList::getName() const
 
 QString QSocToolRemoteFileList::getDescription() const
 {
-    return QStringLiteral("List files in a remote directory via SFTP.");
+    return Core::listDescription();
 }
 
 json QSocToolRemoteFileList::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"directory_path",
-           {{"type", "string"},
-            {"description", "Remote directory path (absolute or relative to cwd)"}}},
-          {"limit",
-           {{"type", "integer"}, {"description", "Maximum number of entries (default 200)"}}}}},
-        {"required", json::array({"directory_path"})}};
+    return Core::listSchema();
 }
 
 QString QSocToolRemoteFileList::execute(const json &arguments)
 {
-    if (!arguments.contains("directory_path") || !arguments["directory_path"].is_string()) {
-        return QStringLiteral("Error: directory_path is required");
-    }
-    const QString      raw = QString::fromStdString(arguments["directory_path"].get<std::string>());
-    const ResolvedPath resolved = remoteResolve(m_pathCtx, m_conn, raw);
+    const Core::ListCall call     = Core::listCall(arguments);
+    const ResolvedPath   resolved = remoteResolve(m_pathCtx, m_conn, call.directory);
     if (!resolved.error.isEmpty()) {
         return resolved.error;
     }
-    const QString remotePath = resolved.path;
-    int           limit      = 200;
-    if (arguments.contains("limit") && arguments["limit"].is_number_integer()) {
-        limit = arguments["limit"].get<int>();
-        if (limit <= 0) {
-            limit = 200;
-        }
-    }
-    QString    err;
-    const auto entries = m_conn->sftp()->listDir(remotePath, limit, &err);
-    if (entries.isEmpty() && !err.isEmpty()) {
+    QSocSftpClient *sftp = m_conn->sftp();
+    QString         err;
+    switch (sftp->presence(resolved.path, &err)) {
+    case QSocSftpClient::Presence::Absent:
+        return Core::directoryNotFound(resolved.path);
+    case QSocSftpClient::Presence::Unknown:
         return QStringLiteral("Error: %1").arg(err);
+    case QSocSftpClient::Presence::Present:
+        break;
     }
-    QString out = QStringLiteral("Remote directory: %1\n").arg(remotePath);
-    for (const auto &entry : entries) {
-        out += QStringLiteral("%1 %2 %3\n")
-                   .arg(entry.isDirectory ? QStringLiteral("d") : QStringLiteral("-"))
-                   .arg(entry.size, 10)
-                   .arg(entry.name);
-    }
-    return out;
+    return Core::listFiles(
+        resolved.path,
+        call,
+        m_pathCtx->pathCase() == Qt::CaseSensitive,
+        [sftp](const QString &dir, QList<Core::ListEntry> *entries, QString *error) {
+            return listRemoteDir(sftp, dir, entries, error);
+        });
 }
 
 /* edit_file */
@@ -882,91 +691,65 @@ QString QSocToolRemoteFileEdit::getName() const
 
 QString QSocToolRemoteFileEdit::getDescription() const
 {
-    return QStringLiteral(
-        "Edit a remote file by replacing a unique substring. Read the file with "
-        "read_file first: editing an unread file, or one changed since the read, "
-        "is rejected. Fails if the old string is missing or appears more than "
-        "once, or if the path resolves outside the writable directories.");
+    return Core::editDescription(kWriteScope);
 }
 
 json QSocToolRemoteFileEdit::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"file_path", {{"type", "string"}, {"description", "Remote file path"}}},
-          {"old_string", {{"type", "string"}, {"description", "Exact text to replace"}}},
-          {"new_string", {{"type", "string"}, {"description", "Replacement text"}}}}},
-        {"required", json::array({"file_path", "old_string", "new_string"})}};
+    return Core::editSchema();
 }
 
 QString QSocToolRemoteFileEdit::execute(const json &arguments)
 {
-    for (const char *key : {"file_path", "old_string", "new_string"}) {
-        if (!arguments.contains(key) || !arguments[key].is_string()) {
-            return QStringLiteral("Error: %1 is required").arg(QString::fromLatin1(key));
-        }
+    Core::EditCall call = Core::editCall(arguments);
+    if (!call.error.isEmpty()) {
+        return call.error;
     }
-    const QString raw       = QString::fromStdString(arguments["file_path"].get<std::string>());
-    const QString oldString = QString::fromStdString(arguments["old_string"].get<std::string>());
-    const QString newString = QString::fromStdString(arguments["new_string"].get<std::string>());
-    if (oldString == newString) {
-        return QStringLiteral("Error: old_string and new_string are identical");
-    }
-    QString remotePath;
-    QString resolveError;
     if (m_conn == nullptr) {
         return QStringLiteral("Error: remote SSH connection is not configured");
     }
-    if (!m_conn->resolveWritablePath(raw, &remotePath, &resolveError)) {
+    QString remotePath;
+    QString resolveError;
+    m_conn->learnHome(call.path);
+    if (!m_conn->resolveWritablePath(call.path, &remotePath, &resolveError)) {
         return QStringLiteral("Error: %1").arg(resolveError);
+    }
+    call.path = remotePath;
+    if (const QString refusal = regularFileRefusal(m_conn->sftp(), remotePath); !refusal.isEmpty()) {
+        return refusal;
     }
     QString          err;
     const QByteArray bytes = m_conn->sftp()->readFile(remotePath, 0, &err);
     if (bytes.isNull() && !err.isEmpty()) {
         return QStringLiteral("Error: %1").arg(err);
     }
-    QString content = QString::fromUtf8(bytes);
+    const QString content = QString::fromUtf8(bytes);
 
     /* Read-before-edit + stale-on-disk guard: the agent must have read this
      * exact remote file first, and it must not have changed since, so an
      * edit never blindly clobbers unseen content or a concurrent change. */
     if (!m_pathCtx->readState().wasRead(remotePath)) {
-        return QStringLiteral(
-                   "Error: File not read yet: %1. Read it with read_file "
-                   "before editing.")
-            .arg(remotePath);
+        return Core::notReadYet(remotePath, QStringLiteral("editing"));
     }
     if (m_pathCtx->readState().changedSinceRead(remotePath, content)) {
-        return QStringLiteral(
-                   "Error: File changed on disk since last read: %1. "
-                   "Read it again before editing.")
-            .arg(remotePath);
+        return Core::changedSinceRead(remotePath, QStringLiteral("editing"));
     }
 
-    const int first = content.indexOf(oldString);
-    if (first < 0) {
-        return QStringLiteral("Error: old_string not found in %1").arg(remotePath);
-    }
-    const int second = content.indexOf(oldString, first + oldString.size());
-    if (second >= 0) {
-        return QStringLiteral("Error: old_string is not unique in %1 (add more surrounding context)")
-            .arg(remotePath);
+    const Core::EditOutcome edit = Core::applyEdit(content, call);
+    if (!edit.error.isEmpty()) {
+        return edit.error;
     }
     /* Checkpoint the pre-edit content so rewind can restore the remote file. */
-    if (m_fileHistory != nullptr && m_fileHistory->isPathInScope(remotePath)) {
-        if (!m_fileHistory->trackEdit(remotePath, true, content)) {
-            return QStringLiteral("Error: Cannot save file history before editing: %1")
-                .arg(remotePath);
-        }
+    if (m_fileHistory != nullptr && m_fileHistory->isPathInScope(remotePath)
+        && !m_fileHistory->trackEdit(remotePath, true, content)) {
+        return QStringLiteral("Error: Cannot save file history before editing: %1").arg(remotePath);
     }
-    content.replace(first, oldString.size(), newString);
-    if (!m_conn->sftp()->writeFile(remotePath, content.toUtf8(), &err)) {
+    if (!m_conn->sftp()->writeFile(remotePath, edit.content.toUtf8(), &err)) {
         return sftpWriteError(m_conn->sftp(), err);
     }
     /* The agent now knows the post-edit content. */
-    m_pathCtx->readState().recordRead(remotePath, content);
-    return QStringLiteral("Edited %1 on remote").arg(remotePath);
+    m_pathCtx->readState().recordRead(remotePath, edit.content);
+    return Core::editedText(remotePath, edit.count);
 }
 
 /* bash (shell) */

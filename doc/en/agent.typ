@@ -725,6 +725,51 @@ The agent provides the following tools through natural language:
 LLM, MCP HTTP, and web requests are pinned to HTTP/1.1. HTTP/2-only
 endpoints are unsupported.
 
+=== File Tools
+<agent-file-tools>
+
+The file tools take the same arguments and return the same texts locally and
+on a remote workspace.
+
+#figure(
+  align(center)[#table(
+    columns: (0.3fr, 1fr),
+    align: (auto, left),
+    table.header([Tool], [Arguments]),
+    table.hline(),
+    [`read_file`],
+    [`file_path`; `offset` (first line, default 0); `max_lines` (default 500).
+     Text past the window ends with a `[truncated: ...]` line naming the next
+     offset. Images (PNG, JPG, GIF, WebP) return as image content. One read
+     keeps at most 16 MiB: a longer single line or image is refused],
+    [`list_files`],
+    [`directory` (default: the working directory); `pattern` (glob on the
+     entry name); `recursive`; `include_hidden`; `limit` (default 1000).
+     Sorted, directories end in `/`. A listing cut at `limit` ends with a
+     `[truncated: ...]` line. A recursive listing does not follow symbolic
+     links],
+    [`write_file`],
+    [`file_path`, `content`. Creates missing parent directories],
+    [`edit_file`],
+    [`file_path`, `old_string`, `new_string`; `replace_all` (default false).
+     `old_string` must be unique unless `replace_all` is set, and must differ
+     from `new_string`],
+  )],
+  caption: [FILE TOOLS],
+  kind: table,
+)
+
+File tool paths follow one rule on every machine:
+
+- A relative path resolves against the working directory that `bash` runs in
+  (`/cwd`, or `path_context` with `set_working`).
+- `~` and `~/x` name the home directory of that machine, the one `bash`
+  uses: locally `$HOME` when it is set, else the user's home directory.
+  Remotely it is the login directory the SSH server reports.
+- On a Windows machine, `C:\x`, `C:/x`, the Git Bash form `/c/x` and the SFTP
+  form `/C:/x` name the same file, as does the workspace root in the spelling
+  Git Bash reports for it. Paths compare without case.
+
 == Constraint Solving
 <agent-smt>
 
@@ -2027,11 +2072,8 @@ Workspace tools operate on the remote host (SFTP + SSH exec):
 - `skill_find`, `skill_create` (skills of the remote `.qsoc/skills` and of
   this machine, see @agent-skills)
 
-Remote `read_file` returns image files (PNG, JPG, GIF, WebP) as image content,
-the same as the local tool. Text is paged with `offset` and `max_lines` at any
-file size. One read returns at most 16 MiB; a single longer line is refused
-with a hint to read part of it with `bash`, and an image larger than 16 MiB is
-refused.
+The file tools take the local arguments and limits (@agent-file-tools).
+Remote `read_file` pages text of any file size.
 
 Every other tool runs on the local machine, in both modes:
 

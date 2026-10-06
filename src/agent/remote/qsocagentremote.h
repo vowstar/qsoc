@@ -198,6 +198,13 @@ public:
     bool resolveWritablePath(
         const QString &requested, QString *canonicalPath, QString *errorMessage = nullptr) const;
 
+    /**
+     * @brief Learn the host's home directory when @p requested names `~`.
+     * @details SFTP realpath of `.`, the login directory, asked once per
+     *          binding. A host that does not answer leaves `~` unexpanded.
+     */
+    void learnHome(const QString &requested);
+
     /** @brief Resolve a writable directory entry without following its leaf. */
     bool resolveWritableEntry(
         const QString &requested, QString *entryPath, QString *errorMessage = nullptr) const;

@@ -56,6 +56,37 @@ public:
     void setWritableDirs(const QStringList &dirs);
 
     /**
+     * @brief How the bound host spells paths.
+     * @details On a Windows host @ref normalize maps `C:\x`, `C:/x`, the Git
+     *          Bash `/c/x` and the executor's spelling of the workspace root
+     *          (@p shellRoot, standing for @p sftpRoot) to the SFTP form
+     *          `/C:/x`, and containment ignores case.
+     */
+    void setHostStyle(bool windows, const QString &sftpRoot = {}, const QString &shellRoot = {});
+
+    /** @brief The host's home directory, which a leading `~` names. */
+    void    setHome(const QString &home);
+    QString home() const { return m_home; }
+
+    /** @brief Case rule for comparing paths on the bound host. */
+    Qt::CaseSensitivity pathCase() const
+    {
+        return m_windows ? Qt::CaseInsensitive : Qt::CaseSensitive;
+    }
+
+    /** @brief Whether @p path starts with `~` naming the home directory. */
+    static bool namesHome(const QString &path);
+
+    /**
+     * @brief The SFTP spelling of a path on a Windows host.
+     * @details Pure. Backslashes become `/`; a path under @p shellRoot maps to
+     *          @p sftpRoot; `C:\x`, `C:/x`, `/c/x` and `/C:/x` become `/C:/x`.
+     *          Anything else is returned with only its separators changed.
+     */
+    static QString windowsSftpPath(
+        const QString &path, const QString &sftpRoot, const QString &shellRoot);
+
+    /**
      * @brief Forget everything a transport taught us, keep the observer.
      * @details Assigning a default-constructed context instead drops the
      *          observer, and the working directory then moves with nobody
@@ -66,11 +97,13 @@ public:
     /**
      * @brief Lexically normalize a remote path.
      * @details Handles POSIX `//`, `.`, and `..` segments. Empty input
-     *          resolves to cwd (falling back to root). Relative paths
-     *          resolve against cwd. Absolute paths pass through the same
-     *          lexical cleanup. Never consults the local filesystem.
+     *          resolves to cwd (falling back to root). A leading `~` is the
+     *          home set by @ref setHome. Relative paths resolve against cwd.
+     *          Absolute paths pass through the same lexical cleanup. On a
+     *          Windows host the Windows spellings map first, see
+     *          @ref setHostStyle. Never consults the local filesystem.
      */
-    QString normalize(const QString &path) const;
+    QString normalize(const QString &raw) const;
 
     /**
      * @brief True when @p normalizedPath is inside one of @p normalizedDirs.
@@ -80,7 +113,10 @@ public:
      *          host-canonical path against a lexical directory is how a
      *          workspace reached through a symlink refuses every write in it.
      */
-    static bool isWithinAny(const QString &normalizedPath, const QStringList &normalizedDirs);
+    static bool isWithinAny(
+        const QString      &normalizedPath,
+        const QStringList  &normalizedDirs,
+        Qt::CaseSensitivity cs = Qt::CaseSensitive);
 
     /**
      * @brief @ref isWithinAny against the configured writable dirs.
@@ -103,10 +139,15 @@ private:
     static QStringList splitPosix(const QString &path);
     static QString     joinPosix(const QStringList &parts, bool absolute);
     static QString     lexicalNormalize(const QString &path);
+    QString            hostSpelling(const QString &path) const;
 
     QString                              m_root;
     QString                              m_cwd;
     QStringList                          m_writableDirs;
+    QString                              m_home;
+    QString                              m_sftpRoot;
+    QString                              m_shellRoot;
+    bool                                 m_windows = false;
     QSocFileReadState                    m_readState;
     std::function<void(const QString &)> m_cwdObserver;
 };

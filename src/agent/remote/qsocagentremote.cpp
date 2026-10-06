@@ -821,6 +821,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
         m_host = probeRemoteHost(m_session, m_sftp, m_shellPreference, probeMs);
         verifyRemoteShellRoot(m_session, &m_host, m_canonicalWorkspace, probeMs);
     }
+    m_path.setHostStyle(m_host.kind == QSocMachine::Kind::Windows, m_host.rootFrom, m_host.rootTo);
     ++m_generation;
     m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_watcher->kick();
@@ -1045,7 +1046,7 @@ bool QSocRemoteConnection::resolveBoundDirectory(
         return refuse(
             err.isEmpty() ? QStringLiteral("the remote directory cannot be resolved") : err);
     }
-    if (!QSocRemotePathContext::isWithinAny(resolved, {canonicalRoot})) {
+    if (!QSocRemotePathContext::isWithinAny(resolved, {canonicalRoot}, m_path.pathCase())) {
         return refuse(
             QStringLiteral("the host resolves %1 to %2, outside the workspace").arg(dir, resolved));
     }
@@ -1178,7 +1179,7 @@ bool QSocRemoteConnection::resolveWritablePath(
     if (!canonicalWritableDirs(&writable, &stale, &err)) {
         return refuse(err);
     }
-    if (!QSocRemotePathContext::isWithinAny(resolved, writable)) {
+    if (!QSocRemotePathContext::isWithinAny(resolved, writable, m_path.pathCase())) {
         return refuse(
             stale.isEmpty()
                 ? QStringLiteral("remote path is outside writable directories: %1").arg(resolved)
@@ -1191,6 +1192,18 @@ bool QSocRemoteConnection::resolveWritablePath(
         errorMessage->clear();
     }
     return true;
+}
+
+void QSocRemoteConnection::learnHome(const QString &requested)
+{
+    if (m_sftp == nullptr || !m_path.home().isEmpty()
+        || !QSocRemotePathContext::namesHome(requested)) {
+        return;
+    }
+    QString home;
+    if (m_sftp->realPath(QStringLiteral("."), &home) == QSocSftpClient::Presence::Present) {
+        m_path.setHome(home);
+    }
 }
 
 bool QSocRemoteConnection::resolveWritableEntry(
@@ -1227,7 +1240,7 @@ bool QSocRemoteConnection::resolveWritableEntry(
         return refuse(err);
     }
     const QString entry = QDir(canonicalParent).filePath(leaf);
-    if (!QSocRemotePathContext::isWithinAny(entry, writable)) {
+    if (!QSocRemotePathContext::isWithinAny(entry, writable, m_path.pathCase())) {
         return refuse(
             stale.isEmpty()
                 ? QStringLiteral("remote path is outside writable directories: %1").arg(entry)
@@ -1255,6 +1268,7 @@ QSocRemoteConnection::CwdChange QSocRemoteConnection::setWorkingDirectory(
         return refuse(CwdChange::Refused, QStringLiteral("no remote workspace is bound"));
     }
 
+    learnHome(requested);
     const QString lexical = m_path.resolveCwdRequest(requested);
     QString       err;
     QString       canonicalDir;
@@ -1284,7 +1298,7 @@ QSocRemoteConnection::CwdChange QSocRemoteConnection::setWorkingDirectory(
         return refuse(CwdChange::Unknown, err);
     }
 
-    if (!QSocRemotePathContext::isWithinAny(canonicalDir, {canonicalRoot})) {
+    if (!QSocRemotePathContext::isWithinAny(canonicalDir, {canonicalRoot}, m_path.pathCase())) {
         return refuse(
             CwdChange::Outside,
             QStringLiteral("the host resolves %1 to %2, outside the workspace")

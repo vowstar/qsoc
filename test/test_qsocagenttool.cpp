@@ -613,6 +613,11 @@ private slots:
         file.write("uno dos tres");
         file.close();
 
+        /* Relative paths resolve against the working directory. */
+        const QString previous = pathContext->getWorkingDir();
+        pathContext->setWorkingDir(tempDir.path());
+        const auto restore = qScopeGuard([&]() { pathContext->setWorkingDir(previous); });
+
         QSocToolFileRead readTool(this, pathContext);
         readTool.execute({{"file_path", "./canon.txt"}});
 

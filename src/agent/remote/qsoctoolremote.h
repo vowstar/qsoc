@@ -26,19 +26,15 @@ QString runBoundRemoteShellEscape(
     QSocRemoteConnection *conn, const QString &command, std::optional<int> *exitCode = nullptr);
 
 /**
- * @brief Remote read_file. Same schema and name as the local tool.
+ * @brief Remote read_file. Same schema, reader and texts as the local tool.
  * @details Streams a remote file via SFTP. Relative paths resolve against the
- *          remote working directory in @ref QSocRemotePathContext. Image files
- *          take the local tool's attachment path; text is paged by line and
- *          each read buffers at most @ref kReadBytesLimit bytes.
+ *          remote working directory in @ref QSocRemotePathContext.
  */
 class QSocToolRemoteFileRead : public QSocTool
 {
     Q_OBJECT
 
 public:
-    static constexpr qsizetype kReadBytesLimit = 16 * 1024 * 1024;
-
     QSocToolRemoteFileRead(
         QObject               *parent,
         QSocRemoteConnection  *conn,
@@ -80,7 +76,7 @@ private:
     QSocFileHistory       *m_fileHistory = nullptr;
 };
 
-/** @brief Remote list_files via SFTP opendir/readdir. */
+/** @brief Remote list_files via SFTP readdir, with the local schema and output. */
 class QSocToolRemoteFileList : public QSocTool
 {
     Q_OBJECT
@@ -100,7 +96,7 @@ private:
     QSocRemotePathContext *m_pathCtx = nullptr;
 };
 
-/** @brief Remote edit_file: read, replace, atomically write back. */
+/** @brief Remote edit_file: read, replace, atomically write back, like the local tool. */
 class QSocToolRemoteFileEdit : public QSocTool
 {
     Q_OBJECT

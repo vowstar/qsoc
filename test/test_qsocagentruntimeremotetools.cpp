@@ -97,6 +97,21 @@ bool execTool(const QString &name)
            || name == QStringLiteral("monitor") || name == QStringLiteral("monitor_stop");
 }
 
+/* A schema with every description removed: what a call may carry, not how a
+ * tool explains it. */
+json callShape(json schema)
+{
+    if (schema.is_object()) {
+        schema.erase("description");
+        for (auto &item : schema.items())
+            item.value() = callShape(item.value());
+    } else if (schema.is_array()) {
+        for (auto &item : schema)
+            item = callShape(item);
+    }
+    return schema;
+}
+
 } // namespace
 
 class Test : public QObject
@@ -290,6 +305,37 @@ private slots:
             if (remote->getTool(name) != local->getTool(name))
                 QVERIFY2(QSocToolRegistry::isWorkspaceBound(name), qPrintable(name));
         }
+    }
+
+    /* Counterexample: remote list_files wanted `directory_path` and remote
+     * edit_file had no `replace_all`, so a call that worked locally failed
+     * after `/ssh`. */
+    void sameNamedToolsTakeTheSameArguments()
+    {
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = g_env.root + QStringLiteral("/project");
+        QSocAgentRuntime  runtime(options);
+        QSocToolRegistry *local = runtime.localToolRegistry();
+        QObject           owner;
+        auto *const       remote = buildAgentRemoteRegistry(
+            &owner, runtime.remoteConnection(), local, runtime.monitorTaskSource());
+
+        int compared = 0;
+        for (const QString &name : remote->toolNames()) {
+            QSocTool *mine = local->getTool(name);
+            QSocTool *host = remote->getTool(name);
+            if (mine == nullptr || mine == host)
+                continue;
+            ++compared;
+            QVERIFY2(
+                callShape(mine->getParametersSchema()) == callShape(host->getParametersSchema()),
+                qPrintable(
+                    name + QStringLiteral(": local ")
+                    + QString::fromStdString(callShape(mine->getParametersSchema()).dump())
+                    + QStringLiteral(" remote ")
+                    + QString::fromStdString(callShape(host->getParametersSchema()).dump())));
+        }
+        QVERIFY(compared >= 4);
     }
 
     void remotePromptSaysMcpToolsRunHere()
