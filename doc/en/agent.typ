@@ -495,6 +495,8 @@ View and selection:
 
 - *Ctrl+T*: Toggle TODO list visibility
 - *Ctrl+B*: Open the background-task overlay (see @agent-tasks)
+- *Alt+Left/Right*: Switch the view between the main agent and each live
+  sub-agent (see @agent-subagents-talk)
 - *Down* on the prompt's first row: park focus on the task pill;
   *Enter* opens the overlay, *Up* returns to the prompt
 - *Ctrl+L*: Force a full screen repaint
@@ -1436,6 +1438,47 @@ the old peers and clears their addresses and messages. Process restart
 does not restore mailboxes. A live child's isolated worktree remains
 available for follow-ups until the child is released.
 
+=== Talking to a Sub-agent
+<agent-subagents-talk>
+
+In the task overlay (*Ctrl+B*), select a sub-agent row and press `f` to view
+it. The main view then shows that child's transcript, drawn like the main
+one with code blocks and tool blocks, and follows it while it runs. The title
+bar names the child in view. `s` does the same for a child that can receive
+a message.
+
+While a child is in view:
+
+- A prompt you type goes to that child. Commands (`/`, `!`, `#`) still go to
+  the main agent.
+- *Esc* returns to the main view. The child keeps running.
+- *Ctrl+C* stops the child in view.
+- *Alt+Left/Right* moves through the main agent and each live child, in
+  start order. Only the terminal sequences for Alt plus an arrow key switch
+  the view. Esc followed by a letter is still Esc and a letter.
+
+Main-agent output that arrives meanwhile is drawn when you return. A message
+reaches a live child as your request, through the child's own
+`user_prompt_submit` hooks. An idle child starts a follow-up run with its
+history, model, reasoning effort and workspace; a running child reads the
+message at its next step. The main agent is not notified of messages you
+send. A message is limited to 16 KiB, like peer messages.
+
+These features need a daemon that advertises the `agents` capability in
+its greeting. Against an older daemon the `f` and `s` keys and the
+Alt+arrow switch are not offered. The protocol methods are:
+
+- `tasks` rows for sub-agents carry `agent_id`, `host`, `workspace`, `live`
+  (the child accepts a message now) and `resumable` (a message reaches it).
+- `task_tail` with `offset` returns `text`, `offset`, `next_offset` and
+  `eof`. The offset counts UTF-8 bytes of the rendered transcript, and a page
+  never splits a character. With `"format":"history"`, `offset` counts
+  messages and the reply carries `messages` and `found` instead of `text`.
+- `task_send` with `id` and `message` delivers the message. The reply has
+  `ok`, `delivery` (`woken` or `queued`) and the `task_id` of the run that
+  reads it. It never waits for the child and is refused while an SSH
+  connection is being built.
+
 == Status Line
 <agent-status-line>
 A user-supplied shell command can render an extra status row above the
@@ -1583,6 +1626,8 @@ disappears, select another row before requesting a stop.
     [`r`], [Refresh estimates],
     [`p` in details], [Show provisional numeric ranges],
     [`Enter`], [Open the task's detail tail],
+    [`f`], [View the selected sub-agent (@agent-subagents-talk)],
+    [`s`], [View the selected sub-agent and message it],
     [`x`],
     [Request stop or removal for the highlighted task],
     [`q`, `ESC`], [Return from details or close the overview],

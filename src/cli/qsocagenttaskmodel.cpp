@@ -25,6 +25,11 @@ void QSocAgentTaskModel::refresh()
         item.row.startedAtMs       = object.value("started_at").toInteger();
         item.row.canKill           = object.value("can_kill").toBool();
         item.row.waitingForPeer    = object.value("waiting").toBool();
+        item.row.agentId           = object.value("agent_id").toString();
+        item.row.host              = object.value("host").toString();
+        item.row.workspace         = object.value("workspace").toString();
+        item.row.live              = object.value("live").toBool();
+        item.row.resumable         = object.value("resumable").toBool();
         const auto estimate        = object.value("estimate").toObject();
         item.estimate.summary      = estimate.value("summary").toString();
         item.estimate.reason       = estimate.value("reason").toString();

@@ -20,6 +20,7 @@
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QUuid>
 
 #include <algorithm>
 #include <limits>
@@ -95,6 +96,34 @@ bool writeJsonFile(const QString &path, const QJsonObject &object)
         return false;
     }
     return file.commit();
+}
+
+/* The overlay rendering of a stored event stream: chunks verbatim, every
+ * other event under a `=== <kind> ===` separator. */
+QString renderEventFile(const QString &path)
+{
+    QFile file(path);
+    if (path.isEmpty() || !file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    QString rendered;
+    while (!file.atEnd()) {
+        const QByteArray    line = file.readLine().trimmed();
+        const QJsonDocument doc  = QJsonDocument::fromJson(line);
+        if (line.isEmpty() || !doc.isObject()) {
+            continue;
+        }
+        const QJsonObject obj  = doc.object();
+        const QString     kind = obj.value(QStringLiteral("kind")).toString();
+        const QString     data = obj.value(QStringLiteral("data")).toString();
+        if (kind == QStringLiteral("chunk") || kind == QStringLiteral("start")) {
+            rendered += data;
+        } else {
+            rendered += QStringLiteral("\n=== ") + kind + QStringLiteral(" ===\n") + data
+                        + QLatin1Char('\n');
+        }
+    }
+    return rendered;
 }
 
 bool readHistoricalRun(
@@ -292,6 +321,11 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
         row.startedAtMs    = run.startedAtMs;
         row.canKill
             = (run.status == QSocTask::Status::Running || run.status == QSocTask::Status::Pending);
+        row.agentId     = run.agent ? run.agent->agentIdentity() : QString();
+        row.host        = run.host;
+        row.workspace   = run.workspace;
+        row.live        = liveAgentFor(run.id) != nullptr;
+        row.resumable   = row.live;
         QString summary = run.subagentType;
         if (run.status == QSocTask::Status::Pending) {
             summary += QStringLiteral(" · queued");
@@ -310,59 +344,164 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
 
 QString QSocSubAgentTaskSource::tailFor(const QString &id, int maxBytes) const
 {
+    QString out;
+    bool    tracked = false;
     for (const RunState &run : runs_) {
-        if (run.id != id) {
-            continue;
-        }
-        QString out = run.transcript;
-        if (run.status == QSocTask::Status::Completed && !run.finalResult.isEmpty()) {
-            out += QStringLiteral("\n=== final ===\n") + run.finalResult;
-        } else if (
-            (run.status == QSocTask::Status::Failed || run.status == QSocTask::Status::Aborted)
-            && !run.errorText.isEmpty()) {
-            out += QStringLiteral("\n=== ") + QSocTask::statusWord(run.status)
-                   + QStringLiteral(" ===\n") + run.errorText;
-        }
-        if (maxBytes > 0 && out.size() > maxBytes) {
-            out = QStringLiteral("[... truncated ...]\n") + out.right(maxBytes);
-        }
-        return out;
-    }
-    /* Not in memory (evicted). Fall back to the on-disk JSONL
-     * transcript so agent_status / overlay tail can still serve
-     * historical runs. We render each event back to text by
-     * concatenating data fields (with `=== <kind> ===` separators
-     * for non-chunk events). */
-    const QString path = transcriptPathFor(id);
-    QFile         file(path);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-    QString rendered;
-    while (!file.atEnd()) {
-        const QByteArray line = file.readLine().trimmed();
-        if (line.isEmpty()) {
-            continue;
-        }
-        const QJsonDocument doc = QJsonDocument::fromJson(line);
-        if (!doc.isObject()) {
-            continue;
-        }
-        const QJsonObject obj  = doc.object();
-        const QString     kind = obj.value(QStringLiteral("kind")).toString();
-        const QString     data = obj.value(QStringLiteral("data")).toString();
-        if (kind == QStringLiteral("chunk") || kind == QStringLiteral("start")) {
-            rendered += data;
-        } else {
-            rendered += QStringLiteral("\n=== ") + kind + QStringLiteral(" ===\n") + data
-                        + QLatin1Char('\n');
+        if (run.id == id) {
+            out     = renderRun(run);
+            tracked = true;
+            break;
         }
     }
-    file.close();
-    if (maxBytes > 0 && rendered.size() > maxBytes) {
-        return QStringLiteral("[... truncated ...]\n") + rendered.right(maxBytes);
+    /* Not in memory (evicted): the stored event stream serves the tail. */
+    if (!tracked) {
+        out = renderEventFile(transcriptPathFor(id));
     }
-    return rendered;
+    if (maxBytes > 0 && out.size() > maxBytes) {
+        out = QStringLiteral("[... truncated ...]\n") + out.right(maxBytes);
+    }
+    return out;
+}
+
+QString QSocSubAgentTaskSource::renderRun(const RunState &run)
+{
+    QString out = run.transcript;
+    if (run.status == QSocTask::Status::Completed && !run.finalResult.isEmpty()) {
+        out += QStringLiteral("\n=== final ===\n") + run.finalResult;
+    } else if (
+        (run.status == QSocTask::Status::Failed || run.status == QSocTask::Status::Aborted)
+        && !run.errorText.isEmpty()) {
+        out += QStringLiteral("\n=== ") + QSocTask::statusWord(run.status)
+               + QStringLiteral(" ===\n") + run.errorText;
+    }
+    return out;
+}
+
+QString QSocSubAgentTaskSource::renderedTranscript(const QString &id) const
+{
+    const QString stored = renderEventFile(transcriptPathFor(id));
+    if (!stored.isEmpty()) {
+        return stored;
+    }
+    for (const RunState &run : runs_) {
+        if (run.id == id) {
+            return renderRun(run);
+        }
+    }
+    return {};
+}
+
+QSocSubAgentTaskSource::TranscriptPage QSocSubAgentTaskSource::transcriptPage(
+    const QString &id, qint64 offset, int maxBytes) const
+{
+    const QByteArray bytes = renderedTranscript(id).toUtf8();
+    TranscriptPage   page;
+    page.offset = qBound<qint64>(0, offset, bytes.size());
+    qint64 end  = maxBytes > 0 ? qMin<qint64>(bytes.size(), page.offset + maxBytes) : bytes.size();
+    const auto inside = [&bytes](qint64 at) {
+        return at < bytes.size() && (static_cast<unsigned char>(bytes.at(at)) & 0xC0) == 0x80;
+    };
+    while (end > page.offset && inside(end)) {
+        --end;
+    }
+    /* A page narrower than one character still moves past it. */
+    if (end == page.offset && end < bytes.size()) {
+        ++end;
+        while (inside(end)) {
+            ++end;
+        }
+    }
+    page.text = bytes.mid(page.offset, end - page.offset);
+    page.next = end;
+    page.eof  = end >= bytes.size();
+    return page;
+}
+
+QSocAgent *QSocSubAgentTaskSource::liveAgentFor(const QString &id) const
+{
+    if (mailbox_ == nullptr) {
+        for (const RunState &run : runs_) {
+            if (run.id == id && !QSocTask::isTerminal(run.status)) {
+                return run.agent.data();
+            }
+        }
+        return nullptr;
+    }
+    const QString identity = mailbox_->resolve(id);
+    const QString state    = mailbox_->stateFor(identity);
+    if (identity.isEmpty() || identity == mailbox_->resolve(QStringLiteral("main"))
+        || state == QStringLiteral("closed") || state == QStringLiteral("cancelled")) {
+        return nullptr;
+    }
+    return mailbox_->agentFor(identity);
+}
+
+QString QSocSubAgentTaskSource::latestRunFor(const QSocAgent *agent) const
+{
+    for (auto it = runs_.crbegin(); it != runs_.crend(); ++it) {
+        if (it->agent == agent) {
+            return it->id;
+        }
+    }
+    return {};
+}
+
+QSocSubAgentTaskSource::HistoryPage QSocSubAgentTaskSource::historyPage(
+    const QString &id, int from, int maxBytes) const
+{
+    HistoryPage    page;
+    nlohmann::json messages;
+    if (const QSocAgent *agent = liveAgentFor(id)) {
+        messages = agent->getMessages();
+    } else {
+        const QString path = locate(id, QStringLiteral(".history.jsonl"));
+        if (!path.isEmpty() && trustedFile(path)) {
+            messages = QSocSession::loadMessages(path);
+        }
+    }
+    if (!messages.is_array()) {
+        return page;
+    }
+    page.found      = true;
+    const int total = static_cast<int>(messages.size());
+    page.offset     = from >= 0 && from <= total ? from : 0;
+    qint64 bytes    = 0;
+    int    index    = page.offset;
+    for (; index < total; ++index) {
+        const qint64 size = serializedSize(messages.at(static_cast<size_t>(index)));
+        if (index > page.offset && maxBytes > 0 && bytes + size > maxBytes) {
+            break;
+        }
+        bytes += size;
+        page.messages.push_back(messages.at(static_cast<size_t>(index)));
+    }
+    page.next = index;
+    page.eof  = index >= total;
+    return page;
+}
+
+nlohmann::json QSocSubAgentTaskSource::sendFromUser(const QString &id, const QString &message)
+{
+    QSocAgent *agent = liveAgentFor(id);
+    if (agent == nullptr || mailbox_ == nullptr) {
+        return {{"status", "error"}, {"error", "not_live"}};
+    }
+    const QString identity = mailbox_->idFor(agent);
+    const bool    idle     = mailbox_->stateFor(identity) == QStringLiteral("idle");
+    const QPointer<QSocSubAgentTaskSource> owner(this);
+    nlohmann::json                         receipt = mailbox_->send(
+        QSocAgentMailbox::userSender(),
+        identity,
+        QUuid::createUuid().toString(QUuid::WithoutBraces),
+        message,
+        {},
+        true);
+    if (owner.isNull() || receipt.value("status", std::string()) != "ok") {
+        return receipt;
+    }
+    receipt["delivery"] = idle ? "woken" : "queued";
+    receipt["task_id"]  = latestRunFor(agent).toStdString();
+    return receipt;
 }
 
 bool QSocSubAgentTaskSource::killTask(const QString &id)

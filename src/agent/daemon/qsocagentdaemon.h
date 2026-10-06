@@ -25,6 +25,11 @@
  *            {"id":N,"method":"local"}
  *            {"id":N,"method":"cwd","params":{"path":"..."}}
  *            {"id":N,"method":"project","params":{"path":"..."}}
+ *            {"id":N,"method":"tasks"}
+ *            {"id":N,"method":"task_tail","params":{"source":"agent","id":"a1",
+ *                                                    "offset":0,"format":"history"}}
+ *            {"id":N,"method":"task_send","params":{"id":"a1","message":"..."}}
+ *            {"id":N,"method":"task_kill","params":{"source":"agent","id":"a1"}}
  *            {"id":N,"method":"shutdown"}
  *            {"id":N,"method":"smt.solve","params":{...}}
  *            {"id":N,"method":"smt.cancel","params":{"request_id":N}}

@@ -167,6 +167,7 @@ struct QSocAgentRuntime::Private
 
     QPointer<QSocAgent> maintenanceChild;
     bool                cancelRequested = false;
+    int                 connectDepth    = 0; /* > 0 while a link is being built */
     std::stop_source    commandStop;
 
     QString terminalStopNotice;

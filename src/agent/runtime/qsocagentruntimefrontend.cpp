@@ -46,6 +46,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QScopedValueRollback>
 #include <QStandardPaths>
 
 #include <yaml-cpp/yaml.h>
@@ -219,8 +220,9 @@ bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QS
     if (request.target.trimmed().isEmpty()) {
         return fail(QStringLiteral("empty SSH target"));
     }
-    ResolvedHostTarget resolved;
-    QString            failure;
+    const QScopedValueRollback<int> connecting(d->connectDepth, d->connectDepth + 1);
+    ResolvedHostTarget              resolved;
+    QString                         failure;
     if (!resolveHostTarget(request.target, d->hostCatalog, d->sshConfig.get(), &resolved, &failure)) {
         return fail(failure);
     }
@@ -481,7 +483,8 @@ void QSocAgentRuntime::installRemoteTools()
                                     AgentRemoteState *out,
                                     QString          *errorMessage,
                                     QDeadlineTimer    deadline) {
-        AgentRemoteState fresh;
+        const QScopedValueRollback<int> connecting(d->connectDepth, d->connectDepth + 1);
+        AgentRemoteState                fresh;
         if (!connectAgentSshSession(
                 target,
                 this,
@@ -594,6 +597,11 @@ void QSocAgentRuntime::disconnectRemote()
     emit eventRaised(event);
     wireSessionTools();
     emit statusChanged();
+}
+
+bool QSocAgentRuntime::isConnecting() const
+{
+    return d->connectDepth > 0;
 }
 
 bool QSocAgentRuntime::isRemote() const

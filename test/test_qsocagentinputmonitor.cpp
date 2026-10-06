@@ -95,6 +95,13 @@ private slots:
         monitor.setInputBuffer("ab");
         key(VK_LEFT, 0, 1, LEFT_CTRL_PRESSED);
         QCOMPARE(monitor.getCursorPos(), 2);
+        QSignalSpy cycle(&monitor, &QAgentInputMonitor::agentCycleRequested);
+        key(VK_LEFT, 0, 1, LEFT_ALT_PRESSED);
+        key(VK_RIGHT, 0, 1, RIGHT_ALT_PRESSED);
+        QCOMPARE(cycle.size(), 2);
+        QCOMPARE(cycle.at(0).at(0).toInt(), -1);
+        QCOMPARE(cycle.at(1).at(0).toInt(), 1);
+        QCOMPARE(monitor.getCursorPos(), 2);
         key(VK_LEFT, 0);
         key(VK_DELETE, 0);
         QCOMPARE(monitor.getInputBuffer(), QString("a"));
@@ -749,6 +756,43 @@ private slots:
         const char         data[] = "hello";
         monitor.processBytes(data, 5);
         QCOMPARE(monitor.getCursorPos(), 5);
+    }
+
+    void altArrowsCycleTheAgentView()
+    {
+        QAgentInputMonitor monitor;
+        QSignalSpy         cycle(&monitor, &QAgentInputMonitor::agentCycleRequested);
+        monitor.processBytes("ab", 2);
+        monitor.processBytes("\033[1;3D", 6);
+        monitor.processBytes("\033[1;3C", 6);
+        QCOMPARE(cycle.size(), 2);
+        QCOMPARE(cycle.at(0).at(0).toInt(), -1);
+        QCOMPARE(cycle.at(1).at(0).toInt(), 1);
+        QCOMPARE(monitor.getInputBuffer(), QStringLiteral("ab"));
+        QCOMPARE(monitor.getCursorPos(), 2);
+        /* Ctrl+Left and Shift+Left are not agent switches. */
+        monitor.processBytes("\033[1;5D", 6);
+        monitor.processBytes("\033[1;2D", 6);
+        QCOMPARE(cycle.size(), 2);
+    }
+
+    void escapeThenLetterNeverCyclesTheAgentView()
+    {
+        QAgentInputMonitor monitor;
+        QSignalSpy         cycle(&monitor, &QAgentInputMonitor::agentCycleRequested);
+        QSignalSpy         escape(&monitor, &QAgentInputMonitor::escPressed);
+        monitor.start(false);
+        QVERIFY(monitor.isActive());
+        /* Esc, then b typed after the bare-Esc window. */
+        monitor.processBytes("\033", 1);
+        QTRY_COMPARE(escape.size(), 1);
+        monitor.processBytes("b", 1);
+        QCOMPARE(monitor.getInputBuffer(), QStringLiteral("b"));
+        /* Meta-prefixed b in one burst. */
+        monitor.processBytes("\033b", 2);
+        QCOMPARE(cycle.size(), 0);
+        QCOMPARE(escape.size(), 2);
+        monitor.stop();
     }
 
     void testArrowLeftRightMoveCursor()

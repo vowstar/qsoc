@@ -679,6 +679,80 @@ private slots:
         QCOMPARE(newObj.value(QStringLiteral("status")).toString(), QStringLiteral("aborted"));
     }
 
+    void transcriptPagesJoinIntoTheWholeTranscript()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId
+            = src.registerRun(QStringLiteral("pager"), QStringLiteral("explore"), makeAgent());
+        for (int n = 0; n < 20; ++n) {
+            src.appendTranscript(runId, QStringLiteral("line %1 αβγ\n").arg(n));
+        }
+        src.markCompleted(runId, QStringLiteral("done ✓"));
+        const QByteArray whole = src.transcriptPage(runId, 0, 0).text;
+        QVERIFY(whole.contains("line 19"));
+        QVERIFY(whole.contains("done"));
+        for (const int size : {1, 3, 7, 64}) {
+            QByteArray joined;
+            qint64     offset = 0;
+            for (int guard = 0; guard < 10000; ++guard) {
+                const auto page = src.transcriptPage(runId, offset, size);
+                QCOMPARE(page.offset, offset);
+                QCOMPARE(QString::fromUtf8(page.text).toUtf8(), page.text);
+                QVERIFY(page.next > offset || page.eof);
+                joined += page.text;
+                offset = page.next;
+                if (page.eof) {
+                    break;
+                }
+            }
+            QCOMPARE(joined, whole);
+        }
+        const auto past = src.transcriptPage(runId, whole.size() + 100, 64);
+        QVERIFY(past.text.isEmpty());
+        QVERIFY(past.eof);
+        QCOMPARE(past.next, qint64(whole.size()));
+    }
+
+    void historyPagesServeLiveThenStoredMessages()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        auto *agent = makeAgent();
+        agent->setMessages(
+            json::array(
+                {{{"role", "user"}, {"content", "objective"}},
+                 {{"role", "assistant"}, {"content", "step one"}},
+                 {{"role", "assistant"}, {"content", "step two"}}}));
+        const QString runId = src.registerRun(QStringLiteral("h"), QStringLiteral("explore"), agent);
+        QCOMPARE(src.historyPage(QStringLiteral("a404"), 0, 0).found, false);
+
+        auto page = src.historyPage(runId, 0, 1);
+        QVERIFY(page.found);
+        QCOMPARE(page.messages.size(), size_t{1});
+        QCOMPARE(page.next, 1);
+        QVERIFY(!page.eof);
+        page = src.historyPage(runId, 1, 0);
+        QCOMPARE(page.messages.size(), size_t{2});
+        QVERIFY(page.eof);
+
+        src.markCompleted(runId, QStringLiteral("step two"));
+        QCOMPARE(src.liveAgentFor(runId), nullptr);
+        page = src.historyPage(runId, 2, 0);
+        QVERIFY(page.found);
+        QCOMPARE(page.offset, 2);
+        QCOMPARE(page.messages.at(0).value("content", std::string()), std::string("step two"));
+        /* Past the end means the history shrank: start over. */
+        page = src.historyPage(runId, 99, 0);
+        QCOMPARE(page.offset, 0);
+        QCOMPARE(page.messages.size(), size_t{3});
+        QCOMPARE(
+            src.sendFromUser(runId, QStringLiteral("hi")).value("error", std::string()),
+            std::string("not_live"));
+    }
+
     /* Disk file survives evictStaleCompleted: even after the
      * in-memory RunState is gone, the file is still present. */
     void testDiskFileSurvivesEviction()

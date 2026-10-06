@@ -53,6 +53,9 @@ public:
 
     Mode mode() const { return mode_; }
 
+    /* Offer f (focus) and s (send) on sub-agent rows. Off by default. */
+    void setAgentActionsEnabled(bool enabled) { agentActions_ = enabled; }
+
     /**
      * @brief Consume a key while overlay is in List or Detail mode.
      * @return true when the key was handled and should not propagate.
@@ -77,6 +80,12 @@ signals:
     /** @brief Emitted when the overlay closes back to Input focus. */
     void closed();
 
+    /** @brief f on a sub-agent row: show that agent's transcript. */
+    void focusRequested(const QString &id);
+
+    /** @brief s on a sub-agent row: show it and compose a message to it. */
+    void messageRequested(const QString &id);
+
 private slots:
     void handleRegistryChanged();
 
@@ -98,6 +107,7 @@ private:
     Layout  layout_           = Layout::Automatic;
     bool    animationEnabled_ = true;
     bool    estimatesVisible_ = true;
+    bool    agentActions_     = false;
     bool    rangesVisible_    = false;
     QString summary_;
 
@@ -106,6 +116,8 @@ private:
     void    enterDetail();
     void    exitDetailToList();
     void    killSelected();
+    bool    actOnAgent(int key);
+    QString agentKeys() const;
     void    reloadDetailContent();
     void    flashFooter(const QString &message);
     int     columns(int width) const;

@@ -102,6 +102,10 @@ public:
     /* Empty the scrollback and drop every stream and tool cursor into it. */
     void clearTranscript();
 
+    /* Exchange the scrollback with @p other, keeping both block lists.
+     * Stream and tool cursors are dropped, as by clearTranscript(). */
+    void swapTranscript(QTuiScrollView &other);
+
     /* Retire the top banner; freed rows fold into scroll viewport. */
     void dismissTopBanner();
 

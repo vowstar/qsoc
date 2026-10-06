@@ -333,7 +333,10 @@ QSocAgentMailbox::json QSocAgentMailbox::sendSelected(
     int            receiptOffset)
 {
     static const QRegularExpression validId(QStringLiteral("^[A-Za-z0-9_.-]{1,128}$"));
-    if (!agents_.contains(sender) || agentFor(sender) == nullptr)
+    const bool                      user = sender == userSender();
+    if (user && (!target.is_string() || !replyTo.isEmpty()))
+        return error("invalid_target_selector");
+    if (!user && (!agents_.contains(sender) || agentFor(sender) == nullptr))
         return error("unknown_sender");
     if (stateFor(sender) == QStringLiteral("cancelled"))
         return error("sender_cancelled");
@@ -375,14 +378,14 @@ QSocAgentMailbox::json QSocAgentMailbox::sendSelected(
     const auto records = recipients.size() + static_cast<qsizetype>(message.excluded.size());
     if (messages_.size() >= 8192 || records > 8192 - recordCount_)
         return error("session_message_limit");
-    const bool planOnly = agentFor(sender)->getConfig().planMode;
+    const bool planOnly = !user && agentFor(sender)->getConfig().planMode;
     for (const auto &recipient : recipients) {
         if (recipient == sender)
             return error("self_message");
         const auto *targetAgent = agentFor(recipient);
         if (planOnly && targetAgent && !targetAgent->getConfig().planMode)
             return error("target_not_in_plan_mode");
-        if (wake && recipient == resolve(QStringLiteral("main")))
+        if ((wake || user) && recipient == resolve(QStringLiteral("main")))
             return error("cannot_wake_main");
     }
     QStringList accepted;
@@ -502,6 +505,11 @@ QString QSocAgentMailbox::render(const json &message)
            + QSocMessageAuthority::escapeTags(QString::fromStdString(message.dump()));
 }
 
+bool QSocAgentMailbox::fromUser(const json &message)
+{
+    return message.is_object() && message.value("sender", std::string()) == "user";
+}
+
 void QSocAgentMailbox::finish(const QString &id, const QString &result)
 {
     if (stateFor(id) == QStringLiteral("cancelled"))
@@ -510,7 +518,7 @@ void QSocAgentMailbox::finish(const QString &id, const QString &result)
     for (auto it = messages_.cbegin(); it != messages_.cend(); ++it) {
         const auto delivery = it->deliveries.constFind(id);
         if (delivery != it->deliveries.cend() && it->wake && !delivery->replied
-            && delivery->state == QStringLiteral("delivered"))
+            && delivery->state == QStringLiteral("delivered") && it->sender != userSender())
             requests.append(it.key());
     }
     for (const QString &key : requests) {

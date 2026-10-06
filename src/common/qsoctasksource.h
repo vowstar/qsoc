@@ -87,6 +87,11 @@ struct Row
     bool    canKill;
     QString objective;
     bool    waitingForPeer = false;
+    QString agentId;           /* sub-agent: mailbox identity of the child */
+    QString host;              /* sub-agent: `local` or the SSH target */
+    QString workspace;         /* sub-agent: workspace root */
+    bool    live      = false; /* sub-agent: accepts a message now */
+    bool    resumable = false; /* sub-agent: a message reaches it */
 };
 
 struct Estimate

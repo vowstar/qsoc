@@ -67,6 +67,9 @@ public:
     void           setRootId(const QString &id) { rootId_ = id; }
     void           finish(const QString &id, const QString &result);
     static QString render(const json &message);
+    /* Sender id of a message the user typed; it reaches the child as a request. */
+    static QString userSender() { return QStringLiteral("user"); }
+    static bool    fromUser(const json &message);
 
 signals:
     void changed();

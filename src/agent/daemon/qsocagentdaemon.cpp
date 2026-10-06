@@ -6,6 +6,7 @@
 
 #include "agent/protocol/qsocagentprotocol.h"
 #include "agent/protocol/qsocagentruntimeevent.h"
+#include "agent/qsocsubagenttasksource.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/services/qagentcompletion.h"
 #include "agent/tool/qsoctoolaskuser.h"
@@ -418,6 +419,63 @@ private:
         return result;
     }
 
+    static QJsonValue toQJson(const json &value)
+    {
+        const auto text = value.dump(-1, ' ', false, json::error_handler_t::replace);
+        return QJsonDocument::fromJson(QByteArray::fromStdString("[" + text + "]")).array().at(0);
+    }
+
+    /* A sub-agent pages by byte offset or by message index; other sources
+     * answer with their tail. */
+    QJsonObject taskTail(const QJsonObject &params) const
+    {
+        const QString source   = params.value("source").toString();
+        const QString taskId   = params.value("id").toString();
+        auto         *agents   = source == "agent" ? runtime_->subAgentSource() : nullptr;
+        const int     maxBytes = params.value("max_bytes").toInt(8192);
+        if (agents && params.value("format").toString() == "history") {
+            const auto page = agents->historyPage(
+                taskId, params.value("offset").toInt(0), qBound(1, maxBytes, 1024 * 1024));
+            return {
+                {"messages", toQJson(page.messages)},
+                {"offset", page.offset},
+                {"next_offset", page.next},
+                {"eof", page.eof},
+                {"found", page.found}};
+        }
+        if (agents && params.contains("offset")) {
+            const auto page = agents->transcriptPage(
+                taskId, params.value("offset").toInteger(), qBound(1, maxBytes, 256 * 1024));
+            return {
+                {"text", QString::fromUtf8(page.text)},
+                {"offset", page.offset},
+                {"next_offset", page.next},
+                {"eof", page.eof}};
+        }
+        return {
+            {"text", runtime_->taskRegistry()->tailFor(source, taskId, qBound(1, maxBytes, 65536))}};
+    }
+
+    /* Runs before the busy gate, so it never blocks and never touches a link
+     * that is still being built. */
+    void taskSend(qint64 id, const QJsonObject &params)
+    {
+        const QString message = params.value("message").toString();
+        if (runtime_->isConnecting()) {
+            sendError(id, QStringLiteral("a connection is in progress; try again when it ends"));
+            return;
+        }
+        if (message.trimmed().isEmpty() || runtime_->subAgentSource() == nullptr) {
+            sendError(id, QStringLiteral("message must not be empty"));
+            return;
+        }
+        const json receipt
+            = runtime_->subAgentSource()->sendFromUser(params.value("id").toString(), message);
+        QJsonObject result = toQJson(receipt).toObject();
+        result.insert("ok", result.value("status").toString() == "ok");
+        sendReply(id, result);
+    }
+
     void handleFrame(const QByteArray &payload)
     {
         QJsonParseError     err{};
@@ -502,19 +560,22 @@ private:
                         {"started_at", row.startedAtMs},
                         {"can_kill", row.canKill},
                         {"waiting", row.waitingForPeer},
+                        {"agent_id", row.agentId},
+                        {"host", row.host},
+                        {"workspace", row.workspace},
+                        {"live", row.live},
+                        {"resumable", row.resumable},
                         {"estimate", estimate}});
             }
             sendReply(id, {{"rows", rows}});
             return;
         }
         if (runtime_ && method == "task_tail") {
-            sendReply(
-                id,
-                {{"text",
-                  runtime_->taskRegistry()->tailFor(
-                      params.value("source").toString(),
-                      params.value("id").toString(),
-                      qBound(1, params.value("max_bytes").toInt(8192), 65536))}});
+            sendReply(id, taskTail(params));
+            return;
+        }
+        if (runtime_ && method == "task_send") {
+            taskSend(id, params);
             return;
         }
         if (runtime_ && method == "task_kill") {
@@ -841,7 +902,7 @@ public:
                         {"version", QSOC_VERSION},
                         {"protocol", QSocAgentProtocol::version},
                         {"pid", static_cast<double>(QCoreApplication::applicationPid())},
-                        {"capabilities", QJsonArray{"smt", "resources"}}}));
+                        {"capabilities", QJsonArray{"smt", "resources", "agents"}}}));
         });
         QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleClientRead);
     }

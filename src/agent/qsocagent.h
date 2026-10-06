@@ -1128,6 +1128,8 @@ private:
     void addMessage(const QString &role, const QString &content);
     /* A user-role message the user did not type, marked by its origin. */
     void addNotificationMessage(const QString &content);
+    /* Move mailbox messages into the history; true when the user's queued. */
+    bool takeMailbox();
     /* A request the user typed, after the prompt hook. */
     void addUserRequest(const QString &request);
 

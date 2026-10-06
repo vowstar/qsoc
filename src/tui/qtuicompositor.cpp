@@ -3,6 +3,8 @@
 
 #include "tui/qtuicompositor.h"
 
+#include <utility>
+
 #include "tui/qsocmarkdownrenderer.h"
 
 #include "tui/qtuiassistanttextblock.h"
@@ -12,6 +14,7 @@
 #include "tui/qtuiwidget.h"
 
 #include <cstdio>
+#include <utility>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -428,6 +431,26 @@ void QTuiCompositor::clearTranscript()
     toolBlocks.clear();
     activeTool = nullptr;
     scrollView.clear();
+}
+
+void QTuiCompositor::swapTranscript(QTuiScrollView &other)
+{
+    sealStream(StreamMode::Assistant);
+    sealStream(StreamMode::Reasoning);
+    reasoningHistory.clear();
+    toolBlocks.clear();
+    activeTool = nullptr;
+    if (active) {
+        const QString graphicsDestroy = scrollView.collectGraphicsDestroy();
+        if (!graphicsDestroy.isEmpty()) {
+            fputs(graphicsDestroy.toUtf8().constData(), stdout);
+            fflush(stdout);
+        }
+    }
+    std::swap(scrollView, other);
+    other.resetGraphicsState();
+    scrollView.resetGraphicsState();
+    screen.invalidate();
 }
 
 void QTuiCompositor::focusBlockAtScreenRow(int screenRow)

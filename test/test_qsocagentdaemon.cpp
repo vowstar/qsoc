@@ -313,6 +313,7 @@ private slots:
         QCOMPARE(greeting.value(QStringLiteral("daemon")).toString(), QStringLiteral("qsoc-agentd"));
         QVERIFY(!greeting.value(QStringLiteral("version")).toString().isEmpty());
         QVERIFY(greeting.value(QStringLiteral("pid")).toDouble() > 0);
+        QVERIFY(greeting.value(QStringLiteral("capabilities")).toArray().contains("agents"));
         QVERIFY(QSocLocalPeer::sameUser(client.socket()));
         const qint64 servedBy = QSocLocalPeer::processId(client.socket());
         QVERIFY(servedBy == -1 || servedBy == daemon.processId());
@@ -464,6 +465,28 @@ private slots:
                                     .value(QStringLiteral("sessions"))
                                     .toArray();
         QCOMPARE(rows.size(), 0);
+
+        /* sub-agent RPCs answer for a run that does not exist. */
+        client.send(
+            {{"id", 10},
+             {"method", QStringLiteral("task_send")},
+             {"params", QJsonObject{{"id", "a404"}, {"message", "hello"}}}});
+        const QJsonObject sent = client.waitForReply(10).value("result").toObject();
+        QCOMPARE(sent.value("ok").toBool(true), false);
+        QCOMPARE(sent.value("error").toString(), QStringLiteral("not_live"));
+        client.send(
+            {{"id", 11},
+             {"method", QStringLiteral("task_tail")},
+             {"params", QJsonObject{{"source", "agent"}, {"id", "a404"}, {"format", "history"}}}});
+        QCOMPARE(
+            client.waitForReply(11).value("result").toObject().value("found").toBool(true), false);
+        client.send(
+            {{"id", 12},
+             {"method", QStringLiteral("task_tail")},
+             {"params", QJsonObject{{"source", "agent"}, {"id", "a404"}, {"offset", 0}}}});
+        const QJsonObject paged = client.waitForReply(12).value("result").toObject();
+        QVERIFY(paged.value("eof").toBool());
+        QVERIFY(paged.value("text").toString().isEmpty());
 
         /* unknown method is an error, not a crash. */
         client.send({{"id", 5}, {"method", QStringLiteral("nope")}});

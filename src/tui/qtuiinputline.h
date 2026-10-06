@@ -43,7 +43,8 @@ public:
      *          empty so new users can see available shortcuts at a glance.
      *          Pass an empty string to disable.
      */
-    void setPlaceholder(const QString &hint) { placeholder = hint; }
+    void    setPlaceholder(const QString &hint) { placeholder = hint; }
+    QString getPlaceholder() const { return placeholder; }
 
     /**
      * @brief Set the dim trailing hint shown after the buffer text.

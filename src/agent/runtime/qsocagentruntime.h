@@ -491,6 +491,8 @@ public:
 
     /** Whether a remote workspace is currently bound. */
     [[nodiscard]] bool isRemote() const;
+    /** True while an SSH link is being built or rebuilt. */
+    [[nodiscard]] bool isConnecting() const;
     /** Remote target label ("user@host"), empty when local. */
     [[nodiscard]] QString remoteTarget() const;
     /** Remote workspace path, empty when local. */

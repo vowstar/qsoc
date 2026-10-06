@@ -113,6 +113,9 @@ signals:
     /* Arrow keys */
     void arrowKey(int key); /* 'A'=up, 'B'=down, 'C'=right, 'D'=left */
 
+    /** @brief Alt+Left (-1) or Alt+Right (+1): switch the agent in view. */
+    void agentCycleRequested(int direction);
+
     /**
      * @brief Emitted when PageUp / PageDown is pressed. REPL uses this to
      *        scroll the scrollback buffer from the keyboard so users on

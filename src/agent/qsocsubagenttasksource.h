@@ -149,6 +149,54 @@ public:
      */
     bool queueRequestFor(const QString &id, const QString &message);
 
+    /** @brief One page of a run's rendered transcript, by UTF-8 byte offset. */
+    struct TranscriptPage
+    {
+        QByteArray text;
+        qint64     offset = 0;
+        qint64     next   = 0;
+        bool       eof    = true;
+    };
+
+    /**
+     * @brief Page through the rendered transcript of @p id.
+     * @details The stored event stream wins over the rolling in-memory
+     *          buffer, so offsets stay valid while the run appends. A page
+     *          never splits a UTF-8 sequence; an offset past the end gives
+     *          an empty page at end of file.
+     */
+    TranscriptPage transcriptPage(const QString &id, qint64 offset, int maxBytes) const;
+
+    /** @brief A slice of the message history behind a run. */
+    struct HistoryPage
+    {
+        nlohmann::json messages = nlohmann::json::array();
+        int            offset   = 0;
+        int            next     = 0;
+        bool           eof      = true;
+        bool           found    = false;
+    };
+
+    /**
+     * @brief Messages from index @p from of the agent behind @p id.
+     * @details A live agent answers from memory, a finished one from its
+     *          stored history. A page holds at least one message and stops
+     *          once @p maxBytes of JSON is reached. An index past the end
+     *          restarts at 0 (the history was compacted).
+     */
+    HistoryPage historyPage(const QString &id, int from, int maxBytes) const;
+
+    /** @brief The child that a message to @p id reaches now, or null. */
+    QSocAgent *liveAgentFor(const QString &id) const;
+
+    /**
+     * @brief Mailbox send from the user to the live child behind @p id.
+     * @details An idle child is woken through the follow-up path; a busy one
+     *          reads the message at its next step. Never blocks. The reply
+     *          names the run that will read it in `task_id`.
+     */
+    nlohmann::json sendFromUser(const QString &id, const QString &message);
+
     void              enableMessaging(QSocAgent *root);
     QSocAgentMailbox *mailbox() const { return mailbox_; }
     QString           startFollowup(QSocAgent *agent);
@@ -323,6 +371,15 @@ private:
 
     /** Path of `<id><suffix>` for a tracked run, this session or legacy. */
     QString locate(const QString &id, const QString &suffix) const;
+
+    /** In-memory transcript of a run plus its terminal payload. */
+    static QString renderRun(const RunState &run);
+
+    /** Rendered transcript text: stored events first, memory otherwise. */
+    QString renderedTranscript(const QString &id) const;
+
+    /** Newest run id registered for @p agent, empty when none. */
+    QString latestRunFor(const QSocAgent *agent) const;
 
     /** Persist the child's message history in the session jsonl format. */
     void writeHistory(RunState &run) const;

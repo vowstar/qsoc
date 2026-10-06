@@ -228,6 +228,8 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
         emit invalidated();
         return true;
     }
+    if ((key == Qt::Key_F || key == Qt::Key_S) && actOnAgent(key))
+        return true;
     if (key == Qt::Key_Escape || key == Qt::Key_Q) {
         if (mode_ == Mode::Detail) {
             exitDetailToList();
@@ -287,6 +289,33 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
         return true; /* swallow */
     }
     return false;
+}
+
+bool QTuiTaskOverlay::actOnAgent(int key)
+{
+    if (!agentActions_ || selected_ < 0 || selected_ >= cachedRows_.size())
+        return false;
+    const auto &row = cachedRows_.at(selected_).row;
+    if (row.kind != QSocTask::Kind::SubAgent)
+        return false;
+    if (key == Qt::Key_S && !row.resumable) {
+        flashFooter(QStringLiteral("%1 can no longer receive messages").arg(row.id));
+        return true;
+    }
+    const QString id = row.id;
+    close();
+    if (key == Qt::Key_F)
+        emit focusRequested(id);
+    else
+        emit messageRequested(id);
+    return true;
+}
+
+QString QTuiTaskOverlay::agentKeys() const
+{
+    const bool agentRow = agentActions_ && selected_ >= 0 && selected_ < cachedRows_.size()
+                          && cachedRows_.at(selected_).row.kind == QSocTask::Kind::SubAgent;
+    return agentRow ? QStringLiteral("f focus  s send  ") : QString();
 }
 
 void QTuiTaskOverlay::enterDetail()
@@ -669,7 +698,7 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
                                .arg(qMin(first + capacity, static_cast<int>(cachedRows_.size())))
                                .arg(cachedRows_.size());
     const QString footer = footerFlash_.isEmpty()
-                               ? range
+                               ? range + agentKeys()
                                      + QStringLiteral(
                                          "v view  m motion  e est  Enter detail  x stop  Esc back")
                                : footerFlash_;
@@ -707,10 +736,10 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
         }
     }
     /* Footer */
-    const QString footer = footerFlash_.isEmpty()
-                                   && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
-                               ? QStringLiteral("Esc back  x stop  e estimates  r refresh  p ranges")
-                               : footerFlash_;
+    const QString footer
+        = footerFlash_.isEmpty() && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
+              ? agentKeys() + QStringLiteral("Esc back  x stop  e estimates  r refresh  p ranges")
+              : footerFlash_;
     screen.putString(2, startY + height - 2, fitToWidth(footer, innerW - 2), false, true);
 }
 

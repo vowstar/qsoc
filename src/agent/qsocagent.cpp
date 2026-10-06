@@ -563,13 +563,10 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
             QMutexLocker locker(&queueMutex);
             if (requestQueue.isEmpty()) {
                 locker.unlock();
-                if (mailbox_) {
-                    const json incoming = mailbox_->take(agentIdentity_);
-                    for (const auto &message : incoming) {
-                        addNotificationMessage(QSocAgentMailbox::render(message));
-                    }
+                if (!takeMailbox()) {
+                    return true;
                 }
-                return true;
+                continue;
             }
             item      = requestQueue.takeFirst();
             remaining = requestQueue.size();
@@ -623,6 +620,27 @@ bool QSocAgent::drainQueuedRequests(const ActiveRunPtr &run)
         owner->appendTurnContext(true);
     }
     return false;
+}
+
+bool QSocAgent::takeMailbox()
+{
+    if (!mailbox_) {
+        return false;
+    }
+    bool       queued   = false;
+    const json incoming = mailbox_->take(agentIdentity_);
+    for (const auto &message : incoming) {
+        if (!QSocAgentMailbox::fromUser(message)) {
+            addNotificationMessage(QSocAgentMailbox::render(message));
+            continue;
+        }
+        QMutexLocker locker(&queueMutex);
+        requestQueue.append(
+            {QString::fromStdString(message.value("body", std::string())),
+             QueuedRequest::Kind::User});
+        queued = true;
+    }
+    return queued;
 }
 
 QString QSocAgent::toolDenyReason(const QString &name) const

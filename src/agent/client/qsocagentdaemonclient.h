@@ -40,6 +40,8 @@ public:
     /** Daemon version from the greeting. */
     [[nodiscard]] QString daemonVersion() const { return m_daemonVersion; }
     [[nodiscard]] bool    hasCapability(const QString &name) const;
+    /** The daemon's greeting frame. */
+    [[nodiscard]] QJsonObject greeting() const { return m_greeting; }
     /** Process id of the daemon end, or -1 when the platform cannot tell. */
     [[nodiscard]] qint64 daemonProcessId() const;
 

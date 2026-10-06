@@ -28,13 +28,14 @@ public:
     int  lineCount() const override;
     void render(QTuiScreen &screen, int startY, int width) override;
 
-    void    setItems(const QList<TodoItem> &items);
-    void    addItem(const TodoItem &item);
-    void    updateStatus(int todoId, const QString &newStatus);
-    void    setActive(int todoId);
-    void    clearActive();
-    QString getTitle(int todoId) const;
-    void    tick();
+    void            setItems(const QList<TodoItem> &items);
+    QList<TodoItem> getItems() const { return items; }
+    void            addItem(const TodoItem &item);
+    void            updateStatus(int todoId, const QString &newStatus);
+    void            setActive(int todoId);
+    void            clearActive();
+    QString         getTitle(int todoId) const;
+    void            tick();
 
     /* Remove all completed (done) TODOs */
     void clearDone();

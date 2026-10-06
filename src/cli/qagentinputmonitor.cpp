@@ -119,6 +119,12 @@ void QAgentInputMonitor::processConsoleKey(const KEY_EVENT_RECORD &key)
         }
         return;
     }
+    if (alt && !shift && !control
+        && (key.wVirtualKeyCode == VK_LEFT || key.wVirtualKeyCode == VK_RIGHT)) {
+        processConsoleSequence(
+            key.wVirtualKeyCode == VK_LEFT ? "\033[1;3D" : "\033[1;3C", key.wRepeatCount);
+        return;
+    }
     if (shift || alt || control)
         return;
     const char *sequence = nullptr;
@@ -638,6 +644,14 @@ void QAgentInputMonitor::processEscSequence()
                 QString decoded = QString::fromUtf8(pastedBuffer);
                 pastedBuffer.clear();
                 emit pastedReceived(decoded);
+                cancelDoubleEscArming();
+                resetEscBuffer();
+                return;
+            }
+            /* Alt+Left / Alt+Right (CSI 1;3D / 1;3C) cycle the agent view.
+             * ESC then b/f is word motion in line editors and stays text. */
+            if (escBuffer == QByteArray("\033[1;3D") || escBuffer == QByteArray("\033[1;3C")) {
+                emit agentCycleRequested(escBuffer.endsWith('C') ? 1 : -1);
                 cancelDoubleEscArming();
                 resetEscBuffer();
                 return;

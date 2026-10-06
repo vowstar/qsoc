@@ -5,6 +5,7 @@
 
 #include "agent/client/qsocagentdaemonclient.h"
 #include "agent/client/qsocdaemonconnection.h"
+#include "cli/qsocagentfocus.h"
 #include "cli/qsocagentinputhistory.h"
 #include "cli/qsocagenttaskmodel.h"
 #include "cli/qsoccliworker.h"
@@ -156,6 +157,13 @@ bool QSocCliWorker::runAgentClientLoop(
 
     QSocTranscriptRenderer renderer(compositor);
     QElapsedTimer          lastInterrupt;
+    QSocAgentFocus         focus(
+        compositor,
+        renderer,
+        [&](const QString &method, const QJsonObject &values) {
+            return client.request(method, values, 2000);
+        },
+        QSocAgentFocus::supports(client.greeting()));
     const auto send = [&](const QString &method, const QJsonObject &values = QJsonObject()) {
         client.send({{"id", client.nextId()}, {"method", method}, {"params", values}});
     };
@@ -189,6 +197,8 @@ bool QSocCliWorker::runAgentClientLoop(
     const auto applySnapshot = [&](const QJsonObject &state) {
         if (state.isEmpty())
             return;
+        if (state.contains("messages"))
+            focus.leave();
         if (state.contains("commands")) {
             commandNames.clear();
             for (const auto &value : state.value("commands").toArray())
@@ -199,7 +209,7 @@ bool QSocCliWorker::runAgentClientLoop(
         if (state.contains("resume_command"))
             resumeHint = state.value("resume_command").toString();
         const QString model = state.value("model").toString();
-        compositor.setTitle(QStringLiteral("QSoC Agent · ") + model);
+        focus.setMainTitle(QStringLiteral("QSoC Agent · ") + model);
         statusBarWidget.setModel(model);
         statusBarWidget.setEffortLevel(state.value("effort").toString());
         planMode = state.value("plan_mode").toBool();
@@ -329,7 +339,7 @@ bool QSocCliWorker::runAgentClientLoop(
                 }
                 return;
             }
-            renderer.apply(event);
+            focus.route(event);
             switch (event.kind) {
             case QSocAgentRuntimeEvent::Kind::ContentChunk:
             case QSocAgentRuntimeEvent::Kind::ReasoningChunk:
@@ -407,7 +417,7 @@ bool QSocCliWorker::runAgentClientLoop(
                 compositor.render();
                 break;
             case QSocAgentRuntimeEvent::Kind::ModelChanged:
-                compositor.setTitle(QStringLiteral("QSoC Agent · ") + event.text);
+                focus.setMainTitle(QStringLiteral("QSoC Agent · ") + event.text);
                 statusBarWidget.setModel(event.text);
                 compositor.render();
                 break;
@@ -666,6 +676,11 @@ bool QSocCliWorker::runAgentClientLoop(
         compositor.dismissTopBanner();
         const bool command = trimmed.startsWith('/') || trimmed.startsWith('!')
                              || trimmed.startsWith('#');
+        if (focus.active() && !command) {
+            statusBarWidget.setStatus(focus.send(inputHistory.expand(text)));
+            compositor.render();
+            return;
+        }
         /* A prompt echoes when the runtime adds it to the history. */
         if (command) {
             QSocAgentRuntimeEvent echo;
@@ -690,14 +705,19 @@ bool QSocCliWorker::runAgentClientLoop(
         else if (compositor.completionPopup().isVisible()) {
             hideCompletion();
             compositor.invalidate();
-        } else
+        } else if (!focus.escape())
             send("abort");
+        compositor.render();
     });
     connect(&inputMonitor, &QAgentInputMonitor::escEscPressed, &inputMonitor, [&] {
         if (!running && inputMonitor.getInputBuffer().isEmpty())
             send("command", {{"input", "/rewind"}});
     });
     connect(&inputMonitor, &QAgentInputMonitor::ctrlCPressed, &inputMonitor, [&](bool hadInput) {
+        if (focus.interrupt(hadInput)) {
+            compositor.render();
+            return;
+        }
         if (lastInterrupt.isValid() && lastInterrupt.elapsed() < 2000) {
             closing = true;
             mainLoop.quit();
@@ -811,6 +831,30 @@ bool QSocCliWorker::runAgentClientLoop(
         return client.request(method, values, 2000);
     });
     compositor.taskOverlay().setRegistry(&tasks);
+    compositor.taskOverlay().setAgentActionsEnabled(focus.enabled());
+    const auto focusOn = [&](const QString &id) {
+        focus.enter(id);
+        compositor.render();
+    };
+    connect(&compositor.taskOverlay(), &QTuiTaskOverlay::focusRequested, &compositor, focusOn);
+    connect(&compositor.taskOverlay(), &QTuiTaskOverlay::messageRequested, &compositor, focusOn);
+    connect(&inputMonitor, &QAgentInputMonitor::agentCycleRequested, &compositor, [&](int direction) {
+        if (!focus.enabled())
+            return;
+        tasks.refresh();
+        const QString next = QSocAgentFocus::cycle(focus.target(), tasks.listAll(), direction);
+        if (next.isEmpty())
+            focus.leave();
+        else
+            focus.enter(next);
+        compositor.render();
+    });
+    QTimer focusTimer;
+    connect(&focusTimer, &QTimer::timeout, &compositor, [&] {
+        if (focus.refresh())
+            compositor.render();
+    });
+    focusTimer.start(500);
     const auto detachTasks = qScopeGuard([&] { compositor.taskOverlay().setRegistry(nullptr); });
     QTimer     taskTimer;
     connect(&taskTimer, &QTimer::timeout, &compositor, [&] {
@@ -855,6 +899,7 @@ bool QSocCliWorker::runAgentClientLoop(
     compositor.render();
     if (client.isConnected())
         mainLoop.exec();
+    focus.leave();
     if (daemonLost)
         return fail("The daemon connection closed.");
     inputMonitor.stop();
