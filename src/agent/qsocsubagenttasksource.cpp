@@ -154,6 +154,7 @@ bool readHistoricalRun(
     run->error            = obj.value(QStringLiteral("error")).toString();
     run->finalPreview     = obj.value(QStringLiteral("final_preview")).toString();
     run->host             = obj.value(QStringLiteral("host")).toString();
+    run->endpoint         = obj.value(QStringLiteral("endpoint")).toString(run->host);
     run->workspace        = obj.value(QStringLiteral("workspace")).toString();
     run->definition       = obj.value(QStringLiteral("definition")).toString(run->subagentType);
     run->legacy           = legacy;
@@ -226,17 +227,15 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
     const QString identity = mailbox_->idFor(agent);
     if (mailbox_->stateFor(identity) != QStringLiteral("idle"))
         return {};
-    QString isolation;
-    QString worktreePath;
-    QString host;
-    QString workspace;
-    QString definition;
+    QString  isolation;
+    QString  worktreePath;
+    Dispatch dispatch;
+    QString  definition;
     for (const auto &run : std::as_const(runs_)) {
         if (run.agent == agent) {
             isolation    = run.isolation;
             worktreePath = run.worktreePath;
-            host         = run.host;
-            workspace    = run.workspace;
+            dispatch     = run.dispatch;
             definition   = run.definition;
         }
     }
@@ -248,7 +247,7 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
         }
     }
     setIsolationMetadata(id, isolation, worktreePath);
-    setPlacementMetadata(id, host, workspace);
+    setDispatchMetadata(id, dispatch);
     const auto connections = std::make_shared<QList<QMetaObject::Connection>>();
     *connections << connect(agent, &QSocAgent::contentChunk, this, [this, id](const QString &text) {
         appendTranscript(id, text);
@@ -330,8 +329,8 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
         row.canKill
             = (run.status == QSocTask::Status::Running || run.status == QSocTask::Status::Pending);
         row.agentId     = run.agent ? run.agent->agentIdentity() : QString();
-        row.host        = run.host;
-        row.workspace   = run.workspace;
+        row.host        = run.dispatch.host;
+        row.workspace   = run.dispatch.workspace;
         row.live        = liveAgentFor(run.id) != nullptr;
         row.resumable   = row.live
                           || (!run.historyFile.isEmpty()
@@ -778,15 +777,13 @@ void QSocSubAgentTaskSource::setIsolationMetadata(
     }
 }
 
-void QSocSubAgentTaskSource::setPlacementMetadata(
-    const QString &id, const QString &host, const QString &workspace)
+void QSocSubAgentTaskSource::setDispatchMetadata(const QString &id, const Dispatch &dispatch)
 {
     for (RunState &run : runs_) {
         if (run.id != id) {
             continue;
         }
-        run.host      = host;
-        run.workspace = workspace;
+        run.dispatch = dispatch;
         writeMeta(run);
         return;
     }
@@ -1075,11 +1072,14 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     if (!run.worktreePath.isEmpty()) {
         meta["worktree"] = run.worktreePath;
     }
-    if (!run.host.isEmpty()) {
-        meta["host"] = run.host;
+    if (!run.dispatch.host.isEmpty()) {
+        meta["host"] = run.dispatch.host;
     }
-    if (!run.workspace.isEmpty()) {
-        meta["workspace"] = run.workspace;
+    if (!run.dispatch.endpoint.isEmpty()) {
+        meta["endpoint"] = run.dispatch.endpoint;
+    }
+    if (!run.dispatch.workspace.isEmpty()) {
+        meta["workspace"] = run.dispatch.workspace;
     }
     if (!run.historyFile.isEmpty()) {
         meta["history_file"] = run.historyFile;

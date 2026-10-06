@@ -5,6 +5,7 @@
 #define QSOCTOOLAGENT_H
 
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 
@@ -19,7 +20,6 @@ class QSocAgentDefinitionRegistry;
 class QSocHookManager;
 class QSocLoopScheduler;
 class QSocMemoryManager;
-class QSocSubAgentTaskSource;
 class QSocHostCatalog;
 class QSocSshConfigParser;
 class QSocTaskEventQueue;
@@ -202,10 +202,9 @@ private:
     /** A finished child to rebuild: its history and where it must run. */
     struct ResumeSeed
     {
-        json    history;
-        QString host;
-        QString workspace;
-        bool    notifyParent = true;
+        json                             history;
+        QSocSubAgentTaskSource::Dispatch dispatch;
+        bool                             notifyParent = true;
     };
 
     /** The spawn behind execute(); @p seed rebuilds a finished child. */
@@ -266,9 +265,11 @@ private:
      *        @p errorMessage.
      * @details The whole binding rather than its registry, because a child's
      *          tools, its config and its workspace health all have to name
-     *          the same (target, workspace) pair.
+     *          the same (target, workspace) pair. An empty @p workspace
+     *          means the catalog workspace of @p host.
      */
-    std::shared_ptr<HostBinding> resolveHostBinding(const QString &host, QString *errorMessage);
+    std::shared_ptr<HostBinding> resolveHostBinding(
+        const QString &host, const QString &workspace, QString *errorMessage);
 
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;

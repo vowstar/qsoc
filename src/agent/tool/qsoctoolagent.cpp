@@ -88,7 +88,7 @@ QSocTool::ResultStatus resultStatusFor(QSocTask::Status state)
 } // namespace
 
 std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
-    const QString &host, QString *errorMessage)
+    const QString &host, const QString &workspace, QString *errorMessage)
 {
     if (!QSocInterrupt::handlerReady()) {
         if (errorMessage != nullptr) {
@@ -96,7 +96,22 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         }
         return nullptr;
     }
-    const auto cached = hostCache_.find(host);
+    ResolvedHostTarget resolved;
+    if (!resolveHostTarget(host, hostCatalog_, sshConfigParser_, &resolved, errorMessage)) {
+        return nullptr;
+    }
+    const QString root = workspace.isEmpty() ? resolved.workspaceHint : workspace;
+    if (root.isEmpty()) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                                "no workspace registered for host '%1'; call "
+                                "host_register or /ssh first")
+                                .arg(host);
+        }
+        return nullptr;
+    }
+    const QString cacheKey = host + QLatin1Char('\n') + root;
+    const auto    cached   = hostCache_.find(cacheKey);
     if (cached != hostCache_.end()) {
         const std::shared_ptr<HostBinding> &binding = cached.value();
         /* A cached registry is only worth reusing while its host can still
@@ -115,20 +130,6 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         hostCache_.erase(cached);
     }
 
-    ResolvedHostTarget resolved;
-    if (!resolveHostTarget(host, hostCatalog_, sshConfigParser_, &resolved, errorMessage)) {
-        return nullptr;
-    }
-    if (resolved.workspaceHint.isEmpty()) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral(
-                                "no workspace registered for host '%1'; call "
-                                "host_register or /ssh first")
-                                .arg(host);
-        }
-        return nullptr;
-    }
-
     auto binding = std::make_shared<HostBinding>();
     if (!binding->conn.setShellPreference(resolved.shell, errorMessage)) {
         return nullptr;
@@ -141,7 +142,7 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         })) {
         return nullptr;
     }
-    if (!prepareAgentRemoteWorkspace(resolved.workspaceHint, &binding->state, errorMessage)) {
+    if (!prepareAgentRemoteWorkspace(root, &binding->state, errorMessage)) {
         discardAgentRemoteState(&binding->state);
         return nullptr;
     }
@@ -163,7 +164,7 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
     binding->owner    = std::make_unique<QObject>();
     binding->registry = buildAgentRemoteRegistry(
         binding->owner.get(), &binding->conn, parentRegistry_, nullptr, llmService_);
-    hostCache_.insert(host, binding);
+    hostCache_.insert(cacheKey, binding);
     return binding;
 }
 
@@ -480,10 +481,11 @@ void removeWorktreeAt(const QString &repoRoot, const QString &wtPath)
 
 /* Declare the workspace a binding's tools actually resolve on, so the child's
  * system prompt and its hook envelope name the host that answers its calls. */
-void bindConfigToHost(QSocRemoteConnection *conn, QSocAgentConfig *cfg)
+void bindConfigToHost(QSocRemoteConnection *conn, const QString &alias, QSocAgentConfig *cfg)
 {
     cfg->remoteMode         = true;
     cfg->remoteName         = conn->target();
+    cfg->remoteAlias        = alias;
     cfg->remoteDisplay      = conn->display();
     cfg->remoteWorkspace    = conn->workspace();
     cfg->remoteWorkingDir   = conn->path()->cwd();
@@ -491,6 +493,19 @@ void bindConfigToHost(QSocRemoteConnection *conn, QSocAgentConfig *cfg)
     applyRemoteHostToConfig(conn, cfg);
     cfg->skillListing.clear();
     loadAgentRemoteProjectRules(conn, cfg);
+}
+
+/* Where a child built from @p cfg runs: the alias it was bound by, the SSH
+ * target behind that alias, and the workspace root. */
+QSocSubAgentTaskSource::Dispatch placementOf(const QSocAgentConfig &cfg)
+{
+    if (!cfg.remoteMode) {
+        return {QStringLiteral("local"), QStringLiteral("local"), cfg.projectPath};
+    }
+    return {
+        cfg.remoteAlias.isEmpty() ? cfg.remoteName : cfg.remoteAlias,
+        cfg.remoteName,
+        cfg.remoteWorkspace};
 }
 
 /* JSON spelling of a terminal flavour. Deliberately not statusLine()'s words:
@@ -672,7 +687,8 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     std::shared_ptr<HostBinding> childHost;
     if (remoteHost) {
         QString hostErr;
-        childHost = resolveHostBinding(hostArg, &hostErr);
+        childHost = resolveHostBinding(
+            hostArg, seed != nullptr ? seed->dispatch.workspace : QString(), &hostErr);
         if (childHost == nullptr) {
             return QString::fromUtf8(
                 json{
@@ -781,20 +797,19 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
         }
     }
     if (childHost != nullptr) {
-        bindConfigToHost(&childHost->conn, &childCfg);
+        bindConfigToHost(&childHost->conn, hostArg, &childCfg);
     }
-    const QString placedHost = childCfg.remoteMode ? childCfg.remoteName : QStringLiteral("local");
-    const QString placedWorkspace = childCfg.remoteMode ? childCfg.remoteWorkspace
-                                                        : childCfg.projectPath;
+    const QSocSubAgentTaskSource::Dispatch placed = placementOf(childCfg);
     if (seed != nullptr
-        && (placedHost != seed->host
-            || (!seed->workspace.isEmpty() && placedWorkspace != seed->workspace))) {
+        && (placed.endpoint != seed->dispatch.endpoint
+            || (!seed->dispatch.workspace.isEmpty()
+                && placed.workspace != seed->dispatch.workspace))) {
         return QString::fromStdString(
             json{
                 {"status", "error"},
                 {"error",
                  QStringLiteral("the run used %1:%2, the child would now run on %3:%4")
-                     .arg(seed->host, seed->workspace, placedHost, placedWorkspace)
+                     .arg(seed->dispatch.host, seed->dispatch.workspace, placed.host, placed.workspace)
                      .toStdString()}}
                 .dump());
     }
@@ -948,7 +963,7 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     /* Stash isolation + worktree on the run so the meta sidecar
      * captures them; mirrors what the response JSON reports. */
     taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
-    taskSource_->setPlacementMetadata(taskId, placedHost, placedWorkspace);
+    taskSource_->setDispatchMetadata(taskId, placed);
 
     /* Forward child token usage into the parent's running totals so
      * the parent's status pill / cost view reflects total cost in
@@ -1418,13 +1433,21 @@ json QSocToolAgent::resumeRun(
                    : "no metadata sidecar found for this task_id"}};
     }
     ResumeSeed seed;
-    seed.history          = history;
-    seed.host             = meta.host.isEmpty() ? QStringLiteral("local") : meta.host;
-    seed.workspace        = meta.workspace;
-    seed.notifyParent     = sender != QSocAgentMailbox::userSender();
-    const bool    inherit = parentAgent_ != nullptr && parentAgent_->getConfig().remoteMode
-                            && parentAgent_->getConfig().remoteName == seed.host;
-    const QString host    = seed.host == QStringLiteral("local") || inherit ? QString() : seed.host;
+    seed.history = history;
+    seed.dispatch
+        = {meta.host.isEmpty() ? QStringLiteral("local") : meta.host,
+           meta.endpoint.isEmpty() ? QStringLiteral("local") : meta.endpoint,
+           meta.workspace};
+    seed.notifyParent = sender != QSocAgentMailbox::userSender();
+    /* The parent's binding serves the run only when it is the very endpoint and
+     * workspace the run used; any other run goes back to its own alias. */
+    const QSocSubAgentTaskSource::Dispatch parentAt = parentAgent_ != nullptr
+                                                          ? placementOf(parentAgent_->getConfig())
+                                                          : QSocSubAgentTaskSource::Dispatch{};
+    const bool    inherit = parentAt.endpoint == seed.dispatch.endpoint
+                            && (seed.dispatch.workspace.isEmpty()
+                                || parentAt.workspace == seed.dispatch.workspace);
+    const QString host    = inherit ? QString() : seed.dispatch.host;
     json          result  = json::parse(
         spawn(
             json{

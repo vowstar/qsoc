@@ -518,6 +518,7 @@ void QSocAgentRuntime::installRemoteTools()
         auto newCfg               = d->agent->getConfig();
         newCfg.remoteMode         = true;
         newCfg.remoteName         = d->remoteConn->target();
+        newCfg.remoteAlias        = d->remoteAlias;
         newCfg.remoteDisplay      = d->remoteConn->display();
         newCfg.remoteWorkspace    = d->remoteConn->workspace();
         newCfg.remoteWorkingDir   = d->remoteConn->path()->cwd();
@@ -579,6 +580,7 @@ void QSocAgentRuntime::disconnectRemote()
         auto newCfg       = d->agent->getConfig();
         newCfg.remoteMode = false;
         newCfg.remoteName.clear();
+        newCfg.remoteAlias.clear();
         newCfg.remoteDisplay.clear();
         newCfg.remoteWorkspace.clear();
         newCfg.remoteWorkingDir.clear();

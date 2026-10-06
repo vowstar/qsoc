@@ -4,6 +4,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocagentmailbox.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
@@ -51,6 +52,10 @@ namespace {
 /* The alias the fixture's ~/.ssh/config and host catalog both define, so the
  * spawn tool resolves host, port, user and key as it does for a real target. */
 constexpr auto kAlias = "dispatchhost";
+
+/* A catalog-only name whose target is kAlias, so the alias the call names and
+ * the SSH target behind it differ. */
+constexpr auto kCatalogAlias = "dispatchentry";
 
 /* The parent's binding. Never connected; only its strings matter. */
 constexpr auto kParentWorkspace = "/parent-host-workspace";
@@ -224,6 +229,7 @@ private slots:
     void forkLoadsRemoteRulesAtTheBindingBoundary();
     void aDispatchedChildIsNotStoppedByTheParentHostHealth();
     void worktreeIsolationIsRefusedOnRemoteWorkspaces();
+    void aResumedRunReturnsToItsAliasAndWorkspace();
 
 private:
     bool prepare();
@@ -658,6 +664,78 @@ void Test::worktreeIsolationIsRefusedOnRemoteWorkspaces()
     }
     QCOMPARE(llm.requestCount(), 0);
     QCOMPARE(worktreeCount(repo), 1);
+}
+
+/* Counterexample: a run stored the SSH target as its host, so resuming it named
+ * a host the tool cannot dispatch to, and a catalog workspace changed since
+ * the run moved the rebuilt child away from the tree its history describes. */
+void Test::aResumedRunReturnsToItsAliasAndWorkspace()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const QString moved = m_fixture.workDir() + QStringLiteral("/moved");
+    QVERIFY(QDir().mkpath(moved));
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueFinal(QStringLiteral("first run done"));
+    llm.enqueueFinal(QStringLiteral("resumed run done"));
+
+    QTemporaryDir   runs;
+    QSocHostCatalog catalog;
+    catalog.load(QString(), m_project);
+    QSocHostProfile profile;
+    profile.alias     = QString::fromLatin1(kCatalogAlias);
+    profile.workspace = m_workspace;
+    profile.target    = QString::fromLatin1(kAlias);
+    QVERIFY(catalog.upsert(profile, /*allowOverwrite=*/true));
+
+    struct Harness
+    {
+        explicit Harness(const QString &runDir, QSocHostCatalog *catalog)
+            : service(nullptr, &serviceConfig)
+            , parent(nullptr, &service, &registry, parentOnItsOwnHost())
+            , tool(nullptr, &service, &registry, parentOnItsOwnHost(), &definitions, &tasks)
+        {
+            definitions.registerBuiltins();
+            tasks.setTranscriptDir(runDir);
+            tool.setParentAgent(&parent);
+            tool.setHostCatalog(catalog);
+            registry.registerTool(&tool);
+        }
+        QSocConfig                  serviceConfig;
+        QLLMService                 service;
+        QSocAgentDefinitionRegistry definitions;
+        QSocSubAgentTaskSource      tasks;
+        QSocToolRegistry            registry;
+        QSocAgent                   parent;
+        QSocToolAgent               tool;
+    };
+
+    QString taskId;
+    {
+        Harness first(runs.path(), &catalog);
+        auto    args    = spawnArgs();
+        args["host"]    = kCatalogAlias;
+        const json done = json::parse(first.tool.execute(args).toStdString());
+        QCOMPARE(done.value("status", std::string()), std::string("ok"));
+        taskId = QString::fromStdString(done.value("task_id", std::string()));
+        QSocSubAgentTaskSource::HistoricalRun meta;
+        QVERIFY(first.tasks.findHistoricalRun(taskId, &meta));
+        QCOMPARE(meta.host, QString::fromLatin1(kCatalogAlias));
+        QVERIFY2(meta.endpoint.contains(QString::fromLatin1(kAlias)), qPrintable(meta.endpoint));
+        QCOMPARE(meta.workspace, m_workspace);
+    }
+    profile.workspace = moved;
+    QVERIFY(catalog.upsert(profile, /*allowOverwrite=*/true));
+
+    Harness    later(runs.path(), &catalog);
+    const json resumed
+        = later.tool.resumeRun(taskId, QStringLiteral("go on"), QSocAgentMailbox::userSender());
+    QVERIFY2(resumed.value("resume", std::string()) == "history", resumed.dump().c_str());
+    QTRY_COMPARE(llm.requestCount(), 2);
+    const QString prompt = systemPromptOf(llm, 1);
+    QVERIFY2(prompt.contains(m_workspace), qPrintable(remoteWorkspaceLine(prompt)));
+    QVERIFY2(!prompt.contains(moved), qPrintable(remoteWorkspaceLine(prompt)));
 }
 
 } // namespace

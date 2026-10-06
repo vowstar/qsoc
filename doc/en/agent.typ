@@ -1366,8 +1366,9 @@ produces:
 - `<task_id>.jsonl`: structured event stream (one JSON event per line:
   prompt, tool calls, tool results, content chunks, final output).
 - `<task_id>.meta.json`: sidecar with label, `subagent_type`, status,
-  isolation mode, worktree path, `host` (`local` or the SSH target) and
-  `workspace`. It is replaced atomically.
+  isolation mode, worktree path, `host` (`local` or the alias the run was
+  sent to), `endpoint` (the SSH target behind that alias) and `workspace`.
+  It is replaced atomically.
 - `<task_id>.history.jsonl`: the child's message history in the session file
   format, written when the run ends. A history larger than 16 MiB is not
   kept. The meta names it in `history_file`.
@@ -1405,8 +1406,9 @@ While a backgrounded run is alive:
   history, with the same definition, host and workspace, and runs in the
   background (`resume: history`); its result arrives as a task notification.
   The rebuilt child uses the current model and reasoning effort, not the ones
-  of the earlier run. A run that used another host or workspace than the
-  child would get now is refused. Without instructions the child is asked to
+  of the earlier run. It returns to the stored alias and workspace, even when
+  the catalog workspace changed since; when that alias now reaches another
+  SSH target, the resume is refused. Without instructions the child is asked to
   continue, or to report the result if it is done.
 - When neither applies (no stored history, a `legacy` run, a worktree run),
   `agent_resume` reads the meta sidecar plus the transcript tail and returns

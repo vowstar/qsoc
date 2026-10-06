@@ -145,6 +145,7 @@ struct QSocAgentConfig
      * implementations for SSH/SFTP-backed versions. */
     bool        remoteMode = false;
     QString     remoteName;       /* Profile name or raw "user@host:port". */
+    QString     remoteAlias;      /* The name the binding was made by. */
     QString     remoteDisplay;    /* Human-readable target, no credentials. */
     QString     remoteWorkspace;  /* Absolute remote workspace root. */
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */

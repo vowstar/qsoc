@@ -263,11 +263,16 @@ public:
     void setIsolationMetadata(
         const QString &id, const QString &isolation, const QString &worktreePath);
 
-    /**
-     * @brief Record where a run executes: `local` or the SSH target,
-     *        and its workspace root. No-op for unknown ids.
-     */
-    void setPlacementMetadata(const QString &id, const QString &host, const QString &workspace);
+    /** @brief Where a run executes. */
+    struct Dispatch
+    {
+        QString host;      /* the alias the run was sent to, or `local` */
+        QString endpoint;  /* the SSH target behind the alias, or `local` */
+        QString workspace; /* workspace root */
+    };
+
+    /** @brief Record where a run executes. No-op for unknown ids. */
+    void setDispatchMetadata(const QString &id, const Dispatch &dispatch);
 
     /**
      * @brief One historical run reconstructed from disk meta sidecar.
@@ -287,6 +292,7 @@ public:
         QString error;
         QString finalPreview;
         QString host;
+        QString endpoint; /* the host value of a sidecar that has none */
         QString workspace;
         QString historyFile; /* QSocSession jsonl of the child history */
         QString definition;  /* agent definition the child was built from */
@@ -357,8 +363,7 @@ private:
         QString               errorText;   /* on Failed / Aborted */
         QString               isolation;   /* "none" | "worktree" */
         QString               worktreePath;
-        QString               host;
-        QString               workspace;
+        Dispatch              dispatch;
         QString               directory; /* run storage; empty = memory only */
         QString               historyFile;
         QString               definition; /* follow-ups keep the spawn's definition */

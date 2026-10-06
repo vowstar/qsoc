@@ -181,12 +181,17 @@ void Test::terminalRunStoresHistoryAndPlacement()
          {{"role", "assistant"}, {"content", "the bus is fine"}}});
     child->setMessages(messages);
     const QString id = source.registerRun(QStringLiteral("label"), QStringLiteral("explore"), child);
-    source.setPlacementMetadata(id, QStringLiteral("local"), QStringLiteral("/work/tree"));
+    source.setDispatchMetadata(
+        id,
+        {QStringLiteral("sim"),
+         QStringLiteral("operator@sim.invalid:22"),
+         QStringLiteral("/work/tree")});
     source.start(id, []() {});
     source.markCompleted(id, QStringLiteral("done"));
 
     const QJsonObject meta = readJson(source.metaPathFor(id));
-    QCOMPARE(meta.value("host").toString(), QStringLiteral("local"));
+    QCOMPARE(meta.value("host").toString(), QStringLiteral("sim"));
+    QCOMPARE(meta.value("endpoint").toString(), QStringLiteral("operator@sim.invalid:22"));
     QCOMPARE(meta.value("workspace").toString(), QStringLiteral("/work/tree"));
     const QString history = QDir(dir).filePath(meta.value("history_file").toString());
     QCOMPARE(QFileInfo(history).fileName(), id + QStringLiteral(".history.jsonl"));
@@ -196,6 +201,8 @@ void Test::terminalRunStoresHistoryAndPlacement()
     QVERIFY(source.findHistoricalRun(id, &run));
     QCOMPARE(run.historyFile, history);
     QCOMPARE(run.workspace, QStringLiteral("/work/tree"));
+    QCOMPARE(run.host, QStringLiteral("sim"));
+    QCOMPARE(run.endpoint, QStringLiteral("operator@sim.invalid:22"));
 }
 
 void Test::metaWriteDoesNotFollowLinks()
