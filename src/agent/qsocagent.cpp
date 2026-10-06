@@ -3073,10 +3073,27 @@ QString QSocAgent::remoteToolLines() const
         text += QStringLiteral("Not available in this workspace: %1.\n")
                     .arg(absent.join(QStringLiteral(", ")));
     }
+    const auto present = [&](const QString &name) {
+        return registry->hasTool(name) && isToolPresented(name, registry);
+    };
     if (!registry->hasTool(QStringLiteral("bash"))) {
         text += QStringLiteral(
             "The remote host has no usable shell (see Environment), so no tool runs commands "
             "there.\n");
+    }
+    if (present(QStringLiteral("todo_list"))) {
+        text += QStringLiteral(
+            "The todo tools keep the list in the remote workspace .qsoc/todos.md.\n");
+    }
+    if (present(QStringLiteral("skill_find"))) {
+        text += QStringLiteral(
+            "Skills marked [remote] come from the remote workspace; the others, including the "
+            "local project's [local] skills, are on this machine. A remote skill wins over a "
+            "local one with the same name.\n");
+    }
+    if (present(QStringLiteral("memory_read"))) {
+        text += QStringLiteral(
+            "Project memory is kept on this machine, separate for each remote workspace.\n");
     }
     return text;
 }

@@ -5,7 +5,8 @@
 #define QSOCTOOLTODO_H
 
 #include "agent/qsoctool.h"
-#include "common/qsocprojectmanager.h"
+
+class QSocWorkspaceFs;
 
 #include <QList>
 
@@ -23,14 +24,16 @@ struct QSocTodoItem
 
 /**
  * @brief Tool to list all todo items
+ * @details The todo tools keep `.qsoc/todos.md` (and the `.qsoc/todos.hwm`
+ *          id mark) in the workspace that @p fs names: the local project, or
+ *          the remote workspace in remote mode.
  */
 class QSocToolTodoList : public QSocTool
 {
     Q_OBJECT
 
 public:
-    explicit QSocToolTodoList(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolTodoList(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
     ~QSocToolTodoList() override;
 
     QString getName() const override;
@@ -39,14 +42,10 @@ public:
     QString execute(const json &arguments) override;
     bool    isReadOnly() const override { return true; }
 
-    void setProjectManager(QSocProjectManager *projectManager);
-
 private:
-    QSocProjectManager *projectManager = nullptr;
+    QSocWorkspaceFs *fs = nullptr;
 
-    QString             todoFilePath() const;
-    QList<QSocTodoItem> loadTodos() const;
-    QString             formatTodoList(const QList<QSocTodoItem> &todos) const;
+    QString formatTodoList(const QList<QSocTodoItem> &todos) const;
 };
 
 /**
@@ -57,7 +56,7 @@ class QSocToolTodoAdd : public QSocTool
     Q_OBJECT
 
 public:
-    explicit QSocToolTodoAdd(QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolTodoAdd(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
     ~QSocToolTodoAdd() override;
 
     QString getName() const override;
@@ -65,14 +64,8 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
-
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    QString             todoFilePath() const;
-    QList<QSocTodoItem> loadTodos() const;
-    bool                saveTodos(const QList<QSocTodoItem> &todos) const;
+    QSocWorkspaceFs *fs = nullptr;
 };
 
 /**
@@ -83,8 +76,7 @@ class QSocToolTodoUpdate : public QSocTool
     Q_OBJECT
 
 public:
-    explicit QSocToolTodoUpdate(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolTodoUpdate(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
     ~QSocToolTodoUpdate() override;
 
     QString getName() const override;
@@ -92,14 +84,8 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
-
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    QString             todoFilePath() const;
-    QList<QSocTodoItem> loadTodos() const;
-    bool                saveTodos(const QList<QSocTodoItem> &todos) const;
+    QSocWorkspaceFs *fs = nullptr;
 };
 
 /**
@@ -110,8 +96,7 @@ class QSocToolTodoDelete : public QSocTool
     Q_OBJECT
 
 public:
-    explicit QSocToolTodoDelete(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+    explicit QSocToolTodoDelete(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
     ~QSocToolTodoDelete() override;
 
     QString getName() const override;
@@ -119,14 +104,8 @@ public:
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
 
-    void setProjectManager(QSocProjectManager *projectManager);
-
 private:
-    QSocProjectManager *projectManager = nullptr;
-
-    QString             todoFilePath() const;
-    QList<QSocTodoItem> loadTodos() const;
-    bool                saveTodos(const QList<QSocTodoItem> &todos) const;
+    QSocWorkspaceFs *fs = nullptr;
 };
 
 #endif // QSOCTOOLTODO_H

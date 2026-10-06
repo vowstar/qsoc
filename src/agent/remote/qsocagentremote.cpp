@@ -7,12 +7,15 @@
 #include "agent/qsocprojectrules.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocremoteworkspacefs.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/tool/qsoctoolmonitor.h"
+#include "agent/tool/qsoctoolskill.h"
+#include "agent/tool/qsoctooltodo.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -654,6 +657,18 @@ QSocToolRegistry *buildAgentRemoteRegistry(
         registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
         registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
     }
+    QSocWorkspaceFs *fs = conn->workspaceFs();
+    registry->registerTool(new QSocToolTodoList(parent, fs));
+    registry->registerTool(new QSocToolTodoAdd(parent, fs));
+    registry->registerTool(new QSocToolTodoUpdate(parent, fs));
+    registry->registerTool(new QSocToolTodoDelete(parent, fs));
+    const auto *localSkills = base != nullptr ? dynamic_cast<QSocToolSkillFind *>(
+                                                    base->getTool(QStringLiteral("skill_find")))
+                                              : nullptr;
+    QSocProjectManager *localProject = localSkills != nullptr ? localSkills->getProjectManager()
+                                                              : nullptr;
+    registry->registerTool(new QSocToolSkillFind(parent, localProject, fs));
+    registry->registerTool(new QSocToolSkillCreate(parent, localProject, fs));
     if (monitorSource != nullptr && machineOffersExecTools(conn->host())) {
         QSocMonitorTaskSource::RemoteSpec remote;
         remote.targetKey = conn->target();
@@ -855,6 +870,14 @@ QString QSocRemoteConnection::display() const
         return {};
     }
     return m_target + QStringLiteral(":") + m_workspace;
+}
+
+QSocWorkspaceFs *QSocRemoteConnection::workspaceFs()
+{
+    if (!m_fs) {
+        m_fs = std::make_unique<QSocRemoteWorkspaceFs>(this);
+    }
+    return m_fs.get();
 }
 
 bool QSocRemoteConnection::isUsable() const

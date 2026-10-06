@@ -7,13 +7,15 @@
 #include "agent/qsoctool.h"
 #include "common/qsocprojectmanager.h"
 
-#include <cstdint>
+class QSocWorkspaceFs;
 
 /**
  * @brief Tool to discover, search, and read user-defined skills (SKILL.md)
- * @details Skills are markdown prompt templates resolved across four layers
- *          (high to low priority): $QSOC_HOME/skills, <project>/.qsoc/skills,
- *          ~/.config/qsoc/skills, and a platform-native system skills dir.
+ * @details Skills are markdown prompt templates resolved across layers
+ *          (high to low priority): `env` ($QSOC_HOME/skills), `remote` (the
+ *          workspace file system's `.qsoc/skills`, when one is given),
+ *          `local` (<project>/.qsoc/skills), `user` (~/.config/qsoc/skills),
+ *          `system` (a platform-native dir) and `extra` ($QSOC_SKILLS_PATH).
  *          Same-name skills in higher layers shadow lower ones.
  */
 class QSocToolSkillFind : public QSocTool
@@ -22,7 +24,9 @@ class QSocToolSkillFind : public QSocTool
 
 public:
     explicit QSocToolSkillFind(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+        QObject            *parent         = nullptr,
+        QSocProjectManager *projectManager = nullptr,
+        QSocWorkspaceFs    *projectFs      = nullptr);
     ~QSocToolSkillFind() override;
 
     QString getName() const override;
@@ -31,7 +35,8 @@ public:
     QString execute(const json &arguments) override;
     bool    isReadOnly() const override { return true; }
 
-    void setProjectManager(QSocProjectManager *projectManager);
+    void                setProjectManager(QSocProjectManager *projectManager);
+    QSocProjectManager *getProjectManager() const;
 
     struct SkillInfo
     {
@@ -40,10 +45,11 @@ public:
         QString argumentHint; /* e.g. "-m 'message'" for /commit */
         QString whenToUse;    /* trigger hint for the LLM */
         QString path;
-        QString scope;                          /* "project" or "user" */
+        QString scope;                          /* the layer: "local", "remote", "user", ... */
         bool    userInvocable          = true;  /* register as /name slash command */
         bool    disableModelInvocation = false; /* hide from model-facing listings */
         QString parseError;                     /* non-empty if the SKILL.md was malformed */
+        QString workspacePath;                  /* relative to the workspace when read through it */
     };
 
     /* Scan all skill directories like scanAllSkills(), but include entries
@@ -51,15 +57,10 @@ public:
      * to the user. Each entry's path is set; name is empty when broken. */
     QList<SkillInfo> scanAllSkillFiles() const;
 
-    /* Who can load a listed skill: the model through skill_find, or only the
-     * user as a /name command when skill_find is not in the tool set. */
-    enum class ListingAudience : std::uint8_t { Model, UserOnly };
-
     /* Build the system-prompt listing block. Each description is truncated
      * to keep the prefix small and stable so the prompt cache can hit even
      * when one skill's description grows by a few words. */
-    static QString formatPromptListing(
-        const QList<SkillInfo> &skills, ListingAudience audience = ListingAudience::Model);
+    static QString formatPromptListing(const QList<SkillInfo> &skills);
 
     /* Replace ${ARGS}, ${CWD} and ${PROJECT} placeholders in a skill body.
      * Returns the substituted text and sets argsConsumed to true if the
@@ -78,14 +79,23 @@ public:
     QList<SkillInfo> scanAllSkills() const;
 
     /* Read the full SKILL.md content (frontmatter + body). */
-    QString readSkillContent(const QString &filePath) const;
+    QString readSkillContent(const SkillInfo &skill) const;
 
 private:
-    QSocProjectManager *projectManager = nullptr;
+    /* One skill root; an empty dir names the workspace project layer. */
+    struct Layer
+    {
+        QString dir;
+        QString scope;
+    };
 
-    QStringList      allSkillsDirs() const;
+    QSocProjectManager *projectManager = nullptr;
+    QSocWorkspaceFs    *projectFs      = nullptr;
+
+    QList<Layer>     layers() const;
     QList<SkillInfo> scanSkillsDir(const QString &dirPath, const QString &scope) const;
-    SkillInfo        parseSkillFile(const QString &filePath, const QString &scope) const;
+    QList<SkillInfo> scanWorkspaceSkills() const;
+    static SkillInfo parseSkill(const QString &content, const QString &path, const QString &scope);
 };
 
 /**
@@ -98,7 +108,9 @@ class QSocToolSkillCreate : public QSocTool
 
 public:
     explicit QSocToolSkillCreate(
-        QObject *parent = nullptr, QSocProjectManager *projectManager = nullptr);
+        QObject            *parent         = nullptr,
+        QSocProjectManager *projectManager = nullptr,
+        QSocWorkspaceFs    *projectFs      = nullptr);
     ~QSocToolSkillCreate() override;
 
     QString getName() const override;
@@ -110,10 +122,12 @@ public:
 
 private:
     QSocProjectManager *projectManager = nullptr;
+    QSocWorkspaceFs    *projectFs      = nullptr;
 
     QString userSkillsPath() const;
     QString projectSkillsPath() const;
     bool    isValidSkillName(const QString &name) const;
+    QString createInWorkspace(const QString &name, const QString &content) const;
 };
 
 #endif // QSOCTOOLSKILL_H

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "agent/qsocmemorymanager.h"
 #include "agent/qsoctool.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "common/qsocimageattach.h"
@@ -15,6 +16,7 @@
 #include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -92,6 +94,12 @@ private slots:
     void readFileBoundsOneOversizedLine();
     void skillPlaceholdersNameTheRemoteWorkspace();
     void skillListingFollowsTheBinding();
+    void todoAddWritesTheRemoteWorkspace();
+    void remoteProjectSkillIsListedAndReadable();
+    void remoteSkillLinkOutsideTheWorkspaceIsRefused();
+    void skillCreateWritesTheRemoteWorkspace();
+    void projectMemoryStaysOnThisMachineKeyedByWorkspace();
+    void switchingWorkspacesSeparatesProjectMemory();
 
 private:
     bool prepare();
@@ -102,10 +110,24 @@ private:
         return false;
     }
 
-    QString readRemote(const json &args) const
+    QString readRemote(const json &args) const { return call(QStringLiteral("read_file"), args); }
+
+    QString call(const QString &name, const json &args) const
     {
-        QSocTool *tool = m_runtime->agent()->getToolRegistry()->getTool(QStringLiteral("read_file"));
-        return tool == nullptr ? QStringLiteral("(no read_file tool)") : tool->execute(args);
+        QSocTool *tool = m_runtime->agent()->getToolRegistry()->getTool(name);
+        return tool == nullptr ? QStringLiteral("(no %1 tool)").arg(name) : tool->execute(args);
+    }
+
+    bool bind(const QString &workspace)
+    {
+        QString    error;
+        const bool ok = m_runtime->connectRemote(
+            {.target = QString::fromLatin1(kAlias), .workspace = workspace, .remember = false},
+            &error);
+        if (!ok) {
+            qWarning("connectRemote: %s", qPrintable(error));
+        }
+        return ok;
     }
 
     QSocTestSshd                      m_fixture;
@@ -122,6 +144,8 @@ private:
     bool                              m_hadHome     = false;
     bool                              m_hadQsocHome = false;
     bool                              m_hadXdgHome  = false;
+    QByteArray                        m_oldXdgData;
+    bool                              m_hadXdgData = false;
 };
 
 #define REQUIRE_WORKSPACE_FIXTURE() \
@@ -184,9 +208,14 @@ bool Test::prepare()
     if (!writeFile(m_home + QStringLiteral("/qsoc.yml"), yaml)) {
         return fail(QStringLiteral("could not write the model config"));
     }
-    if (!writeSkill(m_project, QStringLiteral("probe"), true, "PROJECT=${PROJECT}\nCWD=${CWD}\n")
-        || !writeSkill(m_project, QStringLiteral("modelonly"), false, "model only\n")) {
-        return fail(QStringLiteral("could not write the project skills"));
+    if (!writeSkill(m_project, QStringLiteral("localonly"), true, "local only\n")
+        || !writeSkill(m_workspace, QStringLiteral("probe"), true, "PROJECT=${PROJECT}\nCWD=${CWD}\n")
+        || !writeSkill(m_workspace, QStringLiteral("modelonly"), false, "model only\n")
+        || !QDir().mkpath(m_home + QStringLiteral("/qsoc/skills/mine"))
+        || !writeFile(
+            m_home + QStringLiteral("/qsoc/skills/mine/SKILL.md"),
+            "---\nname: mine\ndescription: mine probe\n---\nmine\n")) {
+        return fail(QStringLiteral("could not write the skills"));
     }
     m_hadHome     = qEnvironmentVariableIsSet("HOME");
     m_hadQsocHome = qEnvironmentVariableIsSet("QSOC_HOME");
@@ -194,8 +223,11 @@ bool Test::prepare()
     m_oldHome     = qgetenv("HOME");
     m_oldQsocHome = qgetenv("QSOC_HOME");
     m_oldXdgHome  = qgetenv("XDG_CONFIG_HOME");
+    m_hadXdgData  = qEnvironmentVariableIsSet("XDG_DATA_HOME");
+    m_oldXdgData  = qgetenv("XDG_DATA_HOME");
     if (!qputenv("HOME", m_home.toUtf8()) || !qputenv("QSOC_HOME", m_home.toUtf8())
-        || !qputenv("XDG_CONFIG_HOME", m_home.toUtf8())) {
+        || !qputenv("XDG_CONFIG_HOME", m_home.toUtf8())
+        || !qputenv("XDG_DATA_HOME", (m_home + QStringLiteral("/data")).toUtf8())) {
         return fail(QStringLiteral("could not redirect the environment"));
     }
     return true;
@@ -207,6 +239,7 @@ void Test::cleanupTestCase()
         m_hadHome ? qputenv("HOME", m_oldHome) : qunsetenv("HOME");
         m_hadQsocHome ? qputenv("QSOC_HOME", m_oldQsocHome) : qunsetenv("QSOC_HOME");
         m_hadXdgHome ? qputenv("XDG_CONFIG_HOME", m_oldXdgHome) : qunsetenv("XDG_CONFIG_HOME");
+        m_hadXdgData ? qputenv("XDG_DATA_HOME", m_oldXdgData) : qunsetenv("XDG_DATA_HOME");
     }
     m_fixture.stop();
     /* QSOC_TEST_MAIN calls _exit(), so QTemporaryDir's destructor never runs. */
@@ -311,12 +344,7 @@ void Test::readFileBoundsOneOversizedLine()
 void Test::skillPlaceholdersNameTheRemoteWorkspace()
 {
     REQUIRE_WORKSPACE_FIXTURE();
-    QString error;
-    QVERIFY2(
-        m_runtime->connectRemote(
-            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
-            &error),
-        qPrintable(error));
+    QVERIFY(bind(m_workspace));
 
     QVERIFY(m_runtime->executeCommand(QStringLiteral("/probe")));
     const QStringList queued = m_runtime->takePendingAutoInputs();
@@ -329,29 +357,179 @@ void Test::skillPlaceholdersNameTheRemoteWorkspace()
 }
 
 /* Counterexample: the listing was built once at startup, so after `/ssh` the
- * prompt still told the model to load skills with a tool it no longer had. */
+ * prompt never listed the remote workspace's skills. */
 void Test::skillListingFollowsTheBinding()
 {
     REQUIRE_WORKSPACE_FIXTURE();
     const auto listing = [this] { return m_runtime->agent()->getConfig().skillListing; };
-    QVERIFY2(listing().contains(QStringLiteral("skill_find(action")), qPrintable(listing()));
-    QVERIFY(listing().contains(QStringLiteral("**modelonly**")));
+    QVERIFY2(listing().contains(QStringLiteral("**localonly**")), qPrintable(listing()));
+    QVERIFY(!listing().contains(QStringLiteral("**probe**")));
+    QVERIFY(listing().contains(QStringLiteral("**mine**")));
 
-    QString error;
-    QVERIFY2(
-        m_runtime->connectRemote(
-            {.target = QString::fromLatin1(kAlias), .workspace = m_workspace, .remember = false},
-            &error),
-        qPrintable(error));
-    QVERIFY(m_runtime->agent()->getToolRegistry()->getTool(QStringLiteral("skill_find")) == nullptr);
-    QVERIFY2(listing().contains(QStringLiteral("not in the remote workspace")), qPrintable(listing()));
-    QVERIFY(!listing().contains(QStringLiteral("skill_find(action")));
-    QVERIFY(listing().contains(QStringLiteral("**probe**")));
-    QVERIFY(!listing().contains(QStringLiteral("**modelonly**")));
+    QVERIFY(bind(m_workspace));
+    QVERIFY(m_runtime->agent()->getToolRegistry()->getTool(QStringLiteral("skill_find")) != nullptr);
+    QVERIFY2(listing().contains(QStringLiteral("skill_find(action")), qPrintable(listing()));
+    QVERIFY(listing().contains(QStringLiteral("**probe** [remote]")));
+    QVERIFY(listing().contains(QStringLiteral("**mine** [user]")));
+    QVERIFY(listing().contains(QStringLiteral("**modelonly** [remote]")));
+    QVERIFY(listing().contains(QStringLiteral("**localonly** [local]")));
 
     m_runtime->disconnectRemote();
-    QVERIFY2(listing().contains(QStringLiteral("skill_find(action")), qPrintable(listing()));
-    QVERIFY(listing().contains(QStringLiteral("**modelonly**")));
+    QVERIFY2(listing().contains(QStringLiteral("**localonly**")), qPrintable(listing()));
+    QVERIFY(!listing().contains(QStringLiteral("**probe**")));
+}
+
+/* Counterexample: todo_* were missing in remote mode, although the prompt
+ * said they wrote the remote workspace's .qsoc/todos.md. */
+void Test::todoAddWritesTheRemoteWorkspace()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    const QString added = call(QStringLiteral("todo_add"), {{"title", "remote task"}});
+    QVERIFY2(added.startsWith(QStringLiteral("Added todo #1")), qPrintable(added));
+    QFile remote(m_workspace + QStringLiteral("/.qsoc/todos.md"));
+    QVERIFY(remote.open(QIODevice::ReadOnly));
+    QVERIFY(remote.readAll().contains("#1 remote task"));
+    QVERIFY(!QFile::exists(m_project + QStringLiteral("/.qsoc/todos.md")));
+
+    const QString updated = call(QStringLiteral("todo_update"), {{"id", 1}, {"status", "done"}});
+    QVERIFY2(updated.startsWith(QStringLiteral("Updated todo #1")), qPrintable(updated));
+    const QString listed = call(QStringLiteral("todo_list"), json::object());
+    QVERIFY2(listed.contains(QStringLiteral("[x] 1. remote task")), qPrintable(listed));
+    QVERIFY(call(QStringLiteral("todo_delete"), {{"id", 1}}).startsWith(QStringLiteral("Deleted")));
+
+    m_runtime->disconnectRemote();
+    QVERIFY(
+        call(QStringLiteral("todo_list"), json::object()).startsWith(QStringLiteral("No todos")));
+}
+
+void Test::remoteProjectSkillIsListedAndReadable()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    const QString listed = call(QStringLiteral("skill_find"), {{"action", "list"}});
+    QVERIFY2(listed.contains(QStringLiteral("- probe [remote]")), qPrintable(listed));
+    QVERIFY(listed.contains(QStringLiteral("- localonly [local]")));
+    const QString read
+        = call(QStringLiteral("skill_find"), {{"action", "read"}, {"query", "probe"}});
+    QVERIFY2(read.contains(QStringLiteral("PROJECT=${PROJECT}")), qPrintable(read));
+    QVERIFY(read.contains(m_workspace + QStringLiteral("/.qsoc/skills/probe/SKILL.md")));
+}
+
+/* A SKILL.md that links out of the workspace is not read, so a writer of the
+ * remote tree cannot pull another file into the prompt through it. */
+void Test::remoteSkillLinkOutsideTheWorkspaceIsRefused()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    const QString outside = m_fixture.workDir() + QStringLiteral("/secret.md");
+    QVERIFY(writeFile(outside, "---\nname: leak\ndescription: leak probe\n---\nSECRET\n"));
+    const QString dir = m_workspace + QStringLiteral("/.qsoc/skills/leak");
+    QVERIFY(QDir().mkpath(dir));
+    QFile::remove(dir + QStringLiteral("/SKILL.md"));
+    QVERIFY(QFile::link(outside, dir + QStringLiteral("/SKILL.md")));
+
+    QVERIFY(bind(m_workspace));
+    const QString listed = call(QStringLiteral("skill_find"), {{"action", "list"}});
+    QVERIFY2(!listed.contains(QStringLiteral("leak")), qPrintable(listed));
+    const QString read = call(QStringLiteral("skill_find"), {{"action", "read"}, {"query", "leak"}});
+    QVERIFY2(!read.contains(QStringLiteral("SECRET")), qPrintable(read));
+    QVERIFY(!m_runtime->agent()->getConfig().skillListing.contains(QStringLiteral("leak")));
+    QVERIFY(QDir(dir).removeRecursively());
+}
+
+void Test::skillCreateWritesTheRemoteWorkspace()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    const QString made = call(
+        QStringLiteral("skill_create"),
+        {{"name", "made-remote"},
+         {"description", "made remotely"},
+         {"instructions", "body"},
+         {"scope", "project"}});
+    QVERIFY2(made.startsWith(QStringLiteral("Successfully created")), qPrintable(made));
+    const QString file = m_workspace + QStringLiteral("/.qsoc/skills/made-remote/SKILL.md");
+    QVERIFY(QFile::exists(file));
+    QVERIFY(!QFile::exists(m_project + QStringLiteral("/.qsoc/skills/made-remote")));
+    const QString again = call(
+        QStringLiteral("skill_create"),
+        {{"name", "made-remote"},
+         {"description", "made remotely"},
+         {"instructions", "body"},
+         {"scope", "project"}});
+    QVERIFY2(again.contains(QStringLiteral("already exists")), qPrintable(again));
+    QVERIFY(call(QStringLiteral("skill_find"), {{"action", "list"}})
+                .contains(QStringLiteral("made-remote")));
+    QVERIFY(QDir(m_workspace + QStringLiteral("/.qsoc/skills/made-remote")).removeRecursively());
+}
+
+/* Counterexample: project memory in remote mode was written into the local
+ * project's .qsoc/memory, mixing every remote workspace with the local one. */
+void Test::projectMemoryStaysOnThisMachineKeyedByWorkspace()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    QVERIFY(bind(m_workspace));
+    const QString wrote = call(
+        QStringLiteral("memory_write"),
+        {{"scope", "project"},
+         {"name", "remote-fact"},
+         {"type", "project"},
+         {"description", "remote fact"},
+         {"content", "keyed"}});
+    QVERIFY2(!wrote.startsWith(QStringLiteral("Error")), qPrintable(wrote));
+
+    const QString dir = m_runtime->memoryManager()->projectMemoryDir();
+    QVERIFY2(!dir.startsWith(m_project), qPrintable(dir));
+    QVERIFY2(!dir.startsWith(m_fixture.workDir()), qPrintable(dir));
+    QVERIFY2(dir.startsWith(m_home), qPrintable(dir));
+    QVERIFY(QFile::exists(dir + QStringLiteral("/remote-fact.md")));
+    QVERIFY(!QFile::exists(m_project + QStringLiteral("/.qsoc/memory/remote-fact.md")));
+    QVERIFY(!QDir(m_workspace + QStringLiteral("/.qsoc/memory")).exists());
+#ifndef Q_OS_WIN
+    QCOMPARE(
+        QFileInfo(dir).permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther),
+        QFileDevice::Permissions());
+    QCOMPARE(
+        QFileInfo(dir + QStringLiteral("/remote-fact.md")).permissions()
+            & (QFileDevice::ReadGroup | QFileDevice::ReadOther),
+        QFileDevice::Permissions());
+#endif
+
+    m_runtime->disconnectRemote();
+    QCOMPARE(
+        m_runtime->memoryManager()->projectMemoryDir(), m_project + QStringLiteral("/.qsoc/memory"));
+}
+
+void Test::switchingWorkspacesSeparatesProjectMemory()
+{
+    REQUIRE_WORKSPACE_FIXTURE();
+    const QString other = m_fixture.workDir() + QStringLiteral("/ws2");
+    QVERIFY(QDir().mkpath(other));
+    const auto names = [this] {
+        QStringList out;
+        for (const auto &header : m_runtime->memoryManager()->scanHeaders("project")) {
+            out << header.name;
+        }
+        return out;
+    };
+
+    QVERIFY(bind(m_workspace));
+    QVERIFY(m_runtime->memoryManager()
+                ->writeTopicFile("project", "first-ws", "project", "first", "one"));
+    QVERIFY(names().contains(QStringLiteral("first-ws")));
+
+    QVERIFY(bind(other));
+    QVERIFY2(!names().contains(QStringLiteral("first-ws")), qPrintable(names().join(',')));
+    QVERIFY(m_runtime->memoryManager()
+                ->writeTopicFile("project", "second-ws", "project", "second", "two"));
+
+    QVERIFY(bind(m_workspace));
+    QVERIFY(names().contains(QStringLiteral("first-ws")));
+    QVERIFY(!names().contains(QStringLiteral("second-ws")));
+
+    m_runtime->disconnectRemote();
+    QVERIFY(!names().contains(QStringLiteral("first-ws")));
+    QVERIFY(!names().contains(QStringLiteral("second-ws")));
 }
 
 QSOC_TEST_MAIN(Test)

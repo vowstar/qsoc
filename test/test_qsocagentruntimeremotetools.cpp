@@ -83,7 +83,7 @@ QStringList definitionNames(const QSocToolRegistry &registry)
 /* Local workspace tools with no remote replacement yet. */
 bool localOnly(const QString &name)
 {
-    for (const char *family : {"todo_", "skill_", "project_", "module_", "bus_", "generate_"}) {
+    for (const char *family : {"project_", "module_", "bus_", "generate_"}) {
         if (name.startsWith(QLatin1String(family)))
             return true;
     }
@@ -251,9 +251,15 @@ private slots:
             QVERIFY2(remote->getTool(tool) != nullptr, name);
             QCOMPARE(remote->getTool(tool), local->getTool(tool));
         }
-        for (const char *name : {"project_list", "module_list", "lsp", "todo_list", "skill_find"}) {
+        for (const char *name : {"project_list", "module_list", "lsp"}) {
             QVERIFY2(local->hasTool(QString::fromLatin1(name)), name);
             QVERIFY2(!remote->hasTool(QString::fromLatin1(name)), name);
+        }
+        for (const char *name :
+             {"todo_list", "todo_add", "todo_update", "todo_delete", "skill_find", "skill_create"}) {
+            const QString tool = QString::fromLatin1(name);
+            QVERIFY2(remote->getTool(tool) != nullptr, name);
+            QVERIFY2(remote->getTool(tool) != local->getTool(tool), name);
         }
     }
 

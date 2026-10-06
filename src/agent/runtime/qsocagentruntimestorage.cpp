@@ -3,6 +3,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsoccontextrestore.h"
 #include "agent/qsocfilehistory.h"
+#include "agent/qsocmemorymanager.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsoctoolremote.h"
@@ -55,14 +56,19 @@ void QSocAgentRuntime::wireSessionTools()
 void QSocAgentRuntime::wireContextRestore()
 {
     d->agent->setCandidateRestoreProvider([this](const json &recentTail, qint64 remainingTokens) {
-        auto                  *agent          = d->agent;
-        auto                  *projectManager = d->projectManager;
-        auto                  *remoteConn     = d->remoteConn;
-        auto                  *pathContext    = d->pathContext;
-        const auto            &invokedSkills  = d->invokedSkills;
-        QMap<QString, QString> skillPaths;
-        for (const auto &skill : QSocToolSkillFind(nullptr, projectManager).scanAllSkills())
-            skillPaths.insert("/" + skill.name, skill.path);
+        auto                                       *agent         = d->agent;
+        auto                                       *remoteConn    = d->remoteConn;
+        auto                                       *pathContext   = d->pathContext;
+        const auto                                 &invokedSkills = d->invokedSkills;
+        QMap<QString, QSocToolSkillFind::SkillInfo> skills;
+        QHash<QString, QString>                     skillBodies;
+        d->withSkills([&](const QSocToolSkillFind &finder) {
+            for (const auto &skill : finder.scanAllSkills()) {
+                skills.insert(skill.name, skill);
+                if (invokedSkills.contains(skill.name))
+                    skillBodies.insert(skill.name, finder.readSkillContent(skill));
+            }
+        });
         const QSocAgentConfig             cfg = agent->getConfig();
         QSocContextRestoreBuilder::Inputs inputs;
         inputs.enabled     = cfg.contextRestoreEnabled;
@@ -124,11 +130,8 @@ void QSocAgentRuntime::wireContextRestore()
         const QString userMem
             = QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
                   .filePath(QStringLiteral("memory"));
-        QString projMem;
-        if (projectManager != nullptr && !projectManager->getProjectPath().isEmpty()) {
-            projMem
-                = QDir(projectManager->getProjectPath()).filePath(QStringLiteral(".qsoc/memory"));
-        }
+        const QString projMem = d->memoryManager != nullptr ? d->memoryManager->projectMemoryDir()
+                                                            : QString();
         for (const QString &path : inputs.candidatePaths) {
             if (path.startsWith(userMem) || (!projMem.isEmpty() && path.startsWith(projMem))) {
                 excluded.insert(path);
@@ -152,22 +155,17 @@ void QSocAgentRuntime::wireContextRestore()
             qint64(1),
             static_cast<qint64>(cfg.contextRestoreMaxTokensSkill) * 8,
             qint64(1024 * 1024));
-        inputs.readSkill = [&skillPaths,
-                            maxSkillBytes](const QString &name) -> std::optional<QString> {
-            const QString path = skillPaths.value(QStringLiteral("/") + name);
-            QFile         file(path);
-            if (path.isEmpty() || !file.open(QIODevice::ReadOnly)) {
+        inputs.readSkill =
+            [&skills, &skillBodies, maxSkillBytes](const QString &name) -> std::optional<QString> {
+            const QString body = skillBodies.value(name);
+            if (body.isEmpty()) {
                 return std::nullopt;
             }
-            if (file.size() > maxSkillBytes) {
-                return QStringLiteral("Skill source: %1 (read the file before use)").arg(path);
+            if (body.toUtf8().size() > maxSkillBytes) {
+                return QStringLiteral("Skill source: %1 (read the file before use)")
+                    .arg(skills.value(name).path);
             }
-            const QByteArray data = file.read(maxSkillBytes + 1);
-            if (data.size() > maxSkillBytes) {
-                return QStringLiteral("Skill source: %1 (read the file before use)").arg(path);
-            }
-            QTextStream stream(data, QIODevice::ReadOnly | QIODevice::Text);
-            return stream.readAll();
+            return body;
         };
 
         /* Running background sub-agents. */

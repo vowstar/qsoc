@@ -3,8 +3,10 @@
 
 #include "agent/qsocmemorymanager.h"
 
+#include "agent/qsocprivatefile.h"
 #include "common/qsocpaths.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -40,8 +42,30 @@ QString QSocMemoryManager::userMemoryDir() const
     return QDir(QSocPaths::userRoot()).filePath("memory");
 }
 
+void QSocMemoryManager::setRemoteWorkspace(const QString &endpointIdentity, const QString &workspace)
+{
+    remoteProjectDir = endpointIdentity.isEmpty() || workspace.isEmpty()
+                           ? QString()
+                           : remoteProjectMemoryDir(endpointIdentity, workspace);
+}
+
+QString QSocMemoryManager::remoteProjectMemoryDir(
+    const QString &endpointIdentity, const QString &workspace)
+{
+    const QByteArray key = QCryptographicHash::hash(
+                               (endpointIdentity + QLatin1Char('\n') + workspace).toUtf8(),
+                               QCryptographicHash::Sha256)
+                               .toHex()
+                               .left(32);
+    return QDir(QSocPaths::userRoot())
+        .filePath(QStringLiteral("remote-memory/") + QString::fromLatin1(key));
+}
+
 QString QSocMemoryManager::projectMemoryDir() const
 {
+    if (!remoteProjectDir.isEmpty()) {
+        return remoteProjectDir;
+    }
     if (!projectManager) {
         return {};
     }
@@ -518,6 +542,9 @@ bool QSocMemoryManager::writeFile(const QString &path, const QString &content) c
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
     }
+    if (isPrivatePath(path)) {
+        QSocPrivateFile::restrict(file);
+    }
 
     QTextStream out(&file);
     out << content;
@@ -526,8 +553,17 @@ bool QSocMemoryManager::writeFile(const QString &path, const QString &content) c
     return true;
 }
 
+bool QSocMemoryManager::isPrivatePath(const QString &path) const
+{
+    return !remoteProjectDir.isEmpty() && path.startsWith(remoteProjectDir);
+}
+
 bool QSocMemoryManager::ensureDir(const QString &dirPath) const
 {
+    if (isPrivatePath(dirPath)) {
+        return QSocPrivateFile::makeDir(QFileInfo(remoteProjectDir).absolutePath())
+               && QSocPrivateFile::makeDir(dirPath);
+    }
     QDir dir(dirPath);
     if (dir.exists()) {
         return true;

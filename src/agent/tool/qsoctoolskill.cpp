@@ -3,6 +3,7 @@
 
 #include "agent/tool/qsoctoolskill.h"
 
+#include "agent/qsocworkspacefs.h"
 #include "common/qsocpaths.h"
 
 #include <QDir>
@@ -15,9 +16,11 @@
 
 /* QSocToolSkillFind Implementation */
 
-QSocToolSkillFind::QSocToolSkillFind(QObject *parent, QSocProjectManager *projectManager)
+QSocToolSkillFind::QSocToolSkillFind(
+    QObject *parent, QSocProjectManager *projectManager, QSocWorkspaceFs *projectFs)
     : QSocTool(parent)
     , projectManager(projectManager)
+    , projectFs(projectFs)
 {}
 
 QSocToolSkillFind::~QSocToolSkillFind() = default;
@@ -49,13 +52,52 @@ json QSocToolSkillFind::getParametersSchema() const
              "For 'read': exact skill name to retrieve."}}},
           {"scope",
            {{"type", "string"},
-            {"enum", {"user", "project", "system", "all"}},
+            {"enum", {"project", "remote", "local", "env", "user", "extra", "system", "all"}},
             {"description",
-             "Which scope to search: 'user', 'project', 'system', or 'all' (default: all)"}}}}},
+             "Layer to search. 'project': the bound workspace (remote in remote mode, local "
+             "otherwise). 'remote': the remote workspace. 'local': this machine's project. "
+             "'env': $QSOC_HOME. 'user': this machine's user dir. 'extra': $QSOC_SKILLS_PATH. "
+             "'system': the system dir. 'all' (default): every layer."}}}}},
         {"required", json::array({"action"})}};
 }
 
-QStringList QSocToolSkillFind::allSkillsDirs() const
+namespace {
+
+const QString kSkillsDir = QStringLiteral(".qsoc/skills");
+
+QString readLocalText(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    return QTextStream(&file).readAll();
+}
+
+/* QSOC_SKILLS_PATH lets the user (or sysadmin) point at extra skill
+ * collections, e.g. a shared team-wide library on /opt or NFS. Each entry is
+ * a directory that directly contains <skill>/SKILL.md. */
+QStringList extraSkillDirs()
+{
+    const QString extra = QProcessEnvironment::systemEnvironment().value(
+        QStringLiteral("QSOC_SKILLS_PATH"));
+#if defined(Q_OS_WIN)
+    const QChar sep = QLatin1Char(';');
+#else
+    const QChar sep = QLatin1Char(':');
+#endif
+    QStringList dirs;
+    for (const QString &part : extra.split(sep, Qt::SkipEmptyParts)) {
+        if (!part.trimmed().isEmpty()) {
+            dirs << part.trimmed();
+        }
+    }
+    return dirs;
+}
+
+} // namespace
+
+QList<QSocToolSkillFind::Layer> QSocToolSkillFind::layers() const
 {
     QString projectPath;
     if (projectManager) {
@@ -64,46 +106,49 @@ QStringList QSocToolSkillFind::allSkillsDirs() const
     if (projectPath.isEmpty()) {
         projectPath = QDir::currentPath();
     }
-    QStringList dirs = QSocPaths::resourceDirs(QStringLiteral("skills"), projectPath);
+    const QString projectPrefix = QSocPaths::projectRoot(projectPath);
+    const auto    classify      = [&projectPrefix](const QString &dir) {
+        const auto under = [&dir](const QString &prefix) {
+            return !prefix.isEmpty() && dir.startsWith(prefix);
+        };
+        if (under(projectPrefix)) {
+            return QStringLiteral("local");
+        }
+        if (under(QSocPaths::userRoot())) {
+            return QStringLiteral("user");
+        }
+        if (under(QSocPaths::envRoot())) {
+            return QStringLiteral("env");
+        }
+        return QStringLiteral("system");
+    };
 
-    /* QSOC_SKILLS_PATH lets the user (or sysadmin) point at extra skill
-     * collections, e.g. a shared team-wide library on /opt or NFS. Each
-     * entry is a directory that directly contains <skill>/SKILL.md. */
-    const QString extra = QProcessEnvironment::systemEnvironment().value(
-        QStringLiteral("QSOC_SKILLS_PATH"));
-    if (!extra.isEmpty()) {
-#if defined(Q_OS_WIN)
-        const QChar sep = QLatin1Char(';');
-#else
-        const QChar sep = QLatin1Char(':');
-#endif
-        const QStringList parts = extra.split(sep, Qt::SkipEmptyParts);
-        for (const QString &part : parts) {
-            const QString trimmed = part.trimmed();
-            if (!trimmed.isEmpty() && !dirs.contains(trimmed)) {
-                dirs.append(trimmed);
-            }
+    /* resourceDirs() keeps the order env, project, user, system. */
+    QStringList  dirs = QSocPaths::resourceDirs(QStringLiteral("skills"), projectPath);
+    QList<Layer> out;
+    for (const QString &dir : dirs) {
+        out.append({dir, classify(dir)});
+    }
+    for (const QString &extra : extraSkillDirs()) {
+        if (!dirs.contains(extra)) {
+            dirs << extra;
+            out.append({extra, QStringLiteral("extra")});
         }
     }
-    return dirs;
+    if (projectFs != nullptr) {
+        const QString env    = QSocPaths::envRoot();
+        const bool    hasEnv = !env.isEmpty() && !out.isEmpty() && out.first().dir.startsWith(env);
+        out.insert(hasEnv ? 1 : 0, {QString(), QStringLiteral("remote")});
+    }
+    return out;
 }
 
-QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkillFile(
-    const QString &filePath, const QString &scope) const
+QSocToolSkillFind::SkillInfo QSocToolSkillFind::parseSkill(
+    const QString &content, const QString &path, const QString &scope)
 {
     SkillInfo info;
-    info.path  = filePath;
+    info.path  = path;
     info.scope = scope;
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        info.parseError = QStringLiteral("cannot open file");
-        return info;
-    }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
 
     /* Parse YAML frontmatter between --- delimiters */
     if (!content.startsWith("---")) {
@@ -160,97 +205,98 @@ QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanSkillsDir(
     const QStringList entries = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QString &entry : entries) {
         QString skillFile = dir.filePath(entry + "/SKILL.md");
-        if (QFile::exists(skillFile)) {
-            SkillInfo info = parseSkillFile(skillFile, scope);
-            /* Broken SKILL.md files keep info.name empty but carry parseError;
-             * scanAllSkillFiles() needs them, scanAllSkills() filters them out. */
-            skills.append(info);
+        if (!QFile::exists(skillFile)) {
+            continue;
         }
+        QFile file(skillFile);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            SkillInfo info;
+            info.path       = skillFile;
+            info.scope      = scope;
+            info.parseError = QStringLiteral("cannot open file");
+            skills.append(info);
+            continue;
+        }
+        /* Broken SKILL.md files keep info.name empty but carry parseError;
+         * scanAllSkillFiles() needs them, scanAllSkills() filters them out. */
+        skills.append(parseSkill(QTextStream(&file).readAll(), skillFile, scope));
     }
 
     return skills;
 }
 
-QString QSocToolSkillFind::readSkillContent(const QString &filePath) const
+QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanWorkspaceSkills() const
 {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    QList<SkillInfo>              skills;
+    QList<QSocWorkspaceFs::Entry> entries;
+    QString                       error;
+    if (projectFs->list(kSkillsDir, &entries, &error) != QSocWorkspaceFs::Result::Ok) {
+        return skills;
+    }
+    for (const auto &entry : entries) {
+        if (entry.regular) {
+            continue;
+        }
+        const QString relative = kSkillsDir + QLatin1Char('/') + entry.name
+                                 + QStringLiteral("/SKILL.md");
+        QByteArray    bytes;
+        const auto    result = projectFs->read(relative, &bytes, &error);
+        if (result == QSocWorkspaceFs::Result::Absent) {
+            continue;
+        }
+        const QString path = projectFs->displayPath(relative);
+        SkillInfo     info;
+        if (result == QSocWorkspaceFs::Result::Ok) {
+            info = parseSkill(
+                QString::fromUtf8(bytes).replace(QStringLiteral("\r\n"), QStringLiteral("\n")),
+                path,
+                QStringLiteral("remote"));
+        } else {
+            info.path       = path;
+            info.scope      = QStringLiteral("remote");
+            info.parseError = error;
+        }
+        info.workspacePath = relative;
+        skills.append(info);
+    }
+    return skills;
+}
+
+QString QSocToolSkillFind::readSkillContent(const SkillInfo &skill) const
+{
+    if (skill.workspacePath.isEmpty() || projectFs == nullptr) {
+        return readLocalText(skill.path);
+    }
+    QByteArray bytes;
+    QString    error;
+    if (projectFs->read(skill.workspacePath, &bytes, &error) != QSocWorkspaceFs::Result::Ok) {
         return {};
     }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-
-    return content;
+    return QString::fromUtf8(bytes).replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
 }
 
 QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkills() const
 {
-    /* Classify each candidate dir by which layer root it originates from.
-     * Same iteration order as resourceDirs(): env → project → user → system. */
-    QString projectPath;
-    if (projectManager) {
-        projectPath = projectManager->getProjectPath();
-    }
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    const QString envPrefix     = QSocPaths::envRoot();
-    const QString projectPrefix = QSocPaths::projectRoot(projectPath);
-    const QString userPrefix    = QSocPaths::userRoot();
-    const QString systemPrefix  = QSocPaths::systemRoot();
-
-    auto classify = [&](const QString &dir) -> QString {
-        if (!projectPrefix.isEmpty() && dir.startsWith(projectPrefix)) {
-            return QStringLiteral("project");
-        }
-        if (!envPrefix.isEmpty() && dir.startsWith(envPrefix)) {
-            return QStringLiteral("user");
-        }
-        if (dir.startsWith(userPrefix)) {
-            return QStringLiteral("user");
-        }
-        if (dir.startsWith(systemPrefix)) {
-            return QStringLiteral("system");
-        }
-        return QStringLiteral("user");
-    };
-
-    const QStringList dirs = allSkillsDirs();
-    QList<SkillInfo>  result;
-    QSet<QString>     seen; /* dedup by name, first-found wins (higher layer shadows lower) */
-    for (const QString &dir : dirs) {
-        const QString scope = classify(dir);
-        for (const SkillInfo &skill : scanSkillsDir(dir, scope)) {
-            if (skill.name.isEmpty()) {
-                continue;
-            }
-            if (!seen.contains(skill.name)) {
-                seen.insert(skill.name);
-                result.append(skill);
-            }
+    QList<SkillInfo> result;
+    QSet<QString>    seen; /* dedup by name, first-found wins (higher layer shadows lower) */
+    for (const SkillInfo &skill : scanAllSkillFiles()) {
+        if (!skill.name.isEmpty() && !seen.contains(skill.name)) {
+            seen.insert(skill.name);
+            result.append(skill);
         }
     }
     return result;
 }
 
-QString QSocToolSkillFind::formatPromptListing(
-    const QList<SkillInfo> &skills, ListingAudience audience)
+QString QSocToolSkillFind::formatPromptListing(const QList<SkillInfo> &skills)
 {
-    const bool userOnly = audience == ListingAudience::UserOnly;
-    if (skills.isEmpty()) {
-        return {};
-    }
-
     /* Cap each description so a single noisy SKILL.md cannot blow past the
      * prompt cache prefix budget. 200 chars is enough for one full line. */
     constexpr int kDescriptionCap = 200;
 
     QString body;
     for (const auto &skill : skills) {
-        if (skill.disableModelInvocation || (userOnly && !skill.userInvocable)) {
+        if (skill.disableModelInvocation) {
             continue;
         }
         QString desc = skill.description;
@@ -266,13 +312,6 @@ QString QSocToolSkillFind::formatPromptListing(
     }
     if (body.isEmpty()) {
         return {};
-    }
-    if (userOnly) {
-        return QStringLiteral(
-                   "The following skills are installed on this machine, not in the remote "
-                   "workspace. skill_find is not available here; the user can invoke them "
-                   "as /<name> slash commands.\n\n")
-               + body;
     }
     return QStringLiteral(
                "The following skills are installed. Use skill_find(action:\"read\", "
@@ -300,40 +339,10 @@ QString QSocToolSkillFind::substitutePlaceholders(
 
 QList<QSocToolSkillFind::SkillInfo> QSocToolSkillFind::scanAllSkillFiles() const
 {
-    QString projectPath;
-    if (projectManager) {
-        projectPath = projectManager->getProjectPath();
-    }
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    const QString envPrefix     = QSocPaths::envRoot();
-    const QString projectPrefix = QSocPaths::projectRoot(projectPath);
-    const QString userPrefix    = QSocPaths::userRoot();
-    const QString systemPrefix  = QSocPaths::systemRoot();
-
-    auto classify = [&](const QString &dir) -> QString {
-        if (!projectPrefix.isEmpty() && dir.startsWith(projectPrefix)) {
-            return QStringLiteral("project");
-        }
-        if (!envPrefix.isEmpty() && dir.startsWith(envPrefix)) {
-            return QStringLiteral("user");
-        }
-        if (dir.startsWith(userPrefix)) {
-            return QStringLiteral("user");
-        }
-        if (dir.startsWith(systemPrefix)) {
-            return QStringLiteral("system");
-        }
-        return QStringLiteral("user");
-    };
-
-    const QStringList dirs = allSkillsDirs();
-    QList<SkillInfo>  result;
-    for (const QString &dir : dirs) {
-        const QString scope = classify(dir);
-        result.append(scanSkillsDir(dir, scope));
+    QList<SkillInfo> result;
+    for (const Layer &layer : layers()) {
+        result.append(
+            layer.dir.isEmpty() ? scanWorkspaceSkills() : scanSkillsDir(layer.dir, layer.scope));
     }
     return result;
 }
@@ -352,6 +361,9 @@ QString QSocToolSkillFind::execute(const json &arguments)
         scope = QString::fromStdString(arguments["scope"].get<std::string>());
     }
 
+    if (scope == "project") {
+        scope = projectFs != nullptr ? QStringLiteral("remote") : QStringLiteral("local");
+    }
     QList<SkillInfo> allSkills = scanAllSkills();
     if (scope != "all") {
         QList<SkillInfo> filtered;
@@ -425,7 +437,7 @@ QString QSocToolSkillFind::execute(const json &arguments)
         /* Search project first, then user (project takes priority) */
         for (const SkillInfo &skill : allSkills) {
             if (skill.name == name) {
-                QString content = readSkillContent(skill.path);
+                QString content = readSkillContent(skill);
                 if (content.isEmpty()) {
                     return "Error: Failed to read skill file: " + skill.path;
                 }
@@ -445,11 +457,18 @@ void QSocToolSkillFind::setProjectManager(QSocProjectManager *projectManager)
     this->projectManager = projectManager;
 }
 
+QSocProjectManager *QSocToolSkillFind::getProjectManager() const
+{
+    return projectManager;
+}
+
 /* QSocToolSkillCreate Implementation */
 
-QSocToolSkillCreate::QSocToolSkillCreate(QObject *parent, QSocProjectManager *projectManager)
+QSocToolSkillCreate::QSocToolSkillCreate(
+    QObject *parent, QSocProjectManager *projectManager, QSocWorkspaceFs *projectFs)
     : QSocTool(parent)
     , projectManager(projectManager)
+    , projectFs(projectFs)
 {}
 
 QSocToolSkillCreate::~QSocToolSkillCreate() = default;
@@ -461,8 +480,8 @@ QString QSocToolSkillCreate::getName() const
 
 QString QSocToolSkillCreate::getDescription() const
 {
-    return "Create a new skill as a SKILL.md prompt template file. "
-           "Skills are stored in project or user directories.";
+    return "Create a new skill as a SKILL.md prompt template file in the bound workspace, "
+           "this machine's project, or this machine's user directory.";
 }
 
 json QSocToolSkillCreate::getParametersSchema() const
@@ -478,11 +497,11 @@ json QSocToolSkillCreate::getParametersSchema() const
            {{"type", "string"}, {"description", "Detailed instructions (the SKILL.md body)"}}},
           {"scope",
            {{"type", "string"},
-            {"enum", {"user", "project"}},
+            {"enum", {"project", "local", "user"}},
             {"description",
-             "Where to create: 'user' (~/.config/qsoc/skills/) or "
-             "'project' (<project>/.qsoc/skills/). "
-             "System-level skills are installed via packaging, not this tool."}}}}},
+             "'project': .qsoc/skills of the bound workspace (the remote workspace in remote "
+             "mode). 'local': .qsoc/skills of this machine's project. 'user': this machine's "
+             "user skill dir."}}}}},
         {"required", json::array({"name", "description", "instructions", "scope"})}};
 }
 
@@ -539,7 +558,7 @@ QString QSocToolSkillCreate::execute(const json &arguments)
         return "Error: instructions is required";
     }
     if (!arguments.contains("scope") || !arguments["scope"].is_string()) {
-        return "Error: scope is required (must be 'user' or 'project')";
+        return "Error: scope is required (must be 'project', 'local' or 'user')";
     }
 
     QString name         = QString::fromStdString(arguments["name"].get<std::string>());
@@ -554,17 +573,23 @@ QString QSocToolSkillCreate::execute(const json &arguments)
                  "no leading/trailing/consecutive hyphens.";
     }
 
-    /* Determine base path */
-    QString basePath;
-    if (scope == "user") {
-        basePath = userSkillsPath();
-    } else if (scope == "project") {
-        basePath = projectSkillsPath();
-        if (basePath.isEmpty()) {
-            return "Error: No project directory available for project-scoped skill";
-        }
-    } else {
-        return "Error: scope must be 'user' or 'project'";
+    if (scope != "user" && scope != "project" && scope != "local") {
+        return "Error: scope must be 'project', 'local' or 'user'";
+    }
+
+    QString content = QStringLiteral("---\nname: %1\ndescription: %2\nuser-invocable: true\n---\n\n")
+                          .arg(name, description)
+                      + instructions;
+    if (!instructions.endsWith('\n')) {
+        content += QLatin1Char('\n');
+    }
+    if (scope == "project" && projectFs != nullptr) {
+        return createInWorkspace(name, content);
+    }
+
+    const QString basePath = scope == "user" ? userSkillsPath() : projectSkillsPath();
+    if (basePath.isEmpty()) {
+        return "Error: No project directory available for project-scoped skill";
     }
 
     /* Build file path */
@@ -587,23 +612,30 @@ QString QSocToolSkillCreate::execute(const json &arguments)
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return "Error: Failed to create file: " + skillFile;
     }
-
-    QTextStream out(&file);
-    out << "---\n";
-    out << "name: " << name << "\n";
-    out << "description: " << description << "\n";
-    out << "user-invocable: true\n";
-    out << "---\n\n";
-    out << instructions;
-
-    /* Ensure trailing newline */
-    if (!instructions.endsWith('\n')) {
-        out << "\n";
-    }
-
+    QTextStream(&file) << content;
     file.close();
 
     return "Successfully created skill '" + name + "' at: " + skillFile;
+}
+
+QString QSocToolSkillCreate::createInWorkspace(const QString &name, const QString &content) const
+{
+    const QString relative = kSkillsDir + QLatin1Char('/') + name + QStringLiteral("/SKILL.md");
+    const QString path     = projectFs->displayPath(relative);
+    QSocWorkspaceFs::Entry entry;
+    QString                error;
+    switch (projectFs->stat(relative, &entry, &error)) {
+    case QSocWorkspaceFs::Result::Ok:
+        return "Error: Skill '" + name + "' already exists at: " + path;
+    case QSocWorkspaceFs::Result::Failed:
+        return "Error: " + error;
+    case QSocWorkspaceFs::Result::Absent:
+        break;
+    }
+    if (!projectFs->write(relative, content.toUtf8(), &error)) {
+        return "Error: " + error;
+    }
+    return "Successfully created skill '" + name + "' at: " + path;
 }
 
 void QSocToolSkillCreate::setProjectManager(QSocProjectManager *projectManager)

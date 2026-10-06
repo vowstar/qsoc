@@ -166,6 +166,30 @@ private slots:
         QVERIFY2(!section.contains(QStringLiteral("skill creation")), qPrintable(section));
     }
 
+    void theRemoteSectionSaysWhereWorkspaceStoresLive()
+    {
+        Workspace     bare(kLocal, kRemote);
+        const QString without = remoteSection(promptFor(&bare.remote));
+        QVERIFY2(!without.contains(QStringLiteral("[remote]")), qPrintable(without));
+        QVERIFY2(without.contains(QStringLiteral("Project memory")), qPrintable(without));
+
+        Workspace
+                      ws(kLocal,
+                         kRemote
+                             + QStringList{
+                                 QStringLiteral("todo_list"),
+                                 QStringLiteral("todo_add"),
+                                 QStringLiteral("skill_find")});
+        const QString section = remoteSection(promptFor(&ws.remote));
+        QVERIFY2(section.contains(QStringLiteral(".qsoc/todos.md")), qPrintable(section));
+        QVERIFY2(
+            section.contains(QStringLiteral("A remote skill wins over a local one")),
+            qPrintable(section));
+        QVERIFY2(
+            section.contains(QStringLiteral("separate for each remote workspace")),
+            qPrintable(section));
+    }
+
     void theRemoteSectionSaysWhereEachToolRuns()
     {
         Workspace     ws(kLocal, kRemote);

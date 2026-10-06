@@ -1049,7 +1049,7 @@ QString QSocToolAgent::execute(const json &arguments)
                     if (skill.name != wanted) {
                         continue;
                     }
-                    QString content = skillTool->readSkillContent(skill.path);
+                    QString content = skillTool->readSkillContent(skill);
                     if (content.size() > kSkillCapBytes) {
                         content = content.left(kSkillCapBytes)
                                   + QStringLiteral("\n[... skill content truncated ...]\n");

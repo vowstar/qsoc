@@ -87,7 +87,7 @@ private slots:
         QVERIFY(result.contains("1 skill(s)"));
         QVERIFY(result.contains("test-skill"));
         QVERIFY(result.contains("A test skill"));
-        QVERIFY(result.contains("project"));
+        QVERIFY(result.contains("[local]"));
     }
 
     /* skill_find: search by name */

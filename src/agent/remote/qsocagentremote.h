@@ -6,6 +6,7 @@
 
 #include "agent/qsocfilehistory.h"
 #include "agent/qsocprojectrules.h"
+#include "agent/qsocworkspacefs.h"
 #include "agent/remote/qsocremotehost.h"
 #include "agent/remote/qsocremotejobs.h"
 #include "agent/remote/qsocremotepathcontext.h"
@@ -16,6 +17,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <memory>
 
 class QSocSshSession;
 class QSocSftpClient;
@@ -145,6 +147,9 @@ public:
     QString                workspace() const { return m_workspace; }
     QString                canonicalWorkspace() const { return m_canonicalWorkspace; }
     QString                workspaceTreeId() const { return m_workspaceTreeId; }
+
+    /** @brief Project files of the bound workspace, for the workspace stores. */
+    QSocWorkspaceFs *workspaceFs();
 
     /** @brief What @ref setWorkingDirectory decided. */
     enum class CwdChange : std::uint8_t {
@@ -420,6 +425,7 @@ private:
     QSocMachine                                                   m_host;
     QString                                                       m_shellPreference;
     QSocRemoteJobLedger                                           m_jobs;
+    std::unique_ptr<QSocWorkspaceFs>                              m_fs;
     Generation                                                    m_generation           = 0;
     int                                                           m_lastAttempts         = 0;
     int                                                           m_reconnectsUsed       = 0;
@@ -476,11 +482,12 @@ bool prepareAgentRemoteWorkspace(
 
 /**
  * @brief Build the remote-mode tool registry.
- * @details Holds same-named replacements for the file, shell, path and
- *          monitor tools that route through the SSH/SFTP backends. Every
- *          other name resolves through @p base and runs on this machine,
- *          except workspace-bound names (QSocToolRegistry::isWorkspaceBound),
- *          which are absent when the remote side has no replacement.
+ * @details Holds same-named replacements for the file, shell, path,
+ *          monitor, todo and skill tools that route through the SSH/SFTP
+ *          backends. Every other name resolves through @p base and runs on
+ *          this machine, except workspace-bound names
+ *          (QSocToolRegistry::isWorkspaceBound), which are absent when the
+ *          remote side has no replacement.
  *          Result is owned by @p parent.
  * @param parent QObject parent for the new registry and tools.
  * @param conn The binding's connection. Transport, identity and path context

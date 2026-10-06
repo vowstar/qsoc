@@ -379,7 +379,7 @@ The following commands are available during an interactive session:
      still usable.],
     [`/help`], [Show help message],
     [`/agents`],
-    [List sub-agent definitions by scope (builtin, user, project) and any
+    [List sub-agent definitions by scope (builtin, user, project, remote) and any
      parse errors. See @agent-subagents.],
     [`/agents-history`],
     [Show prior backgrounded sub-agent runs with status and transcript tail.],
@@ -673,7 +673,8 @@ The agent provides the following tools through natural language:
   fsm, logic, netlist, power, reset, template, validation, overview, ...)
 - *Memory*: `memory_read`, `memory_write` for persistent notes across sessions
 - *Todo*: `todo_list`, `todo_add`, `todo_update`, `todo_delete` for multi-step
-  workflows
+  workflows, kept in `.qsoc/todos.md` of the bound workspace (the remote
+  workspace in remote mode)
 - *Skills*: `skill_find`, `skill_create` for user-defined prompt templates
   resolved across four layers (`$QSOC_HOME/skills`, `<project>/.qsoc/skills`,
   `~/.config/qsoc/skills`, and a platform-native system skills dir), plus
@@ -790,6 +791,50 @@ extend the agent without code changes. They are discovered across the four
 configuration layers (see @config-files) plus any directory listed in the
 `QSOC_SKILLS_PATH` environment variable. Same-name skills in higher layers
 shadow lower ones.
+
+In remote mode the remote workspace adds its `.qsoc/skills`, read over SFTP,
+and the local project's `.qsoc/skills` stays available. The first layer that
+holds a name wins, in this order:
+
+#figure(
+  align(center)[#table(
+    columns: (0.25fr, 1fr),
+    align: (auto, left),
+    table.header([Layer], [Directory]),
+    table.hline(),
+    [`env`], [`$QSOC_HOME/skills`],
+    [`remote`], [`.qsoc/skills` in the remote workspace (remote mode only)],
+    [`local`], [`<project>/.qsoc/skills` in the local project],
+    [`user`], [`~/.config/qsoc/skills`],
+    [`system`], [The platform system skills directory],
+    [`extra`], [Each entry of `QSOC_SKILLS_PATH`],
+  )],
+  caption: [SKILL LAYERS],
+  kind: table,
+)
+
+Listings from `skill_find` and the system prompt show the layer of each
+skill. `skill_find` takes a layer as `scope`, or `project` for the bound
+workspace: `remote` in remote mode, `local` otherwise. A remote `SKILL.md`
+loads only when it is at most 256 KiB and its resolved path is inside the
+workspace.
+
+`skill_create` takes the same three scopes in both modes:
+
+#figure(
+  align(center)[#table(
+    columns: (0.25fr, 1fr),
+    align: (auto, left),
+    table.header([Scope], [Writes to]),
+    table.hline(),
+    [`project`], [`.qsoc/skills` of the bound workspace: the remote workspace in
+     remote mode, the local project otherwise],
+    [`local`], [`<project>/.qsoc/skills` in the local project],
+    [`user`], [`~/.config/qsoc/skills`],
+  )],
+  caption: [SKILL_CREATE SCOPES],
+  kind: table,
+)
 
 === File Layout
 <agent-skill-layout>
@@ -1021,6 +1066,15 @@ scopes: user-global (`<user root>/memory/`) and project-local
 The three mechanisms below are on by default; their knobs are in the agent
 configuration table.
 
+In remote mode the project scope is a store on this machine, one per remote
+workspace: `<user root>/remote-memory/<key>/`, where `<key>` is derived from
+the SSH endpoint (user and host key) and the workspace path. Only the user
+can read the directory and its files. Nothing is written to the remote host.
+Recall, extraction and consolidation use the same store, and `/local` returns
+to `<project>/.qsoc/memory/`. Project memory that earlier versions saved
+during remote sessions stays in the local project's `.qsoc/memory/` and is
+not shown in remote mode.
+
 === Selective Recall
 <agent-memory-recall>
 Each turn the agent ranks the topic-file headers (name, type, age,
@@ -1154,16 +1208,17 @@ until the service exits. Querying them makes no model request and does not
 add anything to the conversation.
 
 
-Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, under the same rules as local project instructions (see @agent-system-prompt). Each file prints one line, for example `Loaded AGENTS.md from <target>:<workspace> (812 bytes)`, or the reason it did not load. The local project's instructions stay in the prompt. Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
+Remote bindings load `AGENTS.md` and `AGENTS.local.md` through SFTP once when bound, under the same rules as local project instructions (see @agent-system-prompt). Each file prints one line, for example `Loaded AGENTS.md from <target>:<workspace> (812 bytes)`, or the reason it did not load. The local project's instructions stay in the prompt, and its skills stay available next to the remote workspace's (see @agent-skills). Remote `.qsoc/agents/*.md` definitions follow the same rules, with `.qsoc/agents` as the root; a refused definition is not registered.
 
 === Definitions
 <agent-subagents-defs>
 
-Three scopes exist, in shadowing order from highest to lowest:
+Four scopes exist, in shadowing order from highest to lowest:
 
-- *Project*: `<project>/.qsoc/agents/*.md`. In remote-workspace mode the
-  files are also scanned over SFTP from the same path under the remote
-  workspace, and a remote definition shadows a local one of the same name.
+- *Remote*: `.qsoc/agents/*.md` under the remote workspace, read over SFTP.
+  Present only in remote mode. `/local` removes them.
+- *Project*: `<project>/.qsoc/agents/*.md` in the local project, in both
+  modes.
 - *User*: `~/.config/qsoc/agents/*.md`
 - *Builtin*: compiled in. The shipped names are `general-purpose`
   (full tool set), `explore` (read-only), and `verification` (adds
@@ -1664,10 +1719,9 @@ The system prompt is composed from:
 - *Memory*: entries from the auto-memory store (see `memory_read` /
   `memory_write`), capped by `agent.memory_max_chars`
 - *Skill listing*: names and descriptions of installed skills so the agent
-  can route to them via `skill_find`. In remote mode `skill_find` is not
-  available, so the listing names only the user-invocable skills on this
-  machine and says they are not in the remote workspace. The listing is
-  rebuilt on `/ssh`, `/local` and `/project`.
+  can route to them via `skill_find`, each with its layer. In remote mode
+  it also holds the skills of the remote workspace (@agent-skills). The
+  listing is rebuilt on `/ssh`, `/local` and `/project`.
 
 Set `agent.system_prompt` in the config to replace the modular base with a
 literal string (useful for testing or custom deployments).
@@ -1852,6 +1906,9 @@ Workspace tools operate on the remote host (SFTP + SSH exec):
 - `bash_manage` (status/output/terminate/kill for backgrounded jobs)
 - `monitor`, `monitor_stop` (remote command, local notification stream)
 - `path_context` (remote root, cwd, writable dirs)
+- `todo_*` (`.qsoc/todos.md` in the remote workspace)
+- `skill_find`, `skill_create` (skills of the remote `.qsoc/skills` and of
+  this machine, see @agent-skills)
 
 Remote `read_file` returns image files (PNG, JPG, GIF, WebP) as image content,
 the same as the local tool. Text is paged with `offset` and `max_lines` at any
@@ -1865,7 +1922,8 @@ Every other tool runs on the local machine, in both modes:
   `agent_inbox`, `wait_agent`, `followup_task`, `interrupt_agent`
 - `schedule_create`, `schedule_list`, `schedule_delete`
 - `host_register`, `host_update`, `host_remove`
-- `memory_read`, `memory_write`, `memory_delete` (local memory directories)
+- `memory_read`, `memory_write`, `memory_delete` (project memory in a store
+  on this machine for each remote workspace, see @agent-memory-system)
 - `query_docs`, `z3_solve`, `system_resources`, `tool_output_read`
 - `web_fetch`, `web_search`
 - `ask_user`, `enter_plan_mode`, `exit_plan_mode`, `goal_complete`
@@ -1895,7 +1953,6 @@ The following tools act on the workspace tree and have no remote form, so
 they are unavailable in remote mode:
 
 - `project_*`, `module_*`, `bus_*`, `generate_*`, `lsp`
-- `todo_*`, `skill_find`, `skill_create`
 
 A sub-agent spawned in remote mode gets the same tools on the same remote
 workspace, unless its `host` parameter names another catalog host.

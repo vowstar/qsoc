@@ -20,7 +20,6 @@
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsoctoolremote.h"
 #include "agent/services/qsocloopscheduler.h"
-#include "agent/tool/qsoctoolagent.h"
 #include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolmemory.h"
@@ -429,6 +428,7 @@ void QSocAgentRuntime::loadRemoteProjectFiles()
 {
     auto       cfg   = d->agent->getConfig();
     const auto reads = loadAgentRemoteProjectRules(d->remoteConn, &cfg);
+    cfg.skillListing = d->skillListing();
     d->agent->setConfig(cfg);
     reloadAgentDefinitions();
 
@@ -452,8 +452,10 @@ void QSocAgentRuntime::loadRemoteProjectFiles()
 void QSocAgentRuntime::reloadAgentDefinitions()
 {
     QSocAgentDefinitionRegistry *defs = d->agentDefinitions;
-    defs->removeByScope(QStringLiteral("user"));
-    defs->removeByScope(QStringLiteral("project"));
+    for (const QString &scope :
+         {QStringLiteral("user"), QStringLiteral("project"), QStringLiteral("remote")}) {
+        defs->removeByScope(scope);
+    }
     defs->registerBuiltins();
     const QString userDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
                             + QStringLiteral("/agents");
@@ -463,7 +465,9 @@ void QSocAgentRuntime::reloadAgentDefinitions()
         project.isEmpty() ? QString() : QDir(project).filePath(QStringLiteral(".qsoc/agents")));
     if (isRemote() && d->remoteConn->sftp() != nullptr && !d->remoteConn->workspace().isEmpty()) {
         defs->scanFromRemoteSftp(
-            d->remoteConn->sftp(), d->remoteConn->workspace() + QStringLiteral("/.qsoc/agents"));
+            d->remoteConn->sftp(),
+            d->remoteConn->workspace() + QStringLiteral("/.qsoc/agents"),
+            QStringLiteral("remote"));
     }
 }
 
@@ -503,6 +507,8 @@ void QSocAgentRuntime::installRemoteTools()
             this, d->remoteConn, d->localRegistry, d->monitorTaskSource, d->llmService);
     }
     d->agent->setToolRegistry(d->remoteRegistry);
+    d->memoryManager
+        ->setRemoteWorkspace(d->remoteConn->endpointIdentity(), d->remoteConn->canonicalWorkspace());
     {
         auto newCfg               = d->agent->getConfig();
         newCfg.remoteMode         = true;
@@ -556,17 +562,12 @@ void QSocAgentRuntime::disconnectRemote()
     }
     d->agent->setToolRegistry(d->localRegistry);
     d->agent->setWorkspaceHealthProbe({});
-    if (auto *spawnTool = dynamic_cast<QSocToolAgent *>(
-            d->localRegistry->getTool(QStringLiteral("agent")))) {
-        if (auto *defs = spawnTool->definitionRegistry()) {
-            defs->removeByScope(QStringLiteral("project"));
-        }
-    }
     if (d->remoteRegistry != nullptr) {
         d->remoteRegistry->deleteLater();
         d->remoteRegistry = nullptr;
     }
     d->remoteConn->teardown();
+    d->memoryManager->setRemoteWorkspace({}, {});
     {
         auto newCfg       = d->agent->getConfig();
         newCfg.remoteMode = false;
@@ -580,6 +581,7 @@ void QSocAgentRuntime::disconnectRemote()
         newCfg.skillListing       = d->skillListing();
         d->agent->setConfig(newCfg);
     }
+    reloadAgentDefinitions();
 
     QSocAgentRuntimeEvent event;
     event.kind = QSocAgentRuntimeEvent::Kind::RemoteChanged;

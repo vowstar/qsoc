@@ -82,6 +82,17 @@ bool spillDefinition(const QString &root, const QString &name, const QString &bo
                    .toUtf8());
 }
 
+bool spillSkill(const QString &root, const QString &name, const QString &description)
+{
+    const QString dir = root + QStringLiteral("/.qsoc/skills/") + name;
+    return QDir().mkpath(dir)
+           && spill(
+               dir + QStringLiteral("/SKILL.md"),
+               QStringLiteral("---\nname: %1\ndescription: %2\n---\n\n%2 body\n")
+                   .arg(name, description)
+                   .toUtf8());
+}
+
 constexpr const char *kRemoteRules = "Remote rules sentinel";
 constexpr const char *kLocalRules  = "Local rules sentinel";
 
@@ -214,6 +225,8 @@ private slots:
     void remoteInstructionsLoadOnBindWithANotice();
     void localInstructionsComeFirstAndRemoteWins();
     void remoteDefinitionsShadowLocalOnes();
+    void localAndRemoteSkillsAreBothListed();
+    void skillCreateScopesFollowTheBinding();
 
 private:
     static constexpr const char *kAlias = "menu-box";
@@ -338,6 +351,17 @@ private:
         const QString dir = project(name);
         spill(dir + QStringLiteral("/AGENTS.md"), QByteArray(kLocalRules) + '\n');
         return dir;
+    }
+
+    static QString runTool(QSocAgentRuntime *session, const QString &name, const json &args)
+    {
+        QSocTool *tool = session->agent()->getToolRegistry()->getTool(name);
+        return tool == nullptr ? QString() : tool->execute(args);
+    }
+
+    static QString skills(QSocAgentRuntime *session)
+    {
+        return runTool(session, QStringLiteral("skill_find"), {{"action", "list"}});
     }
 
     static QString prompt(QSocAgentRuntime *session)
@@ -793,6 +817,8 @@ void Test::localInstructionsComeFirstAndRemoteWins()
     QVERIFY(!back.contains(QLatin1String(kRemoteRules)));
 }
 
+/* Counterexample: /local dropped every project-scope definition, including
+ * the local project's own, until the next restart. */
 void Test::remoteDefinitionsShadowLocalOnes()
 {
     QSOC_REQUIRE_SSHD(m_fixture);
@@ -808,6 +834,75 @@ void Test::remoteDefinitionsShadowLocalOnes()
     QCOMPARE(definition(session.get(), QStringLiteral("remote-only")), QStringLiteral("Remote def"));
     QCOMPARE(definition(session.get(), QStringLiteral("shared")), QStringLiteral("Remote shared"));
     QCOMPARE(definition(session.get(), QStringLiteral("local-only")), QStringLiteral("Local def"));
+    m_output.clear();
+    QVERIFY(session->executeCommand(QStringLiteral("/agents")));
+    const auto remoteAt = m_output.indexOf(QStringLiteral("Remote workspace (.qsoc/agents/):"));
+    QVERIFY2(remoteAt >= 0, qPrintable(m_output));
+    QVERIFY2(
+        m_output.indexOf(QStringLiteral("remote-only"), remoteAt) > remoteAt, qPrintable(m_output));
+
+    session->disconnectRemote();
+    QCOMPARE(definition(session.get(), QStringLiteral("local-only")), QStringLiteral("Local def"));
+    QCOMPARE(definition(session.get(), QStringLiteral("shared")), QStringLiteral("Local shared"));
+    QCOMPARE(definition(session.get(), QStringLiteral("remote-only")), QString());
+}
+
+/* Counterexample: in remote mode the remote .qsoc/skills replaced the local
+ * project's, so local skills could not be used on the remote project. */
+void Test::localAndRemoteSkillsAreBothListed()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    const QString ws  = remote(QStringLiteral("skills"));
+    const QString dir = project(QStringLiteral("skills"));
+    QVERIFY(spillSkill(dir, QStringLiteral("local-skill"), QStringLiteral("Local only")));
+    QVERIFY(spillSkill(dir, QStringLiteral("shared-skill"), QStringLiteral("Local shared")));
+    QVERIFY(spillSkill(ws, QStringLiteral("remote-skill"), QStringLiteral("Remote only")));
+    QVERIFY(spillSkill(ws, QStringLiteral("shared-skill"), QStringLiteral("Remote shared")));
+
+    auto session = boundRuntime(QStringLiteral("skills"), ws);
+    QVERIFY(session);
+    const QString listed = skills(session.get());
+    QVERIFY2(listed.contains(QStringLiteral("- local-skill [local]: Local only")), qPrintable(listed));
+    QVERIFY2(
+        listed.contains(QStringLiteral("- remote-skill [remote]: Remote only")), qPrintable(listed));
+    QVERIFY2(
+        listed.contains(QStringLiteral("- shared-skill [remote]: Remote shared")),
+        qPrintable(listed));
+    QVERIFY(!listed.contains(QStringLiteral("Local shared")));
+    const QString listing = session->agent()->getConfig().skillListing;
+    QVERIFY2(listing.contains(QStringLiteral("**local-skill** [local]")), qPrintable(listing));
+    QVERIFY2(listing.contains(QStringLiteral("**remote-skill** [remote]")), qPrintable(listing));
+    QVERIFY(session->availableCommands().contains(QStringLiteral("/remote-skill")));
+    QVERIFY(session->availableCommands().contains(QStringLiteral("/local-skill")));
+}
+
+/* Counterexample: in remote mode skill_create reached only the remote
+ * workspace and the user dir, never this machine's project. */
+void Test::skillCreateScopesFollowTheBinding()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    const QString ws  = remote(QStringLiteral("create"));
+    const QString dir = project(QStringLiteral("create"));
+    QVERIFY(QDir().mkpath(ws));
+    auto session = boundRuntime(QStringLiteral("create"), ws);
+    QVERIFY(session);
+
+    json args{{"name", "here"}, {"description", "Here"}, {"instructions", "do"}, {"scope", "local"}};
+    QString created = runTool(session.get(), QStringLiteral("skill_create"), args);
+    QVERIFY2(created.startsWith(QStringLiteral("Successfully created")), qPrintable(created));
+    QVERIFY(QFile::exists(dir + QStringLiteral("/.qsoc/skills/here/SKILL.md")));
+    QVERIFY(!QFile::exists(ws + QStringLiteral("/.qsoc/skills/here/SKILL.md")));
+
+    args["name"]  = "there";
+    args["scope"] = "project";
+    created       = runTool(session.get(), QStringLiteral("skill_create"), args);
+    QVERIFY2(created.startsWith(QStringLiteral("Successfully created")), qPrintable(created));
+    QVERIFY(QFile::exists(ws + QStringLiteral("/.qsoc/skills/there/SKILL.md")));
+    QVERIFY(!QFile::exists(dir + QStringLiteral("/.qsoc/skills/there/SKILL.md")));
+
+    const QString listed = skills(session.get());
+    QVERIFY2(listed.contains(QStringLiteral("- here [local]")), qPrintable(listed));
+    QVERIFY2(listed.contains(QStringLiteral("- there [remote]")), qPrintable(listed));
 }
 
 QSOC_TEST_MAIN(Test)

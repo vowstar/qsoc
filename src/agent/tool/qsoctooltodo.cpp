@@ -3,36 +3,14 @@
 
 #include "agent/tool/qsoctooltodo.h"
 
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
+#include "agent/qsocworkspacefs.h"
+
 #include <QRegularExpression>
-#include <QTextStream>
 
 namespace {
 
-/* Helper: Read high water mark from .qsoc/todos.hwm */
-int readHighWaterMark(const QString &todoDir)
-{
-    QFile file(QDir(todoDir).filePath("todos.hwm"));
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return 0;
-    }
-    return QTextStream(&file).readAll().trimmed().toInt();
-}
-
-/* Helper: Write high water mark */
-void writeHighWaterMark(const QString &todoDir, int hwm)
-{
-    QDir dir(todoDir);
-    if (!dir.exists()) {
-        dir.mkpath(".");
-    }
-    QFile file(dir.filePath("todos.hwm"));
-    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream(&file) << hwm;
-    }
-}
+const QString kTodoFile = QStringLiteral(".qsoc/todos.md");
+const QString kMarkFile = QStringLiteral(".qsoc/todos.hwm");
 
 /* Helper: Parse markdown todo file into structured list.
  * Format: - [x] #42 Task title
@@ -116,13 +94,56 @@ QString generateTodoMarkdown(const QList<QSocTodoItem> &todos)
     return result;
 }
 
+QString storeError(const QString &error)
+{
+    return QStringLiteral("Error: ") + error;
+}
+
+/* An absent file is an empty list; a failed read is an error, never an empty
+ * list, so a later save cannot overwrite todos that were not read. */
+bool loadTodos(QSocWorkspaceFs *fs, QList<QSocTodoItem> *todos, QString *error)
+{
+    if (fs == nullptr) {
+        *error = QStringLiteral("no workspace is bound");
+        return false;
+    }
+    QByteArray bytes;
+    switch (fs->read(kTodoFile, &bytes, error)) {
+    case QSocWorkspaceFs::Result::Absent:
+        todos->clear();
+        return true;
+    case QSocWorkspaceFs::Result::Failed:
+        return false;
+    case QSocWorkspaceFs::Result::Ok:
+        break;
+    }
+    *todos = parseTodoMarkdown(QString::fromUtf8(bytes));
+    return true;
+}
+
+bool saveTodos(QSocWorkspaceFs *fs, const QList<QSocTodoItem> &todos, QString *error)
+{
+    return fs->write(kTodoFile, generateTodoMarkdown(todos).toUtf8(), error);
+}
+
+/* The highest id ever handed out, so deleted ids are never reused. */
+int readHighWaterMark(QSocWorkspaceFs *fs)
+{
+    QByteArray bytes;
+    QString    error;
+    if (fs->read(kMarkFile, &bytes, &error) != QSocWorkspaceFs::Result::Ok) {
+        return 0;
+    }
+    return QString::fromUtf8(bytes).trimmed().toInt();
+}
+
 } /* anonymous namespace */
 
 /* QSocToolTodoList Implementation */
 
-QSocToolTodoList::QSocToolTodoList(QObject *parent, QSocProjectManager *projectManager)
+QSocToolTodoList::QSocToolTodoList(QObject *parent, QSocWorkspaceFs *fs)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , fs(fs)
 {}
 
 QSocToolTodoList::~QSocToolTodoList() = default;
@@ -150,39 +171,6 @@ json QSocToolTodoList::getParametersSchema() const
         {"required", json::array()}};
 }
 
-QString QSocToolTodoList::todoFilePath() const
-{
-    if (!projectManager) {
-        return {};
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    return QDir(projectPath).filePath(".qsoc/todos.md");
-}
-
-QList<QSocTodoItem> QSocToolTodoList::loadTodos() const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return {};
-    }
-
-    QFile file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-
-    return parseTodoMarkdown(content);
-}
-
 QString QSocToolTodoList::formatTodoList(const QList<QSocTodoItem> &todos) const
 {
     if (todos.isEmpty()) {
@@ -206,7 +194,11 @@ QString QSocToolTodoList::execute(const json &arguments)
         filter = QString::fromStdString(arguments["filter"].get<std::string>());
     }
 
-    QList<QSocTodoItem> todos = loadTodos();
+    QList<QSocTodoItem> todos;
+    QString             error;
+    if (!loadTodos(fs, &todos, &error)) {
+        return storeError(error);
+    }
 
     /* Apply filter */
     if (filter == "pending") {
@@ -230,16 +222,11 @@ QString QSocToolTodoList::execute(const json &arguments)
     return formatTodoList(todos);
 }
 
-void QSocToolTodoList::setProjectManager(QSocProjectManager *projectManager)
-{
-    this->projectManager = projectManager;
-}
-
 /* QSocToolTodoAdd Implementation */
 
-QSocToolTodoAdd::QSocToolTodoAdd(QObject *parent, QSocProjectManager *projectManager)
+QSocToolTodoAdd::QSocToolTodoAdd(QObject *parent, QSocWorkspaceFs *fs)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , fs(fs)
 {}
 
 QSocToolTodoAdd::~QSocToolTodoAdd() = default;
@@ -267,67 +254,6 @@ json QSocToolTodoAdd::getParametersSchema() const
         {"required", json::array({"title"})}};
 }
 
-QString QSocToolTodoAdd::todoFilePath() const
-{
-    if (!projectManager) {
-        return {};
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    return QDir(projectPath).filePath(".qsoc/todos.md");
-}
-
-QList<QSocTodoItem> QSocToolTodoAdd::loadTodos() const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return {};
-    }
-
-    QFile file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-
-    return parseTodoMarkdown(content);
-}
-
-bool QSocToolTodoAdd::saveTodos(const QList<QSocTodoItem> &todos) const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return false;
-    }
-
-    /* Create parent directories if needed */
-    QFileInfo fileInfo(filePath);
-    QDir      parentDir = fileInfo.absoluteDir();
-    if (!parentDir.exists()) {
-        if (!parentDir.mkpath(".")) {
-            return false;
-        }
-    }
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return false;
-    }
-
-    QTextStream stream(&file);
-    stream << generateTodoMarkdown(todos);
-    file.close();
-
-    return true;
-}
-
 QString QSocToolTodoAdd::execute(const json &arguments)
 {
     if (!arguments.contains("title") || !arguments["title"].is_string()) {
@@ -344,11 +270,14 @@ QString QSocToolTodoAdd::execute(const json &arguments)
         }
     }
 
-    QList<QSocTodoItem> todos = loadTodos();
+    QList<QSocTodoItem> todos;
+    QString             error;
+    if (!loadTodos(fs, &todos, &error)) {
+        return storeError(error);
+    }
 
     /* Allocate next ID from high water mark */
-    QString todoDir = QFileInfo(todoFilePath()).absolutePath();
-    int     hwm     = readHighWaterMark(todoDir);
+    int hwm = readHighWaterMark(fs);
 
     /* Also check existing todos for max ID (in case hwm file is stale) */
     for (const auto &item : todos) {
@@ -363,25 +292,19 @@ QString QSocToolTodoAdd::execute(const json &arguments)
 
     todos.append(newItem);
 
-    writeHighWaterMark(todoDir, newItem.id);
-
-    if (!saveTodos(todos)) {
-        return "Error: Failed to save todo list";
+    if (!fs->write(kMarkFile, QByteArray::number(newItem.id), &error)
+        || !saveTodos(fs, todos, &error)) {
+        return storeError(error);
     }
 
     return QString("Added todo #%1: %2 (%3 priority)").arg(newItem.id).arg(title, priority);
 }
 
-void QSocToolTodoAdd::setProjectManager(QSocProjectManager *projectManager)
-{
-    this->projectManager = projectManager;
-}
-
 /* QSocToolTodoUpdate Implementation */
 
-QSocToolTodoUpdate::QSocToolTodoUpdate(QObject *parent, QSocProjectManager *projectManager)
+QSocToolTodoUpdate::QSocToolTodoUpdate(QObject *parent, QSocWorkspaceFs *fs)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , fs(fs)
 {}
 
 QSocToolTodoUpdate::~QSocToolTodoUpdate() = default;
@@ -409,58 +332,6 @@ json QSocToolTodoUpdate::getParametersSchema() const
         {"required", json::array({"id", "status"})}};
 }
 
-QString QSocToolTodoUpdate::todoFilePath() const
-{
-    if (!projectManager) {
-        return {};
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    return QDir(projectPath).filePath(".qsoc/todos.md");
-}
-
-QList<QSocTodoItem> QSocToolTodoUpdate::loadTodos() const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return {};
-    }
-
-    QFile file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-
-    return parseTodoMarkdown(content);
-}
-
-bool QSocToolTodoUpdate::saveTodos(const QList<QSocTodoItem> &todos) const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return false;
-    }
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return false;
-    }
-
-    QTextStream stream(&file);
-    stream << generateTodoMarkdown(todos);
-    file.close();
-
-    return true;
-}
-
 QString QSocToolTodoUpdate::execute(const json &arguments)
 {
     if (!arguments.contains("id") || !arguments["id"].is_number_integer()) {
@@ -478,7 +349,11 @@ QString QSocToolTodoUpdate::execute(const json &arguments)
         return "Error: status must be 'done', 'pending', or 'in_progress'";
     }
 
-    QList<QSocTodoItem> todos = loadTodos();
+    QList<QSocTodoItem> todos;
+    QString             error;
+    if (!loadTodos(fs, &todos, &error)) {
+        return storeError(error);
+    }
 
     /* Find and update the item */
     bool    found = false;
@@ -496,23 +371,18 @@ QString QSocToolTodoUpdate::execute(const json &arguments)
         return QString("Error: Todo #%1 not found").arg(todoId);
     }
 
-    if (!saveTodos(todos)) {
-        return "Error: Failed to save todo list";
+    if (!saveTodos(fs, todos, &error)) {
+        return storeError(error);
     }
 
     return QString("Updated todo #%1: %2 (status: %3)").arg(todoId).arg(title, status);
 }
 
-void QSocToolTodoUpdate::setProjectManager(QSocProjectManager *projectManager)
-{
-    this->projectManager = projectManager;
-}
-
 /* QSocToolTodoDelete Implementation */
 
-QSocToolTodoDelete::QSocToolTodoDelete(QObject *parent, QSocProjectManager *projectManager)
+QSocToolTodoDelete::QSocToolTodoDelete(QObject *parent, QSocWorkspaceFs *fs)
     : QSocTool(parent)
-    , projectManager(projectManager)
+    , fs(fs)
 {}
 
 QSocToolTodoDelete::~QSocToolTodoDelete() = default;
@@ -536,58 +406,6 @@ json QSocToolTodoDelete::getParametersSchema() const
         {"required", json::array({"id"})}};
 }
 
-QString QSocToolTodoDelete::todoFilePath() const
-{
-    if (!projectManager) {
-        return {};
-    }
-
-    QString projectPath = projectManager->getProjectPath();
-    if (projectPath.isEmpty()) {
-        projectPath = QDir::currentPath();
-    }
-
-    return QDir(projectPath).filePath(".qsoc/todos.md");
-}
-
-QList<QSocTodoItem> QSocToolTodoDelete::loadTodos() const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return {};
-    }
-
-    QFile file(filePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        return {};
-    }
-
-    QTextStream stream(&file);
-    QString     content = stream.readAll();
-    file.close();
-
-    return parseTodoMarkdown(content);
-}
-
-bool QSocToolTodoDelete::saveTodos(const QList<QSocTodoItem> &todos) const
-{
-    QString filePath = todoFilePath();
-    if (filePath.isEmpty()) {
-        return false;
-    }
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        return false;
-    }
-
-    QTextStream stream(&file);
-    stream << generateTodoMarkdown(todos);
-    file.close();
-
-    return true;
-}
-
 QString QSocToolTodoDelete::execute(const json &arguments)
 {
     if (!arguments.contains("id") || !arguments["id"].is_number_integer()) {
@@ -596,7 +414,11 @@ QString QSocToolTodoDelete::execute(const json &arguments)
 
     int todoId = arguments["id"].get<int>();
 
-    QList<QSocTodoItem> todos = loadTodos();
+    QList<QSocTodoItem> todos;
+    QString             error;
+    if (!loadTodos(fs, &todos, &error)) {
+        return storeError(error);
+    }
 
     /* Find and remove the item */
     bool    found = false;
@@ -616,16 +438,11 @@ QString QSocToolTodoDelete::execute(const json &arguments)
 
     /* IDs are stable — no renumbering after deletion */
 
-    if (!saveTodos(todos)) {
-        return "Error: Failed to save todo list";
+    if (!saveTodos(fs, todos, &error)) {
+        return storeError(error);
     }
 
     return QString("Deleted todo #%1: %2").arg(todoId).arg(title);
-}
-
-void QSocToolTodoDelete::setProjectManager(QSocProjectManager *projectManager)
-{
-    this->projectManager = projectManager;
 }
 
 #include "moc_qsoctooltodo.cpp"

@@ -18,6 +18,9 @@
  *          Storage layout:
  *          - User:    ~/.config/qsoc/memory/MEMORY.md + topic files
  *          - Project: <project>/.qsoc/memory/MEMORY.md + topic files
+ *          - Project, remote workspace bound:
+ *                     ~/.config/qsoc/remote-memory/<key>/, private to the
+ *                     user, where <key> names the endpoint and the workspace
  */
 class QSocMemoryManager : public QObject
 {
@@ -99,8 +102,19 @@ public:
 
     void setProjectManager(QSocProjectManager *projectManager);
 
+    /**
+     * @brief Keep project memory for a remote workspace on this machine.
+     * @details The project scope moves to @ref remoteProjectMemoryDir for the
+     *          pair; empty arguments return it to the local project.
+     */
+    void setRemoteWorkspace(const QString &endpointIdentity, const QString &workspace);
+
+    /** @brief The local store that holds project memory for one remote workspace. */
+    static QString remoteProjectMemoryDir(const QString &endpointIdentity, const QString &workspace);
+
 private:
     QSocProjectManager *projectManager = nullptr;
+    QString             remoteProjectDir;
 
     /* Parse YAML frontmatter from a memory file */
     MemoryEntry parseMemoryFile(const QString &path) const;
@@ -121,6 +135,7 @@ private:
     QString readFile(const QString &path) const;
     bool    writeFile(const QString &path, const QString &content) const;
     bool    ensureDir(const QString &dirPath) const;
+    bool    isPrivatePath(const QString &path) const;
 
     /* Sanitize topic name for use as filename */
     static QString sanitizeName(const QString &name);

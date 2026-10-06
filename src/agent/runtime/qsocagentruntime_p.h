@@ -17,6 +17,7 @@
 #include "agent/qsocsession.h"
 #include "agent/qsocsessionrecovery.h"
 #include "agent/qsoctaskeventqueue.h"
+#include "agent/qsocworkspacefs.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsshconfigparser.h"
 
@@ -51,6 +52,7 @@ class QSocSubAgentTaskSource;
 class QSocTaskEventQueue;
 class QSocTaskRegistry;
 class QSocToolRegistry;
+class QSocToolSkillFind;
 class QSocPathContext;
 class QSocMonitorTaskSource;
 class QSocHookManager;
@@ -128,6 +130,9 @@ struct QSocAgentRuntime::Private
     QLspService                         *lspService         = nullptr;
     std::unique_ptr<QSocSshConfigParser> sshConfig;
 
+    /* Project files of the local workspace. */
+    std::unique_ptr<QSocLocalWorkspaceFs> localFs;
+
     /* Remote state. */
     QSocRemoteConnection  remoteConnStorage;
     QSocRemoteConnection *remoteConn     = &remoteConnStorage;
@@ -197,6 +202,9 @@ struct QSocAgentRuntime::Private
 
     /* The prompt's skill listing for the workspace bound now. */
     QString skillListing() const;
+
+    /* Run @p use with the skill scanner of the workspace bound now. */
+    void withSkills(const std::function<void(const QSocToolSkillFind &)> &use) const;
 
     /* Stamp the run context (model, effort, dirs) onto a run record. */
     void applyRunContext(QSocAgentRuntime *runtime, QSocSession::RunRecord &record);

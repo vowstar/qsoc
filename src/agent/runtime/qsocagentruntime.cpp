@@ -848,10 +848,14 @@ void QSocAgentRuntime::registerTools()
     d->toolRegistry->registerTool(new QSocToolMemoryDelete(this, d->memoryManager));
 
     /* Todo tools */
-    d->toolRegistry->registerTool(new QSocToolTodoList(this, d->projectManager));
-    d->toolRegistry->registerTool(new QSocToolTodoAdd(this, d->projectManager));
-    d->toolRegistry->registerTool(new QSocToolTodoUpdate(this, d->projectManager));
-    d->toolRegistry->registerTool(new QSocToolTodoDelete(this, d->projectManager));
+    d->localFs = std::make_unique<QSocLocalWorkspaceFs>([pm = d->projectManager] {
+        const QString path = pm->getProjectPath();
+        return path.isEmpty() ? QDir::currentPath() : path;
+    });
+    d->toolRegistry->registerTool(new QSocToolTodoList(this, d->localFs.get()));
+    d->toolRegistry->registerTool(new QSocToolTodoAdd(this, d->localFs.get()));
+    d->toolRegistry->registerTool(new QSocToolTodoUpdate(this, d->localFs.get()));
+    d->toolRegistry->registerTool(new QSocToolTodoDelete(this, d->localFs.get()));
 
     /* Skill tools */
     auto *skillFindTool   = new QSocToolSkillFind(this, d->projectManager);
@@ -1352,13 +1356,26 @@ void QSocAgentRuntime::wirePersistence()
         });
 }
 
+void QSocAgentRuntime::Private::withSkills(
+    const std::function<void(const QSocToolSkillFind &)> &use) const
+{
+    QSocToolRegistry *registry = agent != nullptr ? agent->getToolRegistry() : localRegistry;
+    QSocTool         *tool = registry != nullptr ? registry->getTool(QStringLiteral("skill_find"))
+                                                 : nullptr;
+    if (const auto *finder = dynamic_cast<QSocToolSkillFind *>(tool)) {
+        use(*finder);
+        return;
+    }
+    use(QSocToolSkillFind(nullptr, projectManager));
+}
+
 QString QSocAgentRuntime::Private::skillListing() const
 {
-    const auto        audience = remoteConn->session() != nullptr
-                                     ? QSocToolSkillFind::ListingAudience::UserOnly
-                                     : QSocToolSkillFind::ListingAudience::Model;
-    QSocToolSkillFind scanner(nullptr, projectManager);
-    return QSocToolSkillFind::formatPromptListing(scanner.scanAllSkills(), audience);
+    QString listing;
+    withSkills([&listing](const QSocToolSkillFind &finder) {
+        listing = QSocToolSkillFind::formatPromptListing(finder.scanAllSkills());
+    });
+    return listing;
 }
 
 void QSocAgentRuntime::Private::applyRunContext(
@@ -2093,9 +2110,11 @@ QStringList QSocAgentRuntime::availableCommands() const
     for (const auto &command : kRuntimeCommands)
         result.append(command);
     result.append("/exit");
-    for (const auto &skill : QSocToolSkillFind(nullptr, d->projectManager).scanAllSkills())
-        if (skill.userInvocable && !result.contains("/" + skill.name))
-            result.append("/" + skill.name);
+    d->withSkills([&result](const QSocToolSkillFind &finder) {
+        for (const auto &skill : finder.scanAllSkills())
+            if (skill.userInvocable && !result.contains("/" + skill.name))
+                result.append("/" + skill.name);
+    });
     return result;
 }
 

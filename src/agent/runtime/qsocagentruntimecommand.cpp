@@ -791,11 +791,15 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         }
         QSocAgentDefinitionRegistry *defs = d->agentDefinitions;
         const QStringList            scopes
-            = {QStringLiteral("builtin"), QStringLiteral("user"), QStringLiteral("project")};
+            = {QStringLiteral("builtin"),
+               QStringLiteral("user"),
+               QStringLiteral("project"),
+               QStringLiteral("remote")};
         const QStringList scopeLabels
             = {QStringLiteral("Built-in"),
                QStringLiteral("User (~/.config/qsoc/agents/)"),
-               QStringLiteral("Project (./.qsoc/agents/)")};
+               QStringLiteral("Project (./.qsoc/agents/)"),
+               QStringLiteral("Remote workspace (.qsoc/agents/)")};
         int sectionsPrinted = 0;
         for (qsizetype si = 0; si < scopes.size(); ++si) {
             const QString &scope = scopes[si];
@@ -1127,26 +1131,32 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         return true;
     }
 
-    QSocToolSkillFind finder(nullptr, d->projectManager);
-    for (const auto &skill : finder.scanAllSkills()) {
-        if (!skill.userInvocable || cmd != "/" + skill.name.toLower())
-            continue;
-        const QString content = finder.readSkillContent(skill.path);
-        if (content.isEmpty()) {
-            emitOutput("Could not read skill.\n");
-            return true;
+    QString skillName;
+    QString content;
+    d->withSkills([&](const QSocToolSkillFind &finder) {
+        for (const auto &skill : finder.scanAllSkills()) {
+            if (skill.userInvocable && cmd == "/" + skill.name.toLower()) {
+                skillName = skill.name;
+                content   = finder.readSkillContent(skill);
+                return;
+            }
         }
-        const QString project  = isRemote() ? d->remoteConn->path()->root()
-                                            : d->projectManager->getProjectPath();
-        bool          consumed = false;
-        QString       prompt   = QSocToolSkillFind::substitutePlaceholders(
-            content, rest, workingDirectory(), project, &consumed);
-        if (!rest.isEmpty() && !consumed)
-            prompt += "\n\nArguments passed: " + rest;
-        noteInvokedSkill(skill.name);
-        d->pendingAutoInputs.append(prompt);
-        emitOutput(QStringLiteral("(Running skill %1)\n").arg(skill.name));
+    });
+    if (skillName.isEmpty())
+        return false;
+    if (content.isEmpty()) {
+        emitOutput("Could not read skill.\n");
         return true;
     }
-    return false;
+    const QString project  = isRemote() ? d->remoteConn->path()->root()
+                                        : d->projectManager->getProjectPath();
+    bool          consumed = false;
+    QString       prompt   = QSocToolSkillFind::substitutePlaceholders(
+        content, rest, workingDirectory(), project, &consumed);
+    if (!rest.isEmpty() && !consumed)
+        prompt += "\n\nArguments passed: " + rest;
+    noteInvokedSkill(skillName);
+    d->pendingAutoInputs.append(prompt);
+    emitOutput(QStringLiteral("(Running skill %1)\n").arg(skillName));
+    return true;
 }
