@@ -7,6 +7,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
@@ -79,23 +82,55 @@ private:
     }
 
     /**
-     * @brief The working directory the last system prompt declared.
-     * @details Empty when no request carried one, which is itself a failure
-     *          the caller must report rather than compare against.
+     * @brief The working directory the main agent's last system prompt declared.
+     * @details Only requests that offer `path_context` belong to the main agent.
+     *          A memory-extraction request can arrive after the turn and declare
+     *          the local project instead. Empty when no main request carried
+     *          one, which is itself a failure the caller must report rather
+     *          than compare against.
      */
     QString declaredWorkingDir() const
     {
         static const QString marker = QStringLiteral("- Working directory: ");
-        const QString        blob   = QString::fromUtf8(wireLog());
-        const int            at     = blob.lastIndexOf(marker);
-        if (at < 0) {
-            return {};
+        QString              declared;
+        for (const QByteArray &line : wireLog().split('\n')) {
+            const QJsonObject request = QJsonDocument::fromJson(line).object();
+            if (!offersTool(request, QStringLiteral("path_context"))) {
+                continue;
+            }
+            const QString system = systemPrompt(request);
+            const int     at     = system.lastIndexOf(marker);
+            if (at < 0) {
+                continue;
+            }
+            const int from = at + marker.size();
+            const int end  = system.indexOf(QLatin1Char('\n'), from);
+            declared       = end < 0 ? system.mid(from) : system.mid(from, end - from);
         }
-        const int from = at + marker.size();
-        /* The prompt is JSON-encoded inside the logged request, so the line
-         * ends at an escaped newline rather than a real one. */
-        const int end = blob.indexOf(QStringLiteral("\\n"), from);
-        return end < 0 ? QString() : blob.mid(from, end - from);
+        return declared;
+    }
+
+    static bool offersTool(const QJsonObject &request, const QString &name)
+    {
+        for (const QJsonValue &tool : request.value(QStringLiteral("tools")).toArray()) {
+            const QJsonObject function
+                = tool.toObject().value(QStringLiteral("function")).toObject();
+            if (function.value(QStringLiteral("name")).toString() == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static QString systemPrompt(const QJsonObject &request)
+    {
+        for (const QJsonValue &message : request.value(QStringLiteral("messages")).toArray()) {
+            const QJsonObject object = message.toObject();
+            if (object.value(QStringLiteral("role")).toString() == QStringLiteral("system")) {
+                return object.value(QStringLiteral("content")).toString();
+            }
+        }
+        return {};
     }
 
     /* Bounded wait on an observed condition. */
