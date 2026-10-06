@@ -456,8 +456,8 @@ private:
             {"text", runtime_->taskRegistry()->tailFor(source, taskId, qBound(1, maxBytes, 65536))}};
     }
 
-    /* Runs before the busy gate, so it never blocks and never touches a link
-     * that is still being built. */
+    /* Runs before the busy gate: a live child is messaged without blocking,
+     * and nothing runs while a link is still being built. */
     void taskSend(qint64 id, const QJsonObject &params)
     {
         const QString message = params.value("message").toString();
@@ -469,10 +469,17 @@ private:
             sendError(id, QStringLiteral("message must not be empty"));
             return;
         }
-        const json receipt
-            = runtime_->subAgentSource()->sendFromUser(params.value("id").toString(), message);
+        /* A finished child is rebuilt only while the session is idle. */
+        const bool                       idle = !busy_;
+        const QScopedValueRollback<bool> busyGuard(busy_, true);
+        const json receipt = runtime_->sendToSubAgent(params.value("id").toString(), message, idle);
+        if (receipt.value("error", std::string()) == "busy") {
+            sendError(id, QStringLiteral("the session is busy; try again when the turn ends"));
+            return;
+        }
         QJsonObject result = toQJson(receipt).toObject();
-        result.insert("ok", result.value("status").toString() == "ok");
+        result
+            .insert("ok", !result.contains("error") && result.value("status").toString() != "error");
         sendReply(id, result);
     }
 

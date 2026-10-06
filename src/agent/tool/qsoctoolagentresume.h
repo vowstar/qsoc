@@ -7,26 +7,23 @@
 #include "agent/qsoctool.h"
 
 class QSocSubAgentTaskSource;
+class QSocToolAgent;
 
 /**
- * @brief LLM-callable tool that prepares a resume payload from a
- *        backgrounded sub-agent run that survived a process restart.
- * @details Reads the run's `.meta.json` sidecar (subagent_type,
- *          label, status, isolation, worktree) and tail of the
- *          `.jsonl` transcript, and returns a synthesized
- *          `resume_prompt` plus the original `subagent_type`.
- *          The LLM is expected to follow up with the regular
- *          `agent` tool using those fields, optionally seeding it
- *          with new instructions appended to `resume_prompt`.
- *          Resume is a fresh query() with the prior context
- *          restored, not a live LLM stream reattach.
+ * @brief LLM-callable tool that continues a sub-agent run.
+ * @details A live child is woken or queued, and a finished child with a
+ *          stored history is rebuilt from it (QSocToolAgent::resumeRun).
+ *          Otherwise the tool reads the `.meta.json` sidecar and the
+ *          transcript tail and returns a synthesized `resume_prompt` plus
+ *          the original `subagent_type` for a fresh `agent` call.
  */
 class QSocToolAgentResume : public QSocTool
 {
     Q_OBJECT
 
 public:
-    QSocToolAgentResume(QObject *parent, QSocSubAgentTaskSource *taskSource);
+    QSocToolAgentResume(
+        QObject *parent, QSocSubAgentTaskSource *taskSource, QSocToolAgent *spawner = nullptr);
     ~QSocToolAgentResume() override = default;
 
     QString getName() const override;
@@ -36,6 +33,7 @@ public:
 
 private:
     QSocSubAgentTaskSource *taskSource_ = nullptr;
+    QSocToolAgent          *spawner_    = nullptr;
 };
 
 #endif /* QSOCTOOLAGENTRESUME_H */

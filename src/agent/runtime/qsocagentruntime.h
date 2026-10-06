@@ -189,6 +189,14 @@ public:
     [[nodiscard]] QSocTaskRegistry *taskRegistry() const;
     /** Sub-agent task source. */
     [[nodiscard]] QSocSubAgentTaskSource *subAgentSource() const;
+    /**
+     * @brief Deliver a message the user typed to sub-agent run @p taskId.
+     * @details A live child is woken or queued and this never blocks. A
+     *          finished child is rebuilt from its stored history, which may
+     *          open its SSH host, so only call that when the session is idle
+     *          (@p allowResume).
+     */
+    nlohmann::json sendToSubAgent(const QString &taskId, const QString &message, bool allowResume);
     /** Host catalog (named SSH targets). */
     [[nodiscard]] QSocHostCatalog *hostCatalog() const;
     /** Goal catalog. */

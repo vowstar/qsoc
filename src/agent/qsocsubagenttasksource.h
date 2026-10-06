@@ -197,6 +197,9 @@ public:
      */
     nlohmann::json sendFromUser(const QString &id, const QString &message);
 
+    /** sendFromUser() for any mailbox @p sender; a non-user sender gets a reply. */
+    nlohmann::json sendTo(const QString &id, const QString &message, const QString &sender);
+
     void              enableMessaging(QSocAgent *root);
     QSocAgentMailbox *mailbox() const { return mailbox_; }
     QString           startFollowup(QSocAgent *agent);
@@ -206,7 +209,9 @@ public:
      *        (`<session>.jsonl.agents/`). Empty keeps new runs in memory.
      * @details New ids continue past every `a<N>` stored in @p dir, so a
      *          reopened session never reuses an id. A run keeps the
-     *          directory it was registered under.
+     *          directory it was registered under. Finished runs of another
+     *          directory are dropped, so they never answer for an id of
+     *          this one.
      */
     void setTranscriptDir(const QString &dir);
 
@@ -284,6 +289,7 @@ public:
         QString host;
         QString workspace;
         QString historyFile; /* QSocSession jsonl of the child history */
+        QString definition;  /* agent definition the child was built from */
         bool    legacy = false;
     };
 
@@ -355,7 +361,8 @@ private:
         QString               workspace;
         QString               directory; /* run storage; empty = memory only */
         QString               historyFile;
-        std::function<void()> launcher; /* set by start(); fired by pumpQueue */
+        QString               definition; /* follow-ups keep the spawn's definition */
+        std::function<void()> launcher;   /* set by start(); fired by pumpQueue */
         bool                  launcherStarted = false;
     };
 

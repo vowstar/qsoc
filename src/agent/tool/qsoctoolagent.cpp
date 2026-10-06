@@ -8,7 +8,10 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinition.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocagentmailbox.h"
 #include "agent/qsochookmanager.h"
+#include "agent/qsocsession.h"
+#include "agent/qsocsessionrecovery.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskeventqueue.h"
 #include "agent/remote/qsochostprofile.h"
@@ -588,6 +591,11 @@ int QSocToolAgent::sweepStaleWorktrees(int maxAgeSec)
 
 QString QSocToolAgent::execute(const json &arguments)
 {
+    return spawn(arguments, nullptr);
+}
+
+QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
+{
     if (defRegistry_ == nullptr || taskSource_ == nullptr) {
         return QStringLiteral(R"({"status":"error","error":"agent tool is not wired up"})");
     }
@@ -775,6 +783,21 @@ QString QSocToolAgent::execute(const json &arguments)
     if (childHost != nullptr) {
         bindConfigToHost(&childHost->conn, &childCfg);
     }
+    const QString placedHost = childCfg.remoteMode ? childCfg.remoteName : QStringLiteral("local");
+    const QString placedWorkspace = childCfg.remoteMode ? childCfg.remoteWorkspace
+                                                        : childCfg.projectPath;
+    if (seed != nullptr
+        && (placedHost != seed->host
+            || (!seed->workspace.isEmpty() && placedWorkspace != seed->workspace))) {
+        return QString::fromStdString(
+            json{
+                {"status", "error"},
+                {"error",
+                 QStringLiteral("the run used %1:%2, the child would now run on %3:%4")
+                     .arg(seed->host, seed->workspace, placedHost, placedWorkspace)
+                     .toStdString()}}
+                .dump());
+    }
 
     /* Per-child LLMService: clone the live parent's service so the
      * child has its own streaming reply and buffers. Without this,
@@ -889,6 +912,9 @@ QString QSocToolAgent::execute(const json &arguments)
         });
         child->setMessages(forkedMessages);
     }
+    if (seed != nullptr) {
+        child->setMessages(seed->history);
+    }
 
     if (parentAgent_ && parentAgent_->toolResultStore()) {
         const QString artifactOwner = QUuid::createUuid().toString(QUuid::Id128);
@@ -922,10 +948,7 @@ QString QSocToolAgent::execute(const json &arguments)
     /* Stash isolation + worktree on the run so the meta sidecar
      * captures them; mirrors what the response JSON reports. */
     taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
-    taskSource_->setPlacementMetadata(
-        taskId,
-        childCfg.remoteMode ? childCfg.remoteName : QStringLiteral("local"),
-        childCfg.remoteMode ? childCfg.remoteWorkspace : childCfg.projectPath);
+    taskSource_->setPlacementMetadata(taskId, placedHost, placedWorkspace);
 
     /* Forward child token usage into the parent's running totals so
      * the parent's status pill / cost view reflects total cost in
@@ -1079,7 +1102,8 @@ QString QSocToolAgent::execute(const json &arguments)
      * foreground one because it was connected first. */
     auto          abortReason    = std::make_shared<QString>();
     const QString parentIdentity = parentAgent_ ? parentAgent_->agentIdentity() : QString();
-    const QPointer<QSocTaskEventQueue> busGuard(eventQueue_);
+    const QPointer<QSocTaskEventQueue> busGuard(
+        seed != nullptr && !seed->notifyParent ? nullptr : eventQueue_.data());
     auto deliverAsync = [srcGuard, busGuard, parentIdentity, taskId, effectiveType, delivery]() {
         if (delivery->notified || !delivery->haveTerminal || busGuard.isNull()) {
             return;
@@ -1357,6 +1381,71 @@ QString QSocToolAgent::execute(const json &arguments)
     /* Handed off: the child keeps running on the parent's event loop and its
      * terminal state arrives as a task notification. */
     return QString::fromUtf8(launchedResponse.dump().c_str());
+}
+
+json QSocToolAgent::resumeRun(
+    const QString &taskId, const QString &instruction, const QString &sender)
+{
+    const QString text = instruction.trimmed().isEmpty()
+                             ? QStringLiteral(
+                                   "Continue the task. If it is already complete, report the "
+                                   "result.")
+                             : instruction;
+    if (taskSource_ == nullptr) {
+        return {{"status", "error"}, {"error", "task source not configured"}};
+    }
+    if (taskSource_->liveAgentFor(taskId) != nullptr) {
+        json receipt = taskSource_->sendTo(taskId, text, sender);
+        if (receipt.value("status", std::string()) == "ok") {
+            receipt["resume"] = receipt.value("delivery", std::string()) == "queued" ? "queued"
+                                                                                     : "live";
+        }
+        return receipt;
+    }
+    QSocSubAgentTaskSource::HistoricalRun meta;
+    const bool                            known = taskSource_->findHistoricalRun(taskId, &meta);
+    const json history = known && !meta.legacy && !meta.historyFile.isEmpty()
+                                 && meta.isolation != QStringLiteral("worktree")
+                             ? QSocSession::loadMessages(meta.historyFile)
+                             : json();
+    if (!history.is_array() || history.empty()
+        || !QSocSessionRecovery::historySafeForNewTurn(history)) {
+        return {
+            {"status", "error"},
+            {"resume", "unavailable"},
+            {"error",
+             known ? "the run has no stored history to continue from"
+                   : "no metadata sidecar found for this task_id"}};
+    }
+    ResumeSeed seed;
+    seed.history          = history;
+    seed.host             = meta.host.isEmpty() ? QStringLiteral("local") : meta.host;
+    seed.workspace        = meta.workspace;
+    seed.notifyParent     = sender != QSocAgentMailbox::userSender();
+    const bool    inherit = parentAgent_ != nullptr && parentAgent_->getConfig().remoteMode
+                            && parentAgent_->getConfig().remoteName == seed.host;
+    const QString host    = seed.host == QStringLiteral("local") || inherit ? QString() : seed.host;
+    json          result  = json::parse(
+        spawn(
+            json{
+                {"subagent_type", meta.definition.toStdString()},
+                {"description", meta.label.toStdString()},
+                {"prompt", text.toStdString()},
+                {"host", host.toStdString()},
+                {"run_in_background", true}},
+            &seed)
+            .toStdString(),
+        nullptr,
+        false);
+    if (!result.is_object()) {
+        return {{"status", "error"}, {"error", "resume failed"}};
+    }
+    if (result.value("status", std::string()) != "error") {
+        result["resume"]       = "history";
+        result["resumed_from"] = taskId.toStdString();
+        result["delivery"]     = "resumed";
+    }
+    return result;
 }
 
 void QSocToolAgent::abort()

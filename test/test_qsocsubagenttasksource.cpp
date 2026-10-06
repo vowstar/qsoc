@@ -753,6 +753,41 @@ private slots:
             std::string("not_live"));
     }
 
+    void finishedRunsOfAnotherSessionNeverAnswerForItsIds()
+    {
+        QTemporaryDir one;
+        QTemporaryDir two;
+        QString       stored;
+        {
+            QSocSubAgentTaskSource earlier;
+            earlier.setTranscriptDir(two.path());
+            stored
+                = earlier.registerRun(QStringLiteral("s2"), QStringLiteral("explore"), makeAgent());
+            earlier.appendTranscript(stored, QStringLiteral("from session two"));
+            earlier.markCompleted(stored, QStringLiteral("two done"));
+        }
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(one.path());
+        const QString first
+            = src.registerRun(QStringLiteral("s1"), QStringLiteral("explore"), makeAgent());
+        QCOMPARE(first, stored);
+        src.appendTranscript(first, QStringLiteral("from session one"));
+        src.markCompleted(first, QStringLiteral("one done"));
+
+        /* Resume the other session inside the lingering window. */
+        src.setTranscriptDir(two.path());
+        QVERIFY(!src.findRow(stored, nullptr));
+        QCOMPARE(
+            QFileInfo(src.transcriptPathFor(stored)).absolutePath(),
+            QDir(two.path()).absolutePath());
+        const QString tail = src.tailFor(stored, 4096);
+        QVERIFY(tail.contains(QStringLiteral("from session two")));
+        QVERIFY(!tail.contains(QStringLiteral("from session one")));
+        QSocSubAgentTaskSource::HistoricalRun run;
+        QVERIFY(src.findHistoricalRun(stored, &run));
+        QCOMPARE(run.label, QStringLiteral("s2"));
+    }
+
     /* Disk file survives evictStaleCompleted: even after the
      * in-memory RunState is gone, the file is still present. */
     void testDiskFileSurvivesEviction()

@@ -43,6 +43,7 @@ class QSocGoalCatalog;
 class QSocHostCatalog;
 class QLLMService;
 class QSocLoopScheduler;
+class QSocToolAgent;
 class QSocMemoryManager;
 class QSocMcpManager;
 class QSocModuleManager;
@@ -122,6 +123,7 @@ struct QSocAgentRuntime::Private
     QSocTaskRegistry                    *taskRegistry       = nullptr;
     QSocTaskEventQueue                  *taskEventQueue     = nullptr;
     QSocSubAgentTaskSource              *subAgentTaskSource = nullptr;
+    QSocToolAgent                       *agentTool          = nullptr;
     QSocMonitorTaskSource               *monitorTaskSource  = nullptr;
     QSocBashTaskSource                  *bashTaskSource     = nullptr;
     QSocAgentDefinitionRegistry         *agentDefinitions   = nullptr;

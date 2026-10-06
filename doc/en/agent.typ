@@ -668,8 +668,9 @@ The agent provides the following tools through natural language:
 - *Monitors*: `monitor` starts a line-oriented watcher whose output wakes
   the agent; `monitor_stop` terminates a watcher
 - *Sub-agents*: `agent` to spawn a child run, `agent_status` to poll a
-  backgrounded run, `agent_resume` to pick up a prior run from disk,
-  `send_message` for peer messages and `followup_task` for further work; see
+  backgrounded run, `agent_resume` to continue a prior run from its stored
+  history, `send_message` for peer messages and `followup_task` for further
+  work; see
   @agent-subagents
 - *Documentation*: `query_docs` by topic (about, commands, config, bus, clock,
   fsm, logic, netlist, power, reset, template, validation, overview, ...)
@@ -1320,10 +1321,19 @@ While a backgrounded run is alive:
 - The legacy `send_message(task_id, message)` form accepts messages only
   while that run is running.
 - `/agents-history` lists prior runs with their final results.
-- `agent_resume` reads the meta sidecar plus the transcript tail and
-  synthesizes a `resume_prompt` that can be passed to a fresh `agent`
-  call to continue where a prior run left off, e.g. across a process
-  restart.
+- `agent_resume(task_id, new_instructions?)` continues a run. A live child
+  receives the instructions as a follow-up (`resume: live`, or `queued` while
+  it is busy). A finished child whose history is stored is rebuilt from that
+  history, with the same definition, host and workspace, and runs in the
+  background (`resume: history`); its result arrives as a task notification.
+  The rebuilt child uses the current model and reasoning effort, not the ones
+  of the earlier run. A run that used another host or workspace than the
+  child would get now is refused. Without instructions the child is asked to
+  continue, or to report the result if it is done.
+- When neither applies (no stored history, a `legacy` run, a worktree run),
+  `agent_resume` reads the meta sidecar plus the transcript tail and returns
+  a synthesized `resume_prompt` (`resume: prompt_only`) that can be passed to
+  a fresh `agent` call.
 
 === Peer Communication
 <agent-subagents-messages>
@@ -1461,23 +1471,28 @@ Main-agent output that arrives meanwhile is drawn when you return. A message
 reaches a live child as your request, through the child's own
 `user_prompt_submit` hooks. An idle child starts a follow-up run with its
 history, model, reasoning effort and workspace; a running child reads the
-message at its next step. The main agent is not notified of messages you
-send. A message is limited to 16 KiB, like peer messages.
+message at its next step. A finished child whose history is stored, for
+example one stopped with `x`, is rebuilt from that history as `agent_resume`
+does, and the view follows the new run. This waits until the main agent's
+turn ends. The main agent is not notified of messages you send or of the
+result of a child you resumed. A message is limited to 16 KiB, like peer messages.
 
 These features need a daemon that advertises the `agents` capability in
 its greeting. Against an older daemon the `f` and `s` keys and the
 Alt+arrow switch are not offered. The protocol methods are:
 
 - `tasks` rows for sub-agents carry `agent_id`, `host`, `workspace`, `live`
-  (the child accepts a message now) and `resumable` (a message reaches it).
+  (the child accepts a message now) and `resumable` (a message reaches it,
+  directly or by resuming from the stored history).
 - `task_tail` with `offset` returns `text`, `offset`, `next_offset` and
   `eof`. The offset counts UTF-8 bytes of the rendered transcript, and a page
   never splits a character. With `"format":"history"`, `offset` counts
   messages and the reply carries `messages` and `found` instead of `text`.
 - `task_send` with `id` and `message` delivers the message. The reply has
   `ok`, `delivery` (`woken` or `queued`) and the `task_id` of the run that
-  reads it. It never waits for the child and is refused while an SSH
-  connection is being built.
+  reads it (`delivery` is `resumed` for a rebuilt child). It never waits for
+  the child and is refused while an SSH connection is being built. Resuming a
+  finished child is refused while a turn runs.
 
 == Status Line
 <agent-status-line>

@@ -73,6 +73,19 @@ public:
     QString execute(const json &arguments) override;
     void    abort() override;
 
+    /**
+     * @brief Continue the sub-agent behind @p taskId with @p instruction.
+     * @details A live child gets a mailbox follow-up from @p sender: an idle
+     *          one wakes, a busy one reads it at its next step. A finished
+     *          child is rebuilt from its stored history with the same
+     *          definition, host and workspace, on the user's current model
+     *          and reasoning effort, and runs in the background. The reply's
+     *          `resume` is `live`, `queued`, `history`, or `unavailable` when
+     *          neither applies. A child the user resumes does not notify the
+     *          main agent.
+     */
+    json resumeRun(const QString &taskId, const QString &instruction, const QString &sender);
+
     /* Optional managers to forward into the child agent so it sees
      * the same hook config / scheduler / memory the parent uses. */
     void setMemoryManager(QSocMemoryManager *manager) { memoryManager_ = manager; }
@@ -186,6 +199,18 @@ public:
     static void bindChildCwd(const CwdFanout &fanout, QSocAgent *child);
 
 private:
+    /** A finished child to rebuild: its history and where it must run. */
+    struct ResumeSeed
+    {
+        json    history;
+        QString host;
+        QString workspace;
+        bool    notifyParent = true;
+    };
+
+    /** The spawn behind execute(); @p seed rebuilds a finished child. */
+    QString spawn(const json &arguments, const ResumeSeed *seed);
+
     /**
      * @brief One remote binding for a host alias, and everything built on it.
      * @details Shared, not cached: the cache holds one reference so sibling

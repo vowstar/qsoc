@@ -359,6 +359,84 @@ private slots:
         QCOMPARE(h.tasks.mailbox()->pendingCount(h.parent.agentIdentity()), 0);
     }
 
+    void finishedChildResumesFromStoredHistory()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        ScopedConfig  scope(twoModels(llm.url()));
+        QTemporaryDir runs;
+        QString       taskId;
+        {
+            Harness    first(runs.path());
+            const json spawned = first.spawn("first objective");
+            QCOMPARE(spawned.value("status", std::string()), std::string("ok"));
+            taskId = QString::fromStdString(spawned.value("task_id", std::string()));
+        }
+        QCOMPARE(llm.requestCount(), 1);
+
+        /* A later process: the child is gone, its stored history is not. */
+        Harness later(runs.path());
+        QCOMPARE(later.tasks.liveAgentFor(taskId), nullptr);
+        const json resumed = later.tool.resumeRun(
+            taskId,
+            QStringLiteral("continue sentinel"),
+            later.tasks.mailbox()->idFor(&later.parent));
+        QCOMPARE(resumed.value("resume", std::string()), std::string("history"));
+        QCOMPARE(resumed.value("status", std::string()), std::string("async_launched"));
+        QVERIFY(resumed.value("task_id", std::string()) != taskId.toStdString());
+        QTRY_COMPARE(llm.requestCount(), 2);
+        QVERIFY(hasUserMessage(llm, 1, "first objective"));
+        QVERIFY(hasUserMessage(llm, 1, "continue sentinel"));
+        QVERIFY(requestMentions(llm, 1, "delegated work done"));
+    }
+
+    void resumedChildUsesTheCurrentModelAndEffort()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        ScopedConfig  scope(twoModels(llm.url()));
+        QTemporaryDir runs;
+        QString       taskId;
+        {
+            Harness first(runs.path());
+            first.parent.setEffortLevel(QStringLiteral("low"));
+            taskId = QString::fromStdString(
+                first.spawn("first objective").value("task_id", std::string()));
+        }
+        QCOMPARE(llm.wireModel(0), QStringLiteral("first-wire"));
+        QCOMPARE(llm.requestBody(0).value("reasoning_effort", std::string()), std::string("low"));
+
+        Harness later(runs.path());
+        QVERIFY(later.service.setCurrentModel(QStringLiteral("second-model")));
+        later.parent.setEffortLevel(QStringLiteral("high"));
+        const json resumed
+            = later.tool.resumeRun(taskId, QStringLiteral("go on"), QSocAgentMailbox::userSender());
+        QCOMPARE(resumed.value("resume", std::string()), std::string("history"));
+        QTRY_COMPARE(llm.requestCount(), 2);
+        QCOMPARE(llm.wireModel(1), QStringLiteral("second-wire"));
+        QCOMPARE(llm.requestBody(1).value("reasoning_effort", std::string()), std::string("high"));
+    }
+
+    void runWithoutStoredHistoryFallsBackToThePrompt()
+    {
+        QTemporaryDir          tmp;
+        QSocSubAgentTaskSource src;
+        src.setTranscriptDir(tmp.path());
+        const QString runId
+            = src.registerRun(QStringLiteral("old"), QStringLiteral("explore"), makeAgent());
+        src.markCompleted(runId, QStringLiteral("PRIOR FINAL"));
+        QSocAgentDefinitionRegistry definitions;
+        QSocToolAgent spawner(this, nullptr, nullptr, QSocAgentConfig(), &definitions, &src);
+        const json    direct = spawner.resumeRun(runId, {}, QSocAgentMailbox::userSender());
+        QCOMPARE(direct.value("resume", std::string()), std::string("unavailable"));
+        QSocToolAgentResume tool(this, &src, &spawner);
+        const json          parsed = json::parse(
+            tool.execute(json{{"task_id", runId.toStdString()}}).toStdString());
+        QCOMPARE(parsed.value("resume", std::string()), std::string("prompt_only"));
+        QVERIFY(
+            parsed.value("resume_prompt", std::string()).find("PRIOR FINAL") != std::string::npos);
+    }
+
     void testNewInstructionsAppendedToResumePrompt()
     {
         QTemporaryDir          tmp;

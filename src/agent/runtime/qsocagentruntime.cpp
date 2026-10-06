@@ -8,6 +8,7 @@
 #include "agent/mcp/qsocmcpmanager.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocagentmailbox.h"
 #include "agent/qsocawaysummary.h"
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsoccontextrestore.h"
@@ -348,6 +349,23 @@ QSocTaskRegistry *QSocAgentRuntime::taskRegistry() const
 QSocSubAgentTaskSource *QSocAgentRuntime::subAgentSource() const
 {
     return d->subAgentTaskSource;
+}
+
+nlohmann::json QSocAgentRuntime::sendToSubAgent(
+    const QString &taskId, const QString &message, bool allowResume)
+{
+    if (d->subAgentTaskSource->liveAgentFor(taskId) != nullptr || d->agentTool == nullptr) {
+        return d->subAgentTaskSource->sendFromUser(taskId, message);
+    }
+    if (!allowResume) {
+        return {{"status", "error"}, {"error", "busy"}};
+    }
+    const nlohmann::json resumed
+        = d->agentTool->resumeRun(taskId, message, QSocAgentMailbox::userSender());
+    if (resumed.value("resume", std::string()) == "unavailable") {
+        return {{"status", "error"}, {"error", "not_resumable"}};
+    }
+    return resumed;
 }
 
 QSocHostCatalog *QSocAgentRuntime::hostCatalog() const
@@ -943,6 +961,7 @@ void QSocAgentRuntime::registerTools()
     agentTool->setSshConfigParser(d->sshConfig.get());
     agentTool->setTaskEventQueue(d->taskEventQueue);
     d->toolRegistry->registerTool(agentTool);
+    d->agentTool = agentTool;
 
     auto *agentStatusTool = new QSocToolAgentStatus(this, d->subAgentTaskSource);
     d->toolRegistry->registerTool(agentStatusTool);
@@ -965,7 +984,7 @@ void QSocAgentRuntime::registerTools()
 
     d->toolRegistry->registerTool(new QSocToolGoalComplete(this, d->goalCatalog));
 
-    auto *resumeTool = new QSocToolAgentResume(this, d->subAgentTaskSource);
+    auto *resumeTool = new QSocToolAgentResume(this, d->subAgentTaskSource, agentTool);
     d->toolRegistry->registerTool(resumeTool);
 
     d->localRegistry = d->toolRegistry;

@@ -3,11 +3,16 @@
 
 #include "agent/tool/qsoctoolagentresume.h"
 
+#include "agent/qsocagent.h"
+#include "agent/qsocagentmailbox.h"
 #include "agent/qsocsubagenttasksource.h"
+#include "agent/tool/qsoctoolagent.h"
 
-QSocToolAgentResume::QSocToolAgentResume(QObject *parent, QSocSubAgentTaskSource *taskSource)
+QSocToolAgentResume::QSocToolAgentResume(
+    QObject *parent, QSocSubAgentTaskSource *taskSource, QSocToolAgent *spawner)
     : QSocTool(parent)
     , taskSource_(taskSource)
+    , spawner_(spawner)
 {}
 
 QString QSocToolAgentResume::getName() const
@@ -18,12 +23,12 @@ QString QSocToolAgentResume::getName() const
 QString QSocToolAgentResume::getDescription() const
 {
     return QStringLiteral(
-        "Prepare a resume payload for a backgrounded sub-agent run that survived a "
-        "process restart (or simply went past its in-memory eviction window). "
-        "Returns the original subagent_type plus a synthesized resume_prompt that "
-        "embeds the prior transcript tail. Follow up with the `agent` tool using "
-        "those fields to actually re-spawn. Use this when the parent agent needs to "
-        "pick up where a prior run left off.");
+        "Continue an earlier sub-agent run. A live child receives new_instructions "
+        "as a follow-up (resume: live or queued). A finished child with a stored "
+        "history is rebuilt from it and runs in the background (resume: history); "
+        "its result arrives as a task notification. Otherwise returns the original "
+        "subagent_type plus a synthesized resume_prompt that embeds the prior "
+        "transcript tail (resume: prompt_only); pass those to the `agent` tool.");
 }
 
 json QSocToolAgentResume::getParametersSchema() const
@@ -70,6 +75,18 @@ QString QSocToolAgentResume::execute(const json &arguments)
         }
     }
 
+    const QPointer<QSocToolCallContext> context(currentCallContext());
+    auto         *caller = context ? qobject_cast<QSocAgent *>(context->executionScope()) : nullptr;
+    auto         *mailbox = taskSource_->mailbox();
+    const QString sender  = caller != nullptr && mailbox != nullptr ? mailbox->idFor(caller)
+                                                                    : QString();
+    if (spawner_ != nullptr && !sender.isEmpty()) {
+        const json resumed = spawner_->resumeRun(taskId, newInstructions, sender);
+        if (resumed.value("resume", std::string()) != "unavailable") {
+            return QString::fromStdString(resumed.dump());
+        }
+    }
+
     QSocSubAgentTaskSource::HistoricalRun meta;
     if (!taskSource_->findHistoricalRun(taskId, &meta)) {
         return QString::fromUtf8(
@@ -113,6 +130,7 @@ QString QSocToolAgentResume::execute(const json &arguments)
     return QString::fromUtf8(
         json{
             {"status", "ok"},
+            {"resume", "prompt_only"},
             {"task_id", taskId.toStdString()},
             {"original_subagent_type", meta.subagentType.toStdString()},
             {"original_label", meta.label.toStdString()},

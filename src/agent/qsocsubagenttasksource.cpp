@@ -155,6 +155,7 @@ bool readHistoricalRun(
     run->finalPreview     = obj.value(QStringLiteral("final_preview")).toString();
     run->host             = obj.value(QStringLiteral("host")).toString();
     run->workspace        = obj.value(QStringLiteral("workspace")).toString();
+    run->definition       = obj.value(QStringLiteral("definition")).toString(run->subagentType);
     run->legacy           = legacy;
     const QString history = obj.value(QStringLiteral("history_file")).toString();
     if (!legacy && runFileName().match(history).hasMatch() && !history.contains(QLatin1Char('/'))
@@ -229,16 +230,23 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
     QString worktreePath;
     QString host;
     QString workspace;
+    QString definition;
     for (const auto &run : std::as_const(runs_)) {
         if (run.agent == agent) {
             isolation    = run.isolation;
             worktreePath = run.worktreePath;
             host         = run.host;
             workspace    = run.workspace;
+            definition   = run.definition;
         }
     }
     const QString id
         = registerRun(QStringLiteral("Follow-up"), QStringLiteral("continuation"), agent);
+    for (RunState &run : runs_) {
+        if (run.id == id) {
+            run.definition = definition;
+        }
+    }
     setIsolationMetadata(id, isolation, worktreePath);
     setPlacementMetadata(id, host, workspace);
     const auto connections = std::make_shared<QList<QMetaObject::Connection>>();
@@ -325,7 +333,9 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
         row.host        = run.host;
         row.workspace   = run.workspace;
         row.live        = liveAgentFor(run.id) != nullptr;
-        row.resumable   = row.live;
+        row.resumable   = row.live
+                          || (!run.historyFile.isEmpty()
+                              && run.isolation != QStringLiteral("worktree"));
         QString summary = run.subagentType;
         if (run.status == QSocTask::Status::Pending) {
             summary += QStringLiteral(" · queued");
@@ -482,6 +492,12 @@ QSocSubAgentTaskSource::HistoryPage QSocSubAgentTaskSource::historyPage(
 
 nlohmann::json QSocSubAgentTaskSource::sendFromUser(const QString &id, const QString &message)
 {
+    return sendTo(id, message, QSocAgentMailbox::userSender());
+}
+
+nlohmann::json QSocSubAgentTaskSource::sendTo(
+    const QString &id, const QString &message, const QString &sender)
+{
     QSocAgent *agent = liveAgentFor(id);
     if (agent == nullptr || mailbox_ == nullptr) {
         return {{"status", "error"}, {"error", "not_live"}};
@@ -490,12 +506,7 @@ nlohmann::json QSocSubAgentTaskSource::sendFromUser(const QString &id, const QSt
     const bool    idle     = mailbox_->stateFor(identity) == QStringLiteral("idle");
     const QPointer<QSocSubAgentTaskSource> owner(this);
     nlohmann::json                         receipt = mailbox_->send(
-        QSocAgentMailbox::userSender(),
-        identity,
-        QUuid::createUuid().toString(QUuid::WithoutBraces),
-        message,
-        {},
-        true);
+        sender, identity, QUuid::createUuid().toString(QUuid::WithoutBraces), message, {}, true);
     if (owner.isNull() || receipt.value("status", std::string()) != "ok") {
         return receipt;
     }
@@ -556,6 +567,7 @@ QString QSocSubAgentTaskSource::registerRun(
     run.queuedAtMs     = QDateTime::currentMSecsSinceEpoch();
     run.lastActivityMs = run.queuedAtMs;
     run.directory      = transcriptDir_;
+    run.definition     = subagentType;
     if (agent != nullptr) {
         agent->setParent(this);
         if (mailbox_ != nullptr)
@@ -901,6 +913,19 @@ QString QSocSubAgentTaskSource::subagentTypeFor(const QString &id) const
 
 void QSocSubAgentTaskSource::setTranscriptDir(const QString &dir)
 {
+    const auto foreign = [&dir](const RunState &run) {
+        return run.directory != dir && QSocTask::isTerminal(run.status);
+    };
+    if (std::any_of(runs_.cbegin(), runs_.cend(), foreign)) {
+        for (const RunState &run : std::as_const(runs_)) {
+            if (foreign(run) && run.agent != nullptr && mailbox_ == nullptr) {
+                run.agent->deleteLater();
+            }
+        }
+        runs_.removeIf(foreign);
+        historical_.clear();
+        emit tasksChanged();
+    }
     transcriptDir_          = dir;
     const QStringList names = dir.isEmpty() ? QStringList() : QDir(dir).entryList(QDir::Files);
     for (const QString &name : names) {
@@ -1058,6 +1083,9 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     }
     if (!run.historyFile.isEmpty()) {
         meta["history_file"] = run.historyFile;
+    }
+    if (!run.definition.isEmpty()) {
+        meta["definition"] = run.definition;
     }
     if (isTerminal(run.status)) {
         meta["finished_at_ms"] = run.lastActivityMs;

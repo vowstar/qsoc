@@ -473,7 +473,7 @@ private slots:
              {"params", QJsonObject{{"id", "a404"}, {"message", "hello"}}}});
         const QJsonObject sent = client.waitForReply(10).value("result").toObject();
         QCOMPARE(sent.value("ok").toBool(true), false);
-        QCOMPARE(sent.value("error").toString(), QStringLiteral("not_live"));
+        QCOMPARE(sent.value("error").toString(), QStringLiteral("not_resumable"));
         client.send(
             {{"id", 11},
              {"method", QStringLiteral("task_tail")},
