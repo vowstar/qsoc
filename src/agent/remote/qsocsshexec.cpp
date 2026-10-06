@@ -6,11 +6,16 @@
 #include "agent/remote/qsocsshsession.h"
 #include "common/qsocboundedcapture.h"
 
+#include <QScopeGuard>
+
 namespace {
 
 /* Slice length for one poll. Short enough that requestAbort() from
  * another thread takes effect promptly. */
 constexpr int kPollSliceMs = 200;
+
+/* Least gap between two reads of the session's abort probe. */
+constexpr qint64 kProbeIntervalMs = 50;
 
 /* Courtesy window for releasing a remote handle once the call budget is
  * already spent, so cleanup is bounded rather than skipped. Waiting for the
@@ -20,6 +25,8 @@ constexpr int kCleanupMs = 2000;
 
 const auto kTransportDeadText = QStringLiteral(
     "SSH transport is dead: the remote host stopped responding");
+
+const auto kAbortedText = QStringLiteral("Interrupted by the user");
 
 } // namespace
 
@@ -42,9 +49,33 @@ bool QSocSshExec::waitAbandonable()
     return waitInternal(false);
 }
 
+bool QSocSshExec::stopRequested()
+{
+    /* The probe turns the event loop, so a stream of output must not pay for
+     * that on every read. */
+    if (!m_abort.load(std::memory_order_relaxed)
+        && (!m_probeClock.isValid() || m_probeClock.elapsed() >= kProbeIntervalMs)) {
+        m_probeClock.start();
+        if (m_session.abortRequested()) {
+            m_abort.store(true, std::memory_order_relaxed);
+        }
+    }
+    return m_abort.load(std::memory_order_relaxed);
+}
+
+void QSocSshExec::noteGaveUp(Result &result) const
+{
+    if (m_abort.load(std::memory_order_relaxed)) {
+        result.aborted = true;
+    } else {
+        result.timedOut = !m_transportDead;
+    }
+}
+
 bool QSocSshExec::waitInternal(bool requestInFlight)
 {
-    if (m_deadline.hasExpired()) {
+    /* A stop mid-request strands the exchange just as a timeout does. */
+    if (stopRequested() || m_deadline.hasExpired()) {
         if (requestInFlight) {
             m_session.markAbandonedExchange();
         }
@@ -168,7 +199,7 @@ bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, C
         }
         drainOutput(channel, capture);
         if (!waitAbandonable()) {
-            result.timedOut = !m_transportDead;
+            noteGaveUp(result);
             return false;
         }
     }
@@ -179,7 +210,7 @@ bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, C
             return false;
         }
         if (!waitAbandonable()) {
-            result.timedOut = !m_transportDead;
+            noteGaveUp(result);
             return false;
         }
     }
@@ -195,10 +226,17 @@ bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, C
 QSocSshExec::Result QSocSshExec::run(
     const QString &command, int timeoutMs, const QByteArray &input, qint64 captureBytes)
 {
+    Result result;
+    /* Pumping the event loop while waiting lets a timer or a peer request run
+     * here; libssh2 state is not re-entrant, so a nested call is refused. */
+    if (m_session.inOperation()) {
+        result.errorText = QStringLiteral("SSH session is busy with another operation");
+        return result;
+    }
     const QSocSshSession::Operation operation(m_session);
-    Result                          result;
-    m_abort.store(false, std::memory_order_relaxed);
+    const auto clearAbort = qScopeGuard([this] { m_abort.store(false, std::memory_order_relaxed); });
     m_transportDead = false;
+    m_probeClock.invalidate();
     /* One deadline for the whole call. Starting it here rather than at the
      * first read is what stops a vanished host from parking the caller in
      * the channel-open loop forever. */
@@ -233,11 +271,12 @@ QSocSshExec::Result QSocSshExec::run(
             return result;
         }
         if (!wait()) {
+            noteGaveUp(result);
             result.transportDead = m_transportDead;
-            result.errorText     = m_transportDead
-                                       ? kTransportDeadText
+            result.errorText     = m_transportDead ? kTransportDeadText
+                                   : result.aborted
+                                       ? kAbortedText
                                        : QStringLiteral("Timed out waiting to open channel");
-            result.timedOut      = !m_transportDead;
             return result;
         }
     }
@@ -246,11 +285,12 @@ QSocSshExec::Result QSocSshExec::run(
     int              rc       = 0;
     while ((rc = libssh2_channel_exec(channel, cmdBytes.constData())) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
+            noteGaveUp(result);
             freeChannel(channel);
             result.transportDead = m_transportDead;
-            result.errorText = m_transportDead ? kTransportDeadText
-                                               : QStringLiteral("Timed out sending exec request");
-            result.timedOut  = !m_transportDead;
+            result.errorText = m_transportDead  ? kTransportDeadText
+                               : result.aborted ? kAbortedText
+                                                : QStringLiteral("Timed out sending exec request");
             return result;
         }
     }
@@ -267,7 +307,7 @@ QSocSshExec::Result QSocSshExec::run(
     const bool inputSent = sendInput(channel, input, capture);
     char       buffer[4096];
     while (inputSent) {
-        if (m_abort.load(std::memory_order_relaxed)) {
+        if (stopRequested()) {
             result.aborted = true;
             break;
         }
@@ -297,7 +337,7 @@ QSocSshExec::Result QSocSshExec::run(
                 break;
             }
             if (!waitAbandonable()) {
-                result.timedOut = !m_transportDead;
+                noteGaveUp(result);
                 break;
             }
             continue;
@@ -305,7 +345,7 @@ QSocSshExec::Result QSocSshExec::run(
 
         if (nout == LIBSSH2_ERROR_EAGAIN || nerr == LIBSSH2_ERROR_EAGAIN) {
             if (!waitAbandonable()) {
-                result.timedOut = !m_transportDead;
+                noteGaveUp(result);
                 break;
             }
             continue;
@@ -336,7 +376,7 @@ QSocSshExec::Result QSocSshExec::run(
             break;
         }
         if (!waitAbandonable()) {
-            result.timedOut = !m_transportDead;
+            noteGaveUp(result);
             break;
         }
     }

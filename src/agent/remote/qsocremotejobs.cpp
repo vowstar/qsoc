@@ -179,19 +179,25 @@ QString jobScriptEvidence(const QString &scriptOutput)
     return kept.join(QLatin1Char('\n'));
 }
 
-QString parseJobStatusExitCode(const QString &statusOutput)
+QString parseJobStatusField(const QString &statusOutput, const QString &key)
 {
-    const QStringList lines = statusOutput.split(QLatin1Char('\n'));
+    const QString     prefix = key + QLatin1Char('=');
+    const QStringList lines  = statusOutput.split(QLatin1Char('\n'));
     for (const QString &line : lines) {
         const QString trimmed = line.trimmed();
         if (trimmed == kLogFence) {
             break;
         }
-        if (trimmed.startsWith(QStringLiteral("exit_code="))) {
-            return trimmed.mid(QStringLiteral("exit_code=").size()).trimmed();
+        if (trimmed.startsWith(prefix)) {
+            return trimmed.mid(prefix.size()).trimmed();
         }
     }
     return {};
+}
+
+QString parseJobStatusExitCode(const QString &statusOutput)
+{
+    return parseJobStatusField(statusOutput, QStringLiteral("exit_code"));
 }
 
 /* Ledger */
@@ -396,7 +402,9 @@ QString jobLaunchScript(
     bool                     splitStderr)
 {
     /* The shell that waits for the payload is the one the link drop would
-     * otherwise kill, so it ignores SIGHUP before it spawns anything. It also
+     * otherwise kill, so it ignores SIGHUP before it spawns anything. Job
+     * control makes the payload a process group of its own, so a signal
+     * reaches what it started too. It also
      * keeps the exec channel's stdout only long enough to report the binding,
      * then releases it so the channel closes while the job runs on. */
     const QString wrapper = QStringLiteral(
@@ -407,6 +415,7 @@ QString jobLaunchScript(
                                 "date +%s > \"$__d\"/start_time\n"
                                 "__boot=$(%5)\n"
                                 "printf \"%s\" \"$__boot\" > \"$__d\"/boot_id\n"
+                                "set -m 2>/dev/null\n"
                                 "nohup %7 -c %3 < /dev/null > \"$__d\"/output.log %8 &\n"
                                 "__pid=$!\n"
                                 "printf \"%s\" \"$__pid\" > \"$__d\"/pid\n"
@@ -427,8 +436,20 @@ QString jobLaunchScript(
                                     shell.invocation(true),
                                     splitStderr ? QStringLiteral("2> \"$__d\"/stderr.log")
                                                 : QStringLiteral("2>&1"));
-    return QStringLiteral("mkdir %1 || exit 1\nnohup %3 -c %2 < /dev/null &\n")
-        .arg(shellQuote(jobDir), shellQuote(wrapper), shell.invocation(false));
+    /* The jobs root was verified once for the binding; a root that has since
+     * become a link, or is gone, refuses before anything is created. */
+    const QString jobs = jobDir.left(jobDir.lastIndexOf(QLatin1Char('/')));
+    const QString meta = jobs.left(jobs.lastIndexOf(QLatin1Char('/')));
+    return QStringLiteral(
+               "{ [ -d %4 ] && [ ! -L %4 ] && [ ! -L %5 ]; } || "
+               "{ echo \"token: jobs_root_moved\"; exit 3; }\n"
+               "mkdir %1 || exit 1\nnohup %3 -c %2 < /dev/null &\n")
+        .arg(
+            shellQuote(jobDir),
+            shellQuote(wrapper),
+            shell.invocation(false),
+            shellQuote(jobs),
+            shellQuote(meta));
 }
 
 QString jobStatusScript(const QString &jobDir, const QSocRemoteJobRecord &record)
@@ -497,6 +518,63 @@ QString jobOutputScript(const QString &jobDir, int maxLines, const QSocRemoteJob
                      QString::number(maxLines));
 }
 
+QString jobWaitScript(const QString &jobDir, int waitMs, int tailLines, bool removeWhenEnded)
+{
+    /* Slices of 100 ms where sleep takes a fraction, of a second where it does
+     * not; either way the count, not the clock, bounds the loop. */
+    const int slices = qMax(1, (waitMs + 99) / 100);
+    return QStringLiteral(
+               "__d=%1\n"
+               "__n=%2\n"
+               "while [ ! -s \"$__d\"/exit_code ] && [ \"$__n\" -gt 0 ]; do\n"
+               "sleep 0.1 2>/dev/null || sleep 1\n"
+               "__n=$((__n - 1))\n"
+               "done\n"
+               "if [ -s \"$__d\"/exit_code ]; then\n"
+               "printf \"exit_code=%s\\n\" \"$(tr -dc 0-9 < \"$__d\"/exit_code)\"\n"
+               "printf \"%3\\n\"\n"
+               "cat \"$__d\"/output.log 2>/dev/null\n"
+               "%5"
+               "else\n"
+               "printf \"running=yes\\n\"\n"
+               "printf \"%3\\n\"\n"
+               "tail -n %4 \"$__d\"/output.log 2>/dev/null\n"
+               "fi\n")
+        .arg(
+            shellQuote(jobDir),
+            QString::number(slices),
+            kLogFence,
+            QString::number(qMax(1, tailLines)),
+            removeWhenEnded ? QStringLiteral("cd / && rm -rf \"$__d\"\n") : QString());
+}
+
+QSocRemoteJobWait parseJobWait(const QByteArray &stdoutBytes)
+{
+    QSocRemoteJobWait wait;
+    const QByteArray  fence = kLogFence.toUtf8() + '\n';
+    qsizetype         at    = stdoutBytes.startsWith(fence) ? 0 : -1;
+    if (at < 0) {
+        at = stdoutBytes.indexOf('\n' + fence);
+        at = at < 0 ? -1 : at + 1;
+    }
+    if (at < 0) {
+        wait.head = QString::fromUtf8(stdoutBytes);
+        return wait;
+    }
+    wait.answered = true;
+    wait.head     = QString::fromUtf8(stdoutBytes.left(at));
+    wait.output   = stdoutBytes.mid(at + fence.size());
+    for (const QString &line : wait.head.split(QLatin1Char('\n'))) {
+        if (line.startsWith(QStringLiteral("exit_code="))) {
+            bool      ok   = false;
+            const int code = line.mid(10).toInt(&ok);
+            wait.ended     = true;
+            wait.exitCode  = ok ? code : -1;
+        }
+    }
+    return wait;
+}
+
 QString jobSignalScript(const QSocRemoteJobRecord &record, const QString &signal)
 {
     return identityCompareShell()
@@ -522,7 +600,11 @@ QString jobSignalScript(const QSocRemoteJobRecord &record, const QString &signal
                  "unknown) echo \"token: unverifiable\"; exit 0;;\n"
                  "differ) echo \"token: pid_reused\"; exit 0;;\n"
                  "esac\n"
-                 "if __err=$(kill %3 \"$__pid\" 2>&1); then echo \"token: signalled\"; "
+                 "__sent=no\n"
+                 "for __t in -\"$__pid\" \"$__pid\"; do\n"
+                 "if __err=$(kill %3 \"$__t\" 2>&1); then __sent=yes; break; fi\n"
+                 "done\n"
+                 "if [ \"$__sent\" = yes ]; then echo \"token: signalled\"; "
                  "else echo \"token: signal_failed\"; fi\n"
                  "[ -z \"$__err\" ] || printf \"detail=%s\\n\" \"$__err\"\n")
                  .arg(shellQuote(record.pidStart), pidStartProbe(QStringLiteral("\"$__pid\"")), signal);

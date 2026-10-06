@@ -8,6 +8,7 @@
 
 #include <QByteArray>
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QString>
 
 #include <atomic>
@@ -62,6 +63,8 @@ public:
      *              Empty sends EOF at once.
      * @param captureBytes When positive, stdout and stderr each keep at most
      *                     this many bytes as head and tail around a marker.
+     * @details A stop asked through the session's abort probe after the call
+     *          began ends it like @ref requestAbort, with `aborted` set.
      */
     Result run(
         const QString    &command,
@@ -99,6 +102,12 @@ private:
 
     bool waitInternal(bool requestInFlight);
 
+    /** @brief Whether this call or the session's abort probe asked to stop. */
+    bool stopRequested();
+
+    /** @brief Record why a wait gave up: a stop, or the clock. */
+    void noteGaveUp(Result &result) const;
+
     /**
      * @brief Release a channel, driving the non-blocking free to completion.
      * @details An EAGAIN return released nothing and left the channel
@@ -124,6 +133,7 @@ private:
     QSocSshSession   &m_session;
     std::atomic<bool> m_abort{false};
     QDeadlineTimer    m_deadline;
+    QElapsedTimer     m_probeClock;
     bool              m_transportDead = false;
 };
 

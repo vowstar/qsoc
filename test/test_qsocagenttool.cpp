@@ -691,7 +691,7 @@ private slots:
 
         QString result = tool.execute(args);
 
-        QVERIFY(result.contains("exited with code 42"));
+        QVERIFY(result.startsWith("status: failed\nexit_code: 42\n"));
     }
 
     /* Documentation Tool Tests */

@@ -530,12 +530,18 @@ private:
         }
         if (runtime_ && method == "complete") {
             const QString query = params.value("query").toString();
-            const auto    paths = runtime_->isRemote()
-                                      ? completion_.completeRemote(
-                                            runtime_->remoteConnection()->session(),
-                                            runtime_->workingDirectory(),
-                                            query)
-                                      : completion_.complete(runtime_->workingDirectory(), query);
+            /* A remote exec in flight turns the event loop; the session is
+             * not free for a scan until it returns. */
+            if (runtime_->isRemote() && runtime_->remoteConnection()->operationInFlight()) {
+                sendReply(id, {{"items", QJsonArray()}, {"query", query}});
+                return;
+            }
+            const auto paths = runtime_->isRemote()
+                                   ? completion_.completeRemote(
+                                         runtime_->remoteConnection()->session(),
+                                         runtime_->workingDirectory(),
+                                         query)
+                                   : completion_.complete(runtime_->workingDirectory(), query);
             sendReply(id, {{"items", QJsonArray::fromStringList(paths)}, {"query", query}});
             return;
         }

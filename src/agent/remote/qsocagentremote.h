@@ -307,6 +307,18 @@ public:
      */
     QSocRemoteJobLedger *jobs() { return &m_jobs; }
 
+    /** @brief Jobs root verified on the bound transport, empty until one is. */
+    QString verifiedJobsRoot() const
+    {
+        return m_jobsRootGeneration == m_generation ? m_jobsRoot : QString();
+    }
+    /** @brief Remember @p root as verified for the bound transport; empty forgets it. */
+    void setVerifiedJobsRoot(const QString &root)
+    {
+        m_jobsRoot           = root;
+        m_jobsRootGeneration = m_generation;
+    }
+
     /** @brief Polls @ref jobs on this binding; owned by the connection. */
     QSocRemoteJobWatcher *watcher() const { return m_watcher.get(); }
 
@@ -496,6 +508,8 @@ private:
     QSocMachine                                                   m_host;
     QString                                                       m_shellPreference;
     QSocRemoteJobLedger                                           m_jobs;
+    QString                                                       m_jobsRoot;
+    Generation                                                    m_jobsRootGeneration = 0;
     std::unique_ptr<QSocWorkspaceFs>                              m_fs;
     std::unique_ptr<QSocRemoteJobWatcher>                         m_watcher;
     int                                                           m_operations           = 0;

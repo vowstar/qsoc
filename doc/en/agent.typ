@@ -622,8 +622,11 @@ stops the current step and continues with that input; otherwise it stops the
 run. Conversation history and completed tool results are preserved. The active
 tool may already have changed external state.
 
-*ESC* is not processed while a synchronous remote command is running. Losing
-its SSH channel does not guarantee that the remote process has stopped.
+*ESC* also stops a running remote `bash` call, `!` line or SFTP transfer
+within about a second. A stopped remote `bash` command is killed on the host;
+when the host refuses the signal, the result gives a `job_id` for
+`bash_manage`. A stop that arrives while an SSH request is still unanswered
+leaves the session unusable until it reconnects.
 
 == Decision Flow
 <agent-decision-flow>
@@ -674,7 +677,14 @@ The agent provides the following tools through natural language:
   `write_file` require the file to have been read first and reject a file
   changed on disk since that read (local and remote)
 - *Shell*: `bash` (synchronous, or `background=true` for background jobs),
-  `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. A
+  `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. Both
+  take the same parameters locally and on a remote host: `command`,
+  `timeout` (milliseconds, default 60000; `timeout_ms` is accepted for it),
+  `working_directory`, `background` and `max_output` for `bash`; `action`
+  (`status`, `wait`, `output`, `kill`, `terminate`), `timeout` and
+  `max_lines` for `bash_manage`, with `process_id` locally and `job_id`
+  remotely. A result starts with `status:` and `exit_code:` lines, then the
+  merged output. A command that reads standard input sees end of file. A
   second blocking shell call from the same agent is rejected; different
   sub-agents can block independently. Use `background=true` for background
   concurrency. A terminal status, wait, or stop returns final output and
@@ -955,9 +965,10 @@ at `next_offset` until `eof` is true. Each page contains complete characters.
 Repeated reads do not create new artifacts.
 
 The capture contains the text that reached the agent. A source tool can
-truncate its output before returning it. Local `bash` keeps the first and last
-2 MiB of output longer than 4 MiB, and remote `bash` keeps the first and last
-1 MiB of each stream longer than 2 MiB. The cut reads
+truncate its output before returning it. `bash` and a local `!` line keep the
+first and last 2 MiB of output longer than 4 MiB. A remote `!` line, and remote
+`bash` in a workspace where it cannot create job directories, keep the first
+and last 1 MiB of each stream longer than 2 MiB. The cut reads
 `[... N bytes omitted ...]`. A return larger than `agent.tool_artifact_bytes`
 is saved the same way. `source_completeness` is `truncated` when the saved
 text has such a cut or the source reports truncation, and `unknown`
@@ -1918,7 +1929,7 @@ failure rather than a wait:
   its timeout to finish. Only once the budget is spent does closing a handle
   fall back to its own separate two-second window, so cleanup is bounded
   rather than skipped. The interactive `!` shell escape is bounded too, at
-  thirty seconds, and Esc does not interrupt it before then.
+  fifteen minutes, and Esc stops it sooner.
 - The socket carries TCP keepalive as a second line of detection. How long
   the kernel takes to declare a silent peer dead is platform dependent and
   partly outside QSoC's control: the requested schedule is a 15-second idle
@@ -2005,8 +2016,10 @@ because retrying a change that already landed applies it twice.
 Workspace tools operate on the remote host (SFTP + SSH exec):
 
 - `read_file`, `write_file`, `list_files`, `edit_file`
-- `bash` (with optional `background=true` for detached jobs)
-- `bash_manage` (status/output/terminate/kill for backgrounded jobs)
+- `bash` (with optional `background=true` for detached jobs). A command
+  that outlives its `timeout` keeps running as a background job and the
+  result gives its `job_id`, as a local command gives a `process_id`
+- `bash_manage` (status/wait/output/terminate/kill for jobs)
 - `monitor`, `monitor_stop` (remote background job over the session, local
   notification stream)
 - `path_context` (remote root, cwd, writable dirs, added writable dirs)
@@ -2174,6 +2187,18 @@ then signalling a stranger. When either check cannot be answered, or answers
 no, nothing is signalled and the result says so as uncertain rather than
 reporting a kill that did not happen. A reconnect alone does not block a
 signal: the link is not the job.
+
+`bash` without `background` runs the same way and waits up to `timeout` for
+the job to end. A job that ends in time returns its output and its directory
+is removed. When the workspace has no room for job directories, the command
+runs over the SSH channel alone and cannot outlive the call. `terminate`
+sends SIGTERM and, when the job still runs five seconds later, SIGKILL.
+`wait` returns the output once the job ends, or its last lines when `timeout`
+runs out first. A background or timed-out job whose output grows past
+`max_output` bytes (default 5 MB) is killed at the next check, and
+`bash_manage status` says why. Stopping a job from the task panel returns at
+once: SIGTERM goes out with the next check, and SIGKILL follows when the job
+still runs five seconds later.
 
 While a job runs, the session checks it about every five seconds, or every
 second while a monitor runs. A job that ends on its own shows its result in the

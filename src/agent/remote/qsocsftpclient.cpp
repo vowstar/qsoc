@@ -24,17 +24,26 @@ constexpr int kCleanupMs = 2000;
  * meaningless. 8 outgoing chunks of MAX_SFTP_OUTGOING_SIZE. */
 constexpr qint64 kWriteWindowBytes = 8 * 30000;
 
+/* A cleanup window: its own budget, and deaf to a stop the user asked for,
+ * because abandoning a close or an unlink strands what it was releasing. */
 class DeadlineOverride
 {
 public:
-    DeadlineOverride(QDeadlineTimer *slot, QDeadlineTimer deadline)
+    DeadlineOverride(QDeadlineTimer *slot, QDeadlineTimer deadline, bool *cleaning)
         : m_slot(slot)
         , m_saved(*slot)
+        , m_cleaning(cleaning)
+        , m_savedCleaning(*cleaning)
     {
-        *m_slot = deadline;
+        *m_slot     = deadline;
+        *m_cleaning = true;
     }
 
-    ~DeadlineOverride() { *m_slot = m_saved; }
+    ~DeadlineOverride()
+    {
+        *m_slot     = m_saved;
+        *m_cleaning = m_savedCleaning;
+    }
 
     DeadlineOverride(const DeadlineOverride &)            = delete;
     DeadlineOverride &operator=(const DeadlineOverride &) = delete;
@@ -42,6 +51,8 @@ public:
 private:
     QDeadlineTimer *m_slot;
     QDeadlineTimer  m_saved;
+    bool           *m_cleaning;
+    bool            m_savedCleaning;
 };
 
 /* Same dir as the final path; dot-prefix hides it in most ls output. The
@@ -72,12 +83,16 @@ QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, int budgetMs)
 QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, QDeadlineTimer deadline)
     : m_client(client)
     , m_owner(!client->m_opActive)
+    , m_foreign(m_owner && client->m_session.inOperation())
     , m_operation(client->m_session)
 {
     if (m_owner) {
         m_client->m_opActive             = true;
         m_client->m_lastFailureUncertain = false;
-        m_client->m_deadline             = deadline;
+        m_client->m_aborted              = false;
+        m_client->m_reentered            = m_foreign;
+        ++m_client->m_operationsBegun;
+        m_client->m_deadline = deadline;
     }
 }
 
@@ -150,6 +165,10 @@ bool QSocSftpClient::wait()
     };
 
     if (m_deadline.hasExpired()) {
+        return giveUp();
+    }
+    if (!m_cleaning && m_session.abortRequested()) {
+        m_aborted = true;
         return giveUp();
     }
     const qint64 remaining = m_deadline.remainingTime();
@@ -236,6 +255,9 @@ void QSocSftpClient::setCreateObserver(std::function<void()> observer)
  * agent does not read a dead host as a slow one. */
 QString QSocSftpClient::waitFailureText(const QString &timeoutText) const
 {
+    if (m_aborted) {
+        return QStringLiteral("Interrupted by the user");
+    }
     const QString unusable = m_session.unusableText();
     return unusable.isEmpty() ? timeoutText : unusable;
 }
@@ -249,7 +271,7 @@ bool QSocSftpClient::drainClose(LIBSSH2_SFTP_HANDLE *handle)
      * small one of its own rather than inheriting an expired clock. Its
      * final code still matters: an unfinished close leaves a server-side
      * handle open and libssh2 mid-request. */
-    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs), &m_cleaning);
     int              rc = 0;
     while ((rc = libssh2_sftp_close(handle)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
@@ -268,7 +290,7 @@ bool QSocSftpClient::closeDir(LIBSSH2_SFTP_HANDLE *handle)
     if (handle == nullptr) {
         return true;
     }
-    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs), &m_cleaning);
     int              rc = 0;
     while ((rc = libssh2_sftp_closedir(handle)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
@@ -287,7 +309,7 @@ bool QSocSftpClient::drainUnlink(const QByteArray &path)
     /* The budget comes first: releasing a stranded subsystem and opening the
      * replacement are both requests, and both would otherwise inherit an
      * expired clock and strand themselves on the spot. */
-    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs), &m_cleaning);
     if (!rebuildSubsystem()) {
         return false;
     }
@@ -340,6 +362,10 @@ QSocSftpClient::StepOutcome QSocSftpClient::renameStep(const QByteArray &from, c
 
 bool QSocSftpClient::open(QString *errorMessage)
 {
+    if (m_reentered) {
+        setError(QStringLiteral("SSH session is busy with another operation"), errorMessage);
+        return false;
+    }
     /* Usability before the cached handle: reusing an SFTP channel on a
      * session that died, or on one stranded mid-request, hands every later
      * call a subsystem that cannot answer correctly. */
@@ -390,7 +416,7 @@ void QSocSftpClient::close()
         m_stranded = false;
         return;
     }
-    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs));
+    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs), &m_cleaning);
     int              rc = 0;
     while ((rc = libssh2_sftp_shutdown(m_sftp)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {

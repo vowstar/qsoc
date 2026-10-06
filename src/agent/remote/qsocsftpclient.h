@@ -249,6 +249,9 @@ public:
      */
     qint64 lastBytesAcked() const { return m_lastBytesAcked; }
 
+    /** @brief SFTP operations begun on this client, nested ones not counted. */
+    quint64 operationsBegun() const { return m_operationsBegun; }
+
     /**
      * @brief Budget for one operation, measured from its entry. Default 30000.
      * @details Bounds every EAGAIN retry loop, including the ones a dead
@@ -291,6 +294,7 @@ private:
     private:
         QSocSftpClient           *m_client;
         bool                      m_owner;
+        bool                      m_foreign; /* another session operation is running */
         QSocSshSession::Operation m_operation;
     };
 
@@ -358,7 +362,11 @@ private:
     bool            m_opActive             = false;
     bool            m_lastFailureUncertain = false;
     bool            m_stranded             = false;
+    bool            m_cleaning             = false; /* inside a cleanup window */
+    bool            m_aborted              = false; /* the user stopped this operation */
+    bool            m_reentered            = false; /* started inside another operation */
     qint64          m_lastBytesAcked       = 0;
+    quint64         m_operationsBegun      = 0;
     QString         m_lastError;
 
     std::function<void(PublishStage)> m_publishObserver;

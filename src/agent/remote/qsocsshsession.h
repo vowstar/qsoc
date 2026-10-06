@@ -139,7 +139,7 @@ public:
         explicit Operation(QSocSshSession &session)
             : m_session(session)
         {
-            ++m_session.m_operations;
+            m_session.enterOperation();
         }
         ~Operation() { --m_session.m_operations; }
         Operation(const Operation &)            = delete;
@@ -151,6 +151,18 @@ public:
 
     /** @brief Whether a blocking operation is running on this session. */
     bool inOperation() const { return m_operations > 0; }
+
+    /** @brief Exec, SFTP and connect operations begun, nested ones not counted. */
+    quint64 operationsBegun() const { return m_operationsBegun; }
+
+    /**
+     * @brief Whether the user asked to stop the operation now running.
+     * @details Consults the abort probe, which also keeps the event loop
+     *          turning. Only a stop asked for after the outermost operation
+     *          began counts: a probe still reporting an earlier stop must not
+     *          cut short a poll or a cleanup that runs after it.
+     */
+    bool abortRequested();
 
     /**
      * @brief Take ownership of a channel whose release could not finish.
@@ -392,6 +404,11 @@ private:
     /* Channels libssh2 would not release yet, oldest first. */
     QList<LIBSSH2_CHANNEL *> m_stranded;
     int                      m_operations = 0;
+    /* The probe read no stop when the outermost operation began. */
+    bool    m_abortArmed      = false;
+    quint64 m_operationsBegun = 0;
+
+    void enterOperation();
 };
 
 #endif // QSOCSSHSESSION_H

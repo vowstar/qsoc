@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/runtime/qsocagentruntime_p.h"
+#include "common/qsocboundedcapture.h"
 #include "common/qsocshellexecutor.h"
 #include "common/qsocshellpath.h"
 #include "qsoc_test.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -40,6 +42,24 @@ private slots:
         QVERIFY2(
             out.endsWith(QStringLiteral("(shell: %1)\n").arg(localShellExecutor().summary())),
             qPrintable(out));
+    }
+
+    /* Counterexample: a `!` line read all its output into memory, and a line
+     * reading stdin waited on a pipe nobody closed. */
+    void aLocalLineKeepsBoundedOutputAndNoStdin()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QElapsedTimer clock;
+        clock.start();
+        const QString out = QSocAgentRuntimeInternal::runLocalShellEscape(
+            QStringLiteral("cat; yes | head -c 20000000; echo LAST"), dir.path(), {});
+        QVERIFY2(clock.elapsed() < 20000, qPrintable(QString::number(clock.elapsed())));
+        QVERIFY(QSocBoundedCapture::isElided(out));
+        QVERIFY2(
+            out.toUtf8().size() <= QSocBoundedCapture::kDefaultLimit + 256,
+            qPrintable(out.right(80)));
+        QVERIFY2(out.contains(QStringLiteral("LAST\n")), qPrintable(out.right(80)));
     }
 
     void aLocalLineRunsUnderTheResolvedExecutor()

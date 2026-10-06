@@ -860,6 +860,19 @@ bool QSocSshSession::connectAborted() const
     return m_abortProbe && m_abortProbe();
 }
 
+void QSocSshSession::enterOperation()
+{
+    if (m_operations++ == 0) {
+        ++m_operationsBegun;
+        m_abortArmed = !connectAborted();
+    }
+}
+
+bool QSocSshSession::abortRequested()
+{
+    return m_abortArmed && connectAborted();
+}
+
 QString QSocSshSession::promptSecret(const QString &prompt)
 {
     QString secret;

@@ -32,6 +32,7 @@
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "common/qllmservice.h"
+#include "common/qsocboundedcapture.h"
 #include "common/qsocconfig.h"
 #include "common/qsoccron.h"
 #include "common/qsoclinediff.h"
@@ -85,6 +86,7 @@ QString QSocAgentRuntimeInternal::runLocalShellEscape(
     process.setChildProcessModifier([] { ::setsid(); });
 #endif
     process.setProcessChannelMode(QProcess::MergedChannels);
+    process.setStandardInputFile(QProcess::nullDevice());
     const QSocMachine machine = localMachine();
     if (machineShellEscapeMode(machine) == QSocShellEscapeMode::Passthrough)
         return QStringLiteral("Error: no shell to run the line (%1)\n").arg(machine.shellError);
@@ -101,7 +103,10 @@ QString QSocAgentRuntimeInternal::runLocalShellEscape(
     process.start();
     if (!process.waitForStarted())
         return process.errorString() + QLatin1Char('\n');
-    QEventLoop loop;
+    QSocBoundedCapture capture;
+    const auto         drain = [&] { capture.append(process.readAll()); };
+    QEventLoop         loop;
+    QObject::connect(&process, &QProcess::readyReadStandardOutput, &loop, drain);
     QObject::connect(&process, &QProcess::finished, &loop, &QEventLoop::quit);
     QTimer cancellation;
     cancellation.setInterval(25);
@@ -125,7 +130,8 @@ QString QSocAgentRuntimeInternal::runLocalShellEscape(
         if (!result.isEmpty() && !result.endsWith(QLatin1Char('\n')))
             result += QLatin1Char('\n');
     };
-    append(QSocShellPath::decodeConsoleOutput(process.readAll()));
+    drain();
+    append(QSocShellPath::decodeConsoleOutput(capture.bytes()));
     if (process.exitCode() != 0)
         append(QStringLiteral("(exit code: %1)").arg(process.exitCode()));
     append(QStringLiteral("(shell: %1)").arg(shellEscapeShellName(machine)));

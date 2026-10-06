@@ -99,6 +99,9 @@ QString jobScriptEvidence(const QString &scriptOutput);
  */
 QString parseJobStatusExitCode(const QString &statusOutput);
 
+/** @brief Value of the `key=` line a job script printed ahead of the log, or empty. */
+QString parseJobStatusField(const QString &statusOutput, const QString &key);
+
 /**
  * @brief One background job as the client last observed it.
  * @details The three identity fields are what make a pid signallable. Each
@@ -122,6 +125,7 @@ struct QSocRemoteJobRecord
     bool    monitor    = false; /**< Launched by the monitor tool, not by bash. */
     bool    stopped    = false; /**< Its owner signalled it to stop. */
     QString ownerId;            /**< Agent that launched it; "user" for none. */
+    qint64  maxOutputBytes = 0; /**< Output cap the watcher enforces; 0 for none. */
 };
 
 /** @brief New process-independent opaque job id. */
@@ -304,6 +308,10 @@ QString pidStartProbe(const QString &pidRef);
  *          one that must survive the link dropping: it ignores SIGHUP before
  *          it spawns anything, so `exit_code` is still written for a job that
  *          finished after the channel closed.
+ *
+ *          It creates the job directory itself and exits 3 with
+ *          `token: jobs_root_moved`, launching nothing, when the parent jobs
+ *          root is missing or it or its parent became a symlink.
  * @param jobDir Absolute remote job directory.
  * @param cwd Working directory for the payload.
  * @param jobId Id echoed back on stdout.
@@ -342,6 +350,30 @@ QString jobStatusScript(const QString &jobDir, const QSocRemoteJobRecord &record
 QString jobOutputScript(const QString &jobDir, int maxLines, const QSocRemoteJobRecord &record);
 
 /**
+ * @brief Script waiting up to @p waitMs for a job to end.
+ * @details Prints `exit_code=` once the job wrote one, or `running=yes` when
+ *          the wait ran out, then @ref jobLogFence and the log: all of it once
+ *          the job ended, its last @p tailLines lines while it runs. The wait
+ *          is counted on the host, so a script whose caller went away ends on
+ *          its own instead of polling for the life of the job.
+ * @param removeWhenEnded Delete the job directory after printing an ended job.
+ */
+QString jobWaitScript(const QString &jobDir, int waitMs, int tailLines, bool removeWhenEnded);
+
+/** @brief What a wait script reported. */
+struct QSocRemoteJobWait
+{
+    bool       answered = false; /**< The fence arrived, so the state lines are complete. */
+    bool       ended    = false; /**< The job wrote its exit code. */
+    int        exitCode = -1;
+    QByteArray output; /**< The whole log once ended, else its last lines. */
+    QString    head;   /**< Everything ahead of the fence. */
+};
+
+/** @brief Parse the stdout of a script that ends with @ref jobWaitScript. */
+QSocRemoteJobWait parseJobWait(const QByteArray &stdoutBytes);
+
+/**
  * @brief Script signalling one job, with every guard ahead of the signal.
  * @details The one place a recorded identity is compared against a live one to
  *          decide whether to signal. Each mismatch path prints its token and
@@ -356,6 +388,9 @@ QString jobOutputScript(const QString &jobDir, int maxLines, const QSocRemoteJob
  *          pid against are @p record's, baked in as literals. A recorded
  *          `unknown:` therefore refuses the signal instead of falling back to
  *          a value the host could rewrite.
+ *
+ *          The verified pid leads its own process group, so the signal goes
+ *          to that group, and to the pid alone where the host made none.
  * @param record What this session recorded for the job.
  * @param signal Signal flag for `kill`, e.g. `-TERM`.
  */

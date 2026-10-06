@@ -6,6 +6,7 @@
 #include "common/qsocboundedcapture.h"
 #include "qsoc_test.h"
 
+#include <QElapsedTimer>
 #include <QtCore>
 #include <QtTest>
 
@@ -122,11 +123,29 @@ private slots:
         const QString     result = bash.execute(
             {{"command", "seq 1 1000000; echo ERROR_TAIL; exit 3"}, {"timeout", 30000}});
         QVERIFY2(
-            result.startsWith("Command exited with code 3:\n1\n2\n3\n"),
+            result.startsWith("status: failed\nexit_code: 3\n1\n2\n3\n"),
             qPrintable(result.left(80)));
         QVERIFY(result.endsWith("ERROR_TAIL\n"));
         QVERIFY(QSocBoundedCapture::isElided(result));
         QVERIFY(result.toUtf8().size() <= QSocBoundedCapture::kDefaultLimit + 64);
+#endif
+    }
+
+    /* Counterexample: stdin was an open pipe, so a command reading it waited
+     * for the whole timeout and was left running. */
+    void aCommandReadingStdinSeesEndOfFile()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("The bash tool is unavailable on Windows");
+#else
+        QSocToolShellBash bash;
+        QElapsedTimer     clock;
+        clock.start();
+        const QString result = bash.execute({{"command", "cat; echo after-cat"}, {"timeout", 2000}});
+        QVERIFY2(clock.elapsed() < 1500, qPrintable(QString::number(clock.elapsed())));
+        QVERIFY2(result.contains(QStringLiteral("after-cat")), qPrintable(result));
+        QVERIFY2(!result.contains(QStringLiteral("STILL RUNNING")), qPrintable(result));
+        QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
 #endif
     }
 
@@ -142,7 +161,7 @@ private slots:
               "/proc/$$/fd/1)\""},
              {"max_output", 1000000},
              {"timeout", 30000}});
-        QVERIFY2(result.startsWith("y\ny\n"), qPrintable(result.left(80)));
+        QVERIFY2(result.startsWith("status: ok\nexit_code: 0\ny\ny\n"), qPrintable(result.left(80)));
         const QRegularExpressionMatch blocks
             = QRegularExpression(QStringLiteral("BLOCKS=(\\d+)\n$")).match(result);
         QVERIFY2(blocks.hasMatch(), qPrintable(result.right(200)));
@@ -188,7 +207,7 @@ private slots:
             &owner,
             {},
             record);
-        QVERIFY(text.startsWith("Error:"));
+        QVERIFY(text.startsWith("status: ok\nexit_code: 0\nError:"));
         QCOMPARE(outcome, QSocToolResultStatus::Ok);
         registry.executeTool("bash", {{"command", "exit 7"}}, &owner, {}, record);
         QCOMPARE(outcome, QSocToolResultStatus::Failed);
@@ -665,11 +684,11 @@ private slots:
         QCOMPARE(
             sameOwnerManage,
             QString("Error: Another blocking shell call is active for this agent."));
-        QCOMPARE(otherOwnerBash, QString("nested"));
+        QCOMPARE(otherOwnerBash, QString("status: ok\nexit_code: 0\nnested\n"));
         QVERIFY2(
             otherOwnerManage.startsWith("Process still running after additional 20ms wait."),
             qPrintable(otherOwnerManage));
-        QCOMPARE(outerBash, QString("outer"));
+        QCOMPARE(outerBash, QString("status: ok\nexit_code: 0\nouter\n"));
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 2);
         QSocToolShellBash::killAllActive();
         QCOMPARE(QSocToolShellBash::activeProcessCount(), 0);
@@ -702,7 +721,7 @@ private slots:
             = registry.executeTool(QStringLiteral("bash"), {{"command", "sleep 0.08; printf outer"}});
 
         QCOMPARE(nested, QString("Error: Another blocking shell call is active for this agent."));
-        QCOMPARE(outer, QString("outer"));
+        QCOMPARE(outer, QString("status: ok\nexit_code: 0\nouter\n"));
         const QString after = registry.executeTool(
             QStringLiteral("bash_manage"),
             {{"process_id", processId}, {"action", "wait"}, {"timeout", 20}});
@@ -788,8 +807,8 @@ private slots:
         const QString outer = registry.executeTool(
             QStringLiteral("bash"), {{"command", "sleep 0.08; printf outer"}}, originalAddress);
 
-        QCOMPARE(nested, QString("replacement"));
-        QCOMPARE(outer, QString("outer"));
+        QCOMPARE(nested, QString("status: ok\nexit_code: 0\nreplacement\n"));
+        QCOMPARE(outer, QString("status: ok\nexit_code: 0\nouter\n"));
 #endif
     }
 
@@ -867,7 +886,7 @@ private slots:
             QString(
                 "Error: Another blocking shell call is active for this agent. Use "
                 "background=true for concurrent commands."));
-        QCOMPARE(nestedResult, QString("(no output)"));
+        QCOMPARE(nestedResult, QString("status: ok\nexit_code: 0\n(no output)\n"));
         QVERIFY2(
             nestedBackgroundResult.startsWith("Started in background."),
             qPrintable(nestedBackgroundResult));
@@ -914,7 +933,7 @@ private slots:
         QCOMPARE(
             bash.execute(
                 {{"command", "printf ready"}, {"working_directory", workDir.toStdString()}}),
-            QString("ready"));
+            QString("status: ok\nexit_code: 0\nready\n"));
 
         const QString selfBackgroundedFile = QDir(workDir).filePath(
             QStringLiteral("self-backgrounded.pid"));
@@ -929,7 +948,7 @@ private slots:
             bash.execute(
                 {{"command", "sleep 2 & printf '%s' $! > self-backgrounded.pid"},
                  {"working_directory", workDir.toStdString()}}),
-            QString("(no output)"));
+            QString("status: ok\nexit_code: 0\n(no output)\n"));
         QFile selfBackgroundedPidFile(selfBackgroundedFile);
         QVERIFY(selfBackgroundedPidFile.open(QIODevice::ReadOnly | QIODevice::Text));
         selfBackgroundedPid
@@ -954,7 +973,7 @@ private slots:
         QCOMPARE(
             other.execute(
                 {{"command", "printf after-delete"}, {"working_directory", workDir.toStdString()}}),
-            QString("after-delete"));
+            QString("status: ok\nexit_code: 0\nafter-delete\n"));
 
         auto         *ownerA      = new QSocToolShellBash;
         auto         *ownerB      = new QSocToolShellBash;

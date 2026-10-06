@@ -68,6 +68,7 @@ public:
     static constexpr qint64 kLogChunk         = 64 * 1024;
     static constexpr int    kTailLines        = 40;
     static constexpr int    kTailBytes        = 4000;
+    static constexpr int    kStopGraceMs      = 5000;
 
     explicit QSocRemoteJobWatcher(QSocRemoteConnection *conn, QObject *parent = nullptr);
 
@@ -82,6 +83,17 @@ public:
 
     /** @brief Re-evaluate the timer after the ledger or the transport changed. */
     void kick();
+
+    /**
+     * @brief Stop @p jobId from the next tick: SIGTERM, then SIGKILL after
+     *        the grace period if it still runs.
+     * @details Returns at once; the signal rides on the next poll, which is
+     *          brought forward, so the caller never waits on the link.
+     */
+    void requestStop(const QString &jobId);
+
+    /** @brief Why the watcher killed @p jobId, empty when it did not. */
+    QString killReason(const QString &jobId) const { return m_killReasons.value(jobId); }
 
     /** @brief Whether the timer is running. */
     bool isActive() const { return m_timer.isActive(); }
@@ -107,21 +119,35 @@ signals:
     void jobSettled(const QString &jobId, int exitCode, const QByteArray &tail);
 
 private:
+    /** @brief A signal waiting for the next tick. */
+    struct PendingSignal
+    {
+        QString signal;  /**< kill argument, e.g. "-TERM". */
+        bool    byOwner; /**< The owner asked: a delivered one marks the job stopped. */
+    };
+
     QList<Probe> probes() const;
+    QString      signalScript() const;
+    void         applySignals(const QByteArray &output);
+    void         queueSignal(const QString &jobId, const QString &signal, bool byOwner);
+    void         enforce(const Report &report);
     void         apply(const Report &report);
     void         settle(const QString &jobId, int exitCode, const QByteArray &tail);
     void         rearm();
 
-    QSocRemoteConnection      *m_conn = nullptr;
-    QTimer                     m_timer;
-    QHash<QString, qint64>     m_offsets;    /* followed jobs, stdout */
-    QHash<QString, qint64>     m_errOffsets; /* followed jobs, stderr */
-    QHash<QString, QByteArray> m_tails;      /* unfollowed jobs */
-    QHash<QString, int>        m_quiet;      /* ticks a job read "not running" with no exit code */
-    QSet<QString>              m_done;       /* reported, never polled again */
-    int                        m_failures = 0;
-    int                        m_skipped  = 0;
-    bool                       m_enabled  = false;
+    QSocRemoteConnection         *m_conn = nullptr;
+    QTimer                        m_timer;
+    QHash<QString, qint64>        m_offsets;    /* followed jobs, stdout */
+    QHash<QString, qint64>        m_errOffsets; /* followed jobs, stderr */
+    QHash<QString, QByteArray>    m_tails;      /* unfollowed jobs */
+    QHash<QString, int>           m_quiet;    /* ticks a job read "not running" with no exit code */
+    QSet<QString>                 m_done;     /* reported, never polled again */
+    QHash<QString, PendingSignal> m_signals;  /* sent with the next poll */
+    QHash<QString, qint64>        m_escalate; /* SIGKILL due at this epoch ms */
+    QHash<QString, QString>       m_killReasons;
+    int                           m_failures = 0;
+    int                           m_skipped  = 0;
+    bool                          m_enabled  = false;
 };
 
 #endif // QSOCREMOTEJOBWATCHER_H

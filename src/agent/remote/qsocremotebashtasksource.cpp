@@ -5,13 +5,9 @@
 
 #include "agent/qsoctaskeventqueue.h"
 #include "agent/remote/qsocagentremote.h"
-#include "agent/remote/qsocremotehost.h"
 #include "agent/remote/qsocremotejobwatcher.h"
-#include "agent/remote/qsocsshexec.h"
 
 namespace {
-
-constexpr int kExecMs = 5000;
 
 QSocTask::Status endedStatus(bool stopped, int exitCode)
 {
@@ -80,19 +76,12 @@ QString QSocRemoteBashTaskSource::tailFor(const QString &id, int maxBytes) const
     return maxBytes > 0 ? tail.right(maxBytes) : tail;
 }
 
+/* Queued on the watcher, so the UI never waits on the link. */
 bool QSocRemoteBashTaskSource::killTask(const QString &id)
 {
-    if (statusOf(id) != QSocTask::Status::Running || !conn_->isUsable()
-        || conn_->operationInFlight())
+    if (statusOf(id) != QSocTask::Status::Running || !conn_->isUsable())
         return false;
-    const QSocRemoteExec request = remoteScriptExec(
-        conn_->host(), jobSignalScript(conn_->jobs()->record(id), QStringLiteral("-TERM")), false);
-    QSocSshExec exec(*conn_->session());
-    const auto  token = parseJobToken(
-        QString::fromUtf8(exec.run(request.command, kExecMs, request.input).stdoutBytes));
-    if (token != QSocRemoteJobToken::Signalled)
-        return false;
-    conn_->jobs()->markStopped(id);
+    conn_->watcher()->requestStop(id);
     emit tasksChanged();
     return true;
 }

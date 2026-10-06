@@ -181,7 +181,7 @@ private slots:
         QCOMPARE(empty.exitCode, 0);
     }
 
-    void theBashToolRunsALoginShellFromStdin()
+    void theBashToolRunsALoginShellWithNoStdin()
     {
         QSOC_REQUIRE_SSHD(m_fixture);
         const Paths      paths = makePaths(QStringLiteral("bash_tool"));
@@ -190,18 +190,15 @@ private slots:
         QString err;
         QVERIFY2(runtime.connectRemote(requestFor(paths), &err), qPrintable(err));
 
-        /* `cat` would wait for EOF forever under the old exec line; the
-         * script line gives it /dev/null and runs on. */
+        /* `cat` would wait for EOF forever with an open stdin; the command
+         * gets /dev/null and runs on. The old `timeout_ms` name still works. */
         const QString out = runTool(
             runtime,
             "bash",
             json{
-                {"command",
-                 "cat; case $- in *s*) echo from-stdin;; esac; "
-                 "shopt -q login_shell 2>/dev/null && echo login; pwd"},
+                {"command", "cat; shopt -q login_shell 2>/dev/null && echo login; pwd"},
                 {"timeout_ms", 10000}});
         QVERIFY2(out.contains(QStringLiteral("exit_code: 0")), qPrintable(out));
-        QVERIFY2(out.contains(QStringLiteral("from-stdin")), qPrintable(out));
         QVERIFY2(out.contains(paths.work), qPrintable(out));
         if (runtime.agent()->getConfig().remoteMachine.shell.summary().startsWith(
                 QStringLiteral("bash"))) {
@@ -265,7 +262,7 @@ private slots:
         QSocTool *bash = runtime.toolRegistry()->getTool(QStringLiteral("bash"));
         QVERIFY(bash != nullptr);
         QVERIFY(bash->getDescription().contains(QStringLiteral("Only POSIX sh")));
-        const QString out = runTool(runtime, "bash", json{{"command", "ps -o args= -p $$"}});
+        const QString out = runTool(runtime, "bash", json{{"command", "ps -o args= -p $$; true"}});
         QVERIFY2(out.contains(QStringLiteral("sh ")), qPrintable(out));
         QVERIFY2(!out.contains(QStringLiteral("bash")), qPrintable(out));
         runtime.disconnectRemote();

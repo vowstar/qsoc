@@ -6,6 +6,7 @@
 
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocremotejobs.h"
+#include "agent/remote/qsocsshexec.h"
 
 #include <optional>
 
@@ -138,6 +139,7 @@ struct QSocRemoteJobStart
  * @param monitor Whether the monitor tool launched it.
  * @param ownerId Agent identity the job's completion is reported to.
  * @param running Set to the live exec while the launch runs, for abort.
+ * @param maxOutputBytes Output cap the watcher enforces; 0 for none.
  */
 QSocRemoteJobStart startRemoteJob(
     QSocRemoteConnection *conn,
@@ -145,7 +147,11 @@ QSocRemoteJobStart startRemoteJob(
     const QString        &command,
     bool                  monitor,
     const QString        &ownerId,
-    QSocSshExec         **running = nullptr);
+    QSocSshExec         **running        = nullptr,
+    qint64                maxOutputBytes = 0);
+
+/** @brief Output cap of a remote bash job, matching the local default. */
+constexpr qint64 kDefaultJobOutputBytes = qint64{5} * 1024 * 1024;
 
 /** @brief Remote bash: run a shell command over an SSH exec channel. */
 class QSocToolRemoteShellBash : public QSocTool
@@ -163,9 +169,22 @@ public:
     void    abort() override;
 
 private:
-    QSocRemoteConnection  *m_conn    = nullptr;
-    QSocRemotePathContext *m_pathCtx = nullptr;
-    QSocSshExec           *m_running = nullptr;
+    /* Host time a wait script may overrun its own count before the call gives up. */
+    static constexpr int kJobWaitGraceMs = 10000;
+    static constexpr int kSignalExecMs   = 5000;
+
+    /** @brief Run over the exec channel alone, with no job behind it. */
+    QString runAttached(const QString &cmd, const QString &cwd, int timeoutMs);
+    /** @brief Run as a job; one that outlives @p timeoutMs keeps running and is watched. */
+    QString runAsJob(
+        QSocRemoteJobStart *start, const QString &cmd, const QString &cwd, int timeoutMs);
+    /** @brief Kill a job this call started; true when the host delivered the signal. */
+    bool stopJob(const QSocRemoteJobRecord &record);
+
+    QSocRemoteConnection  *m_conn          = nullptr;
+    QSocRemotePathContext *m_pathCtx       = nullptr;
+    QSocSshExec           *m_running       = nullptr;
+    bool                   m_stopRequested = false;
 };
 
 /**
@@ -187,10 +206,24 @@ public:
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
+    void    abort() override;
 
 private:
+    static constexpr int kQueryMs     = 5000;
+    static constexpr int kOutputMs    = 10000;
+    static constexpr int kSignalMs    = 5000;
+    static constexpr int kWaitGraceMs = 10000;
+
+    QSocSshExec::Result runScript(const QString &script, int timeoutMs);
+    QString             status(const QString &jobId, const QString &dir);
+    QString             output(const QString &jobId, const QString &dir, int maxLines);
+    QString             waitFor(const QString &jobId, const QString &dir, int timeoutMs);
+    QString sendSignal(const QString &jobId, const QString &signalArg, bool *signalled = nullptr);
+    QString terminate(const QString &jobId);
+
     QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
+    QSocSshExec           *m_running = nullptr;
 };
 
 /** @brief Remote path_context: the local actions, over the remote workspace. */

@@ -8,6 +8,8 @@
 #include "agent/remote/qsocsshexec.h"
 #include "common/qsocmachine.h"
 
+#include <QDateTime>
+
 namespace {
 
 const QByteArray kJob  = "@@job ";
@@ -108,6 +110,71 @@ void QSocRemoteJobWatcher::kick()
     rearm();
 }
 
+void QSocRemoteJobWatcher::requestStop(const QString &jobId)
+{
+    queueSignal(jobId, QStringLiteral("-TERM"), true);
+    m_escalate.insert(jobId, QDateTime::currentMSecsSinceEpoch() + kStopGraceMs);
+}
+
+void QSocRemoteJobWatcher::queueSignal(const QString &jobId, const QString &signal, bool byOwner)
+{
+    m_signals.insert(jobId, {signal, byOwner});
+    m_failures = 0;
+    QTimer::singleShot(0, this, [this]() { pollOnce(); });
+}
+
+QString QSocRemoteJobWatcher::signalScript() const
+{
+    QString script;
+    for (auto it = m_signals.cbegin(); it != m_signals.cend(); ++it) {
+        script += QStringLiteral("printf '@@sig %s\\n' %1\n(\n%2)\nprintf '@@end\\n'\n")
+                      .arg(
+                          remoteShellQuote(it.key()),
+                          jobSignalScript(m_conn->jobs()->record(it.key()), it->signal));
+    }
+    return script;
+}
+
+void QSocRemoteJobWatcher::applySignals(const QByteArray &output)
+{
+    for (auto it = m_signals.cbegin(); it != m_signals.cend(); ++it) {
+        const QByteArray head  = "@@sig " + it.key().toUtf8() + '\n';
+        const qsizetype  from  = output.indexOf(head);
+        const qsizetype  until = from < 0 ? -1 : output.indexOf(kEnd, from);
+        if (until < 0) {
+            continue;
+        }
+        const QString section = QString::fromUtf8(output.mid(from + head.size(), until - from));
+        if (it->byOwner && parseJobToken(section) == QSocRemoteJobToken::Signalled) {
+            m_conn->jobs()->markStopped(it.key());
+        }
+    }
+    m_signals.clear();
+}
+
+void QSocRemoteJobWatcher::enforce(const Report &report)
+{
+    const QSocRemoteJobRecord record = m_conn->jobs()->record(report.jobId);
+    if (!report.status.contains(QStringLiteral("running=yes"))) {
+        m_escalate.remove(report.jobId);
+        return;
+    }
+    const auto due = m_escalate.constFind(report.jobId);
+    if (due != m_escalate.cend() && QDateTime::currentMSecsSinceEpoch() >= *due) {
+        m_escalate.remove(report.jobId);
+        queueSignal(report.jobId, QStringLiteral("-KILL"), true);
+        return;
+    }
+    const qint64 bytes
+        = parseJobStatusField(report.status, QStringLiteral("output_bytes")).toLongLong();
+    if (record.maxOutputBytes > 0 && bytes > record.maxOutputBytes
+        && !m_killReasons.contains(report.jobId)) {
+        m_killReasons.insert(
+            report.jobId, QStringLiteral("output exceeded %1 bytes").arg(record.maxOutputBytes));
+        queueSignal(report.jobId, QStringLiteral("-KILL"), false);
+    }
+}
+
 QList<QSocRemoteJobWatcher::Probe> QSocRemoteJobWatcher::probes() const
 {
     QList<Probe> out;
@@ -139,18 +206,23 @@ QSocRemoteJobWatcher::Poll QSocRemoteJobWatcher::pollOnce()
         rearm();
         return Poll::Skipped;
     }
-    const QSocRemoteExec request = remoteScriptExec(m_conn->host(), pollScript(asked), false);
-    QSocSshExec          exec(*m_conn->session());
-    const auto           result = exec.run(request.command, kExecTimeoutMs, request.input);
-    if (result.exitCode != 0 || result.timedOut || result.transportDead
+    const QSocRemoteExec request
+        = remoteScriptExec(m_conn->host(), signalScript() + pollScript(asked), false);
+    QSocSshExec exec(*m_conn->session());
+    const auto  result = exec.run(request.command, kExecTimeoutMs, request.input);
+    if (result.exitCode != 0 || result.timedOut || result.aborted || result.transportDead
         || !result.errorText.isEmpty()) {
         ++m_failures;
         rearm();
         return Poll::Failed;
     }
     m_failures = 0;
+    applySignals(result.stdoutBytes);
     for (const Report &report : parsePoll(result.stdoutBytes)) {
         apply(report);
+        if (!m_done.contains(report.jobId)) {
+            enforce(report);
+        }
     }
     rearm();
     return Poll::Polled;
@@ -204,6 +276,7 @@ void QSocRemoteJobWatcher::settle(const QString &jobId, int exitCode, const QByt
     m_offsets.remove(jobId);
     m_errOffsets.remove(jobId);
     m_quiet.remove(jobId);
+    m_escalate.remove(jobId);
     emit jobSettled(jobId, exitCode, tail);
 }
 
@@ -215,6 +288,9 @@ void QSocRemoteJobWatcher::rearm()
     }
     for (auto it = m_tails.begin(); it != m_tails.end();) {
         it = m_conn->jobs()->has(it.key()) ? std::next(it) : m_tails.erase(it);
+    }
+    for (auto it = m_killReasons.begin(); it != m_killReasons.end();) {
+        it = m_conn->jobs()->has(it.key()) ? std::next(it) : m_killReasons.erase(it);
     }
     const QList<Probe> live = probes();
     if (live.isEmpty() || m_conn->session() == nullptr) {

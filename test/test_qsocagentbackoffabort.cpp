@@ -1639,7 +1639,10 @@ private slots:
                 {{"command", "printf '%060000d' 0"},
                  {"working_directory", root.path().toStdString()},
                  {"timeout", 5000}});
-            QCOMPARE(tool.value, QString(60000, QLatin1Char('0')));
+            QCOMPARE(
+                tool.value,
+                QStringLiteral("status: ok\nexit_code: 0\n") + QString(60000, QLatin1Char('0'))
+                    + QLatin1Char('\n'));
             captured = tool.value;
         } else if (sourceKind == 2) {
             AttachmentTool attachment;
@@ -1748,14 +1751,14 @@ private slots:
         QVERIFY(agent.bindToolResultStore(root.filePath("artifacts"), "session"));
         QCOMPARE(agent.run("run once"), QStringLiteral("done"));
 
-        QString expected = QStringLiteral("Command exited with code 3:\n");
+        QString expected = QStringLiteral("status: failed\nexit_code: 3\n");
         for (int line = 1; line <= 30000; ++line)
             expected += QString::number(line) + QLatin1Char('\n');
         expected += QStringLiteral("ERROR_TAIL\n");
 
         const auto    history = agent.getMessages();
         const QString view    = QString::fromStdString(history[2]["content"].get<std::string>());
-        QVERIFY2(view.startsWith("Command exited with code 3:\n1\n2\n"), qPrintable(view.left(80)));
+        QVERIFY2(view.startsWith("status: failed\nexit_code: 3\n1\n2\n"), qPrintable(view.left(80)));
         QVERIFY2(view.endsWith("ERROR_TAIL\n"), qPrintable(view.right(80)));
         QVERIFY(QSocRequestUsage::estimateText(view) <= 4096);
         const auto refs = QSocAgent::artifactReferences(history);

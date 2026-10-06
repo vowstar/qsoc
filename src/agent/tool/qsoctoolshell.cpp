@@ -3,6 +3,8 @@
 
 #include "agent/tool/qsoctoolshell.h"
 
+#include "agent/qsocshellcommand.h"
+
 #include "common/qsocmachine.h"
 #include "common/qsocshellpath.h"
 
@@ -579,31 +581,7 @@ QString QSocToolShellBash::getDescription() const
 
 json QSocToolShellBash::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"command", {{"type", "string"}, {"description", "The bash command to execute"}}},
-          {"timeout",
-           {{"type", "integer"},
-            {"description",
-             "Timeout in milliseconds (default: 60000). "
-             "On timeout, process keeps running and can be managed via bash_manage tool."}}},
-          {"working_directory",
-           {{"type", "string"},
-            {"description", "Working directory for the command (default: project directory)"}}},
-          {"background",
-           {{"type", "boolean"},
-            {"description",
-             "Run in background (default: false). When true, returns process_id "
-             "immediately without waiting; manage via bash_manage tool."}}},
-          {"max_output",
-           {{"type", "integer"},
-            {"description",
-             "Cap on stdout+stderr bytes of a background or timed-out process "
-             "(default: 5242880 = 5 MB). When the watchdog sees the output grow "
-             "past this, the process is killed and bash_manage reports the kill "
-             "reason. Long output keeps its head and tail."}}}}},
-        {"required", json::array({"command"})}};
+    return QSocShellCommand::bashSchema();
 }
 
 QString QSocToolShellBash::detectInteractivePrompt(const QString &tail)
@@ -710,14 +688,7 @@ QString QSocToolShellBash::execute(const json &arguments)
 
     QString command = QString::fromStdString(arguments["command"].get<std::string>());
 
-    /* Get timeout */
-    int timeout = 60000;
-    if (arguments.contains("timeout") && arguments["timeout"].is_number_integer()) {
-        timeout = arguments["timeout"].get<int>();
-        if (timeout <= 0) {
-            timeout = 60000;
-        }
-    }
+    const int timeout = QSocShellCommand::timeoutArgument(arguments);
 
     /* Get working directory */
     QString workingDir;
@@ -789,6 +760,7 @@ QString QSocToolShellBash::execute(const json &arguments)
     prepareProcessTree(process);
     process->setWorkingDirectory(workingDir);
     process->setProcessChannelMode(QProcess::MergedChannels);
+    process->setStandardInputFile(QProcess::nullDevice());
     process->setStandardOutputFile(outputPath, QIODevice::Append);
 
     process->start(shellExe, QStringList() << "-c" << command);
@@ -894,7 +866,7 @@ QString QSocToolShellBash::execute(const json &arguments)
             callContext->setResultStatus(ResultStatus::Uncertain);
         delete processGuard.data();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
-        return QStringLiteral("Command aborted.");
+        return QSocShellCommand::abortedText();
     }
 
     if (!aborted
@@ -902,22 +874,20 @@ QString QSocToolShellBash::execute(const json &arguments)
         /* Process completed within timeout. Output is already on disk
          * because setStandardOutputFile redirected stdout+stderr there
          * before start; just read the capture file. */
-        const QString output   = outputLog->text();
-        const int     exitCode = processGuard->exitCode();
-        const bool    crashed  = processGuard->exitStatus() == QProcess::CrashExit;
+        QSocShellCommand::Outcome outcome;
+        outcome.output   = outputLog->text();
+        outcome.exitCode = processGuard->exitCode();
+        /* A signalled process has no exit status; Qt reports the signal. */
+        if (processGuard->exitStatus() == QProcess::CrashExit) {
+            outcome.exitSignal = QSocShellCommand::signalName(outcome.exitCode);
+            outcome.exitCode   = -1;
+        }
+        outcome.status = outcome.exitCode == 0 ? ResultStatus::Ok : ResultStatus::Failed;
         if (callContext)
-            callContext->setResultStatus(
-                exitCode != 0 || crashed ? ResultStatus::Failed : ResultStatus::Ok);
+            callContext->setResultStatus(outcome.status);
         delete processGuard.data();
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
-
-        if (exitCode != 0) {
-            return QString("Command exited with code %1:\n%2").arg(exitCode).arg(output);
-        }
-        if (crashed)
-            return QStringLiteral("Command crashed:\n") + output;
-
-        return output.isEmpty() ? "(no output)" : output;
+        return QSocShellCommand::resultText(outcome);
     }
 
     /* Timeout: process still running, store it */
@@ -954,32 +924,14 @@ QString QSocToolShellBash::execute(const json &arguments)
             Qt::QueuedConnection);
     }
 
-    /* Read last lines for immediate feedback */
-    QString lastOutput = outputLog->lastLines(50);
-
-    if (aborted) {
-        return QString(
-                   "Abort requested but the command is STILL RUNNING.\n"
-                   "Process ID: %1\n"
-                   "Output file: %2\n"
-                   "Last output:\n%3\n\n"
-                   "Use bash_manage tool with process_id=%1 to stop it.")
-            .arg(processId)
-            .arg(outputPath)
-            .arg(lastOutput);
-    }
-
-    return QString(
-               "Command timed out after %1ms but is STILL RUNNING.\n"
-               "Process ID: %2\n"
-               "Output file: %3\n"
-               "Last output:\n%4\n\n"
-               "Use bash_manage tool with process_id=%2 to: "
-               "check status, wait more, read output, kill, or terminate.")
-        .arg(timeout)
-        .arg(processId)
-        .arg(outputPath)
-        .arg(lastOutput);
+    const QSocShellCommand::Handle handle{
+        QStringLiteral("process_id"),
+        QStringLiteral("Process ID"),
+        QString::number(processId),
+        outputPath,
+        outputLog->lastLines(QSocShellCommand::kLastOutputLines)};
+    return aborted ? QSocShellCommand::stillRunningAfterAbortText(handle)
+                   : QSocShellCommand::timedOutText(timeout, handle);
 }
 
 void QSocToolShellBash::abort()
@@ -1062,24 +1014,7 @@ QString QSocToolBashManage::getDescription() const
 
 json QSocToolBashManage::getParametersSchema() const
 {
-    return {
-        {"type", "object"},
-        {"properties",
-         {{"process_id",
-           {{"type", "integer"}, {"description", "Process ID from bash timeout response"}}},
-          {"action",
-           {{"type", "string"},
-            {"enum", json::array({"status", "wait", "output", "kill", "terminate"})},
-            {"description",
-             "Action: status (check state), wait (wait more time), "
-             "output (read last 200 lines), kill (force kill), "
-             "terminate (graceful stop, then force kill after 5s)"}}},
-          {"timeout",
-           {{"type", "integer"},
-            {"maximum", std::numeric_limits<int>::max()},
-            {"description",
-             "Additional wait time in ms for 'wait'; non-positive values use 60000"}}}}},
-        {"required", json::array({"process_id", "action"})}};
+    return QSocShellCommand::bashManageSchema("process_id", "integer");
 }
 
 QString QSocToolBashManage::collectOutput(const QSocBashProcessInfo &info, int exitCode)
@@ -1283,7 +1218,7 @@ QString QSocToolBashManage::execute(const json &arguments)
 
     if (action == "output") {
         auto   &info       = QSocToolShellBash::activeProcesses[processId];
-        QString lastOutput = info.output->lastLines(200);
+        QString lastOutput = info.output->lastLines(QSocShellCommand::maxLinesArgument(arguments));
         bool    running    = trackedProcessRunning(info);
         return QString("Process %1 (%2):\n%3")
             .arg(processId)
