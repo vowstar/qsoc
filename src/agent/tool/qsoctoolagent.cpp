@@ -85,10 +85,55 @@ QSocTool::ResultStatus resultStatusFor(QSocTask::Status state)
     }
 }
 
+/* A workspace the model chose must already exist, must stay at or below
+ * @p root when one is granted, and must not be the root or the login
+ * directory, spelled any way that resolves to them. The resolved login
+ * directory never appears in the error, because the error reaches the
+ * model provider. */
+bool acceptNamedWorkspace(
+    QSocSftpClient *sftp, const QString &workspace, const QString &root, QString *errorMessage)
+{
+    const auto refuse = [errorMessage](const QString &why) {
+        if (errorMessage != nullptr) {
+            *errorMessage = why;
+        }
+        return false;
+    };
+    const auto present = [sftp](const QString &path, QString *resolved) {
+        QString err;
+        return sftp != nullptr && sftp->presence(path, &err) == QSocSftpClient::Presence::Present
+               && sftp->realPath(path, resolved, &err) == QSocSftpClient::Presence::Present;
+    };
+    QString resolved;
+    QString home;
+    QString granted;
+    if (!present(workspace, &resolved)) {
+        return refuse(QStringLiteral("workspace %1 does not exist on the host").arg(workspace));
+    }
+    if (!present(QStringLiteral("."), &home)) {
+        return refuse(QStringLiteral("the host login directory could not be read"));
+    }
+    if (resolved == QStringLiteral("/") || resolved == home) {
+        return refuse(
+            QStringLiteral("workspace %1 is / or the login directory; name a project directory")
+                .arg(workspace));
+    }
+    if (!root.isEmpty()
+        && (!present(root, &granted)
+            || (resolved != granted && !resolved.startsWith(granted + QLatin1Char('/'))))) {
+        return refuse(QStringLiteral("workspace %1 resolves outside the granted workspace %2")
+                          .arg(workspace, root));
+    }
+    return true;
+}
+
 } // namespace
 
 std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
-    const QString &host, const QString &workspace, QString *errorMessage)
+    const QString                &host,
+    const QString                &workspace,
+    const std::optional<QString> &namedRoot,
+    QString                      *errorMessage)
 {
     if (!QSocInterrupt::handlerReady()) {
         if (errorMessage != nullptr) {
@@ -104,8 +149,8 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
     if (root.isEmpty()) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral(
-                                "no workspace registered for host '%1'; call "
-                                "host_register or /ssh first")
+                                "host '%1' has no catalog workspace; pass workspace=<absolute "
+                                "directory on that host>")
                                 .arg(host);
         }
         return nullptr;
@@ -142,7 +187,8 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         })) {
         return nullptr;
     }
-    if (!prepareAgentRemoteWorkspace(root, &binding->state, errorMessage)) {
+    if ((namedRoot && !acceptNamedWorkspace(binding->state.sftp, root, *namedRoot, errorMessage))
+        || !prepareAgentRemoteWorkspace(root, &binding->state, errorMessage)) {
         discardAgentRemoteState(&binding->state);
         return nullptr;
     }
@@ -273,6 +319,19 @@ void QSocToolAgent::bindChildCwd(const CwdFanout &fanout, QSocAgent *child)
     fanout->append(QPointer<QSocAgent>(child));
 }
 
+namespace {
+
+json toJsonArray(const QStringList &values)
+{
+    json array = json::array();
+    for (const QString &value : values) {
+        array.push_back(value.toStdString());
+    }
+    return array;
+}
+
+} // namespace
+
 QString QSocToolAgent::getName() const
 {
     return QStringLiteral("agent");
@@ -291,23 +350,10 @@ QString QSocToolAgent::getDescription() const
     if (defRegistry_ != nullptr) {
         desc += defRegistry_->describeAvailable();
     }
-    if (hostCatalog_ != nullptr) {
-        const auto entries = hostCatalog_->allList();
-        if (!entries.isEmpty()) {
-            desc += QStringLiteral(
-                "\nAvailable host values (sub-agent dispatch target):\n"
-                "  local: parent's current execution context\n");
-            for (const auto &entry : entries) {
-                const QString cap = entry.capability.isEmpty()
-                                        ? QStringLiteral("(no capability text)")
-                                        : entry.capability;
-                desc += QStringLiteral("  %1: %2\n").arg(entry.alias, cap);
-            }
-            desc += QStringLiteral(
-                "\nOmit `host` to use the parent's current binding. Pick a "
-                "named host above only when its capability matches the task.\n");
-        }
-    }
+    desc += QStringLiteral(
+        "\nOmit `host` to run the child where the parent works now, and omit `model` to run "
+        "it on the parent's model. Set them only when the task needs a host or model that "
+        "the system prompt lists for its stated capability.\n");
     return desc;
 }
 
@@ -320,14 +366,7 @@ json QSocToolAgent::getParametersSchema() const
             enumValues.push_back(subName.toStdString());
         }
     }
-    json hostEnum = json::array();
-    hostEnum.push_back("local");
-    if (hostCatalog_ != nullptr) {
-        for (const auto &entry : hostCatalog_->allList()) {
-            hostEnum.push_back(entry.alias.toStdString());
-        }
-    }
-    return json{
+    json schema = json{
         {"type", "object"},
         {"properties",
          {{"subagent_type",
@@ -360,14 +399,30 @@ json QSocToolAgent::getParametersSchema() const
              "Not supported on remote workspaces."}}},
           {"host",
            {{"type", "string"},
-            {"enum", hostEnum},
             {"description",
-             "Execution host for this sub-agent. 'local' (default) runs on the "
-             "parent's current binding. A named catalog alias opens (or reuses) "
-             "an SSH session to that host. Only catalog entries with a "
-             "workspace are dispatchable; pure ~/.ssh/config aliases without a "
-             "catalog entry are not listed here."}}}}},
+             "Execution host for this sub-agent. Omit it to run on the parent's current "
+             "binding; 'local' is this machine. A named host opens (or reuses) an SSH "
+             "session for the child only."}}},
+          {"workspace",
+           {{"type", "string"},
+            {"description",
+             "Absolute directory on a named `host` the child works in. Required for a "
+             "host without a catalog workspace. Must already exist and must not be / "
+             "or the login directory."}}}}},
         {"required", json::array({"description", "prompt"})}};
+    const QStringList hosts = dispatchPolicy_.hostChoices();
+    if (!hosts.isEmpty()) {
+        schema["properties"]["host"]["enum"] = toJsonArray(hosts);
+    }
+    const QStringList models = dispatchPolicy_.modelChoices();
+    if (!models.isEmpty()) {
+        schema["properties"]["model"]
+            = {{"type", "string"},
+               {"enum", toJsonArray(models)},
+               {"description",
+                "llm.models key the child runs on. Omit it to use the parent's model."}};
+    }
+    return schema;
 }
 
 namespace {
@@ -495,21 +550,20 @@ void bindConfigToHost(QSocRemoteConnection *conn, const QString &alias, QSocAgen
     loadAgentRemoteProjectRules(conn, cfg);
 }
 
-/* A child on @p entry gets that model's context window, and its effort when
- * the entry names one. A child on the main agent's own model keeps the main
- * agent's live window and effort. */
-void sizeConfigToModel(const LLMModelConfig &entry, bool mainModel, QSocAgentConfig *cfg)
+/* A child the main agent sends to this machine from a remote binding: the
+ * remote declarations go, and the local skill listing of @p local returns. */
+void unbindConfigFromHost(const QSocAgentConfig &local, QSocAgentConfig *cfg)
 {
-    cfg->modelId = entry.id;
-    if (mainModel) {
-        return;
-    }
-    if (entry.contextTokens > 0) {
-        cfg->maxContextTokens = entry.contextTokens;
-    }
-    if (entry.effortSet) {
-        cfg->effortLevel = entry.effort;
-    }
+    cfg->remoteMode = false;
+    cfg->remoteName.clear();
+    cfg->remoteAlias.clear();
+    cfg->remoteDisplay.clear();
+    cfg->remoteWorkspace.clear();
+    cfg->remoteWorkingDir.clear();
+    cfg->remoteWritableDirs.clear();
+    cfg->remoteMachine      = QSocMachine{};
+    cfg->remoteProjectRules = {};
+    cfg->skillListing       = local.skillListing;
 }
 
 /* Where a child built from @p cfg runs: the alias it was bound by, the SSH
@@ -683,42 +737,6 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
         }
     }
 
-    /* Optional per-spawn host override. Catalog alias -> open (or
-     * reuse) an SSH session for the child only, leaving the
-     * parent's binding alone. 'local' or empty falls back to the
-     * named definition's `preferred_host` (when set), then to the
-     * parent's effective registry above. */
-    QString hostArg = jsonStringField(arguments, "host");
-    if (hostArg.isEmpty() && def != nullptr && !def->preferredHost.isEmpty()) {
-        hostArg = def->preferredHost;
-    }
-    /* The one name for the host the child runs on. Null means it inherits the
-     * parent's binding; when set, the child's registry, its config and its
-     * workspace health all come from this pointer, so they cannot disagree
-     * about which host answers for the child. */
-    const bool remoteHost = !hostArg.isEmpty() && hostArg != QStringLiteral("local");
-    if (isolation == QStringLiteral("worktree") && (remoteHost || effectiveConfig.remoteMode)) {
-        return QStringLiteral(
-            R"({"status":"error","error":"isolation=worktree is not supported on remote workspaces"})");
-    }
-    std::shared_ptr<HostBinding> childHost;
-    if (remoteHost) {
-        QString hostErr;
-        childHost = resolveHostBinding(
-            hostArg, seed != nullptr ? seed->dispatch.workspace : QString(), &hostErr);
-        if (childHost == nullptr) {
-            return QString::fromUtf8(
-                json{
-                    {"status", "error"},
-                    {"error",
-                     QString("host '%1' is not dispatchable: %2").arg(hostArg, hostErr).toStdString()},
-                    {"host", hostArg.toStdString()}}
-                    .dump()
-                    .c_str());
-        }
-        effectiveRegistry = childHost->registry;
-    }
-
     /* Concurrency policy: a sliding window the task source enforces.
      * 0 (the default) means unbounded; spawns run as soon as they are
      * registered and flow control is left to the provider's 429
@@ -754,16 +772,73 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
             R"({"status":"error","error":"LLM service or tool registry not configured"})");
     }
 
-    const QString childModel = isFork ? QString() : def->model;
-    if (!childModel.isEmpty() && !effectiveLlm->availableModels().contains(childModel)) {
+    /* Where and on which model the child runs: the call, then the
+     * definition, then the main agent, within what the user granted. */
+    QSocChildRequest request;
+    request.host      = jsonStringField(arguments, "host");
+    request.workspace = jsonStringField(arguments, "workspace");
+    request.model     = jsonStringField(arguments, "model");
+    request.fork      = isFork;
+    if (def != nullptr) {
+        request.host            = request.host.isEmpty() ? def->preferredHost : request.host;
+        request.definitionModel = def->model;
+    }
+    QSocMainState mainState;
+    mainState.modelId = effectiveLlm->getCurrentModelId();
+    mainState.effort  = effectiveConfig.effortLevel;
+    mainState.remote  = effectiveConfig.remoteMode;
+    mainState.alias   = placementOf(effectiveConfig).host;
+    QString    planErr;
+    const auto plan = dispatchPolicy_.resolveChild(
+        request,
+        mainState,
+        hostCatalog_,
+        [effectiveLlm](const QString &key) -> std::optional<LLMModelConfig> {
+            if (!effectiveLlm->availableModels().contains(key)) {
+                return std::nullopt;
+            }
+            return effectiveLlm->getModelConfig(key);
+        },
+        &planErr);
+    if (!plan) {
         return QString::fromStdString(
-            json{
-                {"status", "error"},
-                {"error",
-                 QStringLiteral("definition model '%1' is not in llm.models")
-                     .arg(childModel)
-                     .toStdString()}}
-                .dump());
+            json{{"status", "error"}, {"error", planErr.toStdString()}}.dump());
+    }
+    const QString &hostArg    = plan->host;
+    const bool     remoteHost = !hostArg.isEmpty() && hostArg != QStringLiteral("local");
+    /* `local` while the main agent is remote: this machine's own tools. */
+    const bool toLocal = hostArg == QStringLiteral("local") && effectiveConfig.remoteMode;
+    if (isolation == QStringLiteral("worktree")
+        && (remoteHost || (effectiveConfig.remoteMode && !toLocal))) {
+        return QStringLiteral(
+            R"({"status":"error","error":"isolation=worktree is not supported on remote workspaces"})");
+    }
+    /* The one name for the host the child runs on. Null means it inherits the
+     * parent's binding; when set, the child's registry, its config and its
+     * workspace health all come from this pointer, so they cannot disagree
+     * about which host answers for the child. */
+    std::shared_ptr<HostBinding> childHost;
+    if (remoteHost) {
+        QString       hostErr;
+        const QString workspace = seed != nullptr ? seed->dispatch.workspace : plan->workspace;
+        childHost               = resolveHostBinding(
+            hostArg,
+            workspace,
+            seed == nullptr && plan->workspaceNamed ? plan->workspaceRoot : std::optional<QString>(),
+            &hostErr);
+        if (childHost == nullptr) {
+            return QString::fromUtf8(
+                json{
+                    {"status", "error"},
+                    {"error",
+                     QString("host '%1' is not dispatchable: %2").arg(hostArg, hostErr).toStdString()},
+                    {"host", hostArg.toStdString()}}
+                    .dump()
+                    .c_str());
+        }
+        effectiveRegistry = childHost->registry;
+    } else if (toLocal) {
+        effectiveRegistry = parentRegistry_;
     }
 
     /* When isolation == "worktree" and the parent is a git repo,
@@ -778,6 +853,9 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
 
     QSocAgentConfig childCfg = effectiveConfig;
     childCfg.isSubAgent      = true;
+    if (toLocal) {
+        unbindConfigFromHost(parentConfig_, &childCfg);
+    }
     if (isFork) {
         childCfg.systemPromptOverride = forkSnapshot->identityPrompt;
     } else {
@@ -801,11 +879,12 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
             childCfg.skillListing.clear();
         }
     }
-    if (!childModel.isEmpty()) {
-        sizeConfigToModel(
-            effectiveLlm->getModelConfig(childModel),
-            childModel == effectiveLlm->getCurrentModelId(),
-            &childCfg);
+    childCfg.effortLevel = plan->effort;
+    if (plan->model) {
+        childCfg.modelId = plan->model->id;
+        if (plan->model->contextTokens > 0) {
+            childCfg.maxContextTokens = plan->model->contextTokens;
+        }
     }
     if (!worktreePath.isEmpty()) {
         childCfg.projectPath = worktreePath;
@@ -819,7 +898,8 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     if (childHost != nullptr) {
         bindConfigToHost(&childHost->conn, hostArg, &childCfg);
     }
-    const QSocSubAgentTaskSource::Dispatch placed = placementOf(childCfg);
+    QSocSubAgentTaskSource::Dispatch placed = placementOf(childCfg);
+    placed.model                            = request.model;
     if (seed != nullptr
         && (placed.endpoint != seed->dispatch.endpoint
             || (!seed->dispatch.workspace.isEmpty()
@@ -837,12 +917,13 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     /* Per-child LLMService: clone the live parent's service so the
      * child has its own streaming reply and buffers. Without this,
      * concurrent sub-agents trample each other's single-flight
-     * invariant. The clone shares the same QSocConfig, so model and
-     * endpoint selection stay in sync. */
+     * invariant. A child on another model gets that entry as resolved
+     * when the call was made. */
     auto *childLlm = effectiveLlm->clone(nullptr);
     childLlm->setModel(effectiveLlm->getCurrentModelConfig());
-    if (!childModel.isEmpty()) {
-        childLlm->setCurrentModel(childModel);
+    if (plan->model) {
+        childLlm->setCurrentModel(plan->model->id);
+        childLlm->setModel(*plan->model);
     }
     auto *child = new QSocAgent(nullptr, childLlm, effectiveRegistry, childCfg);
     childLlm->setParent(child); /* tie LLM lifetime to child */
@@ -901,13 +982,13 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
             *observed = conn->generation();
             return health;
         });
-    } else if (parentAgent_ != nullptr && parentAgent_->hasWorkspaceHealthProbe()) {
+    } else if (!toLocal && parentAgent_ != nullptr && parentAgent_->hasWorkspaceHealthProbe()) {
         QPointer<QSocAgent> probeParent(parentAgent_);
         child->setWorkspaceHealthProbe([probeParent]() -> QString {
             return probeParent.isNull() ? QString() : probeParent->probeWorkspaceHealth();
         });
     }
-    if (isFork && worktreePath.isEmpty() && childHost == nullptr) {
+    if (isFork && worktreePath.isEmpty() && childHost == nullptr && !toLocal) {
         child->setMemoryManager(parentAgent_->getMemoryManager());
     } else if (memoryManager_ != nullptr && def != nullptr && def->injectMemory) {
         child->setMemoryManager(memoryManager_);
@@ -1457,7 +1538,8 @@ json QSocToolAgent::resumeRun(
     seed.dispatch
         = {meta.host.isEmpty() ? QStringLiteral("local") : meta.host,
            meta.endpoint.isEmpty() ? QStringLiteral("local") : meta.endpoint,
-           meta.workspace};
+           meta.workspace,
+           meta.model};
     seed.notifyParent = sender != QSocAgentMailbox::userSender();
     /* The parent's binding serves the run only when it is the very endpoint and
      * workspace the run used; any other run goes back to its own alias. */
@@ -1475,6 +1557,7 @@ json QSocToolAgent::resumeRun(
                 {"description", meta.label.toStdString()},
                 {"prompt", text.toStdString()},
                 {"host", host.toStdString()},
+                {"model", meta.model.toStdString()},
                 {"run_in_background", true}},
             &seed)
             .toStdString(),

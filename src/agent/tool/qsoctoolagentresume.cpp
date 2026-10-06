@@ -137,10 +137,14 @@ QString QSocToolAgentResume::execute(const json &arguments)
             {"original_status", meta.status.toStdString()},
             {"isolation", meta.isolation.toStdString()},
             {"worktree", meta.worktreePath.toStdString()},
+            {"host", meta.host.toStdString()},
+            {"workspace", meta.workspace.toStdString()},
+            {"model", meta.model.toStdString()},
             {"resume_prompt", resumePrompt.toStdString()},
             {"hint",
              "Call the `agent` tool with subagent_type=original_subagent_type and "
-             "prompt=resume_prompt to actually re-spawn."}}
+             "prompt=resume_prompt to actually re-spawn. Pass host, workspace and model "
+             "too when they are set, so the run continues where it ran."}}
             .dump()
             .c_str());
 }

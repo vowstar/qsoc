@@ -5,9 +5,11 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocagentmailbox.h"
+#include "agent/qsocdispatchpolicy.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocsshconfigparser.h"
 #include "agent/tool/qsoctoolagent.h"
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
@@ -27,6 +29,12 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#ifdef Q_OS_UNIX
+#include <pwd.h>
+#include <unistd.h>
+#endif
+#include <yaml-cpp/yaml.h>
 
 using json = nlohmann::json;
 
@@ -230,6 +238,8 @@ private slots:
     void aDispatchedChildIsNotStoppedByTheParentHostHealth();
     void worktreeIsolationIsRefusedOnRemoteWorkspaces();
     void aResumedRunReturnsToItsAliasAndWorkspace();
+    void aGrantedSshConfigAliasDispatchesWithAWorkspace();
+    void aNamedWorkspaceMustBeAProjectDirectory();
 
 private:
     bool prepare();
@@ -736,6 +746,141 @@ void Test::aResumedRunReturnsToItsAliasAndWorkspace()
     const QString prompt = systemPromptOf(llm, 1);
     QVERIFY2(prompt.contains(m_workspace), qPrintable(remoteWorkspaceLine(prompt)));
     QVERIFY2(!prompt.contains(moved), qPrintable(remoteWorkspaceLine(prompt)));
+}
+
+/* Counterexample: a host in ~/.ssh/config without a catalog entry could not be
+ * used even when the user granted it, because it had no workspace. */
+void Test::aGrantedSshConfigAliasDispatchesWithAWorkspace()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const QString workspace = m_fixture.workDir() + QStringLiteral("/sshonly");
+    QVERIFY(QDir().mkpath(workspace));
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueFinal(QStringLiteral("ran on the ssh-config host"));
+
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    definitions.registerBuiltins();
+    QSocSubAgentTaskSource tasks;
+    QSocToolRegistry       registry;
+    QSocHostCatalog        catalog;
+    QFile::remove(m_project + QStringLiteral("/.qsoc/host.yml"));
+    catalog.load(QString(), m_project);
+    QVERIFY(catalog.find(QString::fromLatin1(kAlias)) == nullptr);
+    QSocSshConfigParser parser;
+    QVERIFY(parser.parse(m_home + QStringLiteral("/.ssh/config")));
+
+    const QSocAgentConfig config = parentOnItsOwnHost();
+    QSocAgent             parent(nullptr, &service, &registry, config);
+    QSocToolAgent         tool(nullptr, &service, &registry, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+    tool.setSshConfigParser(&parser);
+    registry.registerTool(&tool);
+
+    auto args            = spawnArgs();
+    args["workspace"]    = workspace.toStdString();
+    const json ungranted = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(ungranted.value("status", std::string()), std::string("error"));
+    QCOMPARE(llm.requestCount(), 0);
+
+    tool.setDispatchPolicy(
+        QSocDispatchPolicy::fromNodes(
+            YAML::Load(
+                QStringLiteral("hosts:\n  %1: {}\n").arg(QString::fromLatin1(kAlias)).toStdString()),
+            YAML::Node(),
+            &catalog,
+            &parser));
+    const QString raw      = registry.executeTool(QStringLiteral("agent"), args);
+    const json    response = json::parse(raw.toStdString());
+    QVERIFY2(response.value("status", std::string()) == "ok", qPrintable(raw));
+    QCOMPARE(llm.requestCount(), 1);
+    const QString prompt = systemPromptOf(llm, 0);
+    QVERIFY2(prompt.contains(workspace), qPrintable(remoteWorkspaceLine(prompt)));
+}
+
+/* Counterexample: the model could send a child to any directory of the host,
+ * the root, the login directory and a tree outside the granted workspace
+ * included, spelled through a symlink, and the refusal named the login path. */
+void Test::aNamedWorkspaceMustBeAProjectDirectory()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const QString granted  = m_fixture.workDir() + QStringLiteral("/granted");
+    const QString rootLink = granted + QStringLiteral("/rootlink");
+    const QString escape   = granted + QStringLiteral("/escape");
+    QVERIFY(QDir().mkpath(granted + QStringLiteral("/block")));
+    QFile::remove(rootLink);
+    QFile::remove(escape);
+    QVERIFY(QFile::link(QStringLiteral("/"), rootLink));
+    QVERIFY(QFile::link(m_workspace, escape));
+    /* The loopback sshd logs in through the password database, not $HOME. */
+    QString loginDir;
+#ifdef Q_OS_UNIX
+    const passwd *account = getpwuid(getuid());
+    QVERIFY(account != nullptr);
+    loginDir = QString::fromLocal8Bit(account->pw_dir);
+#else
+    QSKIP("needs the POSIX password database");
+#endif
+    const QString missing = granted + QStringLiteral("/never-created");
+
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    llm.enqueueFinal(QStringLiteral("inside the grant"));
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    definitions.registerBuiltins();
+    QSocSubAgentTaskSource tasks;
+    QSocToolRegistry       registry;
+    QSocHostCatalog        catalog;
+    QVERIFY(registerHostB(&catalog));
+    const QSocAgentConfig config = parentOnItsOwnHost();
+    QSocAgent             parent(nullptr, &service, &registry, config);
+    QSocToolAgent         tool(nullptr, &service, &registry, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+
+    const QList<QPair<QString, QString>> open
+        = {{rootLink, QStringLiteral("is / or the login directory")},
+           {loginDir, QStringLiteral("is / or the login directory")},
+           {missing, QStringLiteral("does not exist")}};
+    for (const auto &[workspace, expected] : open) {
+        auto args              = spawnArgs();
+        args["workspace"]      = workspace.toStdString();
+        const json    response = json::parse(tool.execute(args).toStdString());
+        const QString error    = QString::fromStdString(response.value("error", std::string()));
+        QVERIFY2(error.contains(expected), qPrintable(workspace + QStringLiteral(": ") + error));
+        QVERIFY2(workspace == loginDir || !error.contains(loginDir), qPrintable(error));
+    }
+
+    tool.setDispatchPolicy(
+        QSocDispatchPolicy::fromNodes(
+            YAML::Load(QStringLiteral("hosts:\n  %1: {workspace: %2}\n")
+                           .arg(QString::fromLatin1(kAlias), granted)
+                           .toStdString()),
+            YAML::Node(),
+            &catalog,
+            nullptr));
+    for (const QString &outside : {escape, m_workspace}) {
+        auto args              = spawnArgs();
+        args["workspace"]      = outside.toStdString();
+        const json    response = json::parse(tool.execute(args).toStdString());
+        const QString error    = QString::fromStdString(response.value("error", std::string()));
+        QVERIFY2(error.contains(QStringLiteral("outside")), qPrintable(outside + ": " + error));
+    }
+    QCOMPARE(llm.requestCount(), 0);
+    auto inside         = spawnArgs();
+    inside["workspace"] = (granted + QStringLiteral("/block")).toStdString();
+    const json done     = json::parse(tool.execute(inside).toStdString());
+    QVERIFY2(done.value("status", std::string()) == "ok", done.dump().c_str());
+    QVERIFY(!QFileInfo::exists(missing));
+    QFile::remove(rootLink);
+    QFile::remove(escape);
 }
 
 } // namespace

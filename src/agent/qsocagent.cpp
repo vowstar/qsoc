@@ -3249,9 +3249,12 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
             section += QStringLiteral("## Current host binding\n\n");
             section += agentConfig.remoteMode
                            ? QStringLiteral("Active: %1\nWorkspace: %2\n")
-                                 .arg(agentConfig.remoteName, agentConfig.remoteWorkspace)
+                                 .arg(
+                                     agentConfig.remoteAlias.isEmpty() ? agentConfig.remoteName
+                                                                       : agentConfig.remoteAlias,
+                                     agentConfig.remoteWorkspace)
                            : QStringLiteral("Active: local (this machine)\n");
-            if (!entries.isEmpty()) {
+            if (!entries.isEmpty() && !agentConfig.dispatchHostsDeclared) {
                 section += QStringLiteral("\n## Available execution host\n\n");
                 section += QStringLiteral("- local: this machine\n");
                 for (const auto &entry : entries) {
@@ -3280,6 +3283,10 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
             }
             prompt += section + QStringLiteral("\n");
         }
+    }
+
+    if (!agentConfig.isSubAgent) {
+        prompt += agentConfig.dispatchResources;
     }
 
     /* Section 9: Project instructions (AGENTS.md / AGENTS.local.md). */

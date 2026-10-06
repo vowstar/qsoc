@@ -5,6 +5,7 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocagentdefinitionregistry.h"
 #include "agent/qsocagentmailbox.h"
+#include "agent/qsocdispatchpolicy.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
@@ -14,6 +15,7 @@
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
+#include <yaml-cpp/yaml.h>
 #include <QDir>
 #include <QFile>
 #include <QHash>
@@ -415,6 +417,53 @@ private slots:
         QTRY_COMPARE(llm.requestCount(), 2);
         QCOMPARE(llm.wireModel(1), QStringLiteral("second-wire"));
         QCOMPARE(llm.requestBody(1).value("reasoning_effort", std::string()), std::string("high"));
+    }
+
+    /* Counterexample: a rebuilt child ran on the model its earlier call named
+     * although the user had since taken that model away from sub-agents. */
+    void aResumedChildAsksForItsModelAgain()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        const QByteArray yaml   = twoModels(llm.url());
+        const YAML::Node models = YAML::Load(yaml.toStdString())["llm"]["models"];
+        const auto       policy = [&models](const char *dispatch) {
+            return QSocDispatchPolicy::fromNodes(YAML::Load(dispatch), models, nullptr, nullptr);
+        };
+        ScopedConfig  scope(yaml);
+        QTemporaryDir runs;
+        QString       taskId;
+        {
+            Harness first(runs.path());
+            first.tool.setDispatchPolicy(policy("models: [second-model]\n"));
+            const json args
+                = {{"subagent_type", "probe"},
+                   {"description", "resume probe"},
+                   {"prompt", "first objective"},
+                   {"model", "second-model"}};
+            const json done = json::parse(first.tool.execute(args).toStdString());
+            QCOMPARE(done.value("status", std::string()), std::string("ok"));
+            taskId = QString::fromStdString(done.value("task_id", std::string()));
+        }
+        QCOMPARE(llm.wireModel(0), QStringLiteral("second-wire"));
+
+        Harness revoked(runs.path());
+        revoked.tool.setDispatchPolicy(policy("{}"));
+        const json refused
+            = revoked.tool.resumeRun(taskId, QStringLiteral("go on"), QSocAgentMailbox::userSender());
+        QCOMPARE(refused.value("status", std::string()), std::string("error"));
+        QVERIFY2(
+            refused.value("error", std::string()).find("second-model") != std::string::npos,
+            refused.dump().c_str());
+        QCOMPARE(llm.requestCount(), 1);
+
+        Harness granted(runs.path());
+        granted.tool.setDispatchPolicy(policy("models: [second-model]\n"));
+        const json resumed
+            = granted.tool.resumeRun(taskId, QStringLiteral("go on"), QSocAgentMailbox::userSender());
+        QCOMPARE(resumed.value("resume", std::string()), std::string("history"));
+        QTRY_COMPARE(llm.requestCount(), 2);
+        QCOMPARE(llm.wireModel(1), QStringLiteral("second-wire"));
     }
 
     void runWithoutStoredHistoryFallsBackToThePrompt()

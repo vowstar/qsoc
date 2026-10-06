@@ -4,6 +4,7 @@
 #include "agent/qsocagent.h"
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocdispatchpolicy.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/tool/qsoctoolagent.h"
@@ -12,6 +13,7 @@
 #include "qsoc_test.h"
 
 #include <nlohmann/json.hpp>
+#include <yaml-cpp/yaml.h>
 
 #include <QDir>
 #include <QFile>
@@ -222,6 +224,14 @@ QSocAgentConfig quietParent()
     config.maxRetries          = 1;
     config.autoBackgroundMs    = 0;
     return config;
+}
+
+/* The policy agent.dispatch would give, over the models of @p configYaml. */
+QSocDispatchPolicy dispatchPolicy(const QByteArray &configYaml, const char *dispatch)
+{
+    const YAML::Node root = YAML::Load(configYaml.toStdString());
+    return QSocDispatchPolicy::fromNodes(
+        YAML::Load(dispatch), root["llm"]["models"], nullptr, nullptr);
 }
 
 json spawnArgs()
@@ -626,6 +636,96 @@ private slots:
                 std::string(effort));
             QCOMPARE(h.parent.getConfig().maxContextTokens, 64000);
         }
+    }
+
+    /* Counterexample: a host the user bound to a model ran its children on the
+     * main agent's model. */
+    void aHostBoundModelRunsEveryChildThere()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        const QByteArray yaml = parentAndChildModels(llm.url());
+        ScopedConfig     scope(yaml);
+        Harness          h(definitionOn(QString()));
+        h.tool.setDispatchPolicy(dispatchPolicy(yaml, "hosts:\n  local: {model: child-model}\n"));
+        QCOMPARE(h.spawn().value("status", std::string()), std::string("ok"));
+        QCOMPARE(llm.wireModel(0), QStringLiteral("child-wire"));
+        auto refused     = spawnArgs();
+        refused["model"] = "parent-model";
+        refused["host"]  = "local";
+        QCOMPARE(
+            json::parse(h.tool.execute(refused).toStdString()).value("status", std::string()),
+            std::string("error"));
+        QCOMPARE(llm.requestCount(), 1);
+    }
+
+    /* Counterexample: a child spawned after /model and /effort ran on the model
+     * and effort the session started with. */
+    void omittedFieldsFollowTheMainAfterModelAndEffort()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        const QByteArray yaml = parentAndChildModels(llm.url());
+        ScopedConfig     scope(yaml);
+        Harness          h(definitionOn(QString()));
+        h.tool.setDispatchPolicy(dispatchPolicy(yaml, "models: [parent-model]\nhosts: {}\n"));
+        QVERIFY(h.service.setCurrentModel(QStringLiteral("child-model")));
+        h.parent.setEffortLevel(QStringLiteral("high"));
+        QCOMPARE(h.spawn().value("status", std::string()), std::string("ok"));
+        QCOMPARE(llm.wireModel(0), QStringLiteral("child-wire"));
+        QCOMPARE(llm.requestBody(0).value("reasoning_effort", std::string()), std::string("high"));
+
+        auto chosen     = spawnArgs();
+        chosen["model"] = "parent-model";
+        QCOMPARE(
+            json::parse(h.tool.execute(chosen).toStdString()).value("status", std::string()),
+            std::string("ok"));
+        QCOMPARE(llm.wireModel(1), QStringLiteral("parent-model"));
+        const json schema = h.tool.getParametersSchema();
+        QCOMPARE(schema["properties"]["model"]["enum"], json::array({"parent-model"}));
+        QCOMPARE(schema["properties"]["host"]["enum"], json::array({"local"}));
+    }
+
+    void aForkCannotSwitchModel()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        const QByteArray yaml = parentAndChildModels(llm.url());
+        ScopedConfig     scope(yaml);
+        Harness          h(definitionOn(QString()));
+        h.tool.setDispatchPolicy(dispatchPolicy(yaml, "models: [child-model]\n"));
+        auto args           = forkArgs();
+        args["model"]       = "child-model";
+        const json response = json::parse(h.tool.execute(args).toStdString());
+        QCOMPARE(response.value("status", std::string()), std::string("error"));
+        QVERIFY(response.value("error", std::string()).find("fork mode keeps") != std::string::npos);
+        QCOMPARE(llm.requestCount(), 0);
+    }
+
+    /* Counterexample: `local` meant the main agent's remote binding, so a child
+     * asked for on this machine ran on the remote host instead. */
+    void localRunsOnThisMachineFromARemote()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        ScopedConfig scope(parentAndChildModels(llm.url()));
+        Harness      h(definitionOn(QString()));
+        auto         cfg     = h.parent.getConfig();
+        cfg.remoteMode       = true;
+        cfg.remoteName       = QStringLiteral("operator@remote.invalid:22");
+        cfg.remoteAlias      = QStringLiteral("remote-box");
+        cfg.remoteWorkspace  = QStringLiteral("/remote-workspace-sentinel");
+        cfg.remoteWorkingDir = cfg.remoteWorkspace;
+        h.parent.setConfig(cfg);
+        auto args    = spawnArgs();
+        args["host"] = "local";
+        QCOMPARE(
+            json::parse(h.tool.execute(args).toStdString()).value("status", std::string()),
+            std::string("ok"));
+        QCOMPARE(llm.requestCount(), 1);
+        QVERIFY2(
+            !systemPrompt(llm, 0).contains(QStringLiteral("/remote-workspace-sentinel")),
+            qPrintable(systemPrompt(llm, 0)));
     }
 
     void unknownDefinitionModelFailsTheSpawn()

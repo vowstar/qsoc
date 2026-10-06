@@ -209,11 +209,12 @@ catalog alias that is not there dials its `target`. A catalog
 `workspace` is used without asking.
 
 When spawning a sub-agent through the `agent` tool, set the optional
-`host` parameter to a catalog alias to run the child on that machine.
+`host` parameter to run the child on another machine. Without
+`agent.dispatch.hosts` every catalog alias is a valid `host`; with it, only
+the hosts it lists are (@agent-dispatch).
 A per-parent-run SSH session cache keeps sibling spawns to the same
-alias on the same session, so a second child to the same host does not
-re-authenticate. Pure `~/.ssh/config` aliases that lack a catalog
-entry are not dispatchable because they have no workspace. The child's
+alias and workspace on the same session, so a second child to the same host
+does not re-authenticate. The child's
 workspace tools act on that host; its other tools are the same local tools
 a remote main session has (@agent-remote-where), except `monitor`.
 
@@ -225,7 +226,8 @@ spawn returns an error asking the user to authenticate once via
 all subsequent sub-agent spawns to that host.
 
 Agent definitions may declare `preferred_host:` in their frontmatter to
-default sub-agent spawns of that type to a specific catalog alias.
+default sub-agent spawns of that type to a specific host. It passes the same
+checks as the `host` parameter.
 
 The `capability` field is injected verbatim into the parent agent's
 system prompt and is therefore visible to the LLM provider. Treat it as
@@ -377,6 +379,9 @@ The following commands are available during an interactive session:
      session. In remote mode it also
      reports the bound target, the workspace, and whether the link is
      still usable.],
+    [`/dispatch [reload]`],
+    [Show the hosts and models sub-agents may use, or read `agent.dispatch`
+     again (@agent-dispatch).],
     [`/help`], [Show help message],
     [`/agents`],
     [List sub-agent definitions by scope (builtin, user, project, remote) and any
@@ -1231,6 +1236,18 @@ The `agent` tool accepts:
     [`worktree` runs the child in its own `git worktree --detach` under
      `<runtime>/qsoc-worktrees/<task_id>`. Default is none. Refused with an
      error when the parent or the `host` is a remote workspace.],
+    [`host`],
+    [Where the child runs. Omitted: where the main agent works now.
+     `local`: this machine. Any other value is a host alias
+     (@agent-dispatch).],
+    [`workspace`],
+    [Absolute directory on a named `host`. Required when the host has no
+     catalog workspace. It must exist, must not be `/` or the login
+     directory, and must stay inside the granted workspace when the host
+     grant names one.],
+    [`model`],
+    [An `agent.dispatch.models` key. Omitted: the main agent's model, or the
+     model the host or the definition names.],
   )],
   caption: [`agent` TOOL FIELDS],
   kind: table,
@@ -1252,6 +1269,71 @@ When a detached child reaches a terminal state, the parent receives a
 transcript path; it is injected at the next turn boundary, never
 interrupting an in-progress turn. An idle main agent starts a turn for it
 (@agent-task-wake).
+
+=== Dispatch Resources
+<agent-dispatch>
+
+`agent.dispatch` names the hosts and models the main agent may give a
+sub-agent. Unset fields of a call inherit the main agent.
+
+```yaml
+agent:
+  dispatch:
+    hosts:
+      sim1:                     # ~/.ssh/config alias or host catalog alias
+        workspace: /work/proj   # optional; a named workspace stays inside it
+        model: pro              # optional; every child on sim1 runs on pro
+      local:
+        model: omni             # optional; children on this machine
+    models: [pro, omni]         # llm.models keys a call may name
+```
+
+#figure(
+  align(center)[#table(
+    columns: (0.25fr, 1fr),
+    align: (auto, left),
+    table.header([Field], [Resolution]),
+    table.hline(),
+    [`host`],
+    [Omitted: the main agent's binding. `local`: this machine. Any other alias
+     must be in `hosts`; without `hosts`, it must be a host catalog alias.],
+    [`workspace`],
+    [The call's `workspace`, else the grant's `workspace`, else the catalog
+     workspace.],
+    [`model`],
+    [The host's `model` when set (a different `model` in the call is
+     refused), else the call's `model` (must be in `models`), else the
+     definition's `model`, else the main agent's current model.],
+    [effort],
+    [The main agent's current effort, or the `effort` of the child's model
+     entry when the child runs on another model and the entry sets one.],
+    [context],
+    [The child's model entry. The same model keeps the main agent's window.],
+  )],
+  caption: [DISPATCH RESOLUTION],
+  kind: table,
+)
+
+`hosts` and `models` apply independently. An entry with an unknown field, a
+model key that is not in `llm.models`, or an alias that is neither in
+`~/.ssh/config` nor a catalog entry with a `target` is refused with a warning
+at startup, and a call that needs it is refused with the same text. An
+unknown key under `agent.dispatch` makes `hosts` count as declared, so only
+`local` and the main agent's binding stay usable. A fork keeps the main
+agent's model: a fork whose `model` or host model differs is refused.
+
+The agent tool lists the granted hosts and models, and the system prompt has
+a `Dispatch resources` section with each host's catalog capability and bound
+model and each model's name and context window. Neither names a URL, key,
+`HostName` or `User`.
+
+The policy is read when the session starts. `/dispatch` shows it, and
+`/dispatch reload` reads the config again; a config file changed during the
+session has no effect until then.
+
+Every model is called from this machine, whatever host the child runs on.
+`agent.dispatch` limits where the `agent` tool sends children. It is not a
+sandbox: the shell can still reach any host the user can.
 
 === Fork Mode
 <agent-subagents-fork>
@@ -1368,8 +1450,9 @@ produces:
   prompt, tool calls, tool results, content chunks, final output).
 - `<task_id>.meta.json`: sidecar with label, `subagent_type`, status,
   isolation mode, worktree path, `host` (`local` or the alias the run was
-  sent to), `endpoint` (the SSH target behind that alias) and `workspace`.
-  It is replaced atomically.
+  sent to), `endpoint` (the SSH target behind that alias), `workspace` and
+  `model` (the model the call named, absent when omitted). It is replaced
+  atomically.
 - `<task_id>.history.jsonl`: the child's message history in the session file
   format, written when the run ends. A history larger than 16 MiB is not
   kept. The meta names it in `history_file`.
@@ -1406,15 +1489,17 @@ While a backgrounded run is alive:
   it is busy). A finished child whose history is stored is rebuilt from that
   history, with the same definition, host and workspace, and runs in the
   background (`resume: history`); its result arrives as a task notification.
-  The rebuilt child uses the current model and reasoning effort, not the ones
-  of the earlier run. It returns to the stored alias and workspace, even when
+  A model the earlier call named, or the host's bound model, is resolved
+  again through `agent.dispatch` and the resume is refused when it is no
+  longer granted; otherwise the rebuilt child uses the current model and
+  reasoning effort. It returns to the stored alias and workspace, even when
   the catalog workspace changed since; when that alias now reaches another
   SSH target, the resume is refused. Without instructions the child is asked to
   continue, or to report the result if it is done.
 - When neither applies (no stored history, a `legacy` run, a worktree run),
   `agent_resume` reads the meta sidecar plus the transcript tail and returns
   a synthesized `resume_prompt` (`resume: prompt_only`) that can be passed to
-  a fresh `agent` call.
+  a fresh `agent` call, with the run's `host`, `workspace` and `model`.
 
 === Peer Communication
 <agent-subagents-messages>

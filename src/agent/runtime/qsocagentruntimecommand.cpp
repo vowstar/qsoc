@@ -17,6 +17,7 @@
 #include "agent/protocol/qsocmessagemarkup.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocdispatchpolicy.h"
 #include "agent/qsocfilehistory.h"
 #include "agent/qsocgoal.h"
 #include "agent/qsocmemorymanager.h"
@@ -269,6 +270,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             "  /resume [id] /rewind /branch [name] /rename <title> /diff /btw <question>\n"
             "  /memory /goal /agents /agents-history /mcp /loop\n"
             "  /cwd [path] /project [path] /ssh [target] /local\n"
+            "  /dispatch [reload] shows the hosts and models sub-agents may use\n"
             "  !command runs a shell command and adds its output to the conversation\n"
             "  !!command runs it without adding the output; #fact saves memory\n"
             "Keyboard shortcuts:\n"
@@ -595,6 +597,11 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         }
         disconnectRemote();
         emitOutput(QStringLiteral("Returned to local workspace (binding kept).\n"));
+        return true;
+    }
+
+    if (cmd == QStringLiteral("/dispatch")) {
+        runDispatchCommand(rest);
         return true;
     }
 
@@ -1223,4 +1230,32 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
     d->pendingAutoInputs.append(prompt);
     emitOutput(QStringLiteral("(Running skill %1)\n").arg(skillName));
     return true;
+}
+
+QStringList QSocAgentRuntime::loadDispatchPolicy()
+{
+    const QSocDispatchPolicy policy
+        = QSocDispatchPolicy::load(d->socConfig, d->hostCatalog, d->sshConfig.get());
+    if (d->agentTool != nullptr) {
+        d->agentTool->setDispatchPolicy(policy);
+    }
+    auto cfg                  = d->agent->getConfig();
+    cfg.dispatchResources     = policy.promptSection();
+    cfg.dispatchHostsDeclared = policy.hostsDeclared();
+    d->agent->setConfig(cfg);
+    return policy.warnings();
+}
+
+void QSocAgentRuntime::runDispatchCommand(const QString &argument)
+{
+    if (argument == QStringLiteral("reload")) {
+        loadDispatchPolicy();
+        emitOutput(QStringLiteral("Reloaded agent.dispatch.\n"));
+    } else if (!argument.isEmpty()) {
+        emitOutput(QStringLiteral("Usage: /dispatch [reload]\n"));
+        return;
+    }
+    if (d->agentTool != nullptr) {
+        emitOutput(d->agentTool->dispatchPolicy().describe());
+    }
 }

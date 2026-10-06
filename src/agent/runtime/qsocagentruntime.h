@@ -641,6 +641,10 @@ private:
 
     /* Sub-agent definitions of every layer the bound workspace offers. */
     void reloadAgentDefinitions();
+
+    /* Sub-agent dispatch resources */
+    QStringList loadDispatchPolicy();
+    void        runDispatchCommand(const QString &argument);
 };
 
 #endif /* QSOCAGENTRUNTIME_H */

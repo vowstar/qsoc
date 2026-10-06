@@ -12,6 +12,7 @@
 #include "agent/qsocawaysummary.h"
 #include "agent/qsocbashtasksource.h"
 #include "agent/qsoccontextrestore.h"
+#include "agent/qsocdispatchpolicy.h"
 #include "agent/qsocfilehistory.h"
 #include "agent/qsocgoal.h"
 #include "agent/qsocgoalprompt.h"
@@ -210,7 +211,7 @@ const QStringList kRuntimeCommands = {
     QStringLiteral("/ssh"),    QStringLiteral("/agents"),  QStringLiteral("/agents-history"),
     QStringLiteral("/loop"),   QStringLiteral("/diff"),    QStringLiteral("/help"),
     QStringLiteral("/model"),  QStringLiteral("/effort"),  QStringLiteral("/resume"),
-    QStringLiteral("/rewind"), QStringLiteral("/btw"),
+    QStringLiteral("/rewind"), QStringLiteral("/btw"),     QStringLiteral("/dispatch"),
 };
 
 bool isRuntimeCommand(const QString &cmd)
@@ -526,6 +527,16 @@ void QSocAgentRuntime::assembleInfrastructure(const QSocAgentRuntimeOptions &opt
     d->agent->setGoalCatalog(d->goalCatalog);
     d->agent->setHookManager(d->hookManager);
     d->agent->setContextualBashSafetyJudge(QSocAgent::classifyBashCommand);
+    const QStringList dispatchWarnings = loadDispatchPolicy();
+    if (!dispatchWarnings.isEmpty()) {
+        /* After construction, so a frontend attached by then hears it. */
+        QTimer::singleShot(0, this, [this, dispatchWarnings] {
+            for (const QString &warning : dispatchWarnings) {
+                emitOutput(
+                    warning + QLatin1Char('\n'), static_cast<int>(QSocAgentRuntimeStyle::Warning));
+            }
+        });
+    }
 
     wireAgentCallbacks();
     wirePersistence();

@@ -269,6 +269,7 @@ public:
         QString host;      /* the alias the run was sent to, or `local` */
         QString endpoint;  /* the SSH target behind the alias, or `local` */
         QString workspace; /* workspace root */
+        QString model;     /* the model the call named, empty when omitted */
     };
 
     /** @brief Record where a run executes. No-op for unknown ids. */
@@ -294,6 +295,7 @@ public:
         QString host;
         QString endpoint; /* the host value of a sidecar that has none */
         QString workspace;
+        QString model;       /* the model the call named */
         QString historyFile; /* QSocSession jsonl of the child history */
         QString definition;  /* agent definition the child was built from */
         bool    legacy = false;

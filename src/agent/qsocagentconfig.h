@@ -139,6 +139,11 @@ struct QSocAgentConfig
     /* Retry settings */
     int maxRetries = 3; /* Maximum retry attempts for timeout/network errors */
 
+    /* The `# Dispatch resources` section and whether `agent.dispatch.hosts`
+     * replaces the host catalog as the list of dispatch hosts. */
+    QString dispatchResources;
+    bool    dispatchHostsDeclared = false;
+
     /* Remote workspace state (populated by the REPL when a remote target
      * is active). When remoteMode is true the agent system prompt declares
      * the remote workspace and the tool registry swaps file/shell/path

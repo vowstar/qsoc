@@ -5,11 +5,13 @@
 #define QSOCTOOLAGENT_H
 
 #include "agent/qsocagentconfig.h"
+#include "agent/qsocdispatchpolicy.h"
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 
 #include <memory>
+#include <optional>
 #include <QList>
 #include <QMap>
 #include <QPointer>
@@ -66,6 +68,12 @@ public:
      *        host-list description.
      */
     void setSshConfigParser(QSocSshConfigParser *parser) { sshConfigParser_ = parser; }
+
+    /** @brief Use @p policy for every later spawn and resume. */
+    void setDispatchPolicy(const QSocDispatchPolicy &policy) { dispatchPolicy_ = policy; }
+
+    /** @brief The policy later spawns use. */
+    const QSocDispatchPolicy &dispatchPolicy() const { return dispatchPolicy_; }
 
     QString getName() const override;
     QString getDescription() const override;
@@ -266,10 +274,16 @@ private:
      * @details The whole binding rather than its registry, because a child's
      *          tools, its config and its workspace health all have to name
      *          the same (target, workspace) pair. An empty @p workspace
-     *          means the catalog workspace of @p host.
+     *          means the catalog workspace of @p host. A @p namedRoot marks a
+     *          workspace the model named: it must exist, stay at or below the
+     *          root when that is not empty, and not be `/` or the login
+     *          directory.
      */
     std::shared_ptr<HostBinding> resolveHostBinding(
-        const QString &host, const QString &workspace, QString *errorMessage);
+        const QString                &host,
+        const QString                &workspace,
+        const std::optional<QString> &namedRoot,
+        QString                      *errorMessage);
 
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;
@@ -283,6 +297,7 @@ private:
     QSocHostCatalog             *hostCatalog_     = nullptr;
     QSocSshConfigParser         *sshConfigParser_ = nullptr;
     QPointer<QSocTaskEventQueue> eventQueue_;
+    QSocDispatchPolicy           dispatchPolicy_;
 
     QMap<QString, std::shared_ptr<HostBinding>> hostCache_;
 };

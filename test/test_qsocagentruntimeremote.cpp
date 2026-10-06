@@ -572,9 +572,9 @@ void Test::theHostSectionShowsTheLiveBinding()
     const QString prompt = session->agent()->buildSystemPromptWithMemory();
     const QString host   = prompt.mid(prompt.indexOf(QStringLiteral("# Host Catalog")));
     QVERIFY2(
-        host.contains(
-            QStringLiteral("Active: %1\nWorkspace: %2\n").arg(session->remoteTarget(), workspace)),
+        host.contains(QStringLiteral("Active: cat-only\nWorkspace: %1\n").arg(workspace)),
         qPrintable(host));
+    QVERIFY2(!host.contains(session->remoteTarget()), qPrintable(host));
 }
 
 void Test::aRememberedBindingReconnectsWithoutAsking()

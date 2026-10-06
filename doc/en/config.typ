@@ -530,6 +530,13 @@ These settings can also be overridden by command-line options (see @agent-comman
     [A `!` line's command and output enter the conversation and the session
      (default: true); `false` keeps them on screen only. See
      @agent-shell-context],
+    [agent.dispatch.hosts],
+    [Hosts a sub-agent may run on, by `~/.ssh/config` or host catalog alias,
+     each with optional `workspace` and `model`; absent keeps every host
+     catalog entry usable. See @agent-dispatch],
+    [agent.dispatch.models],
+    [List of `llm.models` keys a sub-agent may be asked to run on (default:
+     none, a child runs on the main agent's model). See @agent-dispatch],
     [agent.system_prompt], [Custom system prompt override],
     [agent.predict_input],
     [Predict next input as ghost text using the selected model and effort:
