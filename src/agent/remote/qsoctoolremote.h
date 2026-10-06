@@ -193,7 +193,7 @@ private:
     QSocRemotePathContext *m_pathCtx = nullptr;
 };
 
-/** @brief Remote path_context: report/change remote cwd, root, writable dirs. */
+/** @brief Remote path_context: the local actions, over the remote workspace. */
 class QSocToolRemotePath : public QSocTool
 {
     Q_OBJECT
@@ -208,6 +208,8 @@ public:
     bool    isReadOnly() const override { return true; }
 
 private:
+    QString listing() const;
+
     QSocRemoteConnection  *m_conn    = nullptr;
     QSocRemotePathContext *m_pathCtx = nullptr;
 };

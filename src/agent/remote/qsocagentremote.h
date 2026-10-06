@@ -205,6 +205,37 @@ public:
     /** @brief Resolve and verify the working directory bound to this workspace. */
     bool resolveBoundCwd(QString *canonicalCwd, QString *errorMessage = nullptr) const;
 
+    /** @brief How many added writable directories are kept; the oldest goes first. */
+    static constexpr int kMaxAddedWritableDirs = 10;
+
+    /**
+     * @brief Make an existing remote directory writable beside the workspace.
+     * @details Binds the name to the directory the host resolves it to now.
+     *          Once the name resolves elsewhere, writes under it are refused
+     *          until it is added again. Kept across a reconnect to the same
+     *          binding; @ref teardown and a bind to a different workspace drop
+     *          every added directory. Adding the workspace root changes nothing.
+     * @param added Receives the normalized name that was added.
+     * @return False when the host does not hold a directory under that name.
+     */
+    bool addWritableDirectory(
+        const QString &requested, QString *added, QString *errorMessage = nullptr);
+
+    /** @brief Forget an added directory. The workspace root stays writable. */
+    void removeWritableDirectory(const QString &requested);
+
+    /** @brief Forget every added directory. */
+    void clearWritableDirectories();
+
+    /** @brief Added directories, oldest first, without the workspace root. */
+    QStringList addedWritableDirs() const;
+
+    /** @brief The host path @p dir was bound to, empty when it is not bound. */
+    QString writableAnchor(const QString &dir) const { return m_writableAnchors.value(dir); }
+
+    /** @brief Whether the host still resolves @p dir to its bound path. */
+    bool writableDirHolds(const QString &dir) const;
+
     /**
      * @brief Observe every accepted working-directory change.
      * @details The working directory lives in the path context, but the agent
@@ -436,8 +467,16 @@ private:
     bool resolveBoundDirectory(
         const QString &dir, QString *canonicalDir, QString *errorMessage) const;
 
-    /** @brief Validate configured writable roots against their bound anchors. */
-    bool canonicalWritableDirs(QStringList *dirs, QString *errorMessage) const;
+    /**
+     * @brief The bound anchors of the writable roots the host still honors.
+     * @details False only when the workspace itself fails verification. A
+     *          root without an anchor, or one the host now resolves elsewhere,
+     *          is left out and the first such reason goes to @p staleReason.
+     */
+    bool canonicalWritableDirs(QStringList *dirs, QString *staleReason, QString *errorMessage) const;
+
+    /** @brief Why @p dir no longer resolves to its anchor, empty when it does. */
+    QString writableDirMismatch(const QString &dir) const;
 
     QSocSshSession                                               *m_session = nullptr;
     QSocSftpClient                                               *m_sftp    = nullptr;

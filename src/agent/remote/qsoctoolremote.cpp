@@ -13,6 +13,7 @@
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
 #include "agent/remote/qsocsshsession.h"
+#include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
 #include "common/qsocboundedcapture.h"
 #include "common/qsocimageattach.h"
@@ -715,7 +716,7 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
     }
 
     /* Checkpoint the pre-write state so rewind can restore the remote file. */
-    if (m_fileHistory != nullptr) {
+    if (m_fileHistory != nullptr && m_fileHistory->isPathInScope(remotePath)) {
         if (!m_fileHistory->trackEdit(remotePath, existedBefore, beforeContent)) {
             return QStringLiteral("Error: Cannot save file history before writing: %1")
                 .arg(remotePath);
@@ -887,7 +888,7 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
             .arg(remotePath);
     }
     /* Checkpoint the pre-edit content so rewind can restore the remote file. */
-    if (m_fileHistory != nullptr) {
+    if (m_fileHistory != nullptr && m_fileHistory->isPathInScope(remotePath)) {
         if (!m_fileHistory->trackEdit(remotePath, true, content)) {
             return QStringLiteral("Error: Cannot save file history before editing: %1")
                 .arg(remotePath);
@@ -1062,8 +1063,10 @@ QString QSocToolRemotePath::getName() const
 QString QSocToolRemotePath::getDescription() const
 {
     return QStringLiteral(
-        "Report the remote workspace root, working directory, and writable "
-        "directories. Action \"cwd\" changes the remote working directory.");
+        "Manage remote workspace paths. "
+        "Actions: 'list' (show root, working dir, and writable dirs), 'set_working' (change "
+        "working dir), 'add' (make an existing remote directory writable), 'remove' (forget a "
+        "directory), 'clear' (forget every added directory).");
 }
 
 json QSocToolRemotePath::getParametersSchema() const
@@ -1073,9 +1076,32 @@ json QSocToolRemotePath::getParametersSchema() const
         {"properties",
          {{"action",
            {{"type", "string"},
-            {"enum", json::array({"show", "cwd"})},
-            {"description", "\"show\" to report, \"cwd\" to change working dir"}}},
-          {"path", {{"type", "string"}, {"description", "New cwd when action=cwd"}}}}}};
+            {"enum", {"list", "set_working", "add", "remove", "clear"}},
+            {"description", "Action to perform"}}},
+          {"path",
+           {{"type", "string"},
+            {"description", "Directory path (required for set_working, add, remove)"}}}}},
+        {"required", json::array({"action"})}};
+}
+
+QString QSocToolRemotePath::listing() const
+{
+    QString out
+        = QStringLiteral("Project: %1\nWorking: %2\n").arg(m_pathCtx->root(), m_pathCtx->cwd());
+    const QStringList added = m_conn != nullptr ? m_conn->addedWritableDirs() : QStringList();
+    if (!added.isEmpty()) {
+        out += QStringLiteral("Recent:\n");
+        for (const QString &dir : added) {
+            out += QStringLiteral("  - ") + dir + QLatin1Char('\n');
+        }
+    }
+    out += QStringLiteral("Writable:\n");
+    for (const QString &dir : m_pathCtx->writableDirs()) {
+        const QString anchor = m_conn != nullptr ? m_conn->writableAnchor(dir) : QString();
+        const bool    holds  = m_conn != nullptr && m_conn->writableDirHolds(dir);
+        out += QSocPathContext::describeWritableRoot(dir, anchor, holds);
+    }
+    return out.trimmed();
 }
 
 QString QSocToolRemotePath::execute(const json &arguments)
@@ -1083,36 +1109,59 @@ QString QSocToolRemotePath::execute(const json &arguments)
     if (m_pathCtx == nullptr) {
         return QStringLiteral("Error: remote path context is not configured");
     }
-    const QString action = arguments.contains("action") && arguments["action"].is_string()
-                               ? QString::fromStdString(arguments["action"].get<std::string>())
-                               : QStringLiteral("show");
-    if (action == QStringLiteral("cwd")) {
-        if (!arguments.contains("path") || !arguments["path"].is_string()) {
-            return QStringLiteral("Error: path is required for action=cwd");
-        }
-        if (m_conn == nullptr) {
-            return QStringLiteral("Error: no remote workspace is bound");
-        }
-        const QString requested = QString::fromStdString(arguments["path"].get<std::string>());
-        QString       why;
+    QString action = arguments.contains("action") && arguments["action"].is_string()
+                         ? QString::fromStdString(arguments["action"].get<std::string>())
+                         : QStringLiteral("list");
+    /* Earlier spellings of list and set_working. */
+    if (action == QStringLiteral("show")) {
+        action = QStringLiteral("list");
+    } else if (action == QStringLiteral("cwd")) {
+        action = QStringLiteral("set_working");
+    }
+
+    if (action == QStringLiteral("list")) {
+        return listing();
+    }
+    if (m_conn == nullptr) {
+        return QStringLiteral("Error: no remote workspace is bound");
+    }
+    if (action == QStringLiteral("clear")) {
+        m_conn->clearWritableDirectories();
+        return QStringLiteral("User directories cleared.");
+    }
+
+    if (!arguments.contains("path") || !arguments["path"].is_string()) {
+        return QStringLiteral("Error: path is required for action '%1'").arg(action);
+    }
+    const QString path = QString::fromStdString(arguments["path"].get<std::string>());
+
+    if (action == QStringLiteral("set_working")) {
+        QString why;
         /* Every refusal reads the same to the model, and they must: what it
          * has to know is that the move did not happen and where it still is.
          * Which of them it was lives in @p why. */
-        if (m_conn->setWorkingDirectory(requested, &why)
-            != QSocRemoteConnection::CwdChange::Changed) {
+        if (m_conn->setWorkingDirectory(path, &why) != QSocRemoteConnection::CwdChange::Changed) {
             return QStringLiteral("Error: %1. The working directory is unchanged and still %2.")
                 .arg(why, m_pathCtx->cwd());
         }
+        return QStringLiteral("Working directory set to: %1").arg(m_pathCtx->cwd());
     }
-    QString out;
-    out += QStringLiteral("remote_root: ") + m_pathCtx->root() + QLatin1Char('\n');
-    out += QStringLiteral("remote_cwd : ") + m_pathCtx->cwd() + QLatin1Char('\n');
-    const QStringList dirs = m_pathCtx->writableDirs();
-    out += QStringLiteral("writable   :\n");
-    for (const QString &dir : dirs) {
-        out += QStringLiteral("  - ") + dir + QLatin1Char('\n');
+
+    if (action == QStringLiteral("add")) {
+        QString added;
+        QString why;
+        if (!m_conn->addWritableDirectory(path, &added, &why)) {
+            return QStringLiteral("Error: %1").arg(why);
+        }
+        return QStringLiteral("Added to path context: %1").arg(added);
     }
-    return out;
+
+    if (action == QStringLiteral("remove")) {
+        m_conn->removeWritableDirectory(path);
+        return QStringLiteral("Removed from path context: %1").arg(path);
+    }
+
+    return QStringLiteral("Error: Unknown action '%1'").arg(action);
 }
 
 /* bash_manage */

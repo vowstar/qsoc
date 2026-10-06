@@ -51,6 +51,9 @@ public:
     /* Get full context as structured text */
     QString getFullContext() const;
 
+    /* One writable root as path_context lists it, local and remote alike */
+    static QString describeWritableRoot(const QString &dir, const QString &resolved, bool holds);
+
     /* Shared read-before-edit state for the local file tools. */
     QSocFileReadState &readState() { return fileReadState; }
 

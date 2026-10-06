@@ -1851,8 +1851,9 @@ The workspace is never part of the command line. It is the first of:
 + The workspace remembered for this project with the same target.
 + A two-column directory browser that opens at the remote home directory.
 
-The chosen path becomes both the initial cwd and the sole writable root
-for remote file tools. Cancelling the browser connects nothing. A local
+The chosen path becomes both the initial cwd and the first writable root
+for remote file tools; `path_context` can add more
+(@agent-remote-writable). Cancelling the browser connects nothing. A local
 `--workspace` is never used as the remote workspace.
 
 After a successful `/ssh`, the target and workspace are remembered for
@@ -1867,8 +1868,8 @@ a warning is printed and the session stays local. A run with `-q`,
 === Writable Root and Symlinks
 <agent-remote-writable>
 
-`write_file` and `edit_file` refuse a path outside the workspace root. The
-check runs on the path the *host* resolves, not on the path as typed, so a
+`write_file` and `edit_file` refuse a path outside the writable roots: the
+workspace root and the directories added with `path_context`. The check runs on the path the *host* resolves, not on the path as typed, so a
 symlink cannot be used to spell an outside directory as an inside one:
 
 - A symlink that leads out of the workspace is refused, whether it is a
@@ -1888,6 +1889,19 @@ and persistent `.qsoc-agent/tree-id` are bound when selected; changing the root
 link or replacing the directory at the same path makes writes, shell cwd, and
 rewinds refuse the workspace instead of following the replacement. A copied
 marker deliberately identifies the copy as the same logical tree.
+
+Remote `path_context` takes the same actions as the local tool: `list`,
+`set_working`, `add`, `remove`, and `clear`. `add` accepts an existing remote
+directory and binds it to the path the host resolves it to at that moment. If
+the name later resolves elsewhere, writes under it are refused until it is
+added again. At most ten added directories are kept; adding another drops the
+oldest. The workspace root cannot be removed. `list` names the root, the
+working directory, and every writable root with its resolved path, marked
+`[changed]` when the host now resolves it elsewhere.
+
+Added directories survive a reconnect to the same workspace. `/local` and
+binding a different workspace drop them. They are not checkpointed, and rewind
+never changes them.
 
 === When The Link Drops
 <agent-remote-disconnect>
@@ -1995,7 +2009,7 @@ Workspace tools operate on the remote host (SFTP + SSH exec):
 - `bash_manage` (status/output/terminate/kill for backgrounded jobs)
 - `monitor`, `monitor_stop` (remote background job over the session, local
   notification stream)
-- `path_context` (remote root, cwd, writable dirs)
+- `path_context` (remote root, cwd, writable dirs, added writable dirs)
 - `todo_*` (`.qsoc/todos.md` in the remote workspace)
 - `skill_find`, `skill_create` (skills of the remote `.qsoc/skills` and of
   this machine, see @agent-skills)
@@ -2247,7 +2261,8 @@ what interrupted it.
 File rewind covers the active local project root or the selected remote
 workspace. Other locally allowed write roots, such as the working directory,
 user-added directories, and the OS temp directory, remain writable but are not
-checkpointed and are never changed by rewind.
+checkpointed and are never changed by rewind. The same holds for directories
+added to a remote workspace with `path_context`.
 
 Each checkpoint names the tree that produced it. A local tree is bound to the
 project's `.qsoc/tree-id`, created when the first local checkpoint needs to be

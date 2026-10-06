@@ -982,11 +982,13 @@ QSocSftpClient::Presence QSocSftpClient::linkStat(
     LIBSSH2_SFTP_ATTRIBUTES attrs{};
     const Presence          presence = statStep(path, LIBSSH2_SFTP_LSTAT, errorMessage, &attrs);
     if (presence == Presence::Present && stat != nullptr) {
-        stat->regular = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) != 0
-                        && LIBSSH2_SFTP_S_ISREG(attrs.permissions);
-        stat->size    = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) != 0
-                            ? static_cast<qint64>(attrs.filesize)
-                            : -1;
+        stat->regular   = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) != 0
+                          && LIBSSH2_SFTP_S_ISREG(attrs.permissions);
+        stat->directory = (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) != 0
+                          && LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
+        stat->size      = (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) != 0
+                              ? static_cast<qint64>(attrs.filesize)
+                              : -1;
     }
     return presence;
 }

@@ -3100,6 +3100,11 @@ QString QSocAgent::remoteToolLines() const
             "The remote host has no usable shell (see Environment), so no tool runs commands "
             "there.\n");
     }
+    text += present(QStringLiteral("path_context"))
+                ? QStringLiteral(
+                      "Writes go to the workspace and the directories added with path_context; "
+                      "path_context(action=list) shows them.\n")
+                : QStringLiteral("Writes go to the workspace only.\n");
     if (present(QStringLiteral("todo_list"))) {
         text += QStringLiteral(
             "The todo tools keep the list in the remote workspace .qsoc/todos.md.\n");
@@ -3189,12 +3194,6 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
         if (!agentConfig.remoteWorkingDir.isEmpty()) {
             remoteSection += QStringLiteral("- Working directory: ") + agentConfig.remoteWorkingDir
                              + QStringLiteral("\n");
-        }
-        if (!agentConfig.remoteWritableDirs.isEmpty()) {
-            remoteSection += QStringLiteral("- Writable directories:\n");
-            for (const QString &dir : agentConfig.remoteWritableDirs) {
-                remoteSection += QStringLiteral("  - ") + dir + QStringLiteral("\n");
-            }
         }
         remoteSection += remoteToolLines();
         remoteSection += QStringLiteral(

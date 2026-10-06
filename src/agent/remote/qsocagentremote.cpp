@@ -931,11 +931,29 @@ void QSocRemoteConnection::resetReconnectBudget()
     m_reconnectsUsed = 0;
 }
 
-bool QSocRemoteConnection::canonicalWritableDirs(QStringList *dirs, QString *errorMessage) const
+QString QSocRemoteConnection::writableDirMismatch(const QString &dir) const
 {
-    if (dirs != nullptr) {
-        dirs->clear();
+    const QString anchor = m_writableAnchors.value(dir);
+    if (anchor.isEmpty()) {
+        return QStringLiteral("remote writable directory has no bound identity: %1").arg(dir);
     }
+    QString resolved;
+    QString err;
+    if (m_sftp == nullptr
+        || m_sftp->canonicalize(dir, &resolved, &err) != QSocSftpClient::Canonical::Ok) {
+        return err.isEmpty() ? QStringLiteral("the host cannot resolve %1").arg(dir) : err;
+    }
+    if (resolved != anchor) {
+        return QStringLiteral("remote writable directory changed identity: %1").arg(dir);
+    }
+    return {};
+}
+
+bool QSocRemoteConnection::canonicalWritableDirs(
+    QStringList *dirs, QString *staleReason, QString *errorMessage) const
+{
+    dirs->clear();
+    staleReason->clear();
     if (m_sftp == nullptr) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("remote SFTP client is not connected");
@@ -946,40 +964,14 @@ bool QSocRemoteConnection::canonicalWritableDirs(QStringList *dirs, QString *err
         return false;
     }
     for (const QString &lexical : m_path.writableDirs()) {
-        const QString anchor = m_writableAnchors.value(lexical);
-        if (anchor.isEmpty()) {
-            if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("remote writable directory has no bound identity: %1")
-                                    .arg(lexical);
-            }
-            return false;
-        }
-        QString resolved;
-        QString err;
-        if (m_sftp->canonicalize(lexical, &resolved, &err) != QSocSftpClient::Canonical::Ok) {
-            if (errorMessage != nullptr) {
-                *errorMessage = err;
-            }
-            return false;
-        }
-        if (resolved != anchor) {
-            if (errorMessage != nullptr) {
-                *errorMessage
-                    = QStringLiteral("remote writable directory changed identity: %1").arg(lexical);
-            }
-            return false;
-        }
-        if (dirs != nullptr) {
-            dirs->append(anchor);
+        const QString why = writableDirMismatch(lexical);
+        if (why.isEmpty()) {
+            dirs->append(m_writableAnchors.value(lexical));
+        } else if (staleReason->isEmpty()) {
+            *staleReason = why;
         }
     }
-    if (dirs == nullptr || !dirs->isEmpty()) {
-        return true;
-    }
-    if (errorMessage != nullptr) {
-        *errorMessage = QStringLiteral("no verified remote writable directory is bound");
-    }
-    return false;
+    return true;
 }
 
 bool QSocRemoteConnection::verifyWorkspaceBinding(QString *canonicalRoot, QString *errorMessage) const
@@ -1071,6 +1063,92 @@ bool QSocRemoteConnection::resolveBoundCwd(QString *canonicalCwd, QString *error
     return resolveBoundDirectory(m_path.cwd(), canonicalCwd, errorMessage);
 }
 
+bool QSocRemoteConnection::addWritableDirectory(
+    const QString &requested, QString *added, QString *errorMessage)
+{
+    const auto refuse = [errorMessage](const QString &reason) {
+        if (errorMessage != nullptr) {
+            *errorMessage = reason;
+        }
+        return false;
+    };
+    if (m_sftp == nullptr || m_path.root().isEmpty()) {
+        return refuse(QStringLiteral("no remote workspace is bound"));
+    }
+    const QString lexical = m_path.normalize(requested);
+    const QString notDir = QStringLiteral("'%1' does not exist or is not a directory").arg(lexical);
+    QString       resolved;
+    QString       err;
+    switch (m_sftp->realPath(lexical, &resolved, &err)) {
+    case QSocSftpClient::Presence::Present:
+        break;
+    case QSocSftpClient::Presence::Absent:
+        return refuse(notDir);
+    case QSocSftpClient::Presence::Unknown:
+        return refuse(
+            err.isEmpty() ? QStringLiteral("the host cannot resolve %1").arg(lexical) : err);
+    }
+    QSocSftpClient::LinkStat stat;
+    switch (m_sftp->linkStat(resolved, &stat, &err)) {
+    case QSocSftpClient::Presence::Present:
+        if (!stat.directory) {
+            return refuse(notDir);
+        }
+        break;
+    case QSocSftpClient::Presence::Absent:
+        return refuse(notDir);
+    case QSocSftpClient::Presence::Unknown:
+        return refuse(err);
+    }
+    if (lexical != m_path.root()) {
+        QStringList dirs = m_path.writableDirs();
+        if (!dirs.contains(lexical)) {
+            const QStringList extras = addedWritableDirs();
+            if (extras.size() >= kMaxAddedWritableDirs) {
+                dirs.removeAll(extras.first());
+                m_writableAnchors.remove(extras.first());
+            }
+            dirs.append(lexical);
+            m_path.setWritableDirs(dirs);
+        }
+        m_writableAnchors.insert(lexical, resolved);
+    }
+    if (added != nullptr) {
+        *added = lexical;
+    }
+    return true;
+}
+
+void QSocRemoteConnection::removeWritableDirectory(const QString &requested)
+{
+    const QString lexical = m_path.normalize(requested);
+    QStringList   dirs    = m_path.writableDirs();
+    if (lexical == m_path.root() || dirs.removeAll(lexical) == 0) {
+        return;
+    }
+    m_path.setWritableDirs(dirs);
+    m_writableAnchors.remove(lexical);
+}
+
+void QSocRemoteConnection::clearWritableDirectories()
+{
+    for (const QString &dir : addedWritableDirs()) {
+        removeWritableDirectory(dir);
+    }
+}
+
+QStringList QSocRemoteConnection::addedWritableDirs() const
+{
+    QStringList dirs = m_path.writableDirs();
+    dirs.removeAll(m_path.root());
+    return dirs;
+}
+
+bool QSocRemoteConnection::writableDirHolds(const QString &dir) const
+{
+    return writableDirMismatch(dir).isEmpty();
+}
+
 bool QSocRemoteConnection::resolveWritablePath(
     const QString &requested, QString *canonicalPath, QString *errorMessage) const
 {
@@ -1096,12 +1174,15 @@ bool QSocRemoteConnection::resolveWritablePath(
     }
 
     QStringList writable;
-    if (!canonicalWritableDirs(&writable, &err)) {
+    QString     stale;
+    if (!canonicalWritableDirs(&writable, &stale, &err)) {
         return refuse(err);
     }
     if (!QSocRemotePathContext::isWithinAny(resolved, writable)) {
         return refuse(
-            QStringLiteral("remote path is outside writable directories: %1").arg(resolved));
+            stale.isEmpty()
+                ? QStringLiteral("remote path is outside writable directories: %1").arg(resolved)
+                : stale);
     }
     if (canonicalPath != nullptr) {
         *canonicalPath = resolved;
@@ -1141,12 +1222,16 @@ bool QSocRemoteConnection::resolveWritableEntry(
             err.isEmpty() ? QStringLiteral("the host cannot resolve %1").arg(parent) : err);
     }
     QStringList writable;
-    if (!canonicalWritableDirs(&writable, &err)) {
+    QString     stale;
+    if (!canonicalWritableDirs(&writable, &stale, &err)) {
         return refuse(err);
     }
     const QString entry = QDir(canonicalParent).filePath(leaf);
     if (!QSocRemotePathContext::isWithinAny(entry, writable)) {
-        return refuse(QStringLiteral("remote path is outside writable directories: %1").arg(entry));
+        return refuse(
+            stale.isEmpty()
+                ? QStringLiteral("remote path is outside writable directories: %1").arg(entry)
+                : stale);
     }
     if (entryPath != nullptr) {
         *entryPath = entry;
@@ -1371,6 +1456,11 @@ QSocFileHistory::LiveFileAccessor remoteLiveFileAccessor(QSocRemoteConnection *c
         }
         QString err;
         return sftp->removeFile(entry, &err);
+    };
+    accessor.inScope = [conn](const QString &path) {
+        return conn != nullptr
+               && QSocRemotePathContext::isWithinAny(
+                   path, {conn->canonicalWorkspace(), conn->path()->root()});
     };
     accessor.coversPath = [resolve](const QString &path) { return !resolve(path).isEmpty(); };
     accessor.tree       = [conn]() {

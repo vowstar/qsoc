@@ -171,8 +171,9 @@ public:
     /** @brief Type and size of a path, as LSTAT reports them. */
     struct LinkStat
     {
-        bool   regular = false; /**< A regular file, not a link, directory or device. */
-        qint64 size    = -1;    /**< Byte size, -1 when the server sent none. */
+        bool   regular   = false; /**< A regular file, not a link, directory or device. */
+        bool   directory = false; /**< A directory, not a link to one. */
+        qint64 size      = -1;    /**< Byte size, -1 when the server sent none. */
     };
 
     /** @brief LSTAT @p path; @p stat is filled only when Present. */

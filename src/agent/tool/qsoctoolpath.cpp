@@ -299,9 +299,18 @@ QString QSocPathContext::getSummary() const
     return parts.isEmpty() ? "No paths" : parts.join(" ");
 }
 
+QString QSocPathContext::describeWritableRoot(const QString &dir, const QString &resolved, bool holds)
+{
+    if (resolved.isEmpty()) {
+        return QString("  - %1 [missing]\n").arg(dir);
+    }
+    return QString("  - %1 -> %2%3\n").arg(dir, resolved, holds ? "" : " [changed]");
+}
+
 QString QSocPathContext::getFullContext() const
 {
-    QMutexLocker locker(&mutex);
+    const QList<WritableRoot> roots = writableRoots();
+    QMutexLocker              locker(&mutex);
 
     QString result;
 
@@ -324,6 +333,15 @@ QString QSocPathContext::getFullContext() const
             QFileInfo info(dir);
             QString   status = info.exists() && info.isDir() ? "" : " [missing]";
             result += QString("  - %1%2\n").arg(dir, status);
+        }
+    }
+
+    if (!roots.isEmpty()) {
+        result += "Writable:\n";
+        for (const WritableRoot &root : roots) {
+            const bool holds
+                = canonicalRoot(root.lexical).compare(root.anchor, pathCaseSensitivity()) == 0;
+            result += describeWritableRoot(root.lexical, root.anchor, holds);
         }
     }
 

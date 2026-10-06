@@ -190,6 +190,31 @@ private slots:
             qPrintable(section));
     }
 
+    /* Counterexample: the section listed the writable directories of the
+     * connect, so a directory path_context added or removed later was wrong. */
+    void theRemoteSectionDefersWritableDirsToPathContext()
+    {
+        Workspace       ws(kLocal, kRemote + QStringList{QStringLiteral("path_context")});
+        QSocAgentConfig cfg;
+        cfg.remoteMode         = true;
+        cfg.remoteName         = QStringLiteral("box");
+        cfg.remoteWorkspace    = QStringLiteral("/srv/ws");
+        cfg.remoteWritableDirs = {QStringLiteral("/srv/ws"), QStringLiteral("/srv/removed")};
+        cfg.autoLoadMemory     = false;
+        QSocAgent     agent(nullptr, nullptr, &ws.remote, cfg);
+        const QString section = remoteSection(agent.buildSystemPromptWithMemory());
+        QVERIFY2(!section.contains(QStringLiteral("/srv/removed")), qPrintable(section));
+        QVERIFY2(
+            section.contains(QStringLiteral("path_context(action=list) shows them")),
+            qPrintable(section));
+
+        Workspace     bare(kLocal, kRemote);
+        const QString without = remoteSection(promptFor(&bare.remote));
+        QVERIFY2(
+            without.contains(QStringLiteral("Writes go to the workspace only.")),
+            qPrintable(without));
+    }
+
     void theRemoteSectionSaysWhereEachToolRuns()
     {
         Workspace     ws(kLocal, kRemote);
