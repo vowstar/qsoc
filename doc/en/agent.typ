@@ -1543,8 +1543,8 @@ Hooks and the status line run through the local executor.
 == Background Tasks
 <agent-tasks>
 A unified task panel lists every long-running activity attached to the
-current agent: backgrounded `bash` jobs, scheduled `/loop` prompts, and
-detached sub-agent runs. Monitors created by `monitor` also appear here
+current agent: backgrounded `bash` jobs (local and remote), scheduled
+`/loop` prompts, and detached sub-agent runs. Monitors created by `monitor` also appear here
 while they are alive.
 
 === Status Pill
@@ -1644,8 +1644,9 @@ The agent does not start a turn by itself:
 - when `agent.background_wake` is `false`.
 
 Notifications that do not start a turn wait for the next one. Plain peer
-messages and group messages never start a turn. Background jobs the agent
-did not start never notify the model.
+messages and group messages never start a turn. A notification goes to the
+agent that started the work, so a sub-agent's jobs and monitors report to that
+sub-agent. Background jobs no agent started never notify the model.
 
 Waiting notifications are bounded. Later events of a task merge into its
 waiting notification, which keeps an event count and the newest 8 KiB of
@@ -1663,6 +1664,12 @@ bursts are coalesced before injection. An idle agent starts a turn for
 them (@agent-task-wake).
 The full stream is also written to an `output.log` path returned by the
 tool and shown in the task overlay.
+
+In a remote workspace, `monitor` runs the command on the remote host as a
+background job over the session `/ssh` opened, from the current remote working
+directory, and never starts a local `ssh` program. Its output arrives about
+once a second, with stderr lines marked as for a local monitor. Leaving the workspace with
+`/local` or `/ssh` to another host stops its monitors.
 
 Users normally do not need to configure monitors manually. Ask the agent
 to watch a log, poll a status endpoint, wait for CI, or react to a file
@@ -1904,7 +1911,8 @@ Workspace tools operate on the remote host (SFTP + SSH exec):
 - `read_file`, `write_file`, `list_files`, `edit_file`
 - `bash` (with optional `background=true` for detached jobs)
 - `bash_manage` (status/output/terminate/kill for backgrounded jobs)
-- `monitor`, `monitor_stop` (remote command, local notification stream)
+- `monitor`, `monitor_stop` (remote background job over the session, local
+  notification stream)
 - `path_context` (remote root, cwd, writable dirs)
 - `todo_*` (`.qsoc/todos.md` in the remote workspace)
 - `skill_find`, `skill_create` (skills of the remote `.qsoc/skills` and of
@@ -2070,6 +2078,17 @@ then signalling a stranger. When either check cannot be answered, or answers
 no, nothing is signalled and the result says so as uncertain rather than
 reporting a kill that did not happen. A reconnect alone does not block a
 signal: the link is not the job.
+
+While a job runs, the session checks it about every five seconds, or every
+second while a monitor runs. A job that ends on its own shows its result in the
+task panel (@agent-tasks) and sends the agent that launched it a task
+notification with the exit status and the last 40 lines of output
+(@agent-task-wake). A job its agent stopped, or whose end `bash_manage status`
+already reported, sends none. A job whose directory is gone or whose host
+restarted is reported as failed. Checks wait while another SSH operation runs
+on the session, slow to every 30 seconds after two failed checks, and pause
+while the link is down until the next reconnect. Jobs started by a sub-agent on
+another host are not checked.
 
 == Security
 <agent-security>

@@ -5,6 +5,7 @@
 #define QSOCTOOLREMOTE_H
 
 #include "agent/qsoctool.h"
+#include "agent/remote/qsocremotejobs.h"
 
 class QLLMService;
 class QSocRemoteConnection;
@@ -114,6 +115,31 @@ private:
     QSocRemotePathContext *m_pathCtx     = nullptr;
     QSocFileHistory       *m_fileHistory = nullptr;
 };
+
+/** @brief One background job a launch started, or why it did not. */
+struct QSocRemoteJobStart
+{
+    QSocRemoteJobRecord record;        /**< Its jobId is set even on failure. */
+    QString             jobDir;        /**< Remote job directory. */
+    QString             failure;       /**< Text to hand back; empty on success. */
+    bool                noted = false; /**< The ledger recorded the job. */
+};
+
+/**
+ * @brief Launch @p command as a detached job in @p cwd over @p conn.
+ * @details The one launch path for bash(background=true) and the monitor.
+ *          A recorded job is watched by the connection's job watcher.
+ * @param monitor Whether the monitor tool launched it.
+ * @param ownerId Agent identity the job's completion is reported to.
+ * @param running Set to the live exec while the launch runs, for abort.
+ */
+QSocRemoteJobStart startRemoteJob(
+    QSocRemoteConnection *conn,
+    const QString        &cwd,
+    const QString        &command,
+    bool                  monitor,
+    const QString        &ownerId,
+    QSocSshExec         **running = nullptr);
 
 /** @brief Remote bash: run a shell command over an SSH exec channel. */
 class QSocToolRemoteShellBash : public QSocTool

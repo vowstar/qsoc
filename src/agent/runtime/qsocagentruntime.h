@@ -604,6 +604,7 @@ private:
     void              maybeGenerateAwaySummary();
     void              wireTaskBus();
     void              deliverTaskEvent(const struct QSocTaskEvent &event);
+    QSocAgent        *taskEventOwner(const QString &agentId);
     void              armWake();
     void              settleWake(const QSocAgentTurnResult &result);
     [[nodiscard]] int pendingWakeWork() const;

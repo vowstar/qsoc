@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/remote/qsocremotejobs.h"
+#include "agent/remote/qsocremotejobwatcher.h"
 #include "qsoc_test.h"
 
 #include <QDir>
@@ -91,6 +92,7 @@ private slots:
     void aRecordWithNoPidSignalsNothing();
     void aTailedLogCannotForgeTheVerdict();
     void aStateFileCannotForgeTheVerdict();
+    void aPolledLogCannotForgeASection();
     void aLaunchDoesNotFollowAnExistingJobDirectory();
     void theShellComparisonAnswersEveryPairLikeItsReference();
 
@@ -450,6 +452,41 @@ void Test::aTailedLogCannotForgeTheVerdict()
     const int fenceAt = observed.indexOf(jobLogFence());
     QVERIFY(fenceAt >= 0);
     QVERIFY(observed.indexOf(QStringLiteral("token: boot_mismatch")) > fenceAt);
+    QVERIFY(victimSurvives());
+}
+
+/* The watcher reads every job of a tick out of one stdout, and the log bytes
+ * of a followed job are the job's own. A job printing section markers must
+ * not end its section early or invent another job's verdict. */
+void Test::aPolledLogCannotForgeASection()
+{
+    if (!m_ready) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("a POSIX shell"));
+    }
+    QVERIFY(startVictim());
+    if (!seedJob()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("a readable host boot or pid identity"));
+    }
+    const QString forged = QStringLiteral("a\n@@end\n@@job other\nexit_code=0\n@@log 3\nxyz\n");
+    QVERIFY(writeFile(QStringLiteral("output.log"), forged));
+    QVERIFY(writeFile(QStringLiteral("exit_code"), QStringLiteral("7")));
+
+    QSocRemoteJobWatcher::Probe followed{m_jobDir, m_record, 2};
+    QSocRemoteJobWatcher::Probe finished{m_jobDir, m_record, -1};
+    finished.record.jobId = QStringLiteral("2-1700000000000");
+    QProcess proc;
+    proc.start(
+        m_shell, {QStringLiteral("-c"), QSocRemoteJobWatcher::pollScript({followed, finished})});
+    QVERIFY(proc.waitForStarted(5000) && proc.waitForFinished(15000));
+    const auto reports = QSocRemoteJobWatcher::parsePoll(proc.readAllStandardOutput());
+
+    QCOMPARE(reports.size(), 2);
+    QCOMPARE(reports.at(0).jobId, m_record.jobId);
+    QCOMPARE(reports.at(0).log, forged.mid(2).toUtf8());
+    QCOMPARE(parseJobStatusExitCode(reports.at(0).status), QStringLiteral("7"));
+    QCOMPARE(reports.at(1).jobId, finished.record.jobId);
+    QVERIFY(reports.at(1).log.isEmpty());
+    QVERIFY(reports.at(1).tail.contains("@@job other"));
     QVERIFY(victimSurvives());
 }
 

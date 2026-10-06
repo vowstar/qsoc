@@ -29,6 +29,8 @@
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocremotebashtasksource.h"
+#include "agent/remote/qsocremotejobwatcher.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
@@ -277,6 +279,7 @@ QSocAgentRuntime::~QSocAgentRuntime()
     for (QObject *child : findChildren<QObject *>())
         child->disconnect(this);
     abort();
+    d->monitorTaskSource->stopRemote(d->remoteConn, QStringLiteral("session ending"));
     d->remoteConn->setAbortProbe({});
     d->remoteConn->setWorkingDirectoryObserver({});
     d->remoteConn->teardown();
@@ -880,6 +883,10 @@ void QSocAgentRuntime::registerTools()
     d->bashTaskSource = new QSocBashTaskSource(shellBashTool, this);
     d->bashTaskSource->setTaskEventQueue(d->taskEventQueue);
     d->taskRegistry->registerSource(d->bashTaskSource);
+    auto *remoteBashSource = new QSocRemoteBashTaskSource(d->remoteConn, this);
+    remoteBashSource->setTaskEventQueue(d->taskEventQueue);
+    d->taskRegistry->registerSource(remoteBashSource);
+    d->remoteConn->watcher()->setEnabled(true);
     d->taskRegistry->registerSource(d->monitorTaskSource);
     d->subAgentTaskSource = new QSocSubAgentTaskSource(this);
     d->subAgentTaskSource->loadHistoricalRuns();

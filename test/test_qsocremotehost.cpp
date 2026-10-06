@@ -447,27 +447,23 @@ private slots:
         QVERIFY(manage.getDescription().contains(QStringLiteral("/proc")));
     }
 
-    void aMonitorRunsThroughTheExecutor()
+    void aMonitorNeedsTheBoundSession()
     {
-        QSocMonitorTaskSource::RemoteSpec spec;
-        spec.targetKey = QStringLiteral("user@host.invalid:22");
-        spec.workspace = QStringLiteral("/srv/work");
-        QVERIFY(!QSocMonitorTaskSource::remoteLaunch(spec, QStringLiteral("tail -f log"))
-                     .error.isEmpty());
-
+        QSocMonitorTaskSource source;
+        const auto            start = [&source](QSocRemoteConnection *conn) {
+            return source.startRemote(
+                QStringLiteral("tail -f log"),
+                QStringLiteral("log"),
+                0,
+                false,
+                QSocMonitorTaskSource::RemoteSpec{conn});
+        };
+        QVERIFY(start(nullptr).error.contains(QStringLiteral("not connected")));
         FakeBinding windows(windowsHost());
-        spec.conn = &windows.conn;
-        QVERIFY(
-            QSocMonitorTaskSource::remoteLaunch(spec, QStringLiteral("tail -f log"))
-                .error.contains(QStringLiteral("POSIX shell")));
-
+        QVERIFY(start(&windows.conn).error.contains(QStringLiteral("POSIX shell")));
         FakeBinding bash(hostFrom(kBashHost));
-        spec.conn = &bash.conn;
-        const auto launch = QSocMonitorTaskSource::remoteLaunch(spec, QStringLiteral("tail -f log"));
-        QVERIFY(launch.error.isEmpty());
-        QCOMPARE(launch.args.last(), QStringLiteral("bash -l -s"));
-        QVERIFY(launch.input.contains("tail -f log"));
-        QVERIFY(launch.input.contains("/srv/work"));
+        QVERIFY(start(&bash.conn).error.contains(QStringLiteral("not connected")));
+        QVERIFY(source.listTasks().isEmpty());
     }
 
     void theRemoteEnvironmentNamesTheRemoteHost()
@@ -740,7 +736,7 @@ private slots:
             QStringLiteral("& 'C:\\it''s\\bash.exe' -s"));
         QVERIFY(windowsLauncher(QSocMachine::LoginShell::Unknown, kGitBash, "-s").isEmpty());
 
-        /* Jobs and monitors take the same path form. */
+        /* Jobs, monitors among them, take the same path form. */
         const QString job = jobLaunchScript(
             machineShellPath(cmd, QStringLiteral("/C:/w/.qsoc-agent/jobs/j")),
             machineShellPath(cmd, QStringLiteral("/C:/w")),
@@ -749,15 +745,6 @@ private slots:
             cmd.shell);
         QVERIFY(job.contains(QStringLiteral("'/c/w/.qsoc-agent/jobs/j'")));
         QVERIFY(job.contains(QStringLiteral("nohup bash -l -c")));
-        FakeBinding                       binding(cmd);
-        QSocMonitorTaskSource::RemoteSpec spec;
-        spec.targetKey = QStringLiteral("user@host.invalid:22");
-        spec.workspace = QStringLiteral("/C:/w");
-        spec.conn      = &binding.conn;
-        const auto launch = QSocMonitorTaskSource::remoteLaunch(spec, QStringLiteral("tail -f log"));
-        QVERIFY(launch.error.isEmpty());
-        QCOMPARE(launch.args.last(), viaCmd.command);
-        QVERIFY(launch.input.contains("/c/w"));
     }
 
     void aWindowsBangRunsCmdVerbatim()

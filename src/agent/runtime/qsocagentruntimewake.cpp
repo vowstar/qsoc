@@ -36,16 +36,17 @@ void QSocAgentRuntime::deliverTaskEvent(const QSocTaskEvent &event)
 {
     if (!QSocTaskEventQueue::notifies(event))
         return;
-    const bool forModel = event.agentId != QSocTaskEvent::userOwner()
-                          && (event.agentId.isEmpty() || event.agentId == d->agent->agentIdentity());
-    const bool idle = !d->agent->isRunning();
+    QSocAgent *owner    = taskEventOwner(event.agentId);
+    const bool forModel = owner != nullptr;
+    const bool idle     = !d->agent->isRunning();
     if (forModel) {
-        QSocAgent *agent = d->agent;
-        d->notices.forgetTaken(
-            [agent](const QString &key) { return agent->hasQueuedNotification(key); });
-        const auto [key, text] = d->notices.add(event);
-        agent->queueTaskNotification(text, key);
-        armWake();
+        QSocTaskNotices &notices = owner == d->agent ? d->notices : d->childNotices[event.agentId];
+        notices.forgetTaken(
+            [owner](const QString &key) { return owner->hasQueuedNotification(key); });
+        const auto [key, text] = notices.add(event);
+        owner->queueTaskNotification(text, key);
+        if (owner == d->agent)
+            armWake();
     }
     if (!idle)
         return;
@@ -60,6 +61,23 @@ void QSocAgentRuntime::deliverTaskEvent(const QSocTaskEvent &event)
            {"body", QSocTaskEventQueue::formatTaskNotification(event).toStdString()}};
     display.at = QDateTime::currentDateTimeUtc();
     emit eventRaised(display);
+}
+
+/* The agent a task event is for: main for an empty owner, a live sub-agent by
+ * its mailbox id, and nobody for the user or an agent that is gone. */
+QSocAgent *QSocAgentRuntime::taskEventOwner(const QString &agentId)
+{
+    if (agentId.isEmpty() || agentId == d->agent->agentIdentity())
+        return d->agent;
+    auto *mailbox = d->subAgentTaskSource->mailbox();
+    for (auto it = d->childNotices.begin(); it != d->childNotices.end();) {
+        it = mailbox != nullptr && mailbox->agentFor(it.key()) != nullptr
+                 ? std::next(it)
+                 : d->childNotices.erase(it);
+    }
+    if (agentId == QSocTaskEvent::userOwner() || mailbox == nullptr)
+        return nullptr;
+    return mailbox->agentFor(agentId);
 }
 
 int QSocAgentRuntime::pendingWakeWork() const

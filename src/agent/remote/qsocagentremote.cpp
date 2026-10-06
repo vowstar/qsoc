@@ -7,6 +7,7 @@
 #include "agent/qsocprojectrules.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
+#include "agent/remote/qsocremotejobwatcher.h"
 #include "agent/remote/qsocremoteworkspacefs.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshconfigparser.h"
@@ -670,11 +671,8 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolSkillFind(parent, localProject, fs));
     registry->registerTool(new QSocToolSkillCreate(parent, localProject, fs));
     if (monitorSource != nullptr && machineOffersExecTools(conn->host())) {
-        QSocMonitorTaskSource::RemoteSpec remote;
-        remote.targetKey = conn->target();
-        remote.workspace = conn->workspace();
-        remote.conn      = conn;
-        registry->registerTool(new QSocToolMonitor(parent, monitorSource, remote));
+        registry->registerTool(
+            new QSocToolMonitor(parent, monitorSource, QSocMonitorTaskSource::RemoteSpec{conn}));
         registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
     }
     registry->setFallback(base);
@@ -690,9 +688,26 @@ constexpr int kHostProbeMs = 10000;
 
 } // namespace
 
+QSocRemoteConnection::QSocRemoteConnection()
+    : m_watcher(std::make_unique<QSocRemoteJobWatcher>(this))
+{}
+
 QSocRemoteConnection::~QSocRemoteConnection()
 {
     teardown();
+}
+
+bool QSocRemoteConnection::operationInFlight() const
+{
+    if (m_operations > 0 || (m_session != nullptr && m_session->inOperation())) {
+        return true;
+    }
+    for (const QSocSshSession *jump : m_jumps) {
+        if (jump->inOperation()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool QSocRemoteConnection::isComplete(const AgentRemoteState &state)
@@ -736,6 +751,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
     if (!isComplete(state)) {
         return false;
     }
+    const Operation operation(*this);
     /* One predicate for "this is the same binding", used for the working
      * directory and for the job ledger alike. The host belongs in it as much
      * as the path does: the same directory name on a different host is a
@@ -807,6 +823,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
     }
     ++m_generation;
     m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_watcher->kick();
     return true;
 }
 
@@ -862,6 +879,7 @@ void QSocRemoteConnection::teardown()
     m_writableAnchors.clear();
     m_host                 = QSocMachine{};
     m_lastReconnectKeptCwd = false;
+    m_watcher->kick();
 }
 
 QString QSocRemoteConnection::display() const
@@ -1201,6 +1219,7 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
 QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
     QString *errorMessage, int *budget, QDeadlineTimer deadline)
 {
+    const Operation operation(*this);
     m_lastAttempts = 0;
     if (m_session != nullptr && m_session->isConnected()) {
         return ReconnectOutcome::NotNeeded;

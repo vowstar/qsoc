@@ -4,6 +4,8 @@
 #ifndef QSOCSFTPCLIENT_H
 #define QSOCSFTPCLIENT_H
 
+#include "agent/remote/qsocsshsession.h"
+
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 
@@ -13,8 +15,6 @@
 #include <QDeadlineTimer>
 #include <QString>
 #include <QStringList>
-
-class QSocSshSession;
 
 /**
  * @brief SFTP helper riding on top of an established SSH session.
@@ -288,8 +288,9 @@ private:
         OpScope &operator=(const OpScope &) = delete;
 
     private:
-        QSocSftpClient *m_client;
-        bool            m_owner;
+        QSocSftpClient           *m_client;
+        bool                      m_owner;
+        QSocSshSession::Operation m_operation;
     };
 
     /**

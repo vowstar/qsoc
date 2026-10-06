@@ -127,6 +127,32 @@ public:
     bool isTransportDead() const { return m_unusable == Unusable::TransportDead; }
 
     /**
+     * @brief Marks one blocking libssh2 operation on this session.
+     * @details Connect, authentication, exec and SFTP each hold one for their
+     *          whole run. A connect or an authentication prompt pumps the event
+     *          loop, so a timer can fire inside one; such a timer must leave
+     *          the session alone while @ref inOperation is true.
+     */
+    class Operation
+    {
+    public:
+        explicit Operation(QSocSshSession &session)
+            : m_session(session)
+        {
+            ++m_session.m_operations;
+        }
+        ~Operation() { --m_session.m_operations; }
+        Operation(const Operation &)            = delete;
+        Operation &operator=(const Operation &) = delete;
+
+    private:
+        QSocSshSession &m_session;
+    };
+
+    /** @brief Whether a blocking operation is running on this session. */
+    bool inOperation() const { return m_operations > 0; }
+
+    /**
      * @brief Take ownership of a channel whose release could not finish.
      * @details libssh2 cannot free a channel the peer has not confirmed closed,
      *          and the peer does not confirm until the remote process exits, so
@@ -365,6 +391,7 @@ private:
     QDeadlineTimer m_connectDeadline;
     /* Channels libssh2 would not release yet, oldest first. */
     QList<LIBSSH2_CHANNEL *> m_stranded;
+    int                      m_operations = 0;
 };
 
 #endif // QSOCSSHSESSION_H

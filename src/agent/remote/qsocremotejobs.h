@@ -118,6 +118,10 @@ struct QSocRemoteJobRecord
     qint64  pid        = 0;     /**< Remote pid; 0 when none was captured. */
     qint64  launchedMs = 0;     /**< Client clock at launch, ms since epoch. */
     bool    settled    = false; /**< An exit code was observed for this job. */
+    int     exitCode   = -1;    /**< The observed exit code; -1 while unknown. */
+    bool    monitor    = false; /**< Launched by the monitor tool, not by bash. */
+    bool    stopped    = false; /**< Its owner signalled it to stop. */
+    QString ownerId;            /**< Agent that launched it; "user" for none. */
 };
 
 /** @brief New process-independent opaque job id. */
@@ -178,13 +182,19 @@ public:
      *          to evict and pointless to re-observe after a reconnect.
      * @return True when found.
      */
-    bool markSettled(const QString &jobId);
+    bool markSettled(const QString &jobId, int exitCode = -1);
+
+    /** @brief Record that the owner signalled @p jobId. @return True when found. */
+    bool markStopped(const QString &jobId);
 
     /** @brief Drop the record for @p jobId. @return True when one was dropped. */
     bool forget(const QString &jobId);
 
     /** @brief Ids of jobs with no known outcome, in launch order. */
     QStringList liveJobIds() const;
+
+    /** @brief Every record, in launch order. */
+    const QList<QSocRemoteJobRecord> &records() const { return m_records; }
 
     /** @brief Drop every record. */
     void clear();
@@ -300,13 +310,15 @@ QString pidStartProbe(const QString &pidRef);
  * @param command Payload command, unescaped.
  * @param shell Executor for the waiting shell and, with `-l` when it takes
  *        one, for the payload.
+ * @param splitStderr Write stderr to `stderr.log` instead of `output.log`.
  */
 QString jobLaunchScript(
     const QString           &jobDir,
     const QString           &cwd,
     const QString           &jobId,
     const QString           &command,
-    const QSocShellExecutor &shell);
+    const QSocShellExecutor &shell,
+    bool                     splitStderr = false);
 
 /**
  * @brief Script reporting one job's state.

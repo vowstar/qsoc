@@ -3,9 +3,12 @@
 
 #include "agent/remote/qsoctoolremote.h"
 
+#include "agent/qsocagent.h"
 #include "agent/qsocfilehistory.h"
+#include "agent/qsoctaskeventqueue.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotejobs.h"
+#include "agent/remote/qsocremotejobwatcher.h"
 #include "agent/remote/qsocremotepathcontext.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/remote/qsocsshexec.h"
@@ -384,7 +387,93 @@ QString shellEscapeText(const QSocSshExec::Result &result)
     return output;
 }
 
+/* A job no live agent started belongs to the user. */
+QString jobOwner(const QSocToolCallContext *context)
+{
+    const auto *agent = context == nullptr ? nullptr
+                                           : qobject_cast<QSocAgent *>(context->executionScope());
+    return agent != nullptr ? agent->agentIdentity() : QSocTaskEvent::userOwner();
+}
+
 } // namespace
+
+QSocRemoteJobStart startRemoteJob(
+    QSocRemoteConnection *conn,
+    const QString        &cwd,
+    const QString        &command,
+    bool                  monitor,
+    const QString        &ownerId,
+    QSocSshExec         **running)
+{
+    QSocRemoteJobStart start;
+    start.record.jobId = newRemoteJobId();
+    if (conn->path()->root().isEmpty()) {
+        start.failure = QStringLiteral("Error: workspace root is not configured");
+        return start;
+    }
+    const ResolvedPath jobPath
+        = resolveRemoteJobPath(conn, start.record.jobId, RemoteJobPathUse::Create);
+    if (!jobPath.error.isEmpty()) {
+        start.failure = QStringLiteral("Error: %1").arg(jobPath.error);
+        return start;
+    }
+    start.jobDir                = jobPath.path;
+    const QSocRemoteExec launch = remoteScriptExec(
+        conn->host(),
+        jobLaunchScript(
+            machineShellPath(conn->host(), jobPath.path),
+            machineShellPath(conn->host(), cwd),
+            start.record.jobId,
+            command,
+            conn->host().shell,
+            monitor),
+        false);
+    QSocSshExec exec(*conn->session());
+    if (running != nullptr) {
+        *running = &exec;
+    }
+    const auto result = exec.run(launch.command, 10000, launch.input);
+    if (running != nullptr) {
+        *running = nullptr;
+    }
+
+    if (remoteRunStatus(result) == QSocTool::ResultStatus::Uncertain) {
+        start.failure = composeJobUncertain(
+            start.record.jobId,
+            QStringLiteral(
+                "the launch did not complete over this link, so the job may or may not be "
+                "running"),
+            QStringLiteral("check bash_manage(action=status) before launching the same work again"));
+        return start;
+    }
+    if (result.exitCode != 0 || !result.errorText.isEmpty()) {
+        start.failure = QStringLiteral("Error: job launch failed (exit %1) %2")
+                            .arg(result.exitCode)
+                            .arg(result.errorText);
+        return start;
+    }
+    const auto report = parseJobLaunchOutput(QString::fromUtf8(result.stdoutBytes));
+    if (report.pid <= 0) {
+        start.failure = composeJobUncertain(
+            start.record.jobId,
+            QStringLiteral("the host started the job but reported no pid for it"),
+            QStringLiteral("read bash_manage(action=output); this job cannot be signalled"));
+        return start;
+    }
+    start.record.commandLine  = command;
+    start.record.generation   = conn->generation();
+    start.record.bootIdentity = report.bootIdentity;
+    start.record.pidStart     = report.pidStart;
+    start.record.pid          = report.pid;
+    start.record.launchedMs   = QDateTime::currentMSecsSinceEpoch();
+    start.record.monitor      = monitor;
+    start.record.ownerId      = ownerId;
+    /* Recorded here or the id is unusable: bash_manage identifies a job by
+     * what the ledger holds, and the watcher polls exactly those. */
+    start.noted = conn->jobs()->note(start.record);
+    conn->watcher()->kick();
+    return start;
+}
 
 QString runBoundRemoteShellEscape(QSocRemoteConnection *conn, const QString &command)
 {
@@ -882,64 +971,13 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
     const bool background = arguments.contains("background") && arguments["background"].is_boolean()
                             && arguments["background"].get<bool>();
     if (background) {
-        if (m_conn->path()->root().isEmpty()) {
-            return QStringLiteral("Error: workspace root is not configured");
+        const QSocRemoteJobStart start
+            = startRemoteJob(m_conn, cwd, cmd, false, jobOwner(currentCallContext()), &m_running);
+        if (!start.failure.isEmpty()) {
+            return start.failure;
         }
-        const QString      jobId   = newRemoteJobId();
-        const ResolvedPath jobPath = resolveRemoteJobPath(m_conn, jobId, RemoteJobPathUse::Create);
-        if (!jobPath.error.isEmpty()) {
-            return QStringLiteral("Error: %1").arg(jobPath.error);
-        }
-
-        const QSocRemoteExec launch = remoteScriptExec(
-            m_conn->host(),
-            jobLaunchScript(
-                machineShellPath(m_conn->host(), jobPath.path),
-                machineShellPath(m_conn->host(), cwd),
-                jobId,
-                cmd,
-                m_conn->host().shell),
-            false);
-        QSocSshExec exec(*m_conn->session());
-        m_running         = &exec;
-        const auto result = exec.run(launch.command, 10000, launch.input);
-        m_running         = nullptr;
-
-        if (remoteRunStatus(result) == QSocTool::ResultStatus::Uncertain) {
-            return composeJobUncertain(
-                jobId,
-                QStringLiteral(
-                    "the launch did not complete over this link, so the job may or may "
-                    "not be running"),
-                QStringLiteral(
-                    "check bash_manage(action=status) before launching the same work "
-                    "again"));
-        }
-        if (result.exitCode != 0 || !result.errorText.isEmpty()) {
-            return QStringLiteral("Error: job launch failed (exit %1) %2")
-                .arg(result.exitCode)
-                .arg(result.errorText);
-        }
-        const auto report = parseJobLaunchOutput(QString::fromUtf8(result.stdoutBytes));
-        if (report.pid <= 0) {
-            return composeJobUncertain(
-                jobId,
-                QStringLiteral("the host started the job but reported no pid for it"),
-                QStringLiteral("read bash_manage(action=output); this job cannot be signalled"));
-        }
-        QSocRemoteJobRecord record;
-        record.jobId        = jobId;
-        record.commandLine  = cmd;
-        record.generation   = m_conn->generation();
-        record.bootIdentity = report.bootIdentity;
-        record.pidStart     = report.pidStart;
-        record.pid          = report.pid;
-        record.launchedMs   = QDateTime::currentMSecsSinceEpoch();
-        QString launched    = composeJobLaunchResult(record, jobPath.path);
-        /* Recorded here or the id is unusable: bash_manage identifies a job by
-         * what the ledger holds, and a re-observation brief names the ids it
-         * wants checked from the same place. */
-        if (!m_conn->jobs()->note(record)) {
+        QString launched = composeJobLaunchResult(start.record, start.jobDir);
+        if (!start.noted) {
             launched += jobLedgerFullNote();
         }
         return launched;
@@ -1202,8 +1240,9 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
         /* An exit code the host reported for a job it could identify is the one
          * thing that settles a record, and only a settled record can be evicted
          * to make room for the next launch. */
-        if (token == QSocRemoteJobToken::Absent && !parseJobStatusExitCode(observed).isEmpty()) {
-            m_conn->jobs()->markSettled(jobId);
+        const QString exitCode = parseJobStatusExitCode(observed);
+        if (token == QSocRemoteJobToken::Absent && !exitCode.isEmpty()) {
+            m_conn->jobs()->markSettled(jobId, exitCode.toInt());
         }
         const QString verdict = token == QSocRemoteJobToken::Absent
                                     ? QSocTool::statusLine(QSocTool::ResultStatus::Ok)
@@ -1260,6 +1299,7 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
             m_conn->jobs()->forget(jobId);
         } else if (judged.signalled) {
             m_conn->jobs()->rebind(jobId, m_conn->generation());
+            m_conn->jobs()->markStopped(jobId);
         }
         return judged.text + stderrTail(result);
     }

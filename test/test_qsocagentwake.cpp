@@ -489,6 +489,25 @@ private slots:
         QVERIFY(!body.contains("USER_JOB"));
     }
 
+    /* Counterexample: a sub-agent's monitor reported to main, which never
+     * started it, and the sub-agent never heard from its own watcher. */
+    void aSubAgentsMonitorNotifiesThatSubAgent()
+    {
+        Fixture fixture(server_);
+        QVERIFY(fixture.opened);
+        auto *mailbox = fixture.runtime->subAgentSource()->mailbox();
+        auto *peer    = new QSocAgent(fixture.runtime.get(), nullptr, nullptr);
+        mailbox->registerAgent(peer, QStringLiteral("peer"));
+        const QString started = fixture.runtime->toolRegistry()->executeTool(
+            QStringLiteral("monitor"),
+            {{"command", "echo CHILD_LINE"}, {"description", "child watch"}},
+            peer);
+        QVERIFY2(started.contains(QStringLiteral("started")), qPrintable(started));
+        QTRY_VERIFY_WITH_TIMEOUT(peer->pendingNotificationCount() >= 1, 10000);
+        QCOMPARE(fixture.runtime->agent()->pendingNotificationCount(), 0);
+        QVERIFY(!fixture.wakeAfterDebounce());
+    }
+
 private:
     ChatServer server_;
 };

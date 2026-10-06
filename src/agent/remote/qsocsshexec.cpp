@@ -195,7 +195,8 @@ bool QSocSshExec::sendInput(LIBSSH2_CHANNEL *channel, const QByteArray &input, C
 QSocSshExec::Result QSocSshExec::run(
     const QString &command, int timeoutMs, const QByteArray &input, qint64 captureBytes)
 {
-    Result result;
+    const QSocSshSession::Operation operation(m_session);
+    Result                          result;
     m_abort.store(false, std::memory_order_relaxed);
     m_transportDead = false;
     /* One deadline for the whole call. Starting it here rather than at the

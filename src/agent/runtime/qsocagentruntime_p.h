@@ -187,8 +187,9 @@ struct QSocAgentRuntime::Private
         TurnOrigin              origin      = TurnOrigin::User;
         std::function<qint64()> clock       = [] { return QDeadlineTimer::current().deadline(); };
     };
-    Wake            wake;
-    QSocTaskNotices notices;
+    Wake                            wake;
+    QSocTaskNotices                 notices;
+    QHash<QString, QSocTaskNotices> childNotices; /* by sub-agent mailbox id */
 
     /* Idle maintenance state. */
     QStringList             pendingAutoInputs;

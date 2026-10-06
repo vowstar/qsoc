@@ -1928,6 +1928,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectTo(
 QSocSshSession::ConnectStatus QSocSshSession::connectTo(
     const QSocSshHostConfig &host, QDeadlineTimer deadline, QString *errorMessage)
 {
+    const Operation operation(*this);
     /* Occupancy, not health: a session whose transport died still owns a
      * libssh2 handle, and overwriting it here would leak it. */
     if (m_session != nullptr) {
@@ -1983,6 +1984,7 @@ QSocSshSession::ConnectStatus QSocSshSession::connectToVia(
     QDeadlineTimer           deadline,
     QString                 *errorMessage)
 {
+    const Operation operation(*this);
     /* Occupancy, not health: a session whose transport died still owns a
      * libssh2 handle, and overwriting it here would leak it. */
     if (m_session != nullptr) {

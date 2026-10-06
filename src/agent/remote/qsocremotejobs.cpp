@@ -252,11 +252,23 @@ bool QSocRemoteJobLedger::rebind(const QString &jobId, quint64 generation)
     return false;
 }
 
-bool QSocRemoteJobLedger::markSettled(const QString &jobId)
+bool QSocRemoteJobLedger::markSettled(const QString &jobId, int exitCode)
 {
     for (QSocRemoteJobRecord &entry : m_records) {
         if (entry.jobId == jobId) {
-            entry.settled = true;
+            entry.settled  = true;
+            entry.exitCode = exitCode;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool QSocRemoteJobLedger::markStopped(const QString &jobId)
+{
+    for (QSocRemoteJobRecord &entry : m_records) {
+        if (entry.jobId == jobId) {
+            entry.stopped = true;
             return true;
         }
     }
@@ -380,7 +392,8 @@ QString jobLaunchScript(
     const QString           &cwd,
     const QString           &jobId,
     const QString           &command,
-    const QSocShellExecutor &shell)
+    const QSocShellExecutor &shell,
+    bool                     splitStderr)
 {
     /* The shell that waits for the payload is the one the link drop would
      * otherwise kill, so it ignores SIGHUP before it spawns anything. It also
@@ -394,7 +407,7 @@ QString jobLaunchScript(
                                 "date +%s > \"$__d\"/start_time\n"
                                 "__boot=$(%5)\n"
                                 "printf \"%s\" \"$__boot\" > \"$__d\"/boot_id\n"
-                                "nohup %7 -c %3 < /dev/null > \"$__d\"/output.log 2>&1 &\n"
+                                "nohup %7 -c %3 < /dev/null > \"$__d\"/output.log %8 &\n"
                                 "__pid=$!\n"
                                 "printf \"%s\" \"$__pid\" > \"$__d\"/pid\n"
                                 "__start=$(%6)\n"
@@ -411,7 +424,9 @@ QString jobLaunchScript(
                                     shellQuote(jobId),
                                     bootIdentityProbe(),
                                     pidStartProbe(QStringLiteral("\"$__pid\"")),
-                                    shell.invocation(true));
+                                    shell.invocation(true),
+                                    splitStderr ? QStringLiteral("2> \"$__d\"/stderr.log")
+                                                : QStringLiteral("2>&1"));
     return QStringLiteral("mkdir %1 || exit 1\nnohup %3 -c %2 < /dev/null &\n")
         .arg(shellQuote(jobDir), shellQuote(wrapper), shell.invocation(false));
 }

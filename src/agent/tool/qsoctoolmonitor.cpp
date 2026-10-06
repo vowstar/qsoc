@@ -3,7 +3,12 @@
 
 #include "agent/tool/qsoctoolmonitor.h"
 
+#include "agent/qsocagent.h"
 #include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsocremotehost.h"
+#include "agent/remote/qsocremotejobwatcher.h"
+#include "agent/remote/qsocsshexec.h"
+#include "agent/remote/qsoctoolremote.h"
 #include "common/qsocshellpath.h"
 
 #include <QDateTime>
@@ -88,7 +93,8 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startLocal(
     const QString &description,
     int            timeoutMs,
     bool           persistent,
-    const QString &name)
+    const QString &name,
+    const QString &owner)
 {
     QString workingDir;
     if (projectManager_ != nullptr) {
@@ -107,6 +113,7 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startLocal(
         timeoutMs,
         persistent,
         name,
+        owner,
         shellExe,
         QStringList() << QStringLiteral("-lc") << command,
         workingDir,
@@ -119,63 +126,66 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startRemote(
     int               timeoutMs,
     bool              persistent,
     const RemoteSpec &remote,
-    const QString    &name)
+    const QString    &name,
+    const QString    &owner)
 {
-    const RemoteLaunch launch = remoteLaunch(remote, command);
-    if (!launch.error.isEmpty()) {
-        return {false, {}, {}, launch.error};
+    QSocRemoteConnection *conn = remote.conn;
+    if (conn != nullptr && !machineOffersExecTools(conn->host())) {
+        return {false, {}, {}, QStringLiteral("the remote host has no POSIX shell to run a monitor")};
     }
-    return startProcess(
-        command,
-        description,
-        timeoutMs,
-        persistent,
-        name,
-        QStringLiteral("ssh"),
-        launch.args,
-        QString(),
-        true,
-        launch.input);
+    if (conn == nullptr || !conn->isUsable()) {
+        return {false, {}, {}, QStringLiteral("the remote workspace is not connected")};
+    }
+    if (conn->jobs()->isFull()) {
+        return {false, {}, {}, QStringLiteral("too many remote jobs are still running")};
+    }
+    QString cwd;
+    QString error;
+    if (!conn->resolveBoundCwd(&cwd, &error)) {
+        return {false, {}, {}, error};
+    }
+    const QSocRemoteJobStart start = startRemoteJob(conn, cwd, command, true, owner);
+    if (!start.failure.isEmpty()) {
+        return {false, {}, {}, start.failure};
+    }
+    Run *run = createRun(command, description, persistent, name, owner, true, &error);
+    if (run == nullptr) {
+        return {false, {}, {}, error};
+    }
+    run->remoteJob                = start.record.jobId;
+    run->conn                     = conn;
+    QSocRemoteJobWatcher *watcher = conn->watcher();
+    connect(
+        watcher,
+        &QSocRemoteJobWatcher::jobOutput,
+        this,
+        &QSocMonitorTaskSource::onRemoteOutput,
+        Qt::UniqueConnection);
+    connect(
+        watcher,
+        &QSocRemoteJobWatcher::jobSettled,
+        this,
+        &QSocMonitorTaskSource::onRemoteSettled,
+        Qt::UniqueConnection);
+    watcher->follow(run->remoteJob);
+    armRun(run, timeoutMs);
+    return {true, run->id, run->outputPath, {}};
 }
 
-QSocMonitorTaskSource::RemoteLaunch QSocMonitorTaskSource::remoteLaunch(
-    const RemoteSpec &remote, const QString &command)
-{
-    RemoteLaunch launch;
-    launch.args = sshArgsForTarget(remote.targetKey);
-    if (launch.args.isEmpty()) {
-        launch.error = QStringLiteral("invalid remote target");
-        return launch;
-    }
-    const QSocRemoteExec request
-        = remote.conn == nullptr
-              ? QSocRemoteExec{}
-              : remoteCommandExec(remote.conn->host(), remote.workspace, command);
-    if (!request.isValid()) {
-        launch.error = QStringLiteral("the remote host has no POSIX shell to run a monitor");
-        return launch;
-    }
-    launch.args << request.command;
-    launch.input = request.input;
-    return launch;
-}
-
-QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
-    const QString     &command,
-    const QString     &description,
-    int                timeoutMs,
-    bool               persistent,
-    const QString     &name,
-    const QString     &program,
-    const QStringList &args,
-    const QString     &workingDir,
-    bool               remote,
-    const QByteArray  &input)
+QSocMonitorTaskSource::Run *QSocMonitorTaskSource::createRun(
+    const QString &command,
+    const QString &description,
+    bool           persistent,
+    const QString &name,
+    const QString &owner,
+    bool           remote,
+    QString       *error)
 {
     auto *tempDir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/qsoc-monitor-XXXXXX"));
     if (!tempDir->isValid()) {
         delete tempDir;
-        return {false, {}, {}, QStringLiteral("failed to create temporary directory")};
+        *error = QStringLiteral("failed to create temporary directory");
+        return nullptr;
     }
     tempDir->setAutoRemove(false);
     const QString outputPath = tempDir->path() + QStringLiteral("/output.log");
@@ -184,26 +194,21 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
     QFile sentinel(outputPath);
     if (!sentinel.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
-        return {false, {}, {}, QStringLiteral("failed to create output file")};
+        *error = QStringLiteral("failed to create output file");
+        return nullptr;
     }
     sentinel.close();
-
-    auto *process = new QProcess(this);
-    process->setProcessChannelMode(QProcess::SeparateChannels);
-    if (!workingDir.isEmpty()) {
-        process->setWorkingDirectory(workingDir);
-    }
 
     auto *run          = new Run;
     run->id            = QStringLiteral("m") + QString::number(nextId_++);
     run->name          = name;
+    run->owner         = owner;
     run->command       = command;
     run->description   = description.isEmpty() ? command.left(80) : description;
     run->outputPath    = outputPath;
     run->startedAtMs   = QDateTime::currentMSecsSinceEpoch();
     run->persistent    = persistent;
     run->remote        = remote;
-    run->process       = process;
     run->windowStartMs = run->startedAtMs;
     runs_.insert(run->id, run);
 
@@ -224,6 +229,46 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
             flushOverflow(it.value());
         }
     });
+    return run;
+}
+
+void QSocMonitorTaskSource::armRun(Run *run, int timeoutMs)
+{
+    if (!run->persistent && timeoutMs > 0) {
+        QTimer::singleShot(timeoutMs, this, [this, taskId = run->id]() {
+            if (auto it = runs_.find(taskId); it != runs_.end()) {
+                stop(taskId, QStringLiteral("timeout"));
+            }
+        });
+    }
+    emitEvent(run, QStringLiteral("task_started"), QStringLiteral("running"), run->description);
+    emit tasksChanged();
+}
+
+QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
+    const QString     &command,
+    const QString     &description,
+    int                timeoutMs,
+    bool               persistent,
+    const QString     &name,
+    const QString     &owner,
+    const QString     &program,
+    const QStringList &args,
+    const QString     &workingDir,
+    bool               remote,
+    const QByteArray  &input)
+{
+    QString error;
+    Run    *run = createRun(command, description, persistent, name, owner, remote, &error);
+    if (run == nullptr) {
+        return {false, {}, {}, error};
+    }
+    auto *process = new QProcess(this);
+    process->setProcessChannelMode(QProcess::SeparateChannels);
+    if (!workingDir.isEmpty()) {
+        process->setWorkingDirectory(workingDir);
+    }
+    run->process = process;
 
     connect(process, &QProcess::readyReadStandardOutput, this, [this, taskId = run->id]() {
         if (auto it = runs_.find(taskId); it != runs_.end()) {
@@ -257,26 +302,87 @@ QSocMonitorTaskSource::StartResult QSocMonitorTaskSource::startProcess(
         const QString err = process->errorString();
         runs_.remove(run->id);
         cleanupProcess(run);
+        QDir(QFileInfo(run->outputPath).absolutePath()).removeRecursively();
         delete run;
-        QDir(QFileInfo(outputPath).absolutePath()).removeRecursively();
         return {false, {}, {}, err};
     }
     if (!input.isEmpty()) {
         process->write(input);
         process->closeWriteChannel();
     }
+    armRun(run, timeoutMs);
+    return {true, run->id, run->outputPath, {}};
+}
 
-    if (!persistent && timeoutMs > 0) {
-        QTimer::singleShot(timeoutMs, this, [this, taskId = run->id]() {
-            if (auto it = runs_.find(taskId); it != runs_.end()) {
-                stop(taskId, QStringLiteral("timeout"));
-            }
-        });
+QSocMonitorTaskSource::Run *QSocMonitorTaskSource::remoteRun(const QString &jobId) const
+{
+    for (Run *run : runs_) {
+        if (!jobId.isEmpty() && run->remoteJob == jobId) {
+            return run;
+        }
     }
+    return nullptr;
+}
 
-    emitEvent(run, QStringLiteral("task_started"), QStringLiteral("running"), run->description);
+void QSocMonitorTaskSource::onRemoteOutput(
+    const QString &jobId, const QByteArray &bytes, bool stderrStream)
+{
+    Run *run = remoteRun(jobId);
+    if (run != nullptr && run->status == QStringLiteral("running")) {
+        acceptBytes(
+            run,
+            stderrStream ? run->stderrBuffer : run->stdoutBuffer,
+            bytes,
+            stderrStream ? QStringLiteral("stderr") : QStringLiteral("stdout"));
+    }
+}
+
+void QSocMonitorTaskSource::onRemoteSettled(const QString &jobId, int exitCode, const QByteArray &)
+{
+    Run *run = remoteRun(jobId);
+    if (run == nullptr) {
+        return;
+    }
+    flushPartial(run);
+    flushOverflow(run);
+    if (run->status == QStringLiteral("running")) {
+        run->status = exitCode == 0 ? QStringLiteral("completed") : QStringLiteral("failed");
+        emitEvent(
+            run,
+            QStringLiteral("task_notification"),
+            run->status,
+            statusToSummary(run->status, exitCode));
+    }
+    run->remoteJob.clear();
+    cleanupProcess(run);
     emit tasksChanged();
-    return {true, run->id, outputPath, {}};
+}
+
+/* The remote job outlives the session that started it, so a stop has to reach
+ * the host. A link inside another operation cannot carry the signal now. */
+bool QSocMonitorTaskSource::signalRemote(Run *run)
+{
+    QSocRemoteConnection *conn = run->conn;
+    if (conn == nullptr || run->remoteJob.isEmpty()) {
+        return true;
+    }
+    if (conn->operationInFlight()) {
+        return false;
+    }
+    const QString jobId = run->remoteJob;
+    conn->watcher()->forget(jobId);
+    run->remoteJob.clear();
+    if (!conn->isUsable() || !conn->jobs()->has(jobId)) {
+        return true;
+    }
+    const QSocRemoteExec request = remoteScriptExec(
+        conn->host(), jobSignalScript(conn->jobs()->record(jobId), QStringLiteral("-TERM")), false);
+    QSocSshExec exec(*conn->session());
+    const auto  result = exec.run(request.command, 5000, request.input);
+    if (parseJobToken(QString::fromUtf8(result.stdoutBytes)) == QSocRemoteJobToken::Signalled) {
+        conn->jobs()->markStopped(jobId);
+    }
+    return true;
 }
 
 bool QSocMonitorTaskSource::stop(const QString &taskId, const QString &reason)
@@ -286,6 +392,8 @@ bool QSocMonitorTaskSource::stop(const QString &taskId, const QString &reason)
         return false;
     Run *run = it.value();
     if (run->status != QStringLiteral("running"))
+        return false;
+    if (!signalRemote(run))
         return false;
     run->stopping = true;
     run->status   = QStringLiteral("stopped");
@@ -308,6 +416,16 @@ void QSocMonitorTaskSource::stopAll()
     const auto ids = runs_.keys();
     for (const QString &id : ids) {
         stop(id, QStringLiteral("session ending"));
+    }
+}
+
+void QSocMonitorTaskSource::stopRemote(const QSocRemoteConnection *conn, const QString &reason)
+{
+    const auto ids = runs_.keys();
+    for (const QString &id : ids) {
+        if (runs_.value(id)->conn == conn) {
+            stop(id, reason);
+        }
     }
 }
 
@@ -455,6 +573,7 @@ void QSocMonitorTaskSource::emitEvent(
     event.description = run->description;
     event.content     = content;
     event.outputFile  = run->outputPath;
+    event.agentId     = run->owner;
     event.createdAtMs = QDateTime::currentMSecsSinceEpoch();
     eventQueue_->enqueue(event);
 }
@@ -489,18 +608,6 @@ QString QSocMonitorTaskSource::readTail(const QString &path, int maxBytes)
         file.seek(size - maxBytes);
     }
     return QString::fromUtf8(file.readAll());
-}
-
-QStringList QSocMonitorTaskSource::sshArgsForTarget(const QString &targetKey)
-{
-    const int atIdx    = targetKey.indexOf(QLatin1Char('@'));
-    const int colonIdx = targetKey.lastIndexOf(QLatin1Char(':'));
-    if (atIdx <= 0 || colonIdx <= atIdx + 1 || colonIdx == targetKey.size() - 1)
-        return {};
-    const QString user = targetKey.left(atIdx);
-    const QString host = targetKey.mid(atIdx + 1, colonIdx - atIdx - 1);
-    const QString port = targetKey.mid(colonIdx + 1);
-    return QStringList() << QStringLiteral("-p") << port << QStringLiteral("-l") << user << host;
 }
 
 QSocToolMonitor::QSocToolMonitor(
@@ -563,12 +670,18 @@ QString QSocToolMonitor::execute(const json &arguments)
     }
     const bool persistent = arguments.contains("persistent") && arguments["persistent"].is_boolean()
                             && arguments["persistent"].get<bool>();
+    /* Notices go to the agent that started the monitor. */
+    const QSocToolCallContext *context = currentCallContext();
+    const auto   *agent = context == nullptr ? nullptr
+                                             : qobject_cast<QSocAgent *>(context->executionScope());
+    const QString owner = agent != nullptr ? agent->agentIdentity() : QString();
 
     QSocMonitorTaskSource::StartResult result;
     if (remote_.has_value()) {
-        result = source_->startRemote(command, description, timeoutMs, persistent, remote_.value());
+        result = source_->startRemote(
+            command, description, timeoutMs, persistent, remote_.value(), QString(), owner);
     } else {
-        result = source_->startLocal(command, description, timeoutMs, persistent);
+        result = source_->startLocal(command, description, timeoutMs, persistent, QString(), owner);
     }
     if (!result.ok) {
         return QString::fromUtf8(

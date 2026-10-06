@@ -23,6 +23,7 @@
 #include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolmemory.h"
+#include "agent/tool/qsoctoolmonitor.h"
 #include "agent/tool/qsoctoolplanmode.h"
 #include "agent/tool/qsoctoolshell.h"
 #include "agent/tool/qsoctoolskill.h"
@@ -232,7 +233,8 @@ bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QS
         return fail(QStringLiteral("host.yml entry %1: %2").arg(request.target, shellError));
     }
     d->cancelRequested = false;
-    AgentRemoteState staged;
+    const QSocRemoteConnection::Operation operation(*d->remoteConn);
+    AgentRemoteState                      staged;
     if (!dialRemote(resolved.connectString, request.unattended, &staged, &failure)) {
         return fail(failure);
     }
@@ -566,6 +568,8 @@ void QSocAgentRuntime::disconnectRemote()
         d->remoteRegistry->deleteLater();
         d->remoteRegistry = nullptr;
     }
+    d->monitorTaskSource
+        ->stopRemote(d->remoteConn, QStringLiteral("the remote workspace was disconnected"));
     d->remoteConn->teardown();
     d->memoryManager->setRemoteWorkspace({}, {});
     {

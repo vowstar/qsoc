@@ -20,6 +20,7 @@
 #include <memory>
 
 class QSocSshSession;
+class QSocRemoteJobWatcher;
 class QSocSftpClient;
 class QSocToolRegistry;
 class QLLMService;
@@ -94,7 +95,7 @@ public:
     /** @brief Counter identifying one bound transport. 0 means never bound. */
     using Generation = quint64;
 
-    QSocRemoteConnection() = default;
+    QSocRemoteConnection();
 
     /** @brief Frees whatever is still bound. */
     ~QSocRemoteConnection();
@@ -275,6 +276,37 @@ public:
      */
     QSocRemoteJobLedger *jobs() { return &m_jobs; }
 
+    /** @brief Polls @ref jobs on this binding; owned by the connection. */
+    QSocRemoteJobWatcher *watcher() const { return m_watcher.get(); }
+
+    /**
+     * @brief Marks one connection-level operation (connect, reconnect, adopt).
+     * @details These pump the event loop, so a timer can fire inside them and
+     *          find the transport half built.
+     */
+    class Operation
+    {
+    public:
+        explicit Operation(QSocRemoteConnection &conn)
+            : m_conn(conn)
+        {
+            ++m_conn.m_operations;
+        }
+        ~Operation() { --m_conn.m_operations; }
+        Operation(const Operation &)            = delete;
+        Operation &operator=(const Operation &) = delete;
+
+    private:
+        QSocRemoteConnection &m_conn;
+    };
+
+    /**
+     * @brief Whether a blocking operation is running on this binding.
+     * @details True inside a connect, reconnect or adopt, and inside any exec,
+     *          SFTP call, connect or authentication on its sessions.
+     */
+    bool operationInFlight() const;
+
     /** @brief Whether a transport is bound and still usable. */
     bool isUsable() const;
 
@@ -426,6 +458,8 @@ private:
     QString                                                       m_shellPreference;
     QSocRemoteJobLedger                                           m_jobs;
     std::unique_ptr<QSocWorkspaceFs>                              m_fs;
+    std::unique_ptr<QSocRemoteJobWatcher>                         m_watcher;
+    int                                                           m_operations           = 0;
     Generation                                                    m_generation           = 0;
     int                                                           m_lastAttempts         = 0;
     int                                                           m_reconnectsUsed       = 0;

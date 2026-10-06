@@ -72,6 +72,7 @@ QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, int budgetMs)
 QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, QDeadlineTimer deadline)
     : m_client(client)
     , m_owner(!client->m_opActive)
+    , m_operation(client->m_session)
 {
     if (m_owner) {
         m_client->m_opActive             = true;

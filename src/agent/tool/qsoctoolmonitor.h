@@ -23,23 +23,11 @@ class QSocMonitorTaskSource final : public QSocTaskSource
     Q_OBJECT
 
 public:
+    /** @brief The bound session a remote monitor runs over, as a remote job. */
     struct RemoteSpec
     {
-        QString               targetKey; /* user@alias:port */
-        QString               workspace;
-        QSocRemoteConnection *conn = nullptr; /* Supplies the host's executor. */
+        QSocRemoteConnection *conn = nullptr;
     };
-
-    /** @brief The ssh invocation for a remote monitor, or why there is none. */
-    struct RemoteLaunch
-    {
-        QStringList args;  /* ssh arguments; the last is the fixed exec line. */
-        QByteArray  input; /* Script written to ssh's stdin. */
-        QString     error;
-    };
-
-    /** @brief Build the ssh invocation that runs @p command for @p remote. */
-    static RemoteLaunch remoteLaunch(const RemoteSpec &remote, const QString &command);
 
     struct StartResult
     {
@@ -65,49 +53,70 @@ public:
         const QString &description,
         int            timeoutMs,
         bool           persistent,
-        const QString &name = QString());
+        const QString &name  = QString(),
+        const QString &owner = QString());
     StartResult startRemote(
         const QString    &command,
         const QString    &description,
         int               timeoutMs,
         bool              persistent,
         const RemoteSpec &remote,
-        const QString    &name = QString());
+        const QString    &name  = QString(),
+        const QString    &owner = QString());
 
     bool stop(const QString &taskId, const QString &reason = QStringLiteral("stopped"));
     void stopAll();
+    /** @brief Stop every monitor running over @p conn, before it goes away. */
+    void stopRemote(const QSocRemoteConnection *conn, const QString &reason);
 
 private:
     struct Run
     {
-        QString    id;
-        QString    name;
-        QString    command;
-        QString    description;
-        QString    outputPath;
-        QString    status      = QStringLiteral("running");
-        qint64     startedAtMs = 0;
-        bool       persistent  = false;
-        bool       remote      = false;
-        QProcess  *process     = nullptr;
-        QByteArray stdoutBuffer;
-        QByteArray stderrBuffer;
-        qint64     bytesWritten  = 0;
-        qint64     windowStartMs = 0;
-        int        windowCount   = 0;
-        int        overflowCount = 0;
-        QString    overflowLast;
-        QTimer    *overflowTimer = nullptr;
-        QTimer    *flushTimer    = nullptr;
-        bool       stopping      = false;
+        QString               id;
+        QString               name;
+        QString               owner; /* agent its notices go to; empty for main */
+        QString               command;
+        QString               description;
+        QString               outputPath;
+        QString               status      = QStringLiteral("running");
+        qint64                startedAtMs = 0;
+        bool                  persistent  = false;
+        bool                  remote      = false;
+        QProcess             *process     = nullptr;
+        QString               remoteJob; /* job id on the remote host */
+        QSocRemoteConnection *conn = nullptr;
+        QByteArray            stdoutBuffer;
+        QByteArray            stderrBuffer;
+        qint64                bytesWritten  = 0;
+        qint64                windowStartMs = 0;
+        int                   windowCount   = 0;
+        int                   overflowCount = 0;
+        QString               overflowLast;
+        QTimer               *overflowTimer = nullptr;
+        QTimer               *flushTimer    = nullptr;
+        bool                  stopping      = false;
     };
 
+    Run *createRun(
+        const QString &command,
+        const QString &description,
+        bool           persistent,
+        const QString &name,
+        const QString &owner,
+        bool           remote,
+        QString       *error);
+    void        armRun(Run *run, int timeoutMs);
+    Run        *remoteRun(const QString &jobId) const;
+    void        onRemoteOutput(const QString &jobId, const QByteArray &bytes, bool stderrStream);
+    void        onRemoteSettled(const QString &jobId, int exitCode, const QByteArray &tail);
+    bool        signalRemote(Run *run);
     StartResult startProcess(
         const QString     &command,
         const QString     &description,
         int                timeoutMs,
         bool               persistent,
         const QString     &name,
+        const QString     &owner,
         const QString     &program,
         const QStringList &args,
         const QString     &workingDir,
@@ -123,8 +132,7 @@ private:
     void emitEvent(Run *run, const QString &kind, const QString &status, const QString &content);
     void cleanupProcess(Run *run);
 
-    static QString     readTail(const QString &path, int maxBytes);
-    static QStringList sshArgsForTarget(const QString &targetKey);
+    static QString readTail(const QString &path, int maxBytes);
 
     QSocTaskEventQueue   *eventQueue_     = nullptr;
     QSocProjectManager   *projectManager_ = nullptr;
