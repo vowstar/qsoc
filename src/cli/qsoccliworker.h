@@ -21,8 +21,6 @@
 #include <QObject>
 #include <QStringList>
 
-class QAgentReadline;
-
 /**
  * @brief The QSocCliWorker class.
  * @details This class is the main worker class for the qsoc application.
@@ -420,12 +418,10 @@ private:
      */
     bool parseOptions(const QStringList &appArguments);
 
-    /**
-     * @brief Load the project selected by common command-line options.
-     * @retval true Project loaded successfully.
-     * @retval false Project selection or loading failed.
-     */
-    bool loadSelectedProject();
+    enum class ProjectLoad { Required, Optional };
+
+    /* Optional loading still rejects an ambiguous project selection. */
+    bool loadSelectedProject(ProjectLoad policy = ProjectLoad::Required);
 
     /**
      * @brief Show application name and version and emit exit with exitCode.

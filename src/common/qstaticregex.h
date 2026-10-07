@@ -4,41 +4,13 @@
 #ifndef QSTATICREGEX_H
 #define QSTATICREGEX_H
 
-#include <QObject>
 #include <QRegularExpression>
 #include <QString>
 
-/**
- * @brief The QStaticRegex class.
- * @details Provides static utility functions for handling and validating
- *          regular expressions. This class is designed as a singleton, offering
- *          a centralized solution for regex-related operations like checking
- *          the validity of regex patterns, determining if a string contains
- *          regex patterns, and performing exact matches against regex patterns.
- *          It is not meant to be instantiated but used directly through its
- *          static methods. The class extends QObject, allowing integration
- *          with Qt's signal-slot mechanism if needed.
- */
-class QStaticRegex : public QObject
+/* Static regular-expression utilities. */
+class QStaticRegex
 {
-    Q_OBJECT
-
 public:
-    /**
-     * @brief Get the static instance of this object.
-     * @details This function returns the static instance of this object. It is
-     *          used to provide a singleton instance of the class, ensuring that
-     *          only one instance of the class exists throughout the
-     *          application.
-     * @return The static instance of QStaticRegex.
-     */
-    static QStaticRegex &instance()
-    {
-        static QStaticRegex instance;
-        return instance;
-    }
-
-public slots:
     /**
      * @brief Check if a regular expression is valid and non-empty.
      * @details Validates the provided regular expression object. It checks
@@ -80,14 +52,7 @@ public slots:
     static bool isNameExactMatch(const QString &str, const QRegularExpression &regex);
 
 private:
-    /**
-     * @brief Constructor.
-     * @details This is a private constructor for QStaticRegex to prevent
-     *          instantiation. Making the constructor private ensures that no
-     *          objects of this class can be created from outside the class,
-     *          enforcing a static-only usage pattern.
-     */
-    QStaticRegex() {}
+    QStaticRegex() = delete;
 };
 
 #endif // QSTATICREGEX_H

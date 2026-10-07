@@ -11,19 +11,6 @@
 #include <QStringList>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                  argc      = 1;
-        static char                  appName[] = "qsoc";
-        static std::array<char *, 1> argv      = {{appName}};
-        /* Use QCoreApplication for cli test */
-        static const QCoreApplication app = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -63,109 +50,15 @@ private:
         return false;
     }
 
-    /* Helper method to verify bus exists */
-    bool verifyBusExists(const QString &busName) { return busManager.isBusExist(busName); }
-
     /* Helper method to verify module exists */
     bool verifyModuleExists(const QString &moduleName)
     {
         return moduleManager.isModuleExist(moduleName);
     }
 
-    /* Helper method to verify module port content */
-    bool verifyModulePortContent(
-        const QString &moduleName, const QString &portName, const QString &direction, int width)
-    {
-        /* Check if the module exists */
-        if (!verifyModuleExists(moduleName)) {
-            return false;
-        }
-
-        YAML::Node moduleNode = moduleManager.getModuleYaml(moduleName);
-
-        /* Check if module node is valid */
-        if (!moduleNode.IsDefined() || moduleNode.IsNull()) {
-            return false;
-        }
-
-        /* Check if port section exists */
-        if (!moduleNode["port"].IsDefined() || moduleNode["port"].IsNull()) {
-            return false;
-        }
-
-        bool portFound      = false;
-        bool directionMatch = false;
-        bool widthMatch     = false;
-
-        /* Iterate through all ports */
-        for (const auto &port : moduleNode["port"]) {
-            /* Check if port key is valid */
-            if (!port.first.IsDefined() || !port.first.IsScalar()) {
-                continue;
-            }
-
-            const QString currentPortName = QString::fromStdString(port.first.Scalar());
-            if (currentPortName != portName)
-                continue;
-
-            portFound = true;
-
-            /* Check if port node is valid */
-            if (!port.second.IsDefined() || port.second.IsNull()) {
-                return false;
-            }
-
-            YAML::Node portNode = port.second;
-
-            /* Check direction */
-            if (portNode["direction"].IsDefined() && !portNode["direction"].IsNull()) {
-                QString portDirection = QString::fromStdString(
-                    portNode["direction"].as<std::string>());
-                /* Remove possible trailing special characters (e.g. %) */
-                portDirection = portDirection.trimmed();
-                if (portDirection.endsWith('%'))
-                    portDirection.chop(1);
-                directionMatch = (portDirection == direction);
-            }
-
-            /* Check width - may be in width or parsed from type */
-            if (portNode["width"].IsDefined() && !portNode["width"].IsNull()) {
-                const int portWidth = portNode["width"].as<int>();
-                widthMatch          = (portWidth == width);
-            } else if (portNode["type"].IsDefined() && !portNode["type"].IsNull()) {
-                const QString typeStr = QString::fromStdString(portNode["type"].as<std::string>());
-
-                /* For unit width logic or wire types */
-                if ((typeStr == "logic" || typeStr == "wire") && width == 1) {
-                    widthMatch = true;
-                }
-                /* For array types like reg[7:0] or logic[3:0] */
-                else if (typeStr.contains('[') && typeStr.contains(']')) {
-                    const QString widthStr = typeStr.section('[', 1).section(']', 0, 0);
-                    if (widthStr.contains(':')) {
-                        const int high      = widthStr.section(':', 0, 0).toInt();
-                        const int low       = widthStr.section(':', 1, 1).toInt();
-                        const int portWidth = high - low + 1;
-                        widthMatch          = (portWidth == width);
-                    }
-                }
-            } else {
-                /* For tests, assume it's a match if port exists and direction matches */
-                widthMatch = true;
-            }
-
-            break;
-        }
-
-        /* If port is found and either direction or width match (for testing purposes),
-           consider it a successful verification */
-        return portFound && (directionMatch || widthMatch);
-    }
-
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         /* Re-enable message handler for collecting CLI output */
         qInstallMessageHandler(messageOutput);
         /* Mirror QSocConsole writes through the message handler so legacy

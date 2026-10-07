@@ -592,26 +592,8 @@ bool QSocCliWorker::parseGenerateVerilog(const QStringList &appArguments)
         return checkPrcmNetlists(filePathList);
     }
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        const QString dirPath = parser.value("directory");
-        projectManager->setProjectPath(dirPath);
-    }
-
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if output path is valid */
@@ -873,26 +855,8 @@ bool QSocCliWorker::parseGenerateTemplate(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: missing template files."));
     }
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        const QString dirPath = parser.value("directory");
-        projectManager->setProjectPath(dirPath);
-    }
-
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if output path is valid */
@@ -1005,26 +969,8 @@ bool QSocCliWorker::parseGenerateStub(const QStringList &appArguments)
 
     const QString &stubName = positionalArgs.first();
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        const QString dirPath = parser.value("directory");
-        projectManager->setProjectPath(dirPath);
-    }
-
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if output path is valid */

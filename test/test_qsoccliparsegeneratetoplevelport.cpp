@@ -16,18 +16,6 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
@@ -203,7 +191,6 @@ project:
 private slots:
     void initTestCase()
     {
-        TestApp::instance();
         projectName = "test_netlist_toplevel_ports_"
                       + QString::number(QDateTime::currentMSecsSinceEpoch());
     }

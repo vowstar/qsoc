@@ -10,25 +10,11 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     /* Helper: create a file with an empty content at the given relative path */
     static void touchFile(const QString &dirPath, const QString &rel)
     {

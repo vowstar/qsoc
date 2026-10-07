@@ -37,6 +37,21 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/../resource"
 )
 
+if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+    qt_add_resources(_TEST_RESOURCES "${PROJECT_QRC_FILES}")
+else()
+    qt5_add_resources(_TEST_RESOURCES "${PROJECT_QRC_FILES}")
+endif()
+add_library(qsoc_test_resources OBJECT ${_TEST_RESOURCES})
+target_link_libraries(qsoc_test_resources PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
+    qt_add_lrelease(qsoc_test_resources TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
+    qt_add_resources(qsoc_test_resources "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
+else()
+    qt5_add_lrelease(qsoc_test_resources TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
+    qt5_add_resources(qsoc_test_resources "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
+endif()
+
 # Per-test policy is declared at the call site. A misspelled keyword is a
 # configure error, unlike a name missing from a regex or a property variable.
 function(QT_ADD_TEST_TARGET TARGET_NAME)
@@ -81,17 +96,12 @@ function(QT_ADD_TEST_TARGET TARGET_NAME)
     set(_TEST_SOURCES "${CMAKE_CURRENT_LIST_DIR}/${TARGET_NAME}.cpp")
 
     if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-        qt_add_resources(_TEST_SOURCES "${PROJECT_QRC_FILES}")
         qt_add_executable(${TARGET_NAME} MANUAL_FINALIZATION "${_TEST_SOURCES}")
-        qt_add_lrelease(${TARGET_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
-        qt_add_resources(${TARGET_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
     else()
-        qt5_add_resources(_TEST_SOURCES "${PROJECT_QRC_FILES}")
         add_executable(${TARGET_NAME} "${_TEST_SOURCES}")
-        qt5_add_lrelease(${TARGET_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
-        qt5_add_resources(${TARGET_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
     endif()
 
+    target_sources(${TARGET_NAME} PRIVATE $<TARGET_OBJECTS:qsoc_test_resources>)
     target_link_libraries(${TARGET_NAME} PRIVATE
         qsoc_core
         Qt${QT_VERSION_MAJOR}::Test

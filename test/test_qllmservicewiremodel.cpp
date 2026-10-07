@@ -218,6 +218,92 @@ class TestQLLMServiceWireModel : public QObject
     Q_OBJECT
 
 private slots:
+    void requestPathFields_data()
+    {
+        QTest::addColumn<int>("variant");
+        QTest::newRow("minimal") << 0;
+        QTest::newRow("configured") << 1;
+        QTest::newRow("reasoning") << 2;
+        QTest::newRow("effort-disabled") << 3;
+        QTest::newRow("empty-effort") << 4;
+    }
+
+    void requestPathFields()
+    {
+        QFETCH(int, variant);
+        CaptureServer server;
+        QVERIFY(server.listen());
+        LLMModelConfig endpoint;
+        endpoint.url                = server.url();
+        endpoint.timeout            = 3000;
+        endpoint.model              = variant ? QStringLiteral("wire-model") : QString();
+        endpoint.maxOutputTokens    = variant ? 123 : 0;
+        endpoint.reasoning          = variant == 2 || variant == 4;
+        endpoint.chatTemplateKwargs = variant ? json{{"clear_thinking", false}} : json::object();
+        const QString effort   = variant == 2 || variant == 3 ? QStringLiteral("high") : QString();
+        const json    messages = json::array({{{"role", "user"}, {"content", "hi"}}});
+        const json    tools
+            = variant
+                  ? json::array(
+                        {{{"type", "function"},
+                          {"function", {{"name", "lookup"}, {"parameters", {{"type", "object"}}}}}}})
+                  : json::array();
+        QLLMService llm;
+        llm.setModel(endpoint);
+        for (int path = 0; path < 4; ++path) {
+            if (path == 0) {
+                QVERIFY(
+                    llm.sendRequest(QStringLiteral("hi"), QString(), 0.37, variant != 0).success);
+            } else if (path == 1) {
+                bool completed = false;
+                bool success   = false;
+                llm.sendRequestAsync(
+                    QStringLiteral("hi"),
+                    [&](const LLMResponse &response) {
+                        success   = response.success;
+                        completed = true;
+                    },
+                    QString(),
+                    0.37,
+                    variant != 0,
+                    effort);
+                QTRY_VERIFY(completed);
+                QVERIFY(success);
+            } else if (path == 2) {
+                QVERIFY(
+                    !llm.sendChatCompletion(messages, tools, 0.37, {}, effort).contains("error"));
+            } else {
+                QSignalSpy done(&llm, &QLLMService::streamComplete);
+                QSignalSpy failed(&llm, &QLLMService::streamError);
+                llm.sendChatCompletionStream(messages, tools, 0.37, effort);
+                QTRY_COMPARE(done.count() + failed.count(), 1);
+                QCOMPARE(failed.count(), 0);
+            }
+            QCOMPARE(server.requestCount(), path + 1);
+            json expected = {{"messages", messages}, {"stream", path == 3}};
+            if (variant == 2 && path != 0) {
+                expected["reasoning_effort"] = "high";
+                expected["reasoning"]        = {{"effort", "high"}};
+            } else {
+                expected["temperature"] = 0.37;
+            }
+            if (variant) {
+                expected["model"]                = "wire-model";
+                expected["chat_template_kwargs"] = {{"clear_thinking", false}};
+                if (path < 2) {
+                    expected["response_format"] = {{"type", "json_object"}};
+                } else {
+                    expected["tools"]      = tools;
+                    expected["max_tokens"] = 123;
+                }
+            }
+            if (path == 3) {
+                expected["stream_options"] = {{"include_usage", true}};
+            }
+            QCOMPARE(server.request(path), expected);
+        }
+    }
+
     void keyIsSentWhenModelFieldIsAbsent()
     {
         CaptureServer server;

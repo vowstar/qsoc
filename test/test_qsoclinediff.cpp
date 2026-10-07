@@ -7,25 +7,11 @@
 #include <QtCore>
 #include <QtTest>
 
-struct TestApp
-{
-    static auto &instance()
-    {
-        static auto                   argc      = 1;
-        static char                   appName[] = "qsoc";
-        static std::array<char *, 1>  argv      = {{appName}};
-        static const QCoreApplication app       = QCoreApplication(argc, argv.data());
-        return app;
-    }
-};
-
 class Test : public QObject
 {
     Q_OBJECT
 
 private slots:
-    void initTestCase() { TestApp::instance(); }
-
     /* Helper: extract the kinds in order, ignoring text content. Lets
      * tests express expected structure compactly. */
     static QString kindString(const QList<QSocLineDiff::DiffLine> &diff)

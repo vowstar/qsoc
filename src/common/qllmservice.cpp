@@ -111,6 +111,40 @@ void applyReasoningEffort(json &payload, const QString &effort)
     }
 }
 
+json buildOpenAIRequest(
+    const json &messages, const LLMModelConfig &endpoint, double temperature, const QString &effort)
+{
+    json payload = {{"messages", messages}, {"temperature", temperature}, {"stream", false}};
+    if (!endpoint.model.isEmpty()) {
+        payload["model"] = endpoint.model.toStdString();
+    }
+    applyReasoningEffort(payload, effort);
+    applyTemplateKwargs(payload, endpoint);
+    return payload;
+}
+
+json buildOpenAIChatRequest(
+    const json           &messages,
+    const json           &tools,
+    const LLMModelConfig &endpoint,
+    double                temperature,
+    const QString        &effort,
+    bool                  stream)
+{
+    json payload = buildOpenAIRequest(messages, endpoint, temperature, effort);
+    if (!tools.empty()) {
+        payload["tools"] = tools;
+    }
+    if (endpoint.maxOutputTokens > 0) {
+        payload["max_tokens"] = endpoint.maxOutputTokens;
+    }
+    payload["stream"] = stream;
+    if (stream) {
+        payload["stream_options"] = {{"include_usage", true}};
+    }
+    return payload;
+}
+
 std::optional<QString> tokenizerSetting(const QString &value)
 {
     const QString keyword = value.toLower();
@@ -956,8 +990,7 @@ json QLLMService::buildRequestPayload(
     const LLMModelConfig &endpoint,
     const QString        &reasoningEffort)
 {
-    const QString &model  = endpoint.model;
-    const QString  effort = endpoint.reasoning ? reasoningEffort : QString();
+    const QString effort = endpoint.reasoning ? reasoningEffort : QString();
     /* Build messages array (OpenAI Chat Completions format) */
     json messages = json::array();
 
@@ -983,23 +1016,10 @@ json QLLMService::buildRequestPayload(
         return QLLMAnthropic::buildRequest(messages, json::array(), endpoint, options);
     }
 
-    /* Build payload */
-    json payload;
-    payload["messages"]    = messages;
-    payload["temperature"] = temperature;
-    payload["stream"]      = false;
-
-    /* Set model if provided */
-    if (!model.isEmpty()) {
-        payload["model"] = model.toStdString();
-    }
-
-    /* Request JSON format if needed */
+    json payload = buildOpenAIRequest(messages, endpoint, temperature, effort);
     if (jsonMode) {
         payload["response_format"] = {{"type", "json_object"}};
     }
-    applyReasoningEffort(payload, effort);
-    applyTemplateKwargs(payload, endpoint);
 
     return payload;
 }
@@ -1332,29 +1352,7 @@ void QLLMService::sendChatCompletionStream(
         options.stream      = true;
         payload             = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
     } else {
-        payload["messages"]    = messages;
-        payload["temperature"] = temperature;
-        payload["stream"]      = true;
-        /* Ask the server to emit a final chunk carrying token usage so
-         * downstream code can anchor estimates on the real prompt size
-         * instead of recomputing from scratch each turn. */
-        payload["stream_options"] = {{"include_usage", true}};
-
-        applyReasoningEffort(payload, effort);
-        applyTemplateKwargs(payload, endpoint);
-
-        if (!endpoint.model.isEmpty()) {
-            payload["model"] = endpoint.model.toStdString();
-        }
-
-        if (!tools.empty()) {
-            payload["tools"] = tools;
-        }
-
-        /* Set max output tokens from endpoint config */
-        if (endpoint.maxOutputTokens > 0) {
-            payload["max_tokens"] = endpoint.maxOutputTokens;
-        }
+        payload = buildOpenAIChatRequest(messages, tools, endpoint, temperature, effort, true);
     }
 
     const auto observation
@@ -2234,25 +2232,7 @@ json QLLMService::sendChatCompletionTo(
         options.effort      = effort;
         payload             = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
     } else {
-        payload["messages"]    = messages;
-        payload["temperature"] = temperature;
-        payload["stream"]      = false;
-        applyReasoningEffort(payload, effort);
-        applyTemplateKwargs(payload, endpoint);
-
-        if (!endpoint.model.isEmpty()) {
-            payload["model"] = endpoint.model.toStdString();
-        }
-
-        /* Add tools if provided */
-        if (!tools.empty()) {
-            payload["tools"] = tools;
-        }
-
-        /* Set max output tokens from endpoint config */
-        if (endpoint.maxOutputTokens > 0) {
-            payload["max_tokens"] = endpoint.maxOutputTokens;
-        }
+        payload = buildOpenAIChatRequest(messages, tools, endpoint, temperature, effort, false);
     }
 
     const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Chat, endpoint.url, payload);

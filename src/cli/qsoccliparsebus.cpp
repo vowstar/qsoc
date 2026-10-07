@@ -86,24 +86,8 @@ bool QSocCliWorker::parseBusImport(const QStringList &appArguments)
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing bus definition CSV files."));
     }
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if both busName and libraryName are empty */
     if (busName.isEmpty() && libraryName.isEmpty()) {
@@ -170,24 +154,8 @@ bool QSocCliWorker::parseBusRemove(const QStringList &appArguments)
             busNameList.end(),
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         busNameList.end());
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if bus path is valid */
     if (!projectManager->isValidBusPath()) {
@@ -281,24 +249,8 @@ bool QSocCliWorker::parseBusList(const QStringList &appArguments)
             busNameList.end(),
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         busNameList.end());
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if bus path is valid */
     if (!projectManager->isValidBusPath()) {
@@ -390,24 +342,8 @@ bool QSocCliWorker::parseBusShow(const QStringList &appArguments)
             busNameList.end(),
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         busNameList.end());
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if bus path is valid */
     if (!projectManager->isValidBusPath()) {

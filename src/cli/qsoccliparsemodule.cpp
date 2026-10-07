@@ -391,24 +391,8 @@ bool QSocCliWorker::parseModuleImport(const QStringList &appArguments)
         return showHelpOrError(
             1, QCoreApplication::translate("main", "Error: missing verilog files."));
     }
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     if (!projectManager->isValidModulePath()) {
         return showErrorWithHelp(
@@ -501,24 +485,8 @@ bool QSocCliWorker::parseModuleRemove(const QStringList &appArguments)
             moduleNameList.end(),
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         moduleNameList.end());
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if module path is valid */
     if (!projectManager->isValidModulePath()) {
@@ -613,24 +581,8 @@ bool QSocCliWorker::parseModuleList(const QStringList &appArguments)
             moduleNameList.end(),
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         moduleNameList.end());
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if module path is valid */
     if (!projectManager->isValidModulePath()) {
@@ -719,24 +671,8 @@ bool QSocCliWorker::parseModuleShow(const QStringList &appArguments)
             moduleNameList.end(),
             [](const QString &str) { return str.trimmed().isEmpty(); }),
         moduleNameList.end());
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if module path is valid */
     if (!projectManager->isValidModulePath()) {

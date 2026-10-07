@@ -262,27 +262,31 @@ private slots:
 
     void testGenerateStubHelp()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "stub", "--help"};
+        QSignalSpy        exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 0);
+        QVERIFY(capture.text().contains(QStringLiteral("<stubname>")));
     }
 
     void testGenerateStubMissingStubName()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments
             = {"qsoc", "generate", "stub", "-d", projectManager.getCurrentPath()};
+        QSignalSpy exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("Error: missing stub name.")));
     }
 
     void testGenerateStubBasic()

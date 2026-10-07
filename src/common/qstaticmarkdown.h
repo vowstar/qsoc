@@ -4,24 +4,14 @@
 #ifndef QSTATICMARKDOWN_H
 #define QSTATICMARKDOWN_H
 
-#include <nlohmann/json.hpp>
-#include <QMetaEnum>
-#include <QObject>
+#include <cstdint>
 #include <QString>
 #include <QStringList>
 #include <QVector>
 
-using json = nlohmann::json;
-
-/**
- * @brief The QStaticMarkdown class.
- * @details This class provides utility functions for rendering Markdown documents
- *          with proper formatting using the Inja template engine.
- */
-class QStaticMarkdown : public QObject
+/* Markdown table formatting. */
+class QStaticMarkdown
 {
-    Q_OBJECT
-
 public:
     /**
      * @brief Text alignment options for table cells
@@ -31,26 +21,7 @@ public:
         Center, /**< Center-aligned text */
         Right   /**< Right-aligned text */
     };
-    Q_ENUM(Alignment)
 
-    /**
-     * @brief Get the static instance of this object.
-     * @details This function will return the static instance of this object.
-     * @return The static instance of this object.
-     */
-    static QStaticMarkdown &instance()
-    {
-        static QStaticMarkdown instance;
-        return instance;
-    }
-
-    /**
-     * @brief Default destructor for QStaticMarkdown.
-     * @details Cleanup and release resources.
-     */
-    ~QStaticMarkdown() override = default;
-
-public slots:
     /**
      * @brief Generate a Markdown table from column headers and data rows.
      * @details Creates a formatted Markdown table with proper column alignment based on
@@ -101,14 +72,7 @@ private:
     static QString createSeparatorLine(
         const QVector<int> &columnWidths, const QVector<Alignment> &alignments);
 
-    /**
-     * @brief Constructor.
-     * @details This is a private constructor for this class to prevent
-     *          instantiation. Making the constructor private ensures that no
-     *          objects of this class can be created from outside the class,
-     *          enforcing a static-only usage pattern.
-     */
-    QStaticMarkdown() {}
+    QStaticMarkdown() = delete;
 };
 
 #endif // QSTATICMARKDOWN_H

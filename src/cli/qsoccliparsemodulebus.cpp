@@ -127,24 +127,8 @@ bool QSocCliWorker::parseModuleBusAdd(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: bus interface name cannot be empty."));
     }
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
     /* Check if module path is valid */
     if (!projectManager->isValidModulePath()) {
@@ -270,24 +254,8 @@ bool QSocCliWorker::parseModuleBusRemove(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: bus interface name is required."));
     }
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if module path is valid */
@@ -402,24 +370,8 @@ bool QSocCliWorker::parseModuleBusList(const QStringList &appArguments)
     const QString    &moduleName     = parser.isSet("module") ? parser.value("module") : ".*";
     const QString    &busName        = positionalArgs.isEmpty() ? ".*" : positionalArgs.first();
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if module path is valid */
@@ -535,24 +487,8 @@ bool QSocCliWorker::parseModuleBusShow(const QStringList &appArguments)
             1, QCoreApplication::translate("main", "Error: module name is required."));
     }
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if module path is valid */
@@ -670,24 +606,8 @@ bool QSocCliWorker::parseModuleBusExplain(const QStringList &appArguments)
         return showHelpOrError(1, QCoreApplication::translate("main", "Error: bus name is required."));
     }
 
-    /* Setup project manager and project path  */
-    if (parser.isSet("directory")) {
-        projectManager->setProjectPath(parser.value("directory"));
-    }
-    if (parser.isSet("project")) {
-        projectManager->load(parser.value("project"));
-    } else {
-        const QStringList &projectNameList = projectManager->list(QRegularExpression(".*"));
-        if (projectNameList.length() > 1) {
-            return showErrorWithHelp(
-                1,
-                QCoreApplication::translate(
-                    "main",
-                    "Error: multiple projects found, please specify the project name.\n"
-                    "Available projects are:\n%1\n")
-                    .arg(projectNameList.join("\n")));
-        }
-        projectManager->loadFirst();
+    if (!loadSelectedProject(ProjectLoad::Optional)) {
+        return false;
     }
 
     /* Check if module path is valid */

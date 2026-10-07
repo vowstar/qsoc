@@ -310,65 +310,75 @@ private slots:
 
     void testGenerateCommandHelp()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "--help"};
+        QSignalSpy        exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 0);
+        QVERIFY(capture.text().contains(QStringLiteral("generate <subcommand>")));
     }
 
     void testGenerateVerilogHelp()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "verilog", "--help"};
+        QSignalSpy        exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 0);
+        QVERIFY(capture.text().contains(QStringLiteral("[<netlist files>]")));
     }
 
     void testGenerateWithInvalidOption()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "generate", "verilog", "--invalid-option"};
+        QSignalSpy        exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("Unknown option 'invalid-option'.")));
     }
 
     void testGenerateWithMissingRequiredArgument()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {
             "qsoc", "generate", "verilog"
             /* Missing netlist file argument */
         };
+        QSignalSpy exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 1);
+        QVERIFY(capture.text().contains(QStringLiteral("Error: missing netlist files.")));
     }
 
     void testGenerateWithVerbosityLevels()
     {
-        messageList.clear();
+        QSocTestCapture   capture;
         QSocCliWorker     socCliWorker;
         const QStringList appArguments = {"qsoc", "--verbose=3", "generate", "verilog", "--help"};
+        QSignalSpy        exitSpy(&socCliWorker, &QSocCliWorker::exit);
         socCliWorker.setup(appArguments, false);
         socCliWorker.run();
 
-        /* Just verify the command doesn't crash */
-        QVERIFY(true);
+        QCOMPARE(exitSpy.count(), 1);
+        QCOMPARE(exitSpy.at(0).at(0).toInt(), 0);
+        QVERIFY(capture.text().contains(QStringLiteral("[<netlist files>]")));
     }
 
     void testGenerateWithMaxWidthTest()

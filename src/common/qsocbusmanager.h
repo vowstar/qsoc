@@ -432,20 +432,6 @@ private:
     YAML::Node busData;
 
     /**
-     * @brief Merge two YAML nodes.
-     * @details This function will merge two YAML nodes. It returns a new map
-     *          resultYaml which is a merge of fromYaml into toYaml.
-     *          Values from fromYaml will replace identically keyed non-map
-     *          values from toYaml in the resultYaml map.
-     *          The values ​​in toYaml and fromYaml will not be modified.
-     * @param toYaml The destination YAML node.
-     * @param fromYaml The source YAML node.
-     * @return YAML::Node The merged YAML node which is a merge of fromYaml into
-     *                    toYaml.
-     */
-    YAML::Node mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml);
-
-    /**
      * @brief Adds a bus name to the library map.
      * @details This function adds a given bus name to the set of buses
      *          associated with a specified library in the libraryMap.

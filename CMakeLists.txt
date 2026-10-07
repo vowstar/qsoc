@@ -286,21 +286,6 @@ else()
     message(STATUS "Use local systemrdl library: ${SYSTEMRDL_LIBRARIES} ${SYSTEMRDL_INCLUDE_DIRS}")
 endif()
 
-# REPLXX
-pkg_check_modules(REPLXX IMPORTED_TARGET replxx>=0.0.4)
-if (REPLXX_FOUND)
-    message(STATUS "Use system replxx library: ${REPLXX_LIBRARIES} ${REPLXX_VERSION}")
-else()
-    set(REPLXX_BUILD_EXAMPLES OFF CACHE BOOL "disable replxx examples")
-    set(REPLXX_BUILD_PACKAGE OFF CACHE BOOL "disable replxx package")
-    add_subdirectory(external/replxx)
-    set(REPLXX_INCLUDE_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/replxx/include"
-    )
-    set(REPLXX_LIBRARIES replxx::replxx)
-    message(STATUS "Use local replxx library: ${REPLXX_LIBRARIES} ${REPLXX_INCLUDE_DIRS}")
-endif()
-
 # FMT
 # Check if fmt target already exists (to avoid conflicts with FetchContent or other mechanisms)
 if(NOT TARGET fmt::fmt)
@@ -610,8 +595,7 @@ target_include_directories(qsoc_tui SYSTEM PUBLIC "${CMARK_GFM_INCLUDE_DIRS}")
 target_compile_definitions(qsoc_tui PUBLIC CMARK_GFM_STATIC_DEFINE CMARK_GFM_EXTENSIONS_STATIC_DEFINE)
 
 qsoc_add_static_library(qsoc_cli ${QSOC_CLI_FILES})
-target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client qsoc_smt ${REPLXX_LIBRARIES})
-target_include_directories(qsoc_cli SYSTEM PRIVATE "${REPLXX_INCLUDE_DIRS}")
+target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client qsoc_smt)
 
 qsoc_add_static_library(qsoc_gui ${QSOC_GUI_FILES} ${PROJECT_UI_FILES})
 target_include_directories(qsoc_gui SYSTEM PUBLIC "${QSCHEMATIC_INCLUDE_DIRS}")

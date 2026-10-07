@@ -74,7 +74,7 @@ bool QSocCliWorker::parseOptions(const QStringList &appArguments)
     return true;
 }
 
-bool QSocCliWorker::loadSelectedProject()
+bool QSocCliWorker::loadSelectedProject(ProjectLoad policy)
 {
     if (parser.isSet("directory")) {
         projectManager->setProjectPath(parser.value("directory"));
@@ -82,7 +82,7 @@ bool QSocCliWorker::loadSelectedProject()
 
     if (parser.isSet("project")) {
         const QString projectName = parser.value("project");
-        if (!projectManager->load(projectName)) {
+        if (!projectManager->load(projectName) && policy == ProjectLoad::Required) {
             return showErrorWithHelp(
                 1,
                 QCoreApplication::translate("main", "Error: could not load project: %1.")
@@ -101,7 +101,7 @@ bool QSocCliWorker::loadSelectedProject()
                 "Available projects are:\n%1\n")
                 .arg(projectNameList.join('\n')));
     }
-    if (!projectManager->loadFirst()) {
+    if (!projectManager->loadFirst() && policy == ProjectLoad::Required) {
         return showErrorWithHelp(
             1, QCoreApplication::translate("main", "Error: could not load a project."));
     }

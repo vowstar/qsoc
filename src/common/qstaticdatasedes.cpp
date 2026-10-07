@@ -30,5 +30,3 @@ json QStaticDataSedes::deserializeJson(const QString &str)
     const std::string stdString = str.toStdString();
     return json::parse(stdString);
 }
-
-#include "moc_qstaticdatasedes.cpp"

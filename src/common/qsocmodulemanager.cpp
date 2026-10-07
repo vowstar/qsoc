@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocmodulemanager.h"
+#include "common/qsocyamlutils.h"
 
 #include "common/qsocconsole.h"
 #include "common/qsociomuxgenerator.h"
@@ -309,42 +310,6 @@ QSocModuleManager::QSocModuleManager(
 }
 
 QSocModuleManager::~QSocModuleManager() = default;
-
-YAML::Node QSocModuleManager::mergeNodes(const YAML::Node &toYaml, const YAML::Node &fromYaml)
-{
-    if (!fromYaml.IsMap()) {
-        /* If fromYaml is not a map, merge result is fromYaml, unless fromYaml is null */
-        return fromYaml.IsNull() ? toYaml : fromYaml;
-    }
-    if (!toYaml.IsMap()) {
-        /* If toYaml is not a map, merge result is fromYaml */
-        return fromYaml;
-    }
-    if (!fromYaml.size()) {
-        /* If toYaml is a map, and fromYaml is an empty map, return toYaml */
-        return toYaml;
-    }
-    /* Create a new map 'resultYaml' with the same mappings as toYaml, merged with fromYaml */
-    YAML::Node resultYaml = YAML::Node(YAML::NodeType::Map);
-    for (auto iter : toYaml) {
-        if (iter.first.IsScalar()) {
-            const std::string &key      = iter.first.Scalar();
-            auto               tempYaml = YAML::Node(fromYaml[key]);
-            if (tempYaml) {
-                resultYaml[iter.first] = mergeNodes(iter.second, tempYaml);
-                continue;
-            }
-        }
-        resultYaml[iter.first] = iter.second;
-    }
-    /* Add the mappings from 'fromYaml' not already in 'resultYaml' */
-    for (auto iter : fromYaml) {
-        if (!iter.first.IsScalar() || !resultYaml[iter.first.Scalar()]) {
-            resultYaml[iter.first] = iter.second;
-        }
-    }
-    return resultYaml;
-}
 
 void QSocModuleManager::libraryMapAdd(const QString &libraryName, const QString &moduleName)
 {
@@ -1479,7 +1444,8 @@ bool QSocModuleManager::saveLibraryYaml(const QString &libraryName, const YAML::
     if (QFile::exists(filePath)) {
         /* Load library YAML file */
         std::ifstream inputFileStream(filePath.toStdString());
-        localLibraryYaml = mergeNodes(YAML::Load(inputFileStream), libraryYaml);
+        localLibraryYaml
+            = QSocYamlUtils::mergeLibraryNodes(YAML::Load(inputFileStream), libraryYaml);
         QSocConsole::debug() << "Load and merge";
     } else {
         localLibraryYaml = libraryYaml;

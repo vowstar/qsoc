@@ -4,7 +4,6 @@
 #ifndef QSTATICDATASEDES_H
 #define QSTATICDATASEDES_H
 
-#include <QObject>
 #include <QString>
 
 #include <nlohmann/json.hpp>
@@ -12,35 +11,10 @@
 
 using json = nlohmann::json;
 
-/**
- * @brief The QStaticDataSedes class.
- * @details This class provides static methods for serializing and deserializing
- *          data between YAML::Node, JSON (nlohmann::json), and QString. It is
- *          designed as a utility class in a Qt environment, leveraging Qt's
- *          string handling capabilities. It's a static-only class, meaning it
- *          cannot be instantiated, but provides its functionality through
- *          static methods.
- */
-class QStaticDataSedes : public QObject
+/* Conversion between YAML, JSON and strings. */
+class QStaticDataSedes
 {
-    Q_OBJECT
-
 public:
-    /**
-     * @brief Get the static instance of this object.
-     * @details This function returns the static instance of this object. It is
-     *          used to provide a singleton instance of the class, ensuring that
-     *          only one instance of the class exists throughout the
-     *          application.
-     * @return The static instance of QStaticDataSedes.
-     */
-    static QStaticDataSedes &instance()
-    {
-        static QStaticDataSedes instance;
-        return instance;
-    }
-
-public slots:
     /**
      * @brief Serialize YAML Node to QString.
      * @details This function serializes a YAML::Node to a QString.
@@ -74,14 +48,7 @@ public slots:
     static json deserializeJson(const QString &str);
 
 private:
-    /**
-     * @brief Constructor.
-     * @details This is a private constructor for QStaticDataSedes to prevent
-     *          instantiation. Making the constructor private ensures that no
-     *          objects of this class can be created from outside the class,
-     *          enforcing a static-only usage pattern.
-     */
-    QStaticDataSedes() {}
+    QStaticDataSedes() = delete;
 };
 
 #endif // QSTATICDATASEDES_H

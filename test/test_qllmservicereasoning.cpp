@@ -6,49 +6,20 @@
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
 #include "qsoc_test.h"
-#include "qsoc_test_pty.h"
+#include "qsoc_test_llm.h"
 
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
 
-#include <memory>
-
 namespace {
-
-using namespace QSocTestPty;
 
 const QString kThinking = QStringLiteral("weighing the options");
 
 /* One mock process per test, killed by the destructor. */
-struct Mock
+struct Mock : QSocTestLlmMock
 {
-    QTemporaryDir dir{QDir::tempPath() + QStringLiteral("/test_qsoc_reason_XXXXXX")};
-    std::unique_ptr<BoundedProcess> process = std::make_unique<BoundedProcess>();
-    int                             port    = 0;
-
-    QString log() const { return QDir(dir.path()).filePath(QStringLiteral("requests.jsonl")); }
-
-    bool start(const QMap<QString, QString> &variables)
-    {
-        port = pickFreePort();
-        if (!dir.isValid() || port <= 0) {
-            return false;
-        }
-        auto environment = isolatedEnvironment(dir.path());
-        environment.insert(QStringLiteral("MOCK_TTL"), QStringLiteral("120"));
-        environment.insert(QStringLiteral("MOCK_REQUEST_LOG"), log());
-        for (auto it = variables.constBegin(); it != variables.constEnd(); ++it) {
-            environment.insert(it.key(), it.value());
-        }
-        process->setProcessEnvironment(environment);
-        process->setStandardOutputFile(QDir(dir.path()).filePath(QStringLiteral("mock.out")));
-        process->setStandardErrorFile(QDir(dir.path()).filePath(QStringLiteral("mock.err")));
-        process->start(QString::fromUtf8(QSOC_MOCK_LLM_PATH), {QString::number(port)});
-        return process->waitForStarted(5000) && waitForMockReady(*process, port, 45000);
-    }
-
     LLMModelConfig model() const
     {
         LLMModelConfig config;
@@ -58,21 +29,6 @@ struct Mock
         config.url     = QStringLiteral("http://127.0.0.1:%1/v1/chat/completions").arg(port);
         config.timeout = 20000;
         return config;
-    }
-
-    QList<json> requests() const
-    {
-        QFile file(log());
-        if (!file.open(QIODevice::ReadOnly)) {
-            return {};
-        }
-        QList<json> out;
-        for (const QByteArray &line : file.readAll().split('\n')) {
-            if (!line.trimmed().isEmpty()) {
-                out.append(json::parse(line.toStdString()));
-            }
-        }
-        return out;
     }
 };
 
