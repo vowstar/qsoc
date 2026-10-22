@@ -201,7 +201,7 @@ private:
         config.verbose             = false;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
-        config.maxIterations       = 4;
+        config.maxTurns            = 4;
         config.maxRetries          = 1;
         config.autoBackgroundMs    = 0;
         return config;

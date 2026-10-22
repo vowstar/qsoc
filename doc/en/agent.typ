@@ -1423,8 +1423,8 @@ group with the offending path.
     [Additional denied tools. Parent denials still apply.
      Pipe-separated alternates.],
     [`max_turns`],
-    [Hard ceiling on the child's iteration count. Unset inherits the
-     parent's limit.],
+    [Hard ceiling on the child's turn count. Unset means no limit. The
+     parent's limit is not inherited.],
     [`critical_reminder`],
     [Text re-injected as a system message at the head of every child turn.],
     [`skills`],

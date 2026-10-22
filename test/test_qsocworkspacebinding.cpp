@@ -25,6 +25,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include <memory>
@@ -249,7 +250,6 @@ private:
                 "      max_output_tokens: 4096\n"
                 "      reasoning: false\n"
                 "agent:\n"
-                "  max_iterations: 3\n"
                 "  session_title: false\n"
                 "  away_summary: false\n"
                 "  memory_extract: false\n"
@@ -425,8 +425,16 @@ void Test::aGoalSetLocallyStillContinues()
     QVERIFY(session->openSession());
     QVERIFY(session->executeCommand(QStringLiteral("/goal port the bus")));
 
+    /* The mock never completes the goal, so stop once it has continued. */
     m_llm.resetRequests();
+    QTimer stop;
+    connect(&stop, &QTimer::timeout, session.get(), [&] {
+        if (m_llm.requests() >= 2)
+            session->abort();
+    });
+    stop.start(10);
     session->runTurn(QStringLiteral("hello"));
+    stop.stop();
     QVERIFY2(m_llm.requests() >= 2, "the goal never continued on its own binding");
     QVERIFY(session->executeCommand(QStringLiteral("/goal clear")));
 }

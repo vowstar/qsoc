@@ -180,7 +180,7 @@ private slots:
         config.verbose              = false;
         config.autoLoadMemory       = false;
         config.memoryRecallEnabled  = false;
-        config.maxIterations        = 2;
+        config.maxTurns             = 2;
         config.maxRetries           = 0;
         config.maxContextTokens     = mode == QStringLiteral("context") ? 100000 : 512000;
         config.reservedOutputTokens = 0;

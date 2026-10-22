@@ -175,7 +175,7 @@ QSocMemoryDream::Outcome QSocMemoryDream::maybeRun(
     childCfg.isSubAgent      = true;
     childCfg.toolsAllow      = QStringList{"memory_read", "memory_write", "memory_delete"};
     childCfg.toolsDeny.clear();
-    childCfg.maxTurnsOverride    = 8;
+    childCfg.maxTurns            = 8;
     childCfg.autoLoadMemory      = false;
     childCfg.memoryRecallEnabled = false;
     childCfg.injectProjectMd     = false;

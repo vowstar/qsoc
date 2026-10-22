@@ -128,9 +128,6 @@ struct QSocAgentConfig
      * custom deployments). */
     QString systemPromptOverride;
 
-    /* Maximum iterations for safety */
-    int maxIterations = 100;
-
     /* Stuck detection settings */
     bool enableStuckDetection  = true;
     bool autoStatusCheck       = true;
@@ -194,12 +191,10 @@ struct QSocAgentConfig
     /* Tool presentation: direct, catalog, or auto. */
     QString toolPresentation = QStringLiteral("direct");
 
-    /* Per-agent iteration cap. 0 = inherit `maxIterations`. When > 0
-     * the agent stops with a "Reached max turns limit" message after
-     * this many iterations even if `maxIterations` would allow more.
-     * Sub-agent definitions set this via the `max_turns:` frontmatter
-     * field. */
-    int maxTurnsOverride = 0;
+    /* Agentic turn cap; 0 = unlimited. Set by `--max-turns` (single
+     * query only), a sub-agent's `max_turns:` frontmatter, and the
+     * internal memory children. Never inherited by a child. */
+    int maxTurns = 0;
 
     /* Reminder text re-injected as a system message at every LLM
      * turn (in messagesWithSystem only, never persisted to

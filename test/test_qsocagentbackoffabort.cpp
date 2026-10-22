@@ -679,7 +679,7 @@ QSocAgentConfig testConfig()
     config.verbose             = false;
     config.autoLoadMemory      = false;
     config.memoryRecallEnabled = false;
-    config.maxIterations       = 2;
+    config.maxTurns            = 2;
     config.maxRetries          = 1;
     return config;
 }
@@ -763,7 +763,7 @@ private slots:
         config.memoryRecallEnabled  = true;
         config.memoryRecallModel    = model;
         config.memoryRecallMaxFiles = 1;
-        config.maxTurnsOverride     = 1;
+        config.maxTurns             = 1;
         const bool  unknown         = model == QStringLiteral("missing-model");
         MockServer &selector        = model.isEmpty() ? active : configured;
         if (!unknown) {
@@ -966,7 +966,7 @@ private slots:
         config.systemPromptOverride = QStringLiteral("Follow the task.");
         config.compactThreshold     = 0;
         config.keepRecentMessages   = 1;
-        config.maxTurnsOverride     = 1;
+        config.maxTurns             = 1;
         QSocAgent agent(nullptr, &service, &registry, config);
         agent.setGoalCatalog(&catalog);
         json history = json::array();
@@ -1450,7 +1450,7 @@ private slots:
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
         config.effortLevel      = effort;
-        config.maxTurnsOverride = 1;
+        config.maxTurns         = 1;
         QSocAgent agent(nullptr, &service, &registry, config);
         QCOMPARE(agent.run(QStringLiteral("answer once")), QStringLiteral("complete"));
         QCOMPARE(server.requestCount(), 1);
@@ -2046,7 +2046,7 @@ private slots:
         configureService(service, server);
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
-        config.maxTurnsOverride = 1;
+        config.maxTurns         = 1;
         config.maxContextTokens = 1000000;
         QSocAgent agent(nullptr, &service, &registry, config);
         if (streaming) {
@@ -2091,7 +2091,7 @@ private slots:
         DefinitionCallbackTool tool;
         registry.registerTool(&tool);
         QSocAgentConfig config  = testConfig();
-        config.maxTurnsOverride = 1;
+        config.maxTurns         = 1;
         config.maxContextTokens = 1000000;
         QSocAgent agent(nullptr, &originalService, &registry, config);
         tool.setDefinitionCallback([&](int) { agent.setLLMService(&nextService); });
@@ -2720,7 +2720,7 @@ private slots:
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
         config.verbose          = true;
-        config.maxTurnsOverride = 1;
+        config.maxTurns         = 1;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
         QSignalSpy aborted(&agent, &QSocAgent::runAborted);
@@ -2775,7 +2775,7 @@ private slots:
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
         config.verbose          = true;
-        config.maxTurnsOverride = 1;
+        config.maxTurns         = 1;
         QSocAgent agent(nullptr, &service, &registry, config);
         bool      injected = false;
         bool      queued   = false;
@@ -2819,8 +2819,8 @@ private slots:
         QSocToolRegistry       registry;
         DefinitionCallbackTool tool;
         registry.registerTool(&tool);
-        QSocAgentConfig config  = testConfig();
-        config.maxTurnsOverride = 1;
+        QSocAgentConfig config = testConfig();
+        config.maxTurns        = 1;
         QSocAgent agent(nullptr, &service, &registry, config);
         bool      injected = false;
         bool      queued   = false;
@@ -2874,7 +2874,7 @@ private slots:
         config.pruneThreshold       = 0.99;
         config.compactThreshold     = 0.01;
         config.keepRecentMessages   = 2;
-        config.maxTurnsOverride     = 1;
+        config.maxTurns             = 1;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
         QSignalSpy aborted(&agent, &QSocAgent::runAborted);
@@ -2944,7 +2944,7 @@ private slots:
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
         config.verbose          = true;
-        config.maxTurnsOverride = 2;
+        config.maxTurns         = 2;
         QSocAgent   agent(nullptr, &service, &registry, config);
         QStringList iterations;
         bool        injected          = false;
@@ -3006,7 +3006,7 @@ private slots:
         configureService(service, server);
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
-        config.maxTurnsOverride = 2;
+        config.maxTurns         = 2;
         QSocAgent agent(nullptr, &service, &registry, config);
         bool      injected = false;
         bool      queued   = false;
@@ -3059,8 +3059,8 @@ private slots:
         QSocToolRegistry registry;
         registry.registerTool(&effect);
         registry.registerTool(&pending);
-        QSocAgentConfig config  = testConfig();
-        config.maxTurnsOverride = 2;
+        QSocAgentConfig config = testConfig();
+        config.maxTurns        = 2;
         QSocAgent agent(nullptr, &service, &registry, config);
         bool      queued = false;
 
@@ -3114,8 +3114,8 @@ private slots:
         QSocToolRegistry       registry;
         DefinitionCallbackTool tool;
         registry.registerTool(&tool);
-        QSocAgentConfig config  = testConfig();
-        config.maxTurnsOverride = 1;
+        QSocAgentConfig config = testConfig();
+        config.maxTurns        = 1;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
         QSignalSpy aborted(&agent, &QSocAgent::runAborted);
@@ -3158,7 +3158,7 @@ private slots:
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
         config.verbose          = true;
-        config.maxTurnsOverride = 2;
+        config.maxTurns         = 2;
         QSocAgent   agent(nullptr, &service, &registry, config);
         QSignalSpy  completed(&agent, &QSocAgent::runComplete);
         QSignalSpy  aborted(&agent, &QSocAgent::runAborted);
@@ -3207,7 +3207,7 @@ private slots:
         QSocToolRegistry registry;
         QSocAgentConfig  config = testConfig();
         config.verbose          = true;
-        config.maxTurnsOverride = 2;
+        config.maxTurns         = 2;
         QSocAgent   agent(nullptr, &service, &registry, config);
         QSignalSpy  completed(&agent, &QSocAgent::runComplete);
         QSignalSpy  aborted(&agent, &QSocAgent::runAborted);
@@ -4342,7 +4342,7 @@ private slots:
         SideEffectTool   effect;
         registry.registerTool(&effect);
         QSocAgentConfig config = testConfig();
-        config.maxIterations   = 4;
+        config.maxTurns        = 4;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
 
@@ -4430,7 +4430,7 @@ private slots:
         SideEffectTool   effect;
         registry.registerTool(&effect);
         QSocAgentConfig config = testConfig();
-        config.maxIterations   = 4;
+        config.maxTurns        = 4;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy completed(&agent, &QSocAgent::runComplete);
 

@@ -578,10 +578,6 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
         if (!maxTokensStr.isEmpty()) {
             config.maxContextTokens = maxTokensStr.toInt();
         }
-        const QString maxIterStr = d->socConfig->getValue("agent.max_iterations");
-        if (!maxIterStr.isEmpty()) {
-            config.maxIterations = maxIterStr.toInt();
-        }
         const auto readArtifactLimit = [&](const QString &key, qint64 &value) {
             bool         ok     = false;
             const qint64 parsed = d->socConfig->getValue(key).toLongLong(&ok);

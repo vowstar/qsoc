@@ -907,6 +907,7 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
 
     QSocAgentConfig childCfg = effectiveConfig;
     childCfg.isSubAgent      = true;
+    childCfg.maxTurns        = 0;
     if (toLocal) {
         unbindConfigFromHost(parentConfig_, &childCfg);
     }
@@ -925,7 +926,7 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
         }
         childCfg.toolsAllow.removeDuplicates();
         childCfg.toolsDeny.removeDuplicates();
-        childCfg.maxTurnsOverride = def->maxTurns;
+        childCfg.maxTurns         = def->maxTurns;
         childCfg.criticalReminder = def->criticalReminder;
         childCfg.autoLoadMemory   = def->injectMemory;
         childCfg.injectProjectMd  = def->injectProjectMd;

@@ -295,7 +295,7 @@ private:
         config.verbose             = false;
         config.effortLevel         = QStringLiteral("high");
         config.projectPath         = project_.path();
-        config.maxIterations       = 6;
+        config.maxTurns            = 6;
         config.memoryRecallEnabled = true;
         config.keepRecentMessages  = 2;
         return config;

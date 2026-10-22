@@ -191,7 +191,7 @@ QSocAgentConfig config()
     result.verbose             = false;
     result.autoLoadMemory      = false;
     result.memoryRecallEnabled = false;
-    result.maxIterations       = 6;
+    result.maxTurns            = 6;
     result.toolPresentation    = "catalog";
     return result;
 }

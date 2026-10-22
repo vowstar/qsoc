@@ -252,6 +252,16 @@ QStringList sectionParts(
     return parts;
 }
 
+bool turnCapReached(int turns, int cap)
+{
+    return cap > 0 && turns >= cap;
+}
+
+QString maxTurnsMessage(int cap)
+{
+    return QStringLiteral("Reached max turns (%1)").arg(cap);
+}
+
 } // namespace
 
 QSocAgent::QSocAgent(
@@ -846,9 +856,7 @@ QString QSocAgent::run(const QString &userQuery)
 
     /* Agent loop */
     int       iteration = 0;
-    const int turnCap   = owner->agentConfig.maxTurnsOverride > 0
-                              ? owner->agentConfig.maxTurnsOverride
-                              : owner->agentConfig.maxIterations;
+    const int turnCap   = owner->agentConfig.maxTurns;
 
     /* Snapshot the rolling token estimate so each iteration's
      * delta can be charged against the active goal's budget. */
@@ -857,7 +865,7 @@ QString QSocAgent::run(const QString &userQuery)
     QElapsedTimer iterationTimer;
     iterationTimer.start();
 
-    while (iteration < turnCap) {
+    while (!turnCapReached(iteration, turnCap)) {
         if (checkpoint() == CheckpointAction::Terminal) {
             return QStringLiteral("[Agent aborted]");
         }
@@ -986,15 +994,12 @@ QString QSocAgent::run(const QString &userQuery)
         }
     }
 
-    /* Cap source decides the wording: per-agent override gets the
-     * "max turns limit" message; the default safety cap retains the
-     * legacy phrasing so existing logs still match. */
-    if (owner->agentConfig.maxTurnsOverride > 0) {
-        owner->finishSynchronousRun(run, RunOutcome::Error);
-        return QString("Reached max turns limit (%1)").arg(turnCap);
-    }
+    const QString message = maxTurnsMessage(turnCap);
     owner->finishSynchronousRun(run, RunOutcome::Error);
-    return QString("[Agent safety limit reached (%1 iterations)]").arg(turnCap);
+    if (!owner.isNull()) {
+        emit owner->runError(message);
+    }
+    return message;
 }
 
 void QSocAgent::runStream(const QString &userQuery)
@@ -1512,19 +1517,13 @@ void QSocAgent::processStreamIteration()
         }
 
         if (countIteration) {
-            owner->streamIteration++;
-            countIteration      = false;
-            const int streamCap = owner->agentConfig.maxTurnsOverride > 0
-                                      ? owner->agentConfig.maxTurnsOverride
-                                      : owner->agentConfig.maxIterations;
-            if (owner->streamIteration > streamCap) {
-                const QString msg
-                    = owner->agentConfig.maxTurnsOverride > 0
-                          ? QString("Reached max turns limit (%1)").arg(streamCap)
-                          : QString("[Agent safety limit reached (%1 iterations)]").arg(streamCap);
-                owner->finishStreamRun(run, RunOutcome::Error, msg);
+            const int streamCap = owner->agentConfig.maxTurns;
+            if (turnCapReached(owner->streamIteration, streamCap)) {
+                owner->finishStreamRun(run, RunOutcome::Error, maxTurnsMessage(streamCap));
                 return;
             }
+            owner->streamIteration++;
+            countIteration = false;
         }
 
         /* Check and compress history if needed */

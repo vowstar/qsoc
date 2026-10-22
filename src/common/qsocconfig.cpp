@@ -88,7 +88,6 @@ void QSocConfig::loadFromEnvironment()
            /* Agent config */
            {"QSOC_AGENT_TEMPERATURE", "agent.temperature"},
            {"QSOC_AGENT_MAX_TOKENS", "agent.max_tokens"},
-           {"QSOC_AGENT_MAX_ITERATIONS", "agent.max_iterations"},
            {"QSOC_AGENT_SYSTEM_PROMPT", "agent.system_prompt"},
            {"QSOC_AGENT_AUTO_LOAD_MEMORY", "agent.auto_load_memory"},
            {"QSOC_AGENT_MEMORY_MAX_CHARS", "agent.memory_max_chars"}};
@@ -364,7 +363,6 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# agent:\n";
     out << "#   temperature: 0.2          # LLM temperature (0.0-1.0)\n";
     out << "#   max_tokens: 128000        # Maximum context tokens\n";
-    out << "#   max_iterations: 100       # Safety limit for iterations\n";
     out << "#   auto_load_memory: true    # Auto-inject memory into system prompt\n";
     out << "#   memory_max_chars: 24000   # Max chars for memory in system prompt\n";
     out << "#   system_prompt: |          # Custom system prompt\n";

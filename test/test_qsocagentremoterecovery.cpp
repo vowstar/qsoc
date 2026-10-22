@@ -361,8 +361,7 @@ void Test::stopAgent()
 /*
  * I16. A workspace that stopped answering does not answer the next call
  * either, so the turn must end. Without that the loop feeds the same refusal
- * back to the model until the iteration cap, which cost a hundred requests
- * and a slice of context to rediscover.
+ * back to the model with nothing to stop it.
  */
 void Test::aDeadWorkspaceEndsTheTurnInsteadOfBurningTheCap()
 {
@@ -388,13 +387,9 @@ void Test::aDeadWorkspaceEndsTheTurnInsteadOfBurningTheCap()
     QVERIFY2(
         agentOutput().contains("The remote workspace is unusable"),
         "the agent stops without explaining the lost workspace");
-    /* The iteration cap is 100. Ending the turn means a handful of requests,
-     * not that. */
+    /* There is no turn cap. Ending the turn means a handful of requests. */
     QVERIFY2(
         served < 20, qPrintable(QStringLiteral("turn did not end: %1 requests served").arg(served)));
-    QVERIFY2(
-        !wireLog().contains("Agent safety limit reached"),
-        "the run hit the iteration cap instead of ending the turn");
 }
 
 /*

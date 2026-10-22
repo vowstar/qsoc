@@ -208,7 +208,7 @@ bool QSocMemoryExtractor::extract(
     childCfg.isSubAgent      = true;
     childCfg.toolsAllow      = QStringList{"memory_read", "memory_write"};
     childCfg.toolsDeny.clear();
-    childCfg.maxTurnsOverride    = 5;
+    childCfg.maxTurns            = 5;
     childCfg.autoLoadMemory      = false;
     childCfg.memoryRecallEnabled = false;
     childCfg.injectProjectMd     = false;

@@ -161,7 +161,7 @@ QSocAgentConfig baseConfig()
     config.verbose             = false;
     config.autoLoadMemory      = false;
     config.memoryRecallEnabled = false;
-    config.maxIterations       = 2;
+    config.maxTurns            = 2;
     return config;
 }
 

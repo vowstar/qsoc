@@ -220,7 +220,7 @@ QSocAgentConfig quietParent()
     config.verbose             = false;
     config.autoLoadMemory      = false;
     config.memoryRecallEnabled = false;
-    config.maxIterations       = 2;
+    config.maxTurns            = 2;
     config.maxRetries          = 1;
     config.autoBackgroundMs    = 0;
     return config;
@@ -740,6 +740,47 @@ private slots:
         QCOMPARE(response.value("status", std::string()), std::string("error"));
         QVERIFY(response.value("error", std::string()).find("not-configured") != std::string::npos);
         QCOMPARE(llm.requestCount(), 0);
+    }
+
+    void aChildDoesNotInheritTheParentTurnCap()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        ScopedConfig scope(parentAndChildModels(llm.url()));
+
+        CountingTool bash;
+        Harness      h(definitionOn(QString()));
+        h.registry.registerTool(&bash);
+        QCOMPARE(h.parent.getConfig().maxTurns, 2);
+        for (int call = 0; call < 3; ++call)
+            llm.enqueueToolCall(QStringLiteral("bash"));
+
+        const json response = h.spawn();
+        QCOMPARE(response.value("status", std::string()), std::string("ok"));
+        QCOMPARE(bash.calls, 3);
+        QCOMPARE(llm.requestCount(), 4);
+    }
+
+    void aDefinitionMaxTurnsStopsTheChild()
+    {
+        MockLlm llm;
+        QVERIFY(llm.listen());
+        ScopedConfig scope(parentAndChildModels(llm.url()));
+
+        CountingTool bash;
+        auto         definition = definitionOn(QString());
+        definition.maxTurns     = 2;
+        Harness h(definition);
+        h.registry.registerTool(&bash);
+        for (int call = 0; call < 5; ++call)
+            llm.enqueueToolCall(QStringLiteral("bash"));
+
+        const json response = h.spawn();
+        QVERIFY2(
+            response.dump().find("Reached max turns (2)") != std::string::npos,
+            response.dump().c_str());
+        QCOMPARE(bash.calls, 2);
+        QCOMPARE(llm.requestCount(), 2);
     }
 };
 

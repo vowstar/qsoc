@@ -123,7 +123,7 @@ def main():
     model = original["llm"]["models"][selected]
     config = {"llm": {"model": selected, "models": {selected: model}},
               "agent": {"auto_load_memory": False, "memory_extract": False,
-                        "memory_recall": False, "max_iterations": 60}}
+                        "memory_recall": False}}
     if "proxy" in original:
         config["proxy"] = original["proxy"]
     artifacts = (args.artifacts or args.build / "peer-prompt-live").resolve()

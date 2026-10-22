@@ -293,7 +293,7 @@ private slots:
         config.verbose             = false;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
-        config.maxIterations       = 3;
+        config.maxTurns            = 3;
         QSocAgent agent(nullptr, &service, &registry, config);
         agent.setUserWatchingProbe([]() { return false; });
 
@@ -344,7 +344,7 @@ private slots:
         config.verbose             = false;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
-        config.maxIterations       = 3;
+        config.maxTurns            = 3;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy results(&agent, &QSocAgent::toolResult);
 
@@ -401,7 +401,7 @@ private slots:
         config.verbose             = false;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
-        config.maxIterations       = 4;
+        config.maxTurns            = 4;
         QSocAgent agent(nullptr, &service, &registry, config);
         agent.setUserWatchingProbe([]() { return false; });
         int judgeCount = 0;
@@ -487,7 +487,7 @@ private slots:
         config.verbose             = false;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
-        config.maxIterations       = 4;
+        config.maxTurns            = 4;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy results(&agent, &QSocAgent::toolResult);
 
@@ -539,7 +539,7 @@ private slots:
         config.verbose             = false;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
-        config.maxIterations       = 4;
+        config.maxTurns            = 4;
         QSocAgent  agent(nullptr, &service, &registry, config);
         QSignalSpy results(&agent, &QSocAgent::toolResult);
 

@@ -209,7 +209,7 @@ QSocAgentConfig quietConfig()
     config.verbose             = false;
     config.autoLoadMemory      = false;
     config.memoryRecallEnabled = false;
-    config.maxIterations       = 2;
+    config.maxTurns            = 2;
     config.maxRetries          = 1;
     config.autoBackgroundMs    = 0;
     return config;
