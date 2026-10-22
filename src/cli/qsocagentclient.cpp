@@ -485,7 +485,7 @@ bool QSocCliWorker::runAgentClientLoop(
         const auto reply  = client.request("turn", {{"input", parser.value("query")}}, 0);
         const auto result = reply.value("result").toObject();
         if (reply.contains("error") || result.value("error").toBool())
-            return showError(1, reply.value("error").toString(result.value("error_text").toString()));
+            return fail(reply.value("error").toString(result.value("error_text").toString()));
         if (result.value("aborted").toBool())
             return showInfo(
                 0,
@@ -493,7 +493,7 @@ bool QSocCliWorker::runAgentClientLoop(
                     ? QStringLiteral("(interrupted)")
                     : result.value("stop_notice").toString());
         if (result.contains("persisted") && !result.value("persisted").toBool())
-            return showError(1, "Session persistence failed.");
+            return fail("Session persistence failed.");
         if (queryStreamed) {
             compositor.finishStream();
             QString content = compositor.contentView().toAnsi(
@@ -551,7 +551,7 @@ bool QSocCliWorker::runAgentClientLoop(
             compositor.invalidate();
             return;
         }
-        if (result.value("error").isBool() && result.value("error").toBool())
+        if (result.value("error").toBool() && !result.value("error_shown").toBool())
             compositor.printContent("Error: " + result.value("error_text").toString() + "\n");
         if (result.contains("handled") && !result.value("handled").toBool())
             compositor.printContent("Unknown command. Type /help for commands.\n");

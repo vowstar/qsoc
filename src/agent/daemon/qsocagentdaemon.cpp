@@ -375,6 +375,7 @@ private:
         result.insert(QStringLiteral("stop_notice"), turn.stopNotice);
         result.insert(QStringLiteral("error"), turn.error);
         result.insert(QStringLiteral("error_text"), turn.errorText);
+        result.insert(QStringLiteral("error_shown"), turn.errorShown);
         result.insert(QStringLiteral("aborted"), turn.aborted);
         result.insert(QStringLiteral("persisted"), turn.persistedOk);
         result.insert("snapshot", snapshot());

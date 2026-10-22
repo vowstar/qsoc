@@ -61,6 +61,18 @@ public:
                     buffers_[socket].clear();
                     ++requests_;
 
+                    if (status_ != 200) {
+                        const QByteArray error = R"({"error":{"message":"bad request"}})";
+                        socket->write(
+                            "HTTP/1.1 " + QByteArray::number(status_)
+                            + " Bad Request\r\nContent-Type: application/json\r\n"
+                              "Content-Length: "
+                            + QByteArray::number(error.size()) + "\r\nConnection: close\r\n\r\n"
+                            + error);
+                        socket->flush();
+                        socket->disconnectFromHost();
+                        return;
+                    }
                     const QByteArray body
                         = "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\","
                           "\"choices\":[{\"index\":0,\"delta\":{\"role\":"
@@ -103,6 +115,7 @@ public:
 
     quint16 port() const { return server_.serverPort(); }
     int     requestCount() const { return requests_; }
+    void    setStatus(int status) { status_ = status; }
 
 private:
     static qint64 headerInt(const QByteArray &head, const QByteArray &name)
@@ -118,6 +131,7 @@ private:
     QTcpServer                      server_;
     QHash<QTcpSocket *, QByteArray> buffers_;
     int                             requests_ = 0;
+    int                             status_   = 200;
 };
 
 } // namespace
@@ -361,6 +375,45 @@ private slots:
         const auto sessions = runtime.listSessions();
         QCOMPARE(sessions.size(), 1);
         QCOMPARE(sessions.first().id, runtime.sessionId());
+    }
+
+    void aTurnErrorIsMarkedShownOnlyWhenItWasAnEvent()
+    {
+        EchoServer server;
+        server.setStatus(400);
+        QVERIFY(server.listen());
+        writeMockConfig(server.port());
+
+        QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/rt_runtime_XXXXXX"));
+        QVERIFY(fixture.isValid());
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = fixture.path();
+        options.verbose          = false;
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.openSession());
+
+        QSignalSpy                events(&runtime, &QSocAgentRuntime::eventRaised);
+        const QSocAgentTurnResult failed = runtime.runTurn(QStringLiteral("hello"));
+        QVERIFY(failed.error);
+        QVERIFY(failed.errorShown);
+        int shown = 0;
+        for (const QVariantList &args : std::as_const(events)) {
+            const auto event = args.first().value<QSocAgentRuntimeEvent>();
+            if (event.kind == QSocAgentRuntimeEvent::Kind::RunError) {
+                QCOMPARE(event.text, failed.errorText);
+                ++shown;
+            }
+        }
+        QCOMPARE(shown, 1);
+
+        events.clear();
+        const QSocAgentTurnResult refused = runtime.runWakeTurn();
+        QVERIFY(refused.error);
+        QVERIFY(!refused.errorShown);
+        for (const QVariantList &args : std::as_const(events))
+            QVERIFY(
+                args.first().value<QSocAgentRuntimeEvent>().kind
+                != QSocAgentRuntimeEvent::Kind::RunError);
     }
 
     void commandExecutionEmitsOutput()

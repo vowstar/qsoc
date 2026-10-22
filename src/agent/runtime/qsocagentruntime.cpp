@@ -2067,6 +2067,7 @@ QSocAgentTurnResult QSocAgentRuntime::runTurn(const QString &input, TurnOrigin o
     result.error       = errored;
     result.aborted     = aborted;
     result.errorText   = errorText;
+    result.errorShown  = errored;
     result.stopNotice  = stopNotice;
     result.persistedOk = saved;
     return result;

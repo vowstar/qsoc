@@ -100,7 +100,8 @@ struct QSocAgentTurnResult
     QString stopNotice; /**< Why a non-complete stop happened; empty on success. */
     bool    error       = false;
     bool    aborted     = false;
-    bool    persistedOk = true; /**< Session persistence for this turn. */
+    bool    persistedOk = true;  /**< Session persistence for this turn. */
+    bool    errorShown  = false; /**< errorText already went out as a RunError event. */
     QString errorText;
 };
 
