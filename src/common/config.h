@@ -4,6 +4,6 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 /* Version of the application. */
-#define QSOC_VERSION "2.7.2"
+#define QSOC_VERSION "2.7.3"
 
 #endif // CONFIG_H
