@@ -65,6 +65,7 @@ QSocAgentRuntimeOptions optionsFromParams(const QJsonObject &params)
     options.continueLatestSession
         = params.value(QStringLiteral("continue_latest_session")).toBool(false);
     options.maxContextTokens    = params.value(QStringLiteral("max_context_tokens")).toInt(0);
+    options.maxTurns            = params.value(QStringLiteral("max_turns")).toInt(0);
     options.temperature         = params.value(QStringLiteral("temperature")).toDouble(-1.0);
     options.effortLevel         = params.value(QStringLiteral("effort_level")).toString();
     options.toolPresentation    = params.value(QStringLiteral("tool_presentation")).toString();

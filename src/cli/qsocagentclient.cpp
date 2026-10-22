@@ -109,6 +109,7 @@ bool QSocCliWorker::runAgentClientLoop(
         {"resume_session_id", options.resumeSessionId},
         {"continue_latest_session", options.continueLatestSession},
         {"max_context_tokens", options.maxContextTokens},
+        {"max_turns", options.maxTurns},
         {"temperature", options.temperature},
         {"effort_level", options.effortLevel},
         {"tool_presentation", options.toolPresentation},

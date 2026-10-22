@@ -23,6 +23,10 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
         {"max-tokens",
          QCoreApplication::translate("main", "Maximum context tokens (default: 128000)."),
          "tokens"},
+        {"max-turns",
+         QCoreApplication::translate(
+             "main", "Maximum agentic turns, only with --query (default: unlimited)."),
+         "turns"},
         {"temperature",
          QCoreApplication::translate("main", "LLM temperature (0.0-1.0, default: 0.2)."),
          "temperature"},
@@ -110,6 +114,16 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
     }
     if (parser.isSet("max-tokens")) {
         options.maxContextTokens = parser.value("max-tokens").toInt();
+    }
+    if (parser.isSet("max-turns")) {
+        if (!parser.isSet("query")) {
+            return showError(2, "--max-turns requires --query");
+        }
+        bool ok          = false;
+        options.maxTurns = parser.value("max-turns").toInt(&ok);
+        if (!ok || options.maxTurns <= 0) {
+            return showError(2, "--max-turns expects a positive integer");
+        }
     }
     if (parser.isSet("temperature")) {
         options.temperature = parser.value("temperature").toDouble();

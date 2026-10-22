@@ -33,6 +33,8 @@ struct QSocAgentRuntimeOptions
     bool continueLatestSession = false;
     /** Override max context tokens; 0 = model registry / config default. */
     int maxContextTokens = 0;
+    /** Agentic turn cap for a single query; 0 = unlimited. */
+    int maxTurns = 0;
     /** Override temperature; negative = config default. */
     double temperature = -1.0;
     /** Override reasoning effort; empty = default, "off"/"low"/"medium"/"high". */

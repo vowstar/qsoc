@@ -756,6 +756,9 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
     if (options.temperature >= 0.0) {
         config.temperature = options.temperature;
     }
+    if (options.singleQuery) {
+        config.maxTurns = options.maxTurns;
+    }
     if (!options.effortLevel.isEmpty()) {
         config.effortLevel = options.effortLevel.toLower();
     }

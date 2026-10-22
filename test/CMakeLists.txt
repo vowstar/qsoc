@@ -456,6 +456,8 @@ qt_add_test_target("test_qsoctranscriptrenderer")
 qt_add_test_target("test_qsocagentfocus")
 qt_add_test_target("test_qsocagentlazystorage")
 add_dependencies(test_qsocagentlazystorage qsoc)
+qt_add_test_target("test_qsocagentmaxturns")
+add_dependencies(test_qsocagentmaxturns qsoc)
 qt_add_test_target("test_qsocagentcompactcancel")
 add_dependencies(test_qsocagentcompactcancel qsoc)
 qt_add_test_target("test_qsocfilehistory")
@@ -535,6 +537,7 @@ foreach(_mock_test
     test_qllmservicereasoning
     test_qsocagentcompactcancel
     test_qsocagentlazystorage
+    test_qsocagentmaxturns
     test_qsocagentremoterecovery
     test_qsocagentruntimeremote
     test_qsocagentruntimereplay

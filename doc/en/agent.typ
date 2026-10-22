@@ -17,6 +17,10 @@ LLM tool calling to execute multi-step workflows through natural language.
     [`-q`, `--query <text>`], [Single query mode (non-interactive)],
     [`--resources`], [Print a local daemon resource snapshot as JSON without opening an agent session],
     [`--max-tokens <n>`], [Maximum context tokens (default: 128000)],
+    [`--max-turns <n>`],
+    [Stop a `-q` query after _n_ agentic turns and exit with status 1.
+     Only valid with `-q`. Without it a turn runs until the model finishes
+     or is interrupted],
     [`--temperature <n>`], [LLM temperature 0.0--1.0 (default: 0.2)],
     [`--no-stream`], [Disable streaming output],
     [`--effort <level>`], [Reasoning effort: low, medium, high],
