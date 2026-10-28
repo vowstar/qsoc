@@ -304,7 +304,7 @@ private:
      *          (ESC + non-[) and timer-delayed (bare ESC timeout) branches
      *          both feed the same double-Esc window.
      */
-    void emitBareEsc();
+    void emitBareEsc(bool clearInput = false);
 
     /**
      * @brief Clear any pending double-Esc arming.

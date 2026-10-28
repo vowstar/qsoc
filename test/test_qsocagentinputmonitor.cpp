@@ -833,6 +833,7 @@ private slots:
         monitor.processBytes("\033b", 2);
         QCOMPARE(cycle.size(), 0);
         QCOMPARE(escape.size(), 2);
+        QCOMPARE(monitor.getInputBuffer(), QStringLiteral("b"));
         monitor.stop();
     }
 

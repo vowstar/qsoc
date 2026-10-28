@@ -1149,6 +1149,8 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::historyRows()
             row.kind        = QSocTask::Kind::SubAgent;
             row.status      = status;
             row.startedAtMs = run.startedAtMs;
+            row.resumable   = !run.historyFile.isEmpty()
+                              && run.isolation != QStringLiteral("worktree");
             rows.append(row);
             break;
         }

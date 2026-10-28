@@ -739,6 +739,9 @@ private slots:
         QVERIFY(page.eof);
 
         src.markCompleted(runId, QStringLiteral("step two"));
+        QVERIFY(src.historyRows().first().resumable);
+        src.setIsolationMetadata(runId, QStringLiteral("worktree"), tmp.path());
+        QVERIFY(!src.historyRows().first().resumable);
         QCOMPARE(src.liveAgentFor(runId), nullptr);
         page = src.historyPage(runId, 2, 0);
         QVERIFY(page.found);

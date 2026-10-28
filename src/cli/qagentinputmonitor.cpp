@@ -267,13 +267,13 @@ void QAgentInputMonitor::resetEscState()
     doubleEscTimerValid = false;
 }
 
-void QAgentInputMonitor::emitBareEsc()
+void QAgentInputMonitor::emitBareEsc(bool clearInput)
 {
     if (externalKeyConsumer_ && externalKeyConsumer_(Qt::Key_Escape)) {
         cancelDoubleEscArming();
         return;
     }
-    if (!submitBlocked) {
+    if (clearInput && !submitBlocked) {
         inputBuffer.clear();
         cursorPos = 0;
         emit inputChanged(inputBuffer);
@@ -835,7 +835,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
              * (which may fire double-Esc if the previous one was armed),
              * then start a fresh ESC sequence for this new byte. */
             if (byte == 0x1B && escBuffer.size() == 1) {
-                emitBareEsc();
+                emitBareEsc(true);
                 escBuffer.clear();
                 escBuffer.append(static_cast<char>(byte));
                 continue;
@@ -1128,7 +1128,7 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             if (active && inEscSeq && escBuffer.size() == 1) {
                 /* When submit is blocked (completion popup open), Esc only
                  * dismisses the popup — keep the input buffer intact. */
-                emitBareEsc();
+                emitBareEsc(true);
                 resetEscBuffer();
             }
         });

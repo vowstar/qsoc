@@ -527,7 +527,7 @@ private:
         }
         if (method == QStringLiteral("abort")) {
             if (params.contains("operation")
-                && params.value("operation").toInteger(-1) != operation_) {
+                && (!busy_ || params.value("operation").toInteger(-1) != operation_)) {
                 sendReply(id, {{"ok", false}});
                 return;
             }
@@ -717,14 +717,6 @@ private:
             result.insert(QStringLiteral("handled"), handled);
             result.insert(
                 QStringLiteral("snapshot"), snapshot(previousSession != runtime_->sessionId()));
-            sendReply(id, result);
-            return;
-        }
-
-        if (method == QStringLiteral("abort")) {
-            runtime_->abort();
-            QJsonObject result;
-            result.insert(QStringLiteral("ok"), true);
             sendReply(id, result);
             return;
         }

@@ -467,7 +467,7 @@ private slots:
         const auto current = client.waitForReply(22).value("result").toObject();
         QVERIFY(current.value("operation") != interrupt.value("operation"));
         client.send({{"id", 23}, {"method", "abort"}, {"params", current}});
-        QVERIFY(client.waitForReply(23).value("result").toObject().value("ok").toBool());
+        QVERIFY(!client.waitForReply(23).value("result").toObject().value("ok").toBool(true));
 
         /* sessions listing answers with a (possibly empty) array: sessions
          * are lazy, so nothing is listed until a durable record exists. */
