@@ -1143,7 +1143,7 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::historyRows()
              {QSocTask::Status::Completed, QSocTask::Status::Failed, QSocTask::Status::Aborted}) {
             if (run.status != QSocTask::statusWord(status))
                 continue;
-            QSocTask::Row row;
+            QSocTask::Row row{};
             row.id          = run.id;
             row.label       = run.label;
             row.kind        = QSocTask::Kind::SubAgent;
