@@ -182,10 +182,10 @@ void QTuiTaskOverlay::refreshRows()
         if (remaining.remove(key) != 0)
             ordered.append(row);
     }
+    selected_   = cachedRows_.isEmpty() ? 0 : -1;
     cachedRows_ = ordered;
     summary_.clear();
-    summary_  = summary();
-    selected_ = -1;
+    summary_ = summary();
     for (int i = 0; i < cachedRows_.size(); ++i) {
         if (cachedRows_.at(i).sourceTag == tag && cachedRows_.at(i).row.id == id) {
             selected_ = i;

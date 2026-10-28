@@ -431,13 +431,24 @@ private slots:
         QVERIFY(!registry.killTask("missing", "x"));
     }
 
-    void emptyRegistryHandlesQueriesGracefully()
+    void emptyRegistryAcceptsFirstTask()
     {
         QSocTaskRegistry registry;
         QCOMPARE(registry.activeCount(), 0);
         QCOMPARE(registry.listAll().size(), 0);
         QVERIFY(registry.tailFor("x", "y", 1024).isEmpty());
         QVERIFY(!registry.killTask("x", "y"));
+
+        FakeTaskSource src;
+        src.tag = "fake";
+        registry.registerSource(&src);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.open();
+        src.rows.append(makeRow("stored", QSocTask::Status::Completed));
+        src.notifyChanged();
+        overlay.handleKey(Qt::Key_Return, false);
+        QCOMPARE(overlay.mode(), QTuiTaskOverlay::Mode::Detail);
     }
 
     /* ---- concrete adapters ---- */
