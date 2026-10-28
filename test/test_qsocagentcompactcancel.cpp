@@ -170,6 +170,11 @@ void Test::escCancelsCompactionAndRunsQueuedInput()
     clock.start();
     QVERIFY(agent.writeInput("\x1b"));
     QVERIFY2(
+        agent.waitForOutputAfter("Interrupt current operation?", cancelMark, 5000),
+        agent.output().right(8192).constData());
+    QVERIFY(!readBytes(requestLog).contains(queued));
+    QVERIFY(agent.writeInput("y"));
+    QVERIFY2(
         agent.waitForOutputAfter("Compaction cancelled. The history is unchanged.", cancelMark, 10000),
         agent.output().right(8192).constData());
     QVERIFY2(clock.elapsed() < 10000, "ESC did not cancel the stalled summary");

@@ -100,7 +100,7 @@ public:
     void appendUserMessage(const QString &text);
 
     /* Empty the scrollback and drop every stream and tool cursor into it. */
-    void clearTranscript();
+    void clearTranscript(bool keepViewport = false);
 
     /* Exchange the scrollback with @p other, keeping both block lists.
      * Stream and tool cursors are dropped, as by clearTranscript(). */

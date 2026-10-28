@@ -67,6 +67,19 @@ QSocTask::Row makeRow(
     return row;
 }
 
+QString renderText(QTuiTaskOverlay &overlay, int width = 80)
+{
+    QTuiScreen screen(width, 30);
+    overlay.render(screen, 0, width);
+    QString text;
+    for (int y = 0; y < overlay.lineCount(); ++y) {
+        for (int x = 0; x < width; ++x)
+            text += screen.at(x, y).text();
+        text += QLatin1Char('\n');
+    }
+    return text;
+}
+
 } /* namespace */
 
 class TestQSocTaskRegistry : public QObject
@@ -74,6 +87,93 @@ class TestQSocTaskRegistry : public QObject
     Q_OBJECT
 
 private slots:
+    void pageNavigation_data()
+    {
+        QTest::addColumn<int>("width");
+        QTest::addColumn<int>("capacity");
+        QTest::newRow("table") << 40 << 10;
+        QTest::newRow("grid") << 120 << 15;
+    }
+
+    void pageNavigation()
+    {
+        QFETCH(int, width);
+        QFETCH(int, capacity);
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "fake";
+        for (int i = 0; i < 40; ++i)
+            source.rows.append(makeRow(QString::number(i), QSocTask::Status::Running, 40 - i));
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.setTerminalWidth(width);
+        overlay.open();
+        overlay.handleKey(Qt::Key_PageDown, false);
+        overlay.handleKey(Qt::Key_Return, false);
+        QVERIFY(renderText(overlay, width).contains(QStringLiteral("fake / %1").arg(capacity)));
+        overlay.handleKey(Qt::Key_Escape, false);
+        overlay.handleKey(Qt::Key_PageUp, false);
+        overlay.handleKey(Qt::Key_PageUp, false);
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(source.lastKilledId, QStringLiteral("0"));
+        overlay.handleKey(Qt::Key_End, false);
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(source.lastKilledId, QStringLiteral("39"));
+        overlay.handleKey(Qt::Key_Home, false);
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(source.lastKilledId, QStringLiteral("1"));
+    }
+
+    void interruptRequiresAnExplicitConfirmation()
+    {
+        QTuiTaskOverlay overlay;
+        QSignalSpy      confirmed(&overlay, &QTuiTaskOverlay::interruptConfirmed);
+        for (const int key :
+             {int(Qt::Key_Escape), int(Qt::Key_Return), int(Qt::Key_N), int(Qt::CTRL) | Qt::Key_C}) {
+            overlay.confirmInterrupt();
+            QVERIFY(renderText(overlay).contains(QStringLiteral("Y interrupt")));
+            overlay.handleKey(key, false);
+            QCOMPARE(overlay.mode(), QTuiTaskOverlay::Mode::Hidden);
+            QCOMPARE(confirmed.size(), 0);
+        }
+        overlay.confirmInterrupt();
+        overlay.handleKey(Qt::Key_X, false);
+        QCOMPARE(overlay.mode(), QTuiTaskOverlay::Mode::ConfirmInterrupt);
+        overlay.handleKey(Qt::Key_Y, false);
+        QCOMPARE(confirmed.size(), 1);
+        overlay.handleKey(Qt::Key_Y, false);
+        QCOMPARE(confirmed.size(), 1);
+    }
+
+    void logReadingSurvivesRefreshAndTaskRemoval()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "fake";
+        source.rows.append(makeRow("log"));
+        for (int i = 0; i < 80; ++i)
+            source.tailContent += QStringLiteral("line %1\n").arg(i, 3, 10, QLatin1Char('0'));
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.open();
+        overlay.handleKey(Qt::Key_Return, false);
+        QVERIFY(renderText(overlay).contains(QStringLiteral("line 079")));
+        overlay.handleKey(Qt::Key_PageUp, false);
+        const auto before = renderText(overlay).section(QLatin1Char('\n'), 1, 9);
+        source.tailContent += QStringLiteral("new output\n");
+        source.notifyChanged();
+        QCOMPARE(renderText(overlay).section(QLatin1Char('\n'), 1, 9), before);
+        source.rows.clear();
+        source.notifyChanged();
+        QCOMPARE(renderText(overlay).section(QLatin1Char('\n'), 1, 9), before);
+        overlay.handleKey(Qt::Key_Home, false);
+        QVERIFY(renderText(overlay).contains(QStringLiteral("line 000")));
+        overlay.handleKey(Qt::Key_End, false);
+        QVERIFY(renderText(overlay).contains(QStringLiteral("new output")));
+    }
+
     /* ---- registry merging ---- */
 
     void matrixClipsWideTitlesAndPreservesBorders()

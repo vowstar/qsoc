@@ -70,17 +70,11 @@ public:
 #endif
 
     /**
-     * @brief Install a printable-byte consumer that takes precedence over
-     *        the buffer state machine.
-     * @details When set, every printable byte (and Return) is offered to the
-     *          consumer before normal processing. If it returns true the byte
-     *          is treated as consumed and not appended to the input buffer.
-     *          Used by modal overlays (task overlay, etc.) so single-key
-     *          actions like x / j / k / Enter act on the overlay rather than
-     *          accumulating into the input line. ESC, Ctrl-keys, and arrow
-     *          escapes still go through normal signal paths.
+     * @brief Offer printable bytes and decoded navigation keys to a modal.
+     * @details Returning true consumes the key before input editing or
+     *          shortcut signals. Ctrl keys use Qt::CTRL with the letter key.
      */
-    using ExternalKeyConsumer = std::function<bool(unsigned char)>;
+    using ExternalKeyConsumer = std::function<bool(int)>;
     void setExternalKeyConsumer(ExternalKeyConsumer consumer);
 
 signals:

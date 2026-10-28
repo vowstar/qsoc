@@ -269,6 +269,15 @@ void QAgentInputMonitor::resetEscState()
 
 void QAgentInputMonitor::emitBareEsc()
 {
+    if (externalKeyConsumer_ && externalKeyConsumer_(Qt::Key_Escape)) {
+        cancelDoubleEscArming();
+        return;
+    }
+    if (!submitBlocked) {
+        inputBuffer.clear();
+        cursorPos = 0;
+        emit inputChanged(inputBuffer);
+    }
     /* Double-Esc detection: if the previous bare Esc happened within
      * DOUBLE_ESC_WINDOW_MS and nothing else was typed in between, emit
      * escEscPressed() INSTEAD of escPressed(). Skipping escPressed on the
@@ -490,6 +499,11 @@ void QAgentInputMonitor::resetEscBuffer()
 
 void QAgentInputMonitor::emitCtrlC(bool acknowledgeSignal)
 {
+    if (externalKeyConsumer_ && externalKeyConsumer_(int(Qt::CTRL) | Qt::Key_C)) {
+        if (acknowledgeSignal)
+            QSocInterrupt::acknowledge();
+        return;
+    }
     const bool hadInput = !inputBuffer.isEmpty();
     if (acknowledgeSignal)
         QSocInterrupt::acknowledge();
@@ -509,6 +523,20 @@ void QAgentInputMonitor::processEscSequence()
         return;
     }
 
+    const int navigation = escBuffer == "\033[A"                             ? Qt::Key_Up
+                           : escBuffer == "\033[B"                           ? Qt::Key_Down
+                           : escBuffer == "\033[C"                           ? Qt::Key_Right
+                           : escBuffer == "\033[D"                           ? Qt::Key_Left
+                           : escBuffer == "\033[H" || escBuffer == "\033[1~" ? Qt::Key_Home
+                           : escBuffer == "\033[F" || escBuffer == "\033[4~" ? Qt::Key_End
+                           : escBuffer == "\033[5~"                          ? Qt::Key_PageUp
+                           : escBuffer == "\033[6~"                          ? Qt::Key_PageDown
+                                                                             : 0;
+    if (navigation && externalKeyConsumer_ && externalKeyConsumer_(navigation)) {
+        cancelDoubleEscArming();
+        resetEscBuffer();
+        return;
+    }
     /* ESC [ ... sequences (CSI) */
     if (escBuffer[1] == '[') {
         /* Need at least 3 bytes to determine CSI type */
@@ -729,6 +757,10 @@ void QAgentInputMonitor::processEscSequence()
             if (parseModifiedEnter(escBuffer, enterMod)) {
                 cancelDoubleEscArming();
                 resetEscBuffer();
+                if (externalKeyConsumer_
+                    && externalKeyConsumer_(
+                        int(Qt::Key_Return) | (enterMod > 1 ? int(Qt::SHIFT) : 0)))
+                    return;
                 if (enterMod > 1) {
                     insertAtCursor(QStringLiteral("\n"));
                 } else {
@@ -753,6 +785,8 @@ void QAgentInputMonitor::processEscSequence()
     if (escBuffer.size() == 2 && (escBuffer[1] == '\r' || escBuffer[1] == '\n')) {
         cancelDoubleEscArming();
         resetEscBuffer();
+        if (externalKeyConsumer_ && externalKeyConsumer_(int(Qt::ALT) | Qt::Key_Return))
+            return;
         insertAtCursor(QStringLiteral("\n"));
         return;
     }
@@ -801,11 +835,6 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
              * (which may fire double-Esc if the previous one was armed),
              * then start a fresh ESC sequence for this new byte. */
             if (byte == 0x1B && escBuffer.size() == 1) {
-                if (!submitBlocked) {
-                    inputBuffer.clear();
-                    cursorPos = 0;
-                    emit inputChanged(inputBuffer);
-                }
                 emitBareEsc();
                 escBuffer.clear();
                 escBuffer.append(static_cast<char>(byte));
@@ -847,6 +876,12 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 utf8Pending.clear();
                 i--;
             }
+            continue;
+        }
+
+        if (byte > 0 && byte < 0x20 && byte != 0x1B && byte != 0x03 && externalKeyConsumer_
+            && externalKeyConsumer_(
+                byte == '\r' ? Qt::Key_Return : int(Qt::CTRL) | ('A' + byte - 1))) {
             continue;
         }
 
@@ -1093,11 +1128,6 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             if (active && inEscSeq && escBuffer.size() == 1) {
                 /* When submit is blocked (completion popup open), Esc only
                  * dismisses the popup — keep the input buffer intact. */
-                if (!submitBlocked) {
-                    inputBuffer.clear();
-                    cursorPos = 0;
-                    emit inputChanged(inputBuffer);
-                }
                 emitBareEsc();
                 resetEscBuffer();
             }

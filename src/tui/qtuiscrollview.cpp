@@ -780,14 +780,19 @@ void QTuiScrollView::foldAllImagePreviews()
     }
 }
 
-void QTuiScrollView::clear()
+void QTuiScrollView::clear(bool keepViewport)
 {
     blocks.clear();
     partialLine.clear();
-    scrollOffset      = 0;
-    maxScrollOffset_  = 0;
-    lastTotalVisible_ = 0;
-    hasRendered_      = false;
+    if (!keepViewport) {
+        scrollOffset      = 0;
+        maxScrollOffset_  = 0;
+        lastTotalVisible_ = 0;
+        hasRendered_      = false;
+    }
+    focusedBlockIdx_ = -1;
+    rowToBlock_.clear();
+    rowToRowInBlock_.clear();
     previousVisibleBlocks_.clear();
     visibleGraphicsEntries_.clear();
 }

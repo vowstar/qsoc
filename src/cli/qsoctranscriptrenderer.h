@@ -37,7 +37,7 @@ public:
      * the events the runtime raised live. The todo pane follows the latest
      * todo_list result still in the history.
      */
-    void replaceHistory(const nlohmann::json &messages);
+    void replaceHistory(const nlohmann::json &messages, bool keepViewport = false);
 
 private:
     void render(const QSocAgentRuntimeEvent &event);

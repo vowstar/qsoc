@@ -66,11 +66,11 @@ json childHistory()
          {{"role", "assistant"}, {"content", "child answer two"}}});
 }
 
-QString screenText(const QTuiScreen &screen)
+QString screenText(const QTuiScreen &screen, bool includeLastColumn = true)
 {
     QString text;
     for (int row = 0; row < screen.height(); ++row) {
-        for (int col = 0; col < screen.width(); ++col)
+        for (int col = 0; col < screen.width() - (includeLastColumn ? 0 : 1); ++col)
             text += screen.at(col, row).text();
         text += QLatin1Char('\n');
     }
@@ -247,6 +247,76 @@ private slots:
         daemon.history = json::array({{{"role", "user"}, {"content", "compacted"}}});
         QVERIFY(focus.refresh());
         QCOMPARE(focus.messages().size(), size_t{1});
+    }
+
+    void refreshKeepsTheLogReadingPosition()
+    {
+        QTuiCompositor         compositor;
+        QSocTranscriptRenderer renderer(compositor);
+        FakeDaemon             daemon;
+        daemon.pageSize = 100;
+        QString content;
+        for (int i = 0; i < 80; ++i)
+            content += QStringLiteral("child line %1\n\n").arg(i);
+        daemon.history = json::array({{{"role", "assistant"}, {"content", content.toStdString()}}});
+        QSocAgentFocus focus(compositor, renderer, forward(daemon), true);
+        focus.enter(QStringLiteral("a1"));
+        QTuiScreen screen(80, 12);
+        auto      &view = compositor.contentView();
+        view.render(screen, 0, 12, 80);
+        view.scrollUp(25);
+        screen.clear();
+        view.render(screen, 0, 12, 80);
+        const auto before = screenText(screen, false);
+        QVERIFY(!view.isAtBottom());
+        daemon.history.push_back({{"role", "assistant"}, {"content", "new child output"}});
+        QVERIFY(focus.refresh());
+        screen.clear();
+        view.render(screen, 0, 12, 80);
+        QCOMPARE(screenText(screen, false), before);
+        view.scrollToBottom();
+        view.render(screen, 0, 12, 80);
+        QVERIFY(screenText(screen).contains(QStringLiteral("new child output")));
+    }
+
+    void taskLogsPageAndResetForANewSession()
+    {
+        QString session = QStringLiteral("one");
+        QString log(9000, QLatin1Char('a'));
+        log += QStringLiteral("中文 end");
+        bool                history     = false;
+        bool                reentered   = false;
+        QSocAgentTaskModel *activeModel = nullptr;
+        QSocAgentTaskModel  model([&](const QString &method, const QJsonObject &params) {
+            if (method == "tasks") {
+                history = params.value("history").toBool();
+                return QJsonObject{
+                    {"result", QJsonObject{{"session_id", session}, {"rows", QJsonArray{}}}}};
+            }
+            if (!reentered) {
+                reentered = true;
+                activeModel->tailFor("agent", "a1", 9000);
+            }
+            const auto bytes  = log.toUtf8();
+            const auto offset = qBound<qint64>(0, params.value("offset").toInteger(), bytes.size());
+            const auto text   = bytes.mid(offset, params.value("max_bytes").toInt());
+            return QJsonObject{
+                {"result",
+                 QJsonObject{
+                     {"text", QString::fromUtf8(text)},
+                     {"offset", offset},
+                     {"next_offset", offset + text.size()}}}};
+        });
+        activeModel = &model;
+        model.refresh();
+        QCOMPARE(model.tailFor("agent", "a1", 9000), QString(9000, QLatin1Char('a')));
+        QCOMPARE(model.tailFor("agent", "a1", 9000), log);
+        model.setHistoryVisible(true);
+        QVERIFY(history);
+        session = QStringLiteral("two");
+        log     = QStringLiteral("new session");
+        model.refresh();
+        QCOMPARE(model.tailFor("agent", "a1", 9000), log);
     }
 
     void cycleWalksMainAndLiveChildren()

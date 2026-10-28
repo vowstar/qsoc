@@ -31,6 +31,47 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void modalKeysPreserveDraftAndDoNotEmitShortcuts()
+    {
+        QAgentInputMonitor monitor;
+        monitor.setInputBuffer(QStringLiteral("draft"));
+        const int  cursor = monitor.getCursorPos();
+        QList<int> keys;
+        monitor.setExternalKeyConsumer([&](int key) {
+            keys.append(key);
+            return true;
+        });
+        QSignalSpy escaped(&monitor, &QAgentInputMonitor::escPressed);
+        QSignalSpy pages(&monitor, &QAgentInputMonitor::pageKey);
+        QSignalSpy interrupted(&monitor, &QAgentInputMonitor::ctrlCPressed);
+        for (const auto &sequence :
+             {QByteArray("\033[5~"),
+              QByteArray("\033[6~"),
+              QByteArray("\033[D"),
+              QByteArray("\033[H"),
+              QByteArray("\033[4~"),
+              QByteArray("\033[13u"),
+              QByteArray("\033[13;2u"),
+              QByteArray("\033\r"),
+              QByteArray("\r"),
+              QByteArray("\003"),
+              QByteArray("\033\033")})
+            monitor.processBytes(sequence.constData(), sequence.size());
+        QVERIFY(keys.contains(Qt::Key_PageUp));
+        QVERIFY(keys.contains(Qt::Key_PageDown));
+        QVERIFY(keys.contains(Qt::Key_Left));
+        QVERIFY(keys.contains(Qt::Key_Home));
+        QVERIFY(keys.contains(Qt::Key_End));
+        QVERIFY(keys.contains(Qt::Key_Return));
+        QVERIFY(keys.contains(Qt::Key_Escape));
+        QVERIFY(keys.contains(int(Qt::CTRL) | Qt::Key_C));
+        QCOMPARE(monitor.getInputBuffer(), QStringLiteral("draft"));
+        QCOMPARE(monitor.getCursorPos(), cursor);
+        QVERIFY(escaped.isEmpty());
+        QVERIFY(pages.isEmpty());
+        QVERIFY(interrupted.isEmpty());
+    }
+
     /* Terminal focus reporting (DECSET 1004): ESC[O = blur, ESC[I = focus.
      * Default state is focused, so only changes emit. No model needed. */
     void terminalFocusEvents()

@@ -15,7 +15,12 @@ public:
     explicit QSocAgentTaskModel(Request request)
         : request_(std::move(request))
     {}
-    void               refresh();
+    void refresh();
+    void setHistoryVisible(bool enabled)
+    {
+        historyVisible_ = enabled;
+        refresh();
+    }
     QList<TaggedRow>   listAll() const override { return rows_; }
     int                activeCount() const override;
     QString            tailFor(const QString &tag, const QString &id, int maxBytes) const override;
@@ -25,6 +30,12 @@ public:
 private:
     Request          request_;
     QList<TaggedRow> rows_;
-    bool             refreshing_ = false;
+    bool             refreshing_     = false;
+    bool             historyVisible_ = false;
+    mutable QString  logId_;
+    mutable QString  logText_;
+    mutable qint64   logOffset_  = 0;
+    mutable bool     logReading_ = false;
+    QString          sessionId_;
 };
 #endif

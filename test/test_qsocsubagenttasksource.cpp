@@ -795,17 +795,21 @@ private slots:
         QTemporaryDir          tmp;
         QSocSubAgentTaskSource src;
         src.setTranscriptDir(tmp.path());
+        src.setCompletionTtlMs(0);
         const QString runId
             = src.registerRun(QStringLiteral("once"), QStringLiteral("explore"), makeAgent());
         src.markCompleted(runId, QStringLiteral("done"));
         QVERIFY(QFile::exists(src.transcriptPathFor(runId)));
-        /* Evict by deleting the in-memory entry directly via kill +
-         * a long-since-finished simulation. (Eviction window is
-         * 60 s wall clock; we just verify that even after we drop
-         * a fresh second run on top, the disk file for the first is
-         * still available via the disk fallback path.) */
         src.registerRun(QStringLiteral("two"), QStringLiteral("explore"), makeAgent());
         QVERIFY(QFile::exists(src.transcriptPathFor(runId)));
+        QCOMPARE(src.runCount(), 1);
+        const auto history = src.historyRows();
+        QCOMPARE(history.size(), 1);
+        QCOMPARE(history.first().id, runId);
+        QCOMPARE(history.first().status, QSocTask::Status::Completed);
+        QVERIFY(!history.first().canKill);
+        QVERIFY(src.tailFor(runId, 1024).contains(QStringLiteral("done")));
+        QCOMPARE(src.runCount(), 1);
     }
 };
 

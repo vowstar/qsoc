@@ -359,6 +359,7 @@ private:
     void dispatchWake()
     {
         ++dispatchDepth_;
+        ++operation_;
         {
             const QScopedValueRollback<bool> busyGuard(busy_, true);
             replyTurn(0, runtime_->runWakeTurn());
@@ -474,6 +475,8 @@ private:
         /* A finished child is rebuilt only while the session is idle. */
         const bool                       idle = !busy_;
         const QScopedValueRollback<bool> busyGuard(busy_, true);
+        if (idle)
+            ++operation_;
         const json receipt = runtime_->sendToSubAgent(params.value("id").toString(), message, idle);
         if (receipt.value("error", std::string()) == "busy") {
             sendError(id, QStringLiteral("the session is busy; try again when the turn ends"));
@@ -523,11 +526,20 @@ private:
             return;
         }
         if (method == QStringLiteral("abort")) {
+            if (params.contains("operation")
+                && params.value("operation").toInteger(-1) != operation_) {
+                sendReply(id, {{"ok", false}});
+                return;
+            }
             if (runtime_)
                 runtime_->abort();
             if (pendingAsk_)
                 pendingAsk_->quit();
             sendReply(id, {{"ok", true}});
+            return;
+        }
+        if (method == QStringLiteral("interrupt_state")) {
+            sendReply(id, {{"operation", operation_}, {"running", busy_}});
             return;
         }
         if (runtime_ && method == "complete") {
@@ -549,7 +561,17 @@ private:
         }
         if (runtime_ && method == "tasks") {
             QJsonArray rows;
-            for (const auto &item : runtime_->taskRegistry()->listAll()) {
+            auto       tasks = runtime_->taskRegistry()->listAll();
+            if (params.value("history").toBool() && runtime_->subAgentSource()) {
+                QSet<QString> known;
+                for (const auto &item : std::as_const(tasks))
+                    if (item.sourceTag == QStringLiteral("agent"))
+                        known.insert(item.row.id);
+                for (const auto &row : runtime_->subAgentSource()->historyRows())
+                    if (!known.contains(row.id))
+                        tasks.append({QStringLiteral("agent"), row, {}});
+            }
+            for (const auto &item : std::as_const(tasks)) {
                 const auto &row = item.row;
                 const auto &e   = item.estimate;
                 QJsonObject estimate{
@@ -582,7 +604,7 @@ private:
                         {"resumable", row.resumable},
                         {"estimate", estimate}});
             }
-            sendReply(id, {{"rows", rows}});
+            sendReply(id, {{"rows", rows}, {"session_id", runtime_->sessionId()}});
             return;
         }
         if (runtime_ && method == "task_tail") {
@@ -640,6 +662,7 @@ private:
             return;
         }
         QScopedValueRollback<bool> busyGuard(busy_, true);
+        ++operation_;
 
         if (method == QStringLiteral("open")) {
             if (runtime_) {
@@ -840,6 +863,7 @@ private:
     bool                              disconnected_  = false;
     int                               dispatchDepth_ = 0;
     bool                              busy_          = false;
+    qint64                            operation_     = 0;
     bool                              interactive_   = true;
     QEventLoop                       *pendingAsk_    = nullptr;
     QJsonObject                       askAnswer_;
@@ -917,7 +941,8 @@ public:
                         {"version", QSOC_VERSION},
                         {"protocol", QSocAgentProtocol::version},
                         {"pid", static_cast<double>(QCoreApplication::applicationPid())},
-                        {"capabilities", QJsonArray{"smt", "resources", "agents"}}}));
+                        {"capabilities",
+                         QJsonArray{"smt", "resources", "agents", "interrupt_confirmation"}}}));
         });
         QTimer::singleShot(0, this, &QSocAgentSessionProxy::handleClientRead);
     }

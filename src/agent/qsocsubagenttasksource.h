@@ -319,6 +319,7 @@ public:
      *        loadHistoricalRuns has never been invoked.
      */
     QList<HistoricalRun> historicalRuns() const { return historical_; }
+    QList<QSocTask::Row> historyRows();
 
     /**
      * @brief Look up one historical run by id from the cache (or

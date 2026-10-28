@@ -8,11 +8,19 @@ void QSocAgentTaskModel::refresh()
     if (refreshing_)
         return;
     QScopedValueRollback<bool> guard(refreshing_, true);
-    const auto                 reply = request_("tasks", {});
+    const auto                 reply = request_("tasks", {{"history", historyVisible_}});
     if (!reply.contains("result"))
         return;
+    const auto result  = reply.value("result").toObject();
+    const auto session = result.value("session_id").toString();
+    if (session != sessionId_) {
+        sessionId_ = session;
+        logId_.clear();
+        logText_.clear();
+        logOffset_ = 0;
+    }
     rows_.clear();
-    for (const auto &value : reply.value("result").toObject().value("rows").toArray()) {
+    for (const auto &value : result.value("rows").toArray()) {
         const auto object = value.toObject();
         TaggedRow  item;
         item.sourceTag             = object.value("source").toString();
@@ -58,6 +66,31 @@ int QSocAgentTaskModel::activeCount() const
 }
 QString QSocAgentTaskModel::tailFor(const QString &tag, const QString &id, int maxBytes) const
 {
+    if (logReading_)
+        return tag == QStringLiteral("agent") && logId_ == id ? logText_ : QString();
+    const QScopedValueRollback<bool> guard(logReading_, true);
+    if (tag == QStringLiteral("agent")) {
+        if (logId_ != id) {
+            logId_ = id;
+            logText_.clear();
+            logOffset_ = 0;
+        }
+        const auto reply = request_(
+            "task_tail",
+            {{"source", tag}, {"id", id}, {"offset", logOffset_}, {"max_bytes", maxBytes}});
+        const auto page = reply.value("result").toObject();
+        if (logId_ != id)
+            return {};
+        if (page.contains("next_offset")) {
+            const qint64 offset = page.value("offset").toInteger();
+            if (offset != logOffset_)
+                logText_.clear();
+            logText_ += page.value("text").toString();
+            logOffset_ = page.value("next_offset").toInteger();
+            return logText_;
+        }
+        return page.value("text").toString();
+    }
     return request_("task_tail", {{"source", tag}, {"id", id}, {"max_bytes", maxBytes}})
         .value("result")
         .toObject()

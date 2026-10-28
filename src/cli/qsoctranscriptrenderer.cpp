@@ -291,9 +291,9 @@ void QSocTranscriptRenderer::render(const QSocAgentRuntimeEvent &event)
     }
 }
 
-void QSocTranscriptRenderer::replaceHistory(const nlohmann::json &messages)
+void QSocTranscriptRenderer::replaceHistory(const nlohmann::json &messages, bool keepViewport)
 {
-    compositor.clearTranscript();
+    compositor.clearTranscript(keepViewport);
     compositor.todoList().setItems({});
     pendingArgs.clear();
     streamedContent = false;

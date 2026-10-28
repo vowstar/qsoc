@@ -5,6 +5,7 @@
 #define QTUITASKOVERLAY_H
 
 #include "common/qsoctaskregistry.h"
+#include "tui/qtuiscrollview.h"
 #include "tui/qtuiwidget.h"
 
 #include <QObject>
@@ -33,6 +34,7 @@ public:
         Hidden, /* not rendered, lineCount() == 0 */
         List,   /* list of tasks */
         Detail, /* tail / metadata of selected task */
+        ConfirmInterrupt,
     };
 
     explicit QTuiTaskOverlay(QObject *parent = nullptr);
@@ -48,6 +50,7 @@ public:
 
     /* Open the overlay in List mode at top selection. */
     void open();
+    void confirmInterrupt();
     /* Hide unconditionally; selection state cleared. */
     void close();
 
@@ -85,6 +88,8 @@ signals:
 
     /** @brief s on a sub-agent row: show it and compose a message to it. */
     void messageRequested(const QString &id);
+    void interruptConfirmed();
+    void historyRequested(bool enabled);
 
 private slots:
     void handleRegistryChanged();
@@ -98,6 +103,8 @@ private:
     QString                            detailSourceTag_;
     QString                            detailId_;
     QString                            detailContent_;
+    QTuiScrollView                     detailView_;
+    bool                               historyVisible_ = false;
     QString                            footerFlash_;
     qint64                             footerFlashUntil_ = 0;
     int                                tickCounter_      = 0;
@@ -112,6 +119,7 @@ private:
     QString summary_;
 
     void    refreshRows();
+    int     pageCapacity() const;
     void    clampSelection();
     void    enterDetail();
     void    exitDetailToList();

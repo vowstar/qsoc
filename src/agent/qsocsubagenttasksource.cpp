@@ -1133,6 +1133,29 @@ QList<QSocSubAgentTaskSource::HistoricalRun> QSocSubAgentTaskSource::loadHistori
     return historical_;
 }
 
+QList<QSocTask::Row> QSocSubAgentTaskSource::historyRows()
+{
+    QList<QSocTask::Row> rows;
+    for (const auto &run : loadHistoricalRuns(std::numeric_limits<int>::max())) {
+        if (run.legacy)
+            continue;
+        for (const auto status :
+             {QSocTask::Status::Completed, QSocTask::Status::Failed, QSocTask::Status::Aborted}) {
+            if (run.status != QSocTask::statusWord(status))
+                continue;
+            QSocTask::Row row;
+            row.id          = run.id;
+            row.label       = run.label;
+            row.kind        = QSocTask::Kind::SubAgent;
+            row.status      = status;
+            row.startedAtMs = run.startedAtMs;
+            rows.append(row);
+            break;
+        }
+    }
+    return rows;
+}
+
 bool QSocSubAgentTaskSource::findHistoricalRun(const QString &id, HistoricalRun *out)
 {
     auto search = [&]() -> bool {

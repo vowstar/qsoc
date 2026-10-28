@@ -181,7 +181,7 @@ bool QSocAgentFocus::refresh()
     if (!active() || !poll()) {
         return false;
     }
-    renderer_.replaceHistory(messages_);
+    renderer_.replaceHistory(messages_, true);
     return true;
 }
 

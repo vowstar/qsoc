@@ -67,9 +67,10 @@ public:
     void scrollDown(int lines = 1);
     void scrollToBottom();
     bool isAtBottom() const;
+    int  viewportHeight() const { return lastRenderHeight_; }
 
     /* Clear all content */
-    void clear();
+    void clear(bool keepViewport = false);
 
     int totalLines() const { return static_cast<int>(blocks.size()); }
 

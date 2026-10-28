@@ -7,16 +7,18 @@
 #include "tui/qtuiansi.h"
 
 #include <algorithm>
+#include <climits>
 
 #include <QChar>
 #include <QDateTime>
 #include <QMap>
+#include <QScopeGuard>
 #include <QString>
 
 namespace {
 
 constexpr int kMinHeight       = 6;
-constexpr int kDetailTailBytes = 8 * 1024;
+constexpr int kDetailTailBytes = 64 * 1024;
 constexpr int kFooterFlashMs   = 600;
 
 QString statusLabel(QSocTask::Status status)
@@ -40,19 +42,25 @@ QString statusLabel(QSocTask::Status status)
     return QStringLiteral("?");
 }
 
-QString fitToWidth(const QString &text, int width)
+QString plainText(const QString &text, bool multiline = false)
 {
-    if (width <= 0)
-        return {};
     QString plain;
     for (const auto &span : QTuiAnsi::parse(text)) {
         for (const char32_t ch : span.text.toUcs4()) {
-            if (!QChar::isPrint(ch))
+            if (!QChar::isPrint(ch) && !(multiline && ch == U'\n'))
                 plain += QLatin1Char(' ');
             else
                 plain += QString::fromUcs4(&ch, 1);
         }
     }
+    return plain;
+}
+
+QString fitToWidth(const QString &text, int width)
+{
+    if (width <= 0)
+        return {};
+    QString plain = plainText(text);
     if (QTuiText::visualWidth(plain) > width)
         plain = width <= 3 ? QString(width, QLatin1Char('.')) : QTuiText::truncate(plain, width);
     return plain + QString(qMax(0, width - QTuiText::visualWidth(plain)), QLatin1Char(' '));
@@ -107,9 +115,16 @@ void QTuiTaskOverlay::open()
     detailSourceTag_.clear();
     detailId_.clear();
     detailContent_.clear();
+    detailView_.clear();
     footerFlash_.clear();
     footerFlashUntil_ = 0;
     mode_             = Mode::List;
+    emit invalidated();
+}
+
+void QTuiTaskOverlay::confirmInterrupt()
+{
+    mode_ = Mode::ConfirmInterrupt;
     emit invalidated();
 }
 
@@ -129,21 +144,8 @@ void QTuiTaskOverlay::close()
 void QTuiTaskOverlay::handleRegistryChanged()
 {
     refreshRows();
-    if (mode_ == Mode::Detail) {
-        /* Detail target may have disappeared. */
-        bool stillThere = false;
-        for (const auto &row : cachedRows_) {
-            if (row.sourceTag == detailSourceTag_ && row.row.id == detailId_) {
-                stillThere = true;
-                break;
-            }
-        }
-        if (!stillThere) {
-            detailContent_ = QStringLiteral("Task no longer exists. Press ESC.\n");
-        } else {
-            reloadDetailContent();
-        }
-    }
+    if (mode_ == Mode::Detail)
+        reloadDetailContent();
     clampSelection();
     emit invalidated();
 }
@@ -202,11 +204,34 @@ void QTuiTaskOverlay::clampSelection()
         selected_ = cachedRows_.size() - 1;
 }
 
+int QTuiTaskOverlay::pageCapacity() const
+{
+    const int body = qMax(1, lineCount() - 4);
+    const int cols = columns(terminalWidth_);
+    return cols > 1 ? qMax(1, body / 2) * cols : body;
+}
+
 bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
 {
     Q_UNUSED(ctrl);
     if (mode_ == Mode::Hidden)
         return false;
+
+    if (mode_ == Mode::ConfirmInterrupt) {
+        const bool confirmed = key == Qt::Key_Y;
+        if (confirmed || key == Qt::Key_Escape || key == Qt::Key_N || key == Qt::Key_Return
+            || key == Qt::Key_Enter || key == (int(Qt::CTRL) | Qt::Key_C)) {
+            close();
+            if (confirmed)
+                emit interruptConfirmed();
+        }
+        return true;
+    }
+    if (key == Qt::Key_H && mode_ == Mode::List) {
+        historyVisible_ = !historyVisible_;
+        emit historyRequested(historyVisible_);
+        return true;
+    }
 
     if (key == Qt::Key_M) {
         setAnimationEnabled(!animationEnabled_);
@@ -241,6 +266,19 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
 
     if (mode_ == Mode::List) {
         switch (key) {
+        case Qt::Key_PageUp:
+        case Qt::Key_PageDown:
+            selected_ = qBound(
+                0,
+                qMax(0, selected_) + (key == Qt::Key_PageUp ? -1 : 1) * pageCapacity(),
+                qMax(0, int(cachedRows_.size()) - 1));
+            emit invalidated();
+            return true;
+        case Qt::Key_Home:
+        case Qt::Key_End:
+            selected_ = key == Qt::Key_Home ? 0 : qMax(0, int(cachedRows_.size()) - 1);
+            emit invalidated();
+            return true;
         case Qt::Key_V:
             layout_ = columns(terminalWidth_) > 1 ? Layout::Table : Layout::Grid;
             emit invalidated();
@@ -286,6 +324,14 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
             killSelected();
             return true;
         }
+        const int page = qMax(1, lineCount() - 4);
+        if (key == Qt::Key_Up || key == Qt::Key_K || key == Qt::Key_PageUp || key == Qt::Key_Home)
+            detailView_.scrollUp(key == Qt::Key_Home ? INT_MAX : key == Qt::Key_PageUp ? page : 1);
+        else if (key == Qt::Key_Down || key == Qt::Key_J || key == Qt::Key_PageDown)
+            detailView_.scrollDown(key == Qt::Key_PageDown ? page : 1);
+        else if (key == Qt::Key_End)
+            detailView_.scrollToBottom();
+        emit invalidated();
         return true; /* swallow */
     }
     return false;
@@ -325,6 +371,8 @@ void QTuiTaskOverlay::enterDetail()
     const auto &row  = cachedRows_.at(selected_);
     detailSourceTag_ = row.sourceTag;
     detailId_        = row.row.id;
+    detailContent_.clear();
+    detailView_.clear();
     reloadDetailContent();
     mode_ = Mode::Detail;
     emit invalidated();
@@ -347,7 +395,20 @@ void QTuiTaskOverlay::reloadDetailContent()
         detailContent_.clear();
         return;
     }
-    const QString tail  = registry_->tailFor(detailSourceTag_, detailId_, kDetailTailBytes);
+    const QString previous = detailContent_;
+    const QString source   = detailSourceTag_;
+    const QString id       = detailId_;
+    const auto    rebuild  = qScopeGuard([&] {
+        if (previous == detailContent_)
+            return;
+        detailView_.clear(true);
+        detailView_.appendPartial(plainText(detailContent_, true));
+    });
+    const QString tail     = registry_->tailFor(detailSourceTag_, detailId_, kDetailTailBytes);
+    if (detailSourceTag_ != source || detailId_ != id)
+        return;
+    if (tail.isEmpty() && !previous.isEmpty())
+        return;
     detailContent_      = tail.isEmpty() ? QStringLiteral("(no output yet)\n") : tail;
     const auto estimate = registry_->estimateFor(detailSourceTag_, detailId_);
     if (!estimatesVisible_ || estimate.summary.isEmpty())
@@ -439,6 +500,8 @@ int QTuiTaskOverlay::lineCount() const
 {
     if (mode_ == Mode::Hidden || maxHeight_ < kMinHeight)
         return 0;
+    if (mode_ == Mode::ConfirmInterrupt)
+        return kMinHeight;
     /* Both modes have the same chrome: top border + footer + bottom border
      * (3 rows). The body is rows in List mode and detail-content lines in
      * Detail mode. Cap to maxHeight_ so a multi-KB bash tail does not
@@ -463,6 +526,20 @@ void QTuiTaskOverlay::render(QTuiScreen &screen, int startY, int width)
     setTerminalWidth(width);
     if (lineCount() == 0)
         return;
+    if (mode_ == Mode::ConfirmInterrupt) {
+        renderBorder(
+            screen, startY, lineCount(), width, QStringLiteral("Interrupt current operation?"));
+        screen.putString(
+            2,
+            startY + 1,
+            fitToWidth(QStringLiteral("Completed changes are not undone."), width - 4));
+        screen.putString(
+            2,
+            startY + 3,
+            fitToWidth(QStringLiteral("Y interrupt   Esc / Enter continue"), width - 4),
+            true);
+        return;
+    }
     if (mode_ == Mode::Detail) {
         renderDetail(screen, startY, width);
     } else {
@@ -660,10 +737,15 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
     const QString title  = QStringLiteral("Tasks (%1) | %2")
                                .arg(cachedRows_.size())
                                .arg(grid ? QStringLiteral("Grid") : QStringLiteral("Table"));
-    renderBorder(screen, startY, height, width, title);
+    renderBorder(
+        screen,
+        startY,
+        height,
+        width,
+        title + (historyVisible_ ? QStringLiteral(" | history") : QString()));
     screen.putString(1, startY + 1, fitToWidth(summary(), innerW), true);
     const int bodyHeight = qMax(0, height - 4);
-    const int capacity   = grid ? qMax(1, bodyHeight / 2) * columns(width) : qMax(1, bodyHeight);
+    const int capacity   = pageCapacity();
     const int first      = selected_ < 0 ? 0 : (selected_ / capacity) * capacity;
     if (grid) {
         renderCells(screen, startY + 2, innerW, bodyHeight, false);
@@ -700,7 +782,7 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
     const QString footer = footerFlash_.isEmpty()
                                ? range + agentKeys()
                                      + QStringLiteral(
-                                         "v view  m motion  e est  Enter detail  x stop  Esc back")
+                                         "PgUp/PgDn  h history  Enter detail  x stop  Esc back")
                                : footerFlash_;
     screen.putString(1, startY + height - 2, fitToWidth(footer, innerW), false, true);
 }
@@ -726,20 +808,20 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
     if (detailContent_.isEmpty()) {
         screen.putString(2, startY + 1, QStringLiteral("(no content)"), false, true);
     } else {
-        const QStringList lines     = detailContent_.split(QLatin1Char('\n'));
-        const int         rowsAvail = contentH - 1;
-        const int         total     = lines.size();
-        const int         start     = qMax(0, total - rowsAvail);
-        for (int i = 0; i < rowsAvail && start + i < total; ++i) {
-            const QString &line = lines.at(start + i);
-            screen.putString(1, startY + 1 + i, fitToWidth(line, innerW), false);
-        }
+        QTuiScreen content(innerW, contentH - 1);
+        detailView_.render(content, 0, contentH - 1, innerW);
+        for (int row = 0; row < content.height(); ++row)
+            for (int col = 0; col < innerW; ++col)
+                screen.at(col + 1, startY + 1 + row) = content.at(col, row);
     }
     /* Footer */
-    const QString footer
-        = footerFlash_.isEmpty() && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
-              ? agentKeys() + QStringLiteral("Esc back  x stop  e estimates  r refresh  p ranges")
-              : footerFlash_;
+    const QString footer = footerFlash_.isEmpty()
+                                   && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
+                               ? QStringLiteral("PgUp/PgDn scroll  End follow  %1  Esc back")
+                                     .arg(
+                                         detailView_.isAtBottom() ? QStringLiteral("following")
+                                                                  : QStringLiteral("reading"))
+                               : footerFlash_;
     screen.putString(2, startY + height - 2, fitToWidth(footer, innerW - 2), false, true);
 }
 

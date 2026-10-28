@@ -631,18 +631,22 @@ restore a diagram that previously needed source fallback.
 Completion and interrupt:
 
 - `@<name>`: Fuzzy-complete a project file path
-- *ESC*: Request cancellation of the current operation
+- *ESC*: Open confirmation before interrupting the current operation
 
 Input typed while the agent is still starting, *Enter* included, is kept.
 While the agent is executing, *Enter* submits input for the next iteration and
-*ESC* requests cancellation. Queued input waits below the transcript and enters
+*ESC* opens an interrupt confirmation. Press `y` to interrupt. *Esc*, *Enter*,
+`n`, or *Ctrl+C* closes the confirmation and keeps the operation running.
+The input draft is preserved. Closing a task panel or child view never interrupts
+the main operation. *Ctrl+C* on the main view remains a direct interrupt.
+Queued input waits below the transcript and enters
 it as a separate prompt when the agent reads it. With queued input, the agent
 stops the current step and continues with that input; otherwise it stops the
 run. Conversation history and completed tool results are preserved. The active
 tool may already have changed external state.
 
-*ESC* also stops a running remote `bash` call, `!` line or SFTP transfer
-within about a second. A stopped remote `bash` command is killed on the host;
+Confirming an interrupt also stops a running remote `bash` call, `!` line or SFTP
+transfer within about a second. A stopped remote `bash` command is killed on the host;
 when the host refuses the signal, the result gives a `job_id` for
 `bash_manage`. A stop that arrives while an SSH request is still unanswered
 leaves the session unusable until it reconnects.
@@ -1647,6 +1651,7 @@ While a child is in view:
   the main agent.
 - *Esc* returns to the main view. The child keeps running.
 - *Ctrl+C* stops the child in view.
+- *PageUp* and *PageDown* scroll the transcript. New output preserves the reading position until you return to the bottom.
 - *Alt+Left/Right* moves through the main agent and each live child, in
   start order. Only the terminal sequences for Alt plus an arrow key switch
   the view. Esc followed by a letter is still Esc and a letter.
@@ -1819,6 +1824,9 @@ disappears, select another row before requesting a stop.
     table.hline(),
     [`Up`/`Down`, `j`/`k`], [Move selection],
     [`Left`/`Right`], [Move between grid columns],
+    [`PageUp`/`PageDown`], [Move one page in the list or output],
+    [`Home`/`End`], [Go to the first or last task or output line],
+    [`h` in the list], [Show or hide stored, finished sub-agent runs],
     [`v`], [Switch grid and table],
     [`m`], [Toggle task animation],
     [`e`], [Show or hide estimates],
@@ -1840,6 +1848,14 @@ stops monitors, and removes a `/loop` job from the schedule. Cancelling a
 sub-agent discards its queued input and leaves other sub-agents running.
 Completed rows linger for a short window so their tail can still be
 inspected before being evicted.
+Press `h` to include finished sub-agent runs stored in the current session.
+Reading a stored run does not restart it or occupy a sub-agent slot.
+
+Output opens at the latest loaded line. Sub-agent output loads in pages from
+the saved transcript. Other task sources show their available output tail.
+Scrolling up pauses following. New output preserves the reading position.
+Press *End* to follow again. An open output view remains readable after its
+task leaves the list.
 
 === Task Estimates
 

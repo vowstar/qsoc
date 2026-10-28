@@ -423,14 +423,14 @@ void QTuiCompositor::appendUserMessage(const QString &text)
     scrollView.appendBlock(std::make_unique<QTuiUserBlock>(text));
 }
 
-void QTuiCompositor::clearTranscript()
+void QTuiCompositor::clearTranscript(bool keepViewport)
 {
     sealStream(StreamMode::Assistant);
     sealStream(StreamMode::Reasoning);
     reasoningHistory.clear();
     toolBlocks.clear();
     activeTool = nullptr;
-    scrollView.clear();
+    scrollView.clear(keepViewport);
 }
 
 void QTuiCompositor::swapTranscript(QTuiScrollView &other)
@@ -571,10 +571,10 @@ void QTuiCompositor::render()
     renderTodo();
     renderQueued();
     renderCompletionPopup();
-    renderTaskOverlay();
     renderStatusBar();
     renderSeparator();
     renderInput();
+    renderTaskOverlay();
 
     /* Overlay selection highlight after all widgets so selected cells
      * invert regardless of which widget owns them. */
@@ -768,6 +768,11 @@ void QTuiCompositor::renderCompletionPopup()
 
 void QTuiCompositor::renderTaskOverlay()
 {
+    if (taskOverlayWidget.mode() == QTuiTaskOverlay::Mode::ConfirmInterrupt) {
+        taskOverlayWidget.setMaxHeight(screen.height() - 2);
+        taskOverlayWidget.render(screen, 1, screen.width());
+        return;
+    }
     if (taskOverlayWidget.mode() == QTuiTaskOverlay::Mode::Hidden) {
         taskOverlayWidget
             .renderPreview(screen, layout.activityStart, screen.width(), layout.activityHeight);

@@ -425,6 +425,11 @@ private slots:
         QCOMPARE(status.value(QStringLiteral("running")).toBool(), false);
         QVERIFY(status.contains(QStringLiteral("model")));
 
+        client.send({{"id", 20}, {"method", "interrupt_state"}});
+        const auto interrupt = client.waitForReply(20).value("result").toObject();
+        QVERIFY(interrupt.contains("operation"));
+        QVERIFY(!interrupt.value("running").toBool(true));
+
         /* command: /status output streams as events, then the reply. */
         client.send(
             {{"id", 3},
@@ -455,6 +460,14 @@ private slots:
                     .toObject()
                     .value(QStringLiteral("handled"))
                     .toBool());
+
+        client.send({{"id", 21}, {"method", "abort"}, {"params", interrupt}});
+        QVERIFY(!client.waitForReply(21).value("result").toObject().value("ok").toBool(true));
+        client.send({{"id", 22}, {"method", "interrupt_state"}});
+        const auto current = client.waitForReply(22).value("result").toObject();
+        QVERIFY(current.value("operation") != interrupt.value("operation"));
+        client.send({{"id", 23}, {"method", "abort"}, {"params", current}});
+        QVERIFY(client.waitForReply(23).value("result").toObject().value("ok").toBool());
 
         /* sessions listing answers with a (possibly empty) array: sessions
          * are lazy, so nothing is listed until a durable record exists. */

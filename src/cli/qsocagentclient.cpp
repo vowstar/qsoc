@@ -124,14 +124,15 @@ bool QSocCliWorker::runAgentClientLoop(
     QAgentInputMonitor inputMonitor;
     inputMonitor.setAtomicPattern(
         QRegularExpression(QStringLiteral(R"(\[Pasted text #\d+(?: \+\d+ lines)?\])")));
-    QEventLoop mainLoop;
-    bool       daemonLost        = false;
-    bool       closing           = false;
-    bool       running           = false;
-    bool       planMode          = false;
-    bool       remoteWorkspace   = !options.sshTarget.isEmpty();
-    qint64     resourceRequestId = 0;
-    QTimer     resourceDeadline;
+    QEventLoop  mainLoop;
+    bool        daemonLost = false;
+    bool        closing    = false;
+    bool        running    = false;
+    QJsonObject interruptTarget;
+    bool        planMode          = false;
+    bool        remoteWorkspace   = !options.sshTarget.isEmpty();
+    qint64      resourceRequestId = 0;
+    QTimer      resourceDeadline;
     resourceDeadline.setSingleShot(true);
     QString               resumeHint;
     bool                  queryStreamed = false;
@@ -169,6 +170,16 @@ bool QSocCliWorker::runAgentClientLoop(
     const auto send = [&](const QString &method, const QJsonObject &values = QJsonObject()) {
         client.send({{"id", client.nextId()}, {"method", method}, {"params", values}});
     };
+    const auto dismissInterrupt = [&] {
+        if (compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::ConfirmInterrupt)
+            compositor.taskOverlay().close();
+        interruptTarget = {};
+    };
+    connect(&compositor.taskOverlay(), &QTuiTaskOverlay::interruptConfirmed, &client, [&] {
+        if (running)
+            send("abort", interruptTarget);
+        interruptTarget = {};
+    });
     const auto consumeQueryInterrupt = [&] {
         const int edges = QSocInterrupt::drainSignalPipe();
         for (int i = 0; i < edges; ++i) {
@@ -250,6 +261,7 @@ bool QSocCliWorker::runAgentClientLoop(
             send("answer", answer);
             return;
         }
+        dismissInterrupt();
         inputMonitor.stop();
         const QString type = data.value("type").toString();
         if (type == "secret" || type == "edit") {
@@ -363,6 +375,7 @@ bool QSocCliWorker::runAgentClientLoop(
             case QSocAgentRuntimeEvent::Kind::RunComplete:
             case QSocAgentRuntimeEvent::Kind::RunError:
             case QSocAgentRuntimeEvent::Kind::RunAborted:
+                dismissInterrupt();
                 statusBarWidget.setStatus(QStringLiteral("Ready"));
                 compositor.render();
                 break;
@@ -398,6 +411,8 @@ bool QSocCliWorker::runAgentClientLoop(
                 break;
             case QSocAgentRuntimeEvent::Kind::Status:
                 running = event.text != "Ready";
+                if (!running)
+                    dismissInterrupt();
                 if (running)
                     statusBarWidget.startTimers();
                 else
@@ -560,6 +575,7 @@ bool QSocCliWorker::runAgentClientLoop(
         applySnapshot(result.value("snapshot").toObject());
         if (reply.contains("error") || result.contains("handled") || result.contains("final_text")) {
             running = false;
+            dismissInterrupt();
             statusBarWidget.setStatus("Ready");
             statusBarWidget.stopTimers();
         }
@@ -632,7 +648,8 @@ bool QSocCliWorker::runAgentClientLoop(
     });
     connect(
         &inputMonitor, &QAgentInputMonitor::pastedReceived, &inputMonitor, [&](const QString &text) {
-            inputMonitor.insertText(inputHistory.paste(text));
+            if (compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::Hidden)
+                inputMonitor.insertText(inputHistory.paste(text));
         });
     connect(&inputMonitor, &QAgentInputMonitor::inputReady, &inputMonitor, [&](const QString &text) {
         if (searching) {
@@ -699,7 +716,7 @@ bool QSocCliWorker::runAgentClientLoop(
         running = true;
         compositor.render();
     });
-    connect(&inputMonitor, &QAgentInputMonitor::escPressed, &inputMonitor, [&] {
+    const auto escape = [&] {
         if (searching) {
             searching = false;
             inputMonitor.setSubmitBlocked(false);
@@ -710,12 +727,26 @@ bool QSocCliWorker::runAgentClientLoop(
         else if (compositor.completionPopup().isVisible()) {
             hideCompletion();
             compositor.invalidate();
-        } else if (!focus.escape())
-            send("abort");
+        } else if (!focus.escape() && running) {
+            interruptTarget = {};
+            if (client.hasCapability("interrupt_confirmation")) {
+                const auto reply  = client.request("interrupt_state", {});
+                const auto target = reply.value("result").toObject();
+                // The request delivers status events through a nested event loop.
+                // cppcheck-suppress knownConditionTrueFalse
+                if (!running || !target.value("running").toBool())
+                    return;
+                interruptTarget.insert("operation", target.value("operation"));
+            }
+            compositor.taskOverlay().confirmInterrupt();
+        }
         compositor.render();
-    });
+    };
+    connect(&inputMonitor, &QAgentInputMonitor::escPressed, &inputMonitor, escape);
     connect(&inputMonitor, &QAgentInputMonitor::escEscPressed, &inputMonitor, [&] {
-        if (!running && inputMonitor.getInputBuffer().isEmpty())
+        if (!running && !focus.active() && !searching
+            && compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::Hidden
+            && !compositor.completionPopup().isVisible() && inputMonitor.getInputBuffer().isEmpty())
             send("command", {{"input", "/rewind"}});
     });
     connect(&inputMonitor, &QAgentInputMonitor::ctrlCPressed, &inputMonitor, [&](bool hadInput) {
@@ -787,16 +818,21 @@ bool QSocCliWorker::runAgentClientLoop(
             compositor.printContent(error + "\n");
     });
     connect(&inputMonitor, &QAgentInputMonitor::mouseWheel, &compositor, [&](int direction) {
+        if (compositor.taskOverlay().mode() != QTuiTaskOverlay::Mode::Hidden) {
+            compositor.taskOverlay().handleKey(direction == 0 ? Qt::Key_Up : Qt::Key_Down, false);
+            return;
+        }
         if (direction == 0)
             compositor.scrollContentUp();
         else
             compositor.scrollContentDown();
     });
     connect(&inputMonitor, &QAgentInputMonitor::pageKey, &compositor, [&](int direction) {
+        const int page = qMax(1, compositor.contentView().viewportHeight() - 2);
         if (direction == 0)
-            compositor.scrollContentUp(10);
+            compositor.scrollContentUp(page);
         else
-            compositor.scrollContentDown(10);
+            compositor.scrollContentDown(page);
     });
     connect(
         &inputMonitor,
@@ -837,6 +873,11 @@ bool QSocCliWorker::runAgentClientLoop(
     });
     compositor.taskOverlay().setRegistry(&tasks);
     compositor.taskOverlay().setAgentActionsEnabled(focus.enabled());
+    connect(
+        &compositor.taskOverlay(),
+        &QTuiTaskOverlay::historyRequested,
+        &compositor,
+        [&](bool enabled) { tasks.setHistoryVisible(enabled); });
     const auto focusOn = [&](const QString &id) {
         focus.enter(id);
         compositor.render();
@@ -844,6 +885,8 @@ bool QSocCliWorker::runAgentClientLoop(
     connect(&compositor.taskOverlay(), &QTuiTaskOverlay::focusRequested, &compositor, focusOn);
     connect(&compositor.taskOverlay(), &QTuiTaskOverlay::messageRequested, &compositor, focusOn);
     connect(&inputMonitor, &QAgentInputMonitor::agentCycleRequested, &compositor, [&](int direction) {
+        if (compositor.taskOverlay().mode() != QTuiTaskOverlay::Mode::Hidden)
+            return;
         if (!focus.enabled())
             return;
         tasks.refresh();
@@ -876,16 +919,27 @@ bool QSocCliWorker::runAgentClientLoop(
         tasks.refresh();
         overlay.open();
     });
-    inputMonitor.setExternalKeyConsumer([&](unsigned char key) {
-        if (compositor.taskOverlay().mode() != QTuiTaskOverlay::Mode::Hidden) {
-            compositor.taskOverlay().handleKey(
-                key == '\r' || key == '\n' ? Qt::Key_Return
-                                           : QChar::fromLatin1(char(key)).toUpper().unicode(),
-                false);
+    inputMonitor.setExternalKeyConsumer([&](int key) {
+        if (key == Qt::Key_Escape) {
+            if (!running && !focus.active() && !searching
+                && compositor.taskOverlay().mode() == QTuiTaskOverlay::Mode::Hidden
+                && !compositor.completionPopup().isVisible())
+                return false;
+            escape();
             return true;
         }
-        if ((key == '\r' || key == '\n') && inputMonitor.getInputBuffer().isEmpty()
-            && !ghost.isEmpty() && !searching) {
+        if (compositor.taskOverlay().mode() != QTuiTaskOverlay::Mode::Hidden) {
+            if (key == (int(Qt::CTRL) | Qt::Key_B)
+                && compositor.taskOverlay().mode() != QTuiTaskOverlay::Mode::ConfirmInterrupt) {
+                compositor.taskOverlay().close();
+                return true;
+            }
+            compositor.taskOverlay()
+                .handleKey(key < 128 ? QChar::fromLatin1(char(key)).toUpper().unicode() : key, false);
+            return true;
+        }
+        if ((key == Qt::Key_Return || key == '\r' || key == '\n')
+            && inputMonitor.getInputBuffer().isEmpty() && !ghost.isEmpty() && !searching) {
             QTimer::singleShot(0, &inputMonitor, [&, accepted = ghost] {
                 inputMonitor.insertText(accepted);
                 inputMonitor.submitNow();
