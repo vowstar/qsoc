@@ -584,6 +584,60 @@ private slots:
         QVERIFY(editResult.contains("3 times") || editResult.contains("replace_all"));
     }
 
+    void testFileEditAfterPartialRead_data()
+    {
+        QTest::addColumn<int>("offset");
+        QTest::addColumn<int>("maxLines");
+        QTest::newRow("window") << 0 << 35;
+        QTest::newRow("offset") << 70 << 5;
+        QTest::newRow("default") << 0 << 0;
+    }
+
+    void testFileEditAfterPartialRead()
+    {
+        QFETCH(int, offset);
+        QFETCH(int, maxLines);
+        const QString path = tempDir.filePath(
+            QStringLiteral("partial-%1.txt").arg(QString::fromLatin1(QTest::currentDataTag())));
+        QByteArray content;
+        for (int i = 0; i < 501; ++i)
+            content += QStringLiteral("line %1: old\n").arg(i).toUtf8();
+        QVERIFY(writeFileBytes(path, content));
+        QSocToolFileRead  readTool(this, pathContext);
+        QSocToolFileEdit  editTool(this, pathContext);
+        QSocToolFileWrite writeTool(this, pathContext);
+        json              arguments = {{"file_path", path.toStdString()}, {"offset", offset}};
+        if (maxLines)
+            arguments["max_lines"] = maxLines;
+        const QString oldText = QStringLiteral("line %1: old").arg(offset);
+        const QString newText = QStringLiteral("line %1: new").arg(offset);
+        QVERIFY(readTool.execute(arguments).contains(oldText));
+        const json edit
+            = {{"file_path", path.toStdString()},
+               {"old_string", oldText.toStdString()},
+               {"new_string", newText.toStdString()}};
+        const QString result = editTool.execute(edit);
+        QVERIFY2(result.contains("Successfully"), qPrintable(result));
+        content.replace(oldText.toUtf8(), newText.toUtf8());
+        QCOMPARE(readFileBytes(path), content);
+        QVERIFY(writeTool.execute({{"file_path", path.toStdString()}, {"content", "replacement"}})
+                    .contains("only partially read"));
+        QCOMPARE(readFileBytes(path), content);
+
+        content += "external change\n";
+        QVERIFY(writeFileBytes(path, content));
+        const QString stale = editTool.execute(
+            {{"file_path", path.toStdString()},
+             {"old_string", newText.toStdString()},
+             {"new_string", "unexpected"}});
+        QVERIFY2(stale.contains("changed on disk"), qPrintable(stale));
+        QCOMPARE(readFileBytes(path), content);
+        QVERIFY(readTool.execute({{"file_path", path.toStdString()}, {"max_lines", 1000}})
+                    .contains(newText));
+        QVERIFY(writeTool.execute({{"file_path", path.toStdString()}, {"content", "replacement"}})
+                    .contains("Successfully"));
+    }
+
     void testFileEditRequiresPriorRead()
     {
         /* Editing a file the agent never read is rejected. */

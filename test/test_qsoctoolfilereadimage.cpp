@@ -5,6 +5,7 @@
  * generated at runtime; nothing binary is committed to the repo. */
 
 #include "agent/tool/qsoctoolfile.h"
+#include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
 #include "common/qsocimageattach.h"
@@ -93,6 +94,22 @@ class TestQSocToolFileReadImage : public QObject
     Q_OBJECT
 
 private slots:
+    void failedImageReadCannotAuthorizeWriting()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QByteArray bytes = makePng(2, 2, QColor(Qt::cyan));
+        bytes.resize(16);
+        const QString    path = writeTempFile(tmp, QStringLiteral("damaged.png"), bytes);
+        QSocPathContext  paths;
+        QSocToolFileRead reader(nullptr, &paths);
+        QVERIFY(runRead(&reader, path).startsWith(QStringLiteral("Error:")));
+        QVERIFY(!paths.readState().wasRead(QFileInfo(path).canonicalFilePath()));
+        QSocToolFileWrite writer(nullptr, &paths);
+        QVERIFY(writer.execute({{"file_path", path.toStdString()}, {"content", "replacement"}})
+                    .contains("not read yet"));
+    }
+
     /* Vision-capable model: read_file on a PNG returns the same
      * attachment marker the agent main loop knows how to lift. */
     void visionModelInlinesPng()

@@ -696,9 +696,11 @@ The agent provides the following tools through natural language:
 - *Generation*: `generate_verilog` (RTL from `.soc_net`), `generate_template`
   (Jinja2 rendering)
 - *Files*: `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
-  reports and adjusts allowed write directories. `edit_file` and overwriting
-  `write_file` require the file to have been read first and reject a file
-  changed on disk since that read (local and remote)
+  reports and adjusts allowed write directories. `read_file` returns the requested
+  window and streams the full file for a content fingerprint. A successful window
+  permits `edit_file`. Overwriting an existing file with `write_file` requires a
+  complete read from offset 0. A partial edit keeps that restriction. Both tools
+  reject files changed since the read, locally and remotely.
 - *Shell*: `bash` (synchronous, or `background=true` for background jobs),
   `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. Both
   take the same parameters locally and on a remote host: `command`,

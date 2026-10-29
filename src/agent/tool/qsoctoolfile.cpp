@@ -183,13 +183,11 @@ QString QSocToolFileRead::execute(const json &arguments)
         return QString("Error: Cannot read file completely: %1").arg(filePath);
     }
 
-    /* Record a full read so edit_file / write_file can enforce
-     * read-before-edit and detect on-disk changes. Partial / offset reads
-     * do not qualify because the agent has not seen the entire file. */
-    if (const auto whole = reader.wholeFile(); pathContext && whole) {
-        pathContext->readState().recordRead(filePath, QString::fromUtf8(*whole));
+    const auto result = reader.result(filePath, llmService);
+    if (pathContext && !result.fingerprint.isEmpty()) {
+        pathContext->readState().recordSnapshot(filePath, result.fingerprint, result.complete);
     }
-    return reader.result(filePath, llmService);
+    return result.text;
 }
 
 void QSocToolFileRead::setPathContext(QSocPathContext *pathContext)
@@ -292,9 +290,11 @@ QString QSocToolFileWrite::execute(const json &arguments)
         if (pathContext && !pathContext->readState().wasRead(filePath)) {
             return Core::notReadYet(filePath, QStringLiteral("overwriting"));
         }
-        if (pathContext && pathContext->readState().changedSinceRead(filePath, beforeContent)) {
+        if (pathContext && pathContext->readState().changedSinceRead(filePath, *bytes)) {
             return Core::changedSinceRead(filePath, QStringLiteral("overwriting"));
         }
+        if (pathContext && !pathContext->readState().wasFullyRead(filePath))
+            return Core::partialRead(filePath);
     }
 
     /* Pre-edit snapshot: capture the current content (or mark absent)
@@ -383,14 +383,11 @@ QString QSocToolFileEdit::execute(const json &arguments)
     }
     const QString content = QString::fromUtf8(*bytes);
 
-    /* Read-before-edit + stale-on-disk guard: the agent must have read this
-     * exact file via read_file first, and it must not have changed on disk
-     * since, so an edit never blindly clobbers content the agent never saw
-     * or a concurrent modification. */
+    /* Require an observed version and reject external changes before replacement. */
     if (pathContext && !pathContext->readState().wasRead(filePath)) {
         return Core::notReadYet(filePath, QStringLiteral("editing"));
     }
-    if (pathContext && pathContext->readState().changedSinceRead(filePath, content)) {
+    if (pathContext && pathContext->readState().changedSinceRead(filePath, *bytes)) {
         return Core::changedSinceRead(filePath, QStringLiteral("editing"));
     }
 
@@ -410,10 +407,10 @@ QString QSocToolFileEdit::execute(const json &arguments)
         return failure;
     }
 
-    /* The agent now knows the post-edit content, so a follow-up edit in the
-     * same session is allowed without a re-read. */
+    /* Preserve the read qualification across a targeted edit. */
     if (pathContext) {
-        pathContext->readState().recordRead(filePath, edit.content);
+        pathContext->readState()
+            .recordRead(filePath, edit.content, pathContext->readState().wasFullyRead(filePath));
     }
 
     /* Notify LSP service about the file change. */

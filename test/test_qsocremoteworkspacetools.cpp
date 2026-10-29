@@ -17,6 +17,7 @@
 #include <memory>
 #include <QBuffer>
 #include <QColor>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -93,7 +94,7 @@ private slots:
     void init();
     void cleanup();
     void readFileAttachesARemoteImage();
-    void readFilePagesALargeLogWithoutReadingItAll();
+    void readFilePagesALargeLogWithoutReturningItAll();
     void readFileBoundsOneOversizedLine();
     void listFilesTakesTheLocalArgumentsAndSaysWhenItStops();
     void editFileReplacesAllLikeTheLocalTool();
@@ -298,7 +299,7 @@ void Test::readFileAttachesARemoteImage()
 
 /* A log far past one read's byte limit still pages by line: the file size is
  * never refused, and only the requested window comes back. */
-void Test::readFilePagesALargeLogWithoutReadingItAll()
+void Test::readFilePagesALargeLogWithoutReturningItAll()
 {
     REQUIRE_WORKSPACE_FIXTURE();
     QString error;
@@ -326,6 +327,21 @@ void Test::readFilePagesALargeLogWithoutReadingItAll()
     QVERIFY(window.contains(QStringLiteral("line 1001x")));
     QVERIFY(!window.contains(QStringLiteral("line 1002x")));
     QVERIFY2(window.contains(QStringLiteral("offset=1002")), qPrintable(window));
+    const QByteArray oldText = "line 1000" + QByteArray(50, 'x');
+    QVERIFY(call(
+                "edit_file",
+                {{"file_path", "big.log"},
+                 {"old_string", oldText.toStdString()},
+                 {"new_string", "edited line"}})
+                .contains("Successfully"));
+    log.replace(oldText, "edited line");
+    QVERIFY(call("write_file", {{"file_path", "big.log"}, {"content", "replacement"}})
+                .contains("only partially read"));
+    QFile after(m_workspace + QStringLiteral("/big.log"));
+    QVERIFY(after.open(QIODevice::ReadOnly));
+    QCOMPARE(
+        QCryptographicHash::hash(after.readAll(), QCryptographicHash::Sha256),
+        QCryptographicHash::hash(log, QCryptographicHash::Sha256));
 }
 
 /* Counterexample: one line with no newline came back whole, so a single read

@@ -220,8 +220,9 @@ json editSchema()
 QString readDescription(bool image)
 {
     QString text = QStringLiteral(
-        "Read the contents of a file. Any file on the system can be read, including temporary "
-        "files. One read returns at most 16 MiB; page longer files with offset and max_lines.");
+        "Read a file or line window. The tool fingerprints the full file while returning at "
+        "most 16 MiB. Use offset and max_lines to page output. Any file on the system can be "
+        "read.");
     if (image) {
         text += QStringLiteral(
             " Image files (PNG, JPG, GIF, WebP) are returned as visual content that the "
@@ -242,20 +243,18 @@ QString listDescription()
 QString writeDescription(const QString &scope)
 {
     return QStringLiteral(
-               "Write content to a file. Creates the file and its parent directories if missing, "
-               "overwrites if it exists. Overwriting an existing file requires reading it first "
-               "with read_file; a file changed on disk since it was read is rejected. The file "
-               "must be within %1.")
+               "Write content to a file and create missing parent directories. Overwriting an "
+               "existing file requires a complete read from offset 0. External changes since "
+               "the read are rejected. The file must be within %1.")
         .arg(scope);
 }
 
 QString editDescription(const QString &scope)
 {
     return QStringLiteral(
-               "Edit a file by replacing a specific string with new content. Read the file with "
-               "read_file first: editing an unread file, or one changed on disk since it was "
-               "read, is rejected. The old_string must be unique in the file unless replace_all "
-               "is set. The file must be within %1.")
+               "Replace text in a file after reading it with read_file. A partial read is "
+               "sufficient. External changes since that read are rejected. The old_string must "
+               "be unique unless replace_all is set. The file must be within %1.")
         .arg(scope);
 }
 
@@ -336,6 +335,14 @@ QString changedSinceRead(const QString &path, const QString &action)
         .arg(path, action);
 }
 
+QString partialRead(const QString &path)
+{
+    return QStringLiteral(
+               "Error: File was only partially read: %1. Read it from offset=0 with enough "
+               "max_lines before overwriting.")
+        .arg(path);
+}
+
 /* read_file */
 
 ReadWindow readWindow(const json &arguments)
@@ -354,11 +361,18 @@ Reader::Reader(const ReadWindow &window, qsizetype limit)
 
 bool Reader::feed(const QByteArray &chunk)
 {
-    if (m_sniffed) {
-        return m_mime.isEmpty() ? pageText(chunk) : keepImage(chunk);
+    m_hash.addData(chunk);
+    if (!m_sniffed) {
+        m_head += chunk;
+        if (m_head.size() >= kMagicBytes)
+            sniff();
+    } else if (!m_stopped) {
+        if (m_mime.isEmpty())
+            pageText(chunk);
+        else
+            keepImage(chunk);
     }
-    m_head += chunk;
-    return m_head.size() < kMagicBytes || sniff();
+    return !m_stopped || (m_mime.isEmpty() && m_emitted > 0);
 }
 
 void Reader::finish()
@@ -368,20 +382,23 @@ void Reader::finish()
     }
     if (m_mime.isEmpty() && !m_stopped && !m_pending.isEmpty()) {
         m_pending += '\n';
-        m_closedLastLine = true;
         takeLine(m_pending);
     }
+    m_finished = true;
 }
 
-std::optional<QByteArray> Reader::wholeFile() const
+ReadResult Reader::result(const QString &path, QLLMService *llm) const
 {
-    if (m_offset != 0 || m_stopped) {
-        return std::nullopt;
-    }
-    return m_closedLastLine ? m_body.chopped(1) : m_body;
+    ReadResult result;
+    result.text            = render(path, llm);
+    const bool failedImage = !m_mime.isEmpty() && result.text.startsWith("Error:");
+    result.complete        = m_finished && m_offset == 0 && !m_stopped && !failedImage;
+    if (m_finished && !failedImage && (result.complete || m_emitted > 0))
+        result.fingerprint = QString::fromLatin1(m_hash.result().toHex());
+    return result;
 }
 
-QString Reader::result(const QString &path, QLLMService *llm) const
+QString Reader::render(const QString &path, QLLMService *llm) const
 {
     const QString limitMiB = QString::number(m_limit / (1024 * 1024));
     if (!m_mime.isEmpty()) {
@@ -417,9 +434,10 @@ QString Reader::result(const QString &path, QLLMService *llm) const
 
 bool Reader::sniff()
 {
-    m_sniffed = true;
-    m_mime    = QSocImageAttach::detectMimeByMagic(m_head);
-    return feed(std::exchange(m_head, {}));
+    m_sniffed       = true;
+    m_mime          = QSocImageAttach::detectMimeByMagic(m_head);
+    const auto head = std::exchange(m_head, {});
+    return m_mime.isEmpty() ? pageText(head) : keepImage(head);
 }
 
 bool Reader::keepImage(const QByteArray &chunk)
@@ -477,6 +495,7 @@ bool Reader::stop(bool *reason)
 {
     *reason   = true;
     m_stopped = true;
+    m_pending.clear();
     return false;
 }
 

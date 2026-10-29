@@ -532,13 +532,11 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
     }
     reader.finish();
 
-    /* Record a full read so the remote edit_file / write_file tools can
-     * enforce read-before-edit and detect on-disk changes. Partial / offset
-     * reads do not qualify: the agent has not seen the whole file. */
-    if (const auto whole = reader.wholeFile(); m_pathCtx && whole) {
-        m_pathCtx->readState().recordRead(remotePath, QString::fromUtf8(*whole));
+    const auto result = reader.result(remotePath, m_llm);
+    if (m_pathCtx && !result.fingerprint.isEmpty()) {
+        m_pathCtx->readState().recordSnapshot(remotePath, result.fingerprint, result.complete);
     }
-    return reader.result(remotePath, m_llm);
+    return result.text;
 }
 
 /* write_file */
@@ -604,9 +602,11 @@ QString QSocToolRemoteFileWrite::execute(const json &arguments)
             return QStringLiteral("Error: %1").arg(readErr);
         }
         beforeContent = QString::fromUtf8(current);
-        if (m_pathCtx->readState().changedSinceRead(remotePath, beforeContent)) {
+        if (m_pathCtx->readState().changedSinceRead(remotePath, current)) {
             return Core::changedSinceRead(remotePath, QStringLiteral("overwriting"));
         }
+        if (!m_pathCtx->readState().wasFullyRead(remotePath))
+            return Core::partialRead(remotePath);
     }
 
     /* Checkpoint the pre-write state so rewind can restore the remote file. */
@@ -725,13 +725,11 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     }
     const QString content = QString::fromUtf8(bytes);
 
-    /* Read-before-edit + stale-on-disk guard: the agent must have read this
-     * exact remote file first, and it must not have changed since, so an
-     * edit never blindly clobbers unseen content or a concurrent change. */
+    /* Require an observed version and reject external changes before replacement. */
     if (!m_pathCtx->readState().wasRead(remotePath)) {
         return Core::notReadYet(remotePath, QStringLiteral("editing"));
     }
-    if (m_pathCtx->readState().changedSinceRead(remotePath, content)) {
+    if (m_pathCtx->readState().changedSinceRead(remotePath, bytes)) {
         return Core::changedSinceRead(remotePath, QStringLiteral("editing"));
     }
 
@@ -747,8 +745,8 @@ QString QSocToolRemoteFileEdit::execute(const json &arguments)
     if (!m_conn->sftp()->writeFile(remotePath, edit.content.toUtf8(), &err)) {
         return sftpWriteError(m_conn->sftp(), err);
     }
-    /* The agent now knows the post-edit content. */
-    m_pathCtx->readState().recordRead(remotePath, edit.content);
+    m_pathCtx->readState()
+        .recordRead(remotePath, edit.content, m_pathCtx->readState().wasFullyRead(remotePath));
     return Core::editedText(remotePath, edit.count);
 }
 

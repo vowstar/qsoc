@@ -64,19 +64,32 @@ private slots:
 
         QVERIFY(!state.wasRead(path));
         /* Unrecorded paths never report a change. */
-        QVERIFY(!state.changedSinceRead(path, QStringLiteral("anything")));
+        QVERIFY(!state.changedSinceRead(path, "anything"));
 
         state.recordRead(path, QStringLiteral("one two three"));
         QVERIFY(state.wasRead(path));
-        QVERIFY(!state.changedSinceRead(path, QStringLiteral("one two three")));
-        QVERIFY(state.changedSinceRead(path, QStringLiteral("one two THREE")));
+        QVERIFY(!state.changedSinceRead(path, "one two three"));
+        QVERIFY(state.changedSinceRead(path, "one two THREE"));
 
         /* Recording the new content (as a write would) clears staleness. */
         state.recordRead(path, QStringLiteral("one two THREE"));
-        QVERIFY(!state.changedSinceRead(path, QStringLiteral("one two THREE")));
+        QVERIFY(!state.changedSinceRead(path, "one two THREE"));
+        QVERIFY(state.wasFullyRead(path));
+        state.recordSnapshot(path, QSocFileReadState::sha("one two THREE"), false);
+        QVERIFY(state.wasFullyRead(path));
+        state.recordSnapshot(path, QSocFileReadState::sha("new version"), false);
+        QVERIFY(state.wasRead(path));
+        QVERIFY(!state.wasFullyRead(path));
+        state.recordRead(path, QStringLiteral("edited"), false);
+        QVERIFY(!state.wasFullyRead(path));
+        state.recordRead(path, QStringLiteral("edited"));
+        QVERIFY(state.wasFullyRead(path));
 
         /* Keys are independent per path. */
         QVERIFY(!state.wasRead(QStringLiteral("/ws/other.txt")));
+        state.clear();
+        QVERIFY(!state.wasRead(path));
+        QVERIFY(!state.wasFullyRead(path));
     }
 
     void testSha256HexIsStable()

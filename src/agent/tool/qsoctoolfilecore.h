@@ -7,8 +7,8 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
-#include <optional>
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <QList>
 #include <QString>
 
@@ -75,6 +75,7 @@ QString wroteText(qsizetype bytes, const QString &path);
 QString editedText(const QString &path, int count);
 /** @param action `editing` or `overwriting`. */
 QString notReadYet(const QString &path, const QString &action);
+QString partialRead(const QString &path);
 QString changedSinceRead(const QString &path, const QString &action);
 
 /* read_file */
@@ -87,6 +88,13 @@ struct ReadWindow
 };
 
 ReadWindow readWindow(const json &arguments);
+
+struct ReadResult
+{
+    QString text;
+    QString fingerprint;
+    bool    complete = false;
+};
 
 /**
  * @brief One streamed read_file: sniffs the leading bytes, then keeps either
@@ -103,40 +111,39 @@ public:
     /** @brief End of file: decide a short file and close its last line. */
     void finish();
 
-    /** @brief The whole file when this read saw all of it from line 0. */
-    std::optional<QByteArray> wholeFile() const;
-
     /**
      * @brief The tool result for @p path.
      * @details An image attachment, the text window with a `[truncated: ...]`
      *          line when more follows, or the refusal for an oversized image
      *          or line.
      */
-    QString result(const QString &path, QLLMService *llm) const;
+    ReadResult result(const QString &path, QLLMService *llm) const;
 
 private:
     static constexpr qsizetype kMagicBytes = 16;
 
-    bool sniff();
-    bool keepImage(const QByteArray &chunk);
-    bool pageText(const QByteArray &chunk);
-    bool takeLine(const QByteArray &line);
-    bool stop(bool *reason);
+    bool    sniff();
+    bool    keepImage(const QByteArray &chunk);
+    bool    pageText(const QByteArray &chunk);
+    bool    takeLine(const QByteArray &line);
+    bool    stop(bool *reason);
+    QString render(const QString &path, QLLMService *llm) const;
 
-    int        m_offset   = 0;
-    int        m_maxLines = 0;
-    qsizetype  m_limit    = 0;
-    QByteArray m_head;
-    QString    m_mime;
-    QByteArray m_body;
-    QByteArray m_pending;
-    int        m_lineNum        = 0;
-    int        m_emitted        = 0;
-    bool       m_sniffed        = false;
-    bool       m_stopped        = false;
-    bool       m_overLimit      = false;
-    bool       m_moreLines      = false;
-    bool       m_closedLastLine = false;
+    int                m_offset   = 0;
+    int                m_maxLines = 0;
+    qsizetype          m_limit    = 0;
+    QByteArray         m_head;
+    QString            m_mime;
+    QByteArray         m_body;
+    QByteArray         m_pending;
+    QCryptographicHash m_hash{QCryptographicHash::Sha256};
+    int                m_lineNum   = 0;
+    int                m_emitted   = 0;
+    bool               m_sniffed   = false;
+    bool               m_stopped   = false;
+    bool               m_overLimit = false;
+    bool               m_moreLines = false;
+    bool               m_finished  = false;
 };
 
 /* write_file and edit_file */

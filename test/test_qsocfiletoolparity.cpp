@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/qsocfilereadstate.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocremotepathcontext.h"
@@ -305,18 +306,40 @@ private slots:
     void aReadWindowEndsWithOneMarker()
     {
         Core::Reader reader({.offset = 1, .maxLines = 2});
-        QVERIFY(!reader.feed("l0\r\nl1\r\nl2\r\nl3\r\n"));
+        QVERIFY(reader.feed("l0\r\nl1\r\nl2\r\nl3\r\n"));
+        QVERIFY(reader.result("/f", nullptr).fingerprint.isEmpty());
+        QVERIFY(reader.feed("tail\n"));
+        reader.finish();
         QCOMPARE(
-            reader.result("/f", nullptr),
+            reader.result("/f", nullptr).text,
             QStringLiteral(
                 "l1\nl2\n[truncated: more lines follow; rerun with offset=3 to continue]\n"));
-        QVERIFY(!reader.wholeFile());
+        QVERIFY(!reader.result("/f", nullptr).complete);
+        QCOMPARE(
+            reader.result("/f", nullptr).fingerprint,
+            QSocFileReadState::sha("l0\r\nl1\r\nl2\r\nl3\r\ntail\n"));
 
         Core::Reader whole({});
         QVERIFY(whole.feed("a\nb"));
         whole.finish();
-        QCOMPARE(whole.result("/f", nullptr), QStringLiteral("a\nb\n"));
-        QCOMPARE(*whole.wholeFile(), QByteArray("a\nb"));
+        QCOMPARE(whole.result("/f", nullptr).text, QStringLiteral("a\nb\n"));
+        QVERIFY(whole.result("/f", nullptr).complete);
+        QCOMPARE(whole.result("/f", nullptr).fingerprint, QSocFileReadState::sha("a\nb"));
+
+        Core::Reader beyond({.offset = 10});
+        QVERIFY(beyond.feed("short\n"));
+        beyond.finish();
+        QVERIFY(beyond.result("/f", nullptr).fingerprint.isEmpty());
+
+        Core::Reader oversized({}, 16);
+        QVERIFY(!oversized.feed(QByteArray(17, 'x')));
+        oversized.finish();
+        QVERIFY(oversized.result("/f", nullptr).fingerprint.isEmpty());
+
+        Core::Reader diagnostic({});
+        QVERIFY(diagnostic.feed("Error: ordinary file content\n"));
+        diagnostic.finish();
+        QVERIFY(!diagnostic.result("/f", nullptr).fingerprint.isEmpty());
     }
 };
 
