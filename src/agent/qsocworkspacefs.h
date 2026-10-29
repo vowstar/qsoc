@@ -10,6 +10,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+
+class QSocTodoModel;
 
 /**
  * @brief The project files of the bound workspace, local or remote.
@@ -33,10 +36,13 @@ public:
         qint64  size    = -1;
     };
 
-    virtual ~QSocWorkspaceFs() = default;
+    QSocWorkspaceFs();
+    virtual ~QSocWorkspaceFs();
+    QSocTodoModel *todos();
 
     /** @brief Absolute workspace root, empty while nothing is bound. */
     virtual QString root() const = 0;
+    virtual QString identity() const { return root(); }
 
     virtual Result read(const QString &path, QByteArray *bytes, QString *error)     = 0;
     virtual Result list(const QString &path, QList<Entry> *entries, QString *error) = 0;
@@ -50,6 +56,9 @@ public:
 
     /** @brief `root()/path` for messages and display. */
     QString displayPath(const QString &path) const;
+
+private:
+    std::unique_ptr<QSocTodoModel> todos_;
 };
 
 /**

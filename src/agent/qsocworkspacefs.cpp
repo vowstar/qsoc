@@ -2,12 +2,24 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocworkspacefs.h"
+#include "agent/qsoctodomodel.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 
 #include <utility>
+
+QSocWorkspaceFs::QSocWorkspaceFs()  = default;
+QSocWorkspaceFs::~QSocWorkspaceFs() = default;
+
+QSocTodoModel *QSocWorkspaceFs::todos()
+{
+    if (!todos_)
+        todos_ = std::make_unique<QSocTodoModel>(this);
+    return todos_.get();
+}
 
 bool QSocWorkspaceFs::isContainedRelative(const QString &path)
 {
@@ -115,9 +127,9 @@ bool QSocLocalWorkspaceFs::write(const QString &path, const QByteArray &bytes, Q
         }
         return false;
     }
-    QFile handle(file);
-    if (!handle.open(QIODevice::WriteOnly | QIODevice::Truncate)
-        || handle.write(bytes) != bytes.size()) {
+    QSaveFile handle(file);
+    if (!handle.open(QIODevice::WriteOnly) || handle.write(bytes) != bytes.size()
+        || !handle.commit()) {
         if (error != nullptr) {
             *error = QStringLiteral("cannot write %1: %2").arg(file, handle.errorString());
         }

@@ -9,6 +9,7 @@
 #include "common/qsoctasksource.h"
 #include "qsoc_test.h"
 #include "tui/qtuitaskoverlay.h"
+#include "tui/qtuitodolist.h"
 
 #include <QObject>
 #include <QSignalSpy>
@@ -87,6 +88,135 @@ class TestQSocTaskRegistry : public QObject
     Q_OBJECT
 
 private slots:
+    void todoRowsDoNotCountAsBackgroundExecutions()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "todo";
+        auto row   = makeRow("1");
+        row.kind   = QSocTask::Kind::Todo;
+        row.planId = "session";
+        source.rows.append(row);
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        QCOMPARE(overlay.previewHeight(120, 30), 0);
+        source.rows.append(makeRow("worker"));
+        source.notifyChanged();
+        QCOMPARE(registry.activeCount(), 1);
+        QTuiScreen screen(120, 10);
+        overlay.renderPreview(screen, 0, 120, overlay.previewHeight(120, 30));
+        QString text;
+        for (int y = 0; y < 10; ++y)
+            for (int x = 0; x < 120; ++x)
+                text += screen.at(x, y).text();
+        QVERIFY(text.contains("label-worker"));
+        QVERIFY(!text.contains("label-1"));
+        QVERIFY(!text.contains("Plan 0/1"));
+    }
+
+    void planSummaryUsesTheSnapshotInsteadOfTransientTodos()
+    {
+        QTuiTodoList widget;
+        auto         completed = makeRow("1", QSocTask::Status::Completed);
+        completed.kind         = QSocTask::Kind::Todo;
+        completed.planId       = "session";
+        auto pending           = completed;
+        pending.id             = "2";
+        pending.status         = QSocTask::Status::Pending;
+        widget.setPlanRows({completed, pending});
+        widget.addItem({99, "unrelated", "medium", "pending"});
+        widget.clearDone();
+        QTuiScreen screen(80, 4);
+        widget.render(screen, 0, 80);
+        QString text;
+        for (int x = 0; x < 80; ++x)
+            text += screen.at(x, 0).text();
+        QVERIFY(text.contains("Plan: 1/2 items done"));
+        QCOMPARE(widget.lineCount(), 2);
+        widget.setVisible(false);
+        QCOMPARE(widget.lineCount(), 0);
+    }
+
+    void dependencyGraphReturnsThroughDetailAndList()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag         = "todo";
+        source.tailContent = "Completion: verification passes";
+        for (int i = 1; i <= 6; ++i) {
+            auto row   = makeRow(QString::number(i), QSocTask::Status::Completed);
+            row.kind   = QSocTask::Kind::Todo;
+            row.planId = "session";
+            if (i > 1)
+                row.dependsOn.append(QString::number(i - 1));
+            source.rows.append(row);
+        }
+        registry.registerSource(&source);
+        FakeTaskSource executions;
+        executions.tag   = "agent";
+        auto execution   = makeRow("a1", QSocTask::Status::Completed);
+        execution.todoId = 1;
+        execution.planId = "session";
+        executions.rows  = {execution};
+        registry.registerSource(&executions);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.open();
+        QVERIFY(renderText(overlay).contains("Plan 6/6 done | Executions: 0 running | 1 done"));
+        overlay.handleKey(Qt::Key_G, false);
+        QVERIFY(renderText(overlay).contains("Task dependencies"));
+        QVERIFY(renderText(overlay).contains("Dependencies connect"));
+        overlay.handleKey(Qt::Key_X, false);
+        QVERIFY(source.lastKilledId.isEmpty());
+        overlay.handleKey(Qt::Key_Return, false);
+        QVERIFY(renderText(overlay).contains("Completion: verification passes"));
+        QVERIFY(renderText(overlay).contains("1 linked execution records."));
+        QVERIFY(!renderText(overlay).contains("pending review"));
+        QSocTask::Estimate estimate;
+        estimate.summary          = "checking";
+        executions.rows[0].status = QSocTask::Status::Running;
+        registry.setEstimate("agent", "a1", estimate);
+        executions.notifyChanged();
+        QVERIFY(renderText(overlay).contains("Estimate: checking (execution a1)"));
+        overlay.handleKey(Qt::Key_Escape, false);
+        QVERIFY(renderText(overlay).contains("Task dependencies"));
+        overlay.handleKey(Qt::Key_Escape, false);
+        QCOMPARE(overlay.mode(), QTuiTaskOverlay::Mode::List);
+        overlay.handleKey(Qt::Key_Escape, false);
+        QCOMPARE(overlay.mode(), QTuiTaskOverlay::Mode::Hidden);
+    }
+
+    void cyclicGraphShowsTheProblemAndRemainsNavigable()
+    {
+        QSocTaskRegistry registry;
+        FakeTaskSource   source;
+        source.tag = "todo";
+        for (int i = 1; i <= 2; ++i) {
+            auto row      = makeRow(QString::number(i), QSocTask::Status::Pending);
+            row.kind      = QSocTask::Kind::Todo;
+            row.dependsOn = {QString::number(3 - i)};
+            source.rows.append(row);
+        }
+        auto error    = makeRow("error", QSocTask::Status::Failed);
+        error.kind    = QSocTask::Kind::Todo;
+        error.summary = "Dependency cycle: #1, #2, #1";
+        source.rows.append(error);
+        registry.registerSource(&source);
+        QTuiTaskOverlay overlay;
+        overlay.setRegistry(&registry);
+        overlay.open();
+        QVERIFY(renderText(overlay).contains("Plan 0/2 done"));
+        QVERIFY(!renderText(overlay).contains("0 running"));
+        overlay.handleKey(Qt::Key_G, false);
+        QVERIFY(renderText(overlay).contains("Dependency cycle:"));
+        overlay.handleKey(Qt::Key_PageDown, false);
+        overlay.handleKey(Qt::Key_Home, false);
+        QVERIFY(renderText(overlay).contains("Dependency cycle:"));
+        overlay.handleKey(Qt::Key_Escape, false);
+        QCOMPARE(overlay.mode(), QTuiTaskOverlay::Mode::List);
+    }
+
     void pageNavigation_data()
     {
         QTest::addColumn<int>("width");

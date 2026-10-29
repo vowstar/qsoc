@@ -560,6 +560,7 @@ private:
             return;
         }
         if (runtime_ && method == "tasks") {
+            runtime_->refreshTodos(params.value("refresh_todos").toBool());
             QJsonArray rows;
             auto       tasks = runtime_->taskRegistry()->listAll();
             if (params.value("history").toBool() && runtime_->subAgentSource()) {
@@ -596,6 +597,11 @@ private:
                         {"status", static_cast<int>(row.status)},
                         {"started_at", row.startedAtMs},
                         {"can_kill", row.canKill},
+                        {"plan_id", row.planId},
+                        {"priority", row.priority},
+                        {"depends_on", QJsonArray::fromStringList(row.dependsOn)},
+                        {"todo_id", row.todoId},
+                        {"dependency_check", row.dependencyCheck},
                         {"waiting", row.waitingForPeer},
                         {"agent_id", row.agentId},
                         {"host", row.host},

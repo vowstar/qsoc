@@ -145,6 +145,8 @@ bool readHistoricalRun(
     const QJsonObject obj = doc.object();
     run->id               = obj.value(QStringLiteral("task_id")).toString();
     run->label            = obj.value(QStringLiteral("label")).toString();
+    run->todoId           = obj.value("todo_id").toInt();
+    run->planId           = obj.value("plan_id").toString();
     run->subagentType     = obj.value(QStringLiteral("subagent_type")).toString();
     run->status           = obj.value(QStringLiteral("status")).toString();
     run->startedAtMs      = obj.value(QStringLiteral("started_at_ms")).toVariant().toLongLong();
@@ -232,16 +234,20 @@ QString QSocSubAgentTaskSource::startFollowup(QSocAgent *agent)
     QString  worktreePath;
     Dispatch dispatch;
     QString  definition;
+    int      todoId = 0;
+    QString  planId;
     for (const auto &run : std::as_const(runs_)) {
         if (run.agent == agent) {
             isolation    = run.isolation;
             worktreePath = run.worktreePath;
             dispatch     = run.dispatch;
             definition   = run.definition;
+            todoId       = run.todoId;
+            planId       = run.planId;
         }
     }
-    const QString id
-        = registerRun(QStringLiteral("Follow-up"), QStringLiteral("continuation"), agent);
+    const QString id = registerRun(
+        QStringLiteral("Follow-up"), QStringLiteral("continuation"), agent, {}, todoId, planId);
     for (RunState &run : runs_) {
         if (run.id == id) {
             run.definition = definition;
@@ -323,6 +329,8 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::listTasks() const
         row.id             = run.id;
         row.label          = run.label;
         row.objective      = run.objective;
+        row.todoId         = run.todoId;
+        row.planId         = run.planId;
         row.waitingForPeer = run.status == QSocTask::Status::Running && run.waitingForPeer;
         row.kind           = QSocTask::Kind::SubAgent;
         row.status         = run.status;
@@ -553,12 +561,19 @@ bool QSocSubAgentTaskSource::killTask(const QString &id)
 }
 
 QString QSocSubAgentTaskSource::registerRun(
-    const QString &label, const QString &subagentType, QSocAgent *agent, const QString &objective)
+    const QString &label,
+    const QString &subagentType,
+    QSocAgent     *agent,
+    const QString &objective,
+    int            todoId,
+    const QString &planId)
 {
     evictStaleCompleted();
 
     RunState run;
     run.objective      = objective;
+    run.todoId         = todoId;
+    run.planId         = planId;
     run.id             = QStringLiteral("a") + QString::number(nextSerial_++);
     run.label          = label;
     run.subagentType   = subagentType;
@@ -1065,6 +1080,8 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
         meta["artifact_owner"]     = run.agent->toolResultStore()->owner();
     }
     meta["task_id"]       = run.id;
+    meta["todo_id"]       = run.todoId;
+    meta["plan_id"]       = run.planId;
     meta["label"]         = run.label;
     meta["subagent_type"] = run.subagentType;
     meta["started_at_ms"] = run.startedAtMs;
@@ -1146,6 +1163,8 @@ QList<QSocTask::Row> QSocSubAgentTaskSource::historyRows()
             QSocTask::Row row{};
             row.id          = run.id;
             row.label       = run.label;
+            row.todoId      = run.todoId;
+            row.planId      = run.planId;
             row.kind        = QSocTask::Kind::SubAgent;
             row.status      = status;
             row.startedAtMs = run.startedAtMs;

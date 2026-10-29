@@ -15,7 +15,7 @@ public:
     explicit QSocAgentTaskModel(Request request)
         : request_(std::move(request))
     {}
-    void refresh();
+    void refresh(bool forceTodos = false);
     void setHistoryVisible(bool enabled)
     {
         historyVisible_ = enabled;

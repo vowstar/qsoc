@@ -3,12 +3,13 @@
 #include "cli/qsocagenttaskmodel.h"
 #include <QJsonArray>
 #include <QScopedValueRollback>
-void QSocAgentTaskModel::refresh()
+void QSocAgentTaskModel::refresh(bool forceTodos)
 {
     if (refreshing_)
         return;
     QScopedValueRollback<bool> guard(refreshing_, true);
-    const auto                 reply = request_("tasks", {{"history", historyVisible_}});
+    const auto                 reply
+        = request_("tasks", {{"history", historyVisible_}, {"refresh_todos", forceTodos}});
     if (!reply.contains("result"))
         return;
     const auto result  = reply.value("result").toObject();
@@ -23,15 +24,21 @@ void QSocAgentTaskModel::refresh()
     for (const auto &value : result.value("rows").toArray()) {
         const auto object = value.toObject();
         TaggedRow  item;
-        item.sourceTag             = object.value("source").toString();
-        item.row.id                = object.value("id").toString();
-        item.row.label             = object.value("label").toString();
-        item.row.summary           = object.value("summary").toString();
-        item.row.objective         = object.value("objective").toString();
-        item.row.kind              = static_cast<QSocTask::Kind>(object.value("kind").toInt());
-        item.row.status            = static_cast<QSocTask::Status>(object.value("status").toInt());
-        item.row.startedAtMs       = object.value("started_at").toInteger();
-        item.row.canKill           = object.value("can_kill").toBool();
+        item.sourceTag           = object.value("source").toString();
+        item.row.id              = object.value("id").toString();
+        item.row.label           = object.value("label").toString();
+        item.row.summary         = object.value("summary").toString();
+        item.row.objective       = object.value("objective").toString();
+        item.row.kind            = static_cast<QSocTask::Kind>(object.value("kind").toInt());
+        item.row.status          = static_cast<QSocTask::Status>(object.value("status").toInt());
+        item.row.startedAtMs     = object.value("started_at").toInteger();
+        item.row.canKill         = object.value("can_kill").toBool();
+        item.row.planId          = object.value("plan_id").toString();
+        item.row.priority        = object.value("priority").toString();
+        item.row.todoId          = object.value("todo_id").toInt();
+        item.row.dependencyCheck = object.value("dependency_check").toString();
+        for (const auto &dependency : object.value("depends_on").toArray())
+            item.row.dependsOn.append(dependency.toString());
         item.row.waitingForPeer    = object.value("waiting").toBool();
         item.row.agentId           = object.value("agent_id").toString();
         item.row.host              = object.value("host").toString();
@@ -60,7 +67,7 @@ int QSocAgentTaskModel::activeCount() const
 {
     int count = 0;
     for (const auto &item : rows_)
-        if (!QSocTask::isTerminal(item.row.status))
+        if (item.row.kind != QSocTask::Kind::Todo && !QSocTask::isTerminal(item.row.status))
             ++count;
     return count;
 }

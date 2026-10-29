@@ -875,6 +875,9 @@ bool QSocCliWorker::runAgentClientLoop(
     QSocAgentTaskModel tasks([&](const QString &method, const QJsonObject &values) {
         return client.request(method, values, 2000);
     });
+    connect(&tasks, &QSocTaskRegistry::estimateRefreshRequested, &compositor, [&] {
+        tasks.refresh(true);
+    });
     compositor.taskOverlay().setRegistry(&tasks);
     compositor.taskOverlay().setAgentActionsEnabled(focus.enabled());
     connect(
@@ -912,6 +915,12 @@ bool QSocCliWorker::runAgentClientLoop(
     connect(&taskTimer, &QTimer::timeout, &compositor, [&] {
         tasks.refresh();
         statusBarWidget.setTaskCount(tasks.activeCount());
+        QList<QSocTask::Row> todoRows;
+        for (const auto &item : tasks.listAll())
+            if (item.row.kind == QSocTask::Kind::Todo)
+                todoRows.append(item.row);
+        compositor.todoList().setPlanRows(todoRows);
+        compositor.invalidate();
     });
     taskTimer.start(1000);
     connect(&inputMonitor, &QAgentInputMonitor::taskOverlayRequested, &compositor, [&] {
@@ -920,7 +929,7 @@ bool QSocCliWorker::runAgentClientLoop(
             overlay.close();
             return;
         }
-        tasks.refresh();
+        tasks.refresh(true);
         overlay.open();
     });
     inputMonitor.setExternalKeyConsumer([&](int key) {

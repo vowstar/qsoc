@@ -125,6 +125,8 @@ struct QSocAgentTurnResult
  *          @ref setPlanApprovalHandler and @ref setSecretHandler. The
  *          runtime never touches a terminal.
  */
+class QSocTodoModel;
+
 class QSocAgentRuntime : public QObject
 {
     Q_OBJECT
@@ -248,6 +250,7 @@ public:
 
     /** Current session id, or empty before openSession(). */
     [[nodiscard]] QString sessionId() const;
+    QSocTodoModel        *refreshTodos(bool force = false);
     /** Shell command to resume the saved session; empty until persisted. */
     [[nodiscard]] QString resumeCommand() const;
     /** Raw session object (for transcript rendering and metadata reads). */

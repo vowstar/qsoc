@@ -1,111 +1,67 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-FileCopyrightText: 2025 Huang Rui <vowstar@gmail.com>
+// SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #ifndef QSOCTOOLTODO_H
 #define QSOCTOOLTODO_H
 
+#include "agent/qsoctodomodel.h"
 #include "agent/qsoctool.h"
 
 class QSocWorkspaceFs;
 
-#include <QList>
-
-/**
- * @brief Structure representing a single todo item
- */
-struct QSocTodoItem
+class QSocToolTodo : public QSocTool
 {
-    int     id = 0;
-    QString title;
-    QString description;
-    QString priority = "medium";  /* high, medium, low */
-    QString status   = "pending"; /* pending, in_progress, done */
-};
-
-/**
- * @brief Tool to list all todo items
- * @details The todo tools keep `.qsoc/todos.md` (and the `.qsoc/todos.hwm`
- *          id mark) in the workspace that @p fs names: the local project, or
- *          the remote workspace in remote mode.
- */
-class QSocToolTodoList : public QSocTool
-{
-    Q_OBJECT
-
 public:
-    explicit QSocToolTodoList(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
-    ~QSocToolTodoList() override;
-
-    QString getName() const override;
+    QString getName() const override { return operation_; }
     QString getDescription() const override;
     json    getParametersSchema() const override;
     QString execute(const json &arguments) override;
-    bool    isReadOnly() const override { return true; }
+    bool    isReadOnly() const override { return operation_ == "todo_list"; }
+
+    QSocTodoModel *model() const;
+
+protected:
+    QSocToolTodo(QObject *parent, QSocWorkspaceFs *fs, const QString &operation);
 
 private:
-    QSocWorkspaceFs *fs = nullptr;
-
-    QString formatTodoList(const QList<QSocTodoItem> &todos) const;
+    QSocWorkspaceFs *fs_;
+    QString          operation_;
 };
 
-/**
- * @brief Tool to add a new todo item
- */
-class QSocToolTodoAdd : public QSocTool
+class QSocToolTodoList : public QSocToolTodo
 {
     Q_OBJECT
-
 public:
-    explicit QSocToolTodoAdd(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
-    ~QSocToolTodoAdd() override;
-
-    QString getName() const override;
-    QString getDescription() const override;
-    json    getParametersSchema() const override;
-    QString execute(const json &arguments) override;
-
-private:
-    QSocWorkspaceFs *fs = nullptr;
+    explicit QSocToolTodoList(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr)
+        : QSocToolTodo(parent, fs, QStringLiteral("todo_list"))
+    {}
 };
 
-/**
- * @brief Tool to update a todo item's status
- */
-class QSocToolTodoUpdate : public QSocTool
+class QSocToolTodoAdd : public QSocToolTodo
 {
     Q_OBJECT
-
 public:
-    explicit QSocToolTodoUpdate(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
-    ~QSocToolTodoUpdate() override;
-
-    QString getName() const override;
-    QString getDescription() const override;
-    json    getParametersSchema() const override;
-    QString execute(const json &arguments) override;
-
-private:
-    QSocWorkspaceFs *fs = nullptr;
+    explicit QSocToolTodoAdd(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr)
+        : QSocToolTodo(parent, fs, QStringLiteral("todo_add"))
+    {}
 };
 
-/**
- * @brief Tool to delete a todo item
- */
-class QSocToolTodoDelete : public QSocTool
+class QSocToolTodoUpdate : public QSocToolTodo
 {
     Q_OBJECT
-
 public:
-    explicit QSocToolTodoDelete(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr);
-    ~QSocToolTodoDelete() override;
-
-    QString getName() const override;
-    QString getDescription() const override;
-    json    getParametersSchema() const override;
-    QString execute(const json &arguments) override;
-
-private:
-    QSocWorkspaceFs *fs = nullptr;
+    explicit QSocToolTodoUpdate(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr)
+        : QSocToolTodo(parent, fs, QStringLiteral("todo_update"))
+    {}
 };
 
-#endif // QSOCTOOLTODO_H
+class QSocToolTodoDelete : public QSocToolTodo
+{
+    Q_OBJECT
+public:
+    explicit QSocToolTodoDelete(QObject *parent = nullptr, QSocWorkspaceFs *fs = nullptr)
+        : QSocToolTodo(parent, fs, QStringLiteral("todo_delete"))
+    {}
+};
+
+#endif

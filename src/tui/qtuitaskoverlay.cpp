@@ -4,7 +4,9 @@
 #include "tui/qtuitaskoverlay.h"
 
 #include "common/qsoctasksource.h"
+#include "tui/qsocdiagram_p.h"
 #include "tui/qtuiansi.h"
+#include <QSet>
 
 #include <algorithm>
 #include <climits>
@@ -72,6 +74,85 @@ QString statusLabel(const QSocTask::Row &row)
                                                                          : statusLabel(row.status);
 }
 
+QString dependencyGraph(
+    const QList<QSocTaskRegistry::TaggedRow> &rows, int width, const QString &selected)
+{
+    using namespace QSocDiagram::Detail;
+    QList<QSocTask::Row> todos;
+    QString              problem;
+    for (const auto &entry : rows) {
+        if (entry.row.kind != QSocTask::Kind::Todo)
+            continue;
+        if (entry.row.id == "error")
+            problem = entry.row.summary;
+        else
+            todos.append(entry.row);
+    }
+    std::sort(todos.begin(), todos.end(), [](const auto &left, const auto &right) {
+        return left.id.toInt() < right.id.toInt();
+    });
+    QString text = QStringLiteral("Dependencies connect prerequisites to dependents.\n");
+    if (!problem.isEmpty())
+        text += problem + QLatin1Char('\n');
+    if (!todos.isEmpty() && !todos.first().dependencyCheck.isEmpty())
+        text += todos.first().dependencyCheck + QLatin1Char('\n');
+    if (todos.size() > nodeLimit)
+        text += QStringLiteral(
+            "Showing the selected task and nearby dependencies; use the list for all tasks.\n");
+    QSet<QString> included;
+    if (todos.size() <= nodeLimit) {
+        for (const auto &row : todos)
+            included.insert(row.id);
+    } else {
+        included.insert(selected);
+        for (const auto &row : todos) {
+            if (included.size() >= nodeLimit)
+                break;
+            if (row.id == selected || row.dependsOn.contains(selected))
+                included.insert(row.id);
+            if (row.id == selected)
+                for (const auto &id : row.dependsOn)
+                    if (included.size() < nodeLimit)
+                        included.insert(id);
+        }
+    }
+    QString fallback;
+    Graph   graph;
+    try {
+        for (const auto &row : todos) {
+            if (!included.contains(row.id))
+                continue;
+            const QString label      = QStringLiteral("%1#%2 %3 [%4]")
+                                           .arg(row.id == selected ? "* " : "")
+                                           .arg(row.id, plainText(row.label), statusLabel(row));
+            const int     index      = graph.node(row.id);
+            graph.nodes[index].label = QTuiText::truncate(label, labelLimit);
+            fallback += label + QStringLiteral("\n  Prerequisites: ")
+                        + (row.dependsOn.isEmpty() ? QStringLiteral("none")
+                                                   : row.dependsOn.join(QStringLiteral(", ")))
+                        + QLatin1Char('\n');
+        }
+        for (const auto &row : todos) {
+            if (!included.contains(row.id))
+                continue;
+            for (const auto &id : row.dependsOn)
+                if (included.contains(id))
+                    graph.edge({.from = graph.node(id), .to = graph.node(row.id)});
+        }
+        const auto result = drawGraph(graph, width);
+        if (result.valid()) {
+            for (const auto &line : result.rows) {
+                for (const auto &span : line)
+                    text += span.text;
+                text += QLatin1Char('\n');
+            }
+            return text;
+        }
+    } catch (const Failure &) {
+    }
+    return text + QStringLiteral("Dependency list (diagram does not fit):\n") + fallback;
+}
+
 } /* namespace */
 
 QTuiTaskOverlay::QTuiTaskOverlay(QObject *parent)
@@ -111,7 +192,9 @@ void QTuiTaskOverlay::open()
     if (registry_ == nullptr)
         return;
     refreshRows();
-    selected_ = 0;
+    selected_        = 0;
+    graphVisible_    = false;
+    detailFromGraph_ = false;
     detailSourceTag_.clear();
     detailId_.clear();
     detailContent_.clear();
@@ -225,6 +308,21 @@ bool QTuiTaskOverlay::handleKey(int key, bool ctrl)
             if (confirmed)
                 emit interruptConfirmed();
         }
+        return true;
+    }
+    if (key == Qt::Key_G) {
+        if (graphVisible_)
+            exitDetailToList();
+        else
+            enterGraph();
+        return true;
+    }
+    if (graphVisible_ && (key == Qt::Key_Return || key == Qt::Key_Enter)) {
+        graphVisible_    = false;
+        detailFromGraph_ = true;
+        detailView_.clear();
+        reloadDetailContent();
+        emit invalidated();
         return true;
     }
     if (key == Qt::Key_H && mode_ == Mode::List) {
@@ -378,8 +476,46 @@ void QTuiTaskOverlay::enterDetail()
     emit invalidated();
 }
 
+void QTuiTaskOverlay::enterGraph()
+{
+    auto chosen = cachedRows_.cend();
+    if (selected_ >= 0 && selected_ < cachedRows_.size()
+        && cachedRows_[selected_].row.kind == QSocTask::Kind::Todo
+        && cachedRows_[selected_].row.id != "error")
+        chosen = cachedRows_.cbegin() + selected_;
+    if (chosen == cachedRows_.cend())
+        chosen = std::find_if(cachedRows_.cbegin(), cachedRows_.cend(), [](const auto &row) {
+            return row.row.kind == QSocTask::Kind::Todo && row.row.id != "error";
+        });
+    if (chosen == cachedRows_.cend()) {
+        flashFooter(QStringLiteral("No todos in this workspace"));
+        return;
+    }
+    detailSourceTag_ = chosen->sourceTag;
+    detailId_        = chosen->row.id;
+    graphAtStart_    = true;
+    graphVisible_    = true;
+    detailFromGraph_ = false;
+    detailView_.clear();
+    mode_ = Mode::Detail;
+    reloadDetailContent();
+    detailView_.scrollUp(INT_MAX);
+    emit invalidated();
+}
+
 void QTuiTaskOverlay::exitDetailToList()
 {
+    if (detailFromGraph_ && !graphVisible_) {
+        detailFromGraph_ = false;
+        graphAtStart_    = true;
+        graphVisible_    = true;
+        reloadDetailContent();
+        detailView_.scrollUp(INT_MAX);
+        emit invalidated();
+        return;
+    }
+    graphVisible_    = false;
+    detailFromGraph_ = false;
     detailSourceTag_.clear();
     detailId_.clear();
     detailContent_.clear();
@@ -404,13 +540,38 @@ void QTuiTaskOverlay::reloadDetailContent()
         detailView_.clear(true);
         detailView_.appendPartial(plainText(detailContent_, true));
     });
-    const QString tail     = registry_->tailFor(detailSourceTag_, detailId_, kDetailTailBytes);
+    if (graphVisible_) {
+        detailContent_ = dependencyGraph(cachedRows_, qMax(1, terminalWidth_ - 4), detailId_);
+        return;
+    }
+    const QString tail = registry_->tailFor(detailSourceTag_, detailId_, kDetailTailBytes);
     if (detailSourceTag_ != source || detailId_ != id)
         return;
     if (tail.isEmpty() && !previous.isEmpty())
         return;
-    detailContent_      = tail.isEmpty() ? QStringLiteral("(no output yet)\n") : tail;
-    const auto estimate = registry_->estimateFor(detailSourceTag_, detailId_);
+    detailContent_ = tail.isEmpty() ? QStringLiteral("(no output yet)\n") : tail;
+    auto estimate  = registry_->estimateFor(detailSourceTag_, detailId_);
+    if (detailSourceTag_ == "todo") {
+        QString plan;
+        for (const auto &entry : cachedRows_)
+            if (entry.sourceTag == "todo" && entry.row.id == detailId_)
+                plan = entry.row.planId;
+        int executions = 0;
+        for (const auto &entry : cachedRows_) {
+            if (entry.row.kind == QSocTask::Kind::Todo || entry.row.todoId <= 0
+                || QString::number(entry.row.todoId) != detailId_ || entry.row.planId != plan)
+                continue;
+            ++executions;
+            detailContent_ += QStringLiteral("\nExecution %1: %2 | %3")
+                                  .arg(entry.row.id, statusLabel(entry.row), entry.row.label);
+            if (!QSocTask::isTerminal(entry.row.status) && !entry.estimate.summary.isEmpty()) {
+                estimate = entry.estimate;
+                estimate.summary += QStringLiteral(" (execution %1)").arg(entry.row.id);
+            }
+        }
+        if (executions)
+            detailContent_ += QStringLiteral("\n%1 linked execution records.\n").arg(executions);
+    }
     if (!estimatesVisible_ || estimate.summary.isEmpty())
         return;
     QStringList lines;
@@ -462,6 +623,10 @@ void QTuiTaskOverlay::killSelected()
         const auto &row = cachedRows_.at(selected_);
         tag             = row.sourceTag;
         id              = row.row.id;
+    }
+    if (tag == "todo") {
+        flashFooter(QStringLiteral("Stop the linked execution; todo items are kept"));
+        return;
     }
     if (id.isEmpty())
         return;
@@ -600,13 +765,21 @@ QString QTuiTaskOverlay::marker(const QSocTask::Row &row) const
     return QStringLiteral(".");
 }
 
-QString QTuiTaskOverlay::summary() const
+QString QTuiTaskOverlay::summary(bool includeTodos) const
 {
-    if (!summary_.isEmpty())
+    if (includeTodos && !summary_.isEmpty())
         return summary_;
     QMap<QString, int> counts;
-    for (const auto &entry : cachedRows_)
-        ++counts[statusLabel(entry.row)];
+    int                planTotal = 0, planDone = 0;
+    for (const auto &entry : cachedRows_) {
+        if (entry.row.kind == QSocTask::Kind::Todo) {
+            if (includeTodos && entry.row.id != "error") {
+                ++planTotal;
+                planDone += entry.row.status == QSocTask::Status::Completed;
+            }
+        } else
+            ++counts[statusLabel(entry.row)];
+    }
     QStringList parts;
     for (const auto &state :
          {QStringLiteral("failed"),
@@ -625,7 +798,11 @@ QString QTuiTaskOverlay::summary() const
                                                                    : state;
         parts << QStringLiteral("%1 %2").arg(count).arg(label);
     }
-    return parts.join(QStringLiteral(" | "));
+    const QString executions = parts.join(QStringLiteral(" | "));
+    if (!planTotal)
+        return executions;
+    const QString plan = QStringLiteral("Plan %1/%2 done").arg(planDone).arg(planTotal);
+    return counts.isEmpty() ? plan : plan + QStringLiteral(" | Executions: ") + executions;
 }
 
 int QTuiTaskOverlay::previewHeight(int width, int availableHeight) const
@@ -633,12 +810,15 @@ int QTuiTaskOverlay::previewHeight(int width, int availableHeight) const
     if (mode_ != Mode::Hidden || availableHeight < 8)
         return 0;
     const bool active = std::any_of(cachedRows_.cbegin(), cachedRows_.cend(), [](const auto &entry) {
-        return !QSocTask::isTerminal(entry.row.status);
+        return entry.row.kind != QSocTask::Kind::Todo && !QSocTask::isTerminal(entry.row.status);
     });
     if (!active)
         return 0;
     const int cols = qMax(1, width / 36);
-    const int rows = (static_cast<int>(cachedRows_.size()) + cols - 1) / cols;
+    const int count = std::count_if(cachedRows_.cbegin(), cachedRows_.cend(), [](const auto &entry) {
+        return entry.row.kind != QSocTask::Kind::Todo;
+    });
+    const int rows = (count + cols - 1) / cols;
     return qMin(qMax(4, availableHeight / 3), qMin(10, 2 + 2 * rows));
 }
 
@@ -649,25 +829,29 @@ void QTuiTaskOverlay::renderPreview(QTuiScreen &screen, int startY, int width, i
     screen.putString(
         0,
         startY,
-        fitToWidth(QStringLiteral("Tasks: ") + summary() + QStringLiteral(" | Ctrl+B"), width),
+        fitToWidth(QStringLiteral("Tasks: ") + summary(false) + QStringLiteral(" | Ctrl+B"), width),
         true);
     renderCells(screen, startY + 1, width, height - 2, true);
-    const int shown
-        = qMin(static_cast<int>(cachedRows_.size()), ((height - 2) / 2) * qMax(1, width / 36));
-    const QString footer
-        = QStringLiteral("Showing %1/%2 | Ctrl+B details").arg(shown).arg(cachedRows_.size());
+    const int count = std::count_if(cachedRows_.cbegin(), cachedRows_.cend(), [](const auto &entry) {
+        return entry.row.kind != QSocTask::Kind::Todo;
+    });
+    const int     shown  = qMin(count, ((height - 2) / 2) * qMax(1, width / 36));
+    const QString footer = QStringLiteral("Showing %1/%2 | Ctrl+B details").arg(shown).arg(count);
     screen.putString(0, startY + height - 1, fitToWidth(footer, width), false, true);
 }
 
 void QTuiTaskOverlay::renderCells(QTuiScreen &screen, int startY, int width, int height, bool preview)
 {
+    auto rows = cachedRows_;
+    if (preview)
+        rows.removeIf([](const auto &entry) { return entry.row.kind == QSocTask::Kind::Todo; });
     const int    cols      = preview ? qMax(1, width / 36) : columns(width + 2);
     const int    cellWidth = qMax(1, width / cols);
     const int    capacity  = qMax(1, height / 2) * cols;
     const int    first     = preview || selected_ < 0 ? 0 : (selected_ / capacity) * capacity;
     const qint64 now       = QDateTime::currentMSecsSinceEpoch();
-    for (int i = 0; i < capacity && first + i < cachedRows_.size(); ++i) {
-        const auto   &entry    = cachedRows_.at(first + i);
+    for (int i = 0; i < capacity && first + i < rows.size(); ++i) {
+        const auto   &entry    = rows.at(first + i);
         const auto   &row      = entry.row;
         const int     x        = (i % cols) * cellWidth + (preview ? 0 : 1);
         const int     y        = startY + (i / cols) * 2;
@@ -678,7 +862,7 @@ void QTuiTaskOverlay::renderCells(QTuiScreen &screen, int startY, int width, int
         const QString heading
             = QStringLiteral("[%1] %2/%3 %4").arg(marker(row), entry.sourceTag, row.id, row.label);
         screen.putString(x, y, fitToWidth(heading, cellWidth - 1), selected, false, selected, color);
-        QString detail = statusLabel(row);
+        QString detail = row.kind == QSocTask::Kind::Todo ? row.summary : statusLabel(row);
         if (row.startedAtMs > 0)
             detail += QStringLiteral(" | %1").arg(
                 QTuiText::formatDuration(qMax(qint64(0), now - row.startedAtMs) / 1000));
@@ -775,15 +959,15 @@ void QTuiTaskOverlay::renderList(QTuiScreen &screen, int startY, int width)
                 row.status == QSocTask::Status::Failed ? QTuiFgColor::Red : QTuiFgColor::Default);
         }
     }
-    const QString range  = QStringLiteral("%1-%2/%3 ")
-                               .arg(cachedRows_.isEmpty() ? 0 : first + 1)
-                               .arg(qMin(first + capacity, static_cast<int>(cachedRows_.size())))
-                               .arg(cachedRows_.size());
-    const QString footer = footerFlash_.isEmpty()
-                               ? range + agentKeys()
-                                     + QStringLiteral(
-                                         "PgUp/PgDn  h history  Enter detail  x stop  Esc back")
-                               : footerFlash_;
+    const QString range = QStringLiteral("%1-%2/%3 ")
+                              .arg(cachedRows_.isEmpty() ? 0 : first + 1)
+                              .arg(qMin(first + capacity, static_cast<int>(cachedRows_.size())))
+                              .arg(cachedRows_.size());
+    const QString footer
+        = footerFlash_.isEmpty()
+              ? range + agentKeys()
+                    + QStringLiteral("PgUp/PgDn  g graph  h history  Enter detail  x stop  Esc back")
+              : footerFlash_;
     screen.putString(1, startY + height - 2, fitToWidth(footer, innerW), false, true);
 }
 
@@ -792,9 +976,10 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
     const int height   = lineCount();
     const int contentH = height - 2;
     const int innerW   = width - 2;
-    QString   title    = QStringLiteral("%1 / %2").arg(detailSourceTag_, detailId_);
+    QString   title    = graphVisible_ ? QStringLiteral("Task dependencies | #%1").arg(detailId_)
+                                       : QStringLiteral("%1 / %2").arg(detailSourceTag_, detailId_);
     for (const auto &entry : cachedRows_) {
-        if (entry.sourceTag == detailSourceTag_ && entry.row.id == detailId_) {
+        if (!graphVisible_ && entry.sourceTag == detailSourceTag_ && entry.row.id == detailId_) {
             title += QStringLiteral(" | ") + statusLabel(entry.row) + QStringLiteral(" | ")
                      + entry.row.label;
             break;
@@ -810,12 +995,19 @@ void QTuiTaskOverlay::renderDetail(QTuiScreen &screen, int startY, int width)
     } else {
         QTuiScreen content(innerW, contentH - 1);
         detailView_.render(content, 0, contentH - 1, innerW);
+        if (graphVisible_ && graphAtStart_) {
+            detailView_.scrollUp(INT_MAX);
+            detailView_.render(content, 0, contentH - 1, innerW);
+            graphAtStart_ = false;
+        }
         for (int row = 0; row < content.height(); ++row)
             for (int col = 0; col < innerW; ++col)
                 screen.at(col + 1, startY + 1 + row) = content.at(col, row);
     }
     /* Footer */
-    const QString footer = footerFlash_.isEmpty()
+    const QString footer = graphVisible_
+                               ? QStringLiteral("PgUp/PgDn scroll  Enter task detail  g / Esc list")
+                           : footerFlash_.isEmpty()
                                    && QDateTime::currentMSecsSinceEpoch() > footerFlashUntil_
                                ? QStringLiteral("PgUp/PgDn scroll  End follow  %1  Esc back")
                                      .arg(

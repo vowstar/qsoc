@@ -25,6 +25,7 @@ enum class Kind {
     BackgroundBash, /* QSocToolShellBash::activeProcesses entry */
     SubAgent,       /* future: in-process or remote sub-agent */
     Monitor,        /* stdout-line monitor task */
+    Todo,
 };
 
 enum class Status {
@@ -78,20 +79,25 @@ inline bool isTerminal(Status status)
  */
 struct Row
 {
-    QString id;      /* stable; e.g. 8-hex for loop, "#N" for bash */
-    QString label;   /* short title for the cell */
-    QString summary; /* one-liner detail string */
-    Kind    kind;
-    Status  status;
-    qint64  startedAtMs; /* 0 = never started */
-    bool    canKill;
-    QString objective;
-    bool    waitingForPeer = false;
-    QString agentId;           /* sub-agent: mailbox identity of the child */
-    QString host;              /* sub-agent: `local` or the SSH target */
-    QString workspace;         /* sub-agent: workspace root */
-    bool    live      = false; /* sub-agent: accepts a message now */
-    bool    resumable = false; /* sub-agent: a message reaches it */
+    QString     id;      /* stable; e.g. 8-hex for loop, "#N" for bash */
+    QString     label;   /* short title for the cell */
+    QString     summary; /* one-liner detail string */
+    Kind        kind;
+    Status      status;
+    qint64      startedAtMs; /* 0 = never started */
+    bool        canKill;
+    QString     objective;
+    bool        waitingForPeer = false;
+    QString     agentId;           /* sub-agent: mailbox identity of the child */
+    QString     host;              /* sub-agent: `local` or the SSH target */
+    QString     workspace;         /* sub-agent: workspace root */
+    bool        live      = false; /* sub-agent: accepts a message now */
+    bool        resumable = false; /* sub-agent: a message reaches it */
+    QString     planId;
+    QString     priority;
+    QStringList dependsOn;
+    int         todoId = 0;
+    QString     dependencyCheck;
 };
 
 struct Estimate

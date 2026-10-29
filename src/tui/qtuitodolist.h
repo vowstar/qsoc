@@ -4,6 +4,7 @@
 #ifndef QTUITODOLIST_H
 #define QTUITODOLIST_H
 
+#include "common/qsoctasksource.h"
 #include "tui/qtuiwidget.h"
 
 #include <QElapsedTimer>
@@ -28,6 +29,7 @@ public:
     int  lineCount() const override;
     void render(QTuiScreen &screen, int startY, int width) override;
 
+    void            setPlanRows(const QList<QSocTask::Row> &rows);
     void            setItems(const QList<TodoItem> &items);
     QList<TodoItem> getItems() const { return items; }
     void            addItem(const TodoItem &item);
@@ -52,6 +54,7 @@ public:
 
 private:
     QList<TodoItem>          items;
+    QList<QSocTask::Row>     planRows_;
     int                      activeTodoId = -1;
     int                      animFrame    = 0;
     bool                     visible      = true;

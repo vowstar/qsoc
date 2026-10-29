@@ -144,6 +144,7 @@ public:
 
     void    setMailbox(QSocAgentMailbox *mailbox, const QString &identity);
     QString agentIdentity() const { return agentIdentity_; }
+    QString taskPlanId() const;
 
     /**
      * @brief Use the session id as the main agent's peer identity.

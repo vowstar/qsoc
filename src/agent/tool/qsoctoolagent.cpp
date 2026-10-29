@@ -20,9 +20,11 @@
 #include "agent/remote/qsocsshsession.h"
 #include "agent/tool/qsoctoolmemory.h"
 #include "agent/tool/qsoctoolskill.h"
+#include "agent/tool/qsoctooltodo.h"
 #include "common/qllmservice.h"
 #include "common/qsocinterrupt.h"
 #include "common/qsocprojectmanager.h"
+#include <limits>
 
 #include <memory>
 #include <utility>
@@ -434,6 +436,12 @@ json QSocToolAgent::getParametersSchema() const
            {{"type", "string"},
             {"description",
              "Full instructions the child agent will receive as its first user message."}}},
+          {"todo_id",
+           {{"type", "integer"},
+            {"minimum", 1},
+            {"description",
+             "Optional todo ID in your plan. Otherwise a single in-progress todo is linked "
+             "automatically."}}},
           {"run_in_background",
            {{"type", "boolean"},
             {"default", false},
@@ -750,6 +758,45 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     if (prompt.isEmpty()) {
         return QStringLiteral(R"({"status":"error","error":"prompt is required"})");
     }
+
+    int        linkedTodo = 0;
+    QString    linkedPlan;
+    QString    completion;
+    const auto requestedTodo = arguments.value("todo_id", json());
+    if (!requestedTodo.is_null()
+        && (!requestedTodo.is_number_integer() || requestedTodo <= 0
+            || requestedTodo > std::numeric_limits<int>::max()))
+        return QStringLiteral("Error: todo_id must be a positive integer");
+    if (parentAgent_ && parentAgent_->getToolRegistry()) {
+        auto *tool = dynamic_cast<QSocToolTodo *>(
+            parentAgent_->getToolRegistry()->getTool(QStringLiteral("todo_list")));
+        if (tool && tool->model()) {
+            QString    error;
+            const bool available = tool->model()->refresh(&error);
+            if (!available && !requestedTodo.is_null())
+                return QStringLiteral("Error: ") + error;
+            const auto    items = available ? tool->model()->items() : QList<QSocTodoItem>{};
+            const QString scope = parentAgent_->taskPlanId();
+            for (const auto &item : items) {
+                if (item.planId != scope && !item.planId.startsWith(scope + '/'))
+                    continue;
+                if (requestedTodo.is_null() ? item.status != "in_progress"
+                                            : item.id != requestedTodo.get<int>())
+                    continue;
+                if (linkedTodo && requestedTodo.is_null()) {
+                    linkedTodo = 0;
+                    linkedPlan.clear();
+                    completion.clear();
+                    break;
+                }
+                linkedTodo = item.id;
+                linkedPlan = item.planId;
+                completion = item.description;
+            }
+        }
+    }
+    if (!requestedTodo.is_null() && !linkedTodo)
+        return QStringLiteral("Error: todo_id must name a todo in your current plan");
 
     /* Forks inherit a captured identity and history, then rebuild binding rules. */
     const bool isFork = subagentType.isEmpty() || subagentType == QStringLiteral("fork");
@@ -1126,7 +1173,8 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
 
     const QString effectiveType = isFork ? QStringLiteral("fork") : subagentType;
     const QString label         = description.isEmpty() ? effectiveType : description;
-    const QString taskId        = taskSource_->registerRun(label, effectiveType, child, prompt);
+    const QString taskId
+        = taskSource_->registerRun(label, effectiveType, child, prompt, linkedTodo, linkedPlan);
     /* Stash isolation + worktree on the run so the meta sidecar
      * captures them; mirrors what the response JSON reports. */
     taskSource_->setIsolationMetadata(taskId, isolation, worktreePath);
@@ -1243,6 +1291,15 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
      * the prompt as a context block. Capped at 4 KB per skill so a
      * fat SKILL.md doesn't dominate the child's context window. */
     QString effectivePrompt = prompt;
+    if (linkedTodo)
+        effectivePrompt
+            += QStringLiteral(
+                   "\n\nAssigned todo #%1. Completion criteria: %2\nReport results, evidence and "
+                   "blockers to the parent, which updates the global plan.")
+                   .arg(linkedTodo)
+                   .arg(
+                       completion.isEmpty() ? QStringLiteral("the assigned task's requested result")
+                                            : completion);
     if (def != nullptr && !def->skills.isEmpty()) {
         if (auto *skillTool = dynamic_cast<QSocToolSkillFind *>(
                 effectiveRegistry->getTool(QStringLiteral("skill_find")))) {
@@ -1265,7 +1322,7 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
                 }
             }
             if (!prefix.isEmpty()) {
-                effectivePrompt = prefix + QStringLiteral("=== Task ===\n") + prompt;
+                effectivePrompt = prefix + QStringLiteral("=== Task ===\n") + effectivePrompt;
             }
         }
     }

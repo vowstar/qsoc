@@ -29,6 +29,11 @@ QString QSocRemoteWorkspaceFs::root() const
     return m_conn->workspace();
 }
 
+QString QSocRemoteWorkspaceFs::identity() const
+{
+    return m_conn->endpointIdentity() + QLatin1Char('\n') + root();
+}
+
 QString QSocRemoteWorkspaceFs::absolute(const QString &path, QString *error) const
 {
     if (!m_conn->isUsable() || m_conn->sftp() == nullptr || root().isEmpty()) {

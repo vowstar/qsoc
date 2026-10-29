@@ -52,7 +52,9 @@ public:
         const QString &label,
         const QString &subagentType,
         QSocAgent     *agent,
-        const QString &objective = {});
+        const QString &objective = {},
+        int            todoId    = 0,
+        const QString &planId    = {});
 
     /**
      * @brief Attach the launcher that actually starts a registered
@@ -299,6 +301,8 @@ public:
         QString historyFile; /* QSocSession jsonl of the child history */
         QString definition;  /* agent definition the child was built from */
         bool    legacy = false;
+        int     todoId = 0;
+        QString planId;
     };
 
     /**
@@ -352,6 +356,8 @@ private:
     struct RunState
     {
         bool                  waitingForPeer = false;
+        int                   todoId         = 0;
+        QString               planId;
         QString               objective;
         QString               id;
         QString               label;

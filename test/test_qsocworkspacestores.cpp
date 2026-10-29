@@ -7,6 +7,7 @@
 #include "agent/tool/qsoctooltodo.h"
 #include "common/qsocprojectmanager.h"
 #include "qsoc_test.h"
+#include "smt/qsocsmtservice.h"
 
 #include <nlohmann/json.hpp>
 
@@ -51,6 +52,11 @@ public:
 
     Result read(const QString &path, QByteArray *bytes, QString *error) override
     {
+        if (onRead) {
+            const auto callback = std::move(onRead);
+            onRead              = {};
+            callback();
+        }
         if (failing.contains(path)) {
             *error = QStringLiteral("link down");
             return Result::Failed;
@@ -89,8 +95,12 @@ public:
         return Result::Ok;
     }
 
-    bool write(const QString &path, const QByteArray &bytes, QString *) override
+    bool write(const QString &path, const QByteArray &bytes, QString *error) override
     {
+        if (failingWrites.contains(path)) {
+            *error = QStringLiteral("write refused");
+            return false;
+        }
         ++writes;
         files.insert(path, bytes);
         return true;
@@ -98,7 +108,9 @@ public:
 
     QHash<QString, QByteArray> files;
     QSet<QString>              failing;
+    QSet<QString>              failingWrites;
     int                        writes = 0;
+    std::function<void()>      onRead;
 };
 
 QString run(QSocTool &tool, const json &args)
@@ -181,6 +193,200 @@ private slots:
         QVERIFY(run(list, json::object()).startsWith(QStringLiteral("Error: link down")));
         QCOMPARE(fs.writes, 0);
         QCOMPARE(fs.files.value(QStringLiteral(".qsoc/todos.md")), QByteArray("- [ ] #7 kept\n"));
+    }
+
+    void smtChecksTheSameDependencyGraph_data()
+    {
+        QTest::addColumn<bool>("cycle");
+        QTest::newRow("diamond") << false;
+        QTest::newRow("cycle") << true;
+    }
+
+    void smtChecksTheSameDependencyGraph()
+    {
+        QFETCH(bool, cycle);
+        if (!QSocSmtService::supported())
+            QSKIP("SMT worker is unavailable");
+        FakeWorkspaceFs     fs;
+        QByteArray          content;
+        QList<QSocTodoItem> items;
+        for (int id = 1; id <= 4; ++id) {
+            QSocTodoItem item;
+            item.id    = id;
+            item.title = "task";
+            if (id == 2 || id == 3)
+                item.dependsOn = {1};
+            if (id == 4)
+                item.dependsOn = {2, 3};
+            if (id == 1 && cycle)
+                item.dependsOn = {4};
+            items.append(item);
+            json metadata = {{"depends_on", json::array()}};
+            for (int dependency : item.dependsOn)
+                metadata["depends_on"].push_back(dependency);
+            content += "- [ ] #" + QByteArray::number(id) + " task\n  <!-- qsoc-todo: "
+                       + QByteArray::fromStdString(metadata.dump()) + " -->\n";
+        }
+        fs.files.insert(QStringLiteral(".qsoc/todos.md"), content);
+        QString error;
+        QVERIFY(fs.todos()->refresh(&error));
+        QCOMPARE(QSocTodoModel::dependencyError(items).isEmpty(), !cycle);
+        const auto answer = QSocSmtService::solve(
+            {{"smtlib", fs.todos()->dependencySmt()}, {"timeout_ms", 1000}},
+            {},
+            QStringLiteral(QSOC_SMT_WORKER_PATH));
+        QCOMPARE(answer.value("execution").toString(), QStringLiteral("completed"));
+        QCOMPARE(
+            answer.value("solver_status").toString(),
+            cycle ? QStringLiteral("unsat") : QStringLiteral("sat"));
+    }
+
+    void prerequisitesMustFinishBeforeStartingOrCompleting()
+    {
+        FakeWorkspaceFs fs;
+        auto           *model = fs.todos();
+        QVERIFY(model->execute("todo_add", {{"title", "first"}}).startsWith("Added"));
+        QVERIFY(model->execute("todo_add", {{"title", "second"}, {"depends_on", {1}}})
+                    .startsWith("Added"));
+        for (const auto *status : {"in_progress", "done"})
+            QVERIFY(model->execute("todo_update", {{"id", 2}, {"status", status}})
+                        .contains("Finish prerequisite #1"));
+        QVERIFY(
+            model->execute("todo_update", {{"id", 1}, {"status", "done"}}).startsWith("Updated"));
+        QVERIFY(model->execute("todo_update", {{"id", 2}, {"status", "in_progress"}})
+                    .startsWith("Updated"));
+    }
+
+    void todoStateAndCriteriaSurviveReload()
+    {
+        FakeWorkspaceFs    fs;
+        QSocToolTodoAdd    add(nullptr, &fs);
+        QSocToolTodoUpdate update(nullptr, &fs);
+        QSocToolTodoList   list(nullptr, &fs);
+        QVERIFY(run(add, {{"title", "first"}, {"description", "check <input>\nthen verify"}})
+                    .startsWith("Added"));
+        QVERIFY(run(update, {{"id", 1}, {"status", "in_progress"}}).startsWith("Updated"));
+        QVERIFY(run(add, {{"title", "second"}, {"depends_on", {1}}}).startsWith("Added"));
+        const auto listed = run(list, json::object());
+        QVERIFY(listed.contains("[in_progress]"));
+        QCOMPARE(
+            fs.todos()->items().first().description, QStringLiteral("check <input>\nthen verify"));
+        QCOMPARE(fs.todos()->items().last().dependsOn, QList<int>{1});
+        fs.todos()->setScope({});
+        const auto rows = fs.todos()->listTasks();
+        QCOMPARE(rows.size(), 2);
+        QCOMPARE(rows.last().summary, QStringLiteral("Waiting for #1"));
+        QVERIFY(run(update, {{"id", 1}, {"status", "done"}}).startsWith("Updated"));
+        QCOMPARE(fs.todos()->listTasks().last().summary, QStringLiteral("Ready"));
+        QCOMPARE(fs.todos()->listTasks().last().status, QSocTask::Status::Pending);
+    }
+
+    void todoCyclesAndMissingDependenciesDoNotOverwrite()
+    {
+        FakeWorkspaceFs    fs;
+        QSocToolTodoAdd    add(nullptr, &fs);
+        QSocToolTodoUpdate update(nullptr, &fs);
+        QSocToolTodoDelete remove(nullptr, &fs);
+        QVERIFY(run(add, {{"title", "first"}}).startsWith("Added"));
+        QVERIFY(run(add, {{"title", "second"}, {"depends_on", {1}}}).startsWith("Added"));
+        const auto original = fs.files.value(QStringLiteral(".qsoc/todos.md"));
+        QVERIFY(run(update, {{"id", 1}, {"depends_on", {2}}}).contains("Dependency cycle:"));
+        QCOMPARE(fs.files.value(QStringLiteral(".qsoc/todos.md")), original);
+        QVERIFY(run(update, {{"id", 1}, {"depends_on", {1}}}).contains("Dependency cycle:"));
+        QVERIFY(run(update, {{"id", 2}, {"depends_on", {99}}}).contains("missing todo #99"));
+        QVERIFY(run(update, {{"id", 2}, {"depends_on", {1, 1}}}).contains("repeats dependency"));
+        QVERIFY(run(remove, {{"id", 1}}).contains("missing todo #1"));
+        QCOMPARE(fs.files.value(QStringLiteral(".qsoc/todos.md")), original);
+        QVERIFY(run(update, {{"id", 2}, {"depends_on", json::array()}}).startsWith("Updated"));
+        QVERIFY(run(remove, {{"id", 1}}).startsWith("Deleted"));
+    }
+
+    void importedCyclesRemainReadableAndCanBeRepaired()
+    {
+        FakeWorkspaceFs fs;
+        QByteArray      content;
+        for (int id = 1; id <= 4; ++id) {
+            const int dependency = id % 2 == 0 ? id - 1 : id + 1;
+            json      metadata   = {{"depends_on", {dependency}}};
+            if (id == 1)
+                metadata["depends_on"].push_back(3);
+            content += "- [ ] #" + QByteArray::number(id) + " task\n  <!-- qsoc-todo: "
+                       + QByteArray::fromStdString(metadata.dump()) + " -->\n";
+        }
+        fs.files.insert(QStringLiteral(".qsoc/todos.md"), content);
+        QSocToolTodoList   list(nullptr, &fs);
+        QSocToolTodoUpdate update(nullptr, &fs);
+        QVERIFY(run(list, json::object()).contains("task"));
+        fs.todos()->setScope({});
+        QCOMPARE(fs.todos()->listTasks().first().id, QStringLiteral("error"));
+        QVERIFY(fs.todos()->tailFor("error", 4096).contains("Dependency cycle:"));
+        QVERIFY(run(update, {{"id", 1}, {"depends_on", {3}}, {"status", "done"}})
+                    .contains("Finish prerequisite #3"));
+        QCOMPARE(fs.files.value(QStringLiteral(".qsoc/todos.md")), content);
+        QVERIFY(run(update, {{"id", 1}, {"depends_on", json::array()}}).startsWith("Updated"));
+        QVERIFY(fs.todos()->listTasks().first().summary.contains("Dependency cycle:"));
+        QVERIFY(run(update, {{"id", 3}, {"depends_on", json::array()}}).startsWith("Updated"));
+        QCOMPARE(fs.todos()->listTasks().size(), 4);
+        QVERIFY(!fs.todos()->listTasks().first().summary.contains("cycle"));
+    }
+
+    void plansStaySeparateAndChildrenCannotEditTheirParent()
+    {
+        FakeWorkspaceFs fs;
+        auto           *model = fs.todos();
+        QVERIFY(model->execute("todo_add", {{"title", "parent"}}, "session-a").startsWith("Added"));
+        QVERIFY(model->execute("todo_add", {{"title", "child"}}, "session-b").startsWith("Added"));
+        model->setScope("session-a");
+        QCOMPARE(model->listTasks().size(), 1);
+        QCOMPARE(model->listTasks().first().label, QStringLiteral("parent"));
+        QVERIFY(model->execute("todo_update", {{"id", 1}, {"status", "done"}}, "session-b", true)
+                    .contains("owning agent"));
+        QVERIFY(model->execute("todo_update", {{"id", 2}, {"depends_on", {1}}}, "session-b", true)
+                    .contains("missing todo"));
+        QCOMPARE(model->listTasks().first().status, QSocTask::Status::Pending);
+    }
+
+    void legacyTodosRemainReadableAndUnknownMetadataIsPreserved()
+    {
+        FakeWorkspaceFs fs;
+        fs.files.insert(QStringLiteral(".qsoc/todos.md"), "- [ ] legacy\n- [x] #1 stable\n");
+        QSocToolTodoList   list(nullptr, &fs);
+        QSocToolTodoUpdate update(nullptr, &fs);
+        QVERIFY(run(list, json::object()).contains("[x] 1. stable"));
+        QCOMPARE(fs.todos()->items().first().id, 2);
+        const json metadata = {{"future_field", true}};
+        const auto original = QByteArray("- [ ] #1 stable\n  <!-- qsoc-todo: ")
+                              + QByteArray::fromStdString(metadata.dump()) + " -->\n";
+        fs.files[QStringLiteral(".qsoc/todos.md")] = original;
+        QVERIFY(run(update, {{"id", 1}, {"status", "done"}}).contains("Unsupported todo metadata"));
+        QCOMPARE(fs.files.value(QStringLiteral(".qsoc/todos.md")), original);
+    }
+
+    void aliasesOfOneWorkspaceCannotOverwriteAConcurrentUpdate()
+    {
+        FakeWorkspaceFs first;
+        FakeWorkspaceFs second;
+        QSocToolTodoAdd addFirst(nullptr, &first);
+        QSocToolTodoAdd addSecond(nullptr, &second);
+        QString         nested;
+        first.onRead = [&] { nested = run(addSecond, {{"title", "nested"}}); };
+        QVERIFY(run(addFirst, {{"title", "first"}}).startsWith("Added"));
+        QVERIFY(nested.contains("storage is busy"));
+        QCOMPARE(second.writes, 0);
+        QVERIFY(run(addSecond, {{"title", "later"}}).startsWith("Added"));
+    }
+
+    void failedTodoWriteKeepsThePreviousPlan()
+    {
+        FakeWorkspaceFs    fs;
+        QSocToolTodoAdd    add(nullptr, &fs);
+        QSocToolTodoUpdate update(nullptr, &fs);
+        QVERIFY(run(add, {{"title", "kept"}}).startsWith("Added"));
+        const auto original = fs.files.value(QStringLiteral(".qsoc/todos.md"));
+        fs.failingWrites.insert(QStringLiteral(".qsoc/todos.md"));
+        QVERIFY(run(update, {{"id", 1}, {"status", "done"}}).contains("write refused"));
+        QCOMPARE(fs.todos()->items().first().status, QStringLiteral("pending"));
+        QCOMPARE(fs.files.value(QStringLiteral(".qsoc/todos.md")), original);
     }
 
     void workspaceSkillsLayerOverTheLocalProject()

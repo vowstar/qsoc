@@ -612,8 +612,13 @@ private slots:
         QSocSubAgentTaskSource src;
         src.setTranscriptDir(tmp.path());
 
-        const QString done
-            = src.registerRun(QStringLiteral("done-x"), QStringLiteral("explore"), makeAgent());
+        const QString done = src.registerRun(
+            QStringLiteral("done-x"),
+            QStringLiteral("explore"),
+            makeAgent(),
+            {},
+            7,
+            QStringLiteral("plan"));
         src.markCompleted(done, QStringLiteral("PASSED"));
         const QString fail
             = src.registerRun(QStringLiteral("flaky-y"), QStringLiteral("verification"), makeAgent());
@@ -628,6 +633,8 @@ private slots:
         for (const auto &run : runs) {
             if (run.id == done && run.status == QStringLiteral("completed")) {
                 sawDone = true;
+                QCOMPARE(run.todoId, 7);
+                QCOMPARE(run.planId, QStringLiteral("plan"));
             }
             if (run.id == fail && run.status == QStringLiteral("failed")) {
                 sawFail = true;

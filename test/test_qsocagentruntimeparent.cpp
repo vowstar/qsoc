@@ -165,6 +165,26 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void messagingToolsUseTheRegisteredRoot()
+    {
+        auto runtime = makeRuntime();
+        QVERIFY(runtime->openSession());
+        auto *registry = runtime->localToolRegistry();
+        for (const auto *name : {"agent_list", "wait_agent"}) {
+            const json arguments = QString::fromLatin1(name) == "wait_agent"
+                                       ? json{{"timeout_ms", 0}}
+                                       : json::object();
+            const auto result    = json::parse(
+                registry->executeTool(QString::fromLatin1(name), arguments, runtime->agent())
+                    .toStdString());
+            QVERIFY2(!result.contains("error"), result.dump().c_str());
+        }
+        QVERIFY(runtime->clearSession());
+        const auto result = json::parse(
+            registry->executeTool("agent_list", json::object(), runtime->agent()).toStdString());
+        QVERIFY2(!result.contains("error"), result.dump().c_str());
+    }
+
     void initTestCase()
     {
         qRegisterMetaType<QSocAgentRuntimeEvent>("QSocAgentRuntimeEvent");

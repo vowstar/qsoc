@@ -119,14 +119,15 @@ struct QSocAgentRuntime::Private
     QSocGenerateManager *generateManager = nullptr;
 
     QSocAgentConfig                      agentConfig;
-    QSocAgent                           *agent              = nullptr;
-    QSocToolRegistry                    *toolRegistry       = nullptr;
-    QSocLoopScheduler                   *loopScheduler      = nullptr;
-    QSocMemoryManager                   *memoryManager      = nullptr;
-    QSocHookManager                     *hookManager        = nullptr;
-    QSocHostCatalog                     *hostCatalog        = nullptr;
-    QSocGoalCatalog                     *goalCatalog        = nullptr;
-    QSocTaskRegistry                    *taskRegistry       = nullptr;
+    QSocAgent                           *agent         = nullptr;
+    QSocToolRegistry                    *toolRegistry  = nullptr;
+    QSocLoopScheduler                   *loopScheduler = nullptr;
+    QSocMemoryManager                   *memoryManager = nullptr;
+    QSocHookManager                     *hookManager   = nullptr;
+    QSocHostCatalog                     *hostCatalog   = nullptr;
+    QSocGoalCatalog                     *goalCatalog   = nullptr;
+    QSocTaskRegistry                    *taskRegistry  = nullptr;
+    QPointer<QSocTodoModel>              todoModel;
     QSocTaskEventQueue                  *taskEventQueue     = nullptr;
     QSocSubAgentTaskSource              *subAgentTaskSource = nullptr;
     QSocToolAgent                       *agentTool          = nullptr;

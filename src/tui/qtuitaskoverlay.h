@@ -103,6 +103,9 @@ private:
     QString                            detailSourceTag_;
     QString                            detailId_;
     QString                            detailContent_;
+    bool                               graphAtStart_    = false;
+    bool                               graphVisible_    = false;
+    bool                               detailFromGraph_ = false;
     QTuiScrollView                     detailView_;
     bool                               historyVisible_ = false;
     QString                            footerFlash_;
@@ -122,6 +125,7 @@ private:
     int     pageCapacity() const;
     void    clampSelection();
     void    enterDetail();
+    void    enterGraph();
     void    exitDetailToList();
     void    killSelected();
     bool    actOnAgent(int key);
@@ -129,7 +133,7 @@ private:
     void    reloadDetailContent();
     void    flashFooter(const QString &message);
     int     columns(int width) const;
-    QString summary() const;
+    QString summary(bool includeTodos = true) const;
     QString marker(const QSocTask::Row &row) const;
     void    renderCells(QTuiScreen &screen, int startY, int width, int height, bool preview);
 

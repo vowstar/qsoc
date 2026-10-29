@@ -59,7 +59,7 @@ QList<QSocTaskRegistry::TaggedRow> QSocTaskRegistry::listAll() const
             out.append({tag, row, estimateFor(tag, row.id)});
         }
     }
-    std::sort(out.begin(), out.end(), [](const TaggedRow &a, const TaggedRow &b) {
+    std::stable_sort(out.begin(), out.end(), [](const TaggedRow &a, const TaggedRow &b) {
         const int ra = statusRank(a.row.status);
         const int rb = statusRank(b.row.status);
         if (ra != rb)
@@ -74,7 +74,7 @@ int QSocTaskRegistry::activeCount() const
     int total = 0;
     for (auto *src : sources_) {
         for (const auto &row : src->listTasks()) {
-            if (!QSocTask::isTerminal(row.status))
+            if (row.kind != QSocTask::Kind::Todo && !QSocTask::isTerminal(row.status))
                 ++total;
         }
     }

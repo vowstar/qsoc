@@ -28,6 +28,7 @@
 #include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctaskeventqueue.h"
 #include "agent/qsoctaskforecast.h"
+#include "agent/qsoctodomodel.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsochostprofile.h"
@@ -424,6 +425,24 @@ QSocFileHistory *QSocAgentRuntime::fileHistory() const
     return d->currentFileHistory.get();
 }
 
+QSocTodoModel *QSocAgentRuntime::refreshTodos(bool force)
+{
+    auto *fs = isRemote() ? d->remoteConn->workspaceFs() : d->localFs.get();
+    if (!fs || !d->taskRegistry)
+        return nullptr;
+    auto *model = fs->todos();
+    if (d->todoModel != model) {
+        if (d->todoModel)
+            d->todoModel->setScope({}, false);
+        d->todoModel = model;
+        d->taskRegistry->registerSource(model);
+    }
+    model->setScope(d->agent ? d->agent->taskPlanId() : sessionId());
+    QString error;
+    model->refresh(&error, force);
+    return model;
+}
+
 QString QSocAgentRuntime::sessionId() const
 {
     return d->currentSession ? d->currentSession->id() : QString();
@@ -520,6 +539,11 @@ void QSocAgentRuntime::assembleInfrastructure(const QSocAgentRuntimeOptions &opt
         spawnTool->setParentAgent(d->agent);
     }
     d->subAgentTaskSource->enableMessaging(d->agent);
+    for (const auto *name :
+         {"agent_list", "agent_inbox", "wait_agent", "followup_task", "interrupt_agent"}) {
+        d->toolRegistry->registerTool(new QSocToolAgentMessage(
+            this, d->subAgentTaskSource->mailbox(), QString::fromLatin1(name)));
+    }
     d->agent->setRequestBoundaryHandler([] { QSocInterrupt::clearRequest(); });
     d->agent->setMemoryManager(d->memoryManager);
     d->agent->setLoopScheduler(d->loopScheduler);
@@ -979,11 +1003,6 @@ void QSocAgentRuntime::registerTools()
     d->toolRegistry->registerTool(agentStatusTool);
     auto *sendMessageTool = new QSocToolSendMessage(this, d->subAgentTaskSource);
     d->toolRegistry->registerTool(sendMessageTool);
-    for (const auto *name :
-         {"agent_list", "agent_inbox", "wait_agent", "followup_task", "interrupt_agent"}) {
-        d->toolRegistry->registerTool(new QSocToolAgentMessage(
-            this, d->subAgentTaskSource->mailbox(), QString::fromLatin1(name)));
-    }
 
     d->toolRegistry->registerTool(new QSocToolHostRegister(this, d->hostCatalog));
     d->toolRegistry->registerTool(new QSocToolHostUpdate(this, d->hostCatalog));

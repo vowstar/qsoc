@@ -7,6 +7,8 @@
 
 int QTuiTodoList::lineCount() const
 {
+    if (visible && !planRows_.isEmpty())
+        return 2;
     if (!visible || items.isEmpty()) {
         return 0;
     }
@@ -15,6 +17,49 @@ int QTuiTodoList::lineCount() const
 
 void QTuiTodoList::render(QTuiScreen &screen, int startY, int width)
 {
+    if (!planRows_.isEmpty()) {
+        int     total = 0, done = 0;
+        QString current, problem;
+        for (const auto &row : planRows_) {
+            if (row.id == "error") {
+                problem = row.summary;
+                continue;
+            }
+            ++total;
+            if (row.status == QSocTask::Status::Completed)
+                ++done;
+            if (current.isEmpty() && row.status == QSocTask::Status::Running)
+                current = row.label + QStringLiteral(" | ") + row.summary;
+        }
+        const QString summary = total
+                                    ? QStringLiteral("Plan: %1/%2 items done").arg(done).arg(total)
+                                    : QStringLiteral("Plan needs attention");
+        screen.putString(
+            0,
+            startY,
+            QTuiText::truncate(summary, width),
+            false,
+            false,
+            false,
+            problem.isEmpty() ? QTuiFgColor::Green : QTuiFgColor::Yellow);
+        const QString detail
+            = !problem.isEmpty() ? problem
+              : current.isEmpty()
+                  ? (done == total
+                         ? QStringLiteral("All listed items done | Ctrl+B details")
+                         : QStringLiteral(
+                               "Ctrl+B tasks | Ready and waiting items remain in the plan"))
+                  : current;
+        screen.putString(
+            0,
+            startY + 1,
+            QTuiText::truncate(detail, width),
+            false,
+            true,
+            false,
+            problem.isEmpty() ? QTuiFgColor::Default : QTuiFgColor::Red);
+        return;
+    }
     /* Build display list: active first, then in_progress, then pending, then done.
      * Within each group, most recent (highest index) first. */
     QList<int> displayOrder;
@@ -63,6 +108,20 @@ void QTuiTodoList::render(QTuiScreen &screen, int startY, int width)
         screen.putString(0, startY + row, line.left(width));
         row++;
     }
+}
+
+void QTuiTodoList::setPlanRows(const QList<QSocTask::Row> &rows)
+{
+    planRows_.clear();
+    bool planned = false;
+    for (const auto &row : rows) {
+        if (row.kind != QSocTask::Kind::Todo)
+            continue;
+        planRows_.append(row);
+        planned |= !row.planId.isEmpty() || row.id == "error";
+    }
+    if (!planned)
+        planRows_.clear();
 }
 
 void QTuiTodoList::setItems(const QList<TodoItem> &items)
@@ -129,6 +188,7 @@ void QTuiTodoList::clearDone()
 void QTuiTodoList::clearAll()
 {
     items.clear();
+    planRows_.clear();
     activeTodoId = -1;
 }
 

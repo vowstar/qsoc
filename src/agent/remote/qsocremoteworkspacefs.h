@@ -22,6 +22,7 @@ public:
     explicit QSocRemoteWorkspaceFs(QSocRemoteConnection *conn);
 
     QString root() const override;
+    QString identity() const override;
     Result  read(const QString &path, QByteArray *bytes, QString *error) override;
     Result  list(const QString &path, QList<Entry> *entries, QString *error) override;
     Result  stat(const QString &path, Entry *entry, QString *error) override;

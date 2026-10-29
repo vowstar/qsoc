@@ -1802,6 +1802,26 @@ prompt with the count and the most recent activity. *Down* on the
 prompt's first row parks focus on the pill; *Enter* opens the overlay;
 *Up* returns to the prompt. *Ctrl+B* opens the overlay from anywhere.
 
+=== Todo Plans
+
+The four `todo_*` tools keep their names and existing arguments. New todos belong to the calling agent's session or goal. `todo_add` accepts optional `description` completion criteria, `depends_on` IDs, and a `plan_id` name. `todo_list(plan_id: "current")` selects the current plan. Existing files without plan metadata remain ordinary workspace todos. Older versions read the checkbox rows but do not preserve plan metadata when rewriting them.
+
+`todo_update` changes status, criteria, or dependencies. A task's prerequisites must be done before it starts or completes. Deleting a referenced task requires removing its incoming dependencies first. Invalid dependency edits leave the saved list unchanged.
+
+Imported cyclic graphs stay readable and show the cycle. Remove dependency edges to repair them, including one cycle at a time. A failed read or unsupported metadata never becomes an empty list that a later update overwrites.
+
+The todo area shows the current plan's completed-item count and active task. This count measures listed items, not elapsed time or overall goal completion. Completed items remain in the plan after temporary display rows expire. *Ctrl+T* hides or shows this area.
+
+*Ctrl+B* opens the existing task panel. Press `g` to view todo dependencies, then Enter for the selected todo's details. Esc returns through the graph and list. A narrow or large graph falls back to a dependency list or nearby tasks. The list still contains the full plan. `x` stops executions and does not delete todos.
+
+If the terminal leaves no space for the panel, enlarge it or press Esc to return.
+
+The dependency graph receives an asynchronous SMT audit through the existing local worker service. The result applies only to the checked graph. Unavailable, timed-out, and unknown results remain unverified. This audit does not schedule work or mark a todo done.
+
+The `agent` tool accepts an optional `todo_id`. With exactly one in-progress todo, it associates the execution automatically. Follow-ups retain that association and receive new execution IDs. A child's completion does not complete the todo. Its parent checks the result and updates the plan. Child agents cannot edit another agent's plan.
+
+A todo detail can show an associated execution's estimate. It does not estimate completion of the whole plan.
+
 === Overlay
 <agent-tasks-overlay>
 
@@ -1828,9 +1848,10 @@ disappears, select another row before requesting a stop.
     [`Home`/`End`], [Go to the first or last task or output line],
     [`h` in the list], [Show or hide stored, finished sub-agent runs],
     [`v`], [Switch grid and table],
+    [`g`], [View todo dependencies or return to the list],
     [`m`], [Toggle task animation],
     [`e`], [Show or hide estimates],
-    [`r`], [Refresh estimates],
+    [`r`], [Refresh task data],
     [`p` in details], [Show provisional numeric ranges],
     [`Enter`], [Open the task's detail tail],
     [`f`], [View the selected sub-agent (@agent-subagents-talk)],

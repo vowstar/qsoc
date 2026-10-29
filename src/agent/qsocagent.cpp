@@ -2527,6 +2527,16 @@ void QSocAgent::setMemoryManager(QSocMemoryManager *manager)
     memoryManager = manager;
 }
 
+QString QSocAgent::taskPlanId() const
+{
+    if (!agentConfig.isSubAgent && goalCatalog) {
+        const auto goal = goalCatalog->current();
+        if (goal)
+            return agentIdentity_ + QLatin1Char('/') + goal->id;
+    }
+    return agentIdentity_;
+}
+
 void QSocAgent::setGoalCatalog(QSocGoalCatalog *catalog)
 {
     goalCatalog = catalog;
