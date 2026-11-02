@@ -491,6 +491,40 @@ bool QAgentInputMonitor::findAtomicSpanAtCursor(bool forward, int &outStart, int
     return false;
 }
 
+namespace {
+
+/* First body byte of an APC graphics, DCS, or OSC reply after its introducer. */
+bool isTerminalReplyStart(unsigned char intro, unsigned char first)
+{
+    const bool digit = first >= '0' && first <= '9';
+    return (intro == '_' && first == 'G')
+           || (intro == 'P' && (first == '>' || first == '+' || digit)) || (intro == ']' && digit);
+}
+
+} // namespace
+
+void QAgentInputMonitor::consumeTerminalReply(unsigned char byte, bool *reprocess)
+{
+    constexpr qsizetype maxReplyBytes = 64 * 1024;
+    if (terminalReplyEsc) {
+        terminalReplyEsc = false;
+        inTerminalReply  = false;
+        if (byte != '\\') {
+            /* An unterminated reply ended here: this ESC opens a new sequence. */
+            inEscSeq = true;
+            escBuffer.clear();
+            escBuffer.append('\x1b');
+            *reprocess = true;
+        }
+        return;
+    }
+    if (byte == 0x1B) {
+        terminalReplyEsc = true;
+    } else if (byte == 0x07 || ++terminalReplyBytes > maxReplyBytes) {
+        inTerminalReply = false;
+    }
+}
+
 void QAgentInputMonitor::resetEscBuffer()
 {
     escBuffer.clear();
@@ -826,6 +860,14 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             continue;
         }
 
+        if (inTerminalReply) {
+            bool reprocess = false;
+            consumeTerminalReply(byte, &reprocess);
+            if (reprocess)
+                i--;
+            continue;
+        }
+
         /* Continue accumulating ESC sequence */
         if (inEscSeq) {
             /* Edge case: two ESC bytes back-to-back in one read() burst. The
@@ -838,6 +880,16 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
                 emitBareEsc(true);
                 escBuffer.clear();
                 escBuffer.append(static_cast<char>(byte));
+                continue;
+            }
+            /* A terminal reply arrives as one burst: Alt+P, Alt+], and Alt+_
+             * end the burst after their second byte, so they stay keys. */
+            if (escBuffer.size() == 1 && !inBracketedPaste && i + 1 < len
+                && isTerminalReplyStart(byte, static_cast<unsigned char>(data[i + 1]))) {
+                resetEscBuffer();
+                inTerminalReply    = true;
+                terminalReplyEsc   = false;
+                terminalReplyBytes = 0;
                 continue;
             }
             escBuffer.append(static_cast<char>(byte));
@@ -1115,6 +1167,15 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             insertAtCursor(QString(QChar(byte)));
             continue;
         }
+    }
+
+    /* A reply that never reaches its terminator must not swallow the keyboard. */
+    if (inTerminalReply) {
+        const quint64 serial = ++terminalReplySerial;
+        QTimer::singleShot(200, this, [this, serial]() {
+            if (serial == terminalReplySerial)
+                inTerminalReply = false;
+        });
     }
 
     /* After processing all bytes: if we're in an ESC sequence with only the

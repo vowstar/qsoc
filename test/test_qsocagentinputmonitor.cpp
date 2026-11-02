@@ -361,6 +361,76 @@ private slots:
         QVERIFY(!monitor.isActive());
     }
 
+    void lateTerminalRepliesAreNotKeys_data()
+    {
+        QTest::addColumn<QByteArray>("reply");
+        QTest::newRow("kitty") << QByteArray("\033_Gi=31;OK\033\\");
+        QTest::newRow("xtversion") << QByteArray("\033P>|terminal 1.0\033\\");
+        QTest::newRow("osc-bel") << QByteArray("\033]11;rgb:0000/0000/0000\a");
+        QTest::newRow("osc-st") << QByteArray("\033]11;rgb:ffff/ffff/ffff\033\\");
+        QTest::newRow("csi") << QByteArray("\033[6;42;19t");
+        QTest::newRow("da1") << QByteArray("\033[?62;22;52c");
+    }
+
+    void lateTerminalRepliesAreNotKeys()
+    {
+        QFETCH(QByteArray, reply);
+        QAgentInputMonitor monitor;
+        QSignalSpy         escaped(&monitor, &QAgentInputMonitor::escPressed);
+        QString            text;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&text](const QString &value) {
+            text = value;
+        });
+        monitor.processBytes(reply.constData(), reply.size());
+        monitor.processBytes("x", 1);
+        QCOMPARE(text, QStringLiteral("x"));
+        QCOMPARE(escaped.count(), 0);
+    }
+
+    void splitTerminalReplyKeepsItsBody()
+    {
+        QAgentInputMonitor monitor;
+        QString            text;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&text](const QString &value) {
+            text = value;
+        });
+        monitor.processBytes("\033_Gi=31;", 8);
+        monitor.processBytes("OK\033", 3);
+        monitor.processBytes("\\", 1);
+        monitor.processBytes("y", 1);
+        QCOMPARE(text, QStringLiteral("y"));
+    }
+
+    void altKeysSharingReplyPrefixesStayKeys()
+    {
+        for (const QByteArray &key :
+             {QByteArray("\033_"), QByteArray("\033P"), QByteArray("\033]")}) {
+            QAgentInputMonitor monitor;
+            QSignalSpy         escaped(&monitor, &QAgentInputMonitor::escPressed);
+            QString            text;
+            connect(&monitor, &QAgentInputMonitor::inputChanged, [&text](const QString &value) {
+                text = value;
+            });
+            monitor.processBytes(key.constData(), key.size());
+            monitor.processBytes("z", 1);
+            QCOMPARE(escaped.count(), 1);
+            QCOMPARE(text, QStringLiteral("z"));
+        }
+    }
+
+    void unterminatedReplyReleasesTheKeyboard()
+    {
+        QAgentInputMonitor monitor;
+        QString            text;
+        connect(&monitor, &QAgentInputMonitor::inputChanged, [&text](const QString &value) {
+            text = value;
+        });
+        monitor.processBytes("\033_Gi=31;OK", 10);
+        QTest::qWait(1000);
+        monitor.processBytes("q", 1);
+        QCOMPARE(text, QStringLiteral("q"));
+    }
+
     /* Input buffering byte-level tests via processBytes() */
 
     void testAsciiInput()

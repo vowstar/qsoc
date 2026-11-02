@@ -291,12 +291,17 @@ private:
     QElapsedTimer doubleEscTimer;
     bool          doubleEscTimerValid = false;
     bool          inEscSeq            = false;
+    bool          inTerminalReply     = false; /* Inside a late APC, DCS, or OSC reply */
+    bool          terminalReplyEsc    = false; /* Reply body just saw ESC, expecting ST */
+    qsizetype     terminalReplyBytes  = 0;
+    quint64       terminalReplySerial = 0;
     bool          inBracketedPaste    = false; /* True while inside \033[200~ ... \033[201~ */
     bool          submitBlocked       = false; /* Enter/Tab emit submitBlockedKey instead */
     bool          inCtrlXChord        = false; /* True after Ctrl+X, waiting for second key */
     bool          focused_            = true;  /* Terminal focus (DECSET 1004); unknown=focused */
 
     void processEscSequence();
+    void consumeTerminalReply(unsigned char byte, bool *reprocess);
 
     /**
      * @brief Emit escPressed() and update the double-Esc detection state.
