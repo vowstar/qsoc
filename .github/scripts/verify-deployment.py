@@ -117,6 +117,13 @@ def main():
                       flush=True)
                 raise
             print((version.stdout + version.stderr).decode(errors="replace"), flush=True)
+        figure = subprocess.run(
+            [str(entry or directory / ("qsoc" + suffix)), "--svg-raster", "dark", "16"],
+            cwd=working, env=environment, timeout=30, capture_output=True,
+            input=b'<svg viewBox="0 0 40 20"><text y="15" font-size="14">qsoc</text></svg>')
+        if figure.returncode != 0 or not figure.stdout.startswith(b"\x89PNG"):
+            print(figure.stderr.decode(errors="replace"), flush=True)
+            raise RuntimeError("The package cannot draw SVG figures")
         resource_probe = subprocess.run(
             [str(entry or directory / ("qsoc" + suffix)), "agent", "--resources"],
             cwd=working, env=environment, timeout=15,

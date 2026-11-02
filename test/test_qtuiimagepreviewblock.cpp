@@ -24,6 +24,9 @@ void clearGraphicsEnv()
     qunsetenv("WEZTERM_EXECUTABLE");
     qunsetenv("KONSOLE_VERSION");
     qunsetenv("TERM");
+    qunsetenv("COLORTERM");
+    qunsetenv("LC_TERMINAL");
+    qunsetenv("QSOC_IMAGE_PROTOCOL");
     qunsetenv("TERM_PROGRAM");
     qunsetenv("TMUX");
     qunsetenv("STY");
@@ -108,14 +111,23 @@ private slots:
     void kittyWindowIdSelectsKitty();
     void ghosttyResourcesDirSelectsKitty();
     void ghosttyTermProgramSelectsKitty();
-    void wezTermExecutableSelectsKitty();
-    void wezTermProgramSelectsKitty();
+    void wezTermExecutableSelectsITerm2();
+    void wezTermProgramSelectsITerm2();
     void rioTermProgramSelectsKitty();
     void konsoleVersionSelectsKitty();
     void xtermKittySelectsKitty();
     void xtermGhosttySelectsKitty();
     void itermSelectsITerm2();
-    void vscodeSelectsITerm2();
+    void vscodeUsesCellPreview();
+    void tmuxKittyUsesPlaceholders();
+    void sixelPlacesWholeImagesOnly();
+    void savedFileBecomesALink();
+    void controlCharactersNeverReachTheScreen();
+    void placeholdersFollowCellSizeChanges();
+    void cellsUseTrueColorWhenAdvertised();
+    void cellsFallBackToPalette();
+    void transparentPixelsKeepTerminalBackground();
+    void iTerm2ClippedImageShowsCells();
     void minttySelectsITerm2();
     void termProgramCaseInsensitive();
 
@@ -153,8 +165,8 @@ private slots:
     void kittyPlacementContainsSuppressAndNoMove();
 
     /* Multiplexer / opt-out gating */
-    void tmuxSuppressesGraphicsAndReservesNoCells();
-    void screenSuppressesGraphicsAndReservesNoCells();
+    void tmuxPaintsCellsInsteadOfGraphics();
+    void screenPaintsCellsInsteadOfGraphics();
     void optOutEnvSuppressesGraphics();
     void optOutEmptyValueDoesNotSuppress();
 
@@ -252,20 +264,20 @@ void Test::ghosttyTermProgramSelectsKitty()
     QVERIFY(block.toAnsi(60).contains(QLatin1String(kKittyEscapePrefix)));
 }
 
-void Test::wezTermExecutableSelectsKitty()
+void Test::wezTermExecutableSelectsITerm2()
 {
     qputenv("WEZTERM_EXECUTABLE", "/usr/bin/wezterm");
     QTuiImagePreviewBlock block = makePngBlock();
-    QVERIFY(block.toAnsi(60).contains(QLatin1String(kKittyEscapePrefix)));
+    QVERIFY(block.toAnsi(60).contains(QLatin1String(kITerm2EscapePrefix)));
 }
 
-void Test::wezTermProgramSelectsKitty()
+void Test::wezTermProgramSelectsITerm2()
 {
     qputenv("TERM_PROGRAM", "WezTerm");
     QTuiImagePreviewBlock block = makePngBlock();
     const QString         out   = block.toAnsi(60);
-    QVERIFY(out.contains(QLatin1String(kKittyEscapePrefix)));
-    QVERIFY(!out.contains(QLatin1String(kITerm2EscapePrefix)));
+    QVERIFY(out.contains(QLatin1String(kITerm2EscapePrefix)));
+    QVERIFY(!out.contains(QLatin1String(kKittyEscapePrefix)));
 }
 
 void Test::rioTermProgramSelectsKitty()
@@ -305,11 +317,162 @@ void Test::itermSelectsITerm2()
     QVERIFY(!out.contains(QLatin1String(kKittyEscapePrefix)));
 }
 
-void Test::vscodeSelectsITerm2()
+void Test::vscodeUsesCellPreview()
 {
+    qputenv("TERM", "xterm-256color");
     qputenv("TERM_PROGRAM", "vscode");
     QTuiImagePreviewBlock block = makePngBlock();
-    QVERIFY(block.toAnsi(60).contains(QLatin1String(kITerm2EscapePrefix)));
+    const QString         out   = block.toAnsi(60);
+    QVERIFY(!out.contains(QLatin1String(kITerm2EscapePrefix)));
+    QVERIFY(out.contains(QChar(0x2580)));
+}
+
+void Test::cellsUseTrueColorWhenAdvertised()
+{
+    qputenv("TERM", "xterm-256color");
+    qputenv("COLORTERM", "truecolor");
+    QTuiImagePreviewBlock block = makePngBlock();
+    const QString         out   = block.toAnsi(60);
+    QVERIFY(out.contains(QStringLiteral("38;2;255;64;32")));
+    QVERIFY(out.contains(QStringLiteral("48;2;255;64;32")));
+}
+
+void Test::cellsFallBackToPalette()
+{
+    qputenv("TERM", "xterm-256color");
+    QTuiImagePreviewBlock block = makePngBlock();
+    const QString         out   = block.toAnsi(60);
+    QVERIFY(out.contains(QStringLiteral("38;5;")));
+    QVERIFY(!out.contains(QStringLiteral("38;2;")));
+}
+
+void Test::transparentPixelsKeepTerminalBackground()
+{
+    qputenv("TERM", "xterm-256color");
+    qputenv("COLORTERM", "truecolor");
+    QImage image(16, 32, QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    QByteArray bytes;
+    QBuffer    buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    QTuiImagePreviewBlock
+                  block(QStringLiteral("/tmp/t.png"), QStringLiteral("image/png"), 16, 32, bytes);
+    const QString out = block.toAnsi(60);
+    QVERIFY(!out.contains(QChar(0x2580)));
+    QVERIFY(!out.contains(QStringLiteral("48;2;")));
+}
+
+void Test::iTerm2ClippedImageShowsCells()
+{
+    qputenv("TERM", "xterm-256color");
+    qputenv("TERM_PROGRAM", "iTerm.app");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const int rows = block.rowCount();
+    block.setVisibleWindow(2, rows - 2);
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, rows - 2), QString());
+    QTuiScreen screen(60, rows);
+    block.paintRow(screen, 0, 2, 0, 60, false, false);
+    QCOMPARE(screen.at(0, 0).codePoint(), char32_t(0x2580));
+    QVERIFY(screen.at(0, 0).decorative);
+
+    block.setVisibleWindow(1, rows - 1);
+    QVERIFY(!block.emitGraphicsLayer(3, 1, 60, rows - 1).isEmpty());
+    QTuiScreen blank(60, rows);
+    block.paintRow(blank, 0, 2, 0, 60, false, false);
+    QCOMPARE(blank.at(0, 0).codePoint(), char32_t(' '));
+}
+
+void Test::tmuxKittyUsesPlaceholders()
+{
+    qputenv("TERM", "tmux-256color");
+    qputenv("TMUX", "s");
+    qputenv("QSOC_IMAGE_PROTOCOL", "kitty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const int  rows = block.rowCount();
+    QTuiScreen screen(60, rows);
+    block.paintRow(screen, 0, 2, 0, 60, false, false);
+    QCOMPARE(screen.at(0, 0).codePoint(), char32_t(0x10eeee));
+    QCOMPARE(screen.at(0, 0).combining.size(), 2);
+    QCOMPARE(screen.at(1, 0).codePoint(), char32_t(0x10eeee));
+    QVERIFY(screen.at(1, 0).combining.isEmpty());
+    QVERIFY(screen.at(0, 0).fgColor != QTuiFgColor::Default);
+
+    /* The image goes to the terminal once, wrapped, and needs no cursor moves. */
+    const QString first = block.emitGraphicsLayer(3, 1, 60, rows);
+    QVERIFY(first.startsWith(QStringLiteral("\x1bPtmux;")));
+    QVERIFY(first.contains(QStringLiteral("U=1")));
+    QVERIFY(!first.contains(QStringLiteral("\x1b[3;1H")));
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, rows), QString());
+    QCOMPARE(block.emitGraphicsClear(), QString());
+}
+
+void Test::sixelPlacesWholeImagesOnly()
+{
+    qputenv("TERM", "xterm");
+    qputenv("QSOC_IMAGE_PROTOCOL", "sixel");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        320,
+        240,
+        makeRealImageBytes("PNG"));
+    block.layout(60);
+    const int rows = block.rowCount();
+    QVERIFY(block.emitGraphicsLayer(3, 1, 60, rows).contains(QStringLiteral("\x1bP0;1;0q")));
+    block.setVisibleWindow(2, rows - 2);
+    QCOMPARE(block.graphicsState(3, 1, 60, rows - 2), QTuiBlock::GraphicsState::Hidden);
+}
+
+void Test::savedFileBecomesALink()
+{
+    qputenv("TERM", "xterm");
+    QTuiImagePreviewBlock block = makePngBlock();
+    block.setSourceFile(QStringLiteral("/tmp/saved.png"));
+    QVERIFY(block.toAnsi(60).contains(QStringLiteral("file:///tmp/saved.png")));
+}
+
+void Test::controlCharactersNeverReachTheScreen()
+{
+    QTuiImagePreviewBlock block(
+        QStringLiteral("evil\x1b]52;c;QQ==\x07.png"),
+        QStringLiteral("image/png"),
+        8,
+        8,
+        QByteArray());
+    QVERIFY(!block.toPlainText().contains(QChar(0x1b)));
+    QVERIFY(!block.label().contains(QChar(0x07)));
+}
+
+void Test::placeholdersFollowCellSizeChanges()
+{
+    qputenv("TERM", "tmux-256color");
+    qputenv("TMUX", "s");
+    qputenv("QSOC_IMAGE_PROTOCOL", "kitty");
+    QTuiImagePreviewBlock block(
+        QStringLiteral("/tmp/x.png"),
+        QStringLiteral("image/png"),
+        800,
+        400,
+        makeRealImageBytes("PNG"));
+    block.layout(80);
+    QVERIFY(block.emitGraphicsLayer(3, 1, 80, block.rowCount()).contains(QStringLiteral("a=t")));
+    block.layout(40);
+    const QString moved = block.emitGraphicsLayer(3, 1, 40, block.rowCount());
+    QVERIFY(moved.contains(QStringLiteral("U=1")));
+    QVERIFY(!moved.contains(QStringLiteral("a=t")));
 }
 
 void Test::minttySelectsITerm2()
@@ -750,8 +913,10 @@ void Test::emitGraphicsLayerSkipsWhenViewportTooShort()
     /* Plenty of room: graphics emitted. */
     QVERIFY(!block.emitGraphicsLayer(3, 1, 60, rowsNeeded).isEmpty());
 
-    /* Viewport too short by even one row: nothing emitted. */
-    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, rowsNeeded - 1), QString());
+    /* Viewport too short by one row: only the visible image rows are placed. */
+    const QString clipped = block.emitGraphicsLayer(3, 1, 60, rowsNeeded - 1);
+    QVERIFY(clipped.contains(QStringLiteral("x=0,y=0,w=320,")));
+    QVERIFY(clipped.contains(QStringLiteral(",r=%1,").arg(rowsNeeded - 2)));
 
     /* Only the metadata row visible: nothing emitted. */
     QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 1), QString());
@@ -789,10 +954,9 @@ void Test::iTerm2SameCoordsAreThrottled()
         makeRealImageBytes("PNG"));
     block.layout(60);
     block.emitGraphicsLayer(3, 1, 60, 100);
-    const QString second = block.emitGraphicsLayer(3, 1, 60, 100);
     /* Same coords - iTerm2 keeps the bitmap until the cells under
      * it get overwritten, so re-uploading would only burn bandwidth. */
-    QCOMPARE(second, QString());
+    QCOMPARE(block.graphicsState(3, 1, 60, 100), QTuiBlock::GraphicsState::Keep);
 }
 
 void Test::iTerm2SameCoordsChangedSizeReuploads()
@@ -858,7 +1022,7 @@ void Test::iTerm2ClearResetsThrottle()
 /* Inside tmux the graphics escapes get stripped, so the layout
  * must NOT reserve a tall cell rectangle that the user would see
  * as blank space with no image. */
-void Test::tmuxSuppressesGraphicsAndReservesNoCells()
+void Test::tmuxPaintsCellsInsteadOfGraphics()
 {
     qputenv("TERM_PROGRAM", "ghostty");
     qputenv("TMUX", "/tmp/tmux-1000/default,1234,0");
@@ -868,19 +1032,22 @@ void Test::tmuxSuppressesGraphicsAndReservesNoCells()
         320,
         240,
         makeRealImageBytes("PNG"));
+    qputenv("TERM", "tmux-256color");
     block.layout(60);
-    QCOMPARE(block.imageCellRows(), 0);
-    QCOMPARE(block.rowCount(), 1);
-    /* No graphics escape on any path. */
-    QVERIFY(!block.toAnsi(60).contains(QLatin1String(kKittyEscapePrefix)));
+    QVERIFY(block.imageCellRows() > 0);
+    /* No graphics escape on any path, half-blocks instead. */
+    const QString out = block.toAnsi(60);
+    QVERIFY(!out.contains(QLatin1String(kKittyEscapePrefix)));
+    QVERIFY(out.contains(QChar(0x2580)));
     QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 100), QString());
 }
 
 /* GNU screen has the same problem as tmux for the same reason. */
-void Test::screenSuppressesGraphicsAndReservesNoCells()
+void Test::screenPaintsCellsInsteadOfGraphics()
 {
     qputenv("KITTY_WINDOW_ID", "1");
     qputenv("STY", "12345.pts-0.host");
+    qputenv("TERM", "screen");
     QTuiImagePreviewBlock block(
         QStringLiteral("/tmp/x.png"),
         QStringLiteral("image/png"),
@@ -888,8 +1055,8 @@ void Test::screenSuppressesGraphicsAndReservesNoCells()
         240,
         makeRealImageBytes("PNG"));
     block.layout(60);
-    QCOMPARE(block.imageCellRows(), 0);
-    QCOMPARE(block.rowCount(), 1);
+    QVERIFY(block.imageCellRows() > 0);
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 60, 100), QString());
 }
 
 /* Explicit user opt-out forces text-only regardless of any other

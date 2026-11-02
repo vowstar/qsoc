@@ -3,6 +3,8 @@
 
 #include "tui/qtuiimagepreviewblock.h"
 
+#include "tui/qtuigraphics.h"
+#include "tui/qtuisvg.h"
 #include "tui/qtuiwidget.h"
 
 #include <QBuffer>
@@ -10,68 +12,23 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QProcessEnvironment>
+#include <QUrl>
 
 #include <atomic>
 #include <utility>
 
 namespace {
 
-enum class GraphicsProtocol : std::uint8_t {
-    None,
-    Kitty,
-    ITerm2,
-    SixelPlaceholder, /* Sixel-capable terminal but encoder not bundled */
-};
+using GraphicsProtocol = QTuiGraphics::Protocol;
 
-GraphicsProtocol detectProtocol()
+QString printable(QString text)
 {
-    /* Re-evaluated on every call so tests can flip env vars between
-     * cases. The cost is one environment snapshot plus a handful of
-     * string compares, negligible next to the base64 image transfer. */
-    const QProcessEnvironment env  = QProcessEnvironment::systemEnvironment();
-    const QString             term = env.value(QStringLiteral("TERM"), QString()).toLower();
-    const QString termProgram      = env.value(QStringLiteral("TERM_PROGRAM"), QString()).toLower();
-
-    /* Explicit user opt-out. Any non-empty QSOC_NO_IMAGE_GRAPHICS
-     * forces the text-only fallback regardless of terminal
-     * capability, so SSH bandwidth-conscious sessions or users who
-     * prefer not to see large blank rectangles when graphics get
-     * stripped can suppress the cell reservation. */
-    if (!env.value(QStringLiteral("QSOC_NO_IMAGE_GRAPHICS"), QString()).isEmpty()) {
-        return GraphicsProtocol::None;
+    for (QChar &character : text) {
+        const ushort code = character.unicode();
+        if (code < 0x20 || (code >= 0x7f && code < 0xa0))
+            character = QLatin1Char(' ');
     }
-
-    /* Multiplexers (tmux, GNU screen) strip kitty / iTerm2 graphics
-     * escapes by default, so a graphics-capable host terminal still
-     * never sees the bitmap. Detect via the multiplexer-set env
-     * vars and force the text fallback so layout does not reserve
-     * a tall rectangle that stays visually blank. tmux has an
-     * opt-in passthrough mode that requires a host config change
-     * plus DCS wrapping; that is out of scope for this gate. */
-    if (env.contains(QStringLiteral("TMUX")) || env.contains(QStringLiteral("STY"))) {
-        return GraphicsProtocol::None;
-    }
-
-    /* Kitty graphics protocol. WezTerm and Rio also speak iTerm2
-     * inline, but Kitty's chunked transfer is the more capable
-     * dialect on every terminal that supports both. */
-    if (env.contains(QStringLiteral("KITTY_WINDOW_ID"))
-        || env.contains(QStringLiteral("GHOSTTY_RESOURCES_DIR"))
-        || env.contains(QStringLiteral("WEZTERM_EXECUTABLE"))
-        || env.contains(QStringLiteral("KONSOLE_VERSION")) || term == QStringLiteral("xterm-kitty")
-        || term == QStringLiteral("xterm-ghostty") || termProgram == QStringLiteral("ghostty")
-        || termProgram == QStringLiteral("wezterm") || termProgram == QStringLiteral("rio")) {
-        return GraphicsProtocol::Kitty;
-    }
-    if (termProgram == QStringLiteral("iterm.app") || termProgram == QStringLiteral("vscode")
-        || termProgram == QStringLiteral("mintty") || term == QStringLiteral("mintty")) {
-        return GraphicsProtocol::ITerm2;
-    }
-    if (term.contains(QStringLiteral("foot")) || term.contains(QStringLiteral("mlterm"))
-        || term.contains(QStringLiteral("contour"))) {
-        return GraphicsProtocol::SixelPlaceholder;
-    }
-    return GraphicsProtocol::None;
+    return text;
 }
 
 QTuiStyledRun coloredRun(const QString &text, QTuiFgColor color, bool bold = false, bool dim = false)
@@ -106,14 +63,10 @@ QString shortMime(const QString &mime)
     return mime.mid(slash + 1).toLower();
 }
 
-/* Default terminal cell pixel size used when the host does not expose
- * a query response. 8 x 16 covers most monospace fonts at 14-16pt and
- * keeps the aspect-ratio math stable across detection failures. */
-constexpr int kCellWidthPx  = 8;
-constexpr int kCellHeightPx = 16;
-constexpr int kMaxCellRows  = 30;
+constexpr int kMarkedRows = 30;
 
-QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int viewportWidth)
+QPair<int, int> computeImageCellRect(
+    int imageWidthPx, int imageHeightPx, int viewportWidth, int maxRows)
 {
     /* Compute the cell rectangle a graphics-capable terminal will
      * use to display the image. A small image keeps its native cell
@@ -123,8 +76,9 @@ QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int vi
     if (imageWidthPx <= 0 || imageHeightPx <= 0 || viewportWidth <= 4) {
         return {0, 0};
     }
-    const int nativeCols = (imageWidthPx + kCellWidthPx - 1) / kCellWidthPx;
-    const int nativeRows = (imageHeightPx + kCellHeightPx - 1) / kCellHeightPx;
+    const QSize cell       = QTuiGraphics::cellSize();
+    const int   nativeCols = (imageWidthPx + cell.width() - 1) / cell.width();
+    const int   nativeRows = (imageHeightPx + cell.height() - 1) / cell.height();
 
     /* Drawable bound: viewport width minus a one-cell gutter, plus a
      * row cap so a portrait does not eat the entire chat. No minimum
@@ -132,7 +86,7 @@ QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int vi
      * to a 8x4 blurry rectangle. */
     const int maxCols = qMax(1, viewportWidth - 2);
 
-    if (nativeCols <= maxCols && nativeRows <= kMaxCellRows) {
+    if (nativeCols <= maxCols && nativeRows <= maxRows) {
         return {nativeCols, nativeRows};
     }
 
@@ -142,7 +96,7 @@ QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int vi
      * would distort the image; kitty's `c,r` placement scales the
      * bitmap to fill exactly W x H cells. */
     const double ratioCols = static_cast<double>(nativeCols) / maxCols;
-    const double ratioRows = static_cast<double>(nativeRows) / kMaxCellRows;
+    const double ratioRows = static_cast<double>(nativeRows) / maxRows;
     const double ratio     = qMax(ratioCols, ratioRows);
 
     const int cols = qMax(1, static_cast<int>(nativeCols / ratio));
@@ -150,57 +104,18 @@ QPair<int, int> computeImageCellRect(int imageWidthPx, int imageHeightPx, int vi
     return {cols, rows};
 }
 
-QString iTermInlineEscape(const QString &filename, const QByteArray &bytes)
+QString iTermEscape(const QString &filename, const QByteArray &bytes, const QString &size)
 {
-    /* iTerm2 inline image: ESC ] 1337 ; File=...:base64 BEL.
-     * inline=1 places the image in flow rather than as an attachment;
-     * width/height=auto keeps the image at native size with the host
-     * downscaling for cell rows. */
     QString out = QStringLiteral("\x1b]1337;File=");
     if (!filename.isEmpty()) {
         const QByteArray nameB64 = filename.toUtf8().toBase64();
         out += QStringLiteral("name=") + QString::fromLatin1(nameB64) + QLatin1Char(';');
     }
     out += QStringLiteral("size=%1;").arg(bytes.size());
-    out += QStringLiteral("inline=1;width=auto;height=auto:");
+    out += QStringLiteral("inline=1;%1:").arg(size);
     out += QString::fromLatin1(bytes.toBase64());
     out += QChar(0x07);
     return out;
-}
-
-QString iTermPlaceWithSize(
-    const QString &filename, const QByteArray &bytes, int cellCols, int cellRows)
-{
-    /* OSC 1337 inline image with cell-unit sizing and aspect-ratio
-     * preservation. `width=N;height=M` (no unit) is iTerm2's
-     * character-cell measure, so a placement at N cols x M rows lines
-     * up exactly with the cell rectangle the block reserved. */
-    if (bytes.isEmpty() || cellCols <= 0 || cellRows <= 0) {
-        return {};
-    }
-    QString out = QStringLiteral("\x1b]1337;File=");
-    if (!filename.isEmpty()) {
-        const QByteArray nameB64 = filename.toUtf8().toBase64();
-        out += QStringLiteral("name=") + QString::fromLatin1(nameB64) + QLatin1Char(';');
-    }
-    out += QStringLiteral("size=%1;").arg(bytes.size());
-    out += QStringLiteral("inline=1;preserveAspectRatio=1;width=%1;height=%2:")
-               .arg(cellCols)
-               .arg(cellRows);
-    out += QString::fromLatin1(bytes.toBase64());
-    out += QChar(0x07);
-    return out;
-}
-
-/* Process-wide allocator for kitty image ids. The protocol allows
- * any non-zero 32-bit id; starting at 1 and incrementing keeps
- * collisions impossible inside one qsoc session. Multiple sessions
- * sharing one terminal are fine because each uses its own id space
- * and explicitly destroys its images on stop(). */
-quint32 allocateKittyImageId()
-{
-    static std::atomic<quint32> next{1};
-    return next.fetch_add(1, std::memory_order_relaxed);
 }
 
 QByteArray reEncodeAsPngIfNeeded(const QByteArray &bytes, const QString &mime)
@@ -224,41 +139,42 @@ QByteArray reEncodeAsPngIfNeeded(const QByteArray &bytes, const QString &mime)
     return pngBytes;
 }
 
-QString kittyTransmitOnly(const QByteArray &pngBytes, quint32 imageId)
+/* `q=2` keeps the terminal's replies off the agent's stdin. */
+QString kittyChunks(const QByteArray &pngBytes, const QString &firstParams)
 {
-    /* Chunked `a=t` (transmit-only): upload the bytes into the
-     * terminal's image cache without displaying. `q=2` suppresses
-     * the per-command OK/EINVAL response so the response payload
-     * does not race the agent stdin reader, matching the pattern
-     * timg and notcurses both use for TUI integrations. */
-    if (pngBytes.isEmpty() || imageId == 0) {
-        return {};
-    }
     const QByteArray b64       = pngBytes.toBase64();
     constexpr int    chunkSize = 4096;
     QString          out;
-    int              offset = 0;
-    bool             first  = true;
-    while (offset < b64.size()) {
-        const int  take  = qMin(chunkSize, static_cast<int>(b64.size() - offset));
-        const auto chunk = b64.mid(offset, take);
-        const bool last  = offset + take >= b64.size();
-        QString    header;
-        if (first) {
-            header = QStringLiteral("\x1b_Gi=%1,a=t,f=100,q=2,m=%2;").arg(imageId).arg(last ? 0 : 1);
-        } else {
-            header = QStringLiteral("\x1b_Gq=2,m=%1;").arg(last ? 0 : 1);
-        }
-        out += header;
-        out += QString::fromLatin1(chunk);
-        out += QStringLiteral("\x1b\\");
-        offset += take;
-        first = false;
+    for (qsizetype offset = 0; offset < b64.size(); offset += chunkSize) {
+        const bool    last   = offset + chunkSize >= b64.size();
+        const QString params = offset == 0 ? firstParams : QStringLiteral("q=2");
+        out += QTuiGraphics::passthrough(
+            QStringLiteral("\x1b_G%1,m=%2;").arg(params).arg(last ? 0 : 1)
+            + QString::fromLatin1(b64.mid(offset, chunkSize)) + QStringLiteral("\x1b\\"));
     }
     return out;
 }
 
-QString kittyPlaceAtCursor(quint32 imageId, quint32 placementId, int cellCols, int cellRows)
+QString kittyTransmitOnly(const QByteArray &pngBytes, quint32 imageId)
+{
+    if (pngBytes.isEmpty() || imageId == 0) {
+        return {};
+    }
+    return kittyChunks(pngBytes, QStringLiteral("i=%1,a=t,f=100,q=2").arg(imageId));
+}
+
+QString kittySourceRect(int widthPx, int heightPx, int imageRows, int top, int count)
+{
+    if (count >= imageRows)
+        return {};
+    return QStringLiteral("x=0,y=%1,w=%2,h=%3,")
+        .arg(top * heightPx / imageRows)
+        .arg(widthPx)
+        .arg(count * heightPx / imageRows);
+}
+
+QString kittyPlaceAtCursor(
+    quint32 imageId, quint32 placementId, const QString &source, int cellCols, int cellRows)
 {
     /* `a=p` re-uses the previously transmitted image referenced by
      * `i=<id>`. `p=<pid>` keeps the placement slot stable so back-
@@ -270,46 +186,48 @@ QString kittyPlaceAtCursor(quint32 imageId, quint32 placementId, int cellCols, i
     if (imageId == 0 || cellCols <= 0 || cellRows <= 0) {
         return {};
     }
-    return QStringLiteral("\x1b_Ga=p,i=%1,p=%2,c=%3,r=%4,C=1,q=2\x1b\\")
+    return QStringLiteral("\x1b_Ga=p,i=%1,p=%2,%3c=%4,r=%5,C=1,q=2\x1b\\")
         .arg(imageId)
         .arg(placementId)
+        .arg(source)
         .arg(cellCols)
         .arg(cellRows);
 }
 
 QString kittyInlineEscape(const QByteArray &bytes, const QString &mime)
 {
-    /* Kitty graphics: ESC _ G f=<format>,a=T;<base64> ESC \\
-     * Format 100 is PNG. JPEG/GIF/WebP attachments are decoded through
-     * QImage and re-encoded as PNG so terminals like ghostty / kitty /
-     * wezterm see the image instead of just the placeholder text. The
-     * terminal picks reasonable display dimensions when c/r aren't
-     * given. */
     const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mime);
-    if (pngBytes.isEmpty()) {
-        return QString();
+    return pngBytes.isEmpty() ? QString() : kittyChunks(pngBytes, QStringLiteral("f=100,a=T,q=2"));
+}
+
+/* One half-block cell: the top pixel in the foreground, the bottom in the
+ * background. A transparent half keeps the terminal's own background. */
+void paintHalfBlock(QTuiCell &cell, QRgb top, QRgb bottom, bool trueColor)
+{
+    const bool topOpaque    = qAlpha(top) >= 128;
+    const bool bottomOpaque = qAlpha(bottom) >= 128;
+    if (!topOpaque && !bottomOpaque)
+        return;
+    const auto rgb = [](QRgb value) {
+        return kRgbSet | (static_cast<std::uint32_t>(value) & 0xffffff);
+    };
+    const auto palette = [](QRgb value) {
+        return static_cast<std::uint8_t>(
+            16 + 36 * (qRed(value) * 5 / 255) + 6 * (qGreen(value) * 5 / 255)
+            + qBlue(value) * 5 / 255);
+    };
+    const QRgb fg = topOpaque ? top : bottom;
+    cell.setScalar(topOpaque ? 0x2580 : 0x2584);
+    cell.decorative = true;
+    if (trueColor) {
+        cell.fgRgb = rgb(fg);
+        if (topOpaque && bottomOpaque)
+            cell.bgRgb = rgb(bottom);
+    } else {
+        cell.fgColor = static_cast<QTuiFgColor>(palette(fg));
+        if (topOpaque && bottomOpaque)
+            cell.bgColor = palette(bottom);
     }
-    const QByteArray b64 = pngBytes.toBase64();
-    /* Chunked transfer keeps individual escape payloads short enough
-     * for terminals that bound their parsing buffers. m=1 marks a
-     * non-final chunk, m=0 the last. */
-    constexpr int chunkSize = 4096;
-    QString       out;
-    int           offset = 0;
-    bool          first  = true;
-    while (offset < b64.size()) {
-        const int     take   = qMin(chunkSize, b64.size() - offset);
-        const auto    chunk  = b64.mid(offset, take);
-        const bool    last   = offset + take >= b64.size();
-        const QString header = first ? QStringLiteral("\x1b_Gf=100,a=T,q=2,m=%1;").arg(last ? 0 : 1)
-                                     : QStringLiteral("\x1b_Gq=2,m=%1;").arg(last ? 0 : 1);
-        out += header;
-        out += QString::fromLatin1(chunk);
-        out += QStringLiteral("\x1b\\");
-        offset += take;
-        first = false;
-    }
-    return out;
 }
 
 } // namespace
@@ -321,18 +239,66 @@ QTuiImagePreviewBlock::QTuiImagePreviewBlock(
     , widthPx(widthPx)
     , heightPx(heightPx)
     , bytes(std::move(bytes))
-{}
+    , protocol_(QTuiGraphics::protocol())
+    , placeholders_(QTuiGraphics::usesPlaceholders())
+{
+    this->sourceLabel = printable(this->sourceLabel);
+    this->mimeType    = printable(this->mimeType);
+}
+
+void QTuiImagePreviewBlock::drawSvg(const QByteArray &source, std::function<void(bool)> changed)
+{
+    status      = QStringLiteral("drawing");
+    layoutDirty = true;
+    QTuiSvg::rasterize(
+        source,
+        [this,
+         life    = std::weak_ptr<bool>(alive),
+         changed = std::move(changed)](const QByteArray &png, const QString &error) {
+            if (life.expired())
+                return;
+            const QImage image = QImage::fromData(png);
+            if (image.isNull()) {
+                status = printable(QStringLiteral("not drawn: %1").arg(error)).left(160);
+            } else {
+                status   = QString();
+                bytes    = png;
+                mimeType = QStringLiteral("image/png");
+                widthPx  = image.width();
+                heightPx = image.height();
+                setFolded(false);
+            }
+            layoutDirty = true;
+            changed(!image.isNull());
+        });
+}
+
+void QTuiImagePreviewBlock::releaseImageBytes()
+{
+    byteSize    = bytes.size();
+    bytes       = QByteArray();
+    released    = true;
+    cellRaster  = QImage();
+    inlineData  = QString();
+    inlineCells = QSize();
+    setFolded(true);
+}
 
 void QTuiImagePreviewBlock::layout(int width)
 {
-    if (!layoutDirty && layoutWidth == width) {
+    const int maxRows = QTuiGraphics::maxImageRows();
+    if (!layoutDirty && layoutWidth == width && layoutMaxRows == maxRows) {
         return;
     }
-    layoutDirty = false;
-    layoutWidth = width;
+    layoutDirty   = false;
+    layoutMaxRows = maxRows;
+    protocol_     = QTuiGraphics::protocol();
+    placeholders_ = QTuiGraphics::usesPlaceholders();
+    layoutWidth   = width;
     rendered.clear();
-    cellRows = 0;
-    cellCols = 0;
+    cellRows   = 0;
+    cellCols   = 0;
+    cellRaster = QImage();
 
     /* Metadata row: [image: <name>  png 800x600 32 KB]. Always emitted
      * so the user can identify the file even when no graphics protocol
@@ -344,35 +310,35 @@ void QTuiImagePreviewBlock::layout(int width)
         const QString display = fi.fileName().isEmpty() ? sourceLabel : fi.fileName();
         QTuiStyledRun name;
         name.text = display;
+        if (!sourceFile.isEmpty())
+            name.hyperlink = QUrl::fromLocalFile(sourceFile).toString();
         row.append(name);
     }
     QTuiStyledRun stats;
-    stats.text = QStringLiteral("  %1 %2x%3 %4]")
-                     .arg(shortMime(mimeType))
-                     .arg(widthPx)
-                     .arg(heightPx)
-                     .arg(sizeBucket(bytes.size()));
+    stats.text = !status.isEmpty()
+                     ? QStringLiteral("  %1]").arg(status)
+                     : QStringLiteral("  %1 %2x%3 %4]")
+                           .arg(shortMime(mimeType))
+                           .arg(widthPx)
+                           .arg(heightPx)
+                           .arg(sizeBucket(bytes.isEmpty() ? byteSize : bytes.size()));
     stats.dim  = true;
     row.append(stats);
     rendered.append(row);
 
-    /* Reserve empty cells for a future graphics overlay only on
-     * terminals that have a real graphics protocol. Sixel and the
-     * text fallback would just leave a blank gap, which is worse than
-     * the bare placeholder. Folded blocks also stay at one row so
-     * an older image preview collapses to its metadata line when a
-     * newer image arrives. */
+    /* Image rows stay blank under a bitmap and carry half-blocks otherwise.
+     * Folded blocks collapse to their metadata line. */
     if (folded) {
         return;
     }
-    const GraphicsProtocol protocol = detectProtocol();
-    if (protocol == GraphicsProtocol::Kitty || protocol == GraphicsProtocol::ITerm2) {
-        const auto rect = computeImageCellRect(widthPx, heightPx, width);
-        cellCols        = rect.first;
-        cellRows        = rect.second;
-        for (int i = 0; i < cellRows; ++i) {
-            rendered.append(QList<QTuiStyledRun>{});
-        }
+    if (protocol_ == GraphicsProtocol::None || !status.isEmpty() || released) {
+        return;
+    }
+    const auto rect = computeImageCellRect(widthPx, heightPx, width, maxRows);
+    cellCols        = rect.first;
+    cellRows        = rect.second;
+    for (int i = 0; i < cellRows; ++i) {
+        rendered.append(QList<QTuiStyledRun>{});
     }
 }
 
@@ -394,6 +360,18 @@ void QTuiImagePreviewBlock::paintRow(
     Q_UNUSED(focused);
     Q_UNUSED(selected);
     if (viewportRow < 0 || viewportRow >= rendered.size()) {
+        return;
+    }
+    if (viewportRow > 0) {
+        if (placeholders_) {
+            paintPlaceholders(screen, screenRow, viewportRow - 1, width);
+            return;
+        }
+        const auto window = imageWindow(visibleRowCount < 0 ? rowCount() : visibleRowCount);
+        const bool bitmap = protocol_ == GraphicsProtocol::Kitty
+                            || (QTuiGraphics::isInlineBitmap(protocol_) && window.count >= cellRows);
+        if (!bitmap)
+            paintCells(screen, screenRow, viewportRow - 1, width);
         return;
     }
     int col = 0;
@@ -418,6 +396,139 @@ void QTuiImagePreviewBlock::paintRow(
     }
 }
 
+void QTuiImagePreviewBlock::paintPlaceholders(
+    QTuiScreen &screen, int screenRow, int imageRow, int width) const
+{
+    /* Row marks from the kitty placeholder table. Later cells of a row take
+     * their row and next column from the cell on their left. */
+    static const char32_t marks[kMarkedRows + 1] = {0x305, 0x30d, 0x30e, 0x310, 0x312, 0x33d, 0x33e,
+                                                    0x33f, 0x346, 0x34a, 0x34b, 0x34c, 0x350, 0x351,
+                                                    0x352, 0x357, 0x35b, 0x363, 0x364, 0x365, 0x366,
+                                                    0x367, 0x368, 0x369, 0x36a, 0x36b, 0x36c, 0x36d,
+                                                    0x36e, 0x36f, 0x483};
+    if (kittyImageId == 0)
+        kittyImageId = QTuiGraphics::ImageStore::instance().allocateId();
+    if (imageRow < 0 || imageRow > kMarkedRows)
+        return;
+    const int columns = qMin(cellCols, width);
+    for (int col = 0; col < columns; ++col) {
+        QTuiCell &cell = screen.at(col, screenRow);
+        cell.setScalar(0x10eeee);
+        /* The foreground color names the image. A palette index survives a
+         * multiplexer that does not pass 24-bit color. */
+        if (kittyImageId < 256)
+            cell.fgColor = static_cast<QTuiFgColor>(kittyImageId);
+        else
+            cell.fgRgb = kRgbSet | kittyImageId;
+        cell.decorative = true;
+        if (col == 0) {
+            const char32_t first[2] = {marks[imageRow], marks[0]};
+            cell.combining          = QString::fromUcs4(first, 2);
+        }
+    }
+}
+
+bool QTuiImagePreviewBlock::transmitKitty(QString *out) const
+{
+    auto &store = QTuiGraphics::ImageStore::instance();
+    if (kittyImageId == 0)
+        kittyImageId = store.allocateId();
+    if (store.isResident(kittyImageId))
+        return true;
+    const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mimeType);
+    if (pngBytes.isEmpty())
+        return false;
+    for (const quint32 evicted : store.admit(kittyImageId, qint64(widthPx) * heightPx * 4)) {
+        *out += QTuiGraphics::passthrough(
+            QStringLiteral("\x1b_Ga=d,d=I,i=%1,q=2\x1b\\").arg(evicted));
+    }
+    *out += kittyTransmitOnly(pngBytes, kittyImageId);
+    return true;
+}
+
+QRect QTuiImagePreviewBlock::placementFor(
+    int firstScreenRow, int firstScreenCol, int contentWidth, const ImageWindow &window) const
+{
+    return {
+        firstScreenCol - 1,
+        firstScreenRow - 1 + (window.top + 1 - visibleFirstRow),
+        qMin(cellCols, contentWidth),
+        window.count};
+}
+
+QString QTuiImagePreviewBlock::emitPlaceholders(const ImageWindow &window) const
+{
+    const auto &store = QTuiGraphics::ImageStore::instance();
+    const QSize cells(cellCols, cellRows);
+    if (window.count <= 0 || (store.isResident(kittyImageId) && placedCells == cells))
+        return {};
+    QString out;
+    if (!transmitKitty(&out))
+        return {};
+    out += QTuiGraphics::passthrough(QStringLiteral("\x1b_Ga=p,U=1,i=%1,c=%2,r=%3,q=2\x1b\\")
+                                         .arg(kittyImageId)
+                                         .arg(cellCols)
+                                         .arg(cellRows));
+    placedCells = cells;
+    return out;
+}
+
+QString QTuiImagePreviewBlock::inlinePayload(const QSize &cells) const
+{
+    if (inlineCells == cells)
+        return inlineData;
+    const QSize  cell  = QTuiGraphics::cellSize();
+    const QImage image = QImage::fromData(bytes).scaled(
+        cells.width() * cell.width(),
+        cells.height() * cell.height(),
+        Qt::KeepAspectRatio,
+        Qt::SmoothTransformation);
+    inlineCells = cells;
+    if (protocol_ == GraphicsProtocol::Sixel) {
+        inlineData = QString::fromLatin1(QTuiGraphics::encodeSixel(image));
+        return inlineData;
+    }
+    QByteArray png;
+    QBuffer    buffer(&png);
+    const bool encoded = buffer.open(QIODevice::WriteOnly) && image.save(&buffer, "PNG");
+    inlineData         = iTermEscape(
+        QFileInfo(sourceLabel).fileName(),
+        encoded && png.size() < bytes.size() ? png : bytes,
+        QStringLiteral("preserveAspectRatio=1;width=%1;height=%2")
+            .arg(cells.width())
+            .arg(cells.height()));
+    return inlineData;
+}
+
+void QTuiImagePreviewBlock::paintCells(
+    QTuiScreen &screen, int screenRow, int imageRow, int width) const
+{
+    if (cellRaster.isNull() && !bytes.isEmpty() && cellRows > 0) {
+        cellRaster
+            = QImage::fromData(bytes)
+                  .scaled(cellCols, cellRows * 2, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                  .convertToFormat(QImage::Format_ARGB32);
+    }
+    if (cellRaster.isNull() || imageRow < 0 || imageRow * 2 + 1 >= cellRaster.height())
+        return;
+    const int  columns   = qMin(cellRaster.width(), width);
+    const bool trueColor = QTuiGraphics::hasTrueColor();
+    for (int col = 0; col < columns; ++col) {
+        paintHalfBlock(
+            screen.at(col, screenRow),
+            cellRaster.pixel(col, imageRow * 2),
+            cellRaster.pixel(col, imageRow * 2 + 1),
+            trueColor);
+    }
+}
+
+QTuiImagePreviewBlock::ImageWindow QTuiImagePreviewBlock::imageWindow(int visibleRows) const
+{
+    const int top    = qMax(visibleFirstRow, 1);
+    const int bottom = qMin(visibleFirstRow + visibleRows, rowCount());
+    return {top - 1, qMax(0, bottom - top)};
+}
+
 QString QTuiImagePreviewBlock::toPlainText() const
 {
     return QStringLiteral("[image: %1 %2 %3x%4 %5]")
@@ -425,7 +536,7 @@ QString QTuiImagePreviewBlock::toPlainText() const
         .arg(shortMime(mimeType))
         .arg(widthPx)
         .arg(heightPx)
-        .arg(sizeBucket(bytes.size()));
+        .arg(sizeBucket(bytes.isEmpty() ? byteSize : bytes.size()));
 }
 
 QString QTuiImagePreviewBlock::toMarkdown() const
@@ -449,15 +560,14 @@ QString QTuiImagePreviewBlock::toAnsi(int width)
      * after the image renders. */
     QString graphicsEscape;
     if (!folded) {
-        switch (detectProtocol()) {
+        switch (protocol_) {
         case GraphicsProtocol::Kitty:
             graphicsEscape = kittyInlineEscape(bytes, mimeType);
             break;
         case GraphicsProtocol::ITerm2:
-            graphicsEscape = iTermInlineEscape(QFileInfo(sourceLabel).fileName(), bytes);
+            graphicsEscape = iTermEscape(
+                QFileInfo(sourceLabel).fileName(), bytes, QStringLiteral("width=auto;height=auto"));
             break;
-        case GraphicsProtocol::SixelPlaceholder:
-        case GraphicsProtocol::None:
         default:
             break;
         }
@@ -482,20 +592,30 @@ QTuiBlock::GraphicsState QTuiImagePreviewBlock::graphicsState(
     int                 visibleRows,
     const QVector<int> &writtenRows) const
 {
-    if (folded || cellRows <= 0 || cellCols <= 0 || contentWidth <= 0 || bytes.isEmpty()
-        || visibleRows < rowCount()) {
+    if (folded || cellRows <= 0 || cellCols <= 0 || contentWidth <= 0 || bytes.isEmpty()) {
         return GraphicsState::Hidden;
     }
-    const GraphicsProtocol protocol = detectProtocol();
-    if (protocol != GraphicsProtocol::Kitty && protocol != GraphicsProtocol::ITerm2) {
+    const bool inlined = QTuiGraphics::isInlineBitmap(protocol_);
+    if (protocol_ != GraphicsProtocol::Kitty && !inlined) {
         return GraphicsState::Hidden;
     }
-    const QRect nextRect(firstScreenCol - 1, firstScreenRow, qMin(cellCols, contentWidth), cellRows);
-    if (placementRect != nextRect
-        || (protocol == GraphicsProtocol::Kitty && !kittyState.transmitted)) {
+    const ImageWindow window = imageWindow(visibleRows);
+    if (window.count <= 0 || (inlined && window.count < cellRows)) {
+        return GraphicsState::Hidden;
+    }
+    if (placeholders_) {
+        return QTuiGraphics::ImageStore::instance().isResident(kittyImageId)
+                       && placedCells == QSize(cellCols, cellRows)
+                   ? GraphicsState::Keep
+                   : GraphicsState::Place;
+    }
+    const QRect nextRect = placementFor(firstScreenRow, firstScreenCol, contentWidth, window);
+    if (placementRect != nextRect || placementTop != window.top
+        || (protocol_ == GraphicsProtocol::Kitty
+            && !QTuiGraphics::ImageStore::instance().isResident(kittyImageId))) {
         return GraphicsState::Place;
     }
-    if (protocol == GraphicsProtocol::ITerm2) {
+    if (inlined) {
         for (const int row : writtenRows) {
             if (row >= nextRect.top() && row <= nextRect.bottom()) {
                 return GraphicsState::Place;
@@ -507,13 +627,15 @@ QTuiBlock::GraphicsState QTuiImagePreviewBlock::graphicsState(
 
 QRect QTuiImagePreviewBlock::graphicsEraseRect() const
 {
-    return detectProtocol() == GraphicsProtocol::ITerm2 ? placementRect : QRect();
+    return QTuiGraphics::isInlineBitmap(protocol_) ? placementRect : QRect();
 }
 
 void QTuiImagePreviewBlock::resetGraphicsState() const
 {
-    kittyState.transmitted = false;
-    placementRect          = {};
+    QTuiGraphics::ImageStore::instance().forget(kittyImageId);
+    placementRect = {};
+    placementTop  = 0;
+    placedCells   = {};
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsLayer(
@@ -523,34 +645,31 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
         == GraphicsState::Hidden) {
         return {};
     }
-    const QRect nextRect(firstScreenCol - 1, firstScreenRow, qMin(cellCols, contentWidth), cellRows);
-    const GraphicsProtocol protocol = detectProtocol();
-    QString                out;
-    if (protocol == GraphicsProtocol::Kitty) {
-        if (!kittyState.transmitted) {
-            const QByteArray pngBytes = reEncodeAsPngIfNeeded(bytes, mimeType);
-            if (pngBytes.isEmpty()) {
-                return {};
-            }
-            if (kittyState.imageId == 0) {
-                kittyState.imageId = allocateKittyImageId();
-            }
-            out += kittyTransmitOnly(pngBytes, kittyState.imageId);
-            kittyState.transmitted = true;
-        }
-        out += QStringLiteral("\x1b[%1;%2H").arg(nextRect.y() + 1).arg(firstScreenCol);
-        out += kittyPlaceAtCursor(
-            kittyState.imageId, /*placementId=*/1, nextRect.width(), nextRect.height());
-    } else if (protocol == GraphicsProtocol::ITerm2) {
-        if (placementRect == nextRect) {
+    const ImageWindow window = imageWindow(visibleRows);
+    if (placeholders_)
+        return emitPlaceholders(window);
+    const QRect nextRect = placementFor(firstScreenRow, firstScreenCol, contentWidth, window);
+    QString     out;
+    if (protocol_ == GraphicsProtocol::Kitty) {
+        auto &store = QTuiGraphics::ImageStore::instance();
+        if (!transmitKitty(&out)) {
             return {};
         }
+        store.setPlaced(kittyImageId, true);
         out += QStringLiteral("\x1b[%1;%2H").arg(nextRect.y() + 1).arg(firstScreenCol);
-        out += iTermPlaceWithSize(
-            QFileInfo(sourceLabel).fileName(), bytes, nextRect.width(), nextRect.height());
+        out += kittyPlaceAtCursor(
+            kittyImageId,
+            /*placementId=*/1,
+            kittySourceRect(widthPx, heightPx, cellRows, window.top, window.count),
+            nextRect.width(),
+            nextRect.height());
+    } else if (QTuiGraphics::isInlineBitmap(protocol_)) {
+        out += QStringLiteral("\x1b[%1;%2H").arg(nextRect.y() + 1).arg(firstScreenCol);
+        out += inlinePayload(QSize(nextRect.width(), nextRect.height()));
     }
     if (!out.isEmpty()) {
         placementRect = nextRect;
+        placementTop  = window.top;
     }
     return out;
 }
@@ -558,20 +677,22 @@ QString QTuiImagePreviewBlock::emitGraphicsLayer(
 QString QTuiImagePreviewBlock::emitGraphicsClear() const
 {
     placementRect = {};
-    if (!kittyState.transmitted || kittyState.imageId == 0
-        || detectProtocol() != GraphicsProtocol::Kitty) {
+    auto &store   = QTuiGraphics::ImageStore::instance();
+    store.setPlaced(kittyImageId, false);
+    if (!store.isResident(kittyImageId) || protocol_ != GraphicsProtocol::Kitty || placeholders_) {
         return {};
     }
     /* Lowercase i removes this placement while retaining the image data. */
-    return QStringLiteral("\x1b_Ga=d,d=i,i=%1,p=1,q=2\x1b\\").arg(kittyState.imageId);
+    return QStringLiteral("\x1b_Ga=d,d=i,i=%1,p=1,q=2\x1b\\").arg(kittyImageId);
 }
 
 QString QTuiImagePreviewBlock::emitGraphicsDestroy() const
 {
     QString out;
-    if (kittyState.transmitted && kittyState.imageId != 0
-        && detectProtocol() == GraphicsProtocol::Kitty) {
-        out = QStringLiteral("\x1b_Ga=d,d=I,i=%1,q=2\x1b\\").arg(kittyState.imageId);
+    if (QTuiGraphics::ImageStore::instance().isResident(kittyImageId)
+        && protocol_ == GraphicsProtocol::Kitty) {
+        out = QTuiGraphics::passthrough(
+            QStringLiteral("\x1b_Ga=d,d=I,i=%1,q=2\x1b\\").arg(kittyImageId));
     }
     resetGraphicsState();
     return out;

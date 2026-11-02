@@ -2,21 +2,35 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "cli/qsoctranscriptrenderer.h"
+
 #include "cli/qsocsessionreplay.h"
 #include "cli/qsocterminaltext.h"
 #include "common/qsoclinediff.h"
+#include "common/qsocsvg.h"
 #include "tui/qtuiassistanttextblock.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuidiffblock.h"
 #include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuitodoblock.h"
 
+#include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QStringList>
 
 #include <memory>
 
 namespace {
+
+constexpr qint64 kMaxFigureFileBytes = 64 * 1024 * 1024;
+
+/* A session file names its figures, and may have been edited by hand. */
+bool isFigureFile(const QFileInfo &info)
+{
+    static const QRegularExpression name(QStringLiteral("^[0-9a-f]{64}$"));
+    return info.isFile() && info.absolutePath().endsWith(QStringLiteral(".figures"))
+           && name.match(info.baseName()).hasMatch();
+}
 
 using Kind = QSocAgentRuntimeEvent::Kind;
 
@@ -327,6 +341,11 @@ void QSocTranscriptRenderer::finishTool(const QSocAgentRuntimeEvent &event)
             jsonString(args, name == "edit_file" ? "new_string" : "content"));
     compositor.replaceToolUseBody(event.text, event.callId);
     compositor.finishToolUse(status, {}, event.callId);
+    if (status == QTuiToolBlock::Status::Success && name == "write_file"
+        && jsonString(args, "file_path").endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive)) {
+        compositor
+            .appendSvgFigure(jsonString(args, "file_path"), jsonString(args, "content").toUtf8());
+    }
 }
 
 void QSocTranscriptRenderer::closeAnswer()
@@ -381,14 +400,26 @@ void QSocTranscriptRenderer::appendImage(const QSocAgentRuntimeEvent &event)
 {
     if (!event.json.is_object())
         return;
-    compositor.contentView().appendBlock(
-        std::make_unique<QTuiImagePreviewBlock>(
-            event.text,
-            jsonString(event.json, "mime"),
-            event.json.value("width", 0),
-            event.json.value("height", 0),
-            QByteArray::fromBase64(
-                QByteArray::fromStdString(event.json.value("data", std::string())))));
+    QByteArray bytes = QByteArray::fromBase64(
+        QByteArray::fromStdString(event.json.value("data", std::string())));
+    QFile file(jsonString(event.json, "file"));
+    if (bytes.isEmpty() && isFigureFile(QFileInfo(file)) && file.size() <= kMaxFigureFileBytes
+        && file.open(QIODevice::ReadOnly))
+        bytes = file.read(kMaxFigureFileBytes);
+    if (jsonString(event.json, "mime") == QString::fromLatin1(QSocSvg::mimeType())) {
+        compositor.appendSvgFigure(event.text, bytes);
+        compositor.invalidate();
+        return;
+    }
+    auto block = std::make_unique<QTuiImagePreviewBlock>(
+        event.text,
+        jsonString(event.json, "mime"),
+        event.json.value("width", 0),
+        event.json.value("height", 0),
+        bytes);
+    block->setFolded(bytes.isEmpty());
+    block->setSourceFile(file.fileName());
+    compositor.contentView().appendBlock(std::move(block));
     compositor.invalidate();
 }
 

@@ -25,6 +25,7 @@
 #include "cli/qterminalcapability.h"
 #include "common/qsocconsole.h"
 #include "tui/qtuicompositor.h"
+#include "tui/qtuigraphics.h"
 #include "tui/qtuilineinput.h"
 #include "tui/qtuimenu.h"
 #include "tui/qtuipathpicker.h"
@@ -98,7 +99,22 @@ bool QSocCliWorker::runAgentClientLoop(
         exitCode          = status == "ok" || status == "partial" || status == "unknown" ? 0 : 1;
         return exitCode == 0;
     }
+    if (!singleQuery)
+        QTuiGraphics::probeTerminal();
+    const auto displaySurface = [&] {
+        if (singleQuery)
+            return "none";
+        switch (QTuiGraphics::protocol()) {
+        case QTuiGraphics::Protocol::None:
+            return "none";
+        case QTuiGraphics::Protocol::Cells:
+            return "cells";
+        default:
+            return "bitmap";
+        }
+    };
     QJsonObject params{
+        {"display_surface", displaySurface()},
         {"project_directory", options.projectDirectory},
         {"launch_directory", options.launchDirectory},
         {"client_program", options.clientProgram},
@@ -216,6 +232,7 @@ bool QSocCliWorker::runAgentClientLoop(
             commandNames.clear();
             for (const auto &value : state.value("commands").toArray())
                 commandNames.append(value.toString());
+            commandNames.append("/figures");
             if (client.hasCapability("resources") && !commandNames.contains("/resources"))
                 commandNames.append("/resources");
         }
@@ -667,6 +684,31 @@ bool QSocCliWorker::runAgentClientLoop(
             mainLoop.quit();
             return;
         }
+        if (trimmed == "/figures") {
+            hideCompletion();
+            compositor.dismissTopBanner();
+            const auto figures = compositor.contentView().figures();
+            if (figures.isEmpty()) {
+                compositor.printContent("No figures in this session.\n");
+            } else {
+                QTuiMenu                  menu;
+                QList<QTuiMenu::MenuItem> items;
+                for (const auto &figure : figures)
+                    items.append({figure.second, {}, false});
+                menu.setTitle(QStringLiteral("Figures"));
+                menu.setItems(items);
+                menu.setSearchable(true);
+                menu.setHighlight(int(items.size()) - 1);
+                const int index = menu.exec();
+                if (index >= 0)
+                    compositor.contentView().revealBlock(figures[index].first);
+                inputMonitor.resetEscState();
+                inputMonitor.start(!singleQuery);
+            }
+            compositor.invalidate();
+            compositor.render();
+            return;
+        }
         static const QRegularExpression resourceCommand(QStringLiteral(R"(^/resources(?:\s|$))"));
         if (resourceCommand.match(trimmed).hasMatch()) {
             hideCompletion();
@@ -960,6 +1002,8 @@ bool QSocCliWorker::runAgentClientLoop(
             inputMonitor.insertText(ghost);
     });
     inputMonitor.start(!singleQuery);
+    if (const QByteArray typeAhead = QTuiGraphics::takeTypeAhead(); !typeAhead.isEmpty())
+        inputMonitor.processBytes(typeAhead.constData(), int(typeAhead.size()));
     if (!inputMonitor.isActive())
         return fail("Terminal input setup failed.");
     compositor.render();

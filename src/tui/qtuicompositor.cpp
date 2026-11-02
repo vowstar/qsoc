@@ -3,6 +3,10 @@
 
 #include "tui/qtuicompositor.h"
 
+#include "common/qsocsvg.h"
+#include "tui/qtuigraphics.h"
+#include "tui/qtuiimagepreviewblock.h"
+
 #include <utility>
 
 #include "tui/qsocmarkdownrenderer.h"
@@ -286,8 +290,7 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
                 /* Closing fence: code body is finalised; the next
                  * prose line will create a fresh assistant text block
                  * in the same run group. */
-                if (trimmed == QStringLiteral("```"))
-                    activeCode->setClosed();
+                closeCodeFence(activeCode, trimmed, forceDim);
                 activeCode = nullptr;
             }
             continue;
@@ -335,6 +338,40 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
     }
 }
 
+bool QTuiCompositor::drawsFigures() const
+{
+    return active && QTuiGraphics::protocol() != QTuiGraphics::Protocol::None;
+}
+
+void QTuiCompositor::appendSvgFigure(
+    const QString &label, const QByteArray &source, QTuiCodeBlock *sourceBlock)
+{
+    if (sourceBlock != nullptr && !drawsFigures())
+        return;
+    auto block = std::make_unique<QTuiImagePreviewBlock>(
+        label, QString::fromLatin1(QSocSvg::mimeType()), 0, 0, QByteArray());
+    auto *figure = block.get();
+    scrollView.appendBlock(std::move(block));
+    if (!drawsFigures()) {
+        figure->setFolded(true);
+        return;
+    }
+    figure->drawSvg(source, [this, sourceBlock](bool drawn) {
+        if (drawn && sourceBlock != nullptr && scrollView.contains(sourceBlock))
+            sourceBlock->setFolded(true);
+        invalidate();
+    });
+}
+
+void QTuiCompositor::closeCodeFence(QTuiCodeBlock *code, const QString &fence, bool dim)
+{
+    if (fence != QStringLiteral("```"))
+        return;
+    code->setClosed();
+    if (code->isSvg() && !dim)
+        appendSvgFigure(QStringLiteral("svg"), code->source().toUtf8(), code);
+}
+
 void QTuiCompositor::sealStream(StreamMode mode)
 {
     QString                 &pending   = (mode == StreamMode::Assistant) ? pendingAssistantLine
@@ -357,8 +394,7 @@ void QTuiCompositor::sealStream(StreamMode mode)
              * message on the fence line) must close the block, not land
              * inside the code body and double up at toMarkdown time. */
             if (pending.trimmed().startsWith(QStringLiteral("```"))) {
-                if (pending.trimmed() == QStringLiteral("```"))
-                    activeCode->setClosed();
+                closeCodeFence(activeCode, pending.trimmed(), mode == StreamMode::Reasoning);
                 activeCode = nullptr;
             } else {
                 activeCode->appendBody(pending);
@@ -430,6 +466,12 @@ void QTuiCompositor::clearTranscript(bool keepViewport)
     reasoningHistory.clear();
     toolBlocks.clear();
     activeTool = nullptr;
+    /* Bitmaps live in the terminal, not in the cells this clears. */
+    const QString graphicsDestroy = scrollView.collectGraphicsDestroy();
+    if (active && !graphicsDestroy.isEmpty()) {
+        fputs(graphicsDestroy.toUtf8().constData(), stdout);
+        fflush(stdout);
+    }
     scrollView.clear(keepViewport);
 }
 

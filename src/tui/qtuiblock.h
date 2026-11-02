@@ -168,6 +168,13 @@ public:
      */
     virtual QString toAnsi(int width);
 
+    /* The block rows the viewport shows on this frame. */
+    void setVisibleWindow(int firstRow, int rows)
+    {
+        visibleFirstRow = firstRow;
+        visibleRowCount = rows;
+    }
+
     enum class GraphicsState { Hidden, Keep, Place };
 
     virtual GraphicsState graphicsState(
@@ -248,6 +255,9 @@ public:
     virtual QString emitGraphicsDestroy() const { return {}; }
 
 protected:
+    int visibleFirstRow = 0;
+    int visibleRowCount = -1; /* Negative: not clipped by a viewport */
+
     /** Cached width that produced the current row layout. */
     int layoutWidth = -1;
     /** True until layout() satisfies the cache. */

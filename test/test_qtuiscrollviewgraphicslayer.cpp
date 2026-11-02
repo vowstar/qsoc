@@ -140,6 +140,9 @@ void clearGraphicsEnv()
           "KONSOLE_VERSION",
           "TERM",
           "TERM_PROGRAM",
+          "COLORTERM",
+          "QSOC_IMAGE_PROTOCOL",
+          "LC_TERMINAL",
           "TMUX",
           "STY",
           "QSOC_NO_IMAGE_GRAPHICS"}) {
@@ -175,7 +178,8 @@ private slots:
     void collectGraphicsDestroyWalksAllBlocks();
 
     /* Fold semantics */
-    void appendingImageFoldsPriorImagePreviews();
+    void appendingImageKeepsPriorImagesExpanded();
+    void oldestImagesReleaseBytesPastTheCap();
     void foldedBlockTriggersClearOnNextFrame();
     void foldedBlockNotPlacedEvenWhenVisible();
     void appendingNonImageDoesNotFoldImages();
@@ -359,32 +363,43 @@ void Test::collectGraphicsDestroyWalksAllBlocks()
     }
 }
 
-/* Auto-fold: when a new QTuiImagePreviewBlock is appended, every
- * previously appended image preview must be folded so the chat
- * keeps only the latest bitmap rendered as graphics. */
-void Test::appendingImageFoldsPriorImagePreviews()
+/* History keeps every image expanded, so scrolling back shows it again. */
+void Test::appendingImageKeepsPriorImagesExpanded()
 {
     QTuiScrollView view;
     auto           first = std::make_unique<QTuiImagePreviewBlock>(
         QStringLiteral("/tmp/first.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
     auto *firstPtr = first.get();
     view.appendBlock(std::move(first));
+    view.appendBlock(
+        std::make_unique<QTuiImagePreviewBlock>(
+            QStringLiteral("/tmp/second.png"),
+            QStringLiteral("image/png"),
+            320,
+            240,
+            makeRealPngBytes()));
     QVERIFY(!firstPtr->isFolded());
+}
 
-    auto second = std::make_unique<QTuiImagePreviewBlock>(
-        QStringLiteral("/tmp/second.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
-    auto *secondPtr = second.get();
-    view.appendBlock(std::move(second));
-    QVERIFY(firstPtr->isFolded());
-    QVERIFY(!secondPtr->isFolded());
-
-    auto third = std::make_unique<QTuiImagePreviewBlock>(
-        QStringLiteral("/tmp/third.png"), QStringLiteral("image/png"), 320, 240, makeRealPngBytes());
-    auto *thirdPtr = third.get();
-    view.appendBlock(std::move(third));
-    QVERIFY(firstPtr->isFolded());
-    QVERIFY(secondPtr->isFolded());
-    QVERIFY(!thirdPtr->isFolded());
+void Test::oldestImagesReleaseBytesPastTheCap()
+{
+    QTuiScrollView view;
+    view.setImageByteLimit(makeRealPngBytes().size() * 2);
+    QList<QTuiImagePreviewBlock *> images;
+    for (int index = 0; index < 3; ++index) {
+        auto block = std::make_unique<QTuiImagePreviewBlock>(
+            QStringLiteral("/tmp/%1.png").arg(index),
+            QStringLiteral("image/png"),
+            320,
+            240,
+            makeRealPngBytes());
+        images.append(block.get());
+        view.appendBlock(std::move(block));
+    }
+    QCOMPARE(images[0]->imageByteSize(), qint64(0));
+    QVERIFY(images[0]->isFolded());
+    QVERIFY(images[1]->imageByteSize() > 0);
+    QVERIFY(images[2]->imageByteSize() > 0);
 }
 
 void Test::foldedBlockTriggersClearOnNextFrame()
@@ -473,12 +488,15 @@ void Test::clippedImageClearsAndReturns()
     const QString  full = renderFrame(view, screen, 18);
     QVERIFY(full.contains(QStringLiteral("a=t")));
     QVERIFY(full.contains(QStringLiteral("a=p")));
-    const int shortHeight = image->rowCount() - 1;
+    QVERIFY(!full.contains(QStringLiteral("x=0,y=")));
 
-    const QString clipped = renderFrame(view, screen, shortHeight);
-    QCOMPARE(view.mapScreenToBlock(0).rowInBlock, 1);
-    QVERIFY(clipped.contains(QStringLiteral("a=d,d=i,")));
-    QVERIFY(!clipped.contains(QStringLiteral("a=p")));
+    /* The viewport shows the bottom of the image. */
+    const int     shortHeight = image->rowCount() - 2;
+    const QString clipped     = renderFrame(view, screen, shortHeight);
+    QCOMPARE(view.mapScreenToBlock(0).rowInBlock, 2);
+    QVERIFY(clipped.contains(QStringLiteral("a=p")));
+    QVERIFY(!clipped.contains(QStringLiteral("x=0,y=0,")));
+    QVERIFY(clipped.contains(QStringLiteral("x=0,y=")));
     for (int frame = 0; frame < 10; ++frame) {
         const QString held = renderFrame(view, screen, shortHeight);
         QVERIFY(!held.contains(QStringLiteral("\x1b_G")));
@@ -487,12 +505,20 @@ void Test::clippedImageClearsAndReturns()
     QVERIFY(restored.contains(QStringLiteral("a=p")));
     QVERIFY(!restored.contains(QStringLiteral("a=t")));
 
+    /* The viewport shows the top of the image. */
     view.render(screen, 0, shortHeight, 40);
     view.scrollUp(100);
     const QString bottomClipped = renderFrame(view, screen, shortHeight);
     QCOMPARE(view.mapScreenToBlock(0).rowInBlock, 0);
-    QVERIFY(bottomClipped.contains(QStringLiteral("a=d,d=i,")));
-    QVERIFY(!bottomClipped.contains(QStringLiteral("a=p")));
+    QVERIFY(bottomClipped.contains(QStringLiteral("x=0,y=0,")));
+    QVERIFY(bottomClipped.contains(QStringLiteral(",r=%1,").arg(shortHeight - 1)));
+
+    /* Only the metadata row is visible: the placement goes away. */
+    view.render(screen, 0, 1, 40);
+    view.scrollUp(100);
+    const QString metadataOnly = renderFrame(view, screen, 1);
+    QVERIFY(metadataOnly.contains(QStringLiteral("a=d,d=i,")));
+    QVERIFY(!metadataOnly.contains(QStringLiteral("a=p")));
 }
 
 void Test::twoImagesDeleteOnlyHiddenPlacement()
@@ -563,7 +589,7 @@ void Test::inlineMoveRepaintsOldRows()
         QVERIFY(screen.writtenRows().contains(row));
     }
     const QRect   movedRect = image->graphicsEraseRect();
-    const QString hidden    = renderFrame(view, screen, image->rowCount() - 1);
+    const QString hidden    = renderFrame(view, screen, image->rowCount() - 2);
     QVERIFY(!hidden.contains(QStringLiteral("\x1b]1337;File=")));
     for (int row = movedRect.top(); row <= movedRect.bottom(); ++row) {
         QVERIFY(screen.writtenRows().contains(row));

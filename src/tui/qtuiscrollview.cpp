@@ -3,6 +3,7 @@
 
 #include "tui/qtuiscrollview.h"
 
+#include "tui/qtuicodeblock.h"
 #include "tui/qtuiimagepreviewblock.h"
 #include "tui/qtuiwidget.h"
 
@@ -342,27 +343,31 @@ void QTuiScrollView::replaceLastStyledLine(const QList<QTuiStyledRun> &runs)
     blocks.back() = std::make_unique<StyledLineBlock>(runs);
 }
 
+void QTuiScrollView::enforceImageByteLimit()
+{
+    qint64 total = 0;
+    for (auto it = blocks.crbegin(); it != blocks.crend(); ++it) {
+        auto *image = dynamic_cast<QTuiImagePreviewBlock *>(it->get());
+        if (image == nullptr)
+            continue;
+        total += image->imageByteSize();
+        if (total > imageByteLimit_ && image->imageByteSize() > 0) {
+            total -= image->imageByteSize();
+            image->releaseImageBytes();
+        }
+    }
+}
+
 void QTuiScrollView::appendBlock(std::unique_ptr<QTuiBlock> block)
 {
     if (block == nullptr) {
         return;
     }
 
-    /* Auto-fold prior image previews when a new image arrives so the
-     * chat history keeps only the latest bitmap rendered as graphics
-     * and older ones collapse into their `[image: ...]` line. The
-     * scroll view's collectGraphicsLayer drops the placements of the
-     * newly folded blocks on the next frame so the cells return to
-     * normal text flow. */
-    if (dynamic_cast<QTuiImagePreviewBlock *>(block.get()) != nullptr) {
-        for (auto &existing : blocks) {
-            if (dynamic_cast<QTuiImagePreviewBlock *>(existing.get()) != nullptr) {
-                existing->setFolded(true);
-            }
-        }
-    }
-
+    const bool isImage = dynamic_cast<QTuiImagePreviewBlock *>(block.get()) != nullptr;
     blocks.push_back(std::move(block));
+    if (isImage)
+        enforceImageByteLimit();
     while (static_cast<int>(blocks.size()) > MAX_BLOCKS) {
         blocks.erase(blocks.begin());
         previousVisibleBlocks_.clear();
@@ -469,6 +474,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
             const int blockBottomGRow   = qMin(globalRow + rows, viewBottom);
             const int firstScreenRowOne = (startRow + (blockTopGRow - viewTop)) + 1;
             const int visible           = qMax(0, blockBottomGRow - blockTopGRow);
+            block->setVisibleWindow(blockTopGRow - globalRow, visible);
             visibleGraphicsEntries_.push_back(
                 VisibleGraphicsEntry{
                     block.get(), firstScreenRowOne, /*col=*/1, contentWidth, visible});
@@ -492,7 +498,7 @@ void QTuiScrollView::render(QTuiScreen &screen, int startRow, int height, int wi
                  * Cells with an explicit non-default bg keep theirs. */
                 for (int col = 0; col < contentWidth; ++col) {
                     QTuiCell &cell = screen.at(col, screenY);
-                    if (cell.bgColor == BG_DEFAULT) {
+                    if (cell.bgColor == BG_DEFAULT && cell.bgRgb == 0) {
                         cell.bgColor = 235; /* dark gray */
                     }
                 }
@@ -776,8 +782,48 @@ void QTuiScrollView::foldAllImagePreviews()
     for (auto &block : blocks) {
         if (dynamic_cast<QTuiImagePreviewBlock *>(block.get()) != nullptr) {
             block->setFolded(true);
+        } else if (
+            const auto *code = dynamic_cast<QTuiCodeBlock *>(block.get());
+            code != nullptr && code->isSvg()) {
+            /* The scrollback dump carries the source of a drawn figure. */
+            block->setFolded(false);
         }
     }
+}
+
+QList<QPair<int, QString>> QTuiScrollView::figures() const
+{
+    QList<QPair<int, QString>> result;
+    for (int index = 0; index < static_cast<int>(blocks.size()); ++index) {
+        if (const auto *image = dynamic_cast<const QTuiImagePreviewBlock *>(blocks[index].get()))
+            result.append({index, image->label()});
+    }
+    return result;
+}
+
+void QTuiScrollView::revealBlock(int blockIndex)
+{
+    if (blockIndex < 0 || blockIndex >= static_cast<int>(blocks.size()))
+        return;
+    blocks[blockIndex]->setFolded(false);
+    if (lastRenderWidth_ > 0)
+        blocks[blockIndex]->layout(lastRenderWidth_);
+    int top   = 0;
+    int total = 0;
+    for (int index = 0; index < static_cast<int>(blocks.size()); ++index) {
+        if (index == blockIndex)
+            top = total;
+        total += blocks[index]->rowCount();
+    }
+    scrollOffset = qMax(0, total - top - lastRenderHeight_);
+    setFocusedBlockIdx(blockIndex);
+}
+
+bool QTuiScrollView::contains(const QTuiBlock *block) const
+{
+    return std::any_of(blocks.cbegin(), blocks.cend(), [block](const auto &candidate) {
+        return candidate.get() == block;
+    });
 }
 
 void QTuiScrollView::clear(bool keepViewport)

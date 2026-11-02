@@ -5,30 +5,20 @@
 #define QTUIIMAGEPREVIEWBLOCK_H
 
 #include "tui/qtuiblock.h"
+#include "tui/qtuigraphics.h"
 
 #include <QByteArray>
+#include <QImage>
 #include <QString>
 
+#include <functional>
+#include <memory>
+
 /**
- * @brief Inline image preview block for read_file / web_fetch images.
- * @details Holds the raw image bytes plus enough metadata to render
- *          either a graphical preview (Sixel / iTerm2 / Kitty
- *          graphics) or a textual placeholder. The cell-grid paint
- *          path always renders the placeholder; the cooked-mode
- *          toAnsi() path emits the right escape sequence based on a
- *          one-shot protocol probe so the user sees the actual image
- *          inline in their terminal scrollback after the agent exits.
- *
- *          Detection priority (env-only, no DA1 probe):
- *          - Kitty graphics: $KITTY_WINDOW_ID, $GHOSTTY_RESOURCES_DIR,
- *            $WEZTERM_EXECUTABLE, $KONSOLE_VERSION, $TERM in
- *            {xterm-kitty, xterm-ghostty}, or $TERM_PROGRAM in
- *            {ghostty, wezterm, rio}
- *          - iTerm2 inline: $TERM_PROGRAM in {iterm.app, vscode,
- *            mintty} or $TERM=mintty
- *          - Sixel placeholder: $TERM matches foot|mlterm|contour
- *            (no encoder bundled yet)
- *          - otherwise: text placeholder only
+ * @brief One image in the transcript: a metadata line above its picture.
+ * @details The picture is a terminal bitmap where the protocol allows one and
+ *          half-blocks painted into the cells otherwise. Cells also stand in
+ *          for an inline bitmap the viewport clips.
  */
 class QTuiImagePreviewBlock : public QTuiBlock
 {
@@ -69,17 +59,22 @@ public:
     QString emitGraphicsClear() const override;
     QString emitGraphicsDestroy() const override;
 
-    /* Image previews participate in fold so older bitmaps collapse
-     * into their `[image: ...]` line when a newer image arrives.
-     * Folding drops the cell rectangle from layout(), suppresses
+    /* Folding drops the cell rectangle from layout(), suppresses
      * future placement escapes, and the scroll view emits a clear
      * for any placement that was active on the prior frame. */
     bool isFoldable() const override { return true; }
 
-    /* Cell-grid footprint reserved for the eventual graphics overlay.
-     * Zero on text-only terminals; positive when a graphics protocol
-     * is available so subsequent compositor frames can paint a real
-     * image into the same rectangle. */
+    /* Draw SVG source into this block; @p changed runs after the result lands. */
+    void drawSvg(const QByteArray &source, std::function<void(bool drawn)> changed);
+
+    /* The saved file behind this image; its metadata name links to it. */
+    void    setSourceFile(const QString &path) { sourceFile = path; }
+    QString label() const { return sourceLabel; }
+
+    qint64 imageByteSize() const { return bytes.size(); }
+    /* The block keeps its metadata line after the bitmap goes. */
+    void releaseImageBytes();
+
     int imageCellRows() const { return cellRows; }
     int imageCellCols() const { return cellCols; }
 
@@ -89,24 +84,49 @@ private:
     int        widthPx  = 0;
     int        heightPx = 0;
     QByteArray bytes;
+    qint64     byteSize = 0;
 
     int cellRows = 0;
     int cellCols = 0;
 
-    /* Kitty graphics state machine. The first emitGraphicsLayer call
-     * uploads the PNG bytes once with `a=t,i=<id>` so subsequent
-     * frames only need a small `a=p` placement at the new cursor
-     * position. Mutable because emitGraphicsLayer is logically
-     * `const` from the scroll view's point of view but caches the
-     * upload-once decision. */
-    struct KittyState
+    /* Image rows of the block on screen: the first one and how many. */
+    struct ImageWindow
     {
-        quint32 imageId     = 0;
-        bool    transmitted = false;
+        int top   = 0;
+        int count = 0;
     };
-    mutable KittyState kittyState;
+    ImageWindow imageWindow(int visibleRows) const;
+    void        paintCells(QTuiScreen &screen, int screenRow, int imageRow, int width) const;
+    void        paintPlaceholders(QTuiScreen &screen, int screenRow, int imageRow, int width) const;
+    bool        transmitKitty(QString *out) const;
+    QRect       placementFor(
+        int firstScreenRow, int firstScreenCol, int contentWidth, const ImageWindow &window) const;
+    QString emitPlaceholders(const ImageWindow &window) const;
+    QString inlinePayload(const QSize &cells) const;
+
+    /* Mutable because emitGraphicsLayer is logically `const` from the scroll
+     * view's point of view but caches the upload-once decision. */
+    mutable quint32 kittyImageId = 0;
 
     mutable QRect placementRect;
+    mutable int   placementTop = 0;
+
+    QString sourceFile;
+    bool    released      = false;
+    int     layoutMaxRows = 0;
+
+    QTuiGraphics::Protocol protocol_;
+    bool                   placeholders_;
+
+    /* Derived pictures, built when first shown. */
+    mutable QImage  cellRaster;
+    mutable QSize   inlineCells;
+    mutable QString inlineData;
+    mutable QSize   placedCells;
+
+    /* Replaces the size statistics on the metadata line while set. */
+    QString               status;
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
     QList<QList<QTuiStyledRun>> rendered;
 };

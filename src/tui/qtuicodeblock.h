@@ -44,8 +44,10 @@ public:
     /* Streaming append: tack one more line of code onto sourceCode and
      * invalidate the layout. The trailing newline is supplied by the
      * caller so consecutive appends concatenate cleanly. */
-    void appendBody(const QString &chunk);
-    void setClosed();
+    void    appendBody(const QString &chunk);
+    void    setClosed();
+    bool    isSvg() const { return language == QStringLiteral("svg"); }
+    QString source() const { return sourceCode; }
 
     int  groupId() const { return groupId_; }
     bool forceDim() const { return forceDim_; }

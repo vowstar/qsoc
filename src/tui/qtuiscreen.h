@@ -33,12 +33,20 @@ using QTuiBgColor                       = std::uint8_t;
 static constexpr QTuiBgColor BG_DEFAULT = 0;
 
 /**
+ * @brief Optional 24-bit cell color. 0 = none, else kRgbSet | 0xRRGGBB.
+ * @details Takes priority over the palette color of the same plane.
+ */
+static constexpr std::uint32_t kRgbSet = 0x01000000;
+
+/**
  * @brief A single terminal cell with character and style attributes
  */
 struct QTuiCell
 {
     QChar character = ' ';
     QChar lowSurrogate;
+    /* Combining marks drawn with this cell's character. */
+    QString combining;
 
     void setScalar(char32_t value)
     {
@@ -58,16 +66,18 @@ struct QTuiCell
     QString text() const
     {
         const char32_t value = codePoint();
-        return QString::fromUcs4(&value, 1);
+        return QString::fromUcs4(&value, 1) + combining;
     }
 
-    bool        bold      = false;
-    bool        italic    = false;
-    bool        dim       = false;
-    bool        underline = false;
-    bool        inverted  = false;
-    QTuiFgColor fgColor   = QTuiFgColor::Default;
-    QTuiBgColor bgColor   = BG_DEFAULT;
+    bool          bold      = false;
+    bool          italic    = false;
+    bool          dim       = false;
+    bool          underline = false;
+    bool          inverted  = false;
+    QTuiFgColor   fgColor   = QTuiFgColor::Default;
+    QTuiBgColor   bgColor   = BG_DEFAULT;
+    std::uint32_t fgRgb     = 0;
+    std::uint32_t bgRgb     = 0;
     /* Optional OSC 8 hyperlink target. Empty disables hyperlink mode
      * for the cell. Modern terminals (iTerm2, VTE 0.50+, Alacritty,
      * Kitty, foot, WezTerm) honour this; older ones ignore the OSC
@@ -83,10 +93,12 @@ struct QTuiCell
 
     bool operator==(const QTuiCell &other) const
     {
-        return codePoint() == other.codePoint() && bold == other.bold && italic == other.italic
-               && dim == other.dim && underline == other.underline && inverted == other.inverted
-               && fgColor == other.fgColor && bgColor == other.bgColor
-               && hyperlink == other.hyperlink && decorative == other.decorative;
+        return codePoint() == other.codePoint() && combining == other.combining
+               && bold == other.bold && italic == other.italic && dim == other.dim
+               && underline == other.underline && inverted == other.inverted
+               && fgColor == other.fgColor && bgColor == other.bgColor && fgRgb == other.fgRgb
+               && bgRgb == other.bgRgb && hyperlink == other.hyperlink
+               && decorative == other.decorative;
     }
     bool operator!=(const QTuiCell &other) const { return !(*this == other); }
 };

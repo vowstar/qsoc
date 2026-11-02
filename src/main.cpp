@@ -8,6 +8,8 @@
 #include "common/qsocwinconsole.h"
 #include "common/qstatictranslator.h"
 
+#include "tui/qtuisvg.h"
+
 #include <QCoreApplication>
 #include <QFile>
 #include <QProcess>
@@ -76,6 +78,10 @@ int launchGui(int argc, char *argv[], int guiIndex)
 
 int main(int argc, char *argv[])
 {
+    /* Runs before any console setup: the helper shares the terminal of its parent. */
+    if (const int helper = QTuiSvg::helperMain(argc, argv); helper >= 0)
+        return helper;
+
     /* Force UTF-8 + VT on Windows console before any output happens. No-op
        on POSIX. Must run before QSocConsole::install() so the first byte
        written lands in a console already configured for UTF-8 + ANSI. */

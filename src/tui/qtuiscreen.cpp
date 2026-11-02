@@ -7,6 +7,19 @@
 
 QTuiCell QTuiScreen::defaultCell;
 
+namespace {
+
+QString rgbAttribute(int plane, std::uint32_t rgb)
+{
+    return QStringLiteral("\033[%1;2;%2;%3;%4m")
+        .arg(plane)
+        .arg((rgb >> 16) & 0xff)
+        .arg((rgb >> 8) & 0xff)
+        .arg(rgb & 0xff);
+}
+
+} // namespace
+
 QTuiScreen::QTuiScreen(int width, int height)
 {
     resize(width, height);
@@ -170,14 +183,16 @@ QString QTuiScreen::toAnsi()
     /* Cursor home */
     output += "\033[H";
 
-    bool        currentBold      = false;
-    bool        currentItalic    = false;
-    bool        currentDim       = false;
-    bool        currentUnderline = false;
-    bool        currentInverted  = false;
-    QTuiFgColor currentColor     = QTuiFgColor::Default;
-    QTuiBgColor currentBg        = BG_DEFAULT;
-    QString     currentLink;
+    bool          currentBold      = false;
+    bool          currentItalic    = false;
+    bool          currentDim       = false;
+    bool          currentUnderline = false;
+    bool          currentInverted  = false;
+    QTuiFgColor   currentColor     = QTuiFgColor::Default;
+    QTuiBgColor   currentBg        = BG_DEFAULT;
+    std::uint32_t currentFgRgb     = 0;
+    std::uint32_t currentBgRgb     = 0;
+    QString       currentLink;
 
     for (int row = 0; row < rows; row++) {
         /* Check if this row changed (skip unchanged rows for performance) */
@@ -216,11 +231,29 @@ QString QTuiScreen::toAnsi()
              * right. Detect, emit once, skip the trailing cell. */
             const int charWidth = QTuiText::isWideChar(cell.codePoint()) ? 2 : 1;
 
+            /* Adjacent image cells differ only in RGB: skip the reset and the
+             * palette attributes, which dominate a half-block frame. */
+            const bool plainStyle = !currentBold && !currentItalic && !currentDim
+                                    && !currentUnderline && !currentInverted
+                                    && currentColor == QTuiFgColor::Default
+                                    && currentBg == BG_DEFAULT;
+            if (plainStyle && cell.fgRgb != 0 && cell.bgRgb != 0 && !cell.bold && !cell.italic
+                && !cell.dim && !cell.underline && !cell.inverted
+                && cell.fgColor == QTuiFgColor::Default && cell.bgColor == BG_DEFAULT) {
+                if (cell.fgRgb != currentFgRgb)
+                    output += rgbAttribute(38, cell.fgRgb);
+                if (cell.bgRgb != currentBgRgb)
+                    output += rgbAttribute(48, cell.bgRgb);
+                currentFgRgb = cell.fgRgb;
+                currentBgRgb = cell.bgRgb;
+            }
+
             /* Emit style changes */
             bool needReset = false;
             if (cell.bold != currentBold || cell.italic != currentItalic || cell.dim != currentDim
                 || cell.underline != currentUnderline || cell.inverted != currentInverted
-                || cell.fgColor != currentColor || cell.bgColor != currentBg) {
+                || cell.fgColor != currentColor || cell.bgColor != currentBg
+                || cell.fgRgb != currentFgRgb || cell.bgRgb != currentBgRgb) {
                 needReset = true;
             }
 
@@ -233,6 +266,8 @@ QString QTuiScreen::toAnsi()
                 currentInverted  = false;
                 currentColor     = QTuiFgColor::Default;
                 currentBg        = BG_DEFAULT;
+                currentFgRgb     = 0;
+                currentBgRgb     = 0;
 
                 QString attrs;
                 if (cell.bold) {
@@ -260,6 +295,12 @@ QString QTuiScreen::toAnsi()
                     attrs.chop(1);
                     output += "\033[" + attrs + "m";
                 }
+                if (cell.fgRgb != 0)
+                    output += rgbAttribute(38, cell.fgRgb);
+                if (cell.bgRgb != 0)
+                    output += rgbAttribute(48, cell.bgRgb);
+                currentFgRgb     = cell.fgRgb;
+                currentBgRgb     = cell.bgRgb;
                 currentBold      = cell.bold;
                 currentItalic    = cell.italic;
                 currentDim       = cell.dim;
@@ -297,7 +338,7 @@ QString QTuiScreen::toAnsi()
     }
     /* Reset attributes at end */
     if (currentBold || currentDim || currentInverted || currentColor != QTuiFgColor::Default
-        || currentBg != BG_DEFAULT) {
+        || currentBg != BG_DEFAULT || currentFgRgb != 0 || currentBgRgb != 0) {
         output += "\033[0m";
     }
 

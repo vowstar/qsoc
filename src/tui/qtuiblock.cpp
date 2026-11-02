@@ -12,16 +12,18 @@ namespace {
  * came before / after, which is what the cooked-mode dumper wants. */
 QString rowToAnsi(const QTuiScreen &screen, int row, int width)
 {
-    QString     output;
-    QString     currentLink;
-    bool        curBold      = false;
-    bool        curItalic    = false;
-    bool        curDim       = false;
-    bool        curUnderline = false;
-    bool        curInverted  = false;
-    QTuiFgColor curFg        = QTuiFgColor::Default;
-    QTuiBgColor curBg        = BG_DEFAULT;
-    bool        anyStyle     = false;
+    QString       output;
+    QString       currentLink;
+    bool          curBold      = false;
+    bool          curItalic    = false;
+    bool          curDim       = false;
+    bool          curUnderline = false;
+    bool          curInverted  = false;
+    QTuiFgColor   curFg        = QTuiFgColor::Default;
+    QTuiBgColor   curBg        = BG_DEFAULT;
+    std::uint32_t curFgRgb     = 0;
+    std::uint32_t curBgRgb     = 0;
+    bool          anyStyle     = false;
 
     auto resetStyle = [&]() {
         if (anyStyle) {
@@ -34,6 +36,8 @@ QString rowToAnsi(const QTuiScreen &screen, int row, int width)
         curInverted  = false;
         curFg        = QTuiFgColor::Default;
         curBg        = BG_DEFAULT;
+        curFgRgb     = 0;
+        curBgRgb     = 0;
         anyStyle     = false;
     };
 
@@ -43,7 +47,8 @@ QString rowToAnsi(const QTuiScreen &screen, int row, int width)
 
         const bool changed = cell.bold != curBold || cell.italic != curItalic || cell.dim != curDim
                              || cell.underline != curUnderline || cell.inverted != curInverted
-                             || cell.fgColor != curFg || cell.bgColor != curBg;
+                             || cell.fgColor != curFg || cell.bgColor != curBg
+                             || cell.fgRgb != curFgRgb || cell.bgRgb != curBgRgb;
         if (changed) {
             resetStyle();
             QString attrs;
@@ -68,6 +73,18 @@ QString rowToAnsi(const QTuiScreen &screen, int row, int width)
             if (cell.bgColor != BG_DEFAULT) {
                 attrs += QStringLiteral("48;5;%1;").arg(static_cast<int>(cell.bgColor));
             }
+            if (cell.fgRgb != 0) {
+                attrs += QStringLiteral("38;2;%1;%2;%3;")
+                             .arg((cell.fgRgb >> 16) & 0xff)
+                             .arg((cell.fgRgb >> 8) & 0xff)
+                             .arg(cell.fgRgb & 0xff);
+            }
+            if (cell.bgRgb != 0) {
+                attrs += QStringLiteral("48;2;%1;%2;%3;")
+                             .arg((cell.bgRgb >> 16) & 0xff)
+                             .arg((cell.bgRgb >> 8) & 0xff)
+                             .arg(cell.bgRgb & 0xff);
+            }
             if (!attrs.isEmpty()) {
                 attrs.chop(1);
                 output += QStringLiteral("\033[") + attrs + QLatin1Char('m');
@@ -80,6 +97,8 @@ QString rowToAnsi(const QTuiScreen &screen, int row, int width)
             curInverted  = cell.inverted;
             curFg        = cell.fgColor;
             curBg        = cell.bgColor;
+            curFgRgb     = cell.fgRgb;
+            curBgRgb     = cell.bgRgb;
         }
 
         if (cell.hyperlink != currentLink) {

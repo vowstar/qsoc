@@ -590,7 +590,7 @@ function(qsoc_add_static_library name)
 endfunction()
 
 qsoc_add_static_library(qsoc_tui ${QSOC_TUI_FILES})
-target_link_libraries(qsoc_tui PUBLIC qsoc_common Qt${QT_VERSION_MAJOR}::Gui ${CMARK_GFM_LIBRARIES})
+target_link_libraries(qsoc_tui PUBLIC qsoc_common Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Svg ${CMARK_GFM_LIBRARIES})
 target_include_directories(qsoc_tui SYSTEM PUBLIC "${CMARK_GFM_INCLUDE_DIRS}")
 target_compile_definitions(qsoc_tui PUBLIC CMARK_GFM_STATIC_DEFINE CMARK_GFM_EXTENSIONS_STATIC_DEFINE)
 

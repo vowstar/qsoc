@@ -149,9 +149,17 @@ public:
      * scrollback dump emits one metadata line per image instead of
      * stacking a kitty placement on top of the placeholder cells. */
     void foldAllImagePreviews();
+    bool contains(const QTuiBlock *block) const;
+    /* Every image block in history, by block index; unfold and scroll to one. */
+    QList<QPair<int, QString>> figures() const;
+    void                       revealBlock(int blockIndex);
+    void                       setImageByteLimit(qint64 bytes) { imageByteLimit_ = bytes; }
 
 private:
+    void enforceImageByteLimit();
+
     std::vector<std::unique_ptr<QTuiBlock>> blocks;
+    qint64                                  imageByteLimit_ = 512 * 1024 * 1024;
     QString                                 partialLine; /* Current incomplete line */
     LineStyle                               partialStyle      = Normal;
     int                                     scrollOffset      = 0; /* 0 = at bottom */
