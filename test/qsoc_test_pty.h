@@ -66,8 +66,9 @@ inline bool waitForPort(int port, int timeoutMs)
 
 inline bool waitForMockReady(QProcess &mock, int port, int timeoutMs)
 {
-    // The mock's MOCK_READY line only proves the interpreter reached main(),
-    // not that the server bound, so a TCP connect is the readiness proof.
+    // The mock's MOCK_READY line only proves the interpreter reached main().
+    // A connect alone is no proof either: clients were refused right after one
+    // on macOS, and a socket can connect to itself, so the server must answer.
     QElapsedTimer clock;
     clock.start();
     while (clock.elapsed() < timeoutMs) {
@@ -77,7 +78,10 @@ inline bool waitForMockReady(QProcess &mock, int port, int timeoutMs)
         QTcpSocket probe;
         probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(port));
         if (probe.waitForConnected(200)) {
-            return true;
+            probe.write("GET /hits HTTP/1.0\r\n\r\n");
+            if (probe.waitForReadyRead(1000) && probe.readAll().startsWith("HTTP/")) {
+                return true;
+            }
         }
         QTest::qWait(20);
     }

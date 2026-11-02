@@ -168,8 +168,8 @@ public:
         agent->setMessages(history);
     }
 
-    /* A Chat Completions entry whose tokenizer is the mock's /tokenize on host. */
-    static QByteArray chat(const Mock &mock, const QString &host)
+    /* A Chat Completions entry whose tokenizer is /tokenize on another mock. */
+    static QByteArray chat(const Mock &mock, const Mock &tokenizer)
     {
         return configuration(
             mock.url(QStringLiteral("127.0.0.1"), QStringLiteral("/v1/chat/completions")),
@@ -177,7 +177,7 @@ public:
                 "      chat_template_kwargs:\n"
                 "        enable_thinking: false\n"
                 "      tokenizer: %1\n")
-                .arg(mock.url(host, QStringLiteral("/tokenize"))));
+                .arg(tokenizer.url(QStringLiteral("127.0.0.1"), QStringLiteral("/tokenize"))));
     }
 
     /* A Messages API entry with extra model keys. */
@@ -304,7 +304,7 @@ private slots:
     {
         Mock mock({{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")}});
         QVERIFY(mock.ready());
-        Session    session(Session::chat(mock, QStringLiteral("127.0.0.1")));
+        Session    session(Session::chat(mock, mock));
         const auto estimate = session.agent->contextEstimate();
         QVERIFY(estimate.point() <= session.gate() && estimate.upper() > session.gate());
         QCOMPARE(session.agent->compactIfNeeded(), 0);
@@ -332,7 +332,7 @@ private slots:
     {
         Mock mock({});
         QVERIFY(mock.ready());
-        Session session(Session::chat(mock, QStringLiteral("127.0.0.1")), 400);
+        Session session(Session::chat(mock, mock), 400);
         QVERIFY(session.agent->contextEstimate().upper() <= session.gate());
         QCOMPARE(session.agent->compactIfNeeded(), 0);
         QCOMPARE(mock.hits("tokenize"), 0);
@@ -340,12 +340,14 @@ private slots:
 
     void otherOriginGetsNoKey()
     {
-        Mock mock({{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")}});
+        Mock mock({});
+        Mock tokenizer({{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")}});
         QVERIFY(mock.ready());
-        Session session(Session::chat(mock, QStringLiteral("localhost")));
+        QVERIFY(tokenizer.ready());
+        Session session(Session::chat(mock, tokenizer));
         QCOMPARE(session.agent->compactIfNeeded(), 0);
-        QCOMPARE(mock.hits("tokenize"), 1);
-        QCOMPARE(mock.hits("tokenize_auth"), 0);
+        QCOMPARE(tokenizer.hits("tokenize"), 1);
+        QCOMPARE(tokenizer.hits("tokenize_auth"), 0);
         QVERIFY(
             QLLMService::sameOrigin(
                 QUrl(QStringLiteral("https://api.example.com/v1/chat")),
@@ -371,7 +373,7 @@ private slots:
         QFETCH(QString, mode);
         Mock mock({{QStringLiteral("MOCK_TOKENIZE"), mode}});
         QVERIFY(mock.ready());
-        Session    session(Session::chat(mock, QStringLiteral("127.0.0.1")));
+        Session    session(Session::chat(mock, mock));
         QSignalSpy fellBack(session.agent.get(), &QSocAgent::tokenCountFellBack);
         session.agent->compactIfNeeded();
         QCOMPARE(mock.hits("tokenize"), 1);
@@ -406,7 +408,7 @@ private slots:
             {{QStringLiteral("MOCK_TOKENIZE_COUNT"), QStringLiteral("5000")},
              {QStringLiteral("MOCK_PROMPT_TOKENS"), QString::number(reported)}});
         QVERIFY(mock.ready());
-        Session    session(Session::chat(mock, QStringLiteral("127.0.0.1")));
+        Session    session(Session::chat(mock, mock));
         QSignalSpy fellBack(session.agent.get(), &QSocAgent::tokenCountFellBack);
         session.agent->run(QStringLiteral("Count the registers."));
         QCOMPARE(mock.hits("tokenize"), 1);

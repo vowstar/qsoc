@@ -219,7 +219,10 @@ public:
             }
             QTcpSocket probe;
             probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(m_port));
-            if (probe.waitForConnected(200)) {
+            /* Only sshd's banner proves it listens: clients were refused right
+             * after a bare connect on macOS. */
+            if (probe.waitForConnected(200) && probe.waitForReadyRead(2000)
+                && probe.readAll().startsWith("SSH-")) {
                 probe.disconnectFromHost();
                 m_state = State::Ready;
                 return true;
