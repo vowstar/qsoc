@@ -60,6 +60,8 @@ const char *attachmentMarkerClose();
  * @param llm          Active LLM service for capability gating; null
  *                     means "treat as text-only model" so the result
  *                     degrades to an alt-text summary.
+ * @param previewRefused When the model cannot take the image, still carry
+ *                     a `display_only` attachment for the user's preview.
  * @return Same shape as the prior in-tree implementation:
  *         "[image attached: WxH ~tokens (NN KB mime) from <label>]\n
  *          \x01<qsoc:image_attachment>{...json...}</qsoc:image_attachment>\x01"
@@ -67,7 +69,11 @@ const char *attachmentMarkerClose();
  *         when capability gate / token budget refuses to inline.
  */
 QString buildAttachmentResult(
-    const QString &sourceLabel, const QString &mimeHint, const QByteArray &body, QLLMService *llm);
+    const QString    &sourceLabel,
+    const QString    &mimeHint,
+    const QByteArray &body,
+    QLLMService      *llm,
+    bool              previewRefused = false);
 
 /**
  * @brief Outcome of @ref compressWithinBudget.

@@ -1172,6 +1172,8 @@ public:
         int     byteSize  = 0;
         int     estTokens = 0;
         bool    resized   = false;
+        /* Shown to the user only, never sent to the model. */
+        bool displayOnly = false;
     };
 
     /**
@@ -1186,7 +1188,7 @@ public:
 
 private:
     qint64  toolBatchRemainingTokens(bool reserveResults = false) const;
-    QString queueToolAttachments(const QList<AttachmentSpec> &attachments);
+    QString queueToolAttachments(const QList<AttachmentSpec> &allAttachments);
 
     /**
      * @brief Add a tool result message to the conversation history

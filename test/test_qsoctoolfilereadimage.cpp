@@ -4,6 +4,7 @@
 /* read_file with image MIME -> attachment marker. The fixtures are
  * generated at runtime; nothing binary is committed to the repo. */
 
+#include "agent/qsocagent.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
@@ -170,8 +171,30 @@ llm:
         delete tool;
 
         QVERIFY2(result.contains(QStringLiteral("not inlined")), qPrintable(result.left(200)));
-        const QString openMarker = QString::fromLatin1(QSocImageAttach::attachmentMarkerOpen());
-        QVERIFY(!result.contains(openMarker));
+        QVERIFY(result.contains(QStringLiteral("user sees a preview")));
+        QList<QSocAgent::AttachmentSpec> attachments;
+        QSocAgent::extractImageAttachments(result, &attachments);
+        QCOMPARE(attachments.size(), 1);
+        QVERIFY(attachments.first().displayOnly);
+        QCOMPARE(attachments.first().width, 64);
+    }
+
+    /* A refused oversized image still previews, downscaled below the event limit. */
+    void textOnlyPreviewDownscalesLargeImage()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        const QString path
+            = writeTempFile(tmp, QStringLiteral("big.png"), makePng(5120, 2560, QColor(Qt::blue)));
+        auto         *tool   = new QSocToolFileRead(this, nullptr, nullptr);
+        const QString result = runRead(tool, path);
+        delete tool;
+        QList<QSocAgent::AttachmentSpec> attachments;
+        QSocAgent::extractImageAttachments(result, &attachments);
+        QCOMPARE(attachments.size(), 1);
+        QVERIFY(attachments.first().displayOnly);
+        QCOMPARE(attachments.first().width, 2560);
+        QCOMPARE(attachments.first().height, 1280);
     }
 
     /* No LLM pointer at all (remote-mode parity): same fallback. */

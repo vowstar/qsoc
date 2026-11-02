@@ -209,8 +209,60 @@ const char *attachmentMarkerClose()
     return "</qsoc:image_attachment>\x01";
 }
 
+namespace {
+
+QString wrapAttachmentPayload(const nlohmann::json &payload)
+{
+    return QString::fromLatin1(attachmentMarkerOpen()) + QString::fromStdString(payload.dump())
+           + QString::fromLatin1(attachmentMarkerClose());
+}
+
+/* Refused images still reach the user. The bound keeps the event below the
+ * runtime's preview limit. */
+QString displayOnlyMarker(const QString &sourceLabel, const QByteArray &body)
+{
+    constexpr int previewDimension = 2560;
+    constexpr int previewBytes     = 6 * 1024 * 1024;
+    QImage        image            = QImage::fromData(body);
+    if (image.isNull())
+        return {};
+    const bool oversize = std::max(image.width(), image.height()) > previewDimension;
+    if (!oversize && body.size() <= previewBytes) {
+        return wrapAttachmentPayload(
+            {{"mime", detectMimeByMagic(body).toStdString()},
+             {"data", body.toBase64().toStdString()},
+             {"source_url", sourceLabel.toStdString()},
+             {"width", image.width()},
+             {"height", image.height()},
+             {"byte_size", body.size()},
+             {"display_only", true}});
+    }
+    if (oversize) {
+        image = image.scaled(
+            previewDimension, previewDimension, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    const auto outcome = compressWithinBudget(image, QStringLiteral("image/png"), previewBytes);
+    if (outcome.data.isEmpty() || outcome.data.size() > previewBytes)
+        return {};
+    const QImage encoded = QImage::fromData(outcome.data);
+    return wrapAttachmentPayload(
+        {{"mime", outboundMimeFor(outcome.format)},
+         {"data", outcome.data.toBase64().toStdString()},
+         {"source_url", sourceLabel.toStdString()},
+         {"width", encoded.width()},
+         {"height", encoded.height()},
+         {"byte_size", outcome.data.size()},
+         {"display_only", true}});
+}
+
+} // namespace
+
 QString buildAttachmentResult(
-    const QString &sourceLabel, const QString &mimeHint, const QByteArray &body, QLLMService *llm)
+    const QString    &sourceLabel,
+    const QString    &mimeHint,
+    const QByteArray &body,
+    QLLMService      *llm,
+    bool              previewRefused)
 {
     /* Sniff dimensions without decoding pixels. Saves memory for the
      * common case of a 4K screenshot; we only ever decode if we are
@@ -253,7 +305,14 @@ QString buildAttachmentResult(
     };
 
     if (!accepts) {
-        return fallback(QStringLiteral("current model does not accept images"));
+        if (!previewRefused)
+            return fallback(QStringLiteral("current model does not accept images"));
+        const QString marker = displayOnlyMarker(sourceLabel, body);
+        if (marker.isEmpty())
+            return fallback(QStringLiteral("current model does not accept images"));
+        return fallback(
+                   QStringLiteral("current model does not accept images; the user sees a preview"))
+               + QLatin1Char('\n') + marker;
     }
 
     QImage decoded = reader.read();
@@ -365,9 +424,7 @@ QString buildAttachmentResult(
     result.reserve(static_cast<int>(b64.size()) + 256);
     result += summary;
     result += QLatin1Char('\n');
-    result += QString::fromLatin1(attachmentMarkerOpen());
-    result += QString::fromStdString(payload.dump());
-    result += QString::fromLatin1(attachmentMarkerClose());
+    result += wrapAttachmentPayload(payload);
     return result;
 }
 

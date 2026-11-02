@@ -141,8 +141,12 @@ qint64 QSocAgent::toolBatchRemainingTokens(bool reserveResults) const
     return std::max(qint64(0), remaining - reserved - 256);
 }
 
-QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &attachments)
+QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &allAttachments)
 {
+    QList<AttachmentSpec> attachments;
+    for (const auto &attachment : allAttachments)
+        if (!attachment.displayOnly)
+            attachments.append(attachment);
     const auto run = activeRun_;
     if (attachments.isEmpty() || !run || !run->toolBatchStart || !isCurrentRun(run))
         return {};

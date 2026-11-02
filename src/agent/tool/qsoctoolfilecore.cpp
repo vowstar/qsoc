@@ -406,7 +406,7 @@ QString Reader::render(const QString &path, QLLMService *llm) const
             return QStringLiteral("Error: image is larger than the %1 MiB read limit: %2")
                 .arg(limitMiB, path);
         }
-        return QSocImageAttach::buildAttachmentResult(path, m_mime, m_body, llm);
+        return QSocImageAttach::buildAttachmentResult(path, m_mime, m_body, llm, true);
     }
     QString text = QString::fromUtf8(m_body);
     text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));

@@ -3246,13 +3246,12 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
             "- The active model is text-only; it cannot see images.\n"
             "- Do NOT ask the user to attach screenshots, paste images, or\n"
             "  upload pictures; describe what you need in words instead.\n"
-            "- Do NOT call web_image, image-extracting variants of web_fetch,\n"
-            "  or any tool whose primary output is an image. Prefer the\n"
-            "  text-rendering tool of the same family when available.\n"
             "- When a tool returns an image surrogate like\n"
             "  `[image: file mime=... dims=... bytes=... est_tokens=...]`,\n"
             "  treat the surrogate text as the only information you have\n"
-            "  about that image; do not pretend to have seen its contents.\n");
+            "  about that image; do not pretend to have seen its contents.\n"
+            "- read_file on an image file shows the user a preview even though you\n"
+            "  cannot see it, so use it when the user wants to look at an image.\n");
     }
 
     /* Host catalog: emitted when the catalog has entries or a remote
@@ -3438,6 +3437,7 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
                 spec.byteSize  = payload.value("byte_size", 0);
                 spec.estTokens = payload.value("est_tokens", 0);
                 spec.resized   = payload.value("resized", false);
+                spec.displayOnly = payload.value("display_only", false);
                 if (!spec.mime.isEmpty() && !spec.dataB64.isEmpty()) {
                     out->append(spec);
                 }
