@@ -115,6 +115,7 @@ bool QSocCliWorker::runAgentClientLoop(
     };
     QJsonObject params{
         {"display_surface", displaySurface()},
+        {"table_charts", !singleQuery && QTuiCompositor::drawsTableCharts()},
         {"project_directory", options.projectDirectory},
         {"launch_directory", options.launchDirectory},
         {"client_program", options.clientProgram},

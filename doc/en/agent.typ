@@ -632,7 +632,12 @@ folds to one line, and `Tab` on the focused block shows it again. `var(--fg)`, `
 embedded documents, and external references are not drawn. A figure that cannot
 be drawn keeps its source.
 
-`/figures` lists the session's images.
+On terminals that show bitmaps, a Markdown table with at least three rows and
+comparable numbers gets a chart under its text: a line chart when the first
+column is numeric or its header names an ordered axis such as time, step, or
+version, and a bar chart otherwise. The table stays as text.
+`QSOC_NO_TABLE_CHARTS` turns this off. `/figures` lists the session's images and
+charts.
 
 History, logs, whole-block copies, and Markdown copies retain the diagram source.
 Mouse selection copies displayed diagram characters. Widening the terminal can

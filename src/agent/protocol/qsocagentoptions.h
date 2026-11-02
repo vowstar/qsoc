@@ -49,6 +49,8 @@ struct QSocAgentRuntimeOptions
     bool verbose = false;
     /** What the frontend can show: none | cells | bitmap. */
     QString displaySurface = QStringLiteral("none");
+    /** The frontend charts numeric tables under the answer. */
+    bool tableCharts = false;
     /** One query, then exit (`-q`): the agent never wakes on its own. */
     bool singleQuery = false;
 };

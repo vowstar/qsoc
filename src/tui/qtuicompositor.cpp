@@ -4,6 +4,7 @@
 #include "tui/qtuicompositor.h"
 
 #include "common/qsocsvg.h"
+#include "tui/qsoctablechart.h"
 #include "tui/qtuigraphics.h"
 #include "tui/qtuiimagepreviewblock.h"
 
@@ -277,6 +278,8 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
                 const QString lang = trimmed.mid(3).trimmed().toLower();
                 if (activeText != nullptr) {
                     activeText->setMarkdown(committed);
+                    if (!forceDim)
+                        appendTableCharts(committed);
                 }
                 activeText = nullptr;
                 committed.clear();
@@ -372,6 +375,21 @@ void QTuiCompositor::closeCodeFence(QTuiCodeBlock *code, const QString &fence, b
         appendSvgFigure(QStringLiteral("svg"), code->source().toUtf8(), code);
 }
 
+bool QTuiCompositor::drawsTableCharts()
+{
+    const auto protocol = QTuiGraphics::protocol();
+    return protocol != QTuiGraphics::Protocol::None && protocol != QTuiGraphics::Protocol::Cells
+           && !qEnvironmentVariableIsSet("QSOC_NO_TABLE_CHARTS");
+}
+
+void QTuiCompositor::appendTableCharts(const QString &markdown)
+{
+    if (!active || !drawsTableCharts())
+        return;
+    for (const QByteArray &chart : QSocTableChart::charts(markdown))
+        appendSvgFigure(QStringLiteral("table chart"), chart);
+}
+
 void QTuiCompositor::sealStream(StreamMode mode)
 {
     QString                 &pending   = (mode == StreamMode::Assistant) ? pendingAssistantLine
@@ -405,6 +423,8 @@ void QTuiCompositor::sealStream(StreamMode mode)
         }
         pending.clear();
     }
+    if (activeText != nullptr && mode == StreamMode::Assistant)
+        appendTableCharts(committed);
     committed.clear();
     activeText   = nullptr;
     activeCode   = nullptr;

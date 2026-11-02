@@ -812,6 +812,7 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
     }
 
     config.displaySurface = d->options.displaySurface;
+    config.tableCharts    = d->options.tableCharts;
     d->agentConfig        = config;
     return true;
 }

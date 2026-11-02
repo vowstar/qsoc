@@ -61,9 +61,10 @@ public:
     FocusOwner currentFocus() const { return focusOwner_; }
 
     /* Lifecycle */
-    void start(int intervalMs = 100);
-    void stop();
-    bool isActive() const;
+    void        start(int intervalMs = 100);
+    void        stop();
+    bool        isActive() const;
+    static bool drawsTableCharts();
     /* Add a block that draws this SVG, or shows its metadata when it cannot. */
     void appendSvgFigure(
         const QString &label, const QByteArray &source, class QTuiCodeBlock *sourceBlock = nullptr);
@@ -269,6 +270,7 @@ private:
     void recalculateLayout();
     bool drawsFigures() const;
     void closeCodeFence(class QTuiCodeBlock *code, const QString &fence, bool dim);
+    void appendTableCharts(const QString &markdown);
 
     /* Selection state for click-drag copy. Coords are screen-space. */
     struct Selection

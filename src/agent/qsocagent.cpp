@@ -2794,6 +2794,7 @@ QString QSocAgent::systemRebuildKey() const
         = {{"model", agentConfig.modelId.toStdString()},
            {"image", llmService != nullptr && llmService->currentSupportsImage()},
            {"display_surface", agentConfig.displaySurface.toStdString()},
+           {"table_charts", agentConfig.tableCharts},
            {"project", agentConfig.projectPath.toStdString()},
            {"cwd", QDir::currentPath().toStdString()},
            {"remote", agentConfig.remoteMode},
@@ -2900,6 +2901,11 @@ void QSocAgent::appendVisualSystemSection(QString &prompt) const
             "series var(--c1) to var(--c6). They follow the terminal theme.\n"
             "  - Never paint a background. Static and self-contained: no script, animation, "
             "foreignObject, external href, filter, or marker.\n");
+    }
+    if (agentConfig.tableCharts) {
+        prompt += QStringLiteral(
+            "- A table of compared numbers gets a chart under it automatically: never draw that "
+            "data again.\n");
     }
     if (agentConfig.displaySurface == QStringLiteral("cells")) {
         prompt += QStringLiteral(

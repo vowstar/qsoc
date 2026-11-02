@@ -75,6 +75,7 @@ QSocAgentRuntimeOptions optionsFromParams(const QJsonObject &params)
     options.verbose             = params.value(QStringLiteral("verbose")).toBool(false);
     options.singleQuery         = params.value(QStringLiteral("single_query")).toBool(false);
     options.displaySurface      = params.value("display_surface").toString(QStringLiteral("none"));
+    options.tableCharts         = params.value("table_charts").toBool(false);
     return options;
 }
 

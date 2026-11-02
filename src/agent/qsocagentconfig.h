@@ -40,6 +40,8 @@ struct QSocAgentConfig
 
     /* What the frontend can show: "none", "cells", or "bitmap". */
     QString displaySurface = QStringLiteral("none");
+    /* The frontend charts numeric tables under the answer. */
+    bool tableCharts = false;
 
     /* Reasoning effort level: empty=off, "low", "medium", "high" */
     QString effortLevel;

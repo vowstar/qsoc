@@ -95,6 +95,7 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
     [`QSOC_MAX_CONCURRENT_SUBAGENTS`], [Sub-agent concurrency ceiling],
     [`QSOC_AUTO_BACKGROUND_MS`], [`agent.auto_background_ms`: delay before a foreground sub-agent moves to the background],
     [`QSOC_NO_IMAGE_GRAPHICS`], [Shows only metadata text for images when set to any non-empty value],
+    [`QSOC_NO_TABLE_CHARTS`], [Stops charts under numeric tables when set to any value],
     [`QSOC_IMAGE_PROTOCOL`], [Selects the image preview: `kitty`, `iterm2`, `sixel`, `cells`, or `none`],
     [`XDG_CONFIG_HOME`], [Moves the user configuration root off `~/.config`],
   )],
