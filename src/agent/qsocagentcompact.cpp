@@ -3,10 +3,13 @@
 
 #include "agent/qsocagent.h"
 #include "common/qsocconsole.h"
+#include "common/qsocimageattach.h"
 #include "common/qsocmessageauthority.h"
+#include "common/qsocsvg.h"
 
 #include <limits>
 #include <QCryptographicHash>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSet>
 
@@ -282,6 +285,58 @@ void attachArtifactIndex(json &history, const json &references, bool summarized,
                 {"content", text.toStdString()},
                 {"_qsoc_artifact_refs", references}});
     }
+}
+
+json fenceFigures(const json &message, const QString &directory)
+{
+    static const QRegularExpression fence(
+        QStringLiteral("^```svg\\s*\\n(.*?)^```\\s*$"),
+        QRegularExpression::MultilineOption | QRegularExpression::DotMatchesEverythingOption);
+    json refs = json::array();
+    if (message.value("role", std::string()) != "assistant" || !message.contains("content")
+        || !message["content"].is_string())
+        return refs;
+    auto it = fence.globalMatch(QString::fromStdString(message["content"].get<std::string>()));
+    while (it.hasNext()) {
+        const QString path = QSocImageAttach::saveFigure(
+            directory, it.next().captured(1).toUtf8(), QString::fromLatin1(QSocSvg::mimeType()));
+        if (!path.isEmpty()) {
+            refs.push_back(
+                {{"file", path.toStdString()},
+                 {"mime", QSocSvg::mimeType()},
+                 {"source", "svg"},
+                 {"width", 0},
+                 {"height", 0}});
+        }
+    }
+    return refs;
+}
+
+/* Figures of messages the summary replaced move to the front of the history. */
+void attachFigureGallery(json &history, const json &source, const QString &directory)
+{
+    QSet<std::string> keptFiles;
+    QSet<std::string> keptTexts;
+    for (const auto &message : history) {
+        for (const auto &figure : message.value("_qsoc_figures", json::array()))
+            keptFiles.insert(figure.value("file", std::string()));
+        if (message.contains("content") && message["content"].is_string())
+            keptTexts.insert(message["content"].get<std::string>());
+    }
+    json gallery = json::array();
+    for (const auto &message : source) {
+        for (const auto &figure : message.value("_qsoc_figures", json::array())) {
+            if (!keptFiles.contains(figure.value("file", std::string())))
+                gallery.push_back(figure);
+        }
+        if (message.contains("content") && message["content"].is_string()
+            && keptTexts.contains(message["content"].get<std::string>()))
+            continue;
+        for (const auto &figure : fenceFigures(message, directory))
+            gallery.push_back(figure);
+    }
+    if (!gallery.empty() && !history.empty())
+        history.front()["_qsoc_figures"] = std::move(gallery);
 }
 
 } // namespace
@@ -581,6 +636,8 @@ int QSocAgent::performCompaction(bool force, bool manual)
         candidate.artifactRefs,
         summarized,
         exposesArtifactReader(request.tools));
+    attachFigureGallery(
+        candidate.candidateMessages, source, store->directory() + QStringLiteral(".figures"));
     const auto archivedRequest = requestWithHistory(request, candidate.candidateMessages);
     if (!current()) {
         if (owner) {

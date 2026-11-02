@@ -501,7 +501,8 @@ private:
 class LargeResultTool final : public QSocTool
 {
 public:
-    QString getName() const override { return QStringLiteral("bash"); }
+    QString name = QStringLiteral("bash");
+    QString getName() const override { return name; }
     QString getDescription() const override { return QStringLiteral("Returns generated text"); }
     json    getParametersSchema() const override { return {{"type", "object"}}; }
     QString execute(const json &) override
@@ -1645,6 +1646,8 @@ private slots:
                     + QLatin1Char('\n'));
             captured = tool.value;
         } else if (sourceKind == 2) {
+            /* bash relays outside text, so its output never attaches an image. */
+            tool.name = QStringLiteral("generate");
             AttachmentTool attachment;
             captured   = QStringLiteral("Error: generated failure\n") + tool.value;
             tool.value = captured + attachment.execute({});

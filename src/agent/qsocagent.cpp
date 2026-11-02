@@ -673,6 +673,10 @@ QString QSocAgent::toolDenyReasonForRegistry(
     if (agentConfig.isSubAgent && name == QStringLiteral("interrupt_agent")) {
         return QStringLiteral("only the main agent can cancel peers");
     }
+    if (name == QStringLiteral("show_figure")
+        && (agentConfig.isSubAgent || agentConfig.displaySurface == QStringLiteral("none"))) {
+        return QStringLiteral("no terminal displays figures for this agent");
+    }
     if (agentConfig.isSubAgent && name == QStringLiteral("goal_complete")) {
         return QStringLiteral(
             "sub-agents cannot complete the parent goal; return completion evidence to the "
@@ -2436,11 +2440,15 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
         }
 
         QList<AttachmentSpec> attachments;
-        const QString         result = functionName == QStringLiteral("tool_output_read")
-                                           ? rawResult
-                                           : extractImageAttachments(rawResult, &attachments);
-        const QString         attachmentNotice = queueToolAttachments(attachments);
-        const QString         historyResult
+        /* These tools relay outside text, which can imitate an attachment marker. */
+        const bool    relaysText = functionName == QStringLiteral("tool_output_read")
+                                   || functionName == QStringLiteral("bash")
+                                   || functionName == QStringLiteral("bash_manage");
+        const QString result     = relaysText ? rawResult
+                                              : extractImageAttachments(rawResult, &attachments);
+        const json    figures    = owner->saveFigures(&attachments);
+        const QString attachmentNotice = queueToolAttachments(attachments);
+        const QString historyResult
             = run->stop.load() == StopMode::None
                   ? attachmentNotice + result
                   : attachmentNotice
@@ -2455,6 +2463,11 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
             historyResult,
             run->stop.load() == StopMode::None ? QString() : QStringLiteral("uncertain"),
             functionName);
+        if (!figures.empty() && !owner->messages.empty()
+            && owner->messages.back().value("tool_call_id", std::string())
+                   == toolCallId.toStdString()) {
+            owner->messages.back()["_qsoc_figures"] = figures;
+        }
 
         run->executingToolCallId.reset();
         if (stopBatch()) {
@@ -2483,6 +2496,7 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 attachment.sourceUrl,
                 attachment.mime,
                 attachment.dataB64,
+                attachment.file,
                 attachment.width,
                 attachment.height);
         }
@@ -2779,6 +2793,7 @@ QString QSocAgent::systemRebuildKey() const
     const json key
         = {{"model", agentConfig.modelId.toStdString()},
            {"image", llmService != nullptr && llmService->currentSupportsImage()},
+           {"display_surface", agentConfig.displaySurface.toStdString()},
            {"project", agentConfig.projectPath.toStdString()},
            {"cwd", QDir::currentPath().toStdString()},
            {"remote", agentConfig.remoteMode},
@@ -2847,10 +2862,50 @@ QString QSocAgent::buildSystemPromptWithMemory(bool includeRuntime) const
         prompt = buildIdentitySystemPrompt();
         appendDynamicSystemSections(prompt);
     }
+    appendVisualSystemSection(prompt);
     if (includeRuntime) {
         appendRuntimeSystemSections(prompt);
     }
     return prompt;
+}
+
+void QSocAgent::appendVisualSystemSection(QString &prompt) const
+{
+    const bool vision = llmService != nullptr && llmService->currentSupportsImage();
+    if (vision) {
+        prompt += QStringLiteral(
+            "\n# Vision\n"
+            "- You can see images: read_file returns the pixels of an image file.\n"
+            "- After you generate an image, plot, or SVG, read it back or call show_figure with "
+            "inspect, and check it.\n");
+    }
+    if (agentConfig.isSubAgent || agentConfig.displaySurface == QStringLiteral("none"))
+        return;
+    prompt += QStringLiteral(
+        "\n# Visual output\n"
+        "The user reads this session in a terminal that renders Markdown tables, `$...$` math, "
+        "and closed ```mermaid fences (flowchart, sequence, state, class, er).\n"
+        "- First fit wins, one form per idea: a table for compared numbers, mermaid for flow, "
+        "sequence, state, or structure, show_figure for an existing image or plot file.\n"
+        "- Draw only genuine structure, not trivia. The reader sees the figure: never announce "
+        "or restate it, add only what it does not say.\n");
+    if (agentConfig.displaySurface == QStringLiteral("bitmap")) {
+        prompt += QStringLiteral(
+            "- When mermaid cannot draw it (chart, layout, geometry) and it says more than prose, "
+            "write a ```svg fence: it renders inline as an image.\n"
+            "  - `viewBox` sets the size: 1 unit is about 1 pixel, font-size 14 is body text, and "
+            "at most 1000 wide fits the screen.\n"
+            "  - Colors only through currentColor and var(--fg), var(--muted), var(--border), "
+            "var(--surface), var(--accent), var(--success), var(--warning), var(--error), and "
+            "series var(--c1) to var(--c6). They follow the terminal theme.\n"
+            "  - Never paint a background. Static and self-contained: no script, animation, "
+            "foreignObject, external href, filter, or marker.\n");
+    }
+    if (agentConfig.displaySurface == QStringLiteral("cells")) {
+        prompt += QStringLiteral(
+            "- This terminal shows images as coarse block-character previews. Fine text in them is "
+            "unreadable, so put details in text.\n");
+    }
 }
 
 QString QSocAgent::buildIdentitySystemPrompt() const
@@ -3438,7 +3493,7 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
                 spec.estTokens = payload.value("est_tokens", 0);
                 spec.resized   = payload.value("resized", false);
                 spec.displayOnly = payload.value("display_only", false);
-                if (!spec.mime.isEmpty() && !spec.dataB64.isEmpty()) {
+                if (spec.mime.startsWith(QStringLiteral("image/")) && !spec.dataB64.isEmpty()) {
                     out->append(spec);
                 }
             } catch (const json::exception &) {

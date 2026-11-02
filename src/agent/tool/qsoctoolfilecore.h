@@ -85,6 +85,8 @@ struct ReadWindow
 {
     int offset   = 0;
     int maxLines = kDefaultMaxLines;
+    /* An image goes to the user only, whatever the model accepts. */
+    bool displayOnly = false;
 };
 
 ReadWindow readWindow(const json &arguments);
@@ -129,9 +131,10 @@ private:
     bool    stop(bool *reason);
     QString render(const QString &path, QLLMService *llm) const;
 
-    int                m_offset   = 0;
-    int                m_maxLines = 0;
-    qsizetype          m_limit    = 0;
+    int                m_offset      = 0;
+    int                m_maxLines    = 0;
+    bool               m_displayOnly = false;
+    qsizetype          m_limit       = 0;
     QByteArray         m_head;
     QString            m_mime;
     QByteArray         m_body;

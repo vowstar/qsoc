@@ -63,6 +63,7 @@
 #include "agent/tool/qsoctoolschedule.h"
 #include "agent/tool/qsoctoolsendmessage.h"
 #include "agent/tool/qsoctoolshell.h"
+#include "agent/tool/qsoctoolshowfigure.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctoolsmt.h"
 #include "agent/tool/qsoctooltodo.h"
@@ -810,7 +811,8 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
         }
     }
 
-    d->agentConfig = config;
+    config.displaySurface = d->options.displaySurface;
+    d->agentConfig        = config;
     return true;
 }
 
@@ -864,6 +866,7 @@ void QSocAgentRuntime::registerTools()
     auto *fileWriteTool = new QSocToolFileWrite(this, d->pathContext);
     auto *fileEditTool  = new QSocToolFileEdit(this, d->pathContext);
     d->toolRegistry->registerTool(fileReadTool);
+    d->toolRegistry->registerTool(new QSocToolShowFigure(this, fileReadTool, d->llmService));
     d->toolRegistry->registerTool(fileListTool);
     fileWriteTool->setLspService(d->lspService);
     fileEditTool->setLspService(d->lspService);

@@ -38,6 +38,9 @@ struct QSocAgentConfig
     /* LLM temperature parameter (0.0-1.0) */
     double temperature = 0.2;
 
+    /* What the frontend can show: "none", "cells", or "bitmap". */
+    QString displaySurface = QStringLiteral("none");
+
     /* Reasoning effort level: empty=off, "low", "medium", "high" */
     QString effortLevel;
 

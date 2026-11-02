@@ -116,6 +116,7 @@ bool QSocToolCatalog::alwaysDirect(const QString &name)
 {
     static const QSet<QString> names
         = {"read_file",
+           "show_figure",
            "write_file",
            "edit_file",
            "list_files",

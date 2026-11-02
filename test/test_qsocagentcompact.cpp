@@ -772,6 +772,33 @@ private slots:
         delete agent;
     }
 
+    void testCompactionKeepsFiguresOnTheSummary()
+    {
+        QSocAgentConfig config;
+        config.keepRecentMessages   = 2;
+        config.systemPromptOverride = QStringLiteral("Follow the task.");
+        auto *agent                 = createAgent(config);
+        json  history               = json::array();
+        for (int index = 0; index < 12; ++index) {
+            history.push_back(
+                {{"role", index % 2 ? "assistant" : "user"},
+                 {"content", std::string(4000, static_cast<char>('a' + index))}});
+        }
+        const json figure = {{"file", "/tmp/shown.png"}, {"mime", "image/png"}, {"source", "plot"}};
+        history[1]["_qsoc_figures"] = json::array({figure});
+        history[3]["content"]       = "before\n```svg\n<svg viewBox=\"0 0 1 1\"/>\n```\nafter";
+        agent->setMessages(history);
+        QVERIFY(agent->compact() > 0);
+
+        const json gallery = agent->getMessages().front().value("_qsoc_figures", json::array());
+        QCOMPARE(gallery.size(), size_t(2));
+        QCOMPARE(gallery[0].value("file", std::string()), std::string("/tmp/shown.png"));
+        QCOMPARE(gallery[1].value("mime", std::string()), std::string("image/svg+xml"));
+        QFile fence(QString::fromStdString(gallery[1].value("file", std::string())));
+        QVERIFY(fence.open(QIODevice::ReadOnly));
+        QVERIFY(fence.readAll().contains("<svg"));
+    }
+
     void testPruneKeepsArtifactReference()
     {
         QSocAgentConfig config;

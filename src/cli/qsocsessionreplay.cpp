@@ -140,6 +140,7 @@ private:
     void   assistant(const json &message);
     void   tool(const json &message);
     void   images(const json &content);
+    void   figures(const json &message);
     void   startBatch(const json &calls);
     void   endTurn();
     Event &push(
@@ -194,7 +195,9 @@ void Builder::user(const json &message)
         endTurn();
         push(Kind::UserMessage, text);
     }
-    images(*content);
+    if (!message.value("_qsoc_figures_backed", false))
+        images(*content);
+    figures(message);
 }
 
 void Builder::assistant(const json &message)
@@ -256,6 +259,30 @@ void Builder::tool(const json &message)
     Event &finished = push(Kind::ToolFinished, withArtifactHint(message, body), call.name, id);
     finished.ok     = status == QStringLiteral("ok");
     finished.json   = {{"status", status.toStdString()}};
+    figures(message);
+}
+
+int dimension(const json &figure, const char *key)
+{
+    const auto value = figure.find(key);
+    return value != figure.end() && value->is_number_integer() ? value->get<int>() : 0;
+}
+
+void Builder::figures(const json &message)
+{
+    const auto list = message.find("_qsoc_figures");
+    if (list == message.end() || !list->is_array())
+        return;
+    for (const json &figure : *list) {
+        if (!figure.is_object())
+            continue;
+        Event &image = push(Kind::ImagePreview, stringValue(figure, "source"));
+        image.json
+            = {{"mime", stringValue(figure, "mime").toStdString()},
+               {"file", stringValue(figure, "file").toStdString()},
+               {"width", dimension(figure, "width")},
+               {"height", dimension(figure, "height")}};
+    }
 }
 
 void Builder::images(const json &content)

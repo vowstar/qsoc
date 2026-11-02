@@ -3,6 +3,7 @@
 
 #include "agent/daemon/qsocagentdaemon.h"
 #include "agent/daemon/qsocdaemonresources.h"
+#include "agent/qsocagent.h"
 
 #include "agent/protocol/qsocagentprotocol.h"
 #include "agent/protocol/qsocagentruntimeevent.h"
@@ -73,6 +74,7 @@ QSocAgentRuntimeOptions optionsFromParams(const QJsonObject &params)
     options.streamingFromConfig = params.value("streaming_from_config").toBool(false);
     options.verbose             = params.value(QStringLiteral("verbose")).toBool(false);
     options.singleQuery         = params.value(QStringLiteral("single_query")).toBool(false);
+    options.displaySurface      = params.value("display_surface").toString(QStringLiteral("none"));
     return options;
 }
 
@@ -216,7 +218,8 @@ private:
             result.insert(
                 "messages",
                 QJsonDocument::fromJson(
-                    QByteArray::fromStdString(runtime_->persistedMessages().dump()))
+                    QByteArray::fromStdString(
+                        QSocAgent::transcriptForFrontend(runtime_->persistedMessages()).dump()))
                     .array());
         return result;
     }

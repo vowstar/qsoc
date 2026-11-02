@@ -13,17 +13,23 @@ void QSocAgentRuntime::wireAuxiliaryServices()
         d->agent,
         &QSocAgent::imageAttachment,
         this,
-        [this](const QString &source, const QString &mime, const QString &body, int width, int height) {
-            if (body.size() > 8 * 1024 * 1024)
+        [this](
+            const QString &source,
+            const QString &mime,
+            const QString &body,
+            const QString &file,
+            int            width,
+            int            height) {
+            if (file.isEmpty() && body.size() > 8 * 1024 * 1024)
                 return;
             QSocAgentRuntimeEvent event;
             event.kind = QSocAgentRuntimeEvent::Kind::ImagePreview;
             event.text = source;
-            event.json
-                = {{"mime", mime.toStdString()},
-                   {"data", body.toStdString()},
-                   {"width", width},
-                   {"height", height}};
+            event.json = {{"mime", mime.toStdString()}, {"width", width}, {"height", height}};
+            if (file.isEmpty())
+                event.json["data"] = body.toStdString();
+            else
+                event.json["file"] = file.toStdString();
             emit eventRaised(event);
         });
     auto      *prediction = new QSocPredictionController(this, d->llmService);

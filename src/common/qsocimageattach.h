@@ -4,6 +4,8 @@
 #ifndef QSOCIMAGEATTACH_H
 #define QSOCIMAGEATTACH_H
 
+#include <nlohmann/json.hpp>
+
 #include <QByteArray>
 #include <QString>
 
@@ -46,6 +48,15 @@ QString detectMimeByMagic(const QByteArray &bytes);
  */
 const char *attachmentMarkerOpen();
 const char *attachmentMarkerClose();
+/**
+ * @brief Keep image bytes in a session's figure directory, named by content.
+ * @return The file path, or empty for an unknown MIME, a full directory, or an
+ *         I/O error.
+ */
+QString saveFigure(const QString &directory, const QByteArray &bytes, const QString &mime);
+
+/** @brief Wrap an attachment payload in the markers above. */
+QString wrapAttachmentPayload(const nlohmann::json &payload);
 
 /**
  * @brief Build the structured tool-result string from raw image bytes.

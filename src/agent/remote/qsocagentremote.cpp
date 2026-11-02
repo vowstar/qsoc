@@ -3,6 +3,8 @@
 
 #include "agent/remote/qsocagentremote.h"
 
+#include "agent/tool/qsoctoolshowfigure.h"
+
 #include "agent/qsocagentconfig.h"
 #include "agent/qsocprojectrules.h"
 #include "agent/qsoctool.h"
@@ -649,9 +651,11 @@ QSocToolRegistry *buildAgentRemoteRegistry(
 {
     /* Stable for the connection's lifetime: adopt() rewrites the context in
      * place, so the address the tools bind to never changes. */
-    QSocRemotePathContext *pathCtx  = conn->path();
-    auto                  *registry = new QSocToolRegistry(parent);
-    registry->registerTool(new QSocToolRemoteFileRead(parent, conn, pathCtx, llm));
+    QSocRemotePathContext *pathCtx    = conn->path();
+    auto                  *registry   = new QSocToolRegistry(parent);
+    auto                  *remoteRead = new QSocToolRemoteFileRead(parent, conn, pathCtx, llm);
+    registry->registerTool(remoteRead);
+    registry->registerTool(new QSocToolShowFigure(parent, remoteRead, llm));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));

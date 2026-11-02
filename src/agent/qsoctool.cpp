@@ -164,6 +164,7 @@ namespace {
 
 /* A trailing underscore names a whole family. */
 constexpr const char *kWorkspaceBound[] = {
+    "show_figure",
     "read_file",
     "list_files",
     "write_file",

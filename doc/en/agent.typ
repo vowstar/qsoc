@@ -624,6 +624,16 @@ retain the source. Diagrams are limited to 16 KiB of source, 16 graph nodes,
 65,536 cells. Unknown syntax, limits, an unfinished fence, or insufficient
 terminal width show the complete source instead of a partial diagram.
 
+Closed `svg` code fences, `write_file` on an `.svg` path, and `show_figure`
+draw the figure inline on terminals that can show images. The source of a fence
+folds to one line, and `Tab` on the focused block shows it again. `var(--fg)`, `--muted`,
+`--border`, `--surface`, `--accent`, `--success`, `--warning`, `--error`, and
+`--c1` through `--c6` follow the terminal background. Scripts, animation,
+embedded documents, and external references are not drawn. A figure that cannot
+be drawn keeps its source.
+
+`/figures` lists the session's images.
+
 History, logs, whole-block copies, and Markdown copies retain the diagram source.
 Mouse selection copies displayed diagram characters. Widening the terminal can
 restore a diagram that previously needed source fallback.
@@ -766,7 +776,13 @@ on a remote workspace.
     [`file_path`; `offset` (first line, default 0); `max_lines` (default 500).
      Text past the window ends with a `[truncated: ...]` line naming the next
      offset. Images (PNG, JPG, GIF, WebP) return as image content. One read
-     keeps at most 16 MiB: a longer single line or image is refused],
+     keeps at most 16 MiB: a longer single line or image is refused. On a
+     model without image input, the user still sees the image],
+    [`show_figure`],
+    [`file_path` (PNG, JPG, GIF, WebP, SVG) or `svg` (SVG source); `title`.
+     Shows the image in the terminal and keeps it in the session. The model
+     does not receive the pixels unless `inspect` is true. Available in the interactive agent on a terminal that can show
+     images, and not available to sub-agents],
     [`list_files`],
     [`directory` (default: the working directory); `pattern` (glob on the
      entry name); `recursive`; `include_hidden`; `limit` (default 1000).
@@ -2503,7 +2519,8 @@ Saved sessions enable:
   unique prefix. The TUI scrollback is rebuilt from the saved model context
   the way it looked live: code blocks, tables, folded reasoning, tool blocks
   with their outcome, `write_file` and `edit_file` diffs, todo lists, images
-  kept in the context and task notices. A tool result cut to fit the context
+  and task notices. Images shown by a tool return after compaction too, at the
+  point where the conversation summary starts. A tool result cut to fit the context
   shows its kept part and one line naming the saved full output. The todo
   pane shows the latest todo list still in the context. `!` results in the
   conversation are restored as they were shown; slash command and `!!`

@@ -47,6 +47,8 @@ struct QSocAgentRuntimeOptions
     bool streamingFromConfig = false;
     /** Verbose logging to QSocConsole::debug(). */
     bool verbose = false;
+    /** What the frontend can show: none | cells | bitmap. */
+    QString displaySurface = QStringLiteral("none");
     /** One query, then exit (`-q`): the agent never wakes on its own. */
     bool singleQuery = false;
 };

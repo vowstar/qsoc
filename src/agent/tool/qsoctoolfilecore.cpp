@@ -348,14 +348,17 @@ QString partialRead(const QString &path)
 ReadWindow readWindow(const json &arguments)
 {
     return {
-        .offset   = intArg(arguments, "offset", 0, 0),
-        .maxLines = intArg(arguments, "max_lines", kDefaultMaxLines, 1),
+        .offset      = intArg(arguments, "offset", 0, 0),
+        .maxLines    = intArg(arguments, "max_lines", kDefaultMaxLines, 1),
+        .displayOnly = arguments.contains("display_only") && arguments["display_only"].is_boolean()
+                       && arguments["display_only"].get<bool>(),
     };
 }
 
 Reader::Reader(const ReadWindow &window, qsizetype limit)
     : m_offset(window.offset)
     , m_maxLines(window.maxLines)
+    , m_displayOnly(window.displayOnly)
     , m_limit(limit)
 {}
 
@@ -406,10 +409,13 @@ QString Reader::render(const QString &path, QLLMService *llm) const
             return QStringLiteral("Error: image is larger than the %1 MiB read limit: %2")
                 .arg(limitMiB, path);
         }
-        return QSocImageAttach::buildAttachmentResult(path, m_mime, m_body, llm, true);
+        return QSocImageAttach::buildAttachmentResult(
+            path, m_mime, m_body, m_displayOnly ? nullptr : llm, true);
     }
     QString text = QString::fromUtf8(m_body);
     text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    /* File text must not pass for a tool's attachment marker. */
+    text.remove(QChar(0x01));
     const QString next = QString::number(m_offset + m_emitted);
     if (text.isEmpty() && m_overLimit) {
         return QStringLiteral(

@@ -181,6 +181,7 @@ private slots:
     void infersOutcomeForOldSessions();
     void foldsOlderReasoning();
     void rendersImagePartsAndAttachments();
+    void figuresReplayFromFilesAcrossCompaction();
     void rendersOrphanToolResultsAsGenericBlocks();
     void replacesTheArtifactNoticeWithAHint_data();
     void replacesTheArtifactNoticeWithAHint();
@@ -299,6 +300,48 @@ void Test::foldsOlderReasoning()
     QVERIFY(!text.contains(QStringLiteral("first thought")));
     QVERIFY(text.contains(QStringLiteral("(folded)")));
     QVERIFY(text.indexOf(QStringLiteral("a1")) < text.indexOf(QStringLiteral("a2")));
+}
+
+void Test::figuresReplayFromFilesAcrossCompaction()
+{
+    const json figure
+        = {{"file", "/tmp/figure.png"},
+           {"mime", "image/png"},
+           {"source", "plot"},
+           {"width", 6},
+           {"height", 4}};
+    const json history = json::array(
+        {{{"role", "user"},
+          {"content", "[Conversation Summary]\nearlier"},
+          {"_qsoc_figures", json::array({figure})}},
+         {{"role", "assistant"},
+          {"content", nullptr},
+          {"tool_calls",
+           json::array(
+               {{{"id", "a"},
+                 {"type", "function"},
+                 {"function", {{"name", "read_file"}, {"arguments", "{}"}}}}})}},
+         {{"role", "tool"},
+          {"tool_call_id", "a"},
+          {"content", "shown"},
+          {"_qsoc_figures", json::array({figure})}},
+         {{"role", "user"},
+          {"content",
+           json::array(
+               {{{"type", "image_url"}, {"image_url", {{"url", pngDataUrl().toStdString()}}}}})},
+          {"_img_tokens", 10},
+          {"_qsoc_figures_backed", true}}});
+    QList<Event> previews;
+    for (const Event &event : QSocSessionReplay::events(history)) {
+        if (event.kind == Kind::ImagePreview)
+            previews.append(event);
+    }
+    QCOMPARE(previews.size(), 2);
+    QCOMPARE(previews[0].text, QStringLiteral("plot"));
+    QCOMPARE(
+        QString::fromStdString(previews[0].json.value("file", std::string())),
+        QStringLiteral("/tmp/figure.png"));
+    QVERIFY(!previews[0].json.contains("data"));
 }
 
 void Test::rendersImagePartsAndAttachments()

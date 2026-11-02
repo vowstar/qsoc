@@ -1016,6 +1016,8 @@ QString QSocToolWebFetch::execute(const json &arguments)
         text = text.left(kMaxTextSize) + "\n... (content truncated)";
     }
 
+    /* Page text must not pass for a tool's attachment marker. */
+    text.remove(QChar(0x01));
     return text.isEmpty() ? "(no content)" : text;
 }
 

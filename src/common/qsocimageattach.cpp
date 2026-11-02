@@ -8,8 +8,14 @@
 
 #include <nlohmann/json.hpp>
 #include <QBuffer>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QHash>
 #include <QImage>
 #include <QImageReader>
+#include <QSaveFile>
 #include <QSize>
 
 #include <algorithm>
@@ -209,13 +215,43 @@ const char *attachmentMarkerClose()
     return "</qsoc:image_attachment>\x01";
 }
 
-namespace {
+QString saveFigure(const QString &directory, const QByteArray &bytes, const QString &mime)
+{
+    static const QHash<QString, QString> extensions
+        = {{QStringLiteral("image/png"), QStringLiteral("png")},
+           {QStringLiteral("image/jpeg"), QStringLiteral("jpeg")},
+           {QStringLiteral("image/gif"), QStringLiteral("gif")},
+           {QStringLiteral("image/webp"), QStringLiteral("webp")},
+           {QStringLiteral("image/svg+xml"), QStringLiteral("svg")}};
+    constexpr qint64 directoryBytes = qint64(1024) * 1024 * 1024;
+    const QString    extension      = extensions.value(mime);
+    const QDir       dir(directory);
+    if (bytes.isEmpty() || extension.isEmpty() || !dir.mkpath(QStringLiteral(".")))
+        return {};
+    const QString path = dir.filePath(
+        QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())
+        + QLatin1Char('.') + extension);
+    if (QFileInfo::exists(path))
+        return path;
+    qint64 used = 0;
+    for (const auto &entry : dir.entryInfoList(QDir::Files))
+        used += entry.size();
+    if (used + bytes.size() > directoryBytes)
+        return {};
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+        return {};
+    QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner);
+    return path;
+}
 
 QString wrapAttachmentPayload(const nlohmann::json &payload)
 {
     return QString::fromLatin1(attachmentMarkerOpen()) + QString::fromStdString(payload.dump())
            + QString::fromLatin1(attachmentMarkerClose());
 }
+
+namespace {
 
 /* Refused images still reach the user. The bound keeps the event below the
  * runtime's preview limit. */

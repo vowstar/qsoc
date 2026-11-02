@@ -599,6 +599,7 @@ public:
      *        context (project instructions, skills, memory).
      */
     QString buildSystemPromptWithMemory(bool includeRuntime = true) const;
+    void    appendVisualSystemSection(QString &prompt) const;
 
     /**
      * @brief The Environment lines naming the OS, arch and shell bash runs in.
@@ -715,9 +716,14 @@ signals:
         const QString       &result,
         QSocToolResultStatus status);
     void toolCallOutput(const QString &callId, const QString &text);
-    /** Image already admitted by a tool; frontends need no filesystem access. */
+    /** Image admitted by a tool. @p file is its saved copy, empty when @p base64 carries it. */
     void imageAttachment(
-        const QString &source, const QString &mime, const QString &base64, int width, int height);
+        const QString &source,
+        const QString &mime,
+        const QString &base64,
+        const QString &file,
+        int            width,
+        int            height);
     /**
      * @brief Signal emitted when a tool is called
      * @param toolName Name of the tool being called
@@ -1174,6 +1180,8 @@ public:
         bool    resized   = false;
         /* Shown to the user only, never sent to the model. */
         bool displayOnly = false;
+        /* Saved copy in the session's figure directory. */
+        QString file;
     };
 
     /**
@@ -1186,9 +1194,17 @@ public:
      */
     static QString extractImageAttachments(const QString &raw, QList<AttachmentSpec> *out);
 
+    /**
+     * @brief The history a frontend replays, within one IPC frame.
+     * @details Images saved as figures lose their inline bytes. Other images
+     *          keep them, newest first, up to a total of 8 MiB.
+     */
+    static json transcriptForFrontend(const json &history);
+
 private:
     qint64  toolBatchRemainingTokens(bool reserveResults = false) const;
     QString queueToolAttachments(const QList<AttachmentSpec> &allAttachments);
+    json    saveFigures(QList<AttachmentSpec> *attachments) const;
 
     /**
      * @brief Add a tool result message to the conversation history

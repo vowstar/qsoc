@@ -3,10 +3,13 @@
 
 #include "agent/qsocagent.h"
 #include "common/qsocboundedcapture.h"
+#include "common/qsocimageattach.h"
 #include "common/qsoctokenizer.h"
 
 #include <QMap>
 #include <QSet>
+
+#include <algorithm>
 
 namespace {
 constexpr qint64 toolBatchImageBytesLimit = 16 * 1024 * 1024;
@@ -141,6 +144,56 @@ qint64 QSocAgent::toolBatchRemainingTokens(bool reserveResults) const
     return std::max(qint64(0), remaining - reserved - 256);
 }
 
+json QSocAgent::saveFigures(QList<AttachmentSpec> *attachments) const
+{
+    json refs = json::array();
+    if (attachments->isEmpty() || !toolResultStore_ || !toolResultStore_->isBound()
+        || toolResultStore_->isTemporary())
+        return refs;
+    const QString directory = toolResultStore_->directory() + QStringLiteral(".figures");
+    for (auto &attachment : *attachments) {
+        attachment.file = QSocImageAttach::saveFigure(
+            directory, QByteArray::fromBase64(attachment.dataB64.toLatin1()), attachment.mime);
+        if (attachment.file.isEmpty())
+            continue;
+        refs.push_back(
+            {{"file", attachment.file.toStdString()},
+             {"mime", attachment.mime.toStdString()},
+             {"source", attachment.sourceUrl.toStdString()},
+             {"width", attachment.width},
+             {"height", attachment.height}});
+    }
+    return refs;
+}
+
+json QSocAgent::transcriptForFrontend(const json &history)
+{
+    json   transcript = history;
+    qint64 budget     = 8 * 1024 * 1024;
+    for (auto message = transcript.rbegin(); message != transcript.rend(); ++message) {
+        if (!message->is_object() || !message->contains("_img_tokens"))
+            continue;
+        const auto content = message->find("content");
+        if (content == message->end() || !content->is_array())
+            continue;
+        const bool backed = message->value("_qsoc_figures_backed", false);
+        json       kept   = json::array();
+        for (auto &part : *content) {
+            if (part.value("type", std::string()) != "image_url") {
+                kept.push_back(std::move(part));
+                continue;
+            }
+            const qint64 size = qint64(part.dump().size());
+            if (!backed && size <= budget) {
+                budget -= size;
+                kept.push_back(std::move(part));
+            }
+        }
+        *content = std::move(kept);
+    }
+    return transcript;
+}
+
 QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &allAttachments)
 {
     QList<AttachmentSpec> attachments;
@@ -198,9 +251,15 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &allAttachme
         imageTokens += cost;
         imageBytes += bytes;
     }
-    if (imageTokens > 0)
-        run->toolBatchAttachments.push_back(
-            {{"role", "user"}, {"content", std::move(content)}, {"_img_tokens", imageTokens}});
+    if (imageTokens > 0) {
+        json message
+            = {{"role", "user"}, {"content", std::move(content)}, {"_img_tokens", imageTokens}};
+        if (std::all_of(attachments.cbegin(), attachments.cend(), [](const AttachmentSpec &spec) {
+                return !spec.file.isEmpty();
+            }))
+            message["_qsoc_figures_backed"] = true;
+        run->toolBatchAttachments.push_back(std::move(message));
+    }
     if (rejected.isEmpty())
         return {};
     QStringList reasons;
