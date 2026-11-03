@@ -62,6 +62,7 @@ def main():
         with (args.bundle / "Contents" / "Info.plist").open("rb") as source:
             if plistlib.load(source).get("CFBundleExecutable") != "qsoc-gui":
                 raise RuntimeError("The app bundle must start qsoc-gui")
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(args.bundle)], check=True)
     if args.desktop:
         entries = args.desktop.read_text().splitlines()
         if "Exec=qsoc gui" not in entries:

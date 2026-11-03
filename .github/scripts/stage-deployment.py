@@ -65,6 +65,8 @@ def main():
     licenses.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source / "external/z3/LICENSE.txt", licenses / "z3.txt")
     shutil.copy2(source / "external/tiktoken/LICENSE", licenses / "tiktoken.txt")
+    if sys.platform == "darwin":
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True)
 
 
 if __name__ == "__main__":
