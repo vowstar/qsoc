@@ -3,7 +3,10 @@
 
 #include "common/qsocsvg.h"
 
+#include "common/qsocsibling.h"
+
 #include <QHash>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
 #include <QXmlStreamReader>
@@ -178,6 +181,17 @@ QByteArray sanitize(const QByteArray &source, bool lightBackground, QString *err
     if (output.isEmpty())
         return fail(QStringLiteral("empty SVG"));
     return output;
+}
+
+QByteArray drawForModel(const QByteArray &source)
+{
+    QProcess process;
+    process.start(QSocSibling::path(QStringLiteral("qsoc")), {"--svg-raster", "opaque", "16"});
+    process.write(source);
+    process.closeWriteChannel();
+    return process.waitForFinished(5000) && process.exitCode() == 0
+               ? process.readAllStandardOutput()
+               : QByteArray();
 }
 
 } // namespace QSocSvg

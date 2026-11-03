@@ -58,6 +58,9 @@ QString saveFigure(const QString &directory, const QByteArray &bytes, const QStr
 /** @brief Wrap an attachment payload in the markers above. */
 QString wrapAttachmentPayload(const nlohmann::json &payload);
 
+/** @return The first attachment payload in @p text, or discarded JSON when none. */
+nlohmann::json attachmentPayload(const QString &text);
+
 /**
  * @brief Build the structured tool-result string from raw image bytes.
  * @param sourceLabel  Human-readable origin (URL or absolute file

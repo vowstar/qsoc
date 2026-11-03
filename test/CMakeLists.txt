@@ -541,6 +541,7 @@ qt_add_test_target("test_qsocmemorydream")
 qt_add_test_target("test_qsocsftpstranded" LOCK qsoc_loopback_sshd)
 foreach(_mock_test
     test_qllmanthropic
+    test_qllmservicemodalities
     test_qllmservicereasoning
     test_qsocagentcompactcancel
     test_qsocagentlazystorage

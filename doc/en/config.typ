@@ -125,6 +125,9 @@ behind two URLs is two entries with the same `model`.
     table.hline(),
     [llm.model], [Key of the `llm.models` entry to use],
     [llm.models], [Per-model entries, see @llm-models-registry],
+    [llm.vision_model],
+    [`llm.models` key that describes images for a model without image input
+     (empty = no description)],
     [llm.cost_input_per_mtok],
     [Input price per million tokens (used by `/cost`)],
     [llm.cost_output_per_mtok],

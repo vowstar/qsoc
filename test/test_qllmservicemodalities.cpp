@@ -3,10 +3,14 @@
 
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
+#include "common/qsocimageattach.h"
 #include "qsoc_test.h"
+#include "qsoc_test_llm.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtCore>
@@ -112,6 +116,54 @@ private slots:
 
     /* No modalities block at all -> all defaults: text-only, with the
      * canonical 5000-tok hard cap and 1568-px resize target. */
+    void visionModelDescribesImagesForATextModel_data()
+    {
+        QTest::addColumn<QString>("visionKey");
+        QTest::addColumn<bool>("described");
+        QTest::newRow("set") << QStringLiteral("eyes") << true;
+        QTest::newRow("unset") << QString() << false;
+        QTest::newRow("no image input") << QStringLiteral("text") << false;
+        QTest::newRow("unknown key") << QStringLiteral("gone") << false;
+    }
+
+    void visionModelDescribesImagesForATextModel()
+    {
+        QFETCH(QString, visionKey);
+        QFETCH(bool, described);
+        QSocTestLlmMock mock;
+        QVERIFY(mock.start({{QStringLiteral("MOCK_REPLY"), QStringLiteral("A cyan square")}}));
+        const QString url = QStringLiteral("http://127.0.0.1:%1/v1/chat/completions").arg(mock.port);
+        ScopedConfig scope(
+            QStringLiteral(
+                "proxy:\n  type: none\nllm:\n  model: text\n  vision_model: %1\n  models:\n"
+                "    text:\n      model: text-served\n      url: %2\n"
+                "    eyes:\n      model: eyes-served\n      url: %2\n"
+                "      modalities:\n        image: true\n")
+                .arg(visionKey, url)
+                .toUtf8());
+        QSocConfig  config;
+        QLLMService service(nullptr, &config);
+
+        QImage image(8, 8, QImage::Format_RGB32);
+        image.fill(Qt::cyan);
+        QByteArray png;
+        QBuffer    buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        image.save(&buffer, "PNG");
+
+        const QString result = QSocImageAttach::buildAttachmentResult(
+            QStringLiteral("a.png"), QStringLiteral("image/png"), png, &service, true);
+        QCOMPARE(result.contains(QStringLiteral("A cyan square")), described);
+        QCOMPARE(result.contains(QStringLiteral("does not accept images")), !described);
+        QVERIFY(QSocImageAttach::attachmentPayload(result).value("display_only", false));
+        const auto requests = mock.requests();
+        QCOMPARE(requests.size(), described ? 1 : 0);
+        if (described) {
+            QCOMPARE(requests[0].value("model", std::string()), std::string("eyes-served"));
+            QVERIFY(requests[0].dump().find("data:image/") != std::string::npos);
+        }
+    }
+
     void modelWithoutModalitiesBlockIsTextOnly()
     {
         const QByteArray yaml = R"(

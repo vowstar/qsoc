@@ -4,10 +4,7 @@
 #include "agent/tool/qsoctoolshowfigure.h"
 
 #include "common/qsocimageattach.h"
-#include "common/qsocsibling.h"
 #include "common/qsocsvg.h"
-
-#include <QProcess>
 
 namespace {
 constexpr int kSvgMaxLines = 100000;
@@ -48,25 +45,13 @@ json QSocToolShowFigure::getParametersSchema() const
 
 namespace {
 
-/* The pixels of an SVG exist only after the drawing helper ran. */
-QByteArray drawSvg(const QByteArray &source)
-{
-    QProcess process;
-    process.start(QSocSibling::path(QStringLiteral("qsoc")), {"--svg-raster", "dark", "16"});
-    process.write(source);
-    process.closeWriteChannel();
-    return process.waitForFinished(5000) && process.exitCode() == 0
-               ? process.readAllStandardOutput()
-               : QByteArray();
-}
-
 QString showSvg(const QByteArray &source, const QString &label, bool inspect, QLLMService *llm)
 {
     QString error;
     if (QSocSvg::sanitize(source, false, &error).isEmpty())
         return QStringLiteral("Error: %1").arg(error);
     if (inspect) {
-        const QByteArray png = drawSvg(source);
+        const QByteArray png = QSocSvg::drawForModel(source);
         if (png.isEmpty())
             return QStringLiteral("Error: SVG could not be drawn");
         return QSocImageAttach::buildAttachmentResult(
@@ -103,25 +88,19 @@ QString QSocToolShowFigure::execute(const json &arguments)
     if (reader_.isNull())
         return QStringLiteral("Error: file reading is not available");
     const QString filePath = QString::fromStdString(arguments["file_path"].get<std::string>());
+    const bool    isSvg    = filePath.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive);
     const QString result   = reader_->execute(
         {{"file_path", arguments["file_path"]},
-         {"display_only", !inspect},
+         {"display_only", isSvg || !inspect},
          {"max_lines", kSvgMaxLines}});
     if (result.startsWith(QStringLiteral("Error:")))
         return result;
-    if (filePath.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive))
+    if (isSvg)
         return showSvg(result.toUtf8(), title.isEmpty() ? filePath : title, inspect, llm_);
 
     if (inspect)
         return result;
-    const QString   open  = QString::fromLatin1(QSocImageAttach::attachmentMarkerOpen());
-    const QString   close = QString::fromLatin1(QSocImageAttach::attachmentMarkerClose());
-    const qsizetype begin = result.indexOf(open);
-    const qsizetype end   = result.indexOf(close, begin + open.size());
-    if (begin < 0 || end < 0)
-        return QStringLiteral("Error: not a displayable image: %1").arg(filePath);
-    auto payload = json::parse(
-        result.mid(begin + open.size(), end - begin - open.size()).toStdString(), nullptr, false);
+    auto payload = QSocImageAttach::attachmentPayload(result);
     if (!payload.is_object())
         return QStringLiteral("Error: not a displayable image: %1").arg(filePath);
     if (!title.isEmpty())

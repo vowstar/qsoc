@@ -266,6 +266,9 @@ public slots:
      */
     bool currentSupportsImage() const;
 
+    /** @brief Key of the `llm.models` entry that describes images, empty when unset. */
+    QString visionModel() const { return visionModelId; }
+
     /**
      * @brief Switch to a different model, updating the active endpoint
      * @param modelId Model ID from the models registry
@@ -424,6 +427,7 @@ private:
     std::optional<LLMModelConfig>   active;
     QMap<QString, LLMModelConfig>   modelConfigs;
     QString                         defaultModelId;
+    QString                         visionModelId;
     QString                         currentModelId;
 
     /**

@@ -3,8 +3,10 @@
 
 #include "agent/tool/qsoctoolfilecore.h"
 
+#include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
 #include "common/qsocshellpath.h"
+#include "common/qsocsvg.h"
 
 #include <QDir>
 #include <QRegularExpression>
@@ -228,7 +230,8 @@ QString readDescription(bool image)
             " Image files (PNG, JPG, GIF, WebP) are returned as visual content that the "
             "multimodal LLM can see directly. When the user attaches or references a screenshot "
             "or image path, ALWAYS use this tool to view the file at the path; the tool result "
-            "will contain the actual image, not a description.");
+            "will contain the actual image, not a description. An SVG file returns its source "
+            "and its drawing.");
     }
     return text;
 }
@@ -434,6 +437,14 @@ QString Reader::render(const QString &path, QLLMService *llm) const
     } else if (m_moreLines) {
         text += QStringLiteral("[truncated: more lines follow; rerun with offset=%1 to continue]\n")
                     .arg(next);
+    } else if (
+        m_offset == 0 && !m_displayOnly && llm != nullptr && llm->currentSupportsImage()
+        && path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive)) {
+        const QByteArray png = QSocSvg::drawForModel(m_body);
+        if (!png.isEmpty())
+            text += QLatin1Char('\n')
+                    + QSocImageAttach::buildAttachmentResult(
+                        path, QStringLiteral("image/png"), png, llm);
     }
     return text;
 }

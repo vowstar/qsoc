@@ -632,6 +632,11 @@ folds to one line, and `Tab` on the focused block shows it again. `var(--fg)`, `
 embedded documents, and external references are not drawn. A figure that cannot
 be drawn keeps its source.
 
+`read_file` on an `.svg` file returns its source and, on a model with image
+input, its drawing. `llm.vision_model` names an `llm.models` entry that describes
+images for a selected model without image input. Unset, that model gets only the
+image's size and type.
+
 On terminals that show bitmaps, a Markdown table with at least three rows and
 comparable numbers gets a chart under its text. A numeric first column gives a
 line chart when it only rises or only falls and a scatter plot otherwise. A

@@ -149,8 +149,9 @@ int helperMain(int argc, char *argv[])
 {
     if (argc < 4 || std::strcmp(argv[1], kHelperArgument) != 0)
         return -1;
-    const bool light = std::strcmp(argv[2], "light") == 0;
-    const int  cellH = std::max(1, std::atoi(argv[3]));
+    const bool opaque = std::strcmp(argv[2], "opaque") == 0;
+    const bool light  = opaque || std::strcmp(argv[2], "light") == 0;
+    const int  cellH  = std::max(1, std::atoi(argv[3]));
     /* The first available plugin wins. Packages may ship only a native one. */
     qputenv("QT_QPA_PLATFORM", "offscreen;minimal;windows;cocoa");
     QGuiApplication app(argc, argv);
@@ -178,7 +179,7 @@ int helperMain(int argc, char *argv[])
         std::max(1, int(std::ceil(pixels.width()))),
         std::max(1, int(std::ceil(pixels.height()))),
         QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::transparent);
+    image.fill(opaque ? Qt::white : Qt::transparent);
     {
         QPainter painter(&image);
         painter.setRenderHint(QPainter::Antialiasing);

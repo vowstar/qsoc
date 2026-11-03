@@ -20,6 +20,8 @@ constexpr qsizetype kMaxSourceBytes = 256 * 1024;
 const char *mimeType();
 /** @return The cleaned document, or empty with @p error set. */
 QByteArray sanitize(const QByteArray &source, bool lightBackground, QString *error = nullptr);
+/** @return PNG on an opaque background for a model to read, or empty when it cannot be drawn. */
+QByteArray drawForModel(const QByteArray &source);
 
 } // namespace QSocSvg
 

@@ -19,6 +19,7 @@
 #include <QSize>
 
 #include <algorithm>
+#include <memory>
 
 namespace QSocImageAttach {
 
@@ -293,6 +294,56 @@ QString displayOnlyMarker(const QString &sourceLabel, const QByteArray &body)
 
 } // namespace
 
+nlohmann::json attachmentPayload(const QString &text)
+{
+    const QString   open  = QString::fromLatin1(attachmentMarkerOpen());
+    const QString   close = QString::fromLatin1(attachmentMarkerClose());
+    const qsizetype begin = text.indexOf(open);
+    const qsizetype end   = text.indexOf(close, begin + open.size());
+    if (begin < 0 || end < 0)
+        return nlohmann::json(nlohmann::json::value_t::discarded);
+    return nlohmann::json::parse(
+        text.mid(begin + open.size(), end - begin - open.size()).toStdString(), nullptr, false);
+}
+
+namespace {
+
+/* What the `llm.vision_model` entry says about an image, empty when it cannot say. */
+QString describeWithVisionModel(
+    const QString &sourceLabel, const QString &mimeHint, const QByteArray &body, QLLMService *llm)
+{
+    if (llm == nullptr || !llm->getModelConfig(llm->visionModel()).acceptsImage)
+        return {};
+    const std::unique_ptr<QLLMService> vision(llm->clone());
+    vision->setCurrentModel(llm->visionModel());
+    const nlohmann::json payload = attachmentPayload(
+        buildAttachmentResult(sourceLabel, mimeHint, body, vision.get()));
+    if (!payload.is_object())
+        return {};
+    const nlohmann::json content = nlohmann::json::array(
+        {{{"type", "text"},
+          {"text",
+           "Describe this image for an engineer who cannot see it. Report all visible text and "
+           "numbers exactly, and the structure of any diagram or chart."}},
+         {{"type", "image_url"},
+          {"image_url",
+           {{"url",
+             "data:" + payload.value("mime", std::string()) + ";base64,"
+                 + payload.value("data", std::string())}}}}});
+    nlohmann::json message;
+    if (!QLLMService::extractAssistantMessage(
+            vision->sendChatCompletion(
+                nlohmann::json::array({{{"role", "user"}, {"content", content}}})),
+            &message)
+        || !message.value("content", nlohmann::json()).is_string())
+        return {};
+    QString text = QString::fromStdString(message["content"].get<std::string>());
+    text.remove(QChar(0x01));
+    return text.trimmed();
+}
+
+} // namespace
+
 QString buildAttachmentResult(
     const QString    &sourceLabel,
     const QString    &mimeHint,
@@ -341,14 +392,18 @@ QString buildAttachmentResult(
     };
 
     if (!accepts) {
-        if (!previewRefused)
-            return fallback(QStringLiteral("current model does not accept images"));
-        const QString marker = displayOnlyMarker(sourceLabel, body);
-        if (marker.isEmpty())
-            return fallback(QStringLiteral("current model does not accept images"));
-        return fallback(
-                   QStringLiteral("current model does not accept images; the user sees a preview"))
-               + QLatin1Char('\n') + marker;
+        const QString marker    = previewRefused ? displayOnlyMarker(sourceLabel, body) : QString();
+        const QString described = describeWithVisionModel(sourceLabel, mimeHint, body, llm);
+        const QString summary
+            = !described.isEmpty()
+                  ? QStringLiteral("[image: %1 described by the vision model: %2]")
+                        .arg(sourceLabel, described)
+                  : fallback(
+                        marker.isEmpty() ? QStringLiteral("current model does not accept images")
+                                         : QStringLiteral(
+                                               "current model does not accept images; the user "
+                                               "sees a preview"));
+        return marker.isEmpty() ? summary : summary + QLatin1Char('\n') + marker;
     }
 
     QImage decoded = reader.read();

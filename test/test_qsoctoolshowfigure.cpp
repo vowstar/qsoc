@@ -5,11 +5,13 @@
 #include "agent/qsocagentconfig.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolshowfigure.h"
+#include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
 
 #include <QBuffer>
 #include <QImage>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -44,6 +46,9 @@ private slots:
     void rejectsTextAndMissingFiles();
     void wrongArgumentTypesAreIgnored();
     void svgSourceAndFilesShowAsSvg();
+#ifndef Q_OS_WIN
+    void readFileDrawsSvgForAModelThatTakesImages();
+#endif
     void invalidSvgReportsToTheModel();
     void figuresRefuseUnknownTypes();
     void transcriptDropsBackedImageBytes();
@@ -123,6 +128,55 @@ void Test::svgSourceAndFilesShowAsSvg()
     QCOMPARE(attachments.size(), 1);
     QCOMPARE(attachments[0].mime, QStringLiteral("image/svg+xml"));
 }
+
+#ifndef Q_OS_WIN
+void Test::readFileDrawsSvgForAModelThatTakesImages()
+{
+    QTemporaryDir    dir;
+    const QByteArray svg  = "<svg viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"10\"/></svg>\n";
+    const QString    path = writeFile(dir, "a.svg", svg);
+    const QString    png  = writeFile(dir, "drawn.png", makePng(8, 8));
+    const QString    args = dir.filePath("args");
+    QFile            helper(writeFile(
+        dir,
+        "qsoc",
+        QStringLiteral("#!/bin/sh\ncat >/dev/null\necho \"$@\" >'%1'\ncat '%2'\n")
+            .arg(args, png)
+            .toUtf8()));
+    QVERIFY(helper.setPermissions(helper.permissions() | QFile::ExeOwner));
+    qputenv("QSOC_BIN_DIR", dir.path().toUtf8());
+    const auto restore = qScopeGuard([] { qunsetenv("QSOC_BIN_DIR"); });
+
+    QLLMService    llm(this);
+    LLMModelConfig model;
+    model.id = model.name = model.model = QStringLiteral("vision");
+    model.acceptsImage                  = true;
+    model.imageMaxTokens                = 100000;
+    llm.setModel(model);
+    QSocToolFileRead reader(this);
+    reader.setLLMService(&llm);
+
+    const QString result = reader.execute({{"file_path", path.toStdString()}});
+    QVERIFY(result.startsWith(QString::fromUtf8(svg)));
+    QList<QSocAgent::AttachmentSpec> attachments;
+    QSocAgent::extractImageAttachments(result, &attachments);
+    QCOMPARE(attachments.size(), 1);
+    QVERIFY(!attachments[0].displayOnly);
+    QFile recorded(args);
+    QVERIFY(recorded.open(QIODevice::ReadOnly));
+    QCOMPARE(recorded.readAll().trimmed(), QByteArray("--svg-raster opaque 16"));
+
+    const QString paged = reader.execute({{"file_path", path.toStdString()}, {"offset", 1}});
+    QSocAgent::extractImageAttachments(paged, &attachments);
+    QVERIFY(attachments.isEmpty());
+
+    QSocToolShowFigure tool(this, &reader, &llm);
+    QSocAgent::extractImageAttachments(
+        tool.execute({{"file_path", path.toStdString()}, {"inspect", true}}), &attachments);
+    QCOMPARE(attachments.size(), 1);
+    QVERIFY(!attachments[0].mime.contains(QStringLiteral("svg")));
+}
+#endif
 
 void Test::invalidSvgReportsToTheModel()
 {

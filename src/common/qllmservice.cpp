@@ -933,6 +933,7 @@ void QLLMService::loadConfigSettings()
 
     /* Select default model */
     defaultModelId = config->getValue("llm.model");
+    visionModelId  = config->getValue("llm.vision_model");
 
     if (!defaultModelId.isEmpty() && modelConfigs.contains(defaultModelId)) {
         /* Use model registry */
