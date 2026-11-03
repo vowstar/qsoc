@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
+#include <numeric>
 #include <optional>
 
 namespace QSocTableChart {
@@ -23,6 +25,9 @@ constexpr int kValueWidth = 70;
 constexpr int kBarHeight  = 14;
 constexpr int kBarGap     = 10;
 constexpr int kPlotHeight = 180;
+constexpr int kPieRadius  = 90;
+/* The palette has this many colors. */
+constexpr int kMaxSlices = 6;
 /* Series further apart than this do not share a scale. */
 constexpr double kMaxSeriesRatio = 100.0;
 
@@ -135,6 +140,18 @@ double reach(const Series &series)
     return std::max(std::abs(peak(series)), std::abs(trough(series)));
 }
 
+/* The value range of all series, always including zero. */
+std::pair<double, double> rangeOf(const QList<Series> &all)
+{
+    double low  = 0;
+    double high = 0;
+    for (const Series &series : all) {
+        low  = std::min(low, trough(series));
+        high = std::max(high, peak(series));
+    }
+    return {low, high};
+}
+
 QString legend(const QList<Series> &all)
 {
     QString svg;
@@ -151,21 +168,23 @@ QString legend(const QList<Series> &all)
     return svg;
 }
 
-/* Values along an ordered axis: one line per series, labeled at both ends. */
-QByteArray drawLines(const QStringList &names, const QList<Series> &all)
+/* Values at their positions on @p axis, labeled at both ends. Points join into
+ * lines when @p joined. */
+QByteArray drawPlot(
+    const QStringList &names, const QList<double> &axis, const QList<Series> &all, bool joined)
 {
-    double low  = 0;
-    double high = 0;
-    for (const Series &series : all) {
-        low  = std::min(low, trough(series));
-        high = std::max(high, peak(series));
-    }
-    const int  top    = all.size() > 1 ? 28 : 10;
-    const int  height = top + kPlotHeight + 26;
-    const int  left   = 50;
-    const int  right  = kChartWidth - 20;
-    const auto xAt    = [&](qsizetype index) {
-        return left + double(right - left) * double(index) / double(names.size() - 1);
+    const auto   range  = rangeOf(all);
+    const double low    = range.first;
+    const double high   = range.second;
+    const auto   bounds = std::minmax_element(axis.cbegin(), axis.cend());
+    const auto   first  = bounds.first;
+    const auto   last   = bounds.second;
+    const int    top    = all.size() > 1 ? 28 : 10;
+    const int    height = top + kPlotHeight + 26;
+    const int    left   = 50;
+    const int    right  = kChartWidth - 20;
+    const auto   xAt    = [&](qsizetype row) {
+        return left + double(right - left) * (axis[row] - *first) / (*last - *first);
     };
     const auto yAt = [&](double value) { return top + kPlotHeight * (high - value) / (high - low); };
     QString svg = QStringLiteral("<svg viewBox=\"0 0 %1 %2\" font-size=\"12\">")
@@ -190,37 +209,37 @@ QByteArray drawLines(const QStringList &names, const QList<Series> &all)
         QString points;
         for (qsizetype row = 0; row < names.size(); ++row) {
             points += QStringLiteral("%1,%2 ").arg(xAt(row)).arg(yAt(all[index].values[row]));
-            svg += QStringLiteral("<circle cx=\"%1\" cy=\"%2\" r=\"2.5\" fill=\"var(--c%3)\"/>")
+            svg += QStringLiteral("<circle cx=\"%1\" cy=\"%2\" r=\"%3\" fill=\"var(--c%4)\"/>")
                        .arg(xAt(row))
                        .arg(yAt(all[index].values[row]))
+                       .arg(joined ? 2.5 : 4)
                        .arg(index + 1);
         }
-        svg += QStringLiteral(
-                   "<polyline points=\"%1\" fill=\"none\" stroke=\"var(--c%2)\" "
-                   "stroke-width=\"2\"/>")
-                   .arg(points)
-                   .arg(index + 1);
+        if (joined) {
+            svg += QStringLiteral(
+                       "<polyline points=\"%1\" fill=\"none\" stroke=\"var(--c%2)\" "
+                       "stroke-width=\"2\"/>")
+                       .arg(points)
+                       .arg(index + 1);
+        }
     }
     svg += QStringLiteral("<text x=\"%1\" y=\"%2\" fill=\"var(--fg)\">%3</text>")
                .arg(left)
                .arg(height - 6)
-               .arg(escaped(names.first().left(20)));
+               .arg(escaped(names[first - axis.cbegin()].left(20)));
     svg += QStringLiteral("<text x=\"%1\" y=\"%2\" text-anchor=\"end\" fill=\"var(--fg)\">%3</text>")
                .arg(right)
                .arg(height - 6)
-               .arg(escaped(names.last().left(20)));
+               .arg(escaped(names[last - axis.cbegin()].left(20)));
     svg += QStringLiteral("</svg>");
     return svg.toUtf8();
 }
 
 QByteArray drawBars(const QStringList &names, const QList<Series> &all)
 {
-    double low  = 0;
-    double high = 0;
-    for (const Series &series : all) {
-        low  = std::min(low, trough(series));
-        high = std::max(high, peak(series));
-    }
+    const auto   range     = rangeOf(all);
+    const double low       = range.first;
+    const double high      = range.second;
     const int    rowHeight = int(all.size()) * kBarHeight + kBarGap;
     const int    top       = all.size() > 1 ? 24 : 8;
     const int    height    = top + int(names.size()) * rowHeight;
@@ -261,20 +280,109 @@ QByteArray drawBars(const QStringList &names, const QList<Series> &all)
     return svg.toUtf8();
 }
 
-bool isIdentifierHeader(const QString &header)
-{
-    static const QRegularExpression identifier(
-        QStringLiteral(R"(^(id|#|no\.?|num|index|idx|addr|address)$)"),
-        QRegularExpression::CaseInsensitiveOption);
-    return identifier.match(header).hasMatch();
-}
-
 bool isOrderedHeader(const QString &header)
 {
     static const QRegularExpression ordered(
         QStringLiteral(R"(time|date|step|run|iter|epoch|version|year|month|week|day|cycle|round)"),
         QRegularExpression::CaseInsensitiveOption);
     return ordered.match(header).hasMatch();
+}
+
+/* Shares of a whole: one slice per row, keyed beside the circle. */
+QByteArray drawPie(const QStringList &names, const Series &series)
+{
+    const double total     = std::accumulate(series.values.cbegin(), series.values.cend(), 0.0);
+    const int    rowHeight = 22;
+    const int    height    = std::max(2 * kPieRadius, int(names.size()) * rowHeight) + 20;
+    const int    cx        = kPieRadius + 10;
+    const int    cy        = height / 2;
+    QString      svg       = QStringLiteral("<svg viewBox=\"0 0 %1 %2\" font-size=\"13\">")
+                                 .arg(kChartWidth)
+                                 .arg(height);
+    double       angle     = -std::numbers::pi / 2;
+    for (qsizetype row = 0; row < names.size(); ++row) {
+        const double sweep = 2 * std::numbers::pi * series.values[row] / total;
+        const double end   = angle + sweep;
+        svg += QStringLiteral(
+                   "<path d=\"M%1 %2 L%3 %4 A%5 %5 0 %6 1 %7 %8 Z\" fill=\"var(--c%9)\"/>")
+                   .arg(cx)
+                   .arg(cy)
+                   .arg(cx + kPieRadius * std::cos(angle))
+                   .arg(cy + kPieRadius * std::sin(angle))
+                   .arg(kPieRadius)
+                   .arg(sweep > std::numbers::pi ? 1 : 0)
+                   .arg(cx + kPieRadius * std::cos(end))
+                   .arg(cy + kPieRadius * std::sin(end))
+                   .arg(row + 1);
+        const int y = 14 + int(row) * rowHeight;
+        svg += QStringLiteral(
+                   "<rect x=\"%1\" y=\"%2\" width=\"12\" height=\"12\" fill=\"var(--c%3)\"/>")
+                   .arg(2 * kPieRadius + 40)
+                   .arg(y)
+                   .arg(row + 1);
+        svg += QStringLiteral("<text x=\"%1\" y=\"%2\" fill=\"var(--fg)\">%3 %4</text>")
+                   .arg(2 * kPieRadius + 58)
+                   .arg(y + 11)
+                   .arg(escaped(names[row].left(24)), escaped(series.labels[row]));
+        angle = end;
+    }
+    svg += QStringLiteral("</svg>");
+    return svg.toUtf8();
+}
+
+/* Percentages of one whole that the palette can tell apart. */
+bool isShareOfWhole(const QList<Series> &all, qsizetype rows)
+{
+    if (all.size() != 1 || rows > kMaxSlices || !all.first().labels.first().endsWith('%')
+        || trough(all.first()) <= 0)
+        return false;
+    const double total
+        = std::accumulate(all.first().values.cbegin(), all.first().values.cend(), 0.0);
+    return total >= 95 && total <= 105;
+}
+
+/* The numbers in @p names when all of them are numbers and they differ. */
+QList<double> numericAxis(const QStringList &names)
+{
+    QList<double> axis;
+    QString       ignoredUnit;
+    for (const QString &name : names) {
+        const auto value = numberIn(name, &ignoredUnit);
+        if (!value)
+            return {};
+        axis.append(*value);
+    }
+    const auto bounds = std::minmax_element(axis.cbegin(), axis.cend());
+    return *bounds.first < *bounds.second ? axis : QList<double>();
+}
+
+bool isMonotonic(const QList<double> &axis)
+{
+    return std::is_sorted(axis.cbegin(), axis.cend())
+           || std::is_sorted(axis.crbegin(), axis.crend());
+}
+
+/* The chart a table's first column and series ask for. */
+QByteArray draw(const QString &axisHeader, const QStringList &names, const QList<Series> &all)
+{
+    const QList<double> numeric = numericAxis(names);
+    if (!numeric.isEmpty())
+        return drawPlot(names, numeric, all, isMonotonic(numeric));
+    if (isOrderedHeader(axisHeader)) {
+        QList<double> rows;
+        for (qsizetype row = 0; row < names.size(); ++row)
+            rows.append(double(row));
+        return drawPlot(names, rows, all, true);
+    }
+    return isShareOfWhole(all, names.size()) ? drawPie(names, all.first()) : drawBars(names, all);
+}
+
+bool isIdentifierHeader(const QString &header)
+{
+    static const QRegularExpression identifier(
+        QStringLiteral(R"(^(id|#|no\.?|num|index|idx|addr|address)$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    return identifier.match(header).hasMatch();
 }
 
 } // namespace
@@ -290,8 +398,6 @@ QByteArrayList charts(const QString &markdown)
         QStringList names;
         for (const QStringList &row : table.rows)
             names.append(row.first());
-        QString       ignoredUnit;
-        const bool    numericNames = numberIn(names.first(), &ignoredUnit).has_value();
         QList<Series> all;
         for (qsizetype column = 1; column < table.header.size(); ++column) {
             const auto series = seriesOf(table, column);
@@ -305,9 +411,7 @@ QByteArrayList charts(const QString &markdown)
         }
         if (all.isEmpty())
             continue;
-        result.append(
-            numericNames || isOrderedHeader(table.header.first()) ? drawLines(names, all)
-                                                                  : drawBars(names, all));
+        result.append(draw(table.header.first(), names, all));
     }
     return result;
 }

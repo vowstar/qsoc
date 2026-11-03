@@ -10,8 +10,10 @@
 /**
  * @brief Charts for numeric Markdown tables.
  * @details A table qualifies with at least three rows and columns of comparable
- *          numbers that are not all equal. An ordered first column gives a line
- *          chart and any other a bar chart. Identifier columns are not charted.
+ *          numbers that are not all equal. A numeric first column places points by
+ *          value and joins them when it is monotonic. A named ordered axis gives
+ *          a line chart, percentages of one whole a pie, and any other a bar
+ *          chart. Identifier columns are not charted.
  */
 namespace QSocTableChart {
 

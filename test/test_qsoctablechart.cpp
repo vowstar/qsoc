@@ -18,6 +18,10 @@ private slots:
     void groupsComparableColumns();
     void orderedAxisDrawsLines_data();
     void orderedAxisDrawsLines();
+    void unorderedNumbersDrawPoints();
+    void sharesOfAWholeDrawAPie();
+    void otherPercentagesStayBars_data();
+    void otherPercentagesStayBars();
     void negativeValuesCrossTheBaseline();
     void leavesOtherTablesAlone_data();
     void leavesOtherTablesAlone();
@@ -64,6 +68,48 @@ void Test::orderedAxisDrawsLines()
     QCOMPARE(charts.size(), 1);
     QVERIFY(charts[0].contains("<polyline"));
     QVERIFY(!QSocSvg::sanitize(charts[0], false).isEmpty());
+}
+
+void Test::unorderedNumbersDrawPoints()
+{
+    const auto charts = QSocTableChart::charts(
+        "| size | time |\n|---|---|\n| 3 | 4 |\n| 1 | 5 |\n| 2 | 9 |\n");
+    QCOMPARE(charts.size(), 1);
+    QVERIFY(charts[0].contains("<circle"));
+    QVERIFY(!charts[0].contains("<polyline"));
+    QVERIFY(!QSocSvg::sanitize(charts[0], false).isEmpty());
+}
+
+void Test::sharesOfAWholeDrawAPie()
+{
+    const auto charts = QSocTableChart::charts(
+        "| Block | Area |\n|---|---|\n| CPU | 60% |\n| <b>GPU</b> | 30% |\n| IO | 10% |\n");
+    QCOMPARE(charts.size(), 1);
+    QCOMPARE(charts[0].count("<path"), 3);
+    QVERIFY(charts[0].contains("&lt;b&gt;GPU"));
+    QVERIFY(charts[0].contains("60%"));
+    QVERIFY(!QSocSvg::sanitize(charts[0], false).isEmpty());
+}
+
+void Test::otherPercentagesStayBars_data()
+{
+    QTest::addColumn<QString>("markdown");
+    QTest::newRow("not a whole") << "| a | b |\n|---|---|\n| x | 60% |\n| y | 70% |\n| z | 9% |\n";
+    QTest::newRow("no unit") << "| a | b |\n|---|---|\n| x | 60 |\n| y | 30 |\n| z | 10 |\n";
+    QTest::newRow("two columns")
+        << "| a | b | c |\n|---|---|---|\n| x | 60% | 1% |\n| y | 30% | 9% |\n| z | 10% | 90% |\n";
+    QTest::newRow("more than the palette")
+        << "| a | b |\n|---|---|\n| p | 15% |\n| q | 15% |\n| r | 15% |\n| s | 15% |\n"
+           "| t | 15% |\n| u | 15% |\n| v | 10% |\n";
+}
+
+void Test::otherPercentagesStayBars()
+{
+    QFETCH(QString, markdown);
+    const auto charts = QSocTableChart::charts(markdown);
+    QCOMPARE(charts.size(), 1);
+    QVERIFY(charts[0].contains("<rect"));
+    QVERIFY(!charts[0].contains("<path"));
 }
 
 void Test::negativeValuesCrossTheBaseline()
