@@ -771,14 +771,22 @@ private slots:
         delete clone;
     }
 
-    void testAbortFromContentStopsSameDelta()
+    void testAbortStopsSameDelta_data()
     {
+        QTest::addColumn<bool>("fromContent");
+        QTest::newRow("reasoning") << false;
+        QTest::newRow("content") << true;
+    }
+
+    void testAbortStopsSameDelta()
+    {
+        QFETCH(bool, fromContent);
         MockHttpServer server;
         QVERIFY(server.listen());
 
         json delta;
         delta["content"]           = "old content";
-        delta["reasoning_content"] = "stale reasoning";
+        delta["reasoning_content"] = "old reasoning";
         delta["tool_calls"]        = json::array({toolCall(0, QStringLiteral("stale_tool"))});
         server.enqueue(deltaResponse(delta, true, true, true));
 
@@ -788,28 +796,31 @@ private slots:
         StreamEvents events;
         bool         abortRequested = false;
         recordStreamEvents(&service, &events);
-        connect(
-            &service,
-            &QLLMService::streamChunk,
-            this,
-            [&](const QString &) {
-                if (!abortRequested) {
-                    abortRequested = true;
-                    service.abortStream();
-                }
-            },
-            Qt::DirectConnection);
+        const auto abortOnce = [&](const QString &) {
+            if (!abortRequested) {
+                abortRequested = true;
+                service.abortStream();
+            }
+        };
+        if (fromContent) {
+            connect(&service, &QLLMService::streamChunk, this, abortOnce, Qt::DirectConnection);
+        } else {
+            connect(
+                &service, &QLLMService::streamReasoningChunk, this, abortOnce, Qt::DirectConnection);
+        }
 
         service.sendChatCompletionStream(json::array(), json::array(), 0.0);
         QVERIFY2(
             waitUntil([&]() { return !events.errors.isEmpty() || !events.completed.isEmpty(); }),
-            "content abort produced no terminal signal");
+            "abort produced no terminal signal");
         QVERIFY2(waitForNoReplies(&service), "aborted reply was not deleted");
 
         QVERIFY(abortRequested);
-        QCOMPARE(events.content, QStringList({QStringLiteral("old content")}));
+        QCOMPARE(events.reasoning, QStringList({QStringLiteral("old reasoning")}));
+        QCOMPARE(
+            events.content,
+            fromContent ? QStringList({QStringLiteral("old content")}) : QStringList());
         QCOMPARE(events.errors, QStringList({QStringLiteral("Aborted by user")}));
-        QVERIFY(events.reasoning.isEmpty());
         QVERIFY(events.toolNames.isEmpty());
         QVERIFY(events.completed.isEmpty());
     }
@@ -967,8 +978,8 @@ private slots:
         QVERIFY(server.listen());
 
         json delta;
-        delta["content"]           = "delete service";
-        delta["reasoning_content"] = "must not escape";
+        delta["content"]           = "must not escape";
+        delta["reasoning_content"] = "delete service";
         delta["tool_calls"]        = json::array({toolCall(0, QStringLiteral("must_not_run"))});
         server.enqueue(deltaResponse(delta, true, true, true));
 
@@ -980,7 +991,7 @@ private slots:
         recordStreamEvents(service.data(), &events);
         connect(
             service.data(),
-            &QLLMService::streamChunk,
+            &QLLMService::streamReasoningChunk,
             this,
             [&](const QString &) {
                 if (!deleted) {
@@ -1000,8 +1011,8 @@ private slots:
         QVERIFY2(actionObserved, "progress deletion slot did not run");
         QVERIFY(deleted);
         QVERIFY(service.isNull());
-        QCOMPARE(events.content, QStringList({QStringLiteral("delete service")}));
-        QVERIFY(events.reasoning.isEmpty());
+        QCOMPARE(events.reasoning, QStringList({QStringLiteral("delete service")}));
+        QVERIFY(events.content.isEmpty());
         QVERIFY(events.toolNames.isEmpty());
         QVERIFY(events.errors.isEmpty());
         QVERIFY(events.completed.isEmpty());
@@ -1684,10 +1695,10 @@ private slots:
         QCOMPARE(
             eventOrder,
             QStringList(
-                {QStringLiteral("content:one"),
-                 QStringLiteral("reasoning:one"),
-                 QStringLiteral("content:two"),
-                 QStringLiteral("reasoning:two")}));
+                {QStringLiteral("reasoning:one"),
+                 QStringLiteral("content:one"),
+                 QStringLiteral("reasoning:two"),
+                 QStringLiteral("content:two")}));
         QVERIFY2(events.errors.isEmpty(), qPrintable(events.errors.join(QLatin1Char('\n'))));
         QCOMPARE(events.completed.size(), 1);
         QCOMPARE(completionContent(events.completed.first()), QStringLiteral("onetwo"));

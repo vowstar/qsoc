@@ -80,6 +80,32 @@ private slots:
         QCOMPARE(message[expected.toStdString()].get<std::string>(), kThinking.toStdString());
     }
 
+    void deltaWithBothFieldsEmitsThinkingFirst()
+    {
+        Mock mock;
+        QVERIFY(mock.start(
+            {{QStringLiteral("MOCK_REASONING"), kThinking},
+             {QStringLiteral("MOCK_REASONING_WITH_REPLY"), QStringLiteral("1")}}));
+
+        QLLMService service;
+        service.setModel(mock.model());
+        QStringList order;
+        connect(&service, &QLLMService::streamReasoningChunk, this, [&order](const QString &) {
+            order << QStringLiteral("thinking");
+        });
+        connect(&service, &QLLMService::streamChunk, this, [&order](const QString &) {
+            order << QStringLiteral("answer");
+        });
+        QList<json> done;
+        connect(&service, &QLLMService::streamComplete, this, [&done](const json &response) {
+            done.append(response);
+        });
+        service.sendChatCompletionStream(json::array({{{"role", "user"}, {"content", "hi"}}}));
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 10000);
+
+        QCOMPARE(order, QStringList({QStringLiteral("thinking"), QStringLiteral("answer")}));
+    }
+
     void toolRoundReplaysThinking()
     {
         Mock mock;

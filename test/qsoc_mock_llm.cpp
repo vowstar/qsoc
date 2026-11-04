@@ -61,6 +61,7 @@ struct MockConfig
     QString     failMode = QStringLiteral("none");
     QString     reasoning;
     QStringList reasoningFields;
+    bool        reasoningInline = false;
     QByteArray  streamError;
     QByteArray  tokenize;
     int         tokenizeCount = -1;
@@ -139,6 +140,7 @@ bool loadConfig(QString *error)
     config.reasoning         = QString::fromUtf8(qgetenv("MOCK_REASONING"));
     config.reasoningFields   = QString::fromLatin1(envBytes("MOCK_REASONING_FIELD", "reasoning"))
                                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    config.reasoningInline   = qEnvironmentVariableIsSet("MOCK_REASONING_WITH_REPLY");
     config.streamError       = qgetenv("MOCK_STREAM_ERROR");
     config.tokenize          = envBytes("MOCK_TOKENIZE", "ok");
     config.tokenizeCount     = envInt("MOCK_TOKENIZE_COUNT", -1);
@@ -539,7 +541,7 @@ void answerPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
         /* Thinking streams first, under every configured alias at once,
          * the way some servers mirror one text into two fields. */
         QList<QJsonObject> chunks;
-        if (!reasoning.isEmpty()) {
+        if (!reasoning.isEmpty() && !config.reasoningInline) {
             QJsonObject thinking;
             thinking["role"] = QStringLiteral("assistant");
             for (const QString &field : config.reasoningFields) {
@@ -555,6 +557,11 @@ void answerPost(QTcpSocket *socket, const QByteArray &body, Wire wire)
             chunks.append(deltaChunk(QJsonObject(), QStringLiteral("tool_calls")));
         } else {
             delta["content"] = reply;
+            if (config.reasoningInline) {
+                for (const QString &field : config.reasoningFields) {
+                    delta[field] = reasoning;
+                }
+            }
             chunks.append(deltaChunk(delta, QString()));
             chunks.append(deltaChunk(QJsonObject(), QStringLiteral("stop")));
         }

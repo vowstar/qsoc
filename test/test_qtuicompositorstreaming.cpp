@@ -16,6 +16,7 @@ private slots:
     void interveningPrintContentSealsAssistantBlock();
     void finishStreamSealsCurrentBlock();
     void reasoningChunksLandOnSeparateBlock();
+    void interleavedStreamsShowEachTextOnce();
     void toolOutputStaysWithItsCallAcrossMessages();
     void removedToolBlocksRejectLateOutput();
 };
@@ -67,6 +68,20 @@ void Test::reasoningChunksLandOnSeparateBlock()
     QCOMPARE(compositor.contentView().totalLines(), 2);
     const QString flat = compositor.contentView().toPlainText();
     QVERIFY(flat.indexOf(QStringLiteral("thinking")) < flat.indexOf(QStringLiteral("answer")));
+}
+
+void Test::interleavedStreamsShowEachTextOnce()
+{
+    QTuiCompositor compositor;
+    compositor.appendReasoningChunk(QStringLiteral("thinking"));
+    compositor.appendAssistantChunk(QStringLiteral("Ans"));
+    compositor.appendReasoningChunk(QStringLiteral("."));
+    compositor.appendAssistantChunk(QStringLiteral("wer"));
+
+    const QString flat = compositor.contentView().toPlainText();
+    QCOMPARE(flat.count(QStringLiteral("thinking")), 1);
+    QCOMPARE(flat.count(QStringLiteral("Ans")), 1);
+    QVERIFY(flat.contains(QStringLiteral("wer")));
 }
 
 void Test::toolOutputStaysWithItsCallAcrossMessages()

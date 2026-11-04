@@ -213,17 +213,11 @@ void QTuiCompositor::feedSplitChunk(const QString &chunk, StreamMode mode)
                                                                           : currentReasoningGroupId;
     const bool forceDim                 = (mode == StreamMode::Reasoning);
 
-    /* Cursors stale because something else landed on top of our last
-     * block: drop them and reset committed prose so the next line
-     * creates a fresh block rather than back-filling. */
-    if (activeText != nullptr && scrollView.lastBlock() != activeText
+    /* Something else landed on top of our last block. Seal it so the line
+     * it already shows stays there instead of being shown again below. */
+    if ((activeText != nullptr || activeCode != nullptr) && scrollView.lastBlock() != activeText
         && scrollView.lastBlock() != activeCode) {
-        activeText = nullptr;
-        committed.clear();
-    }
-    if (activeCode != nullptr && scrollView.lastBlock() != activeCode
-        && scrollView.lastBlock() != activeText) {
-        activeCode = nullptr;
+        sealStream(mode);
     }
 
     auto ensureRunGroup = [&]() {

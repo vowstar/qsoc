@@ -1810,16 +1810,6 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
     const json &delta = choice.contains("delta") && choice["delta"].is_object() ? choice["delta"]
                                                                                 : emptyDelta;
 
-    /* Handle content chunks */
-    if (delta.contains("content") && delta["content"].is_string()) {
-        QString content = QString::fromStdString(delta["content"].get<std::string>());
-        state->content += content;
-        emit owner->streamChunk(content);
-        if (!isStreamActive(owner, state)) {
-            return ParseResult::Stopped;
-        }
-    }
-
     /* Servers name the reasoning delta differently. The first non-empty
      * alias wins, so a chunk carrying two aliases is shown once. The text
      * of reasoning_details is the fallback. */
@@ -1850,6 +1840,16 @@ QLLMService::ParseResult QLLMService::parseStreamLine(
         }
         state->reasoning += reasoning;
         emit owner->streamReasoningChunk(reasoning);
+        if (!isStreamActive(owner, state)) {
+            return ParseResult::Stopped;
+        }
+    }
+
+    /* Handle content chunks */
+    if (delta.contains("content") && delta["content"].is_string()) {
+        QString content = QString::fromStdString(delta["content"].get<std::string>());
+        state->content += content;
+        emit owner->streamChunk(content);
         if (!isStreamActive(owner, state)) {
             return ParseResult::Stopped;
         }
