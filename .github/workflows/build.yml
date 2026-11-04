@@ -152,7 +152,6 @@ jobs:
         set-env: 'true'
         aqtversion: '==3.1.*'
         py7zrversion: '==0.20.*'
-        extra: '--external 7z'
 
     - name: Verify source archive
       run: |
@@ -361,7 +360,6 @@ jobs:
         set-env: 'true'
         aqtversion: '==3.1.*'
         py7zrversion: '==0.20.*'
-        extra: '--external 7z'
 
     - name: Configure CMake
       run: >-
@@ -490,7 +488,6 @@ jobs:
         set-env: 'true'
         aqtversion: '==3.1.*'
         py7zrversion: '==0.20.*'
-        extra: '--external 7z'
 
     - name: Configure CMake
       run: >-
