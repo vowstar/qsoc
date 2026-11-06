@@ -2,9 +2,8 @@
 <tui-image-preview>
 The agent TUI shows bitmap attachments (PNG, JPG, GIF, WebP) inline.
 Terminals with the kitty graphics, iTerm2 inline image, or Sixel protocol show
-the bitmap. Other color terminals, including tmux, screen, and mosh sessions,
-show a half-block preview in terminal cells. Fine text in a half-block
-preview is not readable.
+the bitmap. Other color terminals show a half-block preview in terminal cells.
+Fine text in a half-block preview is not readable.
 
 == Terminal Compatibility Matrix
 <tui-image-preview-matrix>
@@ -32,6 +31,8 @@ preview is not readable.
 On Linux and macOS, QSoC asks the terminal for its graphics support, cell size,
 and name when the agent starts, so a graphics terminal is recognized over SSH.
 On Windows, set `QSOC_IMAGE_PROTOCOL` to use a bitmap protocol.
+A second client in the same tmux session does not disable a graphics terminal's
+bitmap previews.
 
 == Folding and History
 <tui-image-preview-fold>

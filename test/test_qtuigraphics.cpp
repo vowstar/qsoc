@@ -2,8 +2,12 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "qsoc_test.h"
+#include "qsoc_test_pty.h"
 #include "tui/qtuigraphics.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
 #include <QtTest>
 
 Q_DECLARE_METATYPE(QTuiGraphics::ProbeReply)
@@ -37,6 +41,8 @@ private slots:
     void unfinishedReplyIsNotTypeAhead();
     void selectsByPriority_data();
     void selectsByPriority();
+    void tmuxClients_data();
+    void tmuxClients();
     void sixelDescribesEveryPixel();
     void sixelLeavesTransparentPixelsUndrawn();
     void passthroughWrapsOnlyInTmux();
@@ -154,6 +160,81 @@ void Test::selectsByPriority()
     QFETCH(ProbeReply, reply);
     QFETCH(int, expected);
     QCOMPARE(int(selectProtocol(envOf(env), reply)), expected);
+}
+
+void Test::tmuxClients_data()
+{
+    QTest::addColumn<QString>("clients");
+    QTest::addColumn<QString>("passthrough");
+    QTest::addColumn<int>("expected");
+    const QString graphical = QStringLiteral("graphical\tghostty 1.3.1\txterm-256color\n");
+    const QString plain     = QStringLiteral("plain\t\txterm-256color\n");
+    QTest::newRow("graphical then plain")
+        << graphical + plain << QStringLiteral("on") << int(Protocol::Kitty);
+    QTest::newRow("plain then graphical")
+        << plain + graphical << QStringLiteral("on") << int(Protocol::Kitty);
+    QTest::newRow("only graphical") << graphical << QStringLiteral("on") << int(Protocol::Kitty);
+    QTest::newRow("only plain") << plain << QStringLiteral("on") << int(Protocol::Cells);
+    QTest::newRow("no clients") << QString() << QStringLiteral("on") << int(Protocol::Cells);
+    QTest::newRow("passthrough off")
+        << graphical + plain << QStringLiteral("off") << int(Protocol::Cells);
+    QTest::newRow("passthrough all")
+        << graphical + plain << QStringLiteral("all") << int(Protocol::Kitty);
+    QTest::newRow("sixel after plain") << plain + QStringLiteral("sixel\tfoot\txterm-256color\n")
+                                       << QStringLiteral("off") << int(Protocol::Sixel);
+}
+
+void Test::tmuxClients()
+{
+#ifdef Q_OS_UNIX
+    QFETCH(QString, clients);
+    QFETCH(QString, passthrough);
+    QFETCH(int, expected);
+    QTemporaryDir root(QDir::tempPath() + QStringLiteral("/test_qsoc_graphics_XXXXXX"));
+    QVERIFY(root.isValid());
+    QFile tmux(root.filePath(QStringLiteral("tmux")));
+    QVERIFY(tmux.open(QIODevice::WriteOnly));
+    const QByteArray script
+        = "#!/bin/sh\n"
+          "case \"$1\" in\n"
+          "list-clients)\n"
+          "  [ \"$2\" = -t ] && [ \"$3\" = \"$TMUX_PANE\" ] || exit 1\n"
+          "  printf '%s' \"$QSOC_TEST_CLIENTS\";;\n"
+          "display-message) printf 'plain\\t\\txterm-256color\\n';;\n"
+          "show-options) printf '%s\\n' \"$QSOC_TEST_PASSTHROUGH\";;\n"
+          "show-messages) [ \"$4\" != sixel ] || printf '1: Sxl: (flag) true\\n';;\n"
+          "*) exit 1;;\n"
+          "esac\n";
+    QCOMPARE(tmux.write(script), script.size());
+    tmux.close();
+    QVERIFY(tmux.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+    auto environment = QSocTestPty::isolatedEnvironment(root.path());
+    environment.insert(
+        QStringLiteral("PATH"), root.path() + QLatin1Char(':') + qEnvironmentVariable("PATH"));
+    environment.insert(QStringLiteral("TMUX"), root.filePath(QStringLiteral("socket")));
+    environment.insert(QStringLiteral("TMUX_PANE"), QStringLiteral("%7"));
+    environment.insert(QStringLiteral("QSOC_TEST_CLIENTS"), clients);
+    environment.insert(QStringLiteral("QSOC_TEST_PASSTHROUGH"), passthrough);
+    const QString           resultPath = root.filePath(QStringLiteral("result.json"));
+    QSocTestPty::PtyProcess process;
+    QVERIFY(process.startInPty(
+        QStringLiteral(QSOC_TUI_IMAGE_PROBE_PATH),
+        {QStringLiteral("--graphics-probe"), resultPath},
+        root.path(),
+        environment));
+    QVERIFY(process.waitForOutput("\x1b[c", 5000));
+    QVERIFY(process.writeInput("\x1b[?62;4c"));
+    QVERIFY(process.waitForExit(5000));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(process.exitCode(), 0);
+    QFile result(resultPath);
+    QVERIFY(result.open(QIODevice::ReadOnly));
+    QCOMPARE(
+        QJsonDocument::fromJson(result.readAll()).object().value(QStringLiteral("protocol")).toInt(),
+        expected);
+#else
+    QSKIP("Terminal probing requires a Unix terminal");
+#endif
 }
 
 void Test::sixelDescribesEveryPixel()

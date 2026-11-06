@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "tui/qtuicompositor.h"
+#include "tui/qtuigraphics.h"
 #include "tui/qtuiimagepreviewblock.h"
 
 #include <QBuffer>
@@ -64,6 +65,14 @@ QJsonObject imageGeometry(QTuiCompositor &compositor, const QTuiImagePreviewBloc
 int main(int argc, char **argv)
 {
     const QCoreApplication app(argc, argv);
+    if (app.arguments().size() == 3 && app.arguments().at(1) == QStringLiteral("--graphics-probe")) {
+        QTuiGraphics::probeTerminal();
+        QFile result(app.arguments().at(2));
+        if (!result.open(QIODevice::WriteOnly))
+            return 2;
+        const QJsonObject report{{QStringLiteral("protocol"), int(QTuiGraphics::protocol())}};
+        return result.write(QJsonDocument(report).toJson()) < 0 ? 2 : 0;
+    }
     if (app.arguments().size() != 2) {
         return 2;
     }

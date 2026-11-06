@@ -84,8 +84,7 @@ QString runTmux(const QStringList &arguments)
                                         : QString();
 }
 
-/* tmux answers queries for its own emulator, and only its record of the
- * attached client says what reaches the outer terminal. */
+/* tmux answers queries for its own emulator. A session can have several clients. */
 void askTmuxAboutClient(ProbeReply *reply)
 {
     const bool drawsSixel = reply->sixel;
@@ -94,31 +93,39 @@ void askTmuxAboutClient(ProbeReply *reply)
     const auto env        = QProcessEnvironment::systemEnvironment();
     if (!env.contains(QStringLiteral("TMUX")))
         return;
-    const QString client = runTmux(
-        {QStringLiteral("display-message"),
-         QStringLiteral("-p"),
-         QStringLiteral("#{client_name}\t#{client_termtype}\t#{client_termname}")});
-    const QString name = client.toLower();
-    QStringList   target;
+    QStringList target;
     if (const QString pane = env.value(QStringLiteral("TMUX_PANE")); !pane.isEmpty())
         target = {QStringLiteral("-t"), pane};
+    const QStringList clients
+        = runTmux(
+              QStringList{QStringLiteral("list-clients")} + target
+              + QStringList{QStringLiteral("-F"), QStringLiteral("#{client_name}\t#{client_termtype}\t#{client_termname}")})
+              .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     const QString passthrough
         = runTmux(
               QStringList{QStringLiteral("show-options"), QStringLiteral("-Apqv")} + target
               + QStringList{QStringLiteral("allow-passthrough")})
               .trimmed();
-    reply->kitty = (name.contains(QStringLiteral("kitty"))
-                    || name.contains(QStringLiteral("ghostty")))
-                   && (passthrough == QStringLiteral("on") || passthrough == QStringLiteral("all"));
+    reply->kitty = (passthrough == QStringLiteral("on") || passthrough == QStringLiteral("all"))
+                   && std::any_of(clients.cbegin(), clients.cend(), [](const QString &client) {
+                          return terminalNameProtocol(client.section(QLatin1Char('\t'), 1))
+                                 == Protocol::Kitty;
+                      });
+    if (reply->kitty || !drawsSixel)
+        return;
     static const QRegularExpression sixelCapability(QStringLiteral(R"(\d+: Sxl: \(flag\) true)"));
-    reply->sixel = drawsSixel
-                   && sixelCapability
-                          .match(runTmux(
-                              {QStringLiteral("show-messages"),
-                               QStringLiteral("-T"),
-                               QStringLiteral("-t"),
-                               client.section(QLatin1Char('\t'), 0, 0)}))
-                          .hasMatch();
+    for (const QString &client : clients) {
+        if (sixelCapability
+                .match(runTmux(
+                    {QStringLiteral("show-messages"),
+                     QStringLiteral("-T"),
+                     QStringLiteral("-t"),
+                     client.section(QLatin1Char('\t'), 0, 0)}))
+                .hasMatch()) {
+            reply->sixel = true;
+            break;
+        }
+    }
 }
 
 } // namespace
