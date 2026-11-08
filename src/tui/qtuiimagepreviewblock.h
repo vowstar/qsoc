@@ -112,8 +112,9 @@ private:
     mutable int   placementTop = 0;
 
     QString sourceFile;
-    bool    released      = false;
-    int     layoutMaxRows = 0;
+    bool    released               = false;
+    int     layoutMaxRows          = 0;
+    quint64 layoutGraphicsRevision = 0;
 
     QTuiGraphics::Protocol protocol_;
     bool                   placeholders_;

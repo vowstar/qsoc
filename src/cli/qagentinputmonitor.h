@@ -294,6 +294,7 @@ private:
     bool          inTerminalReply     = false; /* Inside a late APC, DCS, or OSC reply */
     bool          terminalReplyEsc    = false; /* Reply body just saw ESC, expecting ST */
     qsizetype     terminalReplyBytes  = 0;
+    QByteArray    terminalReplyBuffer;
     quint64       terminalReplySerial = 0;
     bool          inBracketedPaste    = false; /* True while inside \033[200~ ... \033[201~ */
     bool          submitBlocked       = false; /* Enter/Tab emit submitBlockedKey instead */

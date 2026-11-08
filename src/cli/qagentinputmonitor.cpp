@@ -4,6 +4,7 @@
 #include "cli/qagentinputmonitor.h"
 
 #include "common/qsocinterrupt.h"
+#include "tui/qtuigraphics.h"
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -506,21 +507,28 @@ bool isTerminalReplyStart(unsigned char intro, unsigned char first)
 void QAgentInputMonitor::consumeTerminalReply(unsigned char byte, bool *reprocess)
 {
     constexpr qsizetype maxReplyBytes = 64 * 1024;
+    terminalReplyBuffer.append(static_cast<char>(byte));
     if (terminalReplyEsc) {
         terminalReplyEsc = false;
         inTerminalReply  = false;
-        if (byte != '\\') {
+        if (byte == '\\') {
+            QTuiGraphics::handleProbeReply(terminalReplyBuffer);
+        } else {
             /* An unterminated reply ended here: this ESC opens a new sequence. */
             inEscSeq = true;
             escBuffer.clear();
             escBuffer.append('\x1b');
             *reprocess = true;
         }
+        terminalReplyBuffer.clear();
         return;
     }
     if (byte == 0x1B) {
         terminalReplyEsc = true;
     } else if (byte == 0x07 || ++terminalReplyBytes > maxReplyBytes) {
+        if (byte == 0x07)
+            QTuiGraphics::handleProbeReply(terminalReplyBuffer);
+        terminalReplyBuffer.clear();
         inTerminalReply = false;
     }
 }
@@ -803,7 +811,8 @@ void QAgentInputMonitor::processEscSequence()
                 return;
             }
             cancelDoubleEscArming();
-            resetEscBuffer(); /* Complete — unknown CSI ignored */
+            QTuiGraphics::handleProbeReply(escBuffer);
+            resetEscBuffer();
             return;
         }
 
@@ -887,9 +896,10 @@ void QAgentInputMonitor::processBytes(const char *data, int len)
             if (escBuffer.size() == 1 && !inBracketedPaste && i + 1 < len
                 && isTerminalReplyStart(byte, static_cast<unsigned char>(data[i + 1]))) {
                 resetEscBuffer();
-                inTerminalReply    = true;
-                terminalReplyEsc   = false;
-                terminalReplyBytes = 0;
+                inTerminalReply     = true;
+                terminalReplyEsc    = false;
+                terminalReplyBytes  = 0;
+                terminalReplyBuffer = QByteArray(1, '\x1b') + static_cast<char>(byte);
                 continue;
             }
             escBuffer.append(static_cast<char>(byte));

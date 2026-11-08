@@ -30,6 +30,11 @@ void clearGraphicsEnv()
     qunsetenv("TERM_PROGRAM");
     qunsetenv("TMUX");
     qunsetenv("STY");
+    qunsetenv("ZELLIJ");
+    qunsetenv("WEZTERM_PANE");
+    qunsetenv("ITERM_SESSION_ID");
+    qunsetenv("WT_SESSION");
+    qunsetenv("PASEO_TERMINAL_ID");
     qunsetenv("QSOC_NO_IMAGE_GRAPHICS");
 }
 

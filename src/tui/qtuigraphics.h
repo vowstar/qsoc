@@ -17,7 +17,7 @@
  * @brief What this terminal can show, and the graphics it currently holds.
  * @details One terminal serves the whole client, so the capability and the
  *          terminal's image store are process-wide. The protocol is derived
- *          from the environment on each call and from one startup probe.
+ *          from terminal replies and the attached clients.
  */
 namespace QTuiGraphics {
 
@@ -29,30 +29,51 @@ enum class Protocol : std::uint8_t {
     Sixel,
 };
 
-/** @brief Parsed answers to the startup queries. */
+enum class Support : std::uint8_t { Unknown, No, Yes };
+enum class Evidence : std::uint8_t { None, Override, Environment, Terminal, Tmux };
+
+struct Capabilities
+{
+    Protocol protocol     = Protocol::None;
+    Evidence evidence     = Evidence::None;
+    Support  placeholders = Support::Unknown;
+};
+
+/** @brief Graphics evidence from replies or attached clients. */
 struct ProbeReply
 {
-    bool       answered = false; /* The DA1 sentinel arrived */
-    bool       kitty    = false;
-    bool       sixel    = false;
+    bool       answered     = false; /* The DA1 sentinel arrived */
+    Support    kitty        = Support::Unknown;
+    Support    sixel        = Support::Unknown;
+    Support    placeholders = Support::Unknown;
+    Support    passthrough  = Support::Unknown;
+    Support    cells        = Support::Unknown;
+    Evidence   evidence     = Evidence::Terminal;
     QSize      cell;
     bool       light = false; /* Background color reply is bright */
     QString    terminal;
     QByteArray typeAhead; /* Key bytes read between the replies */
 };
 
-ProbeReply parseProbeReply(const QByteArray &bytes);
-Protocol   selectProtocol(const QProcessEnvironment &env, const ProbeReply &reply);
+ProbeReply   parseProbeReply(const QByteArray &bytes);
+Protocol     selectProtocol(const QProcessEnvironment &env, const ProbeReply &reply);
+Capabilities selectCapabilities(const QProcessEnvironment &env, const ProbeReply &reply);
 
 /** @brief Query the terminal once. Must run before anything else reads stdin. */
 void       probeTerminal();
 void       setProbeReply(const ProbeReply &reply);
 QByteArray takeTypeAhead();
+/** @brief Accept a complete reply from the input owner without reading stdin. */
+void handleProbeReply(const QByteArray &bytes);
+/** @brief Check attached clients asynchronously while the TUI is running. */
+void    refreshTerminal();
+quint64 revision();
 
-Protocol protocol();
+Protocol     protocol();
+Capabilities capabilities();
 /** @brief Bitmap written into the cells at the cursor, erased by later writes. */
-bool isInlineBitmap(Protocol protocol);
-/** @brief Kitty bitmap placed through text cells, the only placement a multiplexer keeps. */
+bool isInlineBitmap(Protocol value);
+/** @brief Whether Kitty pictures use tmux Unicode placeholders. */
 bool usesPlaceholders();
 /** @brief Wrap a sequence for the terminal outside tmux. */
 QString passthrough(const QString &sequence);

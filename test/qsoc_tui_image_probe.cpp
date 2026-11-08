@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "cli/qagentinputmonitor.h"
+#include "common/qsocinterrupt.h"
 #include "tui/qtuicompositor.h"
 #include "tui/qtuigraphics.h"
 #include "tui/qtuiimagepreviewblock.h"
@@ -19,10 +21,21 @@
 
 namespace {
 
-QTuiImagePreviewBlock *appendImage(QTuiScrollView &view, const QColor &color, const QString &label)
+QTuiImagePreviewBlock *appendImage(
+    QTuiScrollView &view, const QColor &color, const QString &label, bool details = false)
 {
     QImage image(240, 160, QImage::Format_RGB32);
     image.fill(color);
+    if (details) {
+        for (int y = 20; y < 140; ++y) {
+            for (int x = 20; x < 220; ++x) {
+                if (x % 8 == 0 || y % 8 == 0)
+                    image.setPixelColor(x, y, Qt::white);
+                if (x >= 80 && x < 160 && y >= 50 && y < 110)
+                    image.setPixelColor(x, y, (x + y) % 2 == 0 ? Qt::black : Qt::white);
+            }
+        }
+    }
     QByteArray bytes;
     QBuffer    buffer(&bytes);
     buffer.open(QIODevice::WriteOnly);
@@ -65,6 +78,43 @@ QJsonObject imageGeometry(QTuiCompositor &compositor, const QTuiImagePreviewBloc
 int main(int argc, char **argv)
 {
     const QCoreApplication app(argc, argv);
+    if (app.arguments().size() == 3 && app.arguments().at(1) == QStringLiteral("--graphics-watch")) {
+        QTuiGraphics::probeTerminal();
+        const QDir         control(app.arguments().at(2));
+        QAgentInputMonitor input;
+        QTuiCompositor     compositor;
+        compositor.dismissTopBanner();
+        appendImage(compositor.contentView(), QColor(49, 101, 229), QStringLiteral("watch.png"), true);
+        QString typed;
+        QObject::connect(&input, &QAgentInputMonitor::inputChanged, &app, [&](const QString &text) {
+            typed = text;
+            compositor.inputLine().setText(text);
+        });
+        if (!QSocInterrupt::installBridge())
+            return 3;
+        input.start(false);
+        compositor.start();
+        QTimer report;
+        QObject::connect(&report, &QTimer::timeout, &app, [&] {
+            QTuiGraphics::refreshTerminal();
+            const QJsonObject state{
+                {QStringLiteral("protocol"), int(QTuiGraphics::protocol())},
+                {QStringLiteral("revision"), qint64(QTuiGraphics::revision())},
+                {QStringLiteral("placeholders"), QTuiGraphics::usesPlaceholders()},
+                {QStringLiteral("evidence"), int(QTuiGraphics::capabilities().evidence)},
+                {QStringLiteral("input"), typed}};
+            QSaveFile file(control.filePath(QStringLiteral("state.json")));
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(QJsonDocument(state).toJson());
+                file.commit();
+            }
+            if (control.exists(QStringLiteral("stop")))
+                app.quit();
+        });
+        report.start(20);
+        QTimer::singleShot(120000, &app, &QCoreApplication::quit);
+        return app.exec();
+    }
     if (app.arguments().size() == 3 && app.arguments().at(1) == QStringLiteral("--graphics-probe")) {
         QTuiGraphics::probeTerminal();
         QFile result(app.arguments().at(2));
@@ -73,10 +123,14 @@ int main(int argc, char **argv)
         const QJsonObject report{{QStringLiteral("protocol"), int(QTuiGraphics::protocol())}};
         return result.write(QJsonDocument(report).toJson()) < 0 ? 2 : 0;
     }
-    if (app.arguments().size() != 2) {
+    const bool live = app.arguments().size() == 3
+                      && app.arguments().at(1) == QStringLiteral("--graphics-live");
+    if (!live && app.arguments().size() != 2) {
         return 2;
     }
-    const QDir control(app.arguments().at(1));
+    if (live)
+        QTuiGraphics::probeTerminal();
+    const QDir control(app.arguments().at(live ? 2 : 1));
     if (!control.exists()) {
         return 2;
     }
@@ -119,6 +173,8 @@ int main(int argc, char **argv)
             compositor.contentView().scrollUp(1000);
         } else if (action == QStringLiteral("bottom")) {
             compositor.contentView().scrollToBottom();
+        } else if (action == QStringLiteral("step")) {
+            compositor.contentView().scrollUp(2);
         } else if (action == QStringLiteral("input")) {
             compositor.inputLine().setText(QStringLiteral("INPUT_SENTINEL_CHANGED"));
         } else if (action == QStringLiteral("invalidate")) {

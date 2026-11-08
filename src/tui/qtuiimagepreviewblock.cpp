@@ -287,11 +287,15 @@ void QTuiImagePreviewBlock::releaseImageBytes()
 void QTuiImagePreviewBlock::layout(int width)
 {
     const int maxRows = QTuiGraphics::maxImageRows();
-    if (!layoutDirty && layoutWidth == width && layoutMaxRows == maxRows) {
+    if (!layoutDirty && layoutWidth == width && layoutMaxRows == maxRows
+        && layoutGraphicsRevision == QTuiGraphics::revision()) {
         return;
     }
-    layoutDirty   = false;
-    layoutMaxRows = maxRows;
+    layoutDirty            = false;
+    layoutMaxRows          = maxRows;
+    layoutGraphicsRevision = QTuiGraphics::revision();
+    inlineCells            = {};
+    inlineData.clear();
     protocol_     = QTuiGraphics::protocol();
     placeholders_ = QTuiGraphics::usesPlaceholders();
     layoutWidth   = width;

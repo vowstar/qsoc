@@ -52,7 +52,8 @@ void QTuiCompositor::start(int intervalMs)
     if (active) {
         return;
     }
-    active = true;
+    active           = true;
+    graphicsRevision = QTuiGraphics::revision();
     enterAltScreen();
     scrollView.resetGraphicsState();
 
@@ -569,6 +570,17 @@ void QTuiCompositor::flushContent()
 
 void QTuiCompositor::onTimer()
 {
+    QTuiGraphics::refreshTerminal();
+    if (graphicsRevision != QTuiGraphics::revision()) {
+        const QString destroy = scrollView.collectGraphicsDestroy();
+        if (!destroy.isEmpty()) {
+            fputs(destroy.toUtf8().constData(), stdout);
+            fflush(stdout);
+        }
+        graphicsRevision = QTuiGraphics::revision();
+        scrollView.resetGraphicsState();
+        screen.invalidate();
+    }
     /* Check terminal resize */
     int termW = getTerminalWidth();
     int termH = getTerminalHeight();

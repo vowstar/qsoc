@@ -18,8 +18,10 @@ Fine text in a half-block preview is not readable.
     [Konsole, Rio], [bitmap (kitty)], [Terminal reply, `KONSOLE_VERSION`, `TERM_PROGRAM=rio`],
     [iTerm2, WezTerm, mintty], [bitmap (OSC 1337)], [Terminal reply, `TERM_PROGRAM`, `LC_TERMINAL=iTerm2`],
     [Sixel terminals], [bitmap (Sixel)], [Terminal reply],
-    [tmux with `allow-passthrough` on kitty or ghostty], [bitmap (kitty)], [tmux client report],
+    [tmux on kitty, ghostty, or Rio], [bitmap (kitty)], [UTF-8 client, placeholders, and passthrough],
     [tmux on a Sixel terminal], [bitmap (Sixel)], [tmux client report],
+    [Zellij with Kitty or Sixel], [bitmap], [Terminal reply],
+    [tmux without UTF-8 clients], [metadata text only], [tmux client flags],
     [other tmux, screen, mosh], [half-block], [`TMUX`, `STY`, or no graphics reply],
     [VS Code and other color terminals], [half-block], [no graphics reply],
     [`TERM` empty or `dumb`], [metadata text only], [`TERM`],
@@ -31,8 +33,16 @@ Fine text in a half-block preview is not readable.
 On Linux and macOS, QSoC asks the terminal for its graphics support, cell size,
 and name when the agent starts, so a graphics terminal is recognized over SSH.
 On Windows, set `QSOC_IMAGE_PROTOCOL` to use a bitmap protocol.
-A second client in the same tmux session does not disable a graphics terminal's
-bitmap previews.
+QSoC checks clients viewing the pane, including sessions that share its window.
+It refreshes tmux clients in the background and reloads images when a client
+joins or leaves. A failed query keeps the last completed result until the next
+successful query.
+
+For mixed terminals, QSoC selects a bitmap protocol available to a client
+viewing the pane. An attached terminal without that protocol cannot show the
+bitmap. Kitty passthrough requires a UTF-8 client and Unicode placeholder
+support. Nested multiplexers without verified graphics forwarding use cell
+previews.
 
 == Folding and History
 <tui-image-preview-fold>

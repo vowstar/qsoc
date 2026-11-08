@@ -146,8 +146,9 @@ private:
     QTuiCompletionPopup popupWidget;
     QTuiTaskOverlay     taskOverlayWidget;
 
-    QTimer    *timer  = nullptr;
-    bool       active = false;
+    QTimer    *timer            = nullptr;
+    bool       active           = false;
+    quint64    graphicsRevision = 0;
     QString    title;
     FocusOwner focusOwner_ = FocusOwner::Input;
 

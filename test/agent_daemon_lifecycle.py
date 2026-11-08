@@ -108,7 +108,7 @@ class Lifecycle(unittest.TestCase):
         cls.server.server_close()
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='qsoc-daemon-test-')
+        self.temp = tempfile.TemporaryDirectory(prefix='test_qsoc_daemon_')
         self.root = Path(self.temp.name)
         self.env = os.environ.copy()
         self.env.update(HOME=str(self.root), QSOC_HOME=str(self.root / 'config/qsoc'),
@@ -117,6 +117,12 @@ class Lifecycle(unittest.TestCase):
         for key in list(self.env):
             if key.lower().endswith('_proxy'):
                 self.env.pop(key)
+        for key in ('TMUX', 'TMUX_PANE', 'STY', 'ZELLIJ', 'KITTY_WINDOW_ID',
+                    'GHOSTTY_RESOURCES_DIR', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION',
+                    'LC_TERMINAL', 'KONSOLE_VERSION', 'WEZTERM_EXECUTABLE', 'WEZTERM_PANE',
+                    'ITERM_SESSION_ID', 'WT_SESSION', 'PASEO_TERMINAL_ID',
+                    'QSOC_IMAGE_PROTOCOL', 'QSOC_NO_IMAGE_GRAPHICS'):
+            self.env.pop(key, None)
         config = Path(self.env['QSOC_HOME'])
         config.mkdir(parents=True)
         (config / 'qsoc.yml').write_text(f'''llm:
@@ -182,11 +188,16 @@ agent:
 
     def read_pty(self, fd, duration):
         data = b''
+        answered = 0
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
             if select.select([fd], [], [], 0.025)[0]:
                 try:
                     data += os.read(fd, 65536)
+                    queries = data.count(b'\x1b[c')
+                    while answered < queries:
+                        os.write(fd, b'\x1b[?62c')
+                        answered += 1
                 except OSError:
                     break
         return data
