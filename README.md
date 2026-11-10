@@ -76,7 +76,7 @@ cmake --build build --target test
 cmake --build build --target clang-format
 ```
 
-Building from source requires CMake 3.28 or later. QSoC bundles slang v12.1 and uses a system slang installation only at version 12.1.0 or later.
+Building from source requires CMake 3.28 or later. QSoC bundles slang v12.1 and uses a system slang installation only at version 12.1.0 or later. Report layout also requires the Qt Qml module.
 
 ## Third-party licenses
 

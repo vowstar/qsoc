@@ -57,7 +57,7 @@ Releases also provide `qsoc-X.Y.Z.tar.xz` and its `.sha256` checksum file.
 This archive includes recursive submodule sources, which GitHub's automatic source downloads omit.
 The `source-revisions.json` file records the main and dependency commits.
 Qt and other system build dependencies still need installation.
-Source builds require CMake 3.28 or later and bundle slang v12.1.
+Source builds require CMake 3.28 or later and bundle slang v12.1. Report layout also requires the Qt Qml module.
 
 With Nix, `nix shell github:vowstar/qsoc#qsoc` gives a shell with `qsoc` on
 the `PATH`. To build from a clone of the repository:

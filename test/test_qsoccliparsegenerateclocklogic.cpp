@@ -50,6 +50,7 @@ private:
 private slots:
     void initTestCase()
     {
+        qputenv("QSOC_BIN_DIR", QSOC_REPORT_BIN_DIR);
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -167,9 +168,10 @@ clock:
         QVERIFY(!netlistPath.isEmpty());
         const QString verilogPath = QDir(projectManager.getOutputPath())
                                         .filePath("test_dead_dft_path/rtl/test_dead_dft_path.v");
-        const QString typstPath   = QDir(projectManager.getOutputPath()).filePath("bad_ctl.typ");
+        const QString reportPath
+            = QDir(projectManager.getOutputPath()).filePath("test_dead_dft_path/doc/bad_ctl.html");
         QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
-        QVERIFY(!QFile::exists(typstPath) || QFile::remove(typstPath));
+        QVERIFY(!QFile::exists(reportPath) || QFile::remove(reportPath));
         {
             QSocCliWorker socCliWorker;
             QStringList   args;
@@ -192,7 +194,7 @@ clock:
         QCOMPARE(contractErrors, 1);
         QCOMPARE(rejections, 1);
         QVERIFY(!QFile::exists(verilogPath));
-        QVERIFY(!QFile::exists(typstPath));
+        QVERIFY(!QFile::exists(reportPath));
     }
 
     void test_mux_missing_select_rejects_controller()
@@ -368,15 +370,15 @@ clock:
             = QDir(projectManager.getCurrentPath()).filePath("test_ignored_dft.soc_net");
         const QString verilogPath = QDir(projectManager.getOutputPath())
                                         .filePath("test_ignored_dft/rtl/test_ignored_dft.v");
-        const QString typstPath   = QDir(projectManager.getOutputPath())
-                                        .filePath("test_ignored_dft/doc/ignored_dft_ctl.typ");
+        const QString reportPath  = QDir(projectManager.getOutputPath())
+                                        .filePath("test_ignored_dft/doc/ignored_dft_ctl.html");
 
-        const auto generate = [&](const QString &content, QByteArray &verilog, QByteArray &typst) {
+        const auto generate = [&](const QString &content, QByteArray &verilog, QByteArray &report) {
             if (createTempFile("test_ignored_dft.soc_net", content).isEmpty()) {
                 return false;
             }
             if ((QFile::exists(verilogPath) && !QFile::remove(verilogPath))
-                || (QFile::exists(typstPath) && !QFile::remove(typstPath))) {
+                || (QFile::exists(reportPath) && !QFile::remove(reportPath))) {
                 return false;
             }
 
@@ -387,25 +389,25 @@ clock:
             socCliWorker.run();
 
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             if (!verilogFile.open(QIODevice::ReadOnly | QIODevice::Text)
-                || !typstFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                || !reportFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
                 return false;
             }
             verilog = verilogFile.readAll();
-            typst   = typstFile.readAll();
+            report  = reportFile.readAll();
             return true;
         };
 
         QByteArray baselineVerilog;
-        QByteArray baselineTypst;
+        QByteArray baselineReport;
         messageList.clear();
-        QVERIFY(generate(netlistContent(false), baselineVerilog, baselineTypst));
+        QVERIFY(generate(netlistContent(false), baselineVerilog, baselineReport));
 
         QByteArray ignoredVerilog;
-        QByteArray ignoredTypst;
+        QByteArray ignoredReport;
         messageList.clear();
-        QVERIFY(generate(netlistContent(true), ignoredVerilog, ignoredTypst));
+        QVERIFY(generate(netlistContent(true), ignoredVerilog, ignoredReport));
 
         int standardWarnings = 0;
         int singleWarnings   = 0;
@@ -427,7 +429,7 @@ clock:
         QCOMPARE(singleWarnings, 1);
         QCOMPARE(enableWarnings, 1);
         QCOMPARE(ignoredVerilog, baselineVerilog);
-        QCOMPARE(ignoredTypst, baselineTypst);
+        QCOMPARE(ignoredReport, baselineReport);
 
         const QString clockCellPath
             = QDir(projectManager.getOutputPath()).filePath("qsoc_cell/rtl/qsoc_cell_clock.v");
@@ -739,23 +741,23 @@ clock:
             {},
             QSlangDriver::UnknownModulePolicy::Reject));
 
-        QFile fallbackTypstFile(QDir(projectManager.getOutputPath())
-                                    .filePath("test_dft_enable_matrix/doc/dft_fallback.typ"));
-        QFile inheritedTypstFile(QDir(projectManager.getOutputPath())
-                                     .filePath("test_dft_enable_matrix/doc/dft_inherited.typ"));
-        QFile overrideTypstFile(QDir(projectManager.getOutputPath())
-                                    .filePath("test_dft_enable_matrix/doc/dft_override.typ"));
-        QVERIFY(fallbackTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        QVERIFY(inheritedTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        QVERIFY(overrideTypstFile.open(QIODevice::ReadOnly | QIODevice::Text));
-        const QByteArray fallbackTypst  = fallbackTypstFile.readAll();
-        const QByteArray inheritedTypst = inheritedTypstFile.readAll();
-        const QByteArray overrideTypst  = overrideTypstFile.readAll();
-        QVERIFY(!fallbackTypst.contains("fallback_clk_TM"));
-        QVERIFY(inheritedTypst.contains("name: \"ctl_ten\""));
-        QVERIFY(!inheritedTypst.contains("name: \"tgt_ten\""));
-        QVERIFY(overrideTypst.contains("name: \"tgt_ten\""));
-        QVERIFY(!overrideTypst.contains("name: \"ctl_ten\""));
+        QFile fallbackReportFile(QDir(projectManager.getOutputPath())
+                                     .filePath("test_dft_enable_matrix/doc/dft_fallback.html"));
+        QFile inheritedReportFile(QDir(projectManager.getOutputPath())
+                                      .filePath("test_dft_enable_matrix/doc/dft_inherited.html"));
+        QFile overrideReportFile(QDir(projectManager.getOutputPath())
+                                     .filePath("test_dft_enable_matrix/doc/dft_override.html"));
+        QVERIFY(fallbackReportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QVERIFY(inheritedReportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        QVERIFY(overrideReportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QByteArray fallbackReport  = fallbackReportFile.readAll();
+        const QByteArray inheritedReport = inheritedReportFile.readAll();
+        const QByteArray overrideReport  = overrideReportFile.readAll();
+        QVERIFY(fallbackReport.contains("MUX test clock</th><td>1'b0"));
+        QVERIFY(inheritedReport.contains("ctl_ten"));
+        QVERIFY(!inheritedReport.contains("tgt_ten"));
+        QVERIFY(overrideReport.contains("tgt_ten"));
+        QVERIFY(!overrideReport.contains("ctl_ten"));
     }
 
     void test_invalid_dft_controls_preserve_artifacts_data()
@@ -843,18 +845,20 @@ clock:
         const QString verilogPath
             = QDir(projectManager.getOutputPath())
                   .filePath("test_invalid_dft_controls/rtl/test_invalid_dft_controls.v");
-        const QString typstPath
-            = QDir(projectManager.getOutputPath()).filePath("invalid_dft_ctl.typ");
+        const QString    reportPath = QDir(projectManager.getOutputPath())
+                                          .filePath(
+                                              "test_invalid_dft_controls/doc/invalid_dft_ctl.html");
         const QByteArray verilogSentinel("existing-verilog\n");
-        const QByteArray typstSentinel("existing-typst\n");
+        const QByteArray reportSentinel("existing-report\n");
         {
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
-            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QVERIFY(QDir().mkpath(QFileInfo(reportFile.fileName()).path()));
+            QVERIFY(reportFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
-            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+            QCOMPARE(reportFile.write(reportSentinel), reportSentinel.size());
         }
 
         messageList.clear();
@@ -879,11 +883,11 @@ clock:
         QCOMPARE(successes, 0);
 
         QFile verilogFile(verilogPath);
-        QFile typstFile(typstPath);
+        QFile reportFile(reportPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly));
-        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
         QCOMPARE(verilogFile.readAll(), verilogSentinel);
-        QCOMPARE(typstFile.readAll(), typstSentinel);
+        QCOMPARE(reportFile.readAll(), reportSentinel);
     }
 
     void test_dft_constants_are_connections_not_ports()
@@ -1276,18 +1280,19 @@ clock:
 
         const QString verilogPath = QDir(projectManager.getOutputPath())
                                         .filePath("test_port_collision/rtl/test_port_collision.v");
-        const QString typstPath
-            = QDir(projectManager.getOutputPath()).filePath("port_collision_ctl.typ");
+        const QString reportPath = QDir(projectManager.getOutputPath())
+                                       .filePath("test_port_collision/doc/port_collision_ctl.html");
         const QByteArray verilogSentinel("existing-verilog\n");
-        const QByteArray typstSentinel("existing-typst\n");
+        const QByteArray reportSentinel("existing-report\n");
         {
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
-            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QVERIFY(QDir().mkpath(QFileInfo(reportFile.fileName()).path()));
+            QVERIFY(reportFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
-            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+            QCOMPARE(reportFile.write(reportSentinel), reportSentinel.size());
         }
 
         messageList.clear();
@@ -1312,11 +1317,11 @@ clock:
         QCOMPARE(successes, 0);
 
         QFile verilogFile(verilogPath);
-        QFile typstFile(typstPath);
+        QFile reportFile(reportPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly));
-        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
         QCOMPARE(verilogFile.readAll(), verilogSentinel);
-        QCOMPARE(typstFile.readAll(), typstSentinel);
+        QCOMPARE(reportFile.readAll(), reportSentinel);
     }
 
     /* One enable input may serve several dividers; the port declares once
@@ -1674,17 +1679,19 @@ clock:
 
         const QString verilogPath
             = QDir(projectManager.getOutputPath()).filePath("test_bad_atom/rtl/test_bad_atom.v");
-        const QString typstPath = QDir(projectManager.getOutputPath()).filePath("bad_atom_ctl.typ");
+        const QString reportPath
+            = QDir(projectManager.getOutputPath()).filePath("test_bad_atom/doc/bad_atom_ctl.html");
         const QByteArray verilogSentinel("existing-verilog\n");
-        const QByteArray typstSentinel("existing-typst\n");
+        const QByteArray reportSentinel("existing-report\n");
         {
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
-            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QVERIFY(QDir().mkpath(QFileInfo(reportFile.fileName()).path()));
+            QVERIFY(reportFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
-            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+            QCOMPARE(reportFile.write(reportSentinel), reportSentinel.size());
         }
 
         messageList.clear();
@@ -1701,11 +1708,11 @@ clock:
         QCOMPARE(messageList.filter("Successfully generated Verilog file").size(), 0);
 
         QFile verilogFile(verilogPath);
-        QFile typstFile(typstPath);
+        QFile reportFile(reportPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly));
-        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
         QCOMPARE(verilogFile.readAll(), verilogSentinel);
-        QCOMPARE(typstFile.readAll(), typstSentinel);
+        QCOMPARE(reportFile.readAll(), reportSentinel);
     }
 
     /* A unity divider still owns its control ports: default: 1 with
@@ -1814,18 +1821,20 @@ clock:
         const QString verilogPath
             = QDir(projectManager.getOutputPath())
                   .filePath("test_bad_divider_control/rtl/test_bad_divider_control.v");
-        const QString typstPath
-            = QDir(projectManager.getOutputPath()).filePath("bad_divider_control_ctl.typ");
+        const QString reportPath
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_bad_divider_control/doc/bad_divider_control_ctl.html");
         const QByteArray verilogSentinel("existing-verilog\n");
-        const QByteArray typstSentinel("existing-typst\n");
+        const QByteArray reportSentinel("existing-report\n");
         {
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
-            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QVERIFY(QDir().mkpath(QFileInfo(reportFile.fileName()).path()));
+            QVERIFY(reportFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
-            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+            QCOMPARE(reportFile.write(reportSentinel), reportSentinel.size());
         }
 
         messageList.clear();
@@ -1850,11 +1859,11 @@ clock:
         QCOMPARE(successes, 0);
 
         QFile verilogFile(verilogPath);
-        QFile typstFile(typstPath);
+        QFile reportFile(reportPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly));
-        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
         QCOMPARE(verilogFile.readAll(), verilogSentinel);
-        QCOMPARE(typstFile.readAll(), typstSentinel);
+        QCOMPARE(reportFile.readAll(), reportSentinel);
     }
 
     void test_icg_without_enable_is_rejected_data()
@@ -1905,18 +1914,19 @@ clock:
 
         const QString verilogPath = QDir(projectManager.getOutputPath())
                                         .filePath("test_icg_no_enable/rtl/test_icg_no_enable.v");
-        const QString typstPath
-            = QDir(projectManager.getOutputPath()).filePath("icg_no_enable_ctl.typ");
+        const QString reportPath  = QDir(projectManager.getOutputPath())
+                                        .filePath("test_icg_no_enable/doc/icg_no_enable_ctl.html");
         const QByteArray verilogSentinel("existing-verilog\n");
-        const QByteArray typstSentinel("existing-typst\n");
+        const QByteArray reportSentinel("existing-report\n");
         {
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
-            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QVERIFY(QDir().mkpath(QFileInfo(reportFile.fileName()).path()));
+            QVERIFY(reportFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
-            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+            QCOMPARE(reportFile.write(reportSentinel), reportSentinel.size());
         }
 
         messageList.clear();
@@ -1941,11 +1951,11 @@ clock:
         QCOMPARE(successes, 0);
 
         QFile verilogFile(verilogPath);
-        QFile typstFile(typstPath);
+        QFile reportFile(reportPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly));
-        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
         QCOMPARE(verilogFile.readAll(), verilogSentinel);
-        QCOMPARE(typstFile.readAll(), typstSentinel);
+        QCOMPARE(reportFile.readAll(), reportSentinel);
     }
 
     /* Names that collide after bracket sanitization would declare one port
@@ -2044,10 +2054,11 @@ clock:
         const QString verilogPath
             = QDir(projectManager.getOutputPath())
                   .filePath("test_input_target_collision/rtl/test_input_target_collision.v");
-        const QString typstPath
-            = QDir(projectManager.getOutputPath()).filePath("input_target_collision.typ");
+        const QString reportPath
+            = QDir(projectManager.getOutputPath())
+                  .filePath("test_input_target_collision/doc/input_target_collision.html");
         QVERIFY(!QFile::exists(verilogPath) || QFile::remove(verilogPath));
-        QVERIFY(!QFile::exists(typstPath) || QFile::remove(typstPath));
+        QVERIFY(!QFile::exists(reportPath) || QFile::remove(reportPath));
 
         QSocCliWorker socCliWorker;
         socCliWorker.setup(
@@ -2069,7 +2080,7 @@ clock:
         QCOMPARE(collisionErrors, 1);
         QCOMPARE(rejections, 1);
         QVERIFY(!QFile::exists(verilogPath));
-        QVERIFY(!QFile::exists(typstPath));
+        QVERIFY(!QFile::exists(reportPath));
     }
 
     /* A netlist whose only section is `clock:` is complete; the controller
@@ -5262,17 +5273,19 @@ clock:
         /* A rejection must leave existing artifacts byte-identical. */
         const QString verilogPath
             = QDir(projectManager.getOutputPath()).filePath(stem + "/rtl/" + stem + ".v");
-        const QString typstPath = QDir(projectManager.getOutputPath()).filePath(stem + "_ctrl.typ");
+        const QString reportPath
+            = QDir(projectManager.getOutputPath()).filePath(stem + "/doc/" + stem + "_ctrl.html");
         const QByteArray verilogSentinel("existing-verilog\n");
-        const QByteArray typstSentinel("existing-typst\n");
+        const QByteArray reportSentinel("existing-report\n");
         {
             QFile verilogFile(verilogPath);
-            QFile typstFile(typstPath);
+            QFile reportFile(reportPath);
             QVERIFY(QDir().mkpath(QFileInfo(verilogFile.fileName()).path()));
             QVERIFY(verilogFile.open(QIODevice::WriteOnly));
-            QVERIFY(typstFile.open(QIODevice::WriteOnly));
+            QVERIFY(QDir().mkpath(QFileInfo(reportFile.fileName()).path()));
+            QVERIFY(reportFile.open(QIODevice::WriteOnly));
             QCOMPARE(verilogFile.write(verilogSentinel), verilogSentinel.size());
-            QCOMPARE(typstFile.write(typstSentinel), typstSentinel.size());
+            QCOMPARE(reportFile.write(reportSentinel), reportSentinel.size());
         }
 
         {
@@ -5288,11 +5301,11 @@ clock:
         QCOMPARE(messageList.filter("Successfully generated Verilog file").size(), 0);
 
         QFile verilogFile(verilogPath);
-        QFile typstFile(typstPath);
+        QFile reportFile(reportPath);
         QVERIFY(verilogFile.open(QIODevice::ReadOnly));
-        QVERIFY(typstFile.open(QIODevice::ReadOnly));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
         QCOMPARE(verilogFile.readAll(), verilogSentinel);
-        QCOMPARE(typstFile.readAll(), typstSentinel);
+        QCOMPARE(reportFile.readAll(), reportSentinel);
     }
 
 private:

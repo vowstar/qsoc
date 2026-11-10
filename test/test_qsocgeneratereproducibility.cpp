@@ -43,20 +43,6 @@
 
 namespace {
 
-bool generateDiagram(const QString &kind, const QString &path)
-{
-    if (kind == "clock") {
-        QSocClockPrimitive primitive;
-        return primitive.generateTypstDiagram({}, path);
-    }
-    if (kind == "reset") {
-        QSocResetPrimitive primitive;
-        return primitive.generateTypstDiagram({}, path);
-    }
-    QSocPowerPrimitive primitive;
-    return primitive.generateTypstDiagram({}, path);
-}
-
 QString cellFilePath(QSocProjectManager &project, const QString &kind)
 {
     return QDir(project.getOutputPath()).filePath(QSocCellLibrary::path("qsoc_cell_" + kind + ".v"));
@@ -209,25 +195,7 @@ comb:
             return false;
         }
 
-        const QString clockPath = QDir(projectManager.getOutputPath()).filePath("clock.typ");
-        const QString resetPath = QDir(projectManager.getOutputPath()).filePath("reset.typ");
-        const QString powerPath = QDir(projectManager.getOutputPath()).filePath("power.typ");
-
-        QSocClockPrimitive clock;
-        QSocResetPrimitive reset;
-        QSocPowerPrimitive power;
-        if (!clock.generateTypstDiagram({}, clockPath) || !reset.generateTypstDiagram({}, resetPath)
-            || !power.generateTypstDiagram({}, powerPath)) {
-            return false;
-        }
-
-        const QStringList fileNames{
-            "stable/rtl/stable.v",
-            "stable_stub.v",
-            "stable.nc.rpt",
-            "clock.typ",
-            "reset.typ",
-            "power.typ"};
+        const QStringList fileNames{"stable/rtl/stable.v", "stable_stub.v", "stable.nc.rpt"};
         for (const QString &fileName : fileNames) {
             const QByteArray content = readOutput(fileName);
             if (content.isEmpty()) {
@@ -1301,14 +1269,6 @@ extension: retained
         }
     }
 
-    void directTypstWriterPreservesRelativePath_data()
-    {
-        QTest::addColumn<QString>("kind");
-        QTest::newRow("clock") << QStringLiteral("clock");
-        QTest::newRow("reset") << QStringLiteral("reset");
-        QTest::newRow("power") << QStringLiteral("power");
-    }
-
     void cellUnitIsAlwaysReplaced_data() { primitiveCellLinkIsRejected_data(); }
 
     void cellUnitIsAlwaysReplaced()
@@ -1461,22 +1421,6 @@ extension: retained
                 {{inside, "a\n"}, {root.filePath("unit/formal/b.sv"), "b\n"}}, true, root.path()),
             QString());
         QVERIFY(QFileInfo::exists(inside));
-    }
-
-    void directTypstWriterPreservesRelativePath()
-    {
-        QFETCH(QString, kind);
-        QTemporaryDir directory;
-        QVERIFY(directory.isValid());
-        const QString originalPath = QDir::currentPath();
-        QVERIFY(QDir::setCurrent(directory.path()));
-        const auto restorePath = qScopeGuard([&]() { QDir::setCurrent(originalPath); });
-
-        QVERIFY(QDir().mkdir("nested"));
-        const QString relativePath = "nested/" + kind + ".typ";
-        QVERIFY(generateDiagram(kind, relativePath));
-        QVERIFY(QFileInfo::exists(relativePath));
-        QVERIFY(!QFileInfo::exists("nested/nested/" + kind + ".typ"));
     }
 
     void primaryArtifactsRejectEscapes()

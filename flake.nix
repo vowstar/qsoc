@@ -72,6 +72,7 @@
             # Qt dependencies - consolidated packages
             qt6.qtbase # Core, Gui, Widgets, PrintSupport, Sql, Network
             qt6.qtsvg # SVG support
+            qt6.qtdeclarative # JavaScript layout runtime
             qt6.qttools # LinguistTools
             qt6.qt5compat # Core5Compat
 

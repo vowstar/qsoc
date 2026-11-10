@@ -8,6 +8,9 @@
         <file alias="boost-regex.txt">../external/slang/LICENSES/BSL-1.0.txt</file>
         <file alias="cmark-gfm.txt">../external/cmark-gfm/COPYING</file>
         <file alias="csv.txt">../external/csv/LICENSE</file>
+        <file alias="droid-fonts.txt">license/droid-fonts.txt</file>
+        <file alias="elkjs.txt">license/elkjs.txt</file>
+        <file alias="elkjs-sources.txt">license/elkjs-sources.txt</file>
         <file alias="fmt.txt">../external/fmt/LICENSE</file>
         <file alias="gcc-exception-3.1.txt">license/gcc-exception-3.1.txt</file>
         <file alias="gpds.txt">../external/gpds/license.txt</file>

@@ -4,14 +4,9 @@
 #include "qsocgenerateprimitivepower.h"
 #include "common/qsoccelltext.h"
 #include "common/qsocconsole.h"
-#include "common/qsocpaths.h"
+#include "common/qsocprimitivereport.h"
 #include "qsocgeneratemanager.h"
 #include "qsocverilogutils.h"
-#include <cmath>
-#include <QDebug>
-#include <QFileInfo>
-#include <QRegularExpression>
-#include <QRegularExpressionMatch>
 #include <QSet>
 
 QSocPowerPrimitive::QSocPowerPrimitive(QSocGenerateManager *parent)
@@ -72,17 +67,9 @@ bool QSocPowerPrimitive::generatePowerController(const YAML::Node &powerNode, QT
     // Close module
     out << "\nendmodule\n\n";
 
-    // Generate Typst power diagram (failure does not affect Verilog generation)
     if (m_parent && !m_parent->getDiagramDirectory().isEmpty()) {
-        const QString outputDir = m_parent->getDiagramDirectory();
-        const QString typstName = config.moduleName + QStringLiteral(".typ");
-        const auto    artifact  = QSocPaths::resolveArtifactPath(outputDir, typstName);
-        if (!artifact.isValid()) {
-            QSocConsole::warn() << artifact.error;
-        } else if (!generateTypstDiagram(config, artifact.path)) {
-            QSocConsole::warn() << "Failed to generate Typst diagram (non-critical):"
-                                << artifact.path;
-        }
+        QSocPrimitiveReport::stage(
+            m_parent->getDiagramDirectory(), config.moduleName, QSocPrimitiveReport::power(config));
     }
 
     return true;
@@ -160,9 +147,6 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
                                     << "contains bracket characters; sanitized to" << domain.name;
             }
 
-            // Cache YAML node for type inference
-            m_domainYamlCache[domain.name] = domainNode;
-
             // Parse dependencies (optional, absence = AO, empty array = root)
             if (domainNode["depend"] && domainNode["depend"].IsSequence()) {
                 for (size_t j = 0; j < domainNode["depend"].size(); ++j) {
@@ -183,6 +167,10 @@ QSocPowerPrimitive::PowerControllerConfig QSocPowerPrimitive::parsePowerConfigUn
                     domain.depends.append(dep);
                 }
             }
+            domain.kind = !domainNode["depend"] ? DomainKind::AlwaysOn
+                          : domainNode["depend"].IsSequence() && domain.depends.isEmpty()
+                              ? DomainKind::Root
+                              : DomainKind::Dependent;
 
             // Voltage (optional)
             domain.v_mv = domainNode["v_mv"] ? domainNode["v_mv"].as<int>() : 0;
@@ -309,8 +297,7 @@ void QSocPowerPrimitive::generateModuleHeader(const PowerControllerConfig &confi
 
     // Control inputs (enable and fault clear, check for duplicates)
     for (const auto &domain : config.domains) {
-        YAML::Node yamlNode = m_domainYamlCache.value(domain.name);
-        if (!isAODomain(domain, yamlNode)) {
+        if (domain.kind != DomainKind::AlwaysOn) {
             QString enableName = QString("en_%1").arg(domain.name);
             QString clearName  = QString("clr_%1").arg(domain.name);
 
@@ -353,8 +340,7 @@ void QSocPowerPrimitive::generateModuleHeader(const PowerControllerConfig &confi
 
     // Power switch outputs (check for duplicates)
     for (const auto &domain : config.domains) {
-        YAML::Node yamlNode = m_domainYamlCache.value(domain.name);
-        if (!isAODomain(domain, yamlNode)) {
+        if (domain.kind != DomainKind::AlwaysOn) {
             QString switchName = QString("sw_%1").arg(domain.name);
             if (!addedSignals.contains(switchName)) {
                 portDecls << QString("    output wire %1").arg(switchName);
@@ -464,9 +450,8 @@ void QSocPowerPrimitive::generatePowerLogic(const PowerControllerConfig &config,
     out << "    /* Power FSM instances */\n";
 
     for (const auto &domain : config.domains) {
-        YAML::Node yamlNode = m_domainYamlCache.value(domain.name);
-        bool       isAO     = isAODomain(domain, yamlNode);
-        bool       isRoot   = isRootDomain(domain, yamlNode);
+        bool isAO   = domain.kind == DomainKind::AlwaysOn;
+        bool isRoot = domain.kind == DomainKind::Root;
 
         out << "    /* " << domain.name << ": ";
         if (isAO) {
@@ -570,19 +555,6 @@ QString QSocPowerPrimitive::generateCellVerilog()
     return QSocCellText::power();
 }
 
-bool QSocPowerPrimitive::isAODomain(const PowerDomain &domain, const YAML::Node &yamlNode)
-{
-    Q_UNUSED(domain);
-    // AO domain: no "depend" key in YAML
-    return !yamlNode["depend"];
-}
-
-bool QSocPowerPrimitive::isRootDomain(const PowerDomain &domain, const YAML::Node &yamlNode)
-{
-    // Root domain: has "depend" key with empty array
-    return yamlNode["depend"] && yamlNode["depend"].IsSequence() && domain.depends.isEmpty();
-}
-
 QString QSocPowerPrimitive::getHardDependencySignal(const PowerDomain &domain)
 {
     QStringList hardDeps;
@@ -613,314 +585,4 @@ QString QSocPowerPrimitive::getSoftDependencySignal(const PowerDomain &domain)
     }
 
     return softDeps.join(" & ");
-}
-
-/* Typst Power Diagram Generation */
-
-QString QSocPowerPrimitive::escapeTypstId(const QString &str) const
-{
-    // Replace non-alphanumeric characters with underscores
-    QString result;
-    for (const QChar &c : str) {
-        if (c.isLetterOrNumber() || c == '_' || c == '-') {
-            result += c;
-        } else {
-            result += '_';
-        }
-    }
-    return result;
-}
-
-QString QSocPowerPrimitive::typstHeader() const
-{
-    return QStringLiteral(
-        "#import \"@preview/circuiteria:0.2.1\": *\n"
-        "#import \"@preview/cetz:0.3.4\": draw\n"
-        "#set page(width: auto, height: auto, margin: .5cm)\n"
-        "#set text(font: \"Sarasa Mono SC\", size: 10pt)\n"
-        "#align(center)[\n"
-        "  = Power tree\n"
-        "  #text(size: 8pt, fill: gray)[Generated by QSoC.]\n"
-        "]\n"
-        "#v(0.5cm)\n"
-        "#circuit({\n");
-}
-
-QString QSocPowerPrimitive::typstLegend() const
-{
-    const float y  = -1.5f;
-    const float x  = 0.0f;
-    const float w  = 1.6f; // Wider blocks to fit text
-    const float sp = 4.0f; // Increased spacing for wider blocks
-    QTextStream s;
-    QString     result;
-
-    s.setString(&result);
-
-    s << "  // === Legend ===\n";
-
-    // AO Domain - Gray
-    s << "  element.block(x: " << x << ", y: " << (y + 0.3f) << ", w: " << w << ", h: 0.8, "
-      << "id: \"legend_ao\", name: \"AO\", fill: gray, "
-      << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + w / 2) << ", " << (y - 0.8f) << "), [AO])\n";
-
-    // Root Domain - Green
-    s << "  element.block(x: " << (x + sp) << ", y: " << (y + 0.3f) << ", w: " << w << ", h: 0.8, "
-      << "id: \"legend_root\", name: \"ROOT\", fill: util.colors.green, "
-      << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp + w / 2) << ", " << (y - 0.8f) << "), [ROOT])\n";
-
-    // Normal Domain - Blue
-    s << "  element.block(x: " << (x + sp * 2) << ", y: " << (y + 0.3f) << ", w: " << w
-      << ", h: 0.8, "
-      << "id: \"legend_normal\", name: \"NORM\", fill: util.colors.blue, "
-      << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp * 2 + w / 2) << ", " << (y - 0.8f) << "), [NORMAL])\n";
-
-    // FSM - Orange
-    s << "  element.block(x: " << (x + sp * 3) << ", y: " << (y + 0.3f) << ", w: " << w
-      << ", h: 0.8, "
-      << "id: \"legend_fsm\", name: \"FSM\", fill: util.colors.orange, "
-      << "ports: (west: ((id: \"i\"),), east: ((id: \"o\"),)))\n";
-    s << "  draw.content((" << (x + sp * 3 + w / 2) << ", " << (y - 0.8f) << "), [FSM])\n";
-
-    s << "\n";
-
-    return result;
-}
-
-QString QSocPowerPrimitive::typstDomain(const PowerDomain &domain, float x, float y) const
-{
-    QTextStream s;
-    QString     result;
-    s.setString(&result);
-
-    const QString domainName = domain.name;
-    const QString did        = escapeTypstId(domainName);
-
-    const float gx = x;
-    const float gy = y;
-
-    // Infer domain type from dependencies
-    QString domainType;
-    QString domainColor;
-    if (domain.depends.isEmpty()) {
-        // Check if this was explicitly set as empty list vs missing field
-        // For simplicity, treat empty list as AO (always-on)
-        domainType  = "ao";
-        domainColor = "gray";
-    } else {
-        // Has dependencies, check if any exist
-        bool hasActualDeps = false;
-        for (const auto &dep : domain.depends) {
-            if (!dep.name.isEmpty()) {
-                hasActualDeps = true;
-                break;
-            }
-        }
-        if (hasActualDeps) {
-            domainType  = "normal";
-            domainColor = "util.colors.blue";
-        } else {
-            // Empty dependency list means root domain
-            domainType  = "root";
-            domainColor = "util.colors.green";
-        }
-    }
-
-    // For YAML nodes that explicitly set depend: [] (empty), treat as root
-    // This requires checking the original YAML, but for now use simple heuristic:
-    // If depends list exists but is empty or all names are empty, it's root
-    if (domain.depends.isEmpty()
-        || (domain.depends.size() == 1 && domain.depends[0].name.isEmpty())) {
-        // Could be AO or root, need more context
-        // Default to AO for now
-    }
-
-    const QString typeLabel = domainType.toUpper();
-
-    // Build dependency list for display
-    QStringList dependsList;
-    for (const auto &dep : domain.depends) {
-        if (!dep.name.isEmpty()) {
-            dependsList << QString("%1(%2)").arg(dep.name, dep.type);
-        }
-    }
-
-    s << "  // ---- " << domainName << " [" << domainType << "] ----\n";
-
-    // Calculate domain block height based on number of dependencies
-    const int   numDeps   = dependsList.size();
-    const float domHeight = (numDeps > 0) ? qMax(1.5f, 0.6f * numDeps) : 1.2f;
-
-    // Generate domain block
-    s << "  element.block(\n";
-    s << "    x: " << (gx + 0.0f) << ", y: " << (gy + 0.3f) << ", w: 1.8, h: " << domHeight
-      << ",\n";
-    s << "    id: \"" << did << "_DOM\", name: \"" << typeLabel << "\", fill: " << domainColor
-      << ",\n";
-
-    if (numDeps > 0) {
-        s << "    ports: (west: (";
-        for (int i = 0; i < numDeps; ++i) {
-            if (i > 0)
-                s << ", ";
-            s << "(id: \"in" << i << "\")";
-        }
-        s << ",), east: ((id: \"out\"),))\n";
-    } else {
-        s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
-    }
-    s << "  )\n";
-
-    // Add domain name and voltage labels
-    s << "  draw.content((" << (gx + 0.9f) << ", " << (gy - 0.3f) << "), text(size: 8pt)["
-      << domainName << "])\n";
-    s << "  draw.content((" << (gx + 0.9f) << ", " << (gy - 0.7f) << "), text(size: 6pt)["
-      << domain.v_mv << "mV])\n";
-
-    // Add dependency input stubs
-    if (numDeps > 0) {
-        for (int i = 0; i < dependsList.size(); ++i) {
-            s << "  wire.stub(\"" << did << "_DOM-port-in" << i << "\", \"west\", name: \""
-              << dependsList[i] << "\")\n";
-        }
-    }
-
-    QString prevAnchor = QString("%1_DOM-port-out").arg(did);
-
-    // Align FSM with domain center
-    const float fsmY = gy + domHeight / 2.0f - 0.6f;
-
-    // Emit FSM block
-    s << "  element.block(\n";
-    s << "    x: " << (gx + 3.0f) << ", y: " << (fsmY + 0.3f) << ", w: 1.5, h: 1.2,\n";
-    s << "    id: \"" << did << "_FSM\", name: \"FSM\", fill: util.colors.orange,\n";
-    s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
-    s << "  )\n";
-
-    // Add FSM timing parameters
-    s << "  draw.content((" << (gx + 3.75f) << ", " << (fsmY - 0.3f)
-      << "), text(size: 6pt)[wait:" << domain.wait_dep << "])\n";
-    s << "  draw.content((" << (gx + 3.75f) << ", " << (fsmY - 0.6f)
-      << "), text(size: 6pt)[on:" << domain.settle_on << "])\n";
-    s << "  draw.content((" << (gx + 3.75f) << ", " << (fsmY - 0.9f)
-      << "), text(size: 6pt)[off:" << domain.settle_off << "])\n";
-
-    // Wire from domain to FSM
-    s << "  wire.wire(\"" << escapeTypstId(QString("w_%1_dom_fsm").arg(did)) << "\", (\n";
-    s << "    \"" << prevAnchor << "\", \"" << did << "_FSM-port-in\"\n";
-    s << "  ))\n";
-
-    prevAnchor = QString("%1_FSM-port-out").arg(did);
-
-    // Emit reset synchronizers (follow entries)
-    const int numSync = domain.follow_entries.size();
-    for (int syncIdx = 0; syncIdx < numSync; ++syncIdx) {
-        const auto   &followEntry = domain.follow_entries[syncIdx];
-        const QString syncId      = QString("%1_SYNC%2").arg(did).arg(syncIdx);
-
-        s << "  element.block(\n";
-        s << "    x: " << (gx + 5.5f + syncIdx * 1.8f) << ", y: " << (fsmY + 0.3f)
-          << ", w: 1.5, h: 1.2,\n";
-        s << "    id: \"" << syncId << "\", name: \"SYNC\", fill: util.colors.yellow,\n";
-        s << "    ports: (west: ((id: \"in\"),), east: ((id: \"out\"),))\n";
-        s << "  )\n";
-
-        // Add clock, reset, stage labels
-        s << "  draw.content((" << (gx + 6.25f + syncIdx * 1.8f) << ", " << (fsmY - 0.3f)
-          << "), text(size: 6pt)[" << followEntry.clock << "])\n";
-        s << "  draw.content((" << (gx + 6.25f + syncIdx * 1.8f) << ", " << (fsmY - 0.6f)
-          << "), text(size: 6pt)[" << followEntry.reset << "])\n";
-        s << "  draw.content((" << (gx + 6.25f + syncIdx * 1.8f) << ", " << (fsmY - 0.9f)
-          << "), text(size: 6pt)[stage:" << followEntry.stage << "])\n";
-
-        // Wire from previous block to this SYNC
-        QString wireId;
-        if (syncIdx == 0) {
-            wireId = QString("w_%1_fsm_sync%2").arg(did).arg(syncIdx);
-        } else {
-            wireId = QString("w_%1_sync%2_sync%3").arg(did).arg(syncIdx - 1).arg(syncIdx);
-        }
-
-        s << "  wire.wire(\"" << escapeTypstId(wireId) << "\", (\n";
-        s << "    \"" << prevAnchor << "\", \"" << syncId << "-port-in\"\n";
-        s << "  ))\n";
-
-        prevAnchor = QString("%1-port-out").arg(syncId);
-    }
-
-    // Final output - arrow with label
-    // Arrow Y should match FSM/SYNC port Y (center of 1.2 height block at fsmY + 0.3)
-    const float finalX   = (numSync > 0) ? (gx + 5.5f + numSync * 1.8f + 2.0f) : (gx + 5.5f);
-    const float arrowEnd = finalX + 2.0f;
-    const float outY     = fsmY + 0.3f + 0.6f; // FSM/SYNC port center Y
-
-    s << "  draw.line(\"" << prevAnchor << "\", (" << arrowEnd << ", " << outY
-      << "), mark: (end: \">\", fill: black))\n";
-    s << "  draw.content((" << (arrowEnd + 0.3f) << ", " << outY << "), anchor: \"west\", [rdy_"
-      << domainName << "])\n";
-    s << "\n";
-
-    return result;
-}
-
-bool QSocPowerPrimitive::generateTypstDiagram(
-    const PowerControllerConfig &config, const QString &outputPath)
-{
-    const QFileInfo outputInfo(outputPath);
-    const auto      artifact
-        = QSocPaths::resolveArtifactPath(outputInfo.absolutePath(), outputInfo.fileName());
-    if (!artifact.isValid()) {
-        QSocConsole::warn() << artifact.error;
-        return false;
-    }
-
-    QFile file(artifact.path);
-    if (!file.open(QIODevice::WriteOnly)) {
-        QSocConsole::warn() << "Failed to open file for writing:" << artifact.path;
-        return false;
-    }
-
-    QTextStream out(&file);
-    out.setEncoding(QStringConverter::Utf8);
-
-    // Generate header and legend
-    out << typstHeader();
-    out << typstLegend();
-
-    // Layout parameters - vertical stacking with dynamic spacing
-    const float x0          = 0.0f;
-    const float extraMargin = 2.0f; // Extra margin between domains
-
-    float currentY = -5.0f; // Start below legend
-
-    // Generate each domain with dynamic spacing
-    for (int idx = 0; idx < config.domains.size(); ++idx) {
-        const auto &domain = config.domains[idx];
-
-        // Calculate domain height based on dependencies
-        int numDeps = 0;
-        for (const auto &dep : domain.depends) {
-            if (!dep.name.isEmpty()) {
-                numDeps++;
-            }
-        }
-        float domHeight = (numDeps > 0) ? qMax(1.5f, 0.6f * numDeps) : 1.2f;
-
-        // Position domain at currentY
-        out << typstDomain(domain, x0, currentY);
-
-        // Move to next domain position
-        currentY -= domHeight + extraMargin + 2.0f; // Extra padding for labels
-    }
-
-    // Close circuit
-    out << "})\n";
-
-    file.close();
-
-    QSocConsole::info() << "Generated Typst diagram:" << artifact.path;
-    return true;
 }

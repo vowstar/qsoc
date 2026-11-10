@@ -103,6 +103,7 @@ jobs:
         ninja-build
         openssh-server
         p7zip-full
+        poppler-utils
         python3
         python3-py7zr
         xvfb
@@ -125,17 +126,6 @@ jobs:
         mkdir -p "$RUNNER_TEMP/oss-cad-suite"
         tar -xzf "$archive" -C "$RUNNER_TEMP/oss-cad-suite" --strip-components=1
         echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
-    - name: Install typst
-      if: github.event_name == 'pull_request'
-      run: |
-        archive="$RUNNER_TEMP/typst.tar.xz"
-        curl --fail --location --retry 3 \
-          https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz \
-          --output "$archive"
-        echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  $archive" | sha256sum --check
-        mkdir -p "$RUNNER_TEMP/typst"
-        tar -xJf "$archive" -C "$RUNNER_TEMP/typst" --strip-components=1
-        echo "$RUNNER_TEMP/typst" >> "$GITHUB_PATH"
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
@@ -333,16 +323,6 @@ jobs:
         mkdir -p "$RUNNER_TEMP/oss-cad-suite"
         tar -xzf "$archive" -C "$RUNNER_TEMP/oss-cad-suite" --strip-components=1
         echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
-    - name: Install typst
-      run: |
-        archive="$RUNNER_TEMP/typst.tar.xz"
-        curl --fail --location --retry 3 \
-          https://github.com/typst/typst/releases/download/v0.15.1/typst-x86_64-unknown-linux-musl.tar.xz \
-          --output "$archive"
-        echo "a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c  $archive" | sha256sum --check
-        mkdir -p "$RUNNER_TEMP/typst"
-        tar -xJf "$archive" -C "$RUNNER_TEMP/typst" --strip-components=1
-        echo "$RUNNER_TEMP/typst" >> "$GITHUB_PATH"
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
@@ -564,6 +544,19 @@ jobs:
 
     - name: Install tools
       run: choco install ninja pkgconfiglite -y
+
+    - name: Install PDF test tools
+      run: |
+        $archive = Join-Path $env:RUNNER_TEMP "poppler.zip"
+        Invoke-WebRequest "https://github.com/oschwartz10612/poppler-windows/releases/download/v26.09.0-0/Release-26.09.0-0.zip" -OutFile $archive
+        if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne "7a6f256a0ddf7536182246a5733331bf4677cbcc34f4663774947ad34556c8d0") {
+          throw "PDF test tool checksum mismatch"
+        }
+        $destination = Join-Path $env:RUNNER_TEMP "poppler"
+        Expand-Archive $archive -DestinationPath $destination
+        $bin = Join-Path $destination "poppler-26.09.0/Library/bin"
+        $null = Get-Item "$bin/pdftotext.exe", "$bin/pdfdetach.exe"
+        $bin >> $env:GITHUB_PATH
 
     # The action recommends sccache over ccache for MSVC.
     - name: Compiler cache
@@ -809,7 +802,9 @@ jobs:
         echo "ok"
 
     - name: Nix build (with submodules)
-      run: nix build ".?submodules=1" --print-build-logs
+      # Checkout newline conversion can differ from the committed blobs.
+      # Use the revision so local and archive fetches hash the same source.
+      run: nix build "git+file://$PWD?rev=$GITHUB_SHA&submodules=1" --print-build-logs
 
     # A pull request only proves the archive resolves its submodules. The full
     # build from the archive repeats the one above, so it runs on main only.

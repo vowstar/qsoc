@@ -967,11 +967,24 @@ endmodule
 
 === Diagram Output
 <soc-net-clock-diagram>
-Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
+<primitive-reports>
+`generate verilog` writes `<module>.html` and `<module>.pdf` into `output/<top>/doc/` for each clock, reset, or power controller. Open either file directly. QSoC no longer emits `.typ` diagram sources.
 
-*Elements*: Inputs → MUX → ICG/DIV/INV → Outputs (with frequencies/parameters)
+The HTML contains vector diagrams, configuration tables, and its Latin and Simplified Chinese font. It works offline without JavaScript. The PDF contains vector diagrams and selectable text with an embedded font. Neither output needs Typst, a browser installation, or installed fonts to generate.
 
-*Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
+Reports start with a target index that lists the circuit pages. Related targets can share a sheet. Long diagram labels can end in an ellipsis. The parameter tables retain their full names.
+
+Circuit symbols distinguish MUXes, inverters, gates, reset cells, and serial STA guide buffers. Shapes, labels, and line styles carry their meaning in grayscale. Jump arcs cross unrelated signals. Filled dots join branches. Dashed wires identify test clocks or soft power dependencies. Blue dashed frames separate figures.
+
+HTML circuit sheets remain visible. Parameter and connection tables start folded. A diagram keeps its native drawing size and scrolls within its frame on narrow screens. Source specifications appear in a separate table.
+
+The PDF uses A4 landscape pages at a fixed drawing scale. Small circuits share a page. A circuit that spans sheets uses named continuation ports with page references. Large fan-in uses pin subsets with original indices, total input counts, and a repeated device reference. Shared downstream processing repeats on those views. Parameters follow in a separate appendix.
+
+Clock reports preserve branch processing, the effective MUX type, target processing, frequencies, and control signals. A separate test MUX follows the functional MUX, before the MUX guide buffer and target processing. Triangles marked STA represent serial guide buffers. Clock input and target `comment` values appear in the parameters. Reset reports show polarity normalization, active-low combination, effective processing, and output polarity. Power reports distinguish always-on, controllable root, and dependent domains.
+
+Report export uses the bundled GUI companion in offscreen mode. It needs no desktop session. Keep all packaged programs and Qt plugins together. An export failure prints a warning and leaves RTL generation available.
+
+The CSS is independently written under Apache-2.0. The bundled Droid Sans Mono and Droid Sans Fallback fonts use Apache-2.0. The HTML includes both licenses. The PDF includes the font notice as an attachment. Font sources, revision, and checksums are recorded in `resource/report/README.md` in the source distribution.
 
 === Syntax Summary
 <soc-net-clock-syntax-summary>

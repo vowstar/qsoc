@@ -300,11 +300,7 @@ Connectivity and width problems are reported as described in
 
 === Diagram Output
 <soc-net-power-diagram>
-Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
-
-*Elements*: Domains → FSM → SYNC → Ready (with dependencies/timing/parameters)
-
-*Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
+Generates HTML and PDF reports as described in @primitive-reports. A missing `depend` field selects an always-on domain. An explicit empty list selects a controllable root domain. Reports show hard and soft dependencies, host-clock timing, follow resets, and power sequencing.
 
 == Properties
 <soc-net-power-properties>

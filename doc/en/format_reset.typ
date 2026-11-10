@@ -434,10 +434,4 @@ They instantiate the `qsoc_sync` and `qsoc_ck_mux2` roles.
 
 === Diagram Output
 <soc-net-reset-diagram>
-Generates a `.typ` circuit diagram in the `doc/` directory of the top unit.
-
-*Elements*: Sources → AND → ASYNC/SYNC/COUNT → Targets (with active levels/parameters)
-
-The AND combines active-low resets, so any asserted source asserts the target.
-
-*Files*: `output/<top>/doc/<module>.typ` (compile: `typst compile <module>.typ`)
+Generates HTML and PDF reports as described in @primitive-reports. Sources normalize to active-low signals before combination. Any asserted source asserts the combined reset. Each processing box shows the effective primitive selected by the RTL generator: async, otherwise sync, otherwise count.

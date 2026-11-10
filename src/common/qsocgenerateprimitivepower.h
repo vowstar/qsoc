@@ -5,9 +5,6 @@
 #define QSOCGENERATEPRIMITIVEPOWER_H
 
 #include <yaml-cpp/yaml.h>
-#include <QDir>
-#include <QFile>
-#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QTextStream>
@@ -52,10 +49,13 @@ public:
     /**
      * @brief Power domain configuration
      */
+    enum class DomainKind { AlwaysOn, Root, Dependent };
+
     struct PowerDomain
     {
+        DomainKind         kind = DomainKind::AlwaysOn;
         QString            name;           /**< Domain name */
-        QList<Dependency>  depends;        /**< Dependency list (empty = AO, explicit [] = root) */
+        QList<Dependency>  depends;        /**< Dependency domains */
         int                v_mv;           /**< Voltage in millivolts */
         QString            pgood;          /**< Power good signal name */
         int                wait_dep;       /**< Dependency wait cycles */
@@ -110,14 +110,6 @@ public:
     /* Emit qsoc_cell_power.v without file output. */
     QString generateCellVerilog();
 
-    /**
-     * @brief Generate Typst power tree diagram from configuration
-     * @param config Power controller configuration
-     * @param outputPath Output path for .typ file
-     * @return true if generation successful, false otherwise
-     */
-    bool generateTypstDiagram(const PowerControllerConfig &config, const QString &outputPath);
-
 private:
     /**
      * @brief Generate module header and ports
@@ -148,22 +140,6 @@ private:
     void generateOutputAssignments(const PowerControllerConfig &config, QTextStream &out);
 
     /**
-     * @brief Determine if domain is AO (always-on)
-     * @param domain Power domain configuration
-     * @param yamlNode Original YAML node for this domain
-     * @return true if domain is AO type
-     */
-    bool isAODomain(const PowerDomain &domain, const YAML::Node &yamlNode);
-
-    /**
-     * @brief Determine if domain is root (controllable root)
-     * @param domain Power domain configuration
-     * @param yamlNode Original YAML node for this domain
-     * @return true if domain is root type
-     */
-    bool isRootDomain(const PowerDomain &domain, const YAML::Node &yamlNode);
-
-    /**
      * @brief Get aggregated hard dependency signal expression
      * @param domain Power domain configuration
      * @return Signal expression (e.g., "rdy_ao & rdy_vmem" or "1'b1")
@@ -177,15 +153,8 @@ private:
      */
     QString getSoftDependencySignal(const PowerDomain &domain);
 
-    // Typst generation helper functions
-    QString typstHeader() const;
-    QString typstLegend() const;
-    QString typstDomain(const PowerDomain &domain, float x, float y) const;
-    QString escapeTypstId(const QString &str) const;
-
 private:
-    QSocGenerateManager      *m_parent;          // Parent manager for accessing utilities
-    QMap<QString, YAML::Node> m_domainYamlCache; // Cache YAML nodes for domain type inference
+    QSocGenerateManager *m_parent; // Parent manager for accessing utilities
 };
 
 #endif // QSOCGENERATEPRIMITIVEPOWER_H

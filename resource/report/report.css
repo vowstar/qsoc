@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com> */
+:root { color-scheme: light; color: #16191d; background: #eef0f2; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.6 'Droid Sans Mono', 'Droid Sans Fallback', monospace; font-kerning: none; font-variant-ligatures: none; }
+main { max-width: 1440px; margin: 28px auto; padding: 32px 44px; background: white; box-shadow: 0 1px 8px #ccd1d6; overflow-wrap: anywhere; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding-bottom: 12px; border-bottom: 1px solid #222; }
+header img { width: 136px; height: 44px; object-fit: contain; }
+.identity { text-align: right; overflow-wrap: anywhere; }
+.identity p { margin: 0; }
+h1 { margin: 0; font-size: 22px; font-weight: 400; }
+h2 { font-size: 20px; font-weight: 400; margin: 28px 0 16px; }
+a { color: #245e9a; text-underline-offset: 3px; }
+nav { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 16px 0; font-size: 14px; }
+figure { margin: 0; }
+.diagram { overflow: auto; margin-top: 12px; }
+.diagram svg { display: block; width: var(--drawing-width); max-width: none; height: auto; margin: auto; }
+.diagram:focus-visible { outline: 2px solid #245e9a; outline-offset: 3px; }
+.sheet { margin: 24px 0 36px; }
+.sheet h3 { font-size: 16px; font-weight: 400; }
+.connections { margin: 8px 0 24px; font-size: 14px; }
+dd { overflow-wrap: anywhere; }
+figcaption { text-align: center; margin: 12px 0 24px; font-size: 14px; }
+.parameters { border-bottom: 1px solid #b3bac1; margin: 0; padding: 12px 0; }
+summary { cursor: pointer; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; table-layout: fixed; font-size: 14px; }
+caption { text-align: center; margin-bottom: 8px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border: 1px solid #68727c; overflow-wrap: anywhere; font-weight: 400; }
+th { width: 28%; background: #eceff1; }
+footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #222; font-size: 13px; }
+footer details { margin-top: 10px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; }
+@media (max-width: 640px) {
+    main { margin: 0; padding: 20px 14px; box-shadow: none; }
+    header img { width: 100px; }
+    h1 { font-size: 18px; }
+}
+@media print {
+    @page { size: A4 landscape; margin: 12mm; }
+    :root { background: white; }
+    main { max-width: none; margin: 0; padding: 0; box-shadow: none; }
+    nav, footer details { display: none; }
+    .diagram { overflow: visible; }
+    .diagram svg { width: 100%; max-width: 100%; }
+    figure, tr { break-inside: avoid; }
+}
+
+.index-group { border-bottom: 1px solid #b3bac1; padding: 12px 0; }

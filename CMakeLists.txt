@@ -43,6 +43,7 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS
     LinguistTools
     Network
     PrintSupport
+    Qml
     Svg
     Test
     Widgets
@@ -53,6 +54,7 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS
     LinguistTools
     Network
     PrintSupport
+    Qml
     Svg
     Test
     Widgets
@@ -606,6 +608,7 @@ target_link_libraries(qsoc_cli PUBLIC qsoc_tui qsoc_agent_client qsoc_smt)
 
 qsoc_add_static_library(qsoc_gui ${QSOC_GUI_FILES} ${PROJECT_UI_FILES})
 target_include_directories(qsoc_gui SYSTEM PUBLIC "${QSCHEMATIC_INCLUDE_DIRS}")
+target_link_libraries(qsoc_gui PRIVATE Qt${QT_VERSION_MAJOR}::Qml)
 target_link_libraries(qsoc_gui PUBLIC
     qsoc_common
     Qt${QT_VERSION_MAJOR}::PrintSupport
@@ -617,6 +620,18 @@ target_link_libraries(qsoc_gui PUBLIC
 
 add_library(qsoc_core INTERFACE)
 target_link_libraries(qsoc_core INTERFACE qsoc_cli qsoc_gui qsoc_agent)
+
+function(qsoc_check_report_asset file expected)
+    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/resource/report/${file}" actual)
+    if(NOT actual STREQUAL expected)
+        message(FATAL_ERROR "The report asset ${file} does not match its pinned source.")
+    endif()
+endfunction()
+qsoc_check_report_asset(DroidSansMono.ttf 12b552de765dc1265d64f9f5566649930dde4dba07da0251d9f92801e70a1047)
+qsoc_check_report_asset(DroidSansMono.woff2 8b433702ed56190e73107178742439623da79cb8f53dd62a39a8f31c11d8cead)
+qsoc_check_report_asset(DroidSansFallback.ttf 05d71b179ef97b82cf1bb91cef290c600a510f77f39b4964359e3ef88378c79d)
+qsoc_check_report_asset(DroidSansFallback.woff2 125957a9ba65bf995487c36b77fbf4838229ee09212b90aab0b5eda77efa4569)
+qsoc_check_report_asset(layout.js b1032b7cfd2a57c54c6f0e8369d7665e19a579954f7cd20a6dae28f1912ea0d7)
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     set(PROJECT_SOURCES
@@ -634,8 +649,9 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_lrelease(${PROJECT_NAME} TS_FILES "${PROJECT_TS_FILES}" QM_FILES_OUTPUT_VARIABLE QM_FILES)
     qt_add_resources(${PROJECT_NAME} "translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 
+
     # The GUI is its own program; `qsoc gui` hands over to it.
-    qt_add_resources(QSOC_GUI_SOURCES "${PROJECT_QRC_FILES}")
+    qt_add_resources(QSOC_GUI_SOURCES "${PROJECT_QRC_FILES}" src/gui/report/report.qrc)
     qt_add_executable(qsoc-gui MANUAL_FINALIZATION src/guimain.cpp ${QSOC_GUI_SOURCES})
     qt_add_resources(qsoc-gui "gui_translations" PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}" FILES "${QM_FILES}")
 else()
@@ -790,6 +806,9 @@ install(FILES external/z3/LICENSE.txt
 install(FILES external/tiktoken/LICENSE
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc"
     RENAME tiktoken.txt)
+install(FILES resource/license/droid-fonts.txt resource/license/elkjs.txt
+    resource/license/elkjs-sources.txt
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc")
 
 if(UNIX AND NOT APPLE)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.desktop"

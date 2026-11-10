@@ -11,6 +11,7 @@
 #include "common/qsocgenerateprimitiveseq.h"
 #include "common/qsocgeneratereportunconnected.h"
 #include "common/qsocpaths.h"
+#include "common/qsocprimitivereport.h"
 #include "common/qsocverilogutils.h"
 #include "common/qstaticstringweaver.h"
 #include "qsocgenerateprimitivefsm.h"
@@ -55,7 +56,8 @@ bool publishUnit(
     const QDir                                  unit(QDir(outputDirectory).filePath(top));
     std::vector<QSocGenerateArtifact::Artifact> artifacts{
         {unit.filePath("rtl/" + top + ".fl"), (top + "/rtl/" + top + ".v\n").toUtf8()}};
-    for (const QFileInfo &diagram : QDir(diagrams).entryInfoList({"*.typ"}, QDir::Files)) {
+    QSocPrimitiveReport::render(diagrams);
+    for (const QFileInfo &diagram : QDir(diagrams).entryInfoList({"*.html", "*.pdf"}, QDir::Files)) {
         QFile file(diagram.filePath());
         if (file.open(QIODevice::ReadOnly))
             artifacts.push_back({unit.filePath("doc/" + diagram.fileName()), file.readAll()});

@@ -2,9 +2,6 @@
 #define QSOCGENERATEPRIMITIVECLOCK_H
 
 #include <yaml-cpp/yaml.h>
-#include <QDir>
-#include <QFile>
-#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QTextStream>
@@ -205,14 +202,6 @@ public:
      */
     ClockControllerConfig parseClockConfig(const YAML::Node &clockNode);
 
-    /**
-     * @brief Generate Typst clock tree diagram from configuration
-     * @param config Clock controller configuration
-     * @param outputPath Output path for .typ file
-     * @return true if generation successful, false otherwise
-     */
-    bool generateTypstDiagram(const ClockControllerConfig &config, const QString &outputPath);
-
 private:
     /**
      * @brief Parse clock configuration without guarding YAML conversions
@@ -306,13 +295,6 @@ private:
      * @return Generated instance name
      */
     QString getInstanceName(const QString &targetName, const QString &sourceName, int linkIndex);
-
-    // Typst generation helper functions
-    QString typstHeader() const;
-    QString typstLegend() const;
-    QString typstRootStubs(const QList<ClockInput> &inputs, float &bottomY) const;
-    QString typstTarget(const ClockTarget &target, float x, float y, const QString &testEnable) const;
-    QString escapeTypstId(const QString &str) const;
 
 private:
     QSocGenerateManager *m_parent; // Parent manager for accessing utilities

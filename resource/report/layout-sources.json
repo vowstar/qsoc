@@ -1,0 +1,67 @@
+[
+  {
+    "component": "elk",
+    "version": "0.12.1",
+    "url": "https://codeload.github.com/eclipse-elk/elk/tar.gz/3aa3b9fb98d8f9a41285b3061cff5efe79ed2ba4",
+    "sha256": "cee46035f0a691b0dd1813967b445b9fbf9385869bd280caf9574315f858f701",
+    "bytes": 9435594,
+    "commit": "3aa3b9fb98d8f9a41285b3061cff5efe79ed2ba4"
+  },
+  {
+    "component": "elkjs",
+    "version": "0.12.1",
+    "url": "https://codeload.github.com/kieler/elkjs/tar.gz/624ae90aa37110033a8af59c5ccbb292708b4317",
+    "sha256": "ef323ac645876f9ea1c3392d691bc4c4b773c6231c5ffc6731dce78de5bcc469",
+    "bytes": 1935018,
+    "commit": "624ae90aa37110033a8af59c5ccbb292708b4317"
+  },
+  {
+    "component": "emf-common",
+    "version": "2.12.4",
+    "url": "https://repo.maven.apache.org/maven2/com/genmymodel/emf/gwt/emf-common/2.12.4/emf-common-2.12.4-sources.jar",
+    "sha256": "8dfc4e97ca8eee5474927e2b0c5f3bdbd9a52dcd5dff8c0b433b1e938b843bbe",
+    "bytes": 138710
+  },
+  {
+    "component": "emf-ecore",
+    "version": "2.12.4",
+    "url": "https://repo.maven.apache.org/maven2/com/genmymodel/emf/gwt/emf-ecore/2.12.4/emf-ecore-2.12.4-sources.jar",
+    "sha256": "dd3b8c1c3bd0a27c1fbba908bcf0ff21a999148da4e68b3546bcde1dbce7b13a",
+    "bytes": 655830
+  },
+  {
+    "component": "guava",
+    "version": "31.1-jre",
+    "url": "https://repo.maven.apache.org/maven2/com/google/guava/guava/31.1-jre/guava-31.1-jre-sources.jar",
+    "sha256": "8ab1853cdaf936ec88be80c17302b7c20abafbd4f54d4fb54d7011c529e3a44a",
+    "bytes": 1827642
+  },
+  {
+    "component": "guava-gwt",
+    "version": "31.1-jre",
+    "url": "https://repo.maven.apache.org/maven2/com/google/guava/guava-gwt/31.1-jre/guava-gwt-31.1-jre.jar",
+    "sha256": "1f84944b947395d6a4302475284ccfedc5876be354e0926fbe794e41f8acfd23",
+    "bytes": 1212667
+  },
+  {
+    "component": "gwt-user",
+    "version": "2.13.0",
+    "url": "https://repo.maven.apache.org/maven2/org/gwtproject/gwt-user/2.13.0/gwt-user-2.13.0.jar",
+    "sha256": "ef34031b7a71b2de06708395dbc7a3c126f76fe6cbbb0ef587f8fada6c56c11b",
+    "bytes": 17382635
+  },
+  {
+    "component": "xtext-xbase",
+    "version": "2.36.0",
+    "url": "https://repo.maven.apache.org/maven2/org/eclipse/xtext/org.eclipse.xtext.xbase.lib/2.36.0/org.eclipse.xtext.xbase.lib-2.36.0-sources.jar",
+    "sha256": "5e06e3cfc74663d11e0debe4cce88e1134d00eba8122b90712fccbb3a5f6754a",
+    "bytes": 109222
+  },
+  {
+    "component": "xtend-lib",
+    "version": "2.36.0",
+    "url": "https://repo.maven.apache.org/maven2/org/eclipse/xtend/org.eclipse.xtend.lib/2.36.0/org.eclipse.xtend.lib-2.36.0-sources.jar",
+    "sha256": "c06d94fbce7b4c831282f5ec818798e970cc893a498ed6524d9e1e47347d362f",
+    "bytes": 125962
+  }
+]

@@ -19,6 +19,13 @@ const QList<QSocLicense::Component> &QSocLicense::components()
         {"boost-regex", "BSL-1.0", "https://github.com/MikePopoloski/regex", {"boost-regex.txt"}, {}},
         {"cmark-gfm", "BSD-2-Clause", "https://github.com/github/cmark-gfm", {"cmark-gfm.txt"}, {}},
         {"csv", "BSD-3-Clause", "https://github.com/d99kris/rapidcsv", {"csv.txt"}, {}},
+        {"droid-fonts", "Apache-2.0", "https://source.android.com", {"droid-fonts.txt"}, {}},
+        {"elkjs",
+         "EPL-2.0 AND EPL-1.0 AND Apache-2.0 AND Apache-1.1 AND MIT",
+         "https://github.com/kieler/elkjs",
+         {"elkjs.txt", "elkjs-sources.txt"},
+         "Unmodified layout runtime with original dependency notices and source access "
+         "information."},
         {"fmt", "MIT", "https://github.com/fmtlib/fmt", {"fmt.txt"}, {}},
         {"gpds", "MIT", "https://github.com/simulton/gpds", {"gpds.txt"}, {}},
         {"icu", "ICU", "https://icu.unicode.org", {"icu.txt"}, {}},

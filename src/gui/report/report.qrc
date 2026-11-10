@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/primitive-report">
+        <file alias="latin.ttf">../../../resource/report/DroidSansMono.ttf</file>
+        <file alias="latin.woff2">../../../resource/report/DroidSansMono.woff2</file>
+        <file alias="cjk.ttf">../../../resource/report/DroidSansFallback.ttf</file>
+        <file alias="cjk.woff2">../../../resource/report/DroidSansFallback.woff2</file>
+        <file alias="logo.svg">../../../doc/en/image/logo.svg</file>
+        <file alias="layout.js">../../../resource/report/layout.js</file>
+        <file alias="report.css">../../../resource/report/report.css</file>
+    </qresource>
+</RCC>

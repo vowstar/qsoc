@@ -83,7 +83,7 @@ def main():
         directory if sys.platform == "win32" else directory.parent)
     platforms = [path.parent for path in package.rglob("*offscreen*")
                  if path.parent.name == "platforms"]
-    if not platforms and sys.platform.startswith("linux"):
+    if not platforms:
         raise RuntimeError("The package is missing the offscreen platform plugin")
     environment.pop("QT_QPA_PLATFORM", None)
     if platforms:
@@ -118,6 +118,22 @@ def main():
                       flush=True)
                 raise
             print((version.stdout + version.stderr).decode(errors="replace"), flush=True)
+        cli = entry or directory / ("qsoc" + suffix)
+        subprocess.run([str(cli), "project", "create", "-d", working, "reports"],
+                       cwd=working, env=environment, check=True, timeout=20)
+        netlist = pathlib.Path(working) / "output" / "reports.soc_net"
+        netlist.write_text("clock:\n  - name: clocks\n    input: {osc: {freq: 24MHz}}\n"
+                           "    target: {cpu_clk: {link: {osc: {}}}}\n", encoding="utf-8")
+        subprocess.run([str(cli), "generate", "verilog", "-d", working, str(netlist)],
+                       cwd=working, env=environment, check=True, timeout=60)
+        docs = pathlib.Path(working) / "output" / "reports" / "doc"
+        report_html = (docs / "clocks.html").read_text(encoding="utf-8")
+        if (not (docs / "clocks.pdf").read_bytes().startswith(b"%PDF-")
+                or "data:font/woff2;base64," not in report_html
+                or "The Android Open Source Project" not in report_html
+                or list(docs.glob("*.typ"))):
+            raise RuntimeError("The packaged primitive report export failed")
+        print("Packaged offline HTML/PDF report export passed", flush=True)
         figure = subprocess.run(
             [str(entry or directory / ("qsoc" + suffix)), "--svg-raster", "dark", "16"],
             cwd=working, env=environment, timeout=30, capture_output=True,

@@ -102,6 +102,7 @@ private:
 private slots:
     void initTestCase()
     {
+        qputenv("QSOC_BIN_DIR", QSOC_REPORT_BIN_DIR);
         qInstallMessageHandler(messageOutput);
         QSocConsole::setTeeToMessageHandler(true);
         projectName = QFileInfo(__FILE__).baseName() + "_data";
@@ -1593,31 +1594,11 @@ reset:
         }
         QVERIFY(QFile::exists(verilogPath));
 
-        /* The diagram inverts a high-active source where the RTL does: at the
-           link component input, not between the component and the AND gate. */
-        if (kind == "async" || kind == "sync" || kind == "count") {
-            QFile typstFile(outputDir.filePath(stem + "/doc/" + stem + "_ctrl.typ"));
-            QVERIFY(typstFile.open(QIODevice::ReadOnly | QIODevice::Text));
-            const QStringList lines = QString::fromUtf8(typstFile.readAll()).split('\n');
-            const QString     stub
-                = active == "high"
-                      ? QStringLiteral("), \"west\", name: \"rst_src\")")
-                      : QStringLiteral("wire.stub(\"dst_n_L0_%1-port-in\"").arg(kind.toUpper());
-            QString beforeStub;
-            bool    found = false;
-            for (int i = 1; i < lines.size(); ++i) {
-                if (lines[i].contains("wire.stub(") && lines[i].contains(stub)) {
-                    beforeStub = lines[i - 1];
-                    found      = true;
-                }
-            }
-            QVERIFY2(found, qPrintable(stub));
-            const int bubbles = static_cast<int>(
-                lines.filter(QStringLiteral("draw.circle(")).size());
-            QCOMPARE(bubbles, active == "high" ? 1 : 0);
-            QCOMPARE(beforeStub.contains("draw.circle("), active == "high");
-            QVERIFY(lines.join('\n').contains("wire.wire(\"w_dst_n_l0_to_and\""));
-        }
+        QFile reportFile(outputDir.filePath(stem + "/doc/" + stem + "_ctrl.html"));
+        QVERIFY(reportFile.open(QIODevice::ReadOnly));
+        const QByteArray report = reportFile.readAll();
+        QVERIFY(report.contains(("Source (active " + active + ")").toUtf8()));
+        QVERIFY(report.contains("rst_src"));
 
         const QString on    = active == "high" ? "1'b1" : "1'b0";
         const QString bench = QStringLiteral(

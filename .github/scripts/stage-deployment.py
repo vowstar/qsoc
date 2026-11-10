@@ -62,9 +62,16 @@ def main():
         shutil.copy2(source / ".github/scripts/AppRun", entry)
         entry.chmod(0o755)
         licenses = destination / "usr" / "share" / "licenses" / "qsoc"
+    if sys.platform in ("win32", "darwin"):
+        plugin_name = "qoffscreen.dll" if sys.platform == "win32" else "libqoffscreen.dylib"
+        plugins = destination / "platforms" if sys.platform == "win32" else bundle / "Contents" / "PlugIns" / "platforms"
+        plugins.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pathlib.Path(os.environ["QT_ROOT_DIR"]) / "plugins" / "platforms" / plugin_name, plugins)
     licenses.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source / "external/z3/LICENSE.txt", licenses / "z3.txt")
     shutil.copy2(source / "external/tiktoken/LICENSE", licenses / "tiktoken.txt")
+    for name in ("droid-fonts.txt", "elkjs.txt", "elkjs-sources.txt"):
+        shutil.copy2(source / "resource/license" / name, licenses / name)
     if sys.platform == "darwin":
         subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True)
 

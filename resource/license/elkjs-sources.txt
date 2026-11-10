@@ -1,0 +1,53 @@
+Corresponding source for elkjs 0.12.1
+
+The included JavaScript is an unmodified generated artifact. Its preferred
+source includes the following components and their upstream build files.
+Each source retains its original license. The JavaScript bundle SHA256 is
+b1032b7cfd2a57c54c6f0e8369d7665e19a579954f7cd20a6dae28f1912ea0d7.
+
+elkjs commit: 624ae90aa37110033a8af59c5ccbb292708b4317
+ELK commit: 3aa3b9fb98d8f9a41285b3061cff5efe79ed2ba4
+
+Source versions follow the official release and its build definition.
+The original build uses a snapshot generator. QSoC does not claim a
+byte-for-byte reconstruction of the upstream JavaScript compiler output.
+
+elk 0.12.1
+https://codeload.github.com/eclipse-elk/elk/tar.gz/3aa3b9fb98d8f9a41285b3061cff5efe79ed2ba4
+SHA256: cee46035f0a691b0dd1813967b445b9fbf9385869bd280caf9574315f858f701
+
+elkjs 0.12.1
+https://codeload.github.com/kieler/elkjs/tar.gz/624ae90aa37110033a8af59c5ccbb292708b4317
+SHA256: ef323ac645876f9ea1c3392d691bc4c4b773c6231c5ffc6731dce78de5bcc469
+
+emf-common 2.12.4
+https://repo.maven.apache.org/maven2/com/genmymodel/emf/gwt/emf-common/2.12.4/emf-common-2.12.4-sources.jar
+SHA256: 8dfc4e97ca8eee5474927e2b0c5f3bdbd9a52dcd5dff8c0b433b1e938b843bbe
+
+emf-ecore 2.12.4
+https://repo.maven.apache.org/maven2/com/genmymodel/emf/gwt/emf-ecore/2.12.4/emf-ecore-2.12.4-sources.jar
+SHA256: dd3b8c1c3bd0a27c1fbba908bcf0ff21a999148da4e68b3546bcde1dbce7b13a
+
+guava 31.1-jre
+https://repo.maven.apache.org/maven2/com/google/guava/guava/31.1-jre/guava-31.1-jre-sources.jar
+SHA256: 8ab1853cdaf936ec88be80c17302b7c20abafbd4f54d4fb54d7011c529e3a44a
+
+guava-gwt 31.1-jre
+https://repo.maven.apache.org/maven2/com/google/guava/guava-gwt/31.1-jre/guava-gwt-31.1-jre.jar
+SHA256: 1f84944b947395d6a4302475284ccfedc5876be354e0926fbe794e41f8acfd23
+
+gwt-user 2.13.0
+https://repo.maven.apache.org/maven2/org/gwtproject/gwt-user/2.13.0/gwt-user-2.13.0.jar
+SHA256: ef34031b7a71b2de06708395dbc7a3c126f76fe6cbbb0ef587f8fada6c56c11b
+
+xtext-xbase 2.36.0
+https://repo.maven.apache.org/maven2/org/eclipse/xtext/org.eclipse.xtext.xbase.lib/2.36.0/org.eclipse.xtext.xbase.lib-2.36.0-sources.jar
+SHA256: 5e06e3cfc74663d11e0debe4cce88e1134d00eba8122b90712fccbb3a5f6754a
+
+xtend-lib 2.36.0
+https://repo.maven.apache.org/maven2/org/eclipse/xtend/org.eclipse.xtend.lib/2.36.0/org.eclipse.xtend.lib-2.36.0-sources.jar
+SHA256: c06d94fbce7b4c831282f5ec818798e970cc893a498ed6524d9e1e47347d362f
+
+The source distribution records the same URLs and checksums in
+resource/report/layout-sources.json. The original licenses and applicable
+notices are included in elkjs.txt.
