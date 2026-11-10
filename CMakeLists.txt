@@ -70,6 +70,7 @@ find_package(PkgConfig)
 pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang>=3.0.0)
 if (SVLANG_FOUND)
     message(STATUS "Use system sv-lang library: ${SVLANG_LIBRARIES} ${SVLANG_VERSION}")
+    set(SVLANG_LIBRARIES PkgConfig::SVLANG)
 else()
     add_subdirectory(external/slang)
     set(SVLANG_INCLUDE_DIRS
