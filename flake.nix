@@ -84,23 +84,17 @@
             # final binary's RUNPATH resolves QNetworkProxyFactory.
             libproxy
 
-            # slang's external/CMakeLists.txt prefers find_package(fmt)
-            # before its FetchContent fallback. Without network in the
-            # sandbox the fallback fails, so provide fmt from nixpkgs.
+            # QSoC can use the system fmt when slang is system-installed.
             fmt
 
             # Other dependencies...
             llvmPackages_20.clang-tools
           ];
 
-          # Disable slang's optional subprojects that would otherwise
-          # trigger network-dependent FetchContent: mimalloc, cpptrace,
-          # Catch2 (tests). Default slang turns these on; nix sandbox
-          # has no network.
+          # Disable optional slang dependencies that need network access.
           cmakeFlags = [
             "-DCMAKE_BUILD_TYPE=Release"
             "-DSLANG_USE_MIMALLOC=OFF"
-            "-DSLANG_USE_CPPTRACE=OFF"
             "-DSLANG_INCLUDE_TESTS=OFF"
           ];
 

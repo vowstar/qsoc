@@ -48,7 +48,6 @@ jobs:
         dnf install -y epel-release
         dnf config-manager --set-enabled powertools
         dnf install -y \
-          cmake \
           file \
           fontconfig-devel \
           freetype-devel \
@@ -93,9 +92,9 @@ jobs:
         tar -xJf qsoc-*.tar.xz -C "$GITHUB_WORKSPACE" --strip-components=1
         test ! -e "$GITHUB_WORKSPACE/.git"
 
-    - name: Install Qt
+    - name: Install CMake and Qt
       run: |
-        pip3.9 install aqtinstall py7zr
+        pip3.9 install 'cmake>=3.28' aqtinstall py7zr
         aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 \
           -m qt5compat -O /opt/qt
 
@@ -112,7 +111,6 @@ jobs:
           -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
           -DFETCHCONTENT_SOURCE_DIR_FMT="$PWD/external/fmt" \
           -DSLANG_USE_MIMALLOC=OFF \
-          -DSLANG_USE_CPPTRACE=OFF \
           -DSLANG_INCLUDE_TESTS=OFF \
           -DENABLE_CLANG_TIDY=OFF \
           -DENABLE_DOXYGEN=OFF \

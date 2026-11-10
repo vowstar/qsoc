@@ -16,6 +16,7 @@ const QList<QSocLicense::Component> &QSocLicense::components()
          "New AWS-LC files are Apache-2.0 OR ISC. AWS-LC bundles fiat-crypto "
          "under MIT and the jitterentropy library under BSD-3-Clause."},
         {"bigint", "Public domain", "http://mattmccutchen.net/bigint/", {"bigint.txt"}, {}},
+        {"boost-regex", "BSL-1.0", "https://github.com/MikePopoloski/regex", {"boost-regex.txt"}, {}},
         {"cmark-gfm", "BSD-2-Clause", "https://github.com/github/cmark-gfm", {"cmark-gfm.txt"}, {}},
         {"csv", "BSD-3-Clause", "https://github.com/d99kris/rapidcsv", {"csv.txt"}, {}},
         {"fmt", "MIT", "https://github.com/fmtlib/fmt", {"fmt.txt"}, {}},
@@ -65,6 +66,7 @@ const QList<QSocLicense::Component> &QSocLicense::components()
          {"tiktoken.txt"},
          "The o200k_base table. The same table ships under Apache-2.0 in the "
          "gpt-oss tokenizer."},
+        {"tomlplusplus", "MIT", "https://github.com/marzer/tomlplusplus", {"tomlplusplus.txt"}, {}},
         {"uvm-core",
          "Apache-2.0",
          "https://github.com/accellera-official/uvm-core",

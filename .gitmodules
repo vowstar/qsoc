@@ -49,3 +49,9 @@
 [submodule "external/aws-lc"]
 	path = external/aws-lc
 	url = https://github.com/aws/aws-lc.git
+[submodule "external/boost-regex"]
+	path = external/boost-regex
+	url = https://github.com/MikePopoloski/regex.git
+[submodule "external/tomlplusplus"]
+	path = external/tomlplusplus
+	url = https://github.com/marzer/tomlplusplus.git

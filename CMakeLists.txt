@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2023-2025 Huang Rui <vowstar@gmail.com>
 
-cmake_minimum_required(VERSION 3.23)
+cmake_minimum_required(VERSION 3.28)
 
 include(GNUInstallDirs)
 
@@ -67,11 +67,17 @@ endif()
 find_package(PkgConfig)
 
 # Slang(sv-lang)
-pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang>=3.0.0)
+pkg_check_modules(SVLANG IMPORTED_TARGET sv-lang>=12.1.0)
 if (SVLANG_FOUND)
     message(STATUS "Use system sv-lang library: ${SVLANG_LIBRARIES} ${SVLANG_VERSION}")
     set(SVLANG_LIBRARIES PkgConfig::SVLANG)
 else()
+    set(FETCHCONTENT_SOURCE_DIR_FMT "${CMAKE_CURRENT_SOURCE_DIR}/external/fmt"
+        CACHE PATH "Bundled fmt sources")
+    set(FETCHCONTENT_SOURCE_DIR_BOOST_REGEX "${CMAKE_CURRENT_SOURCE_DIR}/external/boost-regex"
+        CACHE PATH "Bundled Boost.Regex sources")
+    set(FETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS "${CMAKE_CURRENT_SOURCE_DIR}/external/tomlplusplus"
+        CACHE PATH "Bundled tomlplusplus sources")
     add_subdirectory(external/slang)
     set(SVLANG_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/slang/include"
