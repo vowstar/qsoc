@@ -387,7 +387,13 @@ void drawNode(QPainter &painter, const QSocReportLayout::Node &node, const QStri
         auto        lines     = wrapSignal(label, labelFace, available);
         if (lines.size() > 2)
             lines = {QFontMetricsF(labelFace).elidedText(label, Qt::ElideMiddle, available)};
-        const auto  notes       = note.isEmpty() ? QStringList() : wrap(note, small, available, 1);
+        QString   displayNote          = note;
+        const int destinationPageCount = data["destinationPageCount"].toInt();
+        if (!input && destinationPageCount > 1
+            && QFontMetricsF(small).horizontalAdvance(note) > available)
+            displayNote = QString("%1 pages").arg(destinationPageCount);
+        const auto  notes       = displayNote.isEmpty() ? QStringList()
+                                                        : wrap(displayNote, small, available, 1);
         const qreal labelHeight = lines.size() * leading(labelFace);
         const qreal top  = box.center().y() - (labelHeight + notes.size() * leading(small)) / 2;
         const qreal left = box.left() + (input ? 0 : 16);
@@ -558,6 +564,7 @@ void drawGraph(
     QMap<QPair<int, qreal>, QList<qreal>> bridgeRows;
     for (const auto &bridge : graph.bridges)
         bridgeRows[{bridge.edge, bridge.position.y()}].append(bridge.position.x());
+    QList<QPainterPath> arcs;
     for (auto it = bridgeRows.begin(); it != bridgeRows.end(); ++it) {
         auto &positions = it.value();
         std::sort(positions.begin(), positions.end());
@@ -580,10 +587,12 @@ void drawGraph(
                 p.x() + radius,
                 p.y());
             painter.drawPath(arc);
-            painter.setPen(QPen(ink, 1.3));
-            painter.drawPath(arc);
+            arcs.append(arc);
         }
     }
+    painter.setPen(QPen(ink, 1.3));
+    for (const auto &arc : arcs)
+        painter.drawPath(arc);
     painter.setPen(Qt::NoPen);
     painter.setBrush(ink);
     for (const auto &point : graph.junctions)
@@ -975,7 +984,8 @@ QList<Page> circuitPages(
                 QStringList targets;
                 for (const int target : consumers.value(label))
                     targets.append(QString::number(target));
-                node.data["note"] = "to p. " + targets.join(",");
+                node.data["note"]                 = "to p. " + targets.join(",");
+                node.data["destinationPageCount"] = targets.size();
             }
         }
     };
