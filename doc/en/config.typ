@@ -138,6 +138,34 @@ behind two URLs is two entries with the same `model`.
   kind: table,
 )
 
+=== Compatible Protocol Endpoints
+
+A provider can expose more than one API protocol. Configure each endpoint as a separate entry, using the same wire model when comparing protocols. Select the entry with `/model`.
+
+DeepSeek supports both Chat Completions and Messages. The Messages URL below is the complete HTTP endpoint, including `/v1/messages`.
+
+```yaml
+llm:
+  model: deepseek-chat
+  models:
+    deepseek-chat:
+      model: deepseek-v4-pro
+      api: openai-chat
+      url: https://api.deepseek.com/chat/completions
+      key: YOUR_API_KEY
+      reasoning: true
+      effort: high
+    deepseek-messages:
+      model: deepseek-v4-pro
+      api: anthropic-messages
+      url: https://api.deepseek.com/anthropic/v1/messages
+      key: YOUR_API_KEY
+      reasoning: true
+      effort: high
+```
+
+Use a DeepSeek API key in both entries. Image and tool features follow the selected model and endpoint. Check the provider's #link("https://api-docs.deepseek.com/guides/anthropic_api/")[compatibility reference].
+
 === Per-Model Fields
 <llm-models-registry>
 Every key under an entry is optional except `url`.
