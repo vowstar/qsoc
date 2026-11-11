@@ -41,9 +41,14 @@ struct Result
 };
 QPointF port(const Node &node, bool input, int index);
 QRectF  body(const Node &node);
+QString validateGraph(const QJsonObject &graph, const QList<QSizeF> &sizes);
 Result  layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engine = nullptr);
 QList<Result> paginate(
-    const QJsonObject &graph, const QList<QSizeF> &sizes, Engine &engine, int group);
+    const QJsonObject   &graph,
+    const QList<QSizeF> &sizes,
+    Engine              &engine,
+    int                  group,
+    const Result        *initial = nullptr);
 QList<Bridge> crossings(const QList<Edge> &edges);
 } // namespace QSocReportLayout
 

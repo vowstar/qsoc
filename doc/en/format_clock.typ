@@ -972,15 +972,17 @@ endmodule
 
 The HTML contains vector diagrams, configuration tables, and its Latin and Simplified Chinese font. It works offline without JavaScript. The PDF contains vector diagrams and selectable text with an embedded font. Neither output needs Typst, a browser installation, or installed fonts to generate.
 
-Reports start with a target index that lists the circuit pages. Related targets can share a sheet. Long diagram labels can end in an ellipsis. The parameter tables retain their full names.
+Large reports start with a connectivity overview, followed by a target index and complete circuit sheets. The overview retains source nets, dependencies, effective main functions and reset polarity. Processing and control pins remain on the circuit sheets. Related targets can share a sheet. Long diagram labels can end in an ellipsis. The parameter tables retain their full names.
 
 Circuit symbols distinguish MUXes, inverters, gates, reset cells, and serial STA guide buffers. Shapes, labels, and line styles carry their meaning in grayscale. Jump arcs cross unrelated signals. Filled dots join branches. Dashed wires identify test clocks or soft power dependencies. Blue dashed frames separate figures.
 
 HTML circuit sheets remain visible. Parameter and connection tables start folded. A diagram keeps its native drawing size and scrolls within its frame on narrow screens. Source specifications appear in a separate table.
 
+*Document pages* opens a complete paginated preview with the PDF's index, circuits and parameters. Select a page number or use Previous and Next, then adjust the zoom. The preview requires JavaScript and a current browser. Static circuit sheets remain available without scripting. The embedded preview uses the same page drawing as the PDF and needs no PDF plugin or network access.
+
 The HTML target index lists each target's PDF page range and links to all its circuit sheets. Each sheet links to its neighbors and the index. Folded signal-continuation tables link directly to the sheets that drive or consume the same signal. An embedded script keeps these links within the report in embedded HTML viewers. The content security policy permits only that script's hash. Offline links also work with scripting disabled.
 
-The PDF uses A4 landscape pages at a fixed drawing scale. Small circuits share a page. A circuit that spans sheets uses named continuation ports with page references. Large fan-in uses pin subsets with original indices, total input counts, and a repeated device reference. Shared downstream processing repeats on those views. Parameters follow in a separate appendix.
+The PDF uses A4 landscape pages. Drawings keep at least 85 percent of their native size. Small circuits share a page. A circuit that spans sheets uses named continuation ports with page references. Large fan-in uses pin subsets with original indices, total input counts, and a repeated device reference. Shared downstream processing repeats on those views. Parameters follow in a separate appendix. Large appendices use a target, parameter and value table. Every target retains its complete name in the appendix, including targets with no separate parameters. The default table lists values common to a strict majority of targets. Per-target rows override those defaults. Missing or repeated fields remain per-target. Patterns use `{target}` for the complete name in the parameter table's Target column.
 
 Clock reports preserve branch processing, the effective MUX type, target processing, frequencies, and control signals. A separate test MUX follows the functional MUX, before the MUX guide buffer and target processing. Triangles marked STA represent serial guide buffers. Clock input and target `comment` values appear in the parameters. Reset reports show polarity normalization, active-low combination, effective processing, and output polarity. Power reports distinguish always-on, controllable root, and dependent domains.
 

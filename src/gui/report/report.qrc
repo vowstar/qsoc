@@ -7,5 +7,6 @@
         <file alias="logo.svg">../../../doc/en/image/logo.svg</file>
         <file alias="layout.js">../../../resource/report/layout.js</file>
         <file alias="report.css">../../../resource/report/report.css</file>
+        <file alias="preview.js">../../../resource/report/preview.js</file>
     </qresource>
 </RCC>

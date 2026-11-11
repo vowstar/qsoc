@@ -23,6 +23,16 @@ figure { margin: 0; }
 .sheet-links ol { padding-left: 20px; }
 .sheet-links li { margin: 4px 0; }
 .signal-continuations { margin: 8px 0; font-size: 14px; }
+.document-preview { margin: 24px 0; padding: 14px; border: 1px dashed #9bb8d1; }
+.document-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.document-toolbar button, .document-toolbar input, .document-toolbar select { font: inherit; color: inherit; background: white; border: 1px solid #68727c; padding: 4px 8px; }
+.document-toolbar button { cursor: pointer; }
+.document-toolbar button:disabled { cursor: default; color: #68727c; }
+.document-toolbar input { width: 7ch; }
+.document-page { overflow: auto; max-height: 80vh; background: #eef0f2; border: 1px solid #9bb8d1; }
+.document-page svg { display: block; width: var(--page-width, 1040px); max-width: none; height: auto; margin: auto; }
+.document-page.fit svg { width: 100%; max-width: 1040px; }
+.document-page:focus-visible { outline: 2px solid #245e9a; outline-offset: 3px; }
 .connections { margin: 8px 0 24px; font-size: 14px; }
 dd { overflow-wrap: anywhere; }
 figcaption { text-align: center; margin: 12px 0 24px; font-size: 14px; }
@@ -44,7 +54,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 
     @page { size: A4 landscape; margin: 12mm; }
     :root { background: white; }
     main { max-width: none; margin: 0; padding: 0; box-shadow: none; }
-    nav, footer details, .signal-continuations { display: none; }
+    nav, footer details, .signal-continuations, .document-preview { display: none; }
     .diagram { overflow: visible; }
     .diagram svg { width: 100%; max-width: 100%; }
     figure, tr { break-inside: avoid; }

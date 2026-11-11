@@ -1,6 +1,6 @@
 # Report assets
 
-The report CSS and fragment-navigation script are independently written for QSoC under Apache-2.0. They use no framework, icon library or copied reference code. The small script keeps same-document links inside embedded HTML viewers; its SHA-256 hash is included in the content security policy.
+The report CSS and `preview.js` are independently written for QSoC under Apache-2.0. They use no framework, icon library or copied reference code. The script handles same-document navigation and the paginated preview; its SHA-256 hash is included in the content security policy.
 
 Droid Sans Mono and Droid Sans Fallback are unmodified fonts from the Android Open Source Project. Both use Apache-2.0. The original NOTICE and the font copyright statements are in `../license/droid-fonts.txt`. Their Latin and Chinese glyphs are embedded in generated reports.
 
@@ -21,11 +21,15 @@ The WOFF2 files are compressed copies made with `woff2_compress <font>.ttf`, wit
 
 The HTML embeds both WOFF2 files and the complete font notice. SVG labels use these embedded webfonts. PDF text uses the TTF files through Qt's PDF writer. Its font notice is included as a PDF attachment. Automatic shaping is disabled for technical labels so PDF extraction retains digits and signal names. Generated reports need no installed font or network access.
 
+The complete page preview uses the same painter and page list as the PDF, including the index and parameters. Each page is stored as a separate SVG compressed by `qCompress`. The browser skips its four-byte size header and uses the native Compression Streams API to inflate one page at a time. Only the current page is mounted in the preview. Page SVGs are limited to 4 MiB each and their compressed payloads to 64 MiB in total. Exceeding these preview limits shows a notice and preserves the static HTML and PDF output.
+
+The page reader requires JavaScript and a browser with `DecompressionStream` support. A missing capability produces a visible notice. The static circuit sheets remain readable without scripting. The reader uses the existing embedded fonts and needs no PDF plugin, external package or network connection.
+
 
 ## Layout runtime
 
 `layout.js` is the unmodified elkjs 0.12.1 bundle from the official npm release. Its SHA-256 is `b1032b7cfd2a57c54c6f0e8369d7665e19a579954f7cd20a6dae28f1912ea0d7`. The wrapper commit is `624ae90aa37110033a8af59c5ccbb292708b4317`. The matching ELK commit is `3aa3b9fb98d8f9a41285b3061cff5efe79ed2ba4`.
 
-The generator runs it through Qt Qml's JavaScript engine. Generated HTML does not include the runtime or require JavaScript. Circuit symbols and the document style are independently written for QSoC.
+The generator runs it through Qt Qml's JavaScript engine. Generated HTML does not include the layout runtime. Circuit symbols and the document style are independently written for QSoC.
 
 The runtime contains components under EPL-2.0, EPL-1.0, Apache-2.0, Apache-1.1 and MIT. Original license texts, applicable notices and source headers are in `../license/elkjs.txt`. Corresponding source URLs and hashes are in `layout-sources.json` and `../license/elkjs-sources.txt`. Keep these files with the runtime when packaging or updating it. The published source versions follow the upstream release; the compiler toolchain is not claimed to reproduce the bundle byte for byte.

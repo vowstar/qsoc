@@ -78,6 +78,40 @@ void verifySheetNavigation(const QString &html, int targets, bool fanIn)
     QCOMPARE(rowsFound, targets);
     QCOMPARE(indexedSheets.size(), sheetTitles.size());
 }
+
+void verifyPagePreview(const QByteArray &html, int expectedPages)
+{
+    const QByteArray startTag("<script type=\"application/json\" id=\"document-page-data\">");
+    const auto       start = html.indexOf(startTag);
+    QVERIFY(start >= 0);
+    const auto end = html.indexOf("</script>", start);
+    QVERIFY(end > start);
+    QJsonParseError error;
+    const auto      pages = QJsonDocument::fromJson(
+                                html.mid(start + startTag.size(), end - start - startTag.size()), &error)
+                                .array();
+    QCOMPARE(error.error, QJsonParseError::NoError);
+    QCOMPARE(pages.size(), expectedPages);
+    for (qsizetype i = 0; i < pages.size(); ++i) {
+        const auto encoded    = pages[i].toString().toLatin1();
+        const auto compressed = QByteArray::fromBase64(encoded);
+        QCOMPARE(compressed.toBase64(), encoded);
+        const auto svg = qUncompress(compressed);
+        QVERIFY(svg.startsWith("<svg"));
+        QVERIFY(!svg.contains("<script"));
+        QXmlStreamReader reader(svg);
+        QString          text;
+        while (!reader.atEnd()) {
+            reader.readNext();
+            if (reader.isStartElement() && reader.name() == QLatin1String("text"))
+                text += reader.readElementText(QXmlStreamReader::IncludeChildElements) + '\n';
+        }
+        QVERIFY(!reader.hasError());
+        QVERIFY2(
+            text.contains(QString("%1 / %2").arg(i + 1).arg(expectedPages)),
+            "Preview pages must retain their PDF page numbers");
+    }
+}
 } // namespace
 
 class Test : public QObject
@@ -90,7 +124,10 @@ private slots:
     void clockOverviewAndLayout();
     void orderedCircuit();
     void crossingSemantics();
+    void boundedPagination_data();
     void boundedPagination();
+    void paginationValidation();
+    void overviewKeepsModelOrder();
     void largeControllers_data();
     void largeControllers();
     void htmlSignalContinuations();
@@ -98,6 +135,9 @@ private slots:
     void powerDomainKinds();
     void headlessExportAndEscaping();
     void pdfTextRoundTrip();
+    void sharedParametersRetainFullTargetNames_data();
+    void sharedParametersRetainFullTargetNames();
+    void parameterDefaultsKeepOverrides();
     void controlLabelSpacing_data();
     void controlLabelSpacing();
     void publication_data();
@@ -330,8 +370,19 @@ void Test::crossingSemantics()
     QCOMPARE(QSocReportLayout::crossings({horizontal, vertical}).size(), 1);
 }
 
+void Test::boundedPagination_data()
+{
+    QTest::addColumn<bool>("overview");
+    QTest::addColumn<bool>("cycle");
+    QTest::newRow("detail") << false << false;
+    QTest::newRow("overview") << true << false;
+    QTest::newRow("overview-power-cycle") << true << true;
+}
+
 void Test::boundedPagination()
 {
+    QFETCH(bool, overview);
+    QFETCH(bool, cycle);
     QSocReportLayout::Engine engine;
     QString                  error;
     engine.layout(
@@ -357,8 +408,42 @@ void Test::boundedPagination()
     edges.append(QJsonObject{{"from", 14}, {"to", 15}});
     nodes.append(QJsonObject{{"kind", "input"}, {"label", "unused"}});
     sizes.append({160, 56});
-    const auto sheets = QSocReportLayout::paginate(
-        QJsonObject{{"nodes", nodes}, {"edges", edges}}, sizes, engine, 7);
+    if (cycle) {
+        auto node      = nodes[1].toObject();
+        node["inputs"] = 2;
+        nodes[1]       = node;
+        edges.append(QJsonObject{{"from", 14}, {"to", 1}, {"input", 1}});
+    }
+    const QJsonObject
+               graph{{"nodes", nodes}, {"edges", edges}, {"overview", overview}, {"power", cycle}};
+    const auto sheets = QSocReportLayout::paginate(graph, sizes, engine, 7);
+    if (!cycle) {
+        const auto initial = QSocReportLayout::layout(graph, sizes, &engine);
+        const auto reused  = QSocReportLayout::paginate(graph, sizes, engine, 7, &initial);
+        QCOMPARE(reused.size(), sheets.size());
+        for (qsizetype i = 0; i < sheets.size(); ++i) {
+            const auto &expected = sheets[i];
+            const auto &actual   = reused[i];
+            QCOMPARE(actual.error, expected.error);
+            QCOMPARE(actual.size, expected.size);
+            QCOMPARE(actual.nodes.size(), expected.nodes.size());
+            QCOMPARE(actual.edges.size(), expected.edges.size());
+            for (qsizetype node = 0; node < expected.nodes.size(); ++node) {
+                QCOMPARE(actual.nodes[node].data, expected.nodes[node].data);
+                QCOMPARE(actual.nodes[node].box, expected.nodes[node].box);
+            }
+            for (qsizetype edge = 0; edge < expected.edges.size(); ++edge) {
+                QCOMPARE(actual.edges[edge].from, expected.edges[edge].from);
+                QCOMPARE(actual.edges[edge].to, expected.edges[edge].to);
+                QCOMPARE(actual.edges[edge].input, expected.edges[edge].input);
+                QCOMPARE(actual.edges[edge].output, expected.edges[edge].output);
+                QCOMPARE(actual.edges[edge].style, expected.edges[edge].style);
+                QCOMPARE(actual.edges[edge].path, expected.edges[edge].path);
+            }
+        }
+        for (const auto &node : initial.nodes)
+            QVERIFY(!node.data.contains("original"));
+    }
     QVERIFY(sheets.size() > 1);
     QMap<int, int>        occurrences;
     QSet<QString>         inputs, outputs;
@@ -393,9 +478,65 @@ void Test::boundedPagination()
     QCOMPARE(occurrences.size(), 14);
     for (const int count : occurrences)
         QCOMPARE(count, 1);
-    QCOMPARE(reconstructed.size(), 15);
+    QCOMPARE(reconstructed.size(), cycle ? 16 : 15);
     for (int i = 1; i <= 15; ++i)
         QVERIFY(reconstructed.contains({i - 1, i}));
+    if (cycle)
+        QVERIFY(reconstructed.contains({14, 1}));
+}
+
+void Test::paginationValidation()
+{
+    QJsonArray    nodes, edges;
+    QList<QSizeF> sizes;
+    for (int i = 0; i < 9; ++i) {
+        nodes.append(
+            QJsonObject{{"kind", "overview"}, {"label", QString::number(i)}, {"inputs", 2}});
+        sizes.append({160, 48});
+        if (i > 0)
+            edges.append(QJsonObject{{"from", i - 1}, {"to", i}});
+    }
+    QSocReportLayout::Engine engine;
+    const auto               rejected = [&](const QJsonArray &links, const QString &expected) {
+        const QJsonObject graph{{"nodes", nodes}, {"edges", links}, {"overview", true}};
+        QCOMPARE(QSocReportLayout::validateGraph(graph, sizes), expected);
+        QCOMPARE(QSocReportLayout::layout(graph, sizes, &engine).error, expected);
+        const auto pages = QSocReportLayout::paginate(graph, sizes, engine, 4);
+        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.first().error, expected);
+    };
+    auto bad = edges;
+    bad.append(QJsonObject{{"from", 9}, {"to", 1}});
+    rejected(bad, "Invalid report connection");
+    bad = edges;
+    bad.append(edges.first());
+    rejected(bad, "Invalid or multiply driven report port");
+    bad = edges;
+    bad.append(QJsonObject{{"from", 8}, {"to", 0}, {"input", 1}});
+    rejected(bad, "The report graph contains a cycle");
+}
+
+void Test::overviewKeepsModelOrder()
+{
+    QJsonArray nodes{
+        QJsonObject{{"kind", "input"}, {"label", "source_a"}},
+        QJsonObject{{"kind", "input"}, {"label", "source_b"}}};
+    QJsonArray    edges;
+    QList<QSizeF> sizes{{96, 32}, {96, 32}};
+    for (int i = 0; i < 8; ++i) {
+        nodes.append(
+            QJsonObject{{"kind", "overview"}, {"label", QString("target_%1").arg(i)}, {"inputs", 2}});
+        sizes.append({160, 44});
+    }
+    for (int i = 7; i >= 0; --i) {
+        edges.append(QJsonObject{{"from", 0}, {"to", i + 2}, {"input", 0}});
+        edges.append(QJsonObject{{"from", 1}, {"to", i + 2}, {"input", 1}});
+    }
+    const auto result = QSocReportLayout::layout(
+        QJsonObject{{"nodes", nodes}, {"edges", edges}, {"overview", true}}, sizes);
+    QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+    for (int i = 3; i < result.nodes.size(); ++i)
+        QVERIFY(result.nodes[i].box.top() > result.nodes[i - 1].box.bottom());
 }
 
 void Test::largeControllers_data()
@@ -504,6 +645,21 @@ void Test::largeControllers()
     QVERIFY(pdf.startsWith("%PDF-"));
     QVERIFY2(html.size() < 20 * 1024 * 1024, "A bounded report must not serialize a dense poster map");
     verifySheetNavigation(QString::fromUtf8(html), fanIn ? 1 : scale, fanIn);
+    const int overviewStart = html.indexOf("<h3>Connectivity overview</h3>");
+    const int overviewEnd
+        = html.indexOf("<p>" + QByteArray::number(fanIn ? 1 : scale) + " targets /", overviewStart);
+    QVERIFY(overviewStart >= 0);
+    QVERIFY(overviewEnd > overviewStart);
+    const auto overview = html.mid(overviewStart, overviewEnd - overviewStart);
+    const int  count    = fanIn ? 1 : scale;
+    for (int i = 0; i < count; ++i) {
+        const auto target
+            = QString("%1_%2").arg(kind == "power" ? "domain" : "target").arg(i, 3, 10, QChar('0'));
+        QVERIFY2(overview.contains(target.toUtf8()), qPrintable(target));
+    }
+    QVERIFY(overview.contains("Processing and control pins"));
+    if (kind == "power")
+        QVERIFY(html.contains("{target}"));
     if (fanIn) {
         const auto end   = html.indexOf("<section id=\"paths\">");
         const auto paths = html.mid(end, html.indexOf("<section id=\"parameters\">", end) - end);
@@ -544,6 +700,8 @@ void Test::largeControllers()
     }
     QVERIFY(!reader.hasError());
     QVERIFY(pages > 10);
+    QVERIFY2(pages <= scale, qPrintable(QString("%1 pages for %2 signals").arg(pages).arg(scale)));
+    verifyPagePreview(html, pages);
 }
 
 void Test::htmlSignalContinuations()
@@ -599,6 +757,14 @@ target:
     const QString rtl = generator.generateControllerVerilog(config);
     QVERIFY(rtl.contains("qsoc_rst_sync"));
     QVERIFY(!rtl.contains("qsoc_rst_pipe"));
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_polarity_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(
+        QSocPrimitiveReport::stage(directory.path(), "resets", QSocPrimitiveReport::reset(config)));
+    QSocPrimitiveReport::render(directory.path());
+    const auto html = read(directory.filePath("resets.html"));
+    QVERIFY(html.contains(">active high</text>"));
+    QVERIFY(html.contains(">active low</text>"));
 }
 
 void Test::powerDomainKinds()
@@ -629,6 +795,136 @@ domain:
     QCOMPARE(ignored["merge"].toObject()["kind"].toString(), "power");
     QCOMPARE(ignored["branches"].toArray().first().toObject()["source"].toString(), "en_ignored");
     QVERIFY(QJsonDocument(ignored).toJson().contains("Ignored dependency"));
+}
+
+void Test::sharedParametersRetainFullTargetNames_data()
+{
+    QTest::addColumn<int>("count");
+    QTest::newRow("small") << 2;
+    QTest::newRow("compact") << 8;
+}
+
+void Test::sharedParametersRetainFullTargetNames()
+{
+    QFETCH(int, count);
+    const QString extractor = QStandardPaths::findExecutable("pdftotext");
+    if (extractor.isEmpty())
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("pdftotext"));
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_identity_XXXXXX");
+    QVERIFY(directory.isValid());
+    QSocClockPrimitive::ClockControllerConfig config;
+    config.moduleName = "clocks";
+    QSocClockPrimitive::ClockInput source;
+    source.name = "osc";
+    source.freq = "24MHz";
+    config.inputs.append(source);
+    QStringList names;
+    for (int i = 0; i < count; ++i) {
+        QSocClockPrimitive::ClockTarget target;
+        target.name = "clock_branch_with_a_long_hierarchical_name_" + QString(64, 'x')
+                      + QString::number(i);
+        QSocClockPrimitive::ClockLink link;
+        link.source = source.name;
+        target.links.append(link);
+        config.targets.append(target);
+        names.append(target.name);
+    }
+    QVERIFY(
+        QSocPrimitiveReport::stage(directory.path(), "clocks", QSocPrimitiveReport::clock(config)));
+    QSocPrimitiveReport::render(directory.path());
+    QProcess process;
+    process.start(extractor, {"-raw", directory.filePath("clocks.pdf"), "-"});
+    QVERIFY(process.waitForFinished(30000));
+    QCOMPARE(process.exitCode(), 0);
+    QString output = QString::fromUtf8(process.readAllStandardOutput());
+    output.remove(QRegularExpression(QStringLiteral("\\s+")));
+    for (const auto &name : names)
+        QVERIFY2(output.contains(name), qPrintable(name));
+}
+
+void Test::parameterDefaultsKeepOverrides()
+{
+    YAML::Node config;
+    config["name"]       = "power";
+    config["host_clock"] = "clk_ao";
+    config["host_reset"] = "rst_ao_n";
+    for (int i = 0; i < 8; ++i) {
+        YAML::Node domain;
+        domain["name"] = QString("domain_%1").arg(i, 3, 10, QChar('0')).toStdString();
+        domain["v_mv"] = 800 + 100 * (i % 4);
+        if (i > 0) {
+            YAML::Node dependency;
+            dependency["name"] = "domain_000";
+            dependency["type"] = "hard";
+            domain["depend"].push_back(dependency);
+        }
+        config["domain"].push_back(domain);
+    }
+    QSocPowerPrimitive generator;
+    const auto         parsed = generator.parsePowerConfig(config);
+    QVERIFY(parsed.valid);
+    auto report = QSocPrimitiveReport::power(parsed);
+    auto panels = report["panels"].toArray();
+    for (int i = 0; i < panels.size(); ++i) {
+        auto panel   = panels[i].toObject();
+        auto details = panel["details"].toArray();
+        if (i + 1 < panels.size())
+            details.append(QJsonObject{{"name", "Partial field"}, {"value", "same"}});
+        details.append(QJsonObject{{"name", "Repeated field"}, {"value", "same"}});
+        if (i + 2 == panels.size())
+            details.append(QJsonObject{{"name", "Repeated field"}, {"value", "second"}});
+        panel["details"] = details;
+        panels[i]        = panel;
+    }
+    report["panels"] = panels;
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_defaults_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(QSocPrimitiveReport::stage(directory.path(), "power", report));
+    QSocPrimitiveReport::render(directory.path());
+    const QString html       = QString::fromUtf8(read(directory.filePath("power.html")));
+    const QString parameters = html.mid(html.indexOf("<section id=\"parameters\">"));
+    const QString common     = parameters.left(parameters.indexOf("</details>"));
+    const auto    rows       = [](const QString &body) {
+        QMap<QString, QString>   result;
+        const QRegularExpression pattern(R"re(<th scope="row">([^<]+)</th><td>([^<]*)</td>)re");
+        auto                     matches = pattern.globalMatch(body);
+        while (matches.hasNext()) {
+            const auto       match = matches.next();
+            QXmlStreamReader value("<value>" + match.captured(2) + "</value>");
+            if (value.readNextStartElement())
+                result.insert(match.captured(1), value.readElementText());
+        }
+        return result;
+    };
+    const auto defaults = rows(common);
+    QVERIFY(common.contains("Target defaults"));
+    QVERIFY(common.contains("Per-target rows override these defaults."));
+    QCOMPARE(defaults.value("Control enable"), "en_{target}");
+    QCOMPARE(defaults.value("Fault clear"), "clr_{target}");
+    QVERIFY(!defaults.contains("Voltage"));
+    QVERIFY(!defaults.contains("Partial field"));
+    QVERIFY(!defaults.contains("Repeated field"));
+    QCOMPARE(parameters.count("<th scope=\"row\">Voltage</th>"), 8);
+    QCOMPARE(parameters.count("<th scope=\"row\">Partial field</th>"), 7);
+    QCOMPARE(parameters.count("<th scope=\"row\">Repeated field</th>"), 9);
+    const QRegularExpression
+               ao(R"re(<summary>3\.\d+ domain_000</summary>(.*?)</details>)re",
+                  QRegularExpression::DotMatchesEverythingOption);
+    const auto exception = rows(ao.match(parameters).captured(1));
+    QCOMPARE(exception.value("Control enable"), "1'b1");
+    QCOMPARE(exception.value("Fault clear"), "1'b0");
+    QVERIFY(!exception.value("Outputs").contains("sw_domain_000"));
+    for (int i = 0; i < panels.size(); ++i) {
+        const auto panel    = panels[i].toObject();
+        QString    expanded = i == 0 ? exception.value("Outputs") : defaults.value("Outputs");
+        expanded.replace("{target}", panel["title"].toString());
+        QString expected;
+        for (const auto &row : panel["details"].toArray()) {
+            if (row.toObject()["name"] == "Outputs")
+                expected = row.toObject()["value"].toString();
+        }
+        QCOMPARE(expanded, expected);
+    }
 }
 
 void Test::headlessExportAndEscaping()
@@ -669,9 +965,10 @@ void Test::headlessExportAndEscaping()
     const auto scriptHash = QCryptographicHash::hash(script, QCryptographicHash::Sha256).toBase64();
     QVERIFY(html.contains("script-src 'sha256-" + scriptHash + "'"));
     QVERIFY(!html.contains("script-src 'unsafe-inline'"));
-    QVERIFY(html.contains(".pdf\" target=\"_blank\" rel=\"noopener\">Vector PDF"));
-    QVERIFY(html.contains("\" target=\"_blank\" rel=\"noopener\">Open PDF"));
-    QCOMPARE(html.count("target=\"_blank\" rel=\"noopener\""), html.count(">Open PDF</a>") + 1);
+    QVERIFY(html.contains(".pdf\" target=\"_blank\" rel=\"noopener\">Download PDF"));
+    QVERIFY(html.contains("href=\"#document-preview\" data-document-page=\""));
+    QVERIFY(html.contains("Complete document preview"));
+    QCOMPARE(html.count("target=\"_blank\" rel=\"noopener\""), 1);
     QVERIFY(html.contains(QString::fromUtf8("时钟与复位").toUtf8()));
     QVERIFY(html.contains("Input 12 source"));
     QVERIFY(html.contains(target.name.toUtf8()));
@@ -680,7 +977,9 @@ void Test::headlessExportAndEscaping()
     QCOMPARE(paths.count("<svg"), 4);
     QVERIFY(!html.contains(">G01</text>"));
     QVERIFY(html.contains("<details class=\"parameters\""));
-    QVERIFY(!html.contains("<details open"));
+    const auto parameterStart = html.indexOf("<section id=\"parameters\">");
+    QVERIFY(parameterStart >= 0);
+    QVERIFY(!html.mid(parameterStart).contains("<details open"));
     QVERIFY(html.contains("<text"));
     QVERIFY(!html.contains("<image"));
     QVERIFY(html.contains("Content-Security-Policy"));

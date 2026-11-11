@@ -106,7 +106,7 @@ QRectF body(const Node &node)
     const qreal margin
         = qMax<qreal>(0, (node.box.width() - node.data["bodyWidth"].toDouble(node.box.width())) / 2);
     const auto box = node.box.adjusted(margin, 0, -margin, 0);
-    if (kind == "input" || kind == "output" || kind == "net")
+    if (kind == "input" || kind == "output" || kind == "net" || kind == "overview")
         return box;
     if (kind == "mux")
         return node.data["test"].toBool() ? box.adjusted(0, 8, 0, -28)
@@ -135,6 +135,53 @@ QPointF port(const Node &node, bool input, int index)
     return {input ? node.box.left() : node.box.right(), y};
 }
 
+QString validateGraph(const QJsonObject &graph, const QList<QSizeF> &sizes)
+{
+    const auto nodes = graph["nodes"].toArray(), edges = graph["edges"].toArray();
+    const int  count = nodes.size();
+    if (count == 0 || count != sizes.size() || count > 4096 || edges.size() > 8192)
+        return QStringLiteral("Invalid or oversized report graph");
+    for (const auto &size : sizes) {
+        if (!std::isfinite(size.width()) || !std::isfinite(size.height()) || size.width() <= 0
+            || size.height() <= 0)
+            return QStringLiteral("Invalid report symbol size");
+    }
+    QList<QList<int>>     outgoing(count);
+    QList<int>            degree(count), queue;
+    QSet<QPair<int, int>> sinks;
+    for (const auto &value : edges) {
+        const auto edge = value.toObject();
+        const int  from = edge["from"].toInt(-1), to = edge["to"].toInt(-1);
+        if (from < 0 || from >= count || to < 0 || to >= count)
+            return QStringLiteral("Invalid report connection");
+        const int input = edge["input"].toInt(), output = edge["output"].toInt();
+        if (input < 0 || output < 0 || nodes[to].toObject()["kind"] == "input"
+            || nodes[from].toObject()["kind"] == "output"
+            || input >= qMax(1, nodes[to].toObject()["inputs"].toInt(1))
+            || output >= qMax(1, nodes[from].toObject()["outputs"].toInt(1))
+            || sinks.contains({to, input}))
+            return QStringLiteral("Invalid or multiply driven report port");
+        sinks.insert({to, input});
+        outgoing[from].append(to);
+        ++degree[to];
+    }
+    if (!graph["power"].toBool()) {
+        for (int i = 0; i < count; ++i) {
+            if (degree[i] == 0)
+                queue.append(i);
+        }
+        for (int i = 0; i < queue.size(); ++i) {
+            for (const int next : outgoing[queue[i]]) {
+                if (--degree[next] == 0)
+                    queue.append(next);
+            }
+        }
+        if (queue.size() != count)
+            return QStringLiteral("The report graph contains a cycle");
+    }
+    return {};
+}
+
 Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engine)
 {
     Result     result;
@@ -142,18 +189,13 @@ Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engi
         result.error = message;
         return result;
     };
+    result.error = validateGraph(graph, sizes);
+    if (!result.error.isEmpty())
+        return result;
     const auto data = graph["nodes"].toArray(), links = graph["edges"].toArray();
     const int  count = data.size();
-    if (count == 0 || count != sizes.size() || count > 4096 || links.size() > 8192)
-        return fail("Invalid or oversized report graph");
-    QJsonArray            nodes, edges;
-    QList<QList<int>>     outgoing(count);
-    QList<int>            degree(count), queue;
-    QSet<QPair<int, int>> sinks;
+    QJsonArray nodes, edges;
     for (int i = 0; i < count; ++i) {
-        if (!std::isfinite(sizes[i].width()) || !std::isfinite(sizes[i].height())
-            || sizes[i].width() <= 0 || sizes[i].height() <= 0)
-            return fail("Invalid report symbol size");
         const Node node{data[i].toObject(), QRectF(QPointF(), sizes[i])};
         result.nodes.append(node);
         QJsonArray pins;
@@ -184,38 +226,13 @@ Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engi
     for (int i = 0; i < links.size(); ++i) {
         const auto value = links[i].toObject();
         const int  from = value["from"].toInt(-1), to = value["to"].toInt(-1);
-        if (from < 0 || from >= count || to < 0 || to >= count)
-            return fail("Invalid report connection");
-        const int input = value["input"].toInt(), output = value["output"].toInt();
-        if (input < 0 || output < 0 || result.nodes[to].data["kind"] == "input"
-            || result.nodes[from].data["kind"] == "output"
-            || input >= qMax(1, data[to].toObject()["inputs"].toInt(1))
-            || output >= qMax(1, data[from].toObject()["outputs"].toInt(1))
-            || sinks.contains({to, input}))
-            return fail("Invalid or multiply driven report port");
-        sinks.insert({to, input});
+        const int  input = value["input"].toInt(), output = value["output"].toInt();
         result.edges.append({from, to, input, output, value["style"].toString(), {}});
-        outgoing[from].append(to);
-        ++degree[to];
         edges.append(
             QJsonObject{
                 {"id", QString("e%1").arg(i)},
                 {"sources", QJsonArray{QString("n%1:o%2").arg(from).arg(output)}},
                 {"targets", QJsonArray{QString("n%1:i%2").arg(to).arg(input)}}});
-    }
-    if (!graph["power"].toBool()) {
-        for (int i = 0; i < count; ++i) {
-            if (degree[i] == 0)
-                queue.append(i);
-        }
-        for (int i = 0; i < queue.size(); ++i) {
-            for (const int next : outgoing[queue[i]]) {
-                if (--degree[next] == 0)
-                    queue.append(next);
-            }
-        }
-        if (queue.size() != count)
-            return fail("The report graph contains a cycle");
     }
     QJsonObject request{
         {"id", "report"},
@@ -226,11 +243,21 @@ Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engi
              {"elk.algorithm", "layered"},
              {"elk.direction", "RIGHT"},
              {"elk.edgeRouting", "ORTHOGONAL"},
-             {"elk.spacing.nodeNode", 16},
-             {"elk.spacing.edgeNode", 8},
+             {"elk.spacing.nodeNode", graph["overview"].toBool() ? 6 : 16},
+             {"elk.spacing.edgeNode", graph["overview"].toBool() ? 6 : 8},
              {"elk.layered.spacing.nodeNodeBetweenLayers", 20},
              {"elk.layered.considerModelOrder.strategy", "NODES_AND_EDGES"},
              {"elk.randomSeed", 1}}}};
+    if (graph["overview"].toBool()) {
+        auto options = request["layoutOptions"].toObject();
+        options["elk.layered.crossingMinimization.forceNodeModelOrder"] = true;
+        options["elk.layered.considerModelOrder.components"]            = "MODEL_ORDER";
+        options["elk.padding"]                               = "[top=6,left=6,bottom=6,right=6]";
+        options["elk.spacing.edgeEdge"]                      = 6;
+        options["elk.layered.spacing.edgeEdgeBetweenLayers"] = 6;
+        options["elk.layered.spacing.edgeNodeBetweenLayers"] = 6;
+        request["layoutOptions"]                             = options;
+    }
     Engine     local;
     auto      &backend = engine ? *engine : local;
     const auto output  = backend.layout(request, result.error);

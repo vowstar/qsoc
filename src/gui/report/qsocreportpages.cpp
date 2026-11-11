@@ -11,6 +11,7 @@
 
 namespace QSocReportLayout {
 namespace {
+constexpr int overviewChunkSize = 8;
 class Sheets
 {
 public:
@@ -23,11 +24,12 @@ public:
         , group(group)
     {}
 
-    QList<Result> run()
+    QList<Result> run(const Result *initial)
     {
-        auto initial = layout(graph, sizes, &engine);
-        if (!initial.error.isEmpty())
-            return {initial};
+        Result checked;
+        checked.error = validateGraph(graph, sizes);
+        if (!checked.error.isEmpty())
+            return {checked};
         QSet<int> core, connected;
         for (const auto &value : edges) {
             const auto edge = value.toObject();
@@ -38,7 +40,6 @@ public:
             const auto kind = nodes[i].toObject()["kind"].toString();
             if ((kind != "input" && kind != "output") || !connected.contains(i))
                 core.insert(i);
-            initial.nodes[i].data["original"] = i;
         }
         for (const auto &value : edges) {
             const auto edge = value.toObject();
@@ -46,7 +47,22 @@ public:
                 && nodes[edge["to"].toInt()].toObject()["kind"] == "output")
                 core.insert(edge["to"].toInt());
         }
-        partition(core, initial);
+        if (graph["overview"].toBool() && core.size() > overviewChunkSize) {
+            QList<int> ordered(core.begin(), core.end());
+            std::sort(ordered.begin(), ordered.end());
+            for (qsizetype start = 0; start < ordered.size(); start += overviewChunkSize) {
+                const auto      block = ordered.mid(start, overviewChunkSize);
+                const QSet<int> members(block.begin(), block.end());
+                partition(members, subset(members));
+            }
+            return result;
+        }
+        auto drawing = initial ? *initial : layout(graph, sizes, &engine);
+        if (!drawing.error.isEmpty())
+            return {drawing};
+        for (int i = 0; i < nodes.size(); ++i)
+            drawing.nodes[i].data["original"] = i;
+        partition(core, drawing);
         return result;
     }
 
@@ -77,7 +93,13 @@ private:
         QMap<QString, int> ports;
         const auto         continuation = [&](const QJsonObject &edge, bool input) {
             const int     from = edge["from"].toInt(), output = edge["output"].toInt();
-            const QString signal = QString("C%1.%2.%3").arg(group).arg(from).arg(output);
+            const auto    source = nodes[from].toObject();
+            const QString named  = source["kind"] == "overview" ? source["signal"].toString()
+                                   : source["kind"] == "net"    ? source["label"].toString()
+                                                                : QString();
+            const QString signal = named.isEmpty()
+                                       ? QString("C%1.%2.%3").arg(group).arg(from).arg(output)
+                                       : named;
             const QString key    = signal + (input ? ":i" : ":o");
             if (!ports.contains(key)) {
                 ports.insert(key, localNodes.size());
@@ -154,8 +176,12 @@ private:
 } // namespace
 
 QList<Result> paginate(
-    const QJsonObject &graph, const QList<QSizeF> &sizes, Engine &engine, int group)
+    const QJsonObject   &graph,
+    const QList<QSizeF> &sizes,
+    Engine              &engine,
+    int                  group,
+    const Result        *initial)
 {
-    return Sheets(graph, sizes, engine, group).run();
+    return Sheets(graph, sizes, engine, group).run(initial);
 }
 } // namespace QSocReportLayout
