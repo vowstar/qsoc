@@ -141,6 +141,11 @@ behind two URLs is two entries with the same `model`.
 === Per-Model Fields
 <llm-models-registry>
 Every key under an entry is optional except `url`.
+The URL must be an absolute HTTP or HTTPS endpoint. `timeout` and
+`context` must be positive. `max_output_tokens` must be zero or positive.
+Invalid entries are skipped with the entry name and invalid field in the warning.
+If `llm.model` names an unavailable entry, select a valid entry with `/model`.
+qsoc leaves requests disabled until then.
 
 #figure(
   align(center)[#table(

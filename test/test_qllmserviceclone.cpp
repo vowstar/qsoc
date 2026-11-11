@@ -262,6 +262,14 @@ QByteArray dataLine(const json &chunk, bool trailingNewline = true)
     return line;
 }
 
+QByteArray multilineEvent(const json &event, const QByteArray &newline)
+{
+    QByteArray result = "event: message" + newline;
+    for (const auto &line : QByteArray::fromStdString(event.dump(2)).split('\n'))
+        result += "data: " + line + newline;
+    return result + newline;
+}
+
 MockResponse deltaResponse(
     const json &delta, bool includeDone = true, bool trailingNewline = true, bool holdOpen = false)
 {
@@ -1212,6 +1220,169 @@ private slots:
                 {QStringLiteral("No LLM endpoint configured"),
                  QStringLiteral("[HTTP 0] Network reply destroyed")}));
         QVERIFY(events.completed.isEmpty());
+    }
+
+    void multilineSseEvents_data()
+    {
+        QTest::addColumn<bool>("anthropic");
+        QTest::addColumn<QByteArray>("newline");
+        QTest::addColumn<int>("split");
+        QTest::newRow("chat-lf") << false << QByteArray("\n") << 0;
+        QTest::newRow("chat-crlf") << false << QByteArray("\r\n") << 0;
+        QTest::newRow("messages-lf") << true << QByteArray("\n") << 0;
+        QTest::newRow("messages-crlf") << true << QByteArray("\r\n") << 0;
+        QTest::newRow("chat-cr-open") << false << QByteArray("\r") << 2;
+        QTest::newRow("messages-cr-open") << true << QByteArray("\r") << 2;
+        QTest::newRow("chat-mixed") << false << QByteArray("mixed") << 0;
+        QTest::newRow("messages-mixed") << true << QByteArray("mixed") << 0;
+        QTest::newRow("chat-crlf-split") << false << QByteArray("\r\n") << 1;
+        QTest::newRow("messages-crlf-split") << true << QByteArray("\r\n") << 1;
+    }
+
+    void multilineSseEvents()
+    {
+        QFETCH(bool, anthropic);
+        QFETCH(QByteArray, newline);
+        QFETCH(int, split);
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        const std::string text = QStringLiteral("clock α").toStdString();
+        const std::string id   = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        json              events;
+        if (anthropic) {
+            events = json::array(
+                {{{"type", "message_start"}, {"message", {{"usage", {{"input_tokens", 12}}}}}},
+                 {{"type", "content_block_start"},
+                  {"index", 0},
+                  {"content_block", {{"type", "text"}, {"text", ""}}}},
+                 {{"type", "content_block_delta"},
+                  {"index", 0},
+                  {"delta", {{"type", "text_delta"}, {"text", text}}}},
+                 {{"type", "content_block_stop"}, {"index", 0}},
+                 {{"type", "content_block_start"},
+                  {"index", 1},
+                  {"content_block",
+                   {{"type", "tool_use"}, {"id", id}, {"name", "lookup"}, {"input", json::object()}}}},
+                 {{"type", "content_block_delta"},
+                  {"index", 1},
+                  {"delta", {{"type", "input_json_delta"}, {"partial_json", "{\"signal\":"}}}},
+                 {{"type", "content_block_delta"},
+                  {"index", 1},
+                  {"delta", {{"type", "input_json_delta"}, {"partial_json", "\"clk\"}"}}}},
+                 {{"type", "content_block_stop"}, {"index", 1}},
+                 {{"type", "message_delta"},
+                  {"delta", {{"stop_reason", "tool_use"}}},
+                  {"usage", {{"output_tokens", 8}}}},
+                 {{"type", "message_stop"}}});
+        } else {
+            events = json::array(
+                {{{"choices", json::array({{{"delta", {{"content", text}}}}})}},
+                 {{"choices",
+                   json::array(
+                       {{{"delta",
+                          {{"tool_calls",
+                            json::array(
+                                {{{"index", 0},
+                                  {"id", id},
+                                  {"type", "function"},
+                                  {"function",
+                                   {{"name", "lookup"}, {"arguments", "{\"signal\":"}}}}})}}}}})}},
+                 {{"choices",
+                   json::array(
+                       {{{"delta",
+                          {{"tool_calls",
+                            json::array(
+                                {{{"index", 0}, {"function", {{"arguments", "\"clk\"}"}}}}})}}},
+                         {"finish_reason", "tool_calls"}}})}},
+                 {{"choices", json::array()},
+                  {"usage", {{"prompt_tokens", 12}, {"completion_tokens", 8}}}}});
+        }
+        const QByteArray separator = newline == "mixed" ? QByteArray("\n") : newline;
+        QByteArray       body      = QByteArray::fromHex("efbbbf") + ": keepalive" + separator;
+        for (const auto &event : events)
+            body += multilineEvent(event, separator);
+        if (!anthropic)
+            body += "data: [DONE]" + separator + separator;
+        if (newline == "mixed") {
+            QByteArray mixed;
+            int        ending = 0;
+            for (const char ch : body) {
+                if (ch != '\n') {
+                    mixed += ch;
+                    continue;
+                }
+                mixed += ending % 3 == 0 ? "\r\n" : ending % 3 == 1 ? "\n" : "\r";
+                ++ending;
+            }
+            body = std::move(mixed);
+        }
+        MockResponse response{QByteArrayLiteral("text/event-stream"), body};
+        response.holdOpen = split == 2;
+        if (split == 1) {
+            const auto textAt    = body.indexOf(QStringLiteral("α").toUtf8());
+            const auto delimiter = body.indexOf("\r\n\r\n", textAt);
+            QVERIFY(delimiter >= 0);
+            response.splitAt = delimiter + 3;
+        } else if (split == 0) {
+            response.splitAt = body.indexOf(QStringLiteral("α").toUtf8()) + 1;
+        }
+        server.enqueue(response);
+        QLLMService service;
+        auto        endpoint = endpointFor(server);
+        endpoint.api         = anthropic ? LLMApi::AnthropicMessages : LLMApi::OpenAIChat;
+        service.setModel(endpoint);
+        StreamEvents output;
+        recordStreamEvents(&service, &output);
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY(waitUntil([&] { return server.requestCount() == 1; }));
+        if (split != 2) {
+            if (split == 1)
+                QVERIFY(waitUntil(
+                    [&] { return !output.content.isEmpty() || !output.errors.isEmpty(); }));
+            QVERIFY(output.errors.isEmpty());
+            QVERIFY(output.completed.isEmpty());
+            QVERIFY(server.releaseSplit());
+        }
+        QVERIFY(waitUntil([&] { return !output.completed.isEmpty() || !output.errors.isEmpty(); }));
+        QVERIFY2(output.errors.isEmpty(), qPrintable(output.errors.join('\n')));
+        QCOMPARE(output.completed.size(), 1);
+        const auto &message = output.completed.first()["choices"][0]["message"];
+        QCOMPARE(message["content"], json(text));
+        QCOMPARE(message["tool_calls"][0]["id"], json(id));
+        QCOMPARE(message["tool_calls"][0]["function"]["name"], json("lookup"));
+        QCOMPARE(
+            json::parse(message["tool_calls"][0]["function"]["arguments"].get<std::string>()),
+            json({{"signal", "clk"}}));
+        QCOMPARE(output.completed.first()["choices"][0]["finish_reason"], json("tool_calls"));
+        QCOMPARE(output.completed.first()["usage"]["prompt_tokens"], json(12));
+        if (split == 2)
+            QVERIFY(!server.eofSent(0));
+        else
+            QVERIFY(waitForNoReplies(&service));
+    }
+
+    void multilineSseEventLimit()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        json event = {{"choices", json::array({{{"delta", {{"content", "bounded"}}}}})}};
+        for (int i = 0; i < 30; ++i)
+            event["extra" + std::to_string(i)] = std::string(16, 'x');
+        server.enqueue(
+            {QByteArrayLiteral("text/event-stream"), multilineEvent(event, "\n"), 0, true});
+        QLLMService service;
+        auto        endpoint                  = endpointFor(server);
+        endpoint.responseLimits.maxEventBytes = 256;
+        service.setModel(endpoint);
+        StreamEvents output;
+        recordStreamEvents(&service, &output);
+        service.sendChatCompletionStream(json::array(), json::array(), 0.0);
+        QVERIFY(waitUntil([&] { return !output.errors.isEmpty() || !output.completed.isEmpty(); }));
+        QCOMPARE(output.errors.size(), 1);
+        QVERIFY(output.errors.first().contains("event limit"));
+        QVERIFY(output.content.isEmpty());
+        QVERIFY(output.completed.isEmpty());
+        QVERIFY(waitForNoReplies(&service));
     }
 
     void testMalformedStreamFailsAtomically_data()

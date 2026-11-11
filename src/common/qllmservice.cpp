@@ -21,6 +21,7 @@ struct QLLMService::StreamState
     QPointer<QNetworkReply>     reply;
     QPointer<QTimer>            timer;
     QByteArray                  buffer;
+    QByteArray                  eventData;
     QLLMResponseLimits          limits;
     qint64                      receivedBytes = 0;
     QMap<qint64, qint64>        messageArgumentBytes;
@@ -37,6 +38,8 @@ struct QLLMService::StreamState
     bool                        replyFinished      = false;
     bool                        transportFailed    = false;
     bool                        sawAssistantChoice = false;
+    bool                        firstStreamLine    = true;
+    bool                        skipStreamLf       = false;
     json                        usage              = json::object();
     StreamOutcome               outcome            = StreamOutcome::Active;
     QLLMDiagnostics::RequestPtr observation;
@@ -790,6 +793,10 @@ QMap<QString, QString> QLLMService::extractMappingsFromResponse(const LLMRespons
 std::optional<LLMModelConfig> QLLMService::parseModelEntry(const QString &id, const YAML::Node &node)
 {
     try {
+        if (!node.IsMap()) {
+            QSocConsole::warn() << "Skipping model" << id << ": entry must be a mapping";
+            return std::nullopt;
+        }
         LLMModelConfig modelCfg;
         modelCfg.id = id;
         if (node["name"]) {
@@ -896,6 +903,27 @@ std::optional<LLMModelConfig> QLLMService::parseModelEntry(const QString &id, co
             }
         }
 
+        QString    invalid;
+        const QUrl url(modelCfg.url, QUrl::StrictMode);
+        if (!url.isValid() || url.isRelative() || url.host().isEmpty()
+            || (url.scheme() != QStringLiteral("http") && url.scheme() != QStringLiteral("https"))) {
+            invalid = QStringLiteral("url must be an absolute HTTP(S) endpoint");
+        } else if (modelCfg.timeout <= 0) {
+            invalid = QStringLiteral("timeout must be positive");
+        } else if (modelCfg.contextTokens <= 0) {
+            invalid = QStringLiteral("context must be positive");
+        } else if (modelCfg.maxOutputTokens < 0) {
+            invalid = QStringLiteral("max_output_tokens must be zero or positive");
+        } else if (!modelCfg.authHeader.isEmpty()) {
+            static const QRegularExpression headerName(
+                QStringLiteral(R"(\A[!#$%&'*+.^_`|~0-9A-Za-z-]+\z)"));
+            if (!headerName.match(modelCfg.authHeader).hasMatch())
+                invalid = QStringLiteral("auth_header must be an HTTP header name");
+        }
+        if (!invalid.isEmpty()) {
+            QSocConsole::warn() << "Skipping model" << modelCfg.id << ":" << invalid;
+            return std::nullopt;
+        }
         if (modelCfg.name.isEmpty()) {
             modelCfg.name = modelCfg.id;
         }
@@ -938,9 +966,11 @@ void QLLMService::loadConfigSettings()
     if (!defaultModelId.isEmpty() && modelConfigs.contains(defaultModelId)) {
         /* Use model registry */
         setCurrentModel(defaultModelId);
-    } else if (!modelConfigs.isEmpty()) {
-        /* Fall back to first model in registry */
+    } else if (defaultModelId.isEmpty() && !modelConfigs.isEmpty()) {
         setCurrentModel(modelConfigs.firstKey());
+    } else if (!defaultModelId.isEmpty()) {
+        QSocConsole::warn() << "Configured llm.model is unavailable:" << defaultModelId
+                            << "; select a valid entry with /model";
     }
 }
 
@@ -1701,53 +1731,74 @@ void QLLMService::drainStreamReply(const QPointer<QLLMService> &owner, const Str
 QLLMService::ParseResult QLLMService::processStreamBuffer(
     const QPointer<QLLMService> &owner, const StreamStatePtr &state)
 {
+    const auto dispatchEvent = [&]() {
+        QByteArray data = std::move(state->eventData);
+        state->eventData.clear();
+        if (data.endsWith('\n'))
+            data.chop(1);
+        return data.isEmpty() ? ParseResult::NeedMore : parseStreamLine(owner, state, data);
+    };
     while (true) {
         if (!isStreamActive(owner, state)) {
             return ParseResult::Stopped;
         }
-        const qsizetype lineEnd = state->buffer.indexOf('\n');
+        if (state->skipStreamLf && !state->buffer.isEmpty()) {
+            state->skipStreamLf = false;
+            if (state->buffer.front() == '\n')
+                state->buffer.remove(0, 1);
+        }
+        qsizetype       lineEnd        = state->buffer.indexOf('\n');
+        const qsizetype carriageReturn = state->buffer.indexOf('\r');
+        if (carriageReturn >= 0 && (lineEnd < 0 || carriageReturn < lineEnd))
+            lineEnd = carriageReturn;
         if (lineEnd == -1) {
             if (state->buffer.size() > state->limits.maxEventBytes) {
                 state->terminalError = QStringLiteral("LLM response event limit exceeded");
                 return ParseResult::ProviderError;
             }
-            return state->transportFailed ? ParseResult::TransportError : ParseResult::NeedMore;
+            if (state->transportFailed)
+                return ParseResult::TransportError;
+            return state->replyFinished ? dispatchEvent() : ParseResult::NeedMore;
         }
 
         if (lineEnd > state->limits.maxEventBytes) {
             state->terminalError = QStringLiteral("LLM response event limit exceeded");
             return ParseResult::ProviderError;
         }
-        QByteArray rawLine = state->buffer.left(lineEnd);
-        state->buffer      = state->buffer.mid(lineEnd + 1);
-        if (rawLine.endsWith('\r')) {
-            rawLine.chop(1);
+        state->skipStreamLf = state->buffer.at(lineEnd) == '\r';
+        QByteArray rawLine  = state->buffer.left(lineEnd);
+        state->buffer       = state->buffer.mid(lineEnd + 1);
+        if (state->firstStreamLine) {
+            state->firstStreamLine = false;
+            if (rawLine.startsWith(QByteArray::fromHex("efbbbf")))
+                rawLine.remove(0, 3);
         }
-        if (rawLine.isEmpty() || rawLine.startsWith(':')) {
+        if (rawLine.isEmpty()) {
+            const ParseResult result = dispatchEvent();
+            if (result != ParseResult::NeedMore)
+                return result;
             continue;
         }
+        if (rawLine.startsWith(':'))
+            continue;
 
         const qsizetype  separator = rawLine.indexOf(':');
         const QByteArray field     = separator < 0 ? rawLine : rawLine.left(separator);
         if (field != QByteArrayLiteral("data")) {
-            if (state->transportFailed) {
+            if (state->transportFailed)
                 state->terminalError += "\n" + QString::fromUtf8(rawLine);
-            }
             continue;
         }
 
         QByteArray data = separator < 0 ? QByteArray() : rawLine.mid(separator + 1);
-        if (data.startsWith(' ')) {
+        if (data.startsWith(' '))
             data.remove(0, 1);
+        if (data.size() > state->limits.maxEventBytes - state->eventData.size()) {
+            state->terminalError = QStringLiteral("LLM response event limit exceeded");
+            return ParseResult::ProviderError;
         }
-        if (data.isEmpty()) {
-            continue;
-        }
-
-        const ParseResult result = parseStreamLine(owner, state, data);
-        if (result != ParseResult::NeedMore) {
-            return result;
-        }
+        state->eventData += data;
+        state->eventData += '\n';
     }
 }
 

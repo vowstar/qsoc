@@ -304,6 +304,73 @@ private slots:
         }
     }
 
+    void invalidModelConfiguration_data()
+    {
+        QTest::addColumn<QByteArray>("entry");
+        QTest::newRow("missing-url") << QByteArray("{}");
+        QTest::newRow("not-a-mapping") << QByteArray("invalid");
+        QTest::newRow("relative-url") << QByteArray("url: /v1/messages");
+        QTest::newRow("unsupported-scheme") << QByteArray("url: ftp://example.invalid/model");
+        QTest::newRow("missing-host") << QByteArray("url: https:///v1/messages");
+        QTest::newRow("zero-timeout")
+            << QByteArray("url: https://example.invalid/model\ntimeout: 0");
+        QTest::newRow("negative-timeout")
+            << QByteArray("url: https://example.invalid/model\ntimeout: -1");
+        QTest::newRow("zero-context")
+            << QByteArray("url: https://example.invalid/model\ncontext: 0");
+        QTest::newRow("negative-output")
+            << QByteArray("url: https://example.invalid/model\nmax_output_tokens: -1");
+        QTest::newRow("header-space")
+            << QByteArray("url: https://example.invalid/model\nauth_header: X Token");
+        QTest::newRow("header-newline") << QByteArray(
+            "url: https://example.invalid/model\nauth_header: \"X-Header\\nAnother\"");
+    }
+
+    void invalidModelConfiguration()
+    {
+        QFETCH(QByteArray, entry);
+        QVERIFY(!QLLMService::parseModelEntry(
+            QStringLiteral("configured"), YAML::Load(entry.constData())));
+    }
+
+    void validCustomModelConfiguration()
+    {
+        YAML::Node entry;
+        entry["url"]         = "http://127.0.0.1:9/custom/inference?deployment=selected";
+        entry["api"]         = "anthropic-messages";
+        entry["model"]       = "user-selected";
+        entry["key"]         = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        entry["auth_header"] = "X-Custom-Token";
+        entry["effort"]      = "high";
+        const auto parsed    = QLLMService::parseModelEntry(QStringLiteral("custom"), entry);
+        QVERIFY(parsed);
+        QCOMPARE(parsed->url, QString::fromStdString(entry["url"].as<std::string>()));
+        QCOMPARE(parsed->model, QStringLiteral("user-selected"));
+        QCOMPARE(parsed->authHeader, QStringLiteral("X-Custom-Token"));
+        QCOMPARE(parsed->effort, QStringLiteral("high"));
+        QCOMPARE(parsed->api, LLMApi::AnthropicMessages);
+    }
+
+    void invalidSelectedModelDoesNotSelectAnother()
+    {
+        CaptureServer server;
+        QVERIFY(server.listen());
+        QByteArray yaml = twoEntriesOneServedModel(server.url());
+        yaml.replace("model: flash-a", "model: misspelled");
+        ScopedConfig scope(yaml);
+        QSocConfig   config;
+        QLLMService  llm(nullptr, &config);
+        QVERIFY(!llm.hasEndpoint());
+        QVERIFY(llm.getCurrentModelId().isEmpty());
+        const json response = llm.sendChatCompletion(json::array(), json::array(), 0.2, {});
+        QVERIFY(response.contains("error"));
+        QCOMPARE(server.requestCount(), 0);
+        QVERIFY(llm.setCurrentModel(QStringLiteral("flash-b")));
+        QVERIFY(llm.sendRequest(QStringLiteral("hi")).success);
+        QCOMPARE(server.requestCount(), 1);
+        QCOMPARE(wireModel(server.request(0)), QStringLiteral("served-model"));
+    }
+
     void keyIsSentWhenModelFieldIsAbsent()
     {
         CaptureServer server;
