@@ -123,12 +123,6 @@ private slots:
      */
     void on_actionPRCEditor_triggered();
 
-    /**
-     * @brief Open PRC editor from toolbar button.
-     * @details Opens the PRC editor when toolbar button is clicked.
-     */
-    void on_toolButtonPRCEditor_clicked();
-
     /* Manual Signal Handlers */
 
     /**

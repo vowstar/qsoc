@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "common/qsocgenerateprimitiveclock.h"
+#include "gui/mainwindow/mainwindow.h"
 #include "gui/prcwindow/prcprimitiveitem.h"
 #include "gui/prcwindow/prcwindow.h"
 
@@ -9,14 +10,18 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <QAction>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QHashFunctions>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QToolButton>
 #include <QtTest>
 
 #include <algorithm>
@@ -24,6 +29,20 @@
 using namespace PrcLibrary;
 
 namespace {
+
+class PrcShowCounter : public QObject
+{
+public:
+    int shows = 0;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::Show && qobject_cast<PrcWindow *>(watched))
+            ++shows;
+        return false;
+    }
+};
 
 class TestPrcNetlist : public QObject
 {
@@ -149,6 +168,58 @@ private:
     }
 
 private slots:
+    void prcToolButtonOpensEditorOnce()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString    previousDirectory  = QDir::currentPath();
+        const QByteArray previousConfig     = qgetenv("XDG_CONFIG_HOME");
+        const QByteArray previousRoot       = qgetenv("QSOC_HOME");
+        const auto       restoreEnvironment = qScopeGuard([&] {
+            QDir::setCurrent(previousDirectory);
+            if (previousConfig.isNull())
+                qunsetenv("XDG_CONFIG_HOME");
+            else
+                qputenv("XDG_CONFIG_HOME", previousConfig);
+            if (previousRoot.isNull())
+                qunsetenv("QSOC_HOME");
+            else
+                qputenv("QSOC_HOME", previousRoot);
+        });
+        qputenv("XDG_CONFIG_HOME", directory.path().toUtf8());
+        qputenv("QSOC_HOME", directory.path().toUtf8());
+        QVERIFY(QDir::setCurrent(directory.path()));
+
+        MainWindow window;
+        auto      *button = window.findChild<QToolButton *>("toolButtonPRCEditor");
+        QVERIFY(button);
+        auto *action = window.findChild<QAction *>("actionPRCEditor");
+        QVERIFY(action);
+        PrcShowCounter counter;
+        qApp->installEventFilter(&counter);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const QString capturePath = qEnvironmentVariable("QSOC_GUI_CAPTURE_DIR");
+        if (!capturePath.isEmpty()) {
+            QVERIFY(QDir().mkpath(capturePath));
+            QVERIFY(window.grab().save(QDir(capturePath).filePath("main-window.png")));
+        }
+
+        action->trigger();
+        auto *editor = window.findChild<PrcWindow *>();
+        QVERIFY(editor);
+        QVERIFY(QTest::qWaitForWindowExposed(editor));
+        QCOMPARE(counter.shows, 1);
+
+        counter.shows = 0;
+        QTest::mouseClick(button, Qt::LeftButton);
+        QVERIFY(QTest::qWaitForWindowExposed(editor));
+        QCOMPARE(counter.shows, 1);
+        QVERIFY(editor->isVisible());
+        if (!capturePath.isEmpty())
+            QVERIFY(editor->grab().save(QDir(capturePath).filePath("prc-editor.png")));
+    }
+
     void exportChild()
     {
         if (qEnvironmentVariable("QSOC_PRC_EXPORT_CHILD") != "1") {

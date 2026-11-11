@@ -70,11 +70,6 @@ void MainWindow::on_actionPRCEditor_triggered()
     openPrcEditor(); // No file path = new untitled file
 }
 
-void MainWindow::on_toolButtonPRCEditor_clicked()
-{
-    openPrcEditor(); // No file path = new untitled file
-}
-
 void MainWindow::on_actionNewProject_triggered()
 {
     /* Show save dialog to get project name and path */

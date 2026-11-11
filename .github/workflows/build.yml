@@ -705,6 +705,21 @@ jobs:
     - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }}
 
+    - name: Native Cocoa PRC launch
+      run: |
+        mkdir -p build/gui-captures
+        cd build
+        QT_QPA_PLATFORM=cocoa QSOC_GUI_CAPTURE_DIR="$PWD/gui-captures" \
+          ./test/test_qsocguiprcnetlist prcToolButtonOpensEditorOnce
+
+    - name: Upload native GUI captures
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: macos-gui-captures
+        path: build/gui-captures/*.png
+        if-no-files-found: warn
+
     - name: Local process contracts
       run: python3 .github/scripts/run-core-tests.py build
 
