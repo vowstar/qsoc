@@ -63,7 +63,6 @@ jobs:
           libxkbcommon-x11-devel \
           mesa-libGL-devel \
           mesa-libGLU-devel \
-          ninja-build \
           patchelf \
           python39 \
           python39-pip \
@@ -92,9 +91,9 @@ jobs:
         tar -xJf qsoc-*.tar.xz -C "$GITHUB_WORKSPACE" --strip-components=1
         test ! -e "$GITHUB_WORKSPACE/.git"
 
-    - name: Install CMake and Qt
+    - name: Install CMake, Ninja and Qt
       run: |
-        pip3.9 install 'cmake>=3.28' aqtinstall py7zr
+        pip3.9 install 'cmake>=3.28' 'ninja==1.13.2' aqtinstall py7zr
         aqt install-qt linux desktop ${{ env.QT_VERSION }} gcc_64 \
           -m qt5compat -O /opt/qt
 
@@ -105,6 +104,7 @@ jobs:
       run: |
         source /opt/rh/gcc-toolset-13/enable
         cmake -B build -G Ninja \
+          -DCMAKE_MAKE_PROGRAM=/usr/local/bin/ninja \
           -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
           -DCMAKE_INSTALL_PREFIX=/usr \
           -DCMAKE_PREFIX_PATH=/opt/qt/${{ env.QT_VERSION }}/gcc_64 \
