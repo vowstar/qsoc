@@ -47,9 +47,11 @@
 #include "agent/tool/qsoctoolaskuser.h"
 #include "agent/tool/qsoctoolbus.h"
 #include "agent/tool/qsoctooldoc.h"
+#include "agent/tool/qsoctooldocument.h"
 #include "agent/tool/qsoctoolfile.h"
 #include "agent/tool/qsoctoolgenerate.h"
 #include "agent/tool/qsoctoolgoalcomplete.h"
+#include "agent/tool/qsoctoolgrep.h"
 #include "agent/tool/qsoctoolhostcatalog.h"
 #include "agent/tool/qsoctoollsp.h"
 #include "agent/tool/qsoctoolmemory.h"
@@ -67,6 +69,7 @@
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctoolsmt.h"
 #include "agent/tool/qsoctooltodo.h"
+#include "agent/tool/qsoctoolwaveform.h"
 #include "agent/tool/qsoctoolweb.h"
 #include "common/config.h"
 #include "common/qllmservice.h"
@@ -868,6 +871,8 @@ void QSocAgentRuntime::registerTools()
     auto *fileWriteTool = new QSocToolFileWrite(this, d->pathContext);
     auto *fileEditTool  = new QSocToolFileEdit(this, d->pathContext);
     d->toolRegistry->registerTool(fileReadTool);
+    d->toolRegistry->registerTool(new QSocToolDocumentRead(this, d->pathContext, d->llmService));
+    d->toolRegistry->registerTool(new QSocToolWaveformRead(this, d->pathContext));
     d->toolRegistry->registerTool(new QSocToolShowFigure(this, fileReadTool, d->llmService));
     d->toolRegistry->registerTool(fileListTool);
     fileWriteTool->setLspService(d->lspService);
@@ -914,6 +919,7 @@ void QSocAgentRuntime::registerTools()
         const QString path = pm->getProjectPath();
         return path.isEmpty() ? QDir::currentPath() : path;
     });
+    d->toolRegistry->registerTool(new QSocToolGrep(this, d->localFs.get()));
     d->toolRegistry->registerTool(new QSocToolTodoList(this, d->localFs.get()));
     d->toolRegistry->registerTool(new QSocToolTodoAdd(this, d->localFs.get()));
     d->toolRegistry->registerTool(new QSocToolTodoUpdate(this, d->localFs.get()));

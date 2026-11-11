@@ -24,9 +24,17 @@ public:
     QString root() const override;
     QString identity() const override;
     Result  read(const QString &path, QByteArray *bytes, QString *error) override;
-    Result  list(const QString &path, QList<Entry> *entries, QString *error) override;
-    Result  stat(const QString &path, Entry *entry, QString *error) override;
-    bool    write(const QString &path, const QByteArray &bytes, QString *error) override;
+    Result  readLimited(
+        const QString &path, qint64 maxBytes, QByteArray *bytes, QString *error) override;
+    Result list(const QString &path, QList<Entry> *entries, QString *error) override;
+    Result listLimited(
+        const QString &path,
+        int            maxEntries,
+        QList<Entry>  *entries,
+        bool          *truncated,
+        QString       *error) override;
+    Result stat(const QString &path, Entry *entry, QString *error) override;
+    bool   write(const QString &path, const QByteArray &bytes, QString *error) override;
 
 private:
     /* The absolute remote path, or empty with @p error set. */

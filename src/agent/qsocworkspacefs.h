@@ -34,6 +34,7 @@ public:
         QString name;
         bool    regular = false; /**< A regular file, possibly behind a link. */
         qint64  size    = -1;
+        bool    symlink = false;
     };
 
     QSocWorkspaceFs();
@@ -44,9 +45,15 @@ public:
     virtual QString root() const = 0;
     virtual QString identity() const { return root(); }
 
-    virtual Result read(const QString &path, QByteArray *bytes, QString *error)     = 0;
+    virtual Result read(const QString &path, QByteArray *bytes, QString *error) = 0;
+    /** @brief Read a complete regular file without retaining more than maxBytes + 1. */
+    virtual Result readLimited(
+        const QString &path, qint64 maxBytes, QByteArray *bytes, QString *error);
     virtual Result list(const QString &path, QList<Entry> *entries, QString *error) = 0;
-    virtual Result stat(const QString &path, Entry *entry, QString *error)          = 0;
+    /** @brief Enumerate at most maxEntries and report whether more entries remain. */
+    virtual Result listLimited(
+        const QString &path, int maxEntries, QList<Entry> *entries, bool *truncated, QString *error);
+    virtual Result stat(const QString &path, Entry *entry, QString *error) = 0;
 
     /** @brief Replace a file, creating its parent directories. */
     virtual bool write(const QString &path, const QByteArray &bytes, QString *error) = 0;
@@ -73,9 +80,17 @@ public:
 
     QString root() const override;
     Result  read(const QString &path, QByteArray *bytes, QString *error) override;
-    Result  list(const QString &path, QList<Entry> *entries, QString *error) override;
-    Result  stat(const QString &path, Entry *entry, QString *error) override;
-    bool    write(const QString &path, const QByteArray &bytes, QString *error) override;
+    Result  readLimited(
+        const QString &path, qint64 maxBytes, QByteArray *bytes, QString *error) override;
+    Result list(const QString &path, QList<Entry> *entries, QString *error) override;
+    Result listLimited(
+        const QString &path,
+        int            maxEntries,
+        QList<Entry>  *entries,
+        bool          *truncated,
+        QString       *error) override;
+    Result stat(const QString &path, Entry *entry, QString *error) override;
+    bool   write(const QString &path, const QByteArray &bytes, QString *error) override;
 
 private:
     QString absolute(const QString &path, QString *error) const;

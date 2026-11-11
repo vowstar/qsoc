@@ -102,6 +102,35 @@ QSocWorkspaceFs::Result QSocRemoteWorkspaceFs::read(
     }
 }
 
+QSocWorkspaceFs::Result QSocRemoteWorkspaceFs::readLimited(
+    const QString &path, qint64 maxBytes, QByteArray *bytes, QString *error)
+{
+    bytes->clear();
+    if (maxBytes < 0 || maxBytes > 64 * 1024 * 1024) {
+        setError(error, QStringLiteral("invalid read byte limit"));
+        return Result::Failed;
+    }
+    QString      target;
+    const Result where = resolveInside(path, &target, error);
+    if (where != Result::Ok)
+        return where;
+    QSocSftpClient::LinkStat info;
+    if (m_conn->sftp()->linkStat(target, &info, error) != QSocSftpClient::Presence::Present
+        || !info.regular) {
+        setError(error, QStringLiteral("path is not a regular file"));
+        return Result::Failed;
+    }
+    QString readError;
+    *bytes = m_conn->sftp()->readFile(target, maxBytes + 1, &readError);
+    if (!readError.isEmpty() || bytes->size() > maxBytes) {
+        bytes->clear();
+        setError(
+            error, readError.isEmpty() ? QStringLiteral("file exceeds the byte limit") : readError);
+        return Result::Failed;
+    }
+    return Result::Ok;
+}
+
 QSocWorkspaceFs::Result QSocRemoteWorkspaceFs::list(
     const QString &path, QList<Entry> *entries, QString *error)
 {
@@ -119,9 +148,38 @@ QSocWorkspaceFs::Result QSocRemoteWorkspaceFs::list(
     entries->clear();
     for (const auto &item : listed) {
         if (item.name != QStringLiteral(".") && item.name != QStringLiteral("..")) {
-            entries->append({item.name, !item.isDirectory && !item.isSymlink, item.size});
+            entries->append(
+                {item.name, !item.isDirectory && !item.isSymlink, item.size, item.isSymlink});
         }
     }
+    return Result::Ok;
+}
+
+QSocWorkspaceFs::Result QSocRemoteWorkspaceFs::listLimited(
+    const QString &path, int maxEntries, QList<Entry> *entries, bool *truncated, QString *error)
+{
+    entries->clear();
+    *truncated = false;
+    if (maxEntries < 0 || maxEntries > 10000) {
+        setError(error, QStringLiteral("invalid directory entry limit"));
+        return Result::Failed;
+    }
+    QString      directory;
+    const Result where = resolveInside(path, &directory, error);
+    if (where != Result::Ok)
+        return where;
+    QString readError;
+    auto    listed = m_conn->sftp()->listDir(directory, maxEntries + 1, &readError);
+    if (!readError.isEmpty()) {
+        setError(error, readError);
+        return Result::Failed;
+    }
+    *truncated = listed.size() > maxEntries;
+    if (*truncated)
+        listed.resize(maxEntries);
+    for (const auto &item : listed)
+        entries->append(
+            {item.name, !item.isDirectory && !item.isSymlink, item.size, item.isSymlink});
     return Result::Ok;
 }
 

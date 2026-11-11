@@ -87,7 +87,8 @@ bool localOnly(const QString &name)
         if (name.startsWith(QLatin1String(family)))
             return true;
     }
-    return name == QStringLiteral("lsp");
+    return name == QStringLiteral("lsp") || name == QStringLiteral("read_document")
+           || name == QStringLiteral("read_waveform");
 }
 
 /* Workspace tools a host without a usable shell does not get. */
@@ -295,11 +296,11 @@ private slots:
                 continue;
             QSocTool *resolved = remote->getTool(name);
             QVERIFY2(resolved != local->getTool(name), qPrintable(name));
-            if (execTool(name)) {
+            if (execTool(name) || localOnly(name)) {
                 QVERIFY2(resolved == nullptr, qPrintable(name));
                 continue;
             }
-            QVERIFY2(localOnly(name) || resolved != nullptr, qPrintable(name));
+            QVERIFY2(resolved != nullptr, qPrintable(name));
         }
         for (const QString &name : remote->toolNames()) {
             if (remote->getTool(name) != local->getTool(name))

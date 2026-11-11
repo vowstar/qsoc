@@ -164,24 +164,10 @@ namespace {
 
 /* A trailing underscore names a whole family. */
 constexpr const char *kWorkspaceBound[] = {
-    "show_figure",
-    "read_file",
-    "list_files",
-    "write_file",
-    "edit_file",
-    "bash",
-    "bash_manage",
-    "path_context",
-    "monitor",
-    "monitor_stop",
-    "lsp",
-    "todo_",
-    "skill_",
-    "project_",
-    "module_",
-    "bus_",
-    "generate_",
-    "schematic_",
+    "grep",         "show_figure", "read_file",  "read_document", "read_waveform", "list_files",
+    "write_file",   "edit_file",   "bash",       "bash_manage",   "path_context",  "monitor",
+    "monitor_stop", "lsp",         "todo_",      "skill_",        "project_",      "module_",
+    "bus_",         "generate_",   "schematic_",
 };
 
 } // namespace

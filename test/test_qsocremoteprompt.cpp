@@ -134,6 +134,37 @@ class Test : public QObject
     Q_OBJECT
 
 private slots:
+    void readerGuidanceFollowsAllowedTools()
+    {
+        Workspace workspace({QStringLiteral("read_document"), QStringLiteral("read_waveform")}, {});
+        QSocAgentConfig config;
+        config.autoLoadMemory = false;
+        QSocAgent agent(nullptr, nullptr, &workspace.local, config);
+        auto      prompt = agent.buildSystemPromptWithMemory();
+        QVERIFY(prompt.contains(QStringLiteral("Use read_document for PDF")));
+        QVERIFY(prompt.contains(QStringLiteral("Use read_waveform for VCD")));
+        config.toolsAllow = {QStringLiteral("read_document")};
+        agent.setConfig(config);
+        prompt = agent.buildSystemPromptWithMemory();
+        QVERIFY(prompt.contains(QStringLiteral("Use read_document for PDF")));
+        QVERIFY(!prompt.contains(QStringLiteral("Use read_waveform for VCD")));
+        config.toolsDeny = {QStringLiteral("read_document")};
+        agent.setConfig(config);
+        prompt = agent.buildSystemPromptWithMemory();
+        QVERIFY(!prompt.contains(QStringLiteral("Use read_document for PDF")));
+        QVERIFY(!prompt.contains(QStringLiteral("Use read_waveform for VCD")));
+    }
+
+    void remoteReaderGuidanceDoesNotUseLocalFallback()
+    {
+        Workspace workspace({QStringLiteral("read_document"), QStringLiteral("read_waveform")}, {});
+        const auto prompt = promptFor(&workspace.remote);
+        QVERIFY(workspace.remote.getTool(QStringLiteral("read_document")) == nullptr);
+        QVERIFY(workspace.remote.getTool(QStringLiteral("read_waveform")) == nullptr);
+        QVERIFY(!prompt.contains(QStringLiteral("Use read_document for PDF")));
+        QVERIFY(!prompt.contains(QStringLiteral("Use read_waveform for VCD")));
+    }
+
     /* Counterexample: the remote section claimed path_context, todo tools,
      * project skills and skill creation in a workspace that had none. */
     void theRemoteSectionNamesOnlyToolsThatExist()

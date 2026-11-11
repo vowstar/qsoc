@@ -2441,12 +2441,15 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
 
         QList<AttachmentSpec> attachments;
         /* These tools relay outside text, which can imitate an attachment marker. */
-        const bool    relaysText = functionName == QStringLiteral("tool_output_read")
-                                   || functionName == QStringLiteral("bash")
-                                   || functionName == QStringLiteral("bash_manage");
-        const QString result     = relaysText ? rawResult
-                                              : extractImageAttachments(rawResult, &attachments);
-        const json    figures    = owner->saveFigures(&attachments);
+        const bool relaysText = functionName == QStringLiteral("tool_output_read")
+                                || functionName == QStringLiteral("grep")
+                                || functionName == QStringLiteral("bash")
+                                || functionName == QStringLiteral("bash_manage");
+        const auto outcome = run->executingToolStatus.value_or(QSocTool::classifyResult(rawResult));
+        const QString result           = relaysText || outcome != QSocToolResultStatus::Ok
+                                             ? rawResult
+                                             : extractImageAttachments(rawResult, &attachments);
+        const json    figures          = owner->saveFigures(&attachments);
         const QString attachmentNotice = queueToolAttachments(attachments);
         const QString historyResult
             = run->stop.load() == StopMode::None
@@ -2993,10 +2996,11 @@ QString QSocAgent::buildIdentitySystemPrompt() const
     /* Section 5: Using tools */
     prompt += QStringLiteral(
         "\n# Using your tools\n"
-        "- Use dedicated tools (file_read, file_write, file_edit, grep, glob) instead "
-        "of shell equivalents when available — they are more reliable and reviewable.\n"
+        "- Use dedicated tools (read_file, write_file, edit_file, grep, list_files) instead "
+        "of shell equivalents when available, they are more reliable and reviewable.\n"
         "- Break down complex work with todo_add / todo_update to track progress.\n"
-        "- For SoC infrastructure: query_docs → file_write .soc_net → generate_verilog.\n"
+        "- For SoC infrastructure: call query_docs, write .soc_net with write_file, then call "
+        "generate_verilog.\n"
         "- For web research: web_search for discovery, web_fetch for content retrieval.\n"
         "- Use monitor proactively when the user asks to watch, monitor, tail, poll, "
         "wait for a status change, react to log lines, or keep an eye on a long-running "
@@ -3237,6 +3241,17 @@ QString QSocAgent::projectInstructionsSection() const
 
 void QSocAgent::appendDynamicSystemSections(QString &prompt) const
 {
+    const auto available = [this](const QString &name) {
+        return toolRegistry && toolRegistry->getTool(name)
+               && isToolPresented(name, toolRegistry.data());
+    };
+    if (available(QStringLiteral("read_document")))
+        prompt += QStringLiteral(
+            "\nUse read_document for PDF and Office documents, selecting pages or parts as "
+            "needed.\n");
+    if (available(QStringLiteral("read_waveform")))
+        prompt += QStringLiteral("Use read_waveform for VCD signals, values and time windows.\n");
+
     /* Section 8: Environment */
     {
         QString envSection = QStringLiteral("\n# Environment\n");

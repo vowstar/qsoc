@@ -1651,7 +1651,7 @@ private slots:
             AttachmentTool attachment;
             captured   = QStringLiteral("Error: generated failure\n") + tool.value;
             tool.value = captured + attachment.execute({});
-            captured += QStringLiteral("runtime image\n");
+            captured   = tool.value;
         }
         QSocToolOutputRead reader(nullptr);
         QSocToolRegistry   registry;
@@ -1688,8 +1688,10 @@ private slots:
             refs.first().completion,
             sourceKind == 2 ? QStringLiteral("failed") : QStringLiteral("ok"));
         if (sourceKind == 2) {
-            QVERIFY(history[3]["content"].is_array());
-            QCOMPARE(history[3]["content"][1]["type"], json("image_url"));
+            QCOMPARE(history.size(), std::size_t(4));
+            QCOMPARE(history[3]["content"], json("done"));
+            for (const auto &message : history)
+                QVERIFY(message["content"].is_null() || message["content"].is_string());
         }
         QVERIFY(
             QSocRequestUsage::estimateText(

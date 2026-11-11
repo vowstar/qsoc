@@ -114,24 +114,13 @@ QSocToolCatalog::QSocToolCatalog(json allowedDefinitions, const QString &binding
 
 bool QSocToolCatalog::alwaysDirect(const QString &name)
 {
-    static const QSet<QString> names
-        = {"read_file",
-           "show_figure",
-           "write_file",
-           "edit_file",
-           "list_files",
-           "bash",
-           "bash_manage",
-           "path_context",
-           "ask_user",
-           "goal_complete",
-           "enter_plan_mode",
-           "exit_plan_mode",
-           "todo_list",
-           "todo_add",
-           "todo_update",
-           "todo_delete",
-           "tool_output_read"};
+    static const QSet<QString> names = {"grep",          "read_file",       "read_document",
+                                        "read_waveform", "show_figure",     "write_file",
+                                        "edit_file",     "list_files",      "bash",
+                                        "bash_manage",   "path_context",    "ask_user",
+                                        "goal_complete", "enter_plan_mode", "exit_plan_mode",
+                                        "todo_list",     "todo_add",        "todo_update",
+                                        "todo_delete",   "tool_output_read"};
     return names.contains(name);
 }
 

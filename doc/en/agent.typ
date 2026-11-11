@@ -725,12 +725,14 @@ The agent provides the following tools through natural language:
 - *Bus*: `bus_list`, `bus_show`, `bus_import` (AXI, APB, Wishbone, etc.)
 - *Generation*: `generate_verilog` (RTL from `.soc_net`), `generate_template`
   (Jinja2 rendering)
-- *Files*: `read_file`, `list_files`, `write_file`, `edit_file`; `path_context`
+- *Files*: `read_file`, `list_files`, `grep`, `write_file`, `edit_file`; `path_context`
   reports and adjusts allowed write directories. `read_file` returns the requested
   window and streams the full file for a content fingerprint. A successful window
   permits `edit_file`. Overwriting an existing file with `write_file` requires a
   complete read from offset 0. A partial edit keeps that restriction. Both tools
   reject files changed since the read, locally and remotely.
+- *Waveforms*: `read_waveform` lists VCD signals and reads values and edges in a time window. This tool is local-only.
+- *Documents*: `read_document` reads PDF pages, DOCX paragraphs, XLSX cells and PPTX slides with source locations. PDF pages can also be rendered as images. This tool is local-only.
 - *Shell*: `bash` (synchronous, or `background=true` for background jobs),
   `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. Both
   take the same parameters locally and on a remote host: `command`,
@@ -809,6 +811,11 @@ on a remote workspace.
      Sorted, directories end in `/`. A listing cut at `limit` ends with a
      `[truncated: ...]` line. A recursive listing does not follow symbolic
      links],
+    [`grep`],
+    [`pattern`; `path` (workspace-relative, default `.`); `glob`;
+     `literal`; `ignore_case`; `include_hidden`; `context` (0 to 5);
+     `max_results` (default 50, maximum 500).
+     Returns matching paths, line numbers, text and optional context],
     [`write_file`],
     [`file_path`, `content`. Creates missing parent directories],
     [`edit_file`],
@@ -820,7 +827,16 @@ on a remote workspace.
   kind: table,
 )
 
-File tool paths follow one rule on every machine:
+`grep` searches below the bound workspace root and does not follow directory links.
+Hidden entries are excluded unless `include_hidden` is true.
+Each call scans at most 512 files, 10000 entries and 32 MiB.
+A ten-second scan budget is checked between workspace operations.
+Remote I/O uses the connection transport timeouts and can extend elapsed time.
+Files over 2 MiB and lines over 64 KiB are skipped and counted.
+Returned line text is limited to 512 characters, with `text_truncated` marking clipping.
+Binary files are skipped. A `truncated` result is incomplete, including when it contains no matches.
+
+Other file tool paths follow one rule on every machine:
 
 - A relative path resolves against the working directory that `bash` runs in
   (`/cwd`, or `path_context` with `set_working`).
@@ -830,6 +846,30 @@ File tool paths follow one rule on every machine:
 - On a Windows machine, `C:\x`, `C:/x`, the Git Bash form `/c/x` and the SFTP
   form `/C:/x` name the same file, as does the workspace root in the spelling
   Git Bash reports for it. Paths compare without case.
+
+=== Waveform Reading
+<agent-waveform-reading>
+
+`read_waveform` reads a local VCD file without loading the whole waveform into memory. Omit `signals` to list up to 200 hierarchical signal names. Use the returned `next_signal_offset` as `signal_offset` to continue the list.
+
+Pass `signals` as one to 32 names or glob patterns. `start_time` and `end_time` select an inclusive window in the file's raw timescale ticks. The result includes the values at the start, value changes, rising and falling edges, and the file's timescale. An unknown initial value is `null`. `max_events` defaults to 200 and accepts up to 2000.
+
+Indexed names retain their declared ranges. Use a listed full name, or its base name when exactly one signal matches.
+
+The scanner reads at most 128 MiB or five seconds per call. `truncated` and `window_complete` state whether the requested window was fully read. Narrow the selection or provide a smaller waveform when a scan or output limit is reached. FST and analog waveform formats are unsupported. Remote workspaces do not offer this tool.
+
+Waveform output is limited to 1 MiB, including metadata, initial values and events.
+
+=== Document Reading
+<agent-document-reading>
+
+`read_document` reads local PDF, DOCX, XLSX and PPTX files. `page` starts at 1. `page_count` defaults to 1 and accepts up to five parts. A part is a PDF page, an XLSX worksheet or a PPTX slide. DOCX has one document body. Results retain page numbers, archive part names, paragraph numbers or spreadsheet cell addresses. Worksheets and slides follow the document's stored order.
+
+`mode` defaults to `text`. PDF text preserves column layout. Use `mode: image` to inspect one PDF page, including charts and scanned pages. The image uses the existing model capability and terminal preview pipeline. Empty text layers are reported. OCR is not performed. `mode: list` reports document metadata or the selected Office parts.
+
+`max_chars` defaults to 20000 per part and accepts up to 100000. A truncated text part returns `next_offset`; pass it as `offset` to continue that part. Office extraction returns body text and raw cell values. It does not render images, charts, page layout or date styles. Spreadsheet formulas include their stored value and expression. Formulas, macros and external links are never executed.
+
+PDF reading requires the optional Poppler programs `pdfinfo`, `pdftotext` and, for images, `pdftoppm`. Office reading requires `unzip`. A missing program produces an explicit dependency error. Inputs are limited to 32 MiB. Office archives allow at most 4096 entries, 8 MiB per expanded entry, 64 MiB of declared expanded data and 32 MiB of actual extraction per call. Unsafe paths, encrypted entries, DTDs and unsupported compression are rejected. Each converter has a 15-second deadline. Remote workspaces do not offer this tool.
 
 == Constraint Solving
 <agent-smt>
@@ -2289,7 +2329,7 @@ because retrying a change that already landed applies it twice.
 
 Workspace tools operate on the remote host (SFTP + SSH exec):
 
-- `read_file`, `write_file`, `list_files`, `edit_file`
+- `read_file`, `write_file`, `list_files`, `edit_file`, `grep`
 - `bash` (with optional `background=true` for detached jobs). A command
   that outlives its `timeout` keeps running as a background job and the
   result gives its `job_id`, as a local command gives a `process_id`

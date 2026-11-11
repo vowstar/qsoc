@@ -351,6 +351,8 @@ QString buildAttachmentResult(
     QLLMService      *llm,
     bool              previewRefused)
 {
+    QString visibleSource = sourceLabel;
+    visibleSource.replace(QChar(0x01), QStringLiteral("\\u0001"));
     /* Sniff dimensions without decoding pixels. Saves memory for the
      * common case of a 4K screenshot; we only ever decode if we are
      * going to inline. */
@@ -383,7 +385,7 @@ QString buildAttachmentResult(
 
     auto fallback = [&](const QString &reason) -> QString {
         return QString("[image: %1 mime=%2 dims=%3x%4 bytes=%5 est_tokens=%6; not inlined: %7]")
-            .arg(sourceLabel, mimeHint)
+            .arg(visibleSource, mimeHint)
             .arg(dims.width())
             .arg(dims.height())
             .arg(body.size())
@@ -393,11 +395,12 @@ QString buildAttachmentResult(
 
     if (!accepts) {
         const QString marker    = previewRefused ? displayOnlyMarker(sourceLabel, body) : QString();
-        const QString described = describeWithVisionModel(sourceLabel, mimeHint, body, llm);
+        QString       described = describeWithVisionModel(sourceLabel, mimeHint, body, llm);
+        described.replace(QChar(0x01), QStringLiteral("\\u0001"));
         const QString summary
             = !described.isEmpty()
                   ? QStringLiteral("[image: %1 described by the vision model: %2]")
-                        .arg(sourceLabel, described)
+                        .arg(visibleSource, described)
                   : fallback(
                         marker.isEmpty() ? QStringLiteral("current model does not accept images")
                                          : QStringLiteral(
@@ -497,7 +500,7 @@ QString buildAttachmentResult(
                                 .arg(estTok)
                                 .arg(encoded.size() / 1024)
                                 .arg(QString::fromLatin1(outMime))
-                                .arg(sourceLabel)
+                                .arg(visibleSource)
                                 .arg(notes);
 
     nlohmann::json payload = {
