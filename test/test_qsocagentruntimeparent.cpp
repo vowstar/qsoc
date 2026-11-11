@@ -3,6 +3,8 @@
 
 #include "agent/protocol/qsocagentruntimeevent.h"
 #include "agent/qsocagent.h"
+#include "agent/qsocagentmailbox.h"
+#include "agent/qsocsubagenttasksource.h"
 #include "agent/qsoctool.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "qsoc_test.h"
@@ -17,6 +19,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <QtTest>
 
 using json = nlohmann::json;
@@ -185,6 +188,73 @@ private slots:
         QVERIFY2(!result.contains("error"), result.dump().c_str());
     }
 
+    void sendMessageUsesRuntimeMailbox_data()
+    {
+        QTest::addColumn<bool>("clearFirst");
+        QTest::addColumn<bool>("taskAlias");
+        QTest::newRow("opened-agent-id") << false << false;
+        QTest::newRow("opened-task-alias") << false << true;
+        QTest::newRow("cleared-agent-id") << true << false;
+        QTest::newRow("cleared-task-alias") << true << true;
+    }
+
+    void sendMessageUsesRuntimeMailbox()
+    {
+        QFETCH(bool, clearFirst);
+        QFETCH(bool, taskAlias);
+        auto runtime = makeRuntime();
+        QVERIFY(runtime->openSession());
+        if (clearFirst)
+            QVERIFY(runtime->clearSession());
+        auto *registry = runtime->localToolRegistry();
+        auto *source   = runtime->subAgentSource();
+        QVERIFY(!runtime->agent()->agentIdentity().isEmpty());
+        QCOMPARE(runtime->agent()->agentIdentity(), runtime->sessionId());
+        QCOMPARE(source->mailbox()->idFor(runtime->agent()), runtime->agent()->agentIdentity());
+        QCOMPARE(
+            source->mailbox()->resolve(QStringLiteral("main")), runtime->agent()->agentIdentity());
+        auto         *peer = new QSocAgent(nullptr, nullptr, registry);
+        const QString task
+            = source->registerRun(QStringLiteral("peer"), QStringLiteral("general-purpose"), peer);
+        source->markCompleted(task, QStringLiteral("ready"));
+        const auto call = [&](const QString &name, const json &arguments, QObject *caller) {
+            return json::parse(registry->executeTool(name, arguments, caller).toStdString());
+        };
+        const std::string requestId
+            = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+        const json request
+            = {{"target", (taskAlias ? task : peer->agentIdentity()).toStdString()},
+               {"message_id", requestId},
+               {"message", "check status"}};
+        const auto sent = call("send_message", request, runtime->agent());
+        QVERIFY2(sent.value("status", std::string()) == "ok", sent.dump().c_str());
+        QCOMPARE(sent["delivery"], json("accepted"));
+        QCOMPARE(sent["agent_id"], json(peer->agentIdentity().toStdString()));
+        const auto incoming = call("agent_inbox", json::object(), peer);
+        QCOMPARE(incoming["messages"].size(), std::size_t(1));
+        QCOMPARE(
+            incoming["messages"][0]["sender"],
+            json(runtime->agent()->agentIdentity().toStdString()));
+        QCOMPARE(incoming["messages"][0]["body"], json("check status"));
+        const auto reply = call(
+            "send_message",
+            {{"target", "main"},
+             {"message_id", QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString()},
+             {"message", "ready"},
+             {"reply_to", requestId}},
+            peer);
+        QVERIFY2(reply.value("status", std::string()) == "ok", reply.dump().c_str());
+        const auto returned = call("agent_inbox", json::object(), runtime->agent());
+        QCOMPARE(returned["messages"].size(), std::size_t(1));
+        QCOMPARE(returned["messages"][0]["sender"], json(peer->agentIdentity().toStdString()));
+        QCOMPARE(returned["messages"][0]["reply_to"], json(requestId));
+        QCOMPARE(returned["messages"][0]["body"], json("ready"));
+        QObject    outsider;
+        const auto rejected = call("send_message", request, &outsider);
+        QCOMPARE(rejected["error"], json("caller_not_registered"));
+        QCOMPARE(source->mailbox()->pendingCount(peer->agentIdentity()), 0);
+    }
+
     void initTestCase()
     {
         qRegisterMetaType<QSocAgentRuntimeEvent>("QSocAgentRuntimeEvent");
@@ -223,6 +293,7 @@ private slots:
         QVERIFY(runtime->setCurrentModel(QStringLiteral("alt")));
         runtime->setEffortLevel(QStringLiteral("high"));
 
+        int completed = 0;
         for (const QString &type : {QStringLiteral("general-purpose"), QStringLiteral("fork")}) {
             server_.clear();
             const QString launch = spawn(runtime.get(), type);
@@ -231,6 +302,8 @@ private slots:
             const json child = server_.childRequest();
             QCOMPARE(child.value("model", std::string()), std::string("alt-model"));
             QCOMPARE(child.value("reasoning_effort", std::string()), std::string("high"));
+            ++completed;
+            QTRY_COMPARE_WITH_TIMEOUT(runtime->agent()->pendingNotificationCount(), completed, 10000);
         }
     }
 

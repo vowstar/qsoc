@@ -540,6 +540,7 @@ void QSocAgentRuntime::assembleInfrastructure(const QSocAgentRuntimeOptions &opt
         spawnTool->setParentAgent(d->agent);
     }
     d->subAgentTaskSource->enableMessaging(d->agent);
+    d->toolRegistry->registerTool(new QSocToolSendMessage(this, d->subAgentTaskSource));
     for (const auto *name :
          {"agent_list", "agent_inbox", "wait_agent", "followup_task", "interrupt_agent"}) {
         d->toolRegistry->registerTool(new QSocToolAgentMessage(
@@ -1005,8 +1006,6 @@ void QSocAgentRuntime::registerTools()
 
     auto *agentStatusTool = new QSocToolAgentStatus(this, d->subAgentTaskSource);
     d->toolRegistry->registerTool(agentStatusTool);
-    auto *sendMessageTool = new QSocToolSendMessage(this, d->subAgentTaskSource);
-    d->toolRegistry->registerTool(sendMessageTool);
 
     d->toolRegistry->registerTool(new QSocToolHostRegister(this, d->hostCatalog));
     d->toolRegistry->registerTool(new QSocToolHostUpdate(this, d->hostCatalog));

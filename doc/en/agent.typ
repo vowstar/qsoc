@@ -1564,6 +1564,10 @@ addresses the main agent, whose `agent_id` is the session ID and stays the
 same when the session is resumed. A follow-up keeps the agent identity and creates
 a new task ID when it wakes an idle child.
 
+The main agent registers when a session starts. Each child registers when spawned.
+Messaging is ready from the first turn and remains available after `/clear`.
+A tool call without a registered calling agent returns `caller_not_registered`.
+
 - `send_message(target, message_id, message, reply_to?)` queues information.
   An idle recipient stays idle; a running recipient reads it at an input
   boundary. The sender comes from the calling agent, and peer content
