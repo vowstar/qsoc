@@ -9,11 +9,13 @@
 #include "gui/report/qsocreportengine.h"
 #include "qsoc_test.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -34,6 +36,48 @@ QStringList kinds(const QJsonArray &parts)
         result.append(part.toObject()["kind"].toString());
     return result;
 }
+
+void verifySheetNavigation(const QString &html, int targets, bool fanIn)
+{
+    const QRegularExpression articles(
+        R"re(<article class="sheet" id="path-(\d+)"><h3>(.*?)</h3>)re");
+    QMap<QString, QString> sheetTitles;
+    auto                   matches = articles.globalMatch(html);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        sheetTitles.insert(match.captured(1), match.captured(2));
+    }
+    QVERIFY(!sheetTitles.isEmpty());
+    QCOMPARE(html.count("class=\"sheet-navigation\""), sheetTitles.size());
+    const QRegularExpression links(R"re(href="#path-(\d+)")re");
+    matches = links.globalMatch(html);
+    while (matches.hasNext())
+        QVERIFY(sheetTitles.contains(matches.next().captured(1)));
+
+    const auto               index = html.left(html.indexOf("<section id=\"paths\">"));
+    const QRegularExpression rows(
+        R"re(<tr><td><a href="#path-(\d+)">([^<]+)</a></td><td>.*?</td><td>(.*?)</td></tr>)re",
+        QRegularExpression::DotMatchesEverythingOption);
+    matches                 = rows.globalMatch(index);
+    int           rowsFound = 0;
+    QSet<QString> indexedSheets;
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        ++rowsFound;
+        QVERIFY(sheetTitles.value(match.captured(1)).contains(match.captured(2)));
+        indexedSheets.insert(match.captured(1));
+        auto sheetLinks = links.globalMatch(match.captured(3));
+        while (sheetLinks.hasNext()) {
+            const auto sheet = sheetLinks.next().captured(1);
+            QVERIFY(sheetTitles.value(sheet).contains(match.captured(2)));
+            indexedSheets.insert(sheet);
+        }
+        if (fanIn)
+            QVERIFY(match.captured(3).section('<', 0, 0).contains('-'));
+    }
+    QCOMPARE(rowsFound, targets);
+    QCOMPARE(indexedSheets.size(), sheetTitles.size());
+}
 } // namespace
 
 class Test : public QObject
@@ -49,6 +93,7 @@ private slots:
     void boundedPagination();
     void largeControllers_data();
     void largeControllers();
+    void htmlSignalContinuations();
     void resetMatchesEffectivePrimitive();
     void powerDomainKinds();
     void headlessExportAndEscaping();
@@ -358,11 +403,16 @@ void Test::largeControllers_data()
     QTest::addColumn<QString>("kind");
     QTest::addColumn<bool>("fanIn");
     QTest::addColumn<int>("divider");
-    QTest::newRow("clock-targets") << QString("clock") << false << 2;
-    QTest::newRow("reset-targets") << QString("reset") << false << 2;
-    QTest::newRow("power-domains") << QString("power") << false << 2;
-    QTest::newRow("clock-fan-in") << QString("clock") << true << 2;
-    QTest::newRow("wide-divider") << QString("clock") << true << 1000000007;
+    QTest::addColumn<int>("scale");
+    QTest::newRow("clock-targets") << QString("clock") << false << 2 << 128;
+    QTest::newRow("reset-targets") << QString("reset") << false << 2 << 128;
+    QTest::newRow("power-domains") << QString("power") << false << 2 << 128;
+    QTest::newRow("clock-fan-in") << QString("clock") << true << 2 << 128;
+    QTest::newRow("wide-divider") << QString("clock") << true << 1000000007 << 128;
+    QTest::newRow("clock-targets-384") << QString("clock") << false << 2 << 384;
+    QTest::newRow("reset-targets-384") << QString("reset") << false << 2 << 384;
+    QTest::newRow("power-domains-384") << QString("power") << false << 2 << 384;
+    QTest::newRow("clock-fan-in-384") << QString("clock") << true << 2 << 384;
 }
 
 void Test::largeControllers()
@@ -370,6 +420,7 @@ void Test::largeControllers()
     QFETCH(QString, kind);
     QFETCH(bool, fanIn);
     QFETCH(int, divider);
+    QFETCH(int, scale);
     YAML::Node config;
     config["name"] = "controller";
     QJsonObject report;
@@ -377,7 +428,7 @@ void Test::largeControllers()
     if (kind == "power") {
         config["host_clock"] = "clk_ao";
         config["host_reset"] = "rst_ao_n";
-        for (int i = 0; i < 128; ++i) {
+        for (int i = 0; i < scale; ++i) {
             YAML::Node domain;
             last           = QString("domain_%1").arg(i, 3, 10, QChar('0'));
             domain["name"] = last.toStdString();
@@ -395,13 +446,13 @@ void Test::largeControllers()
         QVERIFY(parsed.valid);
         report = QSocPrimitiveReport::power(parsed);
     } else {
-        const int sources = fanIn ? 128 : 4;
+        const int sources = fanIn ? scale : 4;
         for (int i = 0; i < sources; ++i) {
             const auto name = QString("source_%1").arg(i, 3, 10, QChar('0')).toStdString();
             config[kind == "clock" ? "input" : "source"][name][kind == "clock" ? "freq" : "active"]
                 = kind == "clock" ? "24MHz" : (i % 2 ? "high" : "low");
         }
-        for (int i = 0; i < (fanIn ? 1 : 128); ++i) {
+        for (int i = 0; i < (fanIn ? 1 : scale); ++i) {
             last        = QString("target_%1").arg(i, 3, 10, QChar('0'));
             auto target = config["target"][last.toStdString()];
             for (int j = 0; j < sources; ++j) {
@@ -452,12 +503,13 @@ void Test::largeControllers()
     QVERIFY(html.contains(last.toUtf8()));
     QVERIFY(pdf.startsWith("%PDF-"));
     QVERIFY2(html.size() < 20 * 1024 * 1024, "A bounded report must not serialize a dense poster map");
+    verifySheetNavigation(QString::fromUtf8(html), fanIn ? 1 : scale, fanIn);
     if (fanIn) {
         const auto end   = html.indexOf("<section id=\"paths\">");
         const auto paths = html.mid(end, html.indexOf("<section id=\"parameters\">", end) - end);
-        QVERIFY(paths.contains("inputs 124-127"));
-        QVERIFY(paths.contains(">127</text>"));
-        QVERIFY(paths.contains("source_127"));
+        QVERIFY(paths.contains(QString("inputs %1-%2").arg(scale - 4).arg(scale - 1).toUtf8()));
+        QVERIFY(paths.contains(QString(">%1</text>").arg(scale - 1).toUtf8()));
+        QVERIFY(paths.contains(QString("source_%1").arg(scale - 1).toUtf8()));
     }
     const QString extractor = QStandardPaths::findExecutable("pdftotext");
     if (extractor.isEmpty())
@@ -492,6 +544,32 @@ void Test::largeControllers()
     }
     QVERIFY(!reader.hasError());
     QVERIFY(pages > 10);
+}
+
+void Test::htmlSignalContinuations()
+{
+    QSocClockPrimitive generator;
+    const auto         config = generator.parseClockConfig(YAML::Load(R"(
+name: clocks
+input: {osc: {freq: 24MHz}}
+target:
+  first_clk: {link: {osc: {}}}
+  second_clk: {link: {first_clk: {}}}
+  third_clk: {link: {second_clk: {}}}
+)"));
+    QVERIFY(config.valid);
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_navigation_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(
+        QSocPrimitiveReport::stage(directory.path(), "clocks", QSocPrimitiveReport::clock(config)));
+    QSocPrimitiveReport::render(directory.path());
+    const QString html = QString::fromUtf8(read(directory.filePath("clocks.html")));
+    verifySheetNavigation(html, 3, false);
+    QVERIFY(html.contains("class=\"signal-continuations\""));
+    QVERIFY(html.contains("<td>first_clk</td><td>From</td><td><a href=\"#path-0\">"));
+    QVERIFY(html.contains("<td>first_clk</td><td>To</td><td><a href=\"#path-1\">"));
+    QVERIFY(html.contains("<td>second_clk</td><td>From</td><td><a href=\"#path-1\">"));
+    QVERIFY(html.contains("<td>second_clk</td><td>To</td><td><a href=\"#path-2\">"));
 }
 
 void Test::resetMatchesEffectivePrimitive()
@@ -584,7 +662,16 @@ void Test::headlessExportAndEscaping()
     QVERIFY(html.contains("data:font/woff2;base64,"));
     QVERIFY(html.contains("The Android Open Source Project"));
     QVERIFY(html.contains("&lt;script&gt;"));
-    QVERIFY(!html.contains("<script>"));
+    QCOMPARE(html.count("<script>"), 1);
+    QVERIFY(!html.contains("<script>alert("));
+    const int  scriptStart = html.indexOf("<script>") + 8;
+    const auto script = html.mid(scriptStart, html.indexOf("</script>", scriptStart) - scriptStart);
+    const auto scriptHash = QCryptographicHash::hash(script, QCryptographicHash::Sha256).toBase64();
+    QVERIFY(html.contains("script-src 'sha256-" + scriptHash + "'"));
+    QVERIFY(!html.contains("script-src 'unsafe-inline'"));
+    QVERIFY(html.contains(".pdf\" target=\"_blank\" rel=\"noopener\">Vector PDF"));
+    QVERIFY(html.contains("\" target=\"_blank\" rel=\"noopener\">Open PDF"));
+    QCOMPARE(html.count("target=\"_blank\" rel=\"noopener\""), html.count(">Open PDF</a>") + 1);
     QVERIFY(html.contains(QString::fromUtf8("时钟与复位").toUtf8()));
     QVERIFY(html.contains("Input 12 source"));
     QVERIFY(html.contains(target.name.toUtf8()));

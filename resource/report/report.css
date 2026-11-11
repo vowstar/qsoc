@@ -18,6 +18,11 @@ figure { margin: 0; }
 .diagram:focus-visible { outline: 2px solid #245e9a; outline-offset: 3px; }
 .sheet { margin: 24px 0 36px; }
 .sheet h3 { font-size: 16px; font-weight: 400; }
+.sheet-navigation { justify-content: center; padding: 8px 0; font-size: 13px; }
+.sheet-links { margin-top: 4px; }
+.sheet-links ol { padding-left: 20px; }
+.sheet-links li { margin: 4px 0; }
+.signal-continuations { margin: 8px 0; font-size: 14px; }
 .connections { margin: 8px 0 24px; font-size: 14px; }
 dd { overflow-wrap: anywhere; }
 figcaption { text-align: center; margin: 12px 0 24px; font-size: 14px; }
@@ -39,7 +44,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 
     @page { size: A4 landscape; margin: 12mm; }
     :root { background: white; }
     main { max-width: none; margin: 0; padding: 0; box-shadow: none; }
-    nav, footer details { display: none; }
+    nav, footer details, .signal-continuations { display: none; }
     .diagram { overflow: visible; }
     .diagram svg { width: 100%; max-width: 100%; }
     figure, tr { break-inside: avoid; }

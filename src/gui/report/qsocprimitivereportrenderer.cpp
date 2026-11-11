@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <functional>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -997,16 +998,26 @@ QString htmlParameters(const QJsonArray &input)
     return details;
 }
 
+QString htmlSheetLink(const QList<Diagram> &diagrams, int sheet)
+{
+    return "<a href=\"#path-" + QString::number(sheet) + "\">Sheet " + QString::number(sheet + 1)
+           + " (PDF p. " + QString::number(diagrams[sheet].page) + ")</a>";
+}
+
 QString htmlIndex(const QJsonArray &panels, const QList<Diagram> &diagrams)
 {
-    QString            result;
-    QMap<int, int>     firstPath;
-    QMap<QString, int> references;
+    QString               result = QString(
+                                       "<p>%1 targets / %2 circuit sheets. Expand a target group to locate "
+                                       "its signal paths.</p>")
+                                       .arg(panels.size())
+                                       .arg(diagrams.size());
+    QMap<int, QList<int>> paths;
+    QMap<QString, int>    references;
     for (int i = 0; i < diagrams.size(); ++i) {
         for (const int owner : diagrams[i].panels) {
-            if (firstPath.contains(owner))
+            paths[owner].append(i);
+            if (paths[owner].size() > 1)
                 continue;
-            firstPath.insert(owner, i);
             const auto panel = panels[owner].toObject();
             for (const auto &key : {"title", "identity", "output"}) {
                 if (!panel[key].toString().isEmpty())
@@ -1032,12 +1043,24 @@ QString htmlIndex(const QJsonArray &panels, const QList<Diagram> &diagrams)
                               + label + "</a>"
                         : label);
             }
-            const int path = firstPath.value(i);
+            const auto sheets = paths.value(i);
+            const int  path = sheets.value(0), last = sheets.value(sheets.size() - 1, path);
             result += "<tr><td><a href=\"#path-" + QString::number(path) + "\">"
                       + escape(panel["title"].toString()) + "</a>" + "</td><td>"
                       + (branches.size() > 4 ? QString::number(branches.size()) + " inputs"
                                              : sources.join(", "))
-                      + "</td><td>" + QString::number(diagrams[path].page) + "</td></tr>";
+                      + "</td><td>" + QString::number(diagrams[path].page)
+                      + (diagrams[path].page == diagrams[last].page
+                             ? QString()
+                             : "-" + QString::number(diagrams[last].page));
+            if (sheets.size() > 1) {
+                result += "<details class=\"sheet-links\"><summary>All "
+                          + QString::number(sheets.size()) + " sheets</summary><ol>";
+                for (const int sheet : sheets)
+                    result += "<li>" + htmlSheetLink(diagrams, sheet) + "</li>";
+                result += "</ol></details>";
+            }
+            result += "</td></tr>";
         }
         result += "</tbody></table></details>";
     }
@@ -1086,6 +1109,50 @@ QString htmlConnections(const QSocReportLayout::Result &graph)
     return result + "</dl></details>";
 }
 
+QString htmlSheetNavigation(int sheet, int count)
+{
+    QString result = "<nav class=\"sheet-navigation\" aria-label=\"Circuit sheet navigation\">"
+                     "<a href=\"#overview\">Target index</a>";
+    if (sheet > 0)
+        result += "<a rel=\"prev\" href=\"#path-" + QString::number(sheet - 1)
+                  + "\">Previous sheet</a>";
+    result += "<span>Sheet " + QString::number(sheet + 1) + " of " + QString::number(count)
+              + "</span>";
+    if (sheet + 1 < count)
+        result += "<a rel=\"next\" href=\"#path-" + QString::number(sheet + 1)
+                  + "\">Next sheet</a>";
+    return result + "</nav>";
+}
+
+QString htmlContinuations(
+    const QList<Diagram>            &diagrams,
+    int                              current,
+    const QMap<QString, QList<int>> &producers,
+    const QMap<QString, QList<int>> &consumers)
+{
+    QString rows;
+    for (const auto &node : diagrams[current].graph.nodes) {
+        const auto  kind = node.data["kind"].toString(), label = node.data["label"].toString();
+        const auto  sheets = kind == "input"    ? producers.value(label)
+                             : kind == "output" ? consumers.value(label)
+                                                : QList<int>();
+        QStringList links;
+        for (const int sheet : sheets) {
+            if (sheet != current)
+                links.append(htmlSheetLink(diagrams, sheet));
+        }
+        if (!links.isEmpty())
+            rows += "<tr><td>" + escape(label) + "</td><td>" + (kind == "input" ? "From" : "To")
+                    + "</td><td>" + links.join(", ") + "</td></tr>";
+    }
+    if (rows.isEmpty())
+        return {};
+    return "<details class=\"signal-continuations\"><summary>Signal continuations"
+           "</summary><table><thead><tr><th>Signal</th><th>Direction</th><th>Circuit "
+           "sheets</th></tr></thead><tbody>"
+           + rows + "</tbody></table></details>";
+}
+
 QString htmlPaths(
     const QList<Diagram> &diagrams,
     const QStringList    &families,
@@ -1095,6 +1162,18 @@ QString htmlPaths(
     QString result = "<section id=\"paths\"><h2>2. Circuit sheets</h2><p>" + circuitLegend(kind)
                      + " MUX indices keep their original values. Pin-subset views repeat shared "
                        "downstream processing.</p>";
+    QMap<QString, QList<int>> producers, consumers;
+    for (int i = 0; i < diagrams.size(); ++i) {
+        for (const auto &node : diagrams[i].graph.nodes) {
+            const auto nodeKind = node.data["kind"].toString();
+            if (nodeKind != "input" && nodeKind != "output")
+                continue;
+            auto &sheets = nodeKind == "input" ? consumers[node.data["label"].toString()]
+                                               : producers[node.data["label"].toString()];
+            if (!sheets.contains(i))
+                sheets.append(i);
+        }
+    }
     for (int i = 0; i < diagrams.size(); ++i) {
         const auto &diagram = diagrams[i];
         const auto  title   = "2." + QString::number(i + 1) + " " + diagram.title;
@@ -1107,7 +1186,10 @@ QString htmlPaths(
                + diagramSvg(diagram.graph, families, title) + "</div><figcaption>PDF page "
                + QString::number(diagram.page) + " / <a href=\""
                + QString::fromLatin1(QUrl::toPercentEncoding(pdfName))
-               + "#page=" + QString::number(diagram.page) + "\">Open PDF</a></figcaption></figure>"
+               + "#page=" + QString::number(diagram.page)
+               + "\" target=\"_blank\" rel=\"noopener\">Open PDF</a></figcaption></figure>"
+               + htmlSheetNavigation(i, diagrams.size())
+               + htmlContinuations(diagrams, i, producers, consumers)
                + htmlConnections(diagram.graph) + "</article>";
     }
     return result + "</section>";
@@ -1167,13 +1249,33 @@ QString htmlReport(
                   license = resource(":/license/droid-fonts.txt");
     if (latin.isEmpty() || cjk.isEmpty() || css.isEmpty() || license.isEmpty())
         return {};
+    const QByteArray navigationScript = R"JS(document.addEventListener('click', function(event) {
+    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+        return;
+    const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+    if (!link)
+        return;
+    const target = document.getElementById(link.getAttribute('href').slice(1));
+    if (!target)
+        return;
+    event.preventDefault();
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+        if (parent.tagName === 'DETAILS')
+            parent.open = true;
+    }
+    target.scrollIntoView({block: 'start'});
+});)JS";
+    const auto       scriptHash
+        = QCryptographicHash::hash(navigationScript, QCryptographicHash::Sha256).toBase64();
     const QString pdfName = QFileInfo(outputBase).fileName() + ".pdf";
     const QString html
         = "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">"
           "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
           "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src "
-          "'unsafe-inline'; font-src data:; img-src data:; base-uri 'none'; form-action 'none'\">"
-          "<title>"
+          "'unsafe-inline'; script-src 'sha256-"
+          + QString::fromLatin1(scriptHash)
+          + "'; font-src data:; img-src data:; base-uri 'none'; form-action 'none'\">"
+            "<title>"
           + escape(name + " / " + kind)
           + "</title><style>"
             "@font-face{font-family:'Droid Sans Mono';src:url(data:font/woff2;base64,"
@@ -1189,7 +1291,8 @@ QString htmlReport(
           + " controller</p></div></header><nav><a href=\"#overview\">Overview</a><a "
             "href=\"#paths\">Signal paths</a><a href=\"#parameters\">Parameters</a>"
             "<a href=\""
-          + QString::fromLatin1(QUrl::toPercentEncoding(pdfName)) + "\">Vector PDF</a></nav>"
+          + QString::fromLatin1(QUrl::toPercentEncoding(pdfName))
+          + "\" target=\"_blank\" rel=\"noopener\">Vector PDF</a></nav>"
           + htmlOverview(data, diagrams) + htmlPaths(diagrams, families, pdfName, kind)
           + "<section id=\"parameters\"><h2>3. Parameters</h2>" + htmlParameters(panels)
           + "</section><footer>QSoC v" + QSOC_VERSION
@@ -1198,7 +1301,8 @@ QString htmlReport(
           + "</pre></details>"
             "<details><summary>Fonts: Droid Sans Mono and Droid Sans Fallback, "
             "Apache-2.0</summary><pre>"
-          + escape(QString::fromUtf8(license)) + "</pre></details></footer></main></html>";
+          + escape(QString::fromUtf8(license)) + "</pre></details></footer></main><script>"
+          + QString::fromUtf8(navigationScript) + "</script></html>";
     return html;
 }
 } // namespace

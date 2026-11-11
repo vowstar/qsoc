@@ -1,6 +1,6 @@
 # Report assets
 
-The report CSS is independently written for QSoC under Apache-2.0. It uses no framework, script, icon library or copied reference code.
+The report CSS and fragment-navigation script are independently written for QSoC under Apache-2.0. They use no framework, icon library or copied reference code. The small script keeps same-document links inside embedded HTML viewers; its SHA-256 hash is included in the content security policy.
 
 Droid Sans Mono and Droid Sans Fallback are unmodified fonts from the Android Open Source Project. Both use Apache-2.0. The original NOTICE and the font copyright statements are in `../license/droid-fonts.txt`. Their Latin and Chinese glyphs are embedded in generated reports.
 

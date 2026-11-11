@@ -978,6 +978,8 @@ Circuit symbols distinguish MUXes, inverters, gates, reset cells, and serial STA
 
 HTML circuit sheets remain visible. Parameter and connection tables start folded. A diagram keeps its native drawing size and scrolls within its frame on narrow screens. Source specifications appear in a separate table.
 
+The HTML target index lists each target's PDF page range and links to all its circuit sheets. Each sheet links to its neighbors and the index. Folded signal-continuation tables link directly to the sheets that drive or consume the same signal. An embedded script keeps these links within the report in embedded HTML viewers. The content security policy permits only that script's hash. Offline links also work with scripting disabled.
+
 The PDF uses A4 landscape pages at a fixed drawing scale. Small circuits share a page. A circuit that spans sheets uses named continuation ports with page references. Large fan-in uses pin subsets with original indices, total input counts, and a repeated device reference. Shared downstream processing repeats on those views. Parameters follow in a separate appendix.
 
 Clock reports preserve branch processing, the effective MUX type, target processing, frequencies, and control signals. A separate test MUX follows the functional MUX, before the MUX guide buffer and target processing. Triangles marked STA represent serial guide buffers. Clock input and target `comment` values appear in the parameters. Reset reports show polarity normalization, active-low combination, effective processing, and output polarity. Power reports distinguish always-on, controllable root, and dependent domains.
