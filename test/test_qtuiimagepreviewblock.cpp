@@ -110,6 +110,8 @@ private slots:
     void plainTextSummarisesMetadata();
     void markdownEmitsImageSyntax();
     void toAnsiContainsPlaceholderText();
+    void releasedImageRetainsScrollbackMetadata();
+    void repeatedReleaseRetainsOriginalSize();
 
     /* Protocol routing */
     void emptyEnvProducesNoEscape();
@@ -237,6 +239,43 @@ void Test::toAnsiContainsPlaceholderText()
     const QString out = block.toAnsi(60);
     QVERIFY(out.contains(QStringLiteral("[image: ")));
     QVERIFY(out.contains(QStringLiteral("x.png")));
+}
+
+void Test::releasedImageRetainsScrollbackMetadata()
+{
+    qputenv("TERM_PROGRAM", "ghostty");
+    auto block = makePngBlock();
+    block.setSourceFile(QStringLiteral("/tmp/saved.png"));
+    const auto metadata = block.toPlainText();
+    block.layout(80);
+    QVERIFY(block.imageCellRows() > 0);
+
+    block.releaseImageBytes();
+    QCOMPARE(block.imageByteSize(), 0);
+    QCOMPARE(block.toPlainText(), metadata);
+    const auto output = block.toAnsi(80);
+    QCOMPARE(block.rowCount(), 1);
+    QVERIFY(output.contains(QStringLiteral("x.png")));
+    QVERIFY(output.contains(QStringLiteral("320x240")));
+    QVERIFY(output.contains(QStringLiteral("file:///tmp/saved.png")));
+    QVERIFY(!output.contains(QLatin1String(kKittyEscapePrefix)));
+    QCOMPARE(block.emitGraphicsLayer(3, 1, 80, 100), QString());
+    QCOMPARE(block.toAnsi(0), QString());
+}
+
+void Test::repeatedReleaseRetainsOriginalSize()
+{
+    auto       block    = makePngBlock();
+    const auto metadata = block.toPlainText();
+    block.setFolded(true);
+    block.releaseImageBytes();
+    block.releaseImageBytes();
+    QCOMPARE(block.toPlainText(), metadata);
+    QVERIFY(block.toAnsi(80).contains(QStringLiteral("x.png")));
+    block.setFolded(false);
+    block.layout(80);
+    QCOMPARE(block.rowCount(), 1);
+    QCOMPARE(block.imageCellRows(), 0);
 }
 
 void Test::emptyEnvProducesNoEscape()

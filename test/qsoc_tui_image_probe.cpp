@@ -22,7 +22,11 @@
 namespace {
 
 QTuiImagePreviewBlock *appendImage(
-    QTuiScrollView &view, const QColor &color, const QString &label, bool details = false)
+    QTuiScrollView &view,
+    const QColor   &color,
+    const QString  &label,
+    bool            details  = false,
+    const QString  &filePath = {})
 {
     QImage image(240, 160, QImage::Format_RGB32);
     image.fill(color);
@@ -42,6 +46,11 @@ QTuiImagePreviewBlock *appendImage(
     image.save(&buffer, "PNG");
     auto block = std::make_unique<QTuiImagePreviewBlock>(
         label, QStringLiteral("image/png"), image.width(), image.height(), bytes);
+    if (!filePath.isEmpty()) {
+        QFile file(filePath);
+        if (file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size())
+            block->setSourceFile(filePath);
+    }
     auto *ptr = block.get();
     view.appendBlock(std::move(block));
     return ptr;
@@ -70,7 +79,8 @@ QJsonObject imageGeometry(QTuiCompositor &compositor, const QTuiImagePreviewBloc
         {QStringLiteral("rows"), image.rowCount()},
         {QStringLiteral("imageRows"), image.imageCellRows()},
         {QStringLiteral("imageCols"), image.imageCellCols()},
-        {QStringLiteral("folded"), image.isFolded()}};
+        {QStringLiteral("folded"), image.isFolded()},
+        {QStringLiteral("imageBytes"), image.imageByteSize()}};
 }
 
 } // namespace
@@ -140,10 +150,18 @@ int main(int argc, char **argv)
     compositor.setTitle(QStringLiteral("Image lifecycle probe"));
     compositor.dismissTopBanner();
     compositor.inputLine().setText(QStringLiteral("INPUT_SENTINEL"));
-    auto *first
-        = appendImage(compositor.contentView(), QColor(49, 101, 229), QStringLiteral("blue.png"));
-    auto *second
-        = appendImage(compositor.contentView(), QColor(37, 221, 113), QStringLiteral("green.png"));
+    auto *first = appendImage(
+        compositor.contentView(),
+        QColor(49, 101, 229),
+        QStringLiteral("blue.png"),
+        false,
+        control.filePath("blue.png"));
+    auto *second = appendImage(
+        compositor.contentView(),
+        QColor(37, 221, 113),
+        QStringLiteral("green.png"),
+        false,
+        control.filePath("green.png"));
     compositor.contentView().appendLine(QStringLiteral("AFTER_IMAGE_SENTINEL"));
     compositor.start(100);
 
@@ -169,6 +187,27 @@ int main(int argc, char **argv)
             second->setFolded(false);
         } else if (action == QStringLiteral("fold")) {
             second->setFolded(true);
+        } else if (action == QStringLiteral("release")) {
+            first->releaseImageBytes();
+            second->releaseImageBytes();
+        } else if (action == QStringLiteral("math")) {
+            first->setFolded(true);
+            second->setFolded(true);
+            compositor.appendAssistantChunk(QStringLiteral(R"(# Engineering formulas
+
+Parallel resistance: $R=R_1\parallel R_2$
+
+Phasor: $Z=10\angle\phi$
+
+Complex components: $\Re(z)+\Im(z)+\arg(z)$
+
+Constraint: $f_{out}\ll f_{in}\Rightarrow T_{out}\gg T_{in}$
+
+$$\frac{1}{R}=\frac{1}{R_1}+\frac{1}{R_2}$$
+
+Unknown commands retain source: $x+\unknownoperator{y}$
+)"));
+            compositor.finishStream();
         } else if (action == QStringLiteral("top")) {
             compositor.contentView().scrollUp(1000);
         } else if (action == QStringLiteral("bottom")) {

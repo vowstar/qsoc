@@ -56,6 +56,8 @@ private slots:
     void matrixLayouts();
     void matrixEnvironments();
     void commonCommands();
+    void engineeringSymbols_data();
+    void engineeringSymbols();
     void fontSemantics();
     void structuredLayouts();
     void casesAndAccents();
@@ -144,6 +146,46 @@ void Test::commonCommands()
     QCOMPARE(rendered(R"($\frac{1}{\frac{2}{3}}$)"), QStringList{"(1)/((2)/(3))"});
     QCOMPARE(rendered(R"($\frac{1}{2}^2$)"), QStringList{"((1)/(2))²"});
     QCOMPARE(rendered(R"($\mathbb{RC}^2$)"), QStringList{"(ℝℂ)²"});
+}
+
+void Test::engineeringSymbols_data()
+{
+    QTest::addColumn<QString>("source");
+    QTest::addColumn<QString>("expected");
+    const auto row = [](const char *name, const QString &source, const QString &expected) {
+        QTest::newRow(name) << source << expected;
+    };
+    row("parallel-resistance", R"(R=R_1\parallel R_2)", "R=R₁∥R₂");
+    row("phasor", R"(Z=10\angle\phi)", "Z=10∠φ");
+    row("orthogonal", R"(a\perp b)", "a⟂b");
+    row("proportion", R"(I\propto V)", "I∝V");
+    row("asymptotic", R"(a\sim b\simeq c)", "a∼b≃c");
+    row("scale", R"(a\ll b\gg c)", "a≪b≫c");
+    row("relations", R"(a\Rightarrow b\Leftarrow c\Leftrightarrow d)", "a⇒b⇐c⇔d");
+    row("mapping", R"(x\mapsto y\leftrightarrow z)", "x↦y↔z");
+    row("logic", R"(a\oplus b\otimes c)", "a⊕b⊗c");
+    row("constants", R"(\ell+\hbar)", "ℓ+ℏ");
+    row("complex", R"(\Re(z)+\Im(z)+\arg(z))", "ℜ(z)+ℑ(z)+arg(z)");
+}
+
+void Test::engineeringSymbols()
+{
+    QFETCH(QString, source);
+    QFETCH(QString, expected);
+    for (const QString &delimiter : {"$", "$$"}) {
+        const QString markdown = delimiter + source + delimiter;
+        QCOMPARE(rendered(markdown), QStringList{expected});
+        QTuiAssistantTextBlock block(markdown);
+        block.layout(80);
+        QCOMPARE(block.toMarkdown(), markdown);
+        block.layout(4);
+        block.layout(80);
+        QCOMPARE(block.toMarkdown(), markdown);
+    }
+    for (const QString &invalid : {source + R"(\unknownoperator{x})", source + R"(\parallelism)"}) {
+        const QString markdown = "$" + invalid + "$";
+        QCOMPARE(rendered(markdown), QStringList{markdown});
+    }
 }
 
 void Test::fontSemantics()

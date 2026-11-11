@@ -25,24 +25,36 @@ QString padded(const QString &value, int width, bool center = false)
 const QHash<QString, QString> &symbols()
 {
     static const QHash<QString, QString> values = {
-        {"alpha", "α"},      {"beta", "β"},      {"gamma", "γ"},    {"delta", "δ"},
-        {"epsilon", "ε"},    {"zeta", "ζ"},      {"eta", "η"},      {"theta", "θ"},
-        {"iota", "ι"},       {"kappa", "κ"},     {"lambda", "λ"},   {"mu", "μ"},
-        {"nu", "ν"},         {"xi", "ξ"},        {"pi", "π"},       {"rho", "ρ"},
-        {"sigma", "σ"},      {"tau", "τ"},       {"upsilon", "υ"},  {"phi", "φ"},
-        {"chi", "χ"},        {"psi", "ψ"},       {"omega", "ω"},    {"Gamma", "Γ"},
-        {"Delta", "Δ"},      {"Theta", "Θ"},     {"Lambda", "Λ"},   {"Xi", "Ξ"},
-        {"Pi", "Π"},         {"Sigma", "Σ"},     {"Upsilon", "Υ"},  {"Phi", "Φ"},
-        {"Psi", "Ψ"},        {"Omega", "Ω"},     {"times", "×"},    {"cdot", "·"},
-        {"div", "÷"},        {"pm", "±"},        {"le", "≤"},       {"leq", "≤"},
-        {"ge", "≥"},         {"geq", "≥"},       {"ne", "≠"},       {"neq", "≠"},
-        {"approx", "≈"},     {"equiv", "≡"},     {"infty", "∞"},    {"in", "∈"},
-        {"notin", "∉"},      {"subset", "⊂"},    {"subseteq", "⊆"}, {"cup", "∪"},
-        {"cap", "∩"},        {"emptyset", "∅"},  {"forall", "∀"},   {"exists", "∃"},
-        {"neg", "¬"},        {"land", "∧"},      {"lor", "∨"},      {"to", "→"},
-        {"rightarrow", "→"}, {"leftarrow", "←"}, {"partial", "∂"},  {"nabla", "∇"},
-        {"sum", "∑"},        {"prod", "∏"},      {"int", "∫"},      {"ldots", "…"},
-        {"cdots", "⋯"},
+        {"alpha", "α"},      {"beta", "β"},      {"gamma", "γ"},
+        {"delta", "δ"},      {"epsilon", "ε"},   {"zeta", "ζ"},
+        {"eta", "η"},        {"theta", "θ"},     {"iota", "ι"},
+        {"kappa", "κ"},      {"lambda", "λ"},    {"mu", "μ"},
+        {"nu", "ν"},         {"xi", "ξ"},        {"pi", "π"},
+        {"rho", "ρ"},        {"sigma", "σ"},     {"tau", "τ"},
+        {"upsilon", "υ"},    {"phi", "φ"},       {"chi", "χ"},
+        {"psi", "ψ"},        {"omega", "ω"},     {"Gamma", "Γ"},
+        {"Delta", "Δ"},      {"Theta", "Θ"},     {"Lambda", "Λ"},
+        {"Xi", "Ξ"},         {"Pi", "Π"},        {"Sigma", "Σ"},
+        {"Upsilon", "Υ"},    {"Phi", "Φ"},       {"Psi", "Ψ"},
+        {"Omega", "Ω"},      {"times", "×"},     {"cdot", "·"},
+        {"div", "÷"},        {"pm", "±"},        {"le", "≤"},
+        {"leq", "≤"},        {"ge", "≥"},        {"geq", "≥"},
+        {"ne", "≠"},         {"neq", "≠"},       {"approx", "≈"},
+        {"equiv", "≡"},      {"infty", "∞"},     {"in", "∈"},
+        {"notin", "∉"},      {"subset", "⊂"},    {"subseteq", "⊆"},
+        {"cup", "∪"},        {"cap", "∩"},       {"emptyset", "∅"},
+        {"forall", "∀"},     {"exists", "∃"},    {"neg", "¬"},
+        {"land", "∧"},       {"lor", "∨"},       {"to", "→"},
+        {"rightarrow", "→"}, {"leftarrow", "←"}, {"partial", "∂"},
+        {"nabla", "∇"},      {"sum", "∑"},       {"prod", "∏"},
+        {"int", "∫"},        {"ldots", "…"},     {"cdots", "⋯"},
+        {"parallel", "∥"},   {"perp", "⟂"},      {"angle", "∠"},
+        {"propto", "∝"},     {"sim", "∼"},       {"simeq", "≃"},
+        {"ll", "≪"},         {"gg", "≫"},        {"leftrightarrow", "↔"},
+        {"Rightarrow", "⇒"}, {"Leftarrow", "⇐"}, {"Leftrightarrow", "⇔"},
+        {"mapsto", "↦"},     {"oplus", "⊕"},     {"otimes", "⊗"},
+        {"ell", "ℓ"},        {"hbar", "ℏ"},      {"Re", "ℜ"},
+        {"Im", "ℑ"},
     };
     return values;
 }
@@ -636,7 +648,8 @@ private:
         }
         if (name == "substack")
             return substack(depth);
-        if (QStringList{"sin", "cos", "tan", "log", "ln", "exp", "lim", "max", "min", "det", "dim"}
+        if (QStringList{
+                "sin", "cos", "tan", "log", "ln", "exp", "lim", "max", "min", "det", "dim", "arg"}
                 .contains(name))
             return text(name);
         if (name == "sum" || name == "prod" || name == "int")

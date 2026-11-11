@@ -565,6 +565,11 @@ Fractions accept `\frac`, `\dfrac`, `\tfrac`, and `\cfrac`, including nested fra
 Roots accept `\sqrt{x}` and `\sqrt[n]{x}`. Common functions include `\sin`, `\cos`,
 `\log`, `\exp`, and `\lim`.
 
+Engineering expressions also support `\parallel`, `\perp`, `\angle`, `\propto`,
+`\sim`, `\simeq`, `\ll`, `\gg`, `\oplus`, `\otimes`, `\ell`, `\hbar`, `\Re`,
+`\Im`, and `\arg`. Relation arrows include `\Rightarrow`, `\Leftarrow`,
+`\Leftrightarrow`, `\leftrightarrow`, and `\mapsto`.
+
 Use `\text{...}` for literal text, `\operatorname{...}` for operator names,
 and `\quad` or `\qquad` for spacing. Text arguments can contain Chinese and escaped
 punctuation, but cannot contain nested groups or commands.
@@ -645,6 +650,9 @@ chart. One percentage column that sums to about 100, in at most six rows, gives
 a pie chart, and any other table gets a bar chart. The table stays as text.
 `QSOC_NO_TABLE_CHARTS` turns this off. `/figures` lists the session's images and
 charts.
+
+When the image budget releases a preview, its filename, dimensions, and file link
+remain in the transcript and terminal scrollback.
 
 History, logs, whole-block copies, and Markdown copies retain the diagram source.
 Mouse selection copies displayed diagram characters. Widening the terminal can

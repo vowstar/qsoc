@@ -275,6 +275,8 @@ void QTuiImagePreviewBlock::drawSvg(const QByteArray &source, std::function<void
 
 void QTuiImagePreviewBlock::releaseImageBytes()
 {
+    if (released)
+        return;
     byteSize    = bytes.size();
     bytes       = QByteArray();
     released    = true;
@@ -553,7 +555,7 @@ QString QTuiImagePreviewBlock::toMarkdown() const
 
 QString QTuiImagePreviewBlock::toAnsi(int width)
 {
-    if (width <= 0 || bytes.isEmpty()) {
+    if (width <= 0) {
         return QString();
     }
     layout(width);
@@ -563,7 +565,7 @@ QString QTuiImagePreviewBlock::toAnsi(int width)
      * would double the vertical footprint into a large blank gap
      * after the image renders. */
     QString graphicsEscape;
-    if (!folded) {
+    if (!folded && !bytes.isEmpty()) {
         switch (protocol_) {
         case GraphicsProtocol::Kitty:
             graphicsEscape = kittyInlineEscape(bytes, mimeType);
