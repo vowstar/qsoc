@@ -79,8 +79,7 @@ jobs:
         submodules: recursive
     - name: Install depends
       run: >-
-        sudo apt update &&
-        sudo apt-get install -y
+        bash .github/scripts/install-linux-deps.sh
         '^libxcb.*-dev'
         catch
         ccache
@@ -280,8 +279,7 @@ jobs:
         submodules: recursive
     - name: Install depends
       run: >-
-        sudo apt update &&
-        sudo apt-get install -y
+        bash .github/scripts/install-linux-deps.sh
         '^libxcb.*-dev'
         catch
         ccache
@@ -420,8 +418,7 @@ jobs:
         submodules: recursive
     - name: Install depends
       run: >-
-        sudo apt update &&
-        sudo apt-get install -y
+        bash .github/scripts/install-linux-deps.sh
         '^libxcb.*-dev'
         catch
         ccache
@@ -847,8 +844,7 @@ jobs:
         submodules: recursive
     - name: Install depends
       run: >-
-        sudo apt update &&
-        sudo apt-get install -y
+        bash .github/scripts/install-linux-deps.sh
         '^libxcb.*-dev'
         libfmt-dev
         libgl-dev
