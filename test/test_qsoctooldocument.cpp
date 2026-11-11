@@ -11,6 +11,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
+#include <QFontDatabase>
 #include <QImage>
 #include <QPainter>
 #include <QPdfWriter>
@@ -92,7 +94,7 @@ json result(QSocToolDocumentRead &tool, const json &arguments)
     return json::parse(text.toStdString());
 }
 
-QString createPdf(const QTemporaryDir &directory)
+QString createPdf(const QTemporaryDir &directory, const QFont &font)
 {
     const QString path = directory.filePath("sample.pdf");
     QPdfWriter    pdf(path);
@@ -101,6 +103,7 @@ QString createPdf(const QTemporaryDir &directory)
     QPainter painter(&pdf);
     if (!painter.isActive())
         qFatal("Cannot create PDF input");
+    painter.setFont(font);
     painter.drawText(30, 60, QStringLiteral("Clock frequency: 100 MHz"));
     painter.drawLine(30, 80, 300, 80);
     if (!pdf.newPage())
@@ -118,7 +121,20 @@ class TestQSocToolDocument : public QObject
 {
     Q_OBJECT
 
+private:
+    QFont pdfFont_;
+
 private slots:
+    void initTestCase()
+    {
+        const int id = QFontDatabase::addApplicationFont(
+            QFINDTESTDATA("../resource/report/DroidSansMono.ttf"));
+        QVERIFY(id >= 0);
+        const auto families = QFontDatabase::applicationFontFamilies(id);
+        QVERIFY(!families.isEmpty());
+        pdfFont_ = QFont(families.first(), 12);
+    }
+
     void docxPreservesParagraphsAndTableText()
     {
         if (QStandardPaths::findExecutable("unzip").isEmpty())
@@ -157,6 +173,30 @@ private slots:
         const auto next
             = result(tool, {{"file_path", path.toStdString()}, {"offset", 12}, {"max_chars", 12}});
         QVERIFY(first["parts"][0]["text"] != next["parts"][0]["text"]);
+    }
+
+    void converterCanCompleteAfterMemoryChecks()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This converter fixture needs a POSIX shell");
+#else
+        QTemporaryDir directory;
+        const auto    converter = save(
+            directory,
+            "unzip",
+            QByteArray("#!/bin/sh\n/bin/sleep 0.1\nprintf '%s' '") + wordBody() + "'\n");
+        QVERIFY(QFile::setPermissions(converter, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        const auto path
+            = save(directory, "sample.docx", makeZip({{"word/document.xml", wordBody()}}));
+        const auto oldPath = qgetenv("PATH");
+        const auto restore = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        qputenv("PATH", directory.path().toUtf8());
+        QSocToolDocumentRead tool;
+        const auto           data = result(tool, {{"file_path", path.toStdString()}});
+        QVERIFY(
+            QString::fromStdString(data["parts"][0]["text"].get<std::string>())
+                .contains("Clock specification"));
+#endif
     }
 
     void xlsxUsesSheetOrderNamesAndCellAddresses()
@@ -355,7 +395,7 @@ private slots:
             || QStandardPaths::findExecutable("pdftotext").isEmpty())
             QSKIP("Poppler is optional");
         QTemporaryDir        directory;
-        const auto           path = createPdf(directory);
+        const auto           path = createPdf(directory, pdfFont_);
         QSocToolDocumentRead tool;
         const auto           data
             = result(tool, {{"file_path", path.toStdString()}, {"page", 2}, {"page_count", 2}});
@@ -375,7 +415,7 @@ private slots:
             || QStandardPaths::findExecutable("pdftoppm").isEmpty())
             QSKIP("Poppler is optional");
         QTemporaryDir        directory;
-        const auto           path = createPdf(directory);
+        const auto           path = createPdf(directory, pdfFont_);
         QSocToolDocumentRead tool;
         const auto           text = tool.execute(
             {{"file_path", path.toStdString()}, {"page", 3}, {"mode", "image"}});
@@ -396,7 +436,7 @@ private slots:
             || QStandardPaths::findExecutable("pdftoppm").isEmpty())
             QSKIP("Poppler is optional");
         QTemporaryDir directory;
-        const auto    original = createPdf(directory);
+        const auto    original = createPdf(directory, pdfFont_);
         QByteArray    encoded;
         for (int seed = 1; seed <= 256; ++seed) {
             QImage small(2, 2, QImage::Format_RGB32);

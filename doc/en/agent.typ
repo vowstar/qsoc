@@ -871,6 +871,8 @@ Waveform output is limited to 1 MiB, including metadata, initial values and even
 
 PDF reading requires the optional Poppler programs `pdfinfo`, `pdftotext` and, for images, `pdftoppm`. Office reading requires `unzip`. A missing program produces an explicit dependency error. Inputs are limited to 32 MiB. Office archives allow at most 4096 entries, 8 MiB per expanded entry, 64 MiB of declared expanded data and 32 MiB of actual extraction per call. Unsafe paths, encrypted entries, DTDs and unsupported compression are rejected. Each converter has a 15-second deadline. Remote workspaces do not offer this tool.
 
+Linux converters have a 768 MiB address-space limit. macOS samples their resident memory and physical footprint every 20 ms, stopping converters that exceed 768 MiB. The macOS check is sampled, so a converter can exceed the budget between checks.
+
 == Constraint Solving
 <agent-smt>
 

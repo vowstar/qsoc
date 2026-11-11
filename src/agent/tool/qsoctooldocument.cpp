@@ -22,6 +22,11 @@
 
 #include <algorithm>
 
+#ifdef Q_OS_MACOS
+#include <cerrno>
+#include <libproc.h>
+#endif
+
 #if defined(Q_OS_UNIX) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <sys/resource.h>
 #include <unistd.h>
@@ -29,9 +34,10 @@
 
 namespace {
 
-constexpr qint64 kInputBytes   = 32 * 1024 * 1024;
-constexpr qint64 kEntryBytes   = 8 * 1024 * 1024;
-constexpr qint64 kExtractBytes = 32 * 1024 * 1024;
+constexpr qint64  kInputBytes           = 32 * 1024 * 1024;
+constexpr qint64  kEntryBytes           = 8 * 1024 * 1024;
+constexpr qint64  kExtractBytes         = 32 * 1024 * 1024;
+constexpr quint64 kConverterMemoryBytes = 768ULL * 1024 * 1024;
 
 struct CommandResult
 {
@@ -53,10 +59,14 @@ CommandResult run(
     process.setProcessEnvironment(environment);
 #if defined(Q_OS_UNIX) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     process.setChildProcessModifier([] {
-        const rlimit memory{768 * 1024 * 1024, 768 * 1024 * 1024};
         const rlimit cpu{15, 15};
-        if (setrlimit(RLIMIT_AS, &memory) != 0 || setrlimit(RLIMIT_CPU, &cpu) != 0)
+        if (setrlimit(RLIMIT_CPU, &cpu) != 0)
             _exit(126);
+#ifndef Q_OS_MACOS
+        const rlimit memory{kConverterMemoryBytes, kConverterMemoryBytes};
+        if (setrlimit(RLIMIT_AS, &memory) != 0)
+            _exit(126);
+#endif
     });
 #endif
     QEventLoop loop;
@@ -71,6 +81,30 @@ CommandResult run(
         if (process.state() == QProcess::NotRunning)
             loop.quit();
     };
+#ifdef Q_OS_MACOS
+    /* Reserved mappings can already exceed the address-space budget before exec. */
+    QTimer memoryTimer;
+    memoryTimer.setInterval(20);
+    memoryTimer.setTimerType(Qt::PreciseTimer);
+    QObject::connect(&process, &QProcess::started, &memoryTimer, [&] { memoryTimer.start(); });
+    QObject::connect(&memoryTimer, &QTimer::timeout, &loop, [&] {
+        if (process.state() != QProcess::Running)
+            return;
+        rusage_info_v2 usage{};
+        if (proc_pid_rusage(
+                static_cast<int>(process.processId()),
+                RUSAGE_INFO_V2,
+                reinterpret_cast<rusage_info_t *>(&usage))
+            != 0) {
+            if (errno != ESRCH)
+                stop(QStringLiteral("Cannot inspect document converter memory"));
+            return;
+        }
+        if (usage.ri_resident_size > kConverterMemoryBytes
+            || usage.ri_phys_footprint > kConverterMemoryBytes)
+            stop(QStringLiteral("Document converter exceeded its 768 MiB memory budget"));
+    });
+#endif
     auto drain = [&] {
         process.setReadChannel(QProcess::StandardOutput);
         result.bytes += process.read(qMax<qint64>(0, limit - result.bytes.size()) + 1);
@@ -115,8 +149,10 @@ CommandResult run(
         loop.exec();
     if (result.error.isEmpty()
         && (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)) {
-        result.error = QStringLiteral("%1 failed: %2")
-                           .arg(program, QString::fromUtf8(diagnostics).trimmed().left(2000));
+        result.error = QStringLiteral("%1 failed (exit %2): %3")
+                           .arg(program)
+                           .arg(process.exitCode())
+                           .arg(QString::fromUtf8(diagnostics).trimmed().left(2000));
     }
     return result;
 }
