@@ -50,7 +50,8 @@ struct Diagram
     QList<int>               panels;
     int                      page = 0;
     QSocReportLayout::Result graph;
-    qreal                    scale = 1;
+    qreal                    scale      = 1;
+    qreal                    frameWidth = 976;
 };
 struct Page
 {
@@ -610,7 +611,8 @@ QJsonArray slice(const QJsonArray &array, int start, int count)
     return result;
 }
 
-QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
+QList<Diagram> circuits(
+    const QJsonArray &panels, const QStringList &families, QSocReportLayout::Budget &budget)
 {
     QList<Diagram>           result;
     QSocReportLayout::Engine engine;
@@ -620,8 +622,11 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
         labels.insert(
             panel["identity"].toString(panel["title"].toString()), panel["output"].toString());
     }
-    std::function<void(const QJsonArray &, const QList<int> &, const QString &)> append;
-    append = [&](const QJsonArray &members, const QList<int> &owners, const QString &caption) {
+    std::function<bool(const QJsonArray &, const QList<int> &, const QString &, bool)> append;
+    append = [&](const QJsonArray &members,
+                 const QList<int> &owners,
+                 const QString    &caption,
+                 bool              fitOnly) {
         auto graph     = QSocPrimitiveReport::graph(members);
         graph["power"] = members.first().toObject()["merge"].toObject()["kind"] == "power";
         auto nodes     = graph["nodes"].toArray();
@@ -637,19 +642,27 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
         QStringList names;
         for (const auto &member : members)
             names.append(member.toObject()["title"].toString());
-        const auto sizes   = measure(graph, families);
-        const auto drawing = QSocReportLayout::layout(graph, sizes, &engine);
+        const auto sizes = measure(graph, families);
+        if (fitOnly
+            && (nodes.size() > 64 || graph["edges"].toArray().size() > 128
+                || std::any_of(sizes.cbegin(), sizes.cend(), [](const QSizeF &size) {
+                       return size.width() > 1110 || size.height() > 527;
+                   })))
+            return false;
+        const auto drawing = QSocReportLayout::layout(graph, sizes, &engine, &budget);
         const bool fits    = drawing.size.width() <= 1110 && drawing.size.height() <= 527;
+        if (fitOnly && (!drawing.error.isEmpty() || !fits))
+            return false;
         if (drawing.error.isEmpty() && !fits && members.size() > 1) {
             const int middle = members.size() / 2;
-            append(slice(members, 0, middle), owners.mid(0, middle), caption);
-            append(slice(members, middle, members.size()), owners.mid(middle), caption);
-            return;
+            append(slice(members, 0, middle), owners.mid(0, middle), caption, false);
+            append(slice(members, middle, members.size()), owners.mid(middle), caption, false);
+            return true;
         }
-        const auto sheets
-            = fits || !drawing.error.isEmpty()
-                  ? QList<QSocReportLayout::Result>{drawing}
-                  : QSocReportLayout::paginate(graph, sizes, engine, result.size() + 1, &drawing);
+        const auto sheets = fits || !drawing.error.isEmpty()
+                                ? QList<QSocReportLayout::Result>{drawing}
+                                : QSocReportLayout::paginate(
+                                      graph, sizes, engine, result.size() + 1, &drawing, &budget);
         for (int i = 0; i < sheets.size(); ++i)
             result.append(
                 {names.join(" / ") + caption
@@ -659,6 +672,7 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
                  owners,
                  0,
                  sheets[i]});
+        return true;
     };
     QList<QList<int>>     groups;
     QMap<QByteArray, int> current;
@@ -667,6 +681,8 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
         const auto branches = panel["branches"].toArray();
         if (branches.size() > 4 || panel["exits"].toArray().size() > 4
             || panel["followers"].toArray().size() > 4) {
+            if (append({panel}, {index}, {}, true))
+                continue;
             for (int start = 0; start < branches.size(); start += 4) {
                 auto part        = panel;
                 part["branches"] = slice(branches, start, 4);
@@ -688,14 +704,15 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
                                               .arg(qMin(start + 3, int(branches.size()) - 1))
                                               .arg(index + 1)
                                               .arg(branches.size())
-                                        : QString());
+                                        : QString(),
+                    false);
             }
             for (int start = 4; start < panel["exits"].toArray().size(); start += 4) {
                 auto part         = panel;
                 part["branches"]  = slice(branches, 0, 4);
                 part["followers"] = QJsonArray();
                 part["exits"]     = slice(panel["exits"].toArray(), start, 4);
-                append({part}, {index}, " / remaining outputs");
+                append({part}, {index}, " / remaining outputs", false);
             }
             for (int start = 0; start < panel["followers"].toArray().size(); start += 4) {
                 auto part         = panel;
@@ -707,7 +724,8 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
                     {index},
                     QString(" / reset followers %1-%2")
                         .arg(start + 1)
-                        .arg(qMin(start + 4, int(panel["followers"].toArray().size()))));
+                        .arg(qMin(start + 4, int(panel["followers"].toArray().size()))),
+                    false);
             }
             continue;
         }
@@ -727,7 +745,7 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
         QJsonArray members;
         for (const int index : group)
             members.append(panels[index]);
-        append(members, group, {});
+        append(members, group, {}, false);
     }
     std::stable_sort(result.begin(), result.end(), [](const Diagram &a, const Diagram &b) {
         return a.panels.first() < b.panels.first();
@@ -735,7 +753,8 @@ QList<Diagram> circuits(const QJsonArray &panels, const QStringList &families)
     return result;
 }
 
-QList<Diagram> connectivity(const QJsonObject &data, const QStringList &families)
+QList<Diagram> connectivity(
+    const QJsonObject &data, const QStringList &families, QSocReportLayout::Budget &budget)
 {
     const auto panels = data["panels"].toArray();
     const bool wide   = std::any_of(panels.begin(), panels.end(), [](const QJsonValue &value) {
@@ -745,13 +764,37 @@ QList<Diagram> connectivity(const QJsonObject &data, const QStringList &families
         return {};
     QJsonArray         nodes, edges;
     QMap<QString, int> drivers;
-    const bool         reset = data["kind"] == "Reset";
+    QSet<QString>      identities;
+    for (const auto &value : panels) {
+        const auto panel = value.toObject();
+        identities.insert(panel["identity"].toString(panel["title"].toString()));
+    }
+    const bool reset = data["kind"] == "Reset";
     for (int owner = 0; owner < panels.size(); ++owner) {
         const auto panel = panels[owner].toObject(), merge = panel["merge"].toObject();
         const auto branches = panel["branches"].toArray();
-        for (int start = 0; start < branches.size(); start += 8) {
+        QJsonArray sourceNodes;
+        for (const auto &value : branches)
+            sourceNodes.append(
+                QJsonObject{{"kind", "input"}, {"label", value.toObject()["source"]}});
+        QJsonObject sourceGraph{{"nodes", sourceNodes}};
+        const auto  sourceSizes = measure(sourceGraph, families);
+        for (int start = 0; start < branches.size();) {
+            int   count  = 0;
+            qreal height = 12;
+            while (start + count < branches.size()) {
+                const auto  source = branches[start + count].toObject()["source"].toString();
+                const qreal next   = (identities.contains(source)
+                                          ? QSocReportLayout::continuationPortSize.height()
+                                          : sourceSizes[start + count].height())
+                                     + (count ? 6 : 0);
+                if (count && height + next > 448)
+                    break;
+                height += next;
+                ++count;
+            }
             QJsonArray sources, styles, inversions;
-            for (const auto &value : slice(branches, start, 8)) {
+            for (const auto &value : slice(branches, start, count)) {
                 const auto branch = value.toObject();
                 sources.append(branch["source"]);
                 styles.append(branch["style"]);
@@ -762,7 +805,7 @@ QList<Diagram> connectivity(const QJsonObject &data, const QStringList &families
             const QString output = panel["output"].toString();
             const bool    test   = !merge["testClock"].toString().isEmpty();
             const QString subset
-                = branches.size() > 8
+                = count < branches.size()
                       ? QString(" / inputs %1-%2").arg(start).arg(start + sources.size() - 1)
                       : QString();
             const int main = nodes.size();
@@ -803,6 +846,7 @@ QList<Diagram> connectivity(const QJsonObject &data, const QStringList &families
             const QString identity = panel["identity"].toString(panel["title"].toString());
             if (!drivers.contains(identity))
                 drivers.insert(identity, final);
+            start += count;
         }
     }
     const int targets = nodes.size();
@@ -852,7 +896,7 @@ QList<Diagram> connectivity(const QJsonObject &data, const QStringList &families
             panel["followers"] = QJsonArray();
             parts.append(panel);
         }
-        return circuits(parts, families);
+        return circuits(parts, families, budget);
     }
     QList<QList<int>> outgoing(nodes.size());
     QList<int>        degree(nodes.size()), depth(nodes.size()), queue;
@@ -882,8 +926,8 @@ QList<Diagram> connectivity(const QJsonObject &data, const QStringList &families
         {"nodes", nodes}, {"edges", edges}, {"overview", true}, {"power", data["kind"] == "Power"}};
     const auto               sizes = measure(graph, families);
     QSocReportLayout::Engine engine;
-    const auto               drawings = QSocReportLayout::paginate(graph, sizes, engine, 0);
-    QList<Diagram>           result;
+    const auto     drawings = QSocReportLayout::paginate(graph, sizes, engine, 0, nullptr, &budget);
+    QList<Diagram> result;
     for (const auto &drawing : drawings) {
         QList<int>  owners;
         QStringList names;
@@ -922,7 +966,7 @@ QList<Page> circuitPages(
     QList<Page> pages;
     Page        page;
     page.title = title;
-    qreal y    = 134;
+    qreal x = 32, y = 134, rowHeight = 0;
     for (int i = 0; i < diagrams.size(); ++i) {
         auto &diagram = diagrams[i];
         diagram.scale = qMin<qreal>(
@@ -931,15 +975,25 @@ QList<Page> circuitPages(
             && diagram.graph.size.height() * .85 + 28 <= 254)
             diagram.scale = .85;
         const qreal height = diagram.graph.size.height() * diagram.scale + 28;
+        diagram.frameWidth
+            = qMin<qreal>(976, qMax<qreal>(244, diagram.graph.size.width() * diagram.scale + 32));
+        if (x + diagram.frameWidth > 1008) {
+            x = 32;
+            y += rowHeight + 8;
+            rowHeight = 0;
+        }
         if (y + height > 650 && !page.diagrams.isEmpty()) {
             pages.append(page);
             page       = Page();
             page.title = title;
             y          = 134;
+            x          = 32;
+            rowHeight  = 0;
         }
         diagram.page = offset + pages.size() + 1;
-        page.diagrams.append({diagram, QPointF(32, y)});
-        y += height + 8;
+        page.diagrams.append({diagram, QPointF(x, y)});
+        x += diagram.frameWidth + 8;
+        rowHeight = qMax(rowHeight, height);
     }
     if (!page.diagrams.isEmpty())
         pages.append(page);
@@ -1155,47 +1209,143 @@ QJsonArray parameterSections(QJsonArray panels)
 
 QList<Page> compactParameters(const QJsonArray &panels, const QStringList &families)
 {
-    const QFont        face = font(families, 14);
-    const qreal        line = leading(face);
-    const QList<qreal> columns{32, 240, 472, 1008};
-    QList<Page>        pages;
-    Page               page;
-    qreal              y     = 0;
-    const auto         fresh = [&] {
+    struct Table
+    {
+        QStringList        headers;
+        QList<qreal>       columns;
+        QList<QStringList> rows;
+    };
+    const QFont           face = font(families, 14);
+    const qreal           line = leading(face);
+    const QStringList     headings{"Target", "Parameter", "Value"};
+    const QList<qreal>    vertical{32, 240, 472, 1008};
+    QList<Table>          tables;
+    Table                 plain{headings, vertical, {}};
+    QList<QJsonArray>     groups;
+    QMap<QByteArray, int> schemas;
+    for (const auto &value : panels) {
+        const auto    panel = value.toObject();
+        QJsonArray    schema;
+        QSet<QString> names;
+        bool          unique = panel.contains("branches") && !panel["details"].toArray().isEmpty();
+        for (const auto &entry : panel["details"].toArray()) {
+            const auto name = entry.toObject()["name"].toString();
+            unique &= !name.isEmpty() && !names.contains(name);
+            names.insert(name);
+            schema.append(name);
+        }
+        if (!unique) {
+            groups.append(QJsonArray{panel});
+            continue;
+        }
+        const auto key = QJsonDocument(schema).toJson(QJsonDocument::Compact);
+        if (!schemas.contains(key)) {
+            schemas.insert(key, groups.size());
+            groups.append(QJsonArray());
+        }
+        groups[schemas.value(key)].append(panel);
+    }
+    const auto rowHeight = [&](const QStringList &row, const QList<qreal> &columns) {
+        int lines = 1;
+        for (int i = 0; i < row.size(); ++i)
+            lines = qMax(lines, int(wrap(row[i], face, columns[i + 1] - columns[i] - 16).size()));
+        return lines * line + 8;
+    };
+    for (const auto &group : groups) {
+        const auto first  = group.first().toObject()["details"].toArray();
+        const int  stride = group.size() >= 8 ? 3 : 1;
+        for (int start = 0; start < qMax<qsizetype>(1, first.size()); start += stride) {
+            const int count = qMin(stride, int(first.size()) - start);
+            Table     matrix{{"Target"}, {32, 240}, {}};
+            for (int i = 0; i < count; ++i) {
+                matrix.headers.append(first[start + i].toObject()["name"].toString());
+                matrix.columns.append(240 + 768.0 * (i + 1) / count);
+            }
+            QList<QStringList> rows;
+            qreal              matrixHeight = 0, verticalHeight = 0;
+            bool               shortRows = true;
+            for (const auto &value : group) {
+                const auto  panel   = value.toObject();
+                const auto  details = panel["details"].toArray();
+                QStringList horizontal{panel["title"].toString()};
+                if (details.isEmpty())
+                    rows.append(
+                        {panel["title"].toString(), "Parameters", "No per-target overrides."});
+                for (int i = start; i < start + count; ++i) {
+                    const auto row = details[i].toObject();
+                    rows.append(
+                        {panel["title"].toString(),
+                         row["name"].toString(),
+                         row["value"].toString()});
+                    horizontal.append(row["value"].toString());
+                }
+                const qreal height = count ? rowHeight(horizontal, matrix.columns) : 0;
+                shortRows &= height <= 3 * line + 8;
+                matrixHeight += height;
+                matrix.rows.append(horizontal);
+            }
+            for (const auto &row : rows)
+                verticalHeight += rowHeight(row, vertical);
+            const qreal headerHeight = count ? rowHeight(matrix.headers, matrix.columns) : 0;
+            matrixHeight += qCeil(matrixHeight / qMax(line, 506 - headerHeight)) * headerHeight;
+            if (group.size() < 8 || count < 1 || !shortRows || headerHeight > 2 * line + 8
+                || matrixHeight >= verticalHeight) {
+                plain.rows.append(rows);
+                continue;
+            }
+            if (!plain.rows.isEmpty()) {
+                tables.append(plain);
+                plain.rows.clear();
+            }
+            tables.append(matrix);
+        }
+    }
+    if (!plain.rows.isEmpty())
+        tables.append(plain);
+    QList<Page>  pages;
+    Page         page;
+    qreal        y     = 0;
+    const Table *table = nullptr;
+    const auto   fresh = [&] {
         if (!page.cells.isEmpty())
             pages.append(page);
-        page       = Page();
-        page.title = "3. Parameters";
-        y          = 144;
-        const QStringList headings{"Target", "Parameter", "Value"};
-        for (int i = 0; i < 3; ++i) {
-            page.cells.append({{columns[i], y, columns[i + 1] - columns[i], 30}, true});
-            page.labels.append({{columns[i] + 8, y + 5}, {headings[i]}, 14, ink});
+        page                = Page();
+        page.title          = "3. Parameters";
+        y                   = 144;
+        const auto &columns = table->columns;
+        const qreal height  = rowHeight(table->headers, columns);
+        for (int i = 0; i < table->headers.size(); ++i) {
+            page.cells.append({{columns[i], y, columns[i + 1] - columns[i], height}, true});
+            page.labels.append(
+                {{columns[i] + 8, y + 4},
+                 wrap(table->headers[i], face, columns[i + 1] - columns[i] - 16),
+                 14,
+                 ink});
         }
-        y += 30;
+        y += height;
     };
-    fresh();
-    for (const auto &value : panels) {
-        const auto panel = value.toObject();
-        auto       rows  = panel["details"].toArray();
-        if (rows.isEmpty())
-            rows.append(QJsonObject{{"name", "Parameters"}, {"value", "No per-target overrides."}});
-        for (const auto &entry : rows) {
-            const auto         row = entry.toObject();
-            QList<QStringList> texts{
-                wrap(panel["title"].toString(), face, columns[1] - columns[0] - 16),
-                wrap(row["name"].toString(), face, columns[2] - columns[1] - 16),
-                wrap(row["value"].toString(), face, columns[3] - columns[2] - 16)};
-            while (!texts[0].isEmpty() || !texts[1].isEmpty() || !texts[2].isEmpty()) {
-                int       capacity = static_cast<int>((650 - y - 8) / line);
-                const int needed   = qMax(texts[0].size(), qMax(texts[1].size(), texts[2].size()));
+    for (const auto &current : tables) {
+        table = &current;
+        fresh();
+        const auto &columns = table->columns;
+        for (const auto &row : table->rows) {
+            QList<QStringList> texts;
+            for (int i = 0; i < row.size(); ++i)
+                texts.append(wrap(row[i], face, columns[i + 1] - columns[i] - 16));
+            while (std::any_of(texts.cbegin(), texts.cend(), [](const QStringList &text) {
+                return !text.isEmpty();
+            })) {
+                int capacity = static_cast<int>((650 - y - 8) / line);
+                int needed   = 0;
+                for (const auto &text : texts)
+                    needed = qMax(needed, int(text.size()));
                 if (capacity < 1 || (needed > capacity && needed <= 16)) {
                     fresh();
                     capacity = static_cast<int>((650 - y - 8) / line);
                 }
                 const int   count  = qMin(capacity, needed);
                 const qreal height = count * line + 8;
-                for (int i = 0; i < 3; ++i) {
+                for (int i = 0; i < texts.size(); ++i) {
                     page.cells.append({{columns[i], y, columns[i + 1] - columns[i], height}, false});
                     page.labels.append({{columns[i] + 8, y + 4}, texts[i].mid(0, count), 14, ink});
                     texts[i] = texts[i].mid(qMin<qsizetype>(count, texts[i].size()));
@@ -1321,8 +1471,8 @@ void paint(
         const auto  origin  = entry.second;
         text(
             painter,
-            {origin, QSizeF(976, 20)},
-            wrap(diagram.title, font(families, 14), 976, 1),
+            {origin, QSizeF(diagram.frameWidth, 20)},
+            wrap(diagram.title, font(families, 14), diagram.frameWidth, 1),
             font(families, 14),
             Qt::AlignLeft | Qt::AlignTop);
         QPen frame(border, .8);
@@ -1331,9 +1481,9 @@ void paint(
         painter.setBrush(Qt::NoBrush);
         const auto width  = diagram.graph.size.width() * diagram.scale;
         const auto height = diagram.graph.size.height() * diagram.scale;
-        painter.drawRect(QRectF(origin.x(), origin.y() + 20, 976, height + 8));
+        painter.drawRect(QRectF(origin.x(), origin.y() + 20, diagram.frameWidth, height + 8));
         painter.save();
-        painter.translate(origin.x() + (976 - width) / 2, origin.y() + 24);
+        painter.translate(origin.x() + (diagram.frameWidth - width) / 2, origin.y() + 24);
         painter.scale(diagram.scale, diagram.scale);
         drawGraph(painter, diagram.graph, {0, 0}, families);
         painter.restore();
@@ -1861,7 +2011,8 @@ bool renderPrimitiveReport(const QString &request, const QString &outputBase, QS
     const auto license = resource(":/license/droid-fonts.txt");
     if (license.isEmpty())
         return fail("Missing report font license resource");
-    auto diagrams = circuits(panels, families);
+    QSocReportLayout::Budget budget;
+    auto                     diagrams = circuits(panels, families, budget);
     if (diagrams.isEmpty())
         return fail("The report contains no circuit sheets");
     for (const auto &diagram : diagrams) {
@@ -1870,7 +2021,7 @@ bool renderPrimitiveReport(const QString &request, const QString &outputBase, QS
         if (diagram.graph.size.width() > 1110 || diagram.graph.size.height() > 527)
             return fail("A circuit sheet exceeds the printable area: " + diagram.title);
     }
-    auto overviews = connectivity(data, families);
+    auto overviews = connectivity(data, families, budget);
     for (const auto &diagram : overviews) {
         if (!diagram.graph.error.isEmpty())
             return fail(diagram.graph.error);

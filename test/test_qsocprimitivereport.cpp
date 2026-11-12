@@ -37,6 +37,25 @@ QStringList kinds(const QJsonArray &parts)
     return result;
 }
 
+QJsonValue withoutRuntimeIdentity(const QJsonValue &value)
+{
+    if (value.isObject()) {
+        auto object = value.toObject();
+        // ELK emits an engine-local object identity as $H.
+        object.remove("$H");
+        for (const auto &key : object.keys())
+            object[key] = withoutRuntimeIdentity(object.value(key));
+        return object;
+    }
+    if (value.isArray()) {
+        auto array = value.toArray();
+        for (int i = 0; i < array.size(); ++i)
+            array[i] = withoutRuntimeIdentity(array.at(i));
+        return array;
+    }
+    return value;
+}
+
 void verifySheetNavigation(const QString &html, int targets, bool fanIn)
 {
     const QRegularExpression articles(
@@ -127,7 +146,14 @@ private slots:
     void boundedPagination_data();
     void boundedPagination();
     void paginationValidation();
+    void layoutBudget();
+    void layoutCacheKeepsCurrentData();
+    void engineCacheMatchesFresh();
+    void compactFanIn();
     void overviewKeepsModelOrder();
+    void overviewKeepsTargetStages();
+    void overviewReferenceFanIn();
+    void compactPagePacking();
     void largeControllers_data();
     void largeControllers();
     void htmlSignalContinuations();
@@ -138,6 +164,7 @@ private slots:
     void sharedParametersRetainFullTargetNames_data();
     void sharedParametersRetainFullTargetNames();
     void parameterDefaultsKeepOverrides();
+    void parameterStripsKeepRows();
     void controlLabelSpacing_data();
     void controlLabelSpacing();
     void publication_data();
@@ -516,6 +543,180 @@ void Test::paginationValidation()
     rejected(bad, "The report graph contains a cycle");
 }
 
+void Test::layoutBudget()
+{
+    QJsonArray    nodes, edges;
+    QList<QSizeF> sizes;
+    for (int i = 0; i < 14; ++i) {
+        nodes.append(QJsonObject{{"kind", "divider"}, {"label", QString::number(i)}});
+        sizes.append({200, 80});
+        if (i > 0)
+            edges.append(QJsonObject{{"from", i - 1}, {"to", i}});
+    }
+    const QJsonObject        graph{{"nodes", nodes}, {"edges", edges}};
+    QSocReportLayout::Engine engine;
+    QSocReportLayout::Budget budget{1, 1000, 1000};
+    const auto sheets = QSocReportLayout::paginate(graph, sizes, engine, 1, nullptr, &budget);
+    QVERIFY(!sheets.isEmpty());
+    for (const auto &sheet : sheets)
+        QCOMPARE(sheet.error, QString("Report layout exceeded its graph-work budget"));
+    QCOMPARE(budget.calls, 0);
+    QCOMPARE(
+        QSocReportLayout::layout(graph, sizes, &engine, &budget).error,
+        QString("Report layout exceeded its graph-work budget"));
+}
+
+void Test::layoutCacheKeepsCurrentData()
+{
+    QJsonArray nodes{
+        QJsonObject{{"kind", "input"}, {"label", "source_a"}},
+        QJsonObject{{"kind", "divider"}, {"label", "divider_a"}},
+        QJsonObject{{"kind", "divider"}, {"label", "divider_b"}},
+        QJsonObject{{"kind", "output"}, {"label", "target_a"}}};
+    QJsonArray edges{
+        QJsonObject{{"from", 0}, {"to", 1}},
+        QJsonObject{{"from", 1}, {"to", 2}},
+        QJsonObject{{"from", 2}, {"to", 3}}};
+    const QList<QSizeF>      sizes{{96, 56}, {72, 96}, {96, 56}, {96, 56}};
+    const QJsonObject        graph{{"nodes", nodes}, {"edges", edges}};
+    QSocReportLayout::Engine shared;
+    for (int variant = 0; variant < 6; ++variant) {
+        auto current    = graph;
+        auto dimensions = sizes;
+        if (variant == 1) {
+            auto changed = nodes;
+            for (int i = 0; i < changed.size(); ++i) {
+                auto node     = changed[i].toObject();
+                node["label"] = QString("current_label_%1").arg(i);
+                changed[i]    = node;
+            }
+            auto links       = edges;
+            auto first       = links[0].toObject();
+            first["style"]   = "soft";
+            links[0]         = first;
+            current["nodes"] = changed;
+            current["edges"] = links;
+        } else if (variant == 2) {
+            dimensions[1].setWidth(140);
+        } else if (variant == 3) {
+            auto changed     = nodes;
+            auto node        = changed[1].toObject();
+            node["inputs"]   = 2;
+            changed[1]       = node;
+            auto links       = edges;
+            auto first       = links[0].toObject();
+            first["input"]   = 1;
+            links[0]         = first;
+            current["nodes"] = changed;
+            current["edges"] = links;
+        } else if (variant == 4) {
+            current["edges"] = QJsonArray{
+                QJsonObject{{"from", 0}, {"to", 2}},
+                QJsonObject{{"from", 2}, {"to", 1}},
+                QJsonObject{{"from", 1}, {"to", 3}}};
+        } else if (variant == 5) {
+            current["overview"] = true;
+        }
+        QSocReportLayout::Engine fresh;
+        const auto               expected = QSocReportLayout::layout(current, dimensions, &fresh);
+        const auto               actual   = QSocReportLayout::layout(current, dimensions, &shared);
+        QVERIFY2(expected.error.isEmpty(), qPrintable(expected.error));
+        QVERIFY2(actual.error.isEmpty(), qPrintable(actual.error));
+        QCOMPARE(actual.size, expected.size);
+        QCOMPARE(actual.nodes.size(), expected.nodes.size());
+        QCOMPARE(actual.edges.size(), expected.edges.size());
+        for (int i = 0; i < actual.nodes.size(); ++i) {
+            QCOMPARE(actual.nodes[i].box, expected.nodes[i].box);
+            QCOMPARE(actual.nodes[i].data, current["nodes"].toArray()[i].toObject());
+        }
+        for (int i = 0; i < actual.edges.size(); ++i) {
+            QCOMPARE(actual.edges[i].path, expected.edges[i].path);
+            QCOMPARE(
+                actual.edges[i].style, current["edges"].toArray()[i].toObject()["style"].toString());
+        }
+    }
+    QSocReportLayout::Budget budget{1, 1000, 1000};
+    QVERIFY(QSocReportLayout::layout(graph, sizes, &shared, &budget).error.isEmpty());
+    QCOMPARE(budget.calls, 0);
+    QCOMPARE(
+        QSocReportLayout::layout(graph, sizes, &shared, &budget).error,
+        QString("Report layout exceeded its graph-work budget"));
+}
+
+void Test::engineCacheMatchesFresh()
+{
+    const QJsonObject graph{
+        {"id", "report"},
+        {"children",
+         QJsonArray{
+             QJsonObject{{"id", "a"}, {"width", 96}, {"height", 48}},
+             QJsonObject{{"id", "b"}, {"width", 96}, {"height", 48}}}},
+        {"edges",
+         QJsonArray{
+             QJsonObject{{"id", "wire"}, {"sources", QJsonArray{"a"}}, {"targets", QJsonArray{"b"}}}}},
+        {"layoutOptions",
+         QJsonObject{
+             {"elk.algorithm", "layered"}, {"elk.direction", "RIGHT"}, {"elk.randomSeed", 1}}}};
+    QSocReportLayout::Engine shared;
+    QString                  error;
+    const auto               initial = shared.layout(graph, error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(!initial.isEmpty());
+    error = "previous failure";
+    QCOMPARE(shared.layout(graph, error), initial);
+    QVERIFY(error.isEmpty());
+    auto changed             = graph;
+    auto options             = graph["layoutOptions"].toObject();
+    options["elk.direction"] = "DOWN";
+    changed["layoutOptions"] = options;
+    QSocReportLayout::Engine fresh;
+    QString                  expectedError;
+    const auto               expected = fresh.layout(changed, expectedError);
+    QVERIFY2(expectedError.isEmpty(), qPrintable(expectedError));
+    QCOMPARE(withoutRuntimeIdentity(shared.layout(changed, error)), withoutRuntimeIdentity(expected));
+    QVERIFY(error.isEmpty());
+    auto invalid     = graph;
+    invalid["edges"] = QJsonArray{
+        QJsonObject{{"id", "bad"}, {"sources", QJsonArray{"missing"}}, {"targets", QJsonArray{"b"}}}};
+    QVERIFY(shared.layout(invalid, error).isEmpty());
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(shared.layout(graph, error), initial);
+    QVERIFY(error.isEmpty());
+}
+
+void Test::compactFanIn()
+{
+    YAML::Node config;
+    config["name"] = "clocks";
+    for (int i = 0; i < 6; ++i) {
+        const auto name                          = QString("source_%1").arg(i).toStdString();
+        config["input"][name]["freq"]            = "24MHz";
+        config["target"]["target"]["link"][name] = YAML::Node(YAML::NodeType::Map);
+    }
+    config["target"]["target"]["select"]           = "select_target";
+    config["target"]["target"]["mux"]["sta_guide"] = YAML::Node(YAML::NodeType::Map);
+    QSocClockPrimitive generator;
+    const auto         parsed = generator.parseClockConfig(config);
+    QVERIFY(parsed.valid);
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_compact_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(
+        QSocPrimitiveReport::stage(directory.path(), "clocks", QSocPrimitiveReport::clock(parsed)));
+    QSocPrimitiveReport::render(directory.path());
+    const QString html  = QString::fromUtf8(read(directory.filePath("clocks.html")));
+    const auto    paths = html.mid(
+        html.indexOf("<section id=\"paths\">"),
+        html.indexOf("<section id=\"parameters\">") - html.indexOf("<section id=\"paths\">"));
+    QCOMPARE(paths.count("<article class=\"sheet\""), 1);
+    QVERIFY(paths.contains("select_target"));
+    QVERIFY(paths.contains("STA"));
+    for (int i = 0; i < 6; ++i) {
+        QVERIFY(paths.contains(QString("source_%1").arg(i)));
+        QVERIFY(paths.contains(QString(">%1</text>").arg(i)));
+    }
+    verifySheetNavigation(html, 1, false);
+}
+
 void Test::overviewKeepsModelOrder()
 {
     QJsonArray nodes{
@@ -539,21 +740,144 @@ void Test::overviewKeepsModelOrder()
         QVERIFY(result.nodes[i].box.top() > result.nodes[i - 1].box.bottom());
 }
 
+void Test::overviewKeepsTargetStages()
+{
+    QJsonArray    nodes, edges;
+    QList<QSizeF> sizes;
+    for (int owner = 0; owner < 12; ++owner) {
+        const int main = nodes.size(), test = main + 1;
+        nodes.append(
+            QJsonObject{
+                {"kind", "overview"},
+                {"owner", owner},
+                {"inputs", 5},
+                {"label", QString("main_%1").arg(owner)}});
+        nodes.append(
+            QJsonObject{
+                {"kind", "overview"},
+                {"owner", owner},
+                {"inputs", 1},
+                {"label", QString("test_%1").arg(owner)}});
+        sizes.append({244, 68});
+        sizes.append({244, 44});
+        edges.append(QJsonObject{{"from", main}, {"to", test}});
+        for (int input = 0; input < 5; ++input) {
+            const int source = nodes.size();
+            nodes.append(
+                QJsonObject{
+                    {"kind", "input"}, {"label", QString("source_%1_%2").arg(owner).arg(input)}});
+            sizes.append({96, 32});
+            edges.append(QJsonObject{{"from", source}, {"to", main}, {"input", input}});
+        }
+    }
+    QSocReportLayout::Engine engine;
+    const auto               sheets = QSocReportLayout::paginate(
+        QJsonObject{{"nodes", nodes}, {"edges", edges}, {"overview", true}}, sizes, engine, 1);
+    QMap<int, int> location, stages;
+    for (int sheet = 0; sheet < sheets.size(); ++sheet) {
+        QVERIFY2(sheets[sheet].error.isEmpty(), qPrintable(sheets[sheet].error));
+        for (const auto &node : sheets[sheet].nodes) {
+            const int owner = node.data["owner"].toInt(-1);
+            if (owner < 0)
+                continue;
+            if (location.contains(owner))
+                QCOMPARE(location.value(owner), sheet);
+            location[owner] = sheet;
+            ++stages[owner];
+        }
+    }
+    QCOMPARE(stages.size(), 12);
+    for (const int count : stages)
+        QCOMPARE(count, 2);
+    QVERIFY(sheets.size() < 12);
+}
+
+void Test::overviewReferenceFanIn()
+{
+    YAML::Node config;
+    config["name"]       = "controller";
+    config["host_clock"] = "clock_ao";
+    config["host_reset"] = "reset_ao_n";
+    YAML::Node dependent;
+    dependent["name"] = "dependent_domain";
+    for (int i = 0; i < 8; ++i) {
+        const auto name = QString("root_domain_%1").arg(i).toStdString();
+        YAML::Node root;
+        root["name"]   = name;
+        root["depend"] = YAML::Node(YAML::NodeType::Sequence);
+        config["domain"].push_back(root);
+        YAML::Node dependency;
+        dependency["name"] = name;
+        dependency["type"] = i % 2 ? "soft" : "hard";
+        dependent["depend"].push_back(dependency);
+    }
+    config["domain"].push_back(dependent);
+    QSocPowerPrimitive generator;
+    const auto         parsed = generator.parsePowerConfig(config);
+    QVERIFY(parsed.valid);
+    for (int i = 0; i < 8; ++i)
+        QCOMPARE(parsed.domains[i].kind, QSocPowerPrimitive::DomainKind::Root);
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_reference_fanin_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(
+        QSocPrimitiveReport::stage(
+            directory.path(), "controller", QSocPrimitiveReport::power(parsed)));
+    QSocPrimitiveReport::render(directory.path());
+    const auto html = read(directory.filePath("controller.html"));
+    QVERIFY(read(directory.filePath("controller.pdf")).startsWith("%PDF-"));
+    verifySheetNavigation(QString::fromUtf8(html), 9, false);
+    const auto overview = html.left(html.indexOf("<section id=\"paths\">"));
+    QVERIFY(overview.contains("dependent_domain"));
+    for (int i = 0; i < 8; ++i)
+        QVERIFY(overview.contains(QString("root_domain_%1").arg(i).toUtf8()));
+}
+
+void Test::compactPagePacking()
+{
+    YAML::Node config;
+    config["name"] = "controller";
+    for (int i = 0; i < 4; ++i) {
+        const auto source               = QString("source_%1").arg(i).toStdString();
+        config["input"][source]["freq"] = "24MHz";
+        config["target"][QString("target_%1").arg(i).toStdString()]["link"][source] = YAML::Node(
+            YAML::NodeType::Map);
+    }
+    QSocClockPrimitive generator;
+    const auto         parsed = generator.parseClockConfig(config);
+    QVERIFY(parsed.valid);
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_report_packing_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(
+        QSocPrimitiveReport::stage(
+            directory.path(), "controller", QSocPrimitiveReport::clock(parsed)));
+    QSocPrimitiveReport::render(directory.path());
+    const QString html = QString::fromUtf8(read(directory.filePath("controller.html")));
+    verifySheetNavigation(html, 4, false);
+    const auto paths = html.mid(html.indexOf("<section id=\"paths\">"));
+    QCOMPARE(paths.count("<figcaption>PDF page 2"), 4);
+    QVERIFY(!paths.contains("<figcaption>PDF page 3"));
+}
+
 void Test::largeControllers_data()
 {
     QTest::addColumn<QString>("kind");
     QTest::addColumn<bool>("fanIn");
     QTest::addColumn<int>("divider");
     QTest::addColumn<int>("scale");
-    QTest::newRow("clock-targets") << QString("clock") << false << 2 << 128;
-    QTest::newRow("reset-targets") << QString("reset") << false << 2 << 128;
-    QTest::newRow("power-domains") << QString("power") << false << 2 << 128;
-    QTest::newRow("clock-fan-in") << QString("clock") << true << 2 << 128;
-    QTest::newRow("wide-divider") << QString("clock") << true << 1000000007 << 128;
-    QTest::newRow("clock-targets-384") << QString("clock") << false << 2 << 384;
-    QTest::newRow("reset-targets-384") << QString("reset") << false << 2 << 384;
-    QTest::newRow("power-domains-384") << QString("power") << false << 2 << 384;
-    QTest::newRow("clock-fan-in-384") << QString("clock") << true << 2 << 384;
+    QTest::addColumn<bool>("dense");
+    QTest::newRow("clock-targets") << QString("clock") << false << 2 << 128 << false;
+    QTest::newRow("reset-targets") << QString("reset") << false << 2 << 128 << false;
+    QTest::newRow("power-domains") << QString("power") << false << 2 << 128 << false;
+    QTest::newRow("clock-fan-in") << QString("clock") << true << 2 << 128 << false;
+    QTest::newRow("wide-divider") << QString("clock") << true << 1000000007 << 128 << false;
+    QTest::newRow("clock-targets-384") << QString("clock") << false << 2 << 384 << false;
+    QTest::newRow("reset-targets-384") << QString("reset") << false << 2 << 384 << false;
+    QTest::newRow("power-domains-384") << QString("power") << false << 2 << 384 << false;
+    QTest::newRow("clock-fan-in-384") << QString("clock") << true << 2 << 384 << false;
+    QTest::newRow("clock-many-sources-128") << QString("clock") << false << 2 << 128 << true;
+    QTest::newRow("reset-many-sources-128") << QString("reset") << false << 2 << 128 << true;
+    QTest::newRow("clock-many-sources-384") << QString("clock") << false << 2 << 384 << true;
+    QTest::newRow("reset-many-sources-384") << QString("reset") << false << 2 << 384 << true;
 }
 
 void Test::largeControllers()
@@ -562,6 +886,7 @@ void Test::largeControllers()
     QFETCH(bool, fanIn);
     QFETCH(int, divider);
     QFETCH(int, scale);
+    QFETCH(bool, dense);
     YAML::Node config;
     config["name"] = "controller";
     QJsonObject report;
@@ -587,18 +912,21 @@ void Test::largeControllers()
         QVERIFY(parsed.valid);
         report = QSocPrimitiveReport::power(parsed);
     } else {
-        const int sources = fanIn ? scale : 4;
+        const int sources = fanIn ? scale : (dense ? 128 : 4);
         for (int i = 0; i < sources; ++i) {
             const auto name = QString("source_%1").arg(i, 3, 10, QChar('0')).toStdString();
             config[kind == "clock" ? "input" : "source"][name][kind == "clock" ? "freq" : "active"]
                 = kind == "clock" ? "24MHz" : (i % 2 ? "high" : "low");
         }
         for (int i = 0; i < (fanIn ? 1 : scale); ++i) {
-            last        = QString("target_%1").arg(i, 3, 10, QChar('0'));
-            auto target = config["target"][last.toStdString()];
-            for (int j = 0; j < sources; ++j) {
-                auto link
-                    = target["link"][QString("source_%1").arg(j, 3, 10, QChar('0')).toStdString()];
+            last             = QString("target_%1").arg(i, 3, 10, QChar('0'));
+            auto      target = config["target"][last.toStdString()];
+            const int links  = dense ? 5 + i % 4 : sources;
+            for (int j = 0; j < links; ++j) {
+                const int source = dense ? (i * 5 + j * 17) % sources : j;
+                auto      link
+                    = target["link"]
+                            [QString("source_%1").arg(source, 3, 10, QChar('0')).toStdString()];
                 link = YAML::Node(YAML::NodeType::Map);
                 if (fanIn) {
                     link["icg"]["enable"]  = QString("en_%1").arg(j).toStdString();
@@ -658,6 +986,12 @@ void Test::largeControllers()
         QVERIFY2(overview.contains(target.toUtf8()), qPrintable(target));
     }
     QVERIFY(overview.contains("Processing and control pins"));
+    if (dense) {
+        for (int i = 0; i < 128; ++i)
+            QVERIFY2(
+                overview.contains(QString("source_%1").arg(i, 3, 10, QChar('0')).toUtf8()),
+                qPrintable(QString("Missing source %1").arg(i)));
+    }
     if (kind == "power")
         QVERIFY(html.contains("{target}"));
     if (fanIn) {
@@ -680,12 +1014,15 @@ void Test::largeControllers()
     QVERIFY(xml.contains(last.toUtf8()));
     if (divider > 2)
         QVERIFY(xml.contains(QByteArray::number(divider)));
-    QXmlStreamReader reader(xml);
-    int              pages = 0;
+    QXmlStreamReader   reader(xml);
+    int                pages = 0;
+    QString            pageText;
+    QMap<QString, int> sections;
     while (!reader.atEnd()) {
         reader.readNext();
         if (reader.isStartElement() && reader.name() == QLatin1String("page")) {
             ++pages;
+            pageText.clear();
             const auto attributes = reader.attributes();
             QVERIFY(qAbs(attributes.value("width").toDouble() - 842) < 2);
             QVERIFY(qAbs(attributes.value("height").toDouble() - 595) < 2);
@@ -696,11 +1033,43 @@ void Test::largeControllers()
             QVERIFY(attributes.value("yMin").toDouble() >= 0);
             QVERIFY(attributes.value("xMax").toDouble() <= 842);
             QVERIFY(attributes.value("yMax").toDouble() <= 596);
+            if (dense)
+                pageText += reader.readElementText(QXmlStreamReader::IncludeChildElements) + ' ';
+        }
+        if (dense && reader.isEndElement() && reader.name() == QLatin1String("page")) {
+            const QString section = pageText.contains("Connectivity overview") ? "overview"
+                                    : pageText.contains("Target index")        ? "index"
+                                    : pageText.contains("Signal paths")        ? "circuits"
+                                    : pageText.contains("Parameters")          ? "parameters"
+                                                                               : QString();
+            QVERIFY2(!section.isEmpty(), qPrintable(pageText.left(200)));
+            ++sections[section];
         }
     }
     QVERIFY(!reader.hasError());
     QVERIFY(pages > 10);
-    QVERIFY2(pages <= scale, qPrintable(QString("%1 pages for %2 signals").arg(pages).arg(scale)));
+    if (dense) {
+        // This fixture has at most eight short external inputs per target.
+        const auto circuitSheets = html.count("<article class=\"sheet\"");
+        QVERIFY(circuitSheets <= scale);
+        QVERIFY(sections.value("circuits") > 0);
+        QVERIFY(sections.value("circuits") <= circuitSheets);
+        QVERIFY(sections.value("overview") > 0);
+        QVERIFY(sections.value("overview") <= scale);
+        QVERIFY(sections.value("index") > 0);
+        QVERIFY(sections.value("index") <= (scale + 17) / 18);
+        qsizetype parameterUnits = scale + report["sources"].toArray().size() + 2;
+        for (const auto &panel : report["panels"].toArray())
+            parameterUnits += panel.toObject()["details"].toArray().size();
+        QVERIFY(sections.value("parameters") > 0);
+        QVERIFY(sections.value("parameters") <= parameterUnits);
+        QCOMPARE(
+            pages,
+            sections.value("circuits") + sections.value("overview") + sections.value("index")
+                + sections.value("parameters"));
+    } else {
+        QVERIFY2(pages <= scale, qPrintable(QString("%1 pages for %2 signals").arg(pages).arg(scale)));
+    }
     verifyPagePreview(html, pages);
 }
 
@@ -1024,6 +1393,80 @@ target: {cpu_clk: {link: {osc: {}}}}
         process.exitCode() == 0,
         qPrintable(detacher + ": " + QString::fromUtf8(process.readAllStandardError())));
     QCOMPARE(read(notice), read(":/license/droid-fonts.txt"));
+}
+
+void Test::parameterStripsKeepRows()
+{
+    YAML::Node config;
+    config["name"]                    = "controller";
+    config["input"]["source"]["freq"] = "24MHz";
+    for (int i = 0; i < 12; ++i)
+        config["target"][QString("target_%1").arg(i).toStdString()]["link"]["source"] = YAML::Node(
+            YAML::NodeType::Map);
+    QSocClockPrimitive generator;
+    const auto         parsed = generator.parseClockConfig(config);
+    QVERIFY(parsed.valid);
+    auto report = QSocPrimitiveReport::clock(parsed);
+    auto panels = report["panels"].toArray();
+    for (int i = 0; i < panels.size(); ++i) {
+        auto       panel = panels[i].toObject();
+        QJsonArray rows;
+        for (const QString &field : {QString("Alpha"), QString("Beta"), QString("Gamma")})
+            rows.append(
+                QJsonObject{{"name", field}, {"value", QString("%1_value_%2").arg(field).arg(i)}});
+        panel["details"] = rows;
+        panels[i]        = panel;
+    }
+    report["panels"] = panels;
+    QTemporaryDir directory(QDir::tempPath() + "/test_qsoc_parameter_strips_XXXXXX");
+    QVERIFY(directory.isValid());
+    QVERIFY(QSocPrimitiveReport::stage(directory.path(), "controller", report));
+    QSocPrimitiveReport::render(directory.path());
+    const auto       html = read(directory.filePath("controller.html"));
+    const QByteArray startTag("<script type=\"application/json\" id=\"document-page-data\">");
+    const auto       start = html.indexOf(startTag) + startTag.size();
+    QVERIFY(start >= startTag.size());
+    const auto encoded
+        = QJsonDocument::fromJson(html.mid(start, html.indexOf("</script>", start) - start)).array();
+    QSet<QString> found;
+    for (const auto &value : encoded) {
+        const auto svg = qUncompress(QByteArray::fromBase64(value.toString().toLatin1()));
+        if (!svg.contains("<title>3. Parameters</title>") || !svg.contains(">Alpha</text>"))
+            continue;
+        QMap<int, QStringList> lines;
+        QXmlStreamReader       reader(svg);
+        while (!reader.atEnd()) {
+            reader.readNext();
+            if (!reader.isStartElement() || reader.name() != QLatin1String("text"))
+                continue;
+            const auto  attributes = reader.attributes();
+            const qreal y          = attributes.value("y").toDouble();
+            const qreal size       = attributes.value("font-size").toDouble();
+            const auto  text       = reader.readElementText(QXmlStreamReader::IncludeChildElements);
+            if (y >= 144 && y < 650) {
+                QCOMPARE(size, 14.0);
+                lines[qRound(y * 100)].append(text);
+            }
+        }
+        QVERIFY(!reader.hasError());
+        QVERIFY(svg.contains(">Alpha</text>"));
+        QVERIFY(svg.contains(">Beta</text>"));
+        QVERIFY(svg.contains(">Gamma</text>"));
+        for (const auto &row : lines) {
+            if (row.size() != 4 || !row.first().startsWith("target_"))
+                continue;
+            const int i = row.first().sliced(7).toInt();
+            QCOMPARE(
+                row,
+                QStringList(
+                    {QString("target_%1").arg(i),
+                     QString("Alpha_value_%1").arg(i),
+                     QString("Beta_value_%1").arg(i),
+                     QString("Gamma_value_%1").arg(i)}));
+            found.insert(row.first());
+        }
+    }
+    QCOMPARE(found.size(), 12);
 }
 
 void Test::controlLabelSpacing_data()

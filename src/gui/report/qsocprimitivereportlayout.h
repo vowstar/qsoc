@@ -8,9 +8,11 @@
 #include <QList>
 #include <QPolygonF>
 #include <QRectF>
+#include <QSizeF>
 
 namespace QSocReportLayout {
 class Engine;
+inline constexpr QSizeF continuationPortSize{96, 56};
 struct Node
 {
     QJsonObject data;
@@ -39,16 +41,27 @@ struct Result
     QSizeF         size;
     QString        error;
 };
+struct Budget
+{
+    int    calls = 8192;
+    qint64 nodes = 1024 * 1024;
+    qint64 edges = 2 * 1024 * 1024;
+};
 QPointF port(const Node &node, bool input, int index);
 QRectF  body(const Node &node);
 QString validateGraph(const QJsonObject &graph, const QList<QSizeF> &sizes);
-Result  layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engine = nullptr);
+Result  layout(
+    const QJsonObject   &graph,
+    const QList<QSizeF> &sizes,
+    Engine              *engine = nullptr,
+    Budget              *budget = nullptr);
 QList<Result> paginate(
     const QJsonObject   &graph,
     const QList<QSizeF> &sizes,
     Engine              &engine,
     int                  group,
-    const Result        *initial = nullptr);
+    const Result        *initial = nullptr,
+    Budget              *budget  = nullptr);
 QList<Bridge> crossings(const QList<Edge> &edges);
 } // namespace QSocReportLayout
 

@@ -182,7 +182,7 @@ QString validateGraph(const QJsonObject &graph, const QList<QSizeF> &sizes)
     return {};
 }
 
-Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engine)
+Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engine, Budget *budget)
 {
     Result     result;
     const auto fail = [&](const QString &message) {
@@ -194,6 +194,13 @@ Result layout(const QJsonObject &graph, const QList<QSizeF> &sizes, Engine *engi
         return result;
     const auto data = graph["nodes"].toArray(), links = graph["edges"].toArray();
     const int  count = data.size();
+    if (budget) {
+        if (budget->calls <= 0 || count > budget->nodes || links.size() > budget->edges)
+            return fail("Report layout exceeded its graph-work budget");
+        --budget->calls;
+        budget->nodes -= count;
+        budget->edges -= links.size();
+    }
     QJsonArray nodes, edges;
     for (int i = 0; i < count; ++i) {
         const Node node{data[i].toObject(), QRectF(QPointF(), sizes[i])};

@@ -3,15 +3,19 @@
 
 #include "gui/report/qsocreportengine.h"
 
+#include <QByteArray>
 #include <QEventLoop>
 #include <QFile>
 #include <QJSEngine>
 #include <QJSValue>
 #include <QJsonDocument>
+#include <QList>
 #include <QMap>
 #include <QTimer>
 
 namespace {
+constexpr int    cacheEntries    = 32;
+constexpr qint64 cacheBytesLimit = 4 * 1024 * 1024;
 class Tasks final : public QObject
 {
     Q_OBJECT
@@ -92,6 +96,14 @@ function clearTimeout(id) { __layoutTasks.cancel(id); }
             error = initializationError;
             return {};
         }
+        const auto input = QJsonDocument(graph).toJson(QJsonDocument::Compact);
+        for (int i = 0; i < cache.size(); ++i) {
+            if (cache[i].input != input)
+                continue;
+            const auto entry = cache.takeAt(i);
+            cache.prepend(entry);
+            return QJsonDocument::fromJson(entry.output).object();
+        }
         QEventLoop loop;
         QString    result;
         bool       completed = false;
@@ -102,8 +114,7 @@ function clearTimeout(id) { __layoutTasks.cancel(id); }
                 completed = true;
                 loop.quit();
             });
-        engine.globalObject().setProperty(
-            "__layoutInput", QString::fromUtf8(QJsonDocument(graph).toJson(QJsonDocument::Compact)));
+        engine.globalObject().setProperty("__layoutInput", QString::fromUtf8(input));
         const auto started = engine.evaluate(QStringLiteral(R"(
 __layoutEngine.layout(JSON.parse(__layoutInput)).then(function(graph) {
     __layoutTasks.complete(JSON.stringify(graph), '');
@@ -124,18 +135,35 @@ __layoutEngine.layout(JSON.parse(__layoutInput)).then(function(graph) {
         if (!error.isEmpty())
             return {};
         QJsonParseError parseError;
-        const auto      output = QJsonDocument::fromJson(result.toUtf8(), &parseError);
+        const auto      encoded = result.toUtf8();
+        const auto      output  = QJsonDocument::fromJson(encoded, &parseError);
         if (parseError.error != QJsonParseError::NoError || !output.isObject()) {
             error = QStringLiteral("Invalid report layout result");
             return {};
+        }
+        const qint64 bytes = input.size() + encoded.size();
+        if (bytes <= cacheBytesLimit) {
+            while (cache.size() >= cacheEntries || cacheBytes + bytes > cacheBytesLimit) {
+                cacheBytes -= cache.last().input.size() + cache.last().output.size();
+                cache.removeLast();
+            }
+            cache.prepend(Cached{input, encoded});
+            cacheBytes += bytes;
         }
         return output.object();
     }
 
 private:
-    QJSEngine engine;
-    Tasks     tasks;
-    QString   initializationError;
+    struct Cached
+    {
+        QByteArray input;
+        QByteArray output;
+    };
+    QList<Cached> cache;
+    qint64        cacheBytes = 0;
+    QJSEngine     engine;
+    Tasks         tasks;
+    QString       initializationError;
 };
 
 QSocReportLayout::Engine::Engine()  = default;
