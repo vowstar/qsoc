@@ -81,6 +81,11 @@ else()
     set(FETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS "${CMAKE_CURRENT_SOURCE_DIR}/external/tomlplusplus"
         CACHE PATH "Bundled tomlplusplus sources")
     add_subdirectory(external/slang)
+    if(TARGET mimalloc-obj)
+        # The allocator object copy requires one translation unit.
+        set_target_properties(mimalloc-obj PROPERTIES
+            AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    endif()
     set(SVLANG_INCLUDE_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/slang/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/slang/external"
