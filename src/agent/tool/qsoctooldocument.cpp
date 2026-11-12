@@ -54,7 +54,10 @@ constexpr qint64  kVirtualMaxPixels     = 64000000;
 constexpr qint64  kRegionMaxPixels      = 16000000;
 constexpr int     kCursorMaxOffset      = std::numeric_limits<int>::max() - 100001;
 /* Bump when the extracted text stream changes. */
-constexpr auto kTextStream = "qsoc-document-text-utf16-v1";
+constexpr auto   kTextStream     = "qsoc-document-text-utf16-v1";
+constexpr auto   kBoxStream      = "qsoc-pdf-word-boxes-v1";
+constexpr qint64 kBoxXmlBytes    = 8 * 1024 * 1024;
+constexpr size_t kBoxResultBytes = 1024 * 1024;
 
 struct CommandResult
 {
@@ -67,13 +70,16 @@ CommandResult run(
     const QStringList   &arguments,
     qint64               limit,
     QSocToolCallContext *context,
-    bool                 mergeChannels = false)
+    bool                 mergeChannels = false,
+    QDeadlineTimer       deadline      = QDeadlineTimer(QDeadlineTimer::Forever))
 {
     const QString executable = QStandardPaths::findExecutable(program);
     if (executable.isEmpty())
         return {{}, QStringLiteral("Missing optional dependency: %1").arg(program)};
     if (context && context->isCancellationRequested())
         return {{}, QStringLiteral("Document read cancelled")};
+    if (deadline.hasExpired())
+        return {{}, QStringLiteral("Document conversion deadline expired")};
     QProcess process;
     if (mergeChannels)
         process.setProcessChannelMode(QProcess::MergedChannels);
@@ -162,13 +168,18 @@ CommandResult run(
         }
     });
     QObject::connect(&timer, &QTimer::timeout, &loop, [&] {
-        stop(QStringLiteral("Document converter exceeded 15 seconds"));
+        stop(
+            deadline.hasExpired() ? QStringLiteral("Document conversion deadline expired")
+                                  : QStringLiteral("Document converter exceeded 15 seconds"));
     });
     if (context)
         QObject::connect(context, &QSocToolCallContext::cancellationRequested, &loop, [&] {
             stop(QStringLiteral("Document read cancelled"));
         });
-    timer.start(15000);
+    timer.start(
+        deadline.isForever()
+            ? 15000
+            : static_cast<int>(qMin<qint64>(15000, qMax<qint64>(1, deadline.remainingTime()))));
     process.start(executable, arguments);
     if (process.state() != QProcess::NotRunning)
         loop.exec();
@@ -192,6 +203,8 @@ struct Options
     std::optional<QRectF> region;
     std::optional<json>   cursor;
     int                   targetLongEdge = 0;
+    int                   wordOffset     = 0;
+    int                   maxWords       = 200;
 };
 
 bool integerOption(const json &arguments, const char *name, int minimum, int maximum, int *target)
@@ -263,11 +276,23 @@ QString checkOptions(const json &arguments, Options *options)
     }
     if (arguments.contains("mode")) {
         if (!arguments["mode"].is_string())
-            return QStringLiteral("mode must be text, image, or list");
+            return QStringLiteral("mode must be text, image, list, or text_boxes");
         options->mode = QString::fromStdString(arguments["mode"].get<std::string>());
     }
-    if (options->mode != "text" && options->mode != "image" && options->mode != "list")
-        return QStringLiteral("mode must be text, image, or list");
+    if (options->mode != "text" && options->mode != "image" && options->mode != "list"
+        && options->mode != "text_boxes")
+        return QStringLiteral("mode must be text, image, list, or text_boxes");
+    if (options->mode == "text_boxes") {
+        if (options->count != 1 || arguments.contains("offset") || arguments.contains("max_chars"))
+            return QStringLiteral(
+                "text_boxes requires page_count=1 and uses word_offset/max_words, not "
+                "offset/max_chars");
+        if (!integerOption(arguments, "word_offset", 0, 1000000, &options->wordOffset)
+            || !integerOption(arguments, "max_words", 1, 1000, &options->maxWords))
+            return QStringLiteral("Invalid word_offset (0 to 1000000) or max_words (1 to 1000)");
+    } else if (arguments.contains("word_offset") || arguments.contains("max_words")) {
+        return QStringLiteral("word_offset and max_words require mode=text_boxes");
+    }
     if (arguments.contains("region")) {
         const auto &region = arguments["region"];
         if (!region.is_object())
@@ -295,26 +320,37 @@ QString checkOptions(const json &arguments, Options *options)
         return QStringLiteral("target_long_edge requires region");
     }
     if (arguments.contains("cursor")) {
-        if (options->mode != "text" || options->region || arguments.contains("page")
-            || arguments.contains("page_count") || arguments.contains("offset"))
+        if ((options->mode != "text" && options->mode != "text_boxes") || options->region
+            || arguments.contains("page") || arguments.contains("page_count")
+            || arguments.contains("offset") || arguments.contains("word_offset"))
             return QStringLiteral(
-                "cursor requires mode=text without page, page_count, offset or region");
+                "cursor requires text or text_boxes without page, page_count, offset, word_offset "
+                "or region");
         options->cursor = decodeCursor(arguments["cursor"]);
         if (!options->cursor)
             return QStringLiteral("Invalid document cursor");
-        options->page   = options->cursor->at("page").get<int>();
-        options->offset = options->cursor->at("offset").get<int>();
+        options->page = options->cursor->at("page").get<int>();
+        if (options->mode == "text_boxes")
+            options->wordOffset = options->cursor->at("offset").get<int>();
+        else
+            options->offset = options->cursor->at("offset").get<int>();
+        if (options->wordOffset > 1000000)
+            return QStringLiteral("Invalid word cursor offset");
     }
     return {};
 }
 
-QString extractorBackend(const QString &format, QSocToolCallContext *context, QString *error)
+QString extractorBackend(
+    const QString       &format,
+    QSocToolCallContext *context,
+    QString             *error,
+    QDeadlineTimer       deadline = QDeadlineTimer(QDeadlineTimer::Forever))
 {
     const QString qt = QStringLiteral("Qt %1").arg(QString::fromLatin1(qVersion()));
     if (format != "pdf")
         return QStringLiteral("native XML; %1").arg(qt);
     const auto version
-        = run(QStringLiteral("pdftotext"), {QStringLiteral("-v")}, 16384, context, true);
+        = run(QStringLiteral("pdftotext"), {QStringLiteral("-v")}, 16384, context, true, deadline);
     if (!version.error.isEmpty()) {
         *error = version.error;
         return {};
@@ -333,14 +369,24 @@ QString partIdentity(const json &result, const json &part)
         QByteArray::fromStdString(json::array({result.at("unit"), part.at("source")}).dump()));
 }
 
-void addCursors(json *result, const QString &source, const QByteArray &sha256, const QString &backend)
+void addCursors(
+    json             *result,
+    const QString    &source,
+    const QByteArray &sha256,
+    const QString    &backend,
+    bool              boxes = false)
 {
-    (*result)["text_stream"]
-        = {{"algorithm", kTextStream}, {"backend", backend.toStdString()}, {"offset_unit", "utf16"}};
+    (*result)[boxes ? "box_stream" : "text_stream"]
+        = {{"algorithm", boxes ? kBoxStream : kTextStream},
+           {"backend", backend.toStdString()},
+           {"offset_unit", boxes ? "source_word_index" : "utf16"}};
+    if (boxes)
+        (*result)["box_stream"]["index_space"]
+            = "Poppler-emitted XML word nodes for the selected CropBox view";
     for (auto &part : (*result)["parts"]) {
         if (!part.value("truncated", false))
             continue;
-        const auto next = part.at("next_offset").get<qint64>();
+        const auto next = part.at(boxes ? "next_word_offset" : "next_offset").get<qint64>();
         if (next > kCursorMaxOffset) {
             part["cursor_unavailable"]
                 = "Text continuation exceeds the supported UTF-16 offset range";
@@ -349,7 +395,7 @@ void addCursors(json *result, const QString &source, const QByteArray &sha256, c
         part["next_cursor"] = encodeCursor({{"v", 1},
                                             {"source", source.toStdString()},
                                             {"sha256", sha256.toStdString()},
-                                            {"stream", kTextStream},
+                                            {"stream", boxes ? kBoxStream : kTextStream},
                                             {"backend", backend.toStdString()},
                                             {"format", result->at("format")},
                                             {"part", partIdentity(*result, part).toStdString()},
@@ -461,7 +507,15 @@ std::optional<QRectF> pdfBox(const QString &info, const QString &name)
     return QRectF(values[0], values[1], values[2] - values[0], values[3] - values[1]);
 }
 
-std::optional<PdfRegion> pdfRegion(const QString &info, const Options &options)
+struct PdfView
+{
+    QRectF media;
+    QRectF crop;
+    QSizeF size;
+    int    rotation;
+};
+
+std::optional<PdfView> pdfView(const QString &info)
 {
     const auto               media = pdfBox(info, QStringLiteral("MediaBox"));
     const auto               crop  = pdfBox(info, QStringLiteral("CropBox"));
@@ -477,8 +531,17 @@ std::optional<PdfRegion> pdfRegion(const QString &info, const Options &options)
     double       width = visible.width(), height = visible.height();
     if (rotation == 90 || rotation == 270)
         std::swap(width, height);
-    if (width <= 0 || height <= 0)
+    if (!std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0)
         return {};
+    return PdfView{*media, *crop, QSizeF(width, height), rotation};
+}
+
+std::optional<PdfRegion> pdfRegion(const QString &info, const Options &options)
+{
+    const auto view = pdfView(info);
+    if (!view)
+        return {};
+    const double width = view->size.width(), height = view->size.height();
     const auto  &region         = *options.region;
     const double longest        = qMax(region.width() * width, region.height() * height);
     const double scale          = (options.targetLongEdge - 1.0) / longest;
@@ -505,10 +568,10 @@ std::optional<PdfRegion> pdfRegion(const QString &info, const Options &options)
     json geometry
         = {{"view", "rotated_cropbox"},
            {"coordinate_space", "view_norm"},
-           {"rotation_degrees", rotation},
+           {"rotation_degrees", view->rotation},
            {"raw_transform", nullptr},
-           {"backend_reported_media_box", rectangle(*media)},
-           {"backend_reported_crop_box", rectangle(*crop)},
+           {"backend_reported_media_box", rectangle(view->media)},
+           {"backend_reported_crop_box", rectangle(view->crop)},
            {"requested_region", rectangle(region)},
            {"effective_region",
             rectangle(QRectF(
@@ -535,22 +598,232 @@ std::optional<PdfRegion> pdfRegion(const QString &info, const Options &options)
     return PdfRegion{viewport, pixels, std::move(geometry)};
 }
 
+bool boxNumber(const QXmlStreamAttributes &attributes, const char *name, double *value)
+{
+    bool valid = false;
+    *value     = attributes.value(QString::fromLatin1(name)).toDouble(&valid);
+    return valid && std::isfinite(*value);
+}
+
+json boxRectangle(const QRectF &box)
+{
+    return {{"x", box.x()}, {"y", box.y()}, {"width", box.width()}, {"height", box.height()}};
+}
+
+QString readPdfBoxes(
+    const QString                  &path,
+    const QString                  &info,
+    const Options                  &options,
+    int                             total,
+    QSocToolCallContext            *callContext,
+    const QSocImageAttach::Options &attachment,
+    const QString                  &knownBackend,
+    QDeadlineTimer                  deadline)
+{
+    const QPointer<QSocToolCallContext> context(callContext);
+    const bool                          hadContext = context != nullptr;
+    const auto                          view       = pdfView(info);
+    if (!view)
+        return QStringLiteral("Error: Unsupported PDF CropBox or rotation for word boxes");
+    QString       error;
+    const QString backend = knownBackend.isEmpty()
+                                ? extractorBackend(QStringLiteral("pdf"), context, &error, deadline)
+                                : knownBackend;
+    if (backend.isEmpty())
+        return QStringLiteral("Error: %1").arg(error);
+    const QString version = backend.section(';', 0, 0).mid(
+        QStringLiteral("pdftotext version ").size());
+    json versions = {{"pdftotext", backend.toStdString()}};
+    for (const QString &program : {QStringLiteral("pdfinfo"), QStringLiteral("pdftoppm")}) {
+        const auto reported = run(program, {QStringLiteral("-v")}, 16384, context, true, deadline);
+        if (!reported.error.isEmpty())
+            return QStringLiteral("Error: %1").arg(reported.error);
+        const QString first = QString::fromUtf8(reported.bytes).section('\n', 0, 0).simplified();
+        if (first != program + QStringLiteral(" version ") + version)
+            return QStringLiteral(
+                "Error: PDF word boxes require matching Poppler extractor, geometry and renderer "
+                "versions");
+        versions[program.toStdString()] = first.toStdString();
+    }
+    const QString page      = QString::number(options.page);
+    const auto    extracted = run(
+        QStringLiteral("pdftotext"),
+        {"-f", page, "-l", page, "-r", "72", "-bbox-layout", "-cropbox", "-enc", "UTF-8", path, "-"},
+        kBoxXmlBytes,
+        context,
+        false,
+        deadline);
+    if (!extracted.error.isEmpty())
+        return QStringLiteral("Error: %1").arg(extracted.error);
+    QXmlStreamReader xml(extracted.bytes);
+    QSizeF           dimensions, reportedSize;
+    bool             seenPage = false, inPage = false;
+    int              words = 0, outside = 0, omitted = 0, clipped = 0;
+    json             selected = json::array();
+    const int        end      = options.wordOffset + options.maxWords;
+    while (!xml.atEnd()) {
+        if (deadline.hasExpired()
+            || (hadContext && (!context || context->isCancellationRequested())))
+            return QStringLiteral(
+                "Error: PDF word-box read cancelled or conversion deadline expired");
+        xml.readNext();
+        if ((xml.isDTD()
+             && (xml.dtdName() != QStringLiteral("html") || !xml.entityDeclarations().isEmpty()
+                 || !xml.notationDeclarations().isEmpty()))
+            || xml.isEntityReference()) {
+            xml.raiseError(QStringLiteral("Unsupported PDF word-box XML declarations"));
+        } else if (xml.isStartElement() && xml.name() == QStringLiteral("page")) {
+            double width = 0, height = 0;
+            if (seenPage || !boxNumber(xml.attributes(), "width", &width)
+                || !boxNumber(xml.attributes(), "height", &height) || width <= 0 || height <= 0) {
+                xml.raiseError(QStringLiteral("Invalid PDF word-box page dimensions"));
+                continue;
+            }
+            seenPage = inPage = true;
+            reportedSize      = QSizeF(width, height);
+            dimensions = view->rotation == 90 || view->rotation == 270 ? QSizeF(height, width)
+                                                                       : QSizeF(width, height);
+            if (std::abs(dimensions.width() - view->size.width()) > 0.021
+                || std::abs(dimensions.height() - view->size.height()) > 0.021)
+                xml.raiseError(
+                    QStringLiteral("Unsupported PDF word-box dimension/rotation contract"));
+        } else if (xml.isEndElement() && xml.name() == QStringLiteral("page")) {
+            inPage = false;
+        } else if (xml.isStartElement() && xml.name() == QStringLiteral("word")) {
+            double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+            if (!inPage || !boxNumber(xml.attributes(), "xMin", &x0)
+                || !boxNumber(xml.attributes(), "yMin", &y0)
+                || !boxNumber(xml.attributes(), "xMax", &x1)
+                || !boxNumber(xml.attributes(), "yMax", &y1) || x1 <= x0 || y1 <= y0
+                || !std::isfinite(x1 - x0) || !std::isfinite(y1 - y0)) {
+                xml.raiseError(QStringLiteral("Invalid PDF word rectangle"));
+                continue;
+            }
+            const QString text = xml.readElementText();
+            const QRectF  native(x0, y0, x1 - x0, y1 - y0);
+            const QRectF  visible = native.intersected(QRectF(QPointF(), dimensions));
+            const int     index   = words++;
+            if (visible.isEmpty())
+                ++outside;
+            if (index < options.wordOffset || index >= end)
+                continue;
+            if (visible.isEmpty()) {
+                ++omitted;
+                continue;
+            }
+            if (text.size() > 8192)
+                return QStringLiteral(
+                    "Error: PDF word text exceeds 8192 UTF-16 units. Use mode=text for this part");
+            const bool partial = visible != native;
+            if (partial)
+                ++clipped;
+            selected.push_back(
+                {{"word_index", index},
+                 {"text", text.toStdString()},
+                 {"box",
+                  boxRectangle(QRectF(
+                      visible.x() / dimensions.width(),
+                      visible.y() / dimensions.height(),
+                      visible.width() / dimensions.width(),
+                      visible.height() / dimensions.height()))},
+                 {"backend_box", boxRectangle(native)},
+                 {"partially_visible", partial}});
+        }
+    }
+    if (xml.hasError() || !seenPage)
+        return QStringLiteral("Error: Invalid PDF word-box XML: %1").arg(xml.errorString());
+    const auto reference = run(
+        QStringLiteral("pdftoppm"),
+        {"-f", page, "-singlefile", "-cropbox", "-scale-to", "1600", "-png", path},
+        16 * 1024 * 1024,
+        context,
+        false,
+        deadline);
+    if (!reference.error.isEmpty())
+        return QStringLiteral("Error: %1").arg(reference.error);
+    const QSize  pixels = imageSize(reference.bytes);
+    const double scale  = 1600.0 / qMax(dimensions.width(), dimensions.height());
+    if (!pixels.isValid() || std::abs(pixels.width() - dimensions.width() * scale) > 1.1
+        || std::abs(pixels.height() - dimensions.height() * scale) > 1.1)
+        return QStringLiteral("Error: PDF word-box view could not be calibrated with the renderer");
+    const bool truncated = end < words;
+    json       part
+        = {{"page", options.page},
+           {"source", QStringLiteral("page %1").arg(options.page).toStdString()},
+           {"source_id", attachment.sourceId.toStdString()},
+           {"view_id", attachment.viewId.toStdString()},
+           {"word_offset", options.wordOffset},
+           {"word_count", qMax(0, qMin(options.maxWords, words - options.wordOffset))},
+           {"total_words", words},
+           {"words", std::move(selected)},
+           {"truncated", truncated},
+           {"text_layer_empty", words == 0},
+           {"page_words_outside_view", outside},
+           {"omitted_outside_view", omitted},
+           {"partially_visible_words", clipped},
+           {"source_kind", "pdf_text_layer"}};
+    if (truncated)
+        part["next_word_offset"] = end;
+    part["geometry"]
+        = {{"view", "rotated_cropbox"},
+           {"coordinate_space", "view_norm"},
+           {"rotation_degrees", view->rotation},
+           {"raw_transform", nullptr},
+           {"physical_units", "unknown"},
+           {"backend_reported_media_box", boxRectangle(view->media)},
+           {"backend_reported_crop_box", boxRectangle(view->crop)},
+           {"backend_page_size",
+            {{"width", reportedSize.width()}, {"height", reportedSize.height()}}},
+           {"view_size", {{"width", dimensions.width()}, {"height", dimensions.height()}}},
+           {"reference_size", {{"width", pixels.width()}, {"height", pixels.height()}}},
+           {"backend_to_view_norm",
+            {1.0 / dimensions.width(), 0.0, 0.0, 0.0, 1.0 / dimensions.height(), 0.0}},
+           {"view_norm_to_reference_pixels", {pixels.width(), 0, 0, 0, pixels.height(), 0}},
+           {"backend_versions", versions},
+           {"calibration", "backend page dimensions and reference raster checked"},
+           {"word_coordinate_contract",
+            "Poppler words are already rotated; XML page dimensions are unrotated"}};
+    json result
+        = {{"format", "pdf"},
+           {"unit", "page"},
+           {"total_pages", total},
+           {"parts", json::array({part})},
+           {"box_stream",
+            {{"algorithm", kBoxStream},
+             {"backend", backend.toStdString()},
+             {"offset_unit", "source_word_index"}}},
+           {"notice",
+            "Words come from the PDF text layer and can include existing OCR errors. XML word "
+            "order is not a reading-order guarantee. Partially visible words retain their full "
+            "text. Boxes are font-based word rectangles, not glyph outlines, table structure or "
+            "formula interpretation. OCR is not performed."}};
+    if (options.page < total)
+        result["next_page"] = options.page + 1;
+    return QString::fromStdString(result.dump());
+}
+
 QString readPdf(
     const QString                  &path,
     const QString                  &source,
     const Options                  &options,
     QLLMService                    *llm,
     QSocToolCallContext            *callContext,
-    const QSocImageAttach::Options &attachmentOptions)
+    const QSocImageAttach::Options &attachmentOptions,
+    const QString                  &knownBackend,
+    QDeadlineTimer                  deadline)
 {
     const QPointer<QLLMService>         model(llm);
     const QPointer<QSocToolCallContext> context(callContext);
     const QString                       page = QString::number(options.page);
     const auto                          info = run(
         QStringLiteral("pdfinfo"),
-        options.region ? QStringList{"-f", page, "-l", page, "-box", path} : QStringList{path},
+        options.region || options.mode == "text_boxes"
+            ? QStringList{"-f", page, "-l", page, "-box", path}
+            : QStringList{path},
         65536,
-        context);
+        context,
+        false,
+        deadline);
     if (!info.error.isEmpty())
         return QStringLiteral("Error: %1").arg(info.error);
     static const QRegularExpression
@@ -564,6 +837,16 @@ QString readPdf(
         = {{"format", "pdf"}, {"unit", "page"}, {"total_pages", total}, {"parts", json::array()}};
     if (options.mode == "list")
         return QString::fromStdString(result.dump(2));
+    if (options.mode == "text_boxes")
+        return readPdfBoxes(
+            path,
+            QString::fromUtf8(info.bytes),
+            options,
+            total,
+            context,
+            attachmentOptions,
+            knownBackend,
+            deadline);
     if (options.mode == "image") {
         if (options.count != 1)
             return QStringLiteral("Error: PDF image mode renders one page per call");
@@ -1083,7 +1366,8 @@ QString QSocToolDocumentRead::getDescription() const
         "offset "
         "to resume that part. Changed sources or text extractors are rejected. "
         "mode=image renders one rotated CropBox PDF view; region plus target_long_edge rerenders "
-        "a normalized view rectangle from the source. OCR is not performed. "
+        "a normalized view rectangle from the source. mode=text_boxes returns bounded native word "
+        "boxes with separate word-index continuation. OCR is not performed. "
         "Office supports text only. Optional dependencies: Poppler pdfinfo/pdftotext/pdftoppm for "
         "PDF, unzip for Office. Inputs are limited to 32 MiB and Office expanded entries to 8 MiB "
         "each/64 MiB total. Remote files are read through SFTP into a private local snapshot; "
@@ -1100,9 +1384,10 @@ json QSocToolDocumentRead::getParametersSchema() const
             {"description", "Document path on the bound workspace, relative or absolute"}}},
           {"mode",
            {{"type", "string"},
-            {"enum", {"text", "image", "list"}},
+            {"enum", {"text", "image", "list", "text_boxes"}},
             {"description",
-             "text by default; image renders one PDF page; list shows available parts"}}},
+             "text by default; image renders one PDF page; text_boxes returns one PDF page of "
+             "native word boxes; list shows parts"}}},
           {"page",
            {{"type", "integer"},
             {"minimum", 1},
@@ -1111,7 +1396,7 @@ json QSocToolDocumentRead::getParametersSchema() const
            {{"type", "integer"},
             {"minimum", 1},
             {"maximum", 5},
-            {"description", "Number of parts, default 1; PDF image mode requires 1"}}},
+            {"description", "Number of parts, default 1; PDF image and text_boxes require 1"}}},
           {"region",
            {{"type", "object"},
             {"description",
@@ -1140,8 +1425,23 @@ json QSocToolDocumentRead::getParametersSchema() const
            {{"type", "string"},
             {"maxLength", 2048},
             {"description",
-             "Opaque next_cursor from one truncated text part. Requires mode=text without page, "
-             "page_count or offset. max_chars can change"}}},
+             "Opaque next_cursor from one truncated part. Use the original text/text_boxes mode "
+             "without page, "
+             "page_count, offset or word_offset. The matching max_chars/max_words can change"}}},
+          {"word_offset",
+           {{"type", "integer"},
+            {"minimum", 0},
+            {"maximum", 1000000},
+            {"description",
+             "text_boxes only: source XML word index, including words outside the CropBox. Default "
+             "0"}}},
+          {"max_words",
+           {{"type", "integer"},
+            {"minimum", 1},
+            {"maximum", 1000},
+            {"description",
+             "text_boxes only: source words per window, default 200. Outside-view words are "
+             "counted and omitted"}}},
           {"max_chars",
            {{"type", "integer"},
             {"minimum", 1},
@@ -1207,6 +1507,8 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         return QStringLiteral("Error: read_document supports PDF, DOCX, XLSX and PPTX only");
     if (options.region && extension != "pdf")
         return QStringLiteral("Error: region is supported only for PDF image mode");
+    if (options.mode == "text_boxes" && extension != "pdf")
+        return QStringLiteral("Error: text_boxes is supported only for PDF");
     const QString canonical = remote_ ? path : QFileInfo(path).canonicalFilePath();
     const json    sourceKey
         = {{"transport", remote_ ? "sftp" : "local"},
@@ -1224,7 +1526,10 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         return QStringLiteral("Error: %1").arg(error);
     if (cancelled())
         return QStringLiteral("Error: Document read cancelled");
-    QString backend;
+    QString              backend;
+    const QDeadlineTimer conversionDeadline = options.mode == "text_boxes"
+                                                  ? QDeadlineTimer(30000)
+                                                  : QDeadlineTimer(QDeadlineTimer::Forever);
     if (options.cursor) {
         const auto &cursor = *options.cursor;
         if (cursor.at("source") != sourceIdentity.toStdString())
@@ -1232,9 +1537,10 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         if (cursor.at("sha256") != snapshot->sha256().toStdString())
             return QStringLiteral(
                 "Error: Document source changed. Read the part again without cursor");
-        if (cursor.at("format") != extension.toStdString() || cursor.at("stream") != kTextStream)
+        if (cursor.at("format") != extension.toStdString()
+            || cursor.at("stream") != (options.mode == "text_boxes" ? kBoxStream : kTextStream))
             return QStringLiteral("Error: Document cursor belongs to a different text stream");
-        backend = extractorBackend(extension, context, &error);
+        backend = extractorBackend(extension, context, &error, conversionDeadline);
         if (backend.isEmpty())
             return QStringLiteral("Error: Cannot resume document cursor: %1").arg(error);
         if (cursor.at("backend") != backend.toStdString())
@@ -1246,7 +1552,15 @@ QString QSocToolDocumentRead::execute(const json &arguments)
     attachmentOptions.sourceId = QString::fromLatin1(snapshot->sha256());
     attachmentOptions.viewId   = QStringLiteral("pdf:page=%1").arg(options.page);
     if (extension == "pdf")
-        output = readPdf(snapshot->path(), path, options, llm_, context, attachmentOptions);
+        output = readPdf(
+            snapshot->path(),
+            path,
+            options,
+            llm_,
+            context,
+            attachmentOptions,
+            backend,
+            conversionDeadline);
     else {
         QFile file(snapshot->path());
         if (!file.open(QIODevice::ReadOnly))
@@ -1260,6 +1574,18 @@ QString QSocToolDocumentRead::execute(const json &arguments)
             result["source_sha256"]   = snapshot->sha256().toStdString();
             result["source_bytes"]    = snapshot->size();
             result["source_identity"] = sourceIdentity.toStdString();
+            if (options.mode == "text_boxes") {
+                const auto &part = result.at("parts").at(0);
+                if (options.cursor
+                    && options.cursor->at("part") != partIdentity(result, part).toStdString())
+                    return QStringLiteral("Error: Document cursor belongs to a different part");
+                addCursors(
+                    &result,
+                    sourceIdentity,
+                    snapshot->sha256(),
+                    QString::fromStdString(result.at("box_stream").at("backend").get<std::string>()),
+                    true);
+            }
             if (options.mode == "text") {
                 const auto &parts = result.at("parts");
                 if (options.cursor
@@ -1281,7 +1607,10 @@ QString QSocToolDocumentRead::execute(const json &arguments)
                 else if (truncated)
                     result["cursor_unavailable"] = error.toStdString();
             }
-            return QString::fromStdString(result.dump(2));
+            const auto serialized = result.dump(2);
+            if (options.mode == "text_boxes" && serialized.size() > kBoxResultBytes)
+                return QStringLiteral("Error: PDF word-box result exceeds 1 MiB. Reduce max_words");
+            return QString::fromStdString(serialized);
         }
     }
     return output;

@@ -141,6 +141,82 @@ QString createPdf(const QTemporaryDir &directory, const QFont &font)
     return path;
 }
 
+QString createFinePdf(const QTemporaryDir &directory, const QFont &font)
+{
+    const QString path = directory.filePath("fine-text.pdf");
+    QPdfWriter    pdf(path);
+    pdf.setResolution(72);
+    pdf.setPageSize(QPageSize(QPageSize::A4));
+    QPainter painter(&pdf);
+    if (!painter.isActive())
+        qFatal("Cannot create fine-text PDF");
+    for (int size : {6, 8, 10}) {
+        QFont current = font;
+        current.setPointSize(size);
+        painter.setFont(current);
+        painter.drawText(30, size * 12, QStringLiteral("时钟规格 I l 1 O 0 −0.125 µA Ω V₂ x²"));
+        painter.drawText(300, size * 12, QStringLiteral("多列 R: −0.125 µA Ω V₂ x²"));
+        painter.setPen(QPen(Qt::black, 0.2));
+        painter.drawLine(30, size * 12 + 4, 240, size * 12 + 4);
+        painter.drawLine(300, size * 12 + 4, 540, size * 12 + 4);
+    }
+    return path;
+}
+
+QImage renderPdfSource(const QString &path, int page)
+{
+    QProcess process;
+    process.start(
+        QStandardPaths::findExecutable("pdftoppm"),
+        {"-f", QString::number(page), "-singlefile", "-cropbox", "-scale-to", "1600", "-png", path});
+    if (!process.waitForFinished(15000)) {
+        process.kill();
+        process.waitForFinished();
+        return {};
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+        return {};
+    return QImage::fromData(process.readAllStandardOutput()).convertToFormat(QImage::Format_RGB32);
+}
+
+QRectF wordPixels(const json &word, const QSize &size)
+{
+    const auto &box = word.at("box");
+    return {
+        box.at("x").get<double>() * size.width(),
+        box.at("y").get<double>() * size.height(),
+        box.at("width").get<double>() * size.width(),
+        box.at("height").get<double>() * size.height()};
+}
+
+int darkPixels(const QImage &image, const QRect &area)
+{
+    const QRect clipped = area.intersected(image.rect());
+    int         count   = 0;
+    for (int y = clipped.top(); y <= clipped.bottom(); ++y)
+        for (int x = clipped.left(); x <= clipped.right(); ++x) {
+            const QColor color(image.pixel(x, y));
+            if (color.red() < 80 && color.green() < 80 && color.blue() < 80)
+                ++count;
+        }
+    return count;
+}
+
+void saveBoxOverlay(
+    const QTemporaryDir &directory, const QString &name, QImage image, const json &part)
+{
+    QPainter painter(&image);
+    painter.setPen(QPen(QColor(220, 30, 30), 1));
+    for (const auto &word : part.at("words"))
+        painter.drawRect(wordPixels(word, image.size()));
+    painter.end();
+    QByteArray bytes;
+    QBuffer    buffer(&bytes);
+    if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG"))
+        qFatal("Cannot save word-box overlay");
+    save(directory, name, bytes);
+}
+
 QByteArray geometryPdf()
 {
     QList<QByteArray> objects{
@@ -155,13 +231,18 @@ QByteArray geometryPdf()
             + (page == 4 ? " /UserUnit 2" : "")
             + " /Resources << /Font << /F1 3 0 R >> >> /Contents "
             + QByteArray::number(5 + page * 2) + " 0 R >>");
-        QByteArray drawing("0.9 0.95 1 rg 40 60 300 200 re f 0.2 w 0 0 0 RG\n");
+        QByteArray drawing("0.9 0.95 1 rg 40 60 300 200 re f 0.2 w 0.85 0.85 0.85 RG\n");
         for (int x = 40; x <= 340; x += 10)
             drawing += QByteArray::number(x) + " 60 m " + QByteArray::number(x) + " 260 l S\n";
         for (int y = 60; y <= 260; y += 10)
             drawing += "40 " + QByteArray::number(y) + " m 340 " + QByteArray::number(y) + " l S\n";
         drawing += "1 0 0 rg 60 80 30 20 re f 0 0 1 rg 280 220 40 15 re f\n"
-                   "0 0 0 rg BT /F1 6 Tf 80 160 Td (I l 1 O 0 -0.125 MHz) Tj ET\n";
+                   "0 0 0 rg BT /F1 6 Tf 80 160 Td (I l 1 O 0 -0.125 MHz) Tj ET\n"
+                   "BT /F1 12 Tf 60 100 Td (Neutral Test ABC123) Tj ET\n"
+                   "BT /F1 9 Tf 60 200 Td (Left 1.25MHz) Tj ET\n"
+                   "BT /F1 9 Tf 220 200 Td (Right -0.125V) Tj ET\n"
+                   "BT /F1 9 Tf 30 230 Td (EDGE) Tj ET\n"
+                   "BT /F1 9 Tf 0 280 Td (OUTSIDE) Tj ET\n";
         objects.append(
             "<< /Length " + QByteArray::number(drawing.size()) + " >>\nstream\n" + drawing
             + "endstream");
@@ -252,6 +333,26 @@ private slots:
         QCOMPARE(linked["format"], json("docx"));
         QCOMPARE(linked["source_sha256"], data["source_sha256"]);
 #endif
+        if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
+            || QStandardPaths::findExecutable("pdftotext").isEmpty()
+            || QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler native boxes"));
+        const QString pdfPath = fixture.workDir() + QStringLiteral("/native.pdf");
+        QFile         pdf(pdfPath);
+        QVERIFY(pdf.open(QIODevice::WriteOnly));
+        const QByteArray pdfBytes = geometryPdf();
+        QCOMPARE(pdf.write(pdfBytes), pdfBytes.size());
+        pdf.close();
+        const auto boxes = result(
+            *tool,
+            {{"file_path", "native.pdf"}, {"mode", "text_boxes"}, {"page", 2}, {"max_words", 2}});
+        QCOMPARE(boxes.at("source"), json(pdfPath.toStdString()));
+        QCOMPARE(
+            boxes.at("source_sha256"),
+            json(
+                QCryptographicHash::hash(pdfBytes, QCryptographicHash::Sha256).toHex().toStdString()));
+        QCOMPARE(boxes.at("parts")[0].at("geometry").at("rotation_degrees"), json(90));
+        QVERIFY(!QString::fromStdString(boxes.dump()).contains(QStringLiteral("qsoc-input-")));
     }
 
     void initTestCase()
@@ -915,29 +1016,282 @@ private slots:
         QVERIFY(tool.execute(request).contains("virtual page exceeds safe rendering limits"));
     }
 
+    void nativeBoxesAlignWithRotatedSourceGlyphs()
+    {
+        for (const char *program : {"pdfinfo", "pdftotext", "pdftoppm"})
+            if (QStandardPaths::findExecutable(program).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(QString::fromLatin1(program));
+        QTemporaryDir        directory;
+        const auto           path = save(directory, "native-geometry.pdf", geometryPdf());
+        QSocToolDocumentRead tool;
+        for (int page = 1; page <= 5; ++page) {
+            const auto data = result(
+                tool,
+                {{"file_path", path.toStdString()},
+                 {"mode", "text_boxes"},
+                 {"page", page},
+                 {"max_words", 1000}});
+            const auto &part     = data.at("parts")[0];
+            const auto &geometry = part.at("geometry");
+            QCOMPARE(data.at("box_stream").at("offset_unit"), json("source_word_index"));
+            QCOMPARE(part.at("source_id"), data.at("source_sha256"));
+            QVERIFY(geometry.at("raw_transform").is_null());
+            QCOMPARE(geometry.at("backend_page_size").at("width"), json(300.0));
+            QCOMPARE(geometry.at("backend_page_size").at("height"), json(200.0));
+            const int    rotation = page < 5 ? (page - 1) * 90 : 0;
+            const double width    = rotation == 90 || rotation == 270 ? 200 : 300;
+            const double height   = rotation == 90 || rotation == 270 ? 300 : 200;
+            QCOMPARE(geometry.at("view_size").at("width"), json(width));
+            QCOMPARE(geometry.at("view_size").at("height"), json(height));
+            QRectF expected(20, 151.384, 38.676, 11.1);
+            if (rotation == 90)
+                expected = QRectF(37.516, 20, 11.1, 38.676);
+            if (rotation == 180)
+                expected = QRectF(241.324, 37.516, 38.676, 11.1);
+            if (rotation == 270)
+                expected = QRectF(151.384, 241.324, 11.1, 38.676);
+            const QImage source = renderPdfSource(path, page);
+            QVERIFY(!source.isNull());
+            bool found = false;
+            for (const auto &word : part.at("words")) {
+                const auto &box = word.at("box");
+                QVERIFY(box.at("x").get<double>() >= 0 && box.at("y").get<double>() >= 0);
+                QVERIFY(box.at("x").get<double>() + box.at("width").get<double>() <= 1.0000001);
+                QVERIFY(box.at("y").get<double>() + box.at("height").get<double>() <= 1.0000001);
+                if (word.at("text") != "Neutral")
+                    continue;
+                found = true;
+                QVERIFY(std::abs(box.at("x").get<double>() - expected.x() / width) < 0.000001);
+                QVERIFY(std::abs(box.at("y").get<double>() - expected.y() / height) < 0.000001);
+                QVERIFY(
+                    std::abs(box.at("width").get<double>() - expected.width() / width) < 0.000001);
+                QVERIFY(
+                    std::abs(box.at("height").get<double>() - expected.height() / height)
+                    < 0.000001);
+                const QRect pixels = wordPixels(word, source.size()).toAlignedRect();
+                const int   inside = darkPixels(source, pixels.adjusted(-1, -1, 1, 1));
+                const int   nearby = darkPixels(source, pixels.adjusted(-5, -5, 5, 5));
+                QVERIFY(inside > 20);
+                QVERIFY(inside >= nearby * 0.99);
+            }
+            QVERIFY(found);
+            if (qEnvironmentVariableIsSet("QSOC_KEEP_DOCUMENT_FIXTURES")) {
+                saveBoxOverlay(
+                    directory, QStringLiteral("native-page-%1-overlay.png").arg(page), source, part);
+                save(
+                    directory,
+                    QStringLiteral("native-page-%1.json").arg(page),
+                    QByteArray::fromStdString(data.dump(2)));
+            }
+        }
+        if (qEnvironmentVariableIsSet("QSOC_KEEP_DOCUMENT_FIXTURES")) {
+            directory.setAutoRemove(false);
+            qInfo().noquote() << "Generated native word-box fixture:" << directory.path();
+        }
+    }
+
+    void nativeBoxesKeepChineseSymbolsAndIndependentContinuation()
+    {
+        for (const char *program : {"pdfinfo", "pdftotext", "pdftoppm"})
+            if (QStandardPaths::findExecutable(program).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(QString::fromLatin1(program));
+        QTemporaryDir        directory;
+        const auto           path = createFinePdf(directory, cjkFont_);
+        QSocToolDocumentRead tool;
+        const auto           full = result(
+            tool, {{"file_path", path.toStdString()}, {"mode", "text_boxes"}, {"max_words", 1000}});
+        const auto &fullPart = full.at("parts")[0];
+        QString     text;
+        bool        left = false, right = false;
+        const auto  source = renderPdfSource(path, 1);
+        QVERIFY(!source.isNull());
+        for (const auto &word : fullPart.at("words")) {
+            const QString value = QString::fromStdString(word.at("text").get<std::string>());
+            text += value;
+            const double x = word.at("box").at("x").get<double>();
+            left |= x < 0.1;
+            right |= x > 0.45;
+            if (value.contains(QStringLiteral("时")) || value.contains(QStringLiteral("Ω")))
+                QVERIFY(darkPixels(source, wordPixels(word, source.size()).toAlignedRect()) > 0);
+        }
+        for (const QString &expected :
+             {QStringLiteral("时钟规格"),
+              QStringLiteral("多列"),
+              QStringLiteral("µA"),
+              QStringLiteral("Ω"),
+              QStringLiteral("V₂"),
+              QStringLiteral("x²")})
+            QVERIFY2(text.contains(expected), qPrintable(text));
+        QVERIFY(left && right);
+        auto current = result(
+            tool, {{"file_path", path.toStdString()}, {"mode", "text_boxes"}, {"max_words", 2}});
+        const auto firstCursor = current.at("parts")[0].at("next_cursor");
+        json       joined      = json::array();
+        int        offset      = 0;
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            const auto &part = current.at("parts")[0];
+            QCOMPARE(part.at("word_offset"), json(offset));
+            for (const auto &word : part.at("words"))
+                joined.push_back(word);
+            offset += part.at("word_count").get<int>();
+            if (!part.at("truncated").get<bool>())
+                break;
+            QVERIFY(iteration < 99);
+            current = result(
+                tool,
+                {{"file_path", path.toStdString()},
+                 {"mode", "text_boxes"},
+                 {"cursor", part.at("next_cursor")},
+                 {"max_words", 7}});
+        }
+        QCOMPARE(joined, fullPart.at("words"));
+        QCOMPARE(offset, fullPart.at("total_words").get<int>());
+        QVERIFY(tool.execute({{"file_path", path.toStdString()}, {"cursor", firstCursor}})
+                    .contains("different text stream"));
+        const auto plain = result(tool, {{"file_path", path.toStdString()}, {"max_chars", 3}});
+        QVERIFY(tool.execute({{"file_path", path.toStdString()},
+                              {"mode", "text_boxes"},
+                              {"cursor", plain.at("parts")[0].at("next_cursor")}})
+                    .contains("different text stream"));
+        const auto emptyPath = createPdf(directory, pdfFont_);
+        const auto empty     = result(
+            tool, {{"file_path", emptyPath.toStdString()}, {"mode", "text_boxes"}, {"page", 3}});
+        QVERIFY(empty.at("parts")[0].at("text_layer_empty").get<bool>());
+        QVERIFY(empty.at("parts")[0].at("words").empty());
+        if (qEnvironmentVariableIsSet("QSOC_KEEP_DOCUMENT_FIXTURES")) {
+            saveBoxOverlay(directory, "native-fine-overlay.png", source, fullPart);
+            save(directory, "native-fine-boxes.json", QByteArray::fromStdString(full.dump(2)));
+            directory.setAutoRemove(false);
+            qInfo().noquote() << "Generated Chinese word-box fixture:" << directory.path();
+        }
+    }
+
+    void nativeBoxesBoundXmlAndJsonAndRejectAmbiguousGeometry()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This converter fixture needs a POSIX shell");
+#else
+        for (const char *program : {"pdfinfo", "pdftotext", "pdftoppm"})
+            if (QStandardPaths::findExecutable(program).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(QString::fromLatin1(program));
+        QTemporaryDir directory;
+        const auto    path = save(directory, "limits.pdf", geometryPdf());
+        QString       real = QStandardPaths::findExecutable("pdftotext");
+        real.replace('\'', QStringLiteral("'\\''"));
+        QString xmlPath = directory.filePath("generated-boxes.xml");
+        xmlPath.replace('\'', QStringLiteral("'\\''"));
+        const auto executable = save(
+            directory,
+            "pdftotext",
+            QStringLiteral(
+                "#!/bin/sh\nif [ \"$1\" = \"-v\" ]; then exec '%1' -v; fi\nexec /bin/cat '%2'\n")
+                .arg(real, xmlPath)
+                .toUtf8());
+        QVERIFY(
+            QFile::setPermissions(
+                executable,
+                QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const auto oldPath = qgetenv("PATH");
+        const auto restore = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        qputenv("PATH", directory.path().toUtf8() + ':' + oldPath);
+        QSocToolDocumentRead tool;
+        const json           request
+            = {{"file_path", path.toStdString()}, {"mode", "text_boxes"}, {"max_words", 1000}};
+        const auto xml = [](const QByteArray &words) {
+            return QByteArray("<html><doc><page width=\"300\" height=\"200\">") + words
+                   + "</page></doc></html>";
+        };
+        save(
+            directory,
+            "generated-boxes.xml",
+            xml("<word xMin=\"-30\" yMin=\"20\" xMax=\"-10\" yMax=\"30\">outside</word>"
+                "<word xMin=\"-5\" yMin=\"20\" xMax=\"15\" yMax=\"30\">edge</word>"
+                "<word xMin=\"20\" yMin=\"20\" xMax=\"40\" yMax=\"30\">inside</word>"));
+        const auto  clipped = result(tool, request);
+        const auto &part    = clipped.at("parts")[0];
+        QCOMPARE(part.at("total_words"), json(3));
+        QCOMPARE(part.at("word_count"), json(3));
+        QCOMPARE(part.at("page_words_outside_view"), json(1));
+        QCOMPARE(part.at("omitted_outside_view"), json(1));
+        QCOMPARE(part.at("words").size(), size_t(2));
+        QCOMPARE(part.at("words")[0].at("word_index"), json(1));
+        QVERIFY(part.at("words")[0].at("partially_visible").get<bool>());
+        QCOMPARE(part.at("words")[0].at("box").at("x"), json(0.0));
+        auto small         = request;
+        small["max_words"] = 1;
+        const auto omitted = result(tool, small);
+        QVERIFY(omitted.at("parts")[0].at("words").empty());
+        QCOMPARE(omitted.at("parts")[0].at("next_word_offset"), json(1));
+        const auto resumed = result(
+            tool,
+            {{"file_path", path.toStdString()},
+             {"mode", "text_boxes"},
+             {"cursor", omitted.at("parts")[0].at("next_cursor")},
+             {"max_words", 2}});
+        QCOMPARE(resumed.at("parts")[0].at("words"), part.at("words"));
+        save(
+            directory,
+            "generated-boxes.xml",
+            "<html><doc><page width=\"200\" height=\"300\"/></doc></html>");
+        auto rotated    = request;
+        rotated["page"] = 2;
+        QVERIFY(tool.execute(rotated).contains("dimension/rotation contract"));
+        save(
+            directory,
+            "generated-boxes.xml",
+            xml("<word xMin=\"NaN\" yMin=\"0\" xMax=\"1\" yMax=\"2\">bad</word>"));
+        QVERIFY(tool.execute(request).contains("Invalid PDF word rectangle"));
+        save(
+            directory,
+            "generated-boxes.xml",
+            "<!DOCTYPE html [<!ENTITY sample 'generated'>]><html><doc><page width=\"300\" "
+            "height=\"200\"/></doc></html>");
+        QVERIFY(tool.execute(request).contains("Unsupported PDF word-box XML declarations"));
+        QByteArray large;
+        for (int index = 0; index < 300; ++index)
+            large += QByteArray("<word xMin=\"20\" yMin=\"20\" xMax=\"40\" yMax=\"30\">")
+                     + QByteArray(4000, 'w') + "</word>";
+        save(directory, "generated-boxes.xml", xml(large));
+        QVERIFY(tool.execute(request).contains("result exceeds 1 MiB"));
+        const auto recovered = result(tool, small);
+        QCOMPARE(recovered.at("parts")[0].at("word_count"), json(1));
+        save(directory, "generated-boxes.xml", QByteArray(8 * 1024 * 1024 + 1, 'x'));
+        QVERIFY(tool.execute(request).contains("converter output exceeds its size limit"));
+#endif
+    }
+
+    void nativeBoxesRejectMixedOptions()
+    {
+        QSocToolDocumentRead tool;
+        const json           base = {{"file_path", "unused.pdf"}, {"mode", "text_boxes"}};
+        for (const char *name : {"offset", "max_chars"}) {
+            auto request  = base;
+            request[name] = 1;
+            QVERIFY(tool.execute(request).contains("uses word_offset/max_words"));
+        }
+        auto request          = base;
+        request["page_count"] = 2;
+        QVERIFY(tool.execute(request).contains("page_count=1"));
+        request              = base;
+        request["max_words"] = 1001;
+        QVERIFY(tool.execute(request).contains("Invalid word_offset"));
+        request                = base;
+        request["word_offset"] = -1;
+        QVERIFY(tool.execute(request).contains("Invalid word_offset"));
+        request              = base;
+        request["file_path"] = "unused.docx";
+        QVERIFY(tool.execute(request).contains("only for PDF"));
+        QVERIFY(tool.execute({{"file_path", "unused.pdf"}, {"word_offset", 0}})
+                    .contains("require mode=text_boxes"));
+    }
+
     void pdfFineTextRegionPreservesGeneratedPixels()
     {
         if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
             || QStandardPaths::findExecutable("pdftoppm").isEmpty())
             QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler"));
-        QTemporaryDir directory;
-        const QString path = directory.filePath("fine-text.pdf");
-        {
-            QPdfWriter pdf(path);
-            pdf.setResolution(72);
-            pdf.setPageSize(QPageSize(QPageSize::A4));
-            QPainter painter(&pdf);
-            QVERIFY(painter.isActive());
-            for (int size : {6, 8, 10}) {
-                QFont font = cjkFont_;
-                font.setPointSize(size);
-                painter.setFont(font);
-                painter
-                    .drawText(30, size * 12, QStringLiteral("时钟规格 I l 1 O 0 −0.125 µA Ω V₂ x²"));
-                painter.setPen(QPen(Qt::black, 0.2));
-                painter.drawLine(30, size * 12 + 4, 400, size * 12 + 4);
-            }
-        }
+        QTemporaryDir  directory;
+        const QString  path = createFinePdf(directory, cjkFont_);
         LLMModelConfig model;
         model.acceptsImage      = true;
         model.imageMaxDimension = 4096;
