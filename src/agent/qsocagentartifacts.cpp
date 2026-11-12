@@ -10,6 +10,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <utility>
 
 namespace {
 constexpr qint64 toolBatchImageBytesLimit = 16 * 1024 * 1024;
@@ -221,13 +222,32 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &allAttachme
     for (const auto &attachment : attachments) {
         QString reason;
         const qint64 cost = std::max(qint64(attachment.estTokens), run->requestSnapshot.imageTokens);
+        json source = {{"source", attachment.sourceUrl.left(512).toStdString()}};
+        for (const auto &[key, value] :
+             {std::pair{"source_id", attachment.sourceId},
+              std::pair{"view_id", attachment.viewId},
+              std::pair{"image_id", attachment.imageId},
+              std::pair{"source_sha256", attachment.sourceSha256}})
+            if (!value.isEmpty())
+                source[key] = value.left(256).toStdString();
+        source["width"]  = attachment.width;
+        source["height"] = attachment.height;
+        if (attachment.sourceWidth > 0 && attachment.sourceHeight > 0) {
+            source["source_width"]  = attachment.sourceWidth;
+            source["source_height"] = attachment.sourceHeight;
+        }
+        source["preserve_source"] = attachment.preserveSource;
+        const QString label       = QStringLiteral("Image source: ")
+                                    + QString::fromStdString(source.dump());
+        const qint64  labelTokens
+            = QSocRequestUsage::estimateText(label, run->requestSnapshot.counter);
         const qint64 availableBytes = toolBatchImageBytesLimit - imageBytes;
         QByteArray   mime;
         QByteArray   data;
         qint64       bytes = 0;
         if (attachment.estTokens <= 0)
             reason = QStringLiteral("unknown token cost");
-        else if (cost > remaining)
+        else if (cost > remaining || labelTokens > remaining - cost)
             reason = QStringLiteral("remaining context budget");
         else if (attachment.mime.size() > 256 || attachment.dataB64.size() > availableBytes)
             reason = QStringLiteral("batch encoded byte limit");
@@ -246,8 +266,12 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &allAttachme
         }
         const QByteArray url = QByteArrayLiteral("data:") + mime + QByteArrayLiteral(";base64,")
                                + data;
-        content.push_back({{"type", "image_url"}, {"image_url", {{"url", url.toStdString()}}}});
-        remaining -= cost;
+        content.push_back({{"type", "text"}, {"text", label.toStdString()}});
+        json image = {{"url", url.toStdString()}};
+        if (attachment.preserveSource)
+            image["detail"] = "high";
+        content.push_back({{"type", "image_url"}, {"image_url", std::move(image)}});
+        remaining -= cost + labelTokens;
         imageTokens += cost;
         imageBytes += bytes;
     }
@@ -269,8 +293,9 @@ QString QSocAgent::queueToolAttachments(const QList<AttachmentSpec> &allAttachme
                                ? QString()
                                : QStringLiteral(" First tool-reported source: %1.").arg(firstSource);
     return QStringLiteral(
-               "[Image attachments omitted (%1).%2 No image artifact was saved for these "
-               "attachments. Read the source again only if needed and still accessible.]\n")
+               "[Image attachments omitted (%1).%2 These images were not queued for the model. "
+               "A saved preview does not imply model delivery. Read the source again only if "
+               "needed and still accessible.]\n")
         .arg(reasons.join(QStringLiteral(", ")), source);
 }
 

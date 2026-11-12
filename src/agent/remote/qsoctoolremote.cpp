@@ -532,7 +532,7 @@ QString QSocToolRemoteFileRead::execute(const json &arguments)
     }
     reader.finish();
 
-    const auto result = reader.result(remotePath, m_llm);
+    const auto result = reader.result(remotePath, m_llm, imageAttachmentOptions());
     if (m_pathCtx && !result.fingerprint.isEmpty()) {
         m_pathCtx->readState().recordSnapshot(remotePath, result.fingerprint, result.complete);
     }

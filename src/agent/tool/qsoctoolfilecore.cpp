@@ -393,10 +393,11 @@ void Reader::finish()
     m_finished = true;
 }
 
-ReadResult Reader::result(const QString &path, QLLMService *llm) const
+ReadResult Reader::result(
+    const QString &path, QLLMService *llm, const QSocImageAttach::Options &options) const
 {
     ReadResult result;
-    result.text            = render(path, llm);
+    result.text            = render(path, llm, options);
     const bool failedImage = !m_mime.isEmpty() && result.text.startsWith("Error:");
     result.complete        = m_finished && m_offset == 0 && !m_stopped && !failedImage;
     if (m_finished && !failedImage && (result.complete || m_emitted > 0))
@@ -404,7 +405,8 @@ ReadResult Reader::result(const QString &path, QLLMService *llm) const
     return result;
 }
 
-QString Reader::render(const QString &path, QLLMService *llm) const
+QString Reader::render(
+    const QString &path, QLLMService *llm, const QSocImageAttach::Options &options) const
 {
     const QString limitMiB = QString::number(m_limit / (1024 * 1024));
     if (!m_mime.isEmpty()) {
@@ -413,7 +415,7 @@ QString Reader::render(const QString &path, QLLMService *llm) const
                 .arg(limitMiB, path);
         }
         return QSocImageAttach::buildAttachmentResult(
-            path, m_mime, m_body, m_displayOnly ? nullptr : llm, true);
+            path, m_mime, m_body, m_displayOnly ? nullptr : llm, true, options);
     }
     QString text = QString::fromUtf8(m_body);
     text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
@@ -444,7 +446,7 @@ QString Reader::render(const QString &path, QLLMService *llm) const
         if (!png.isEmpty())
             text += QLatin1Char('\n')
                     + QSocImageAttach::buildAttachmentResult(
-                        path, QStringLiteral("image/png"), png, llm);
+                        path, QStringLiteral("image/png"), png, llm, false, options);
     }
     return text;
 }

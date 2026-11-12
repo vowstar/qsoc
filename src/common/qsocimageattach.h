@@ -9,6 +9,8 @@
 #include <QByteArray>
 #include <QString>
 
+#include <stop_token>
+
 class QImage;
 class QLLMService;
 
@@ -28,6 +30,15 @@ class QLLMService;
  *          OpenAI-compatible image_url content part.
  */
 namespace QSocImageAttach {
+
+struct Options
+{
+    bool            preserveSource = false;
+    QString         sourceId;
+    QString         viewId;
+    QString         reasoningEffort;
+    std::stop_token stop;
+};
 
 /**
  * @brief Detect a raster image MIME by inspecting magic bytes.
@@ -87,7 +98,8 @@ QString buildAttachmentResult(
     const QString    &mimeHint,
     const QByteArray &body,
     QLLMService      *llm,
-    bool              previewRefused = false);
+    bool              previewRefused = false,
+    const Options    &options        = {});
 
 /**
  * @brief Outcome of @ref compressWithinBudget.

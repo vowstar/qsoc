@@ -1173,11 +1173,18 @@ public:
         QString mime;      /* image/jpeg, image/png, image/webp */
         QString dataB64;   /* base64-encoded payload, no data: prefix */
         QString sourceUrl; /* original URL the bytes were fetched from */
-        int     width     = 0;
-        int     height    = 0;
-        int     byteSize  = 0;
-        int     estTokens = 0;
-        bool    resized   = false;
+        QString sourceId;
+        QString viewId;
+        QString imageId;
+        QString sourceSha256;
+        int     sourceWidth    = 0;
+        int     sourceHeight   = 0;
+        bool    preserveSource = false;
+        int     width          = 0;
+        int     height         = 0;
+        int     byteSize       = 0;
+        int     estTokens      = 0;
+        bool    resized        = false;
         /* Shown to the user only, never sent to the model. */
         bool displayOnly = false;
         /* Saved copy in the session's figure directory. */

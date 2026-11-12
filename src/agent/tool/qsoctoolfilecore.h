@@ -4,6 +4,7 @@
 #ifndef QSOCTOOLFILECORE_H
 #define QSOCTOOLFILECORE_H
 
+#include "common/qsocimageattach.h"
 #include <nlohmann/json.hpp>
 
 #include <functional>
@@ -119,7 +120,8 @@ public:
      *          line when more follows, or the refusal for an oversized image
      *          or line.
      */
-    ReadResult result(const QString &path, QLLMService *llm) const;
+    ReadResult result(
+        const QString &path, QLLMService *llm, const QSocImageAttach::Options &options = {}) const;
 
 private:
     static constexpr qsizetype kMagicBytes = 16;
@@ -129,7 +131,8 @@ private:
     bool    pageText(const QByteArray &chunk);
     bool    takeLine(const QByteArray &line);
     bool    stop(bool *reason);
-    QString render(const QString &path, QLLMService *llm) const;
+    QString render(
+        const QString &path, QLLMService *llm, const QSocImageAttach::Options &options) const;
 
     int                m_offset      = 0;
     int                m_maxLines    = 0;

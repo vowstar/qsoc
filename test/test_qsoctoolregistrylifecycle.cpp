@@ -7,13 +7,18 @@
 #include <nlohmann/json.hpp>
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEvent>
+#include <QEventLoop>
 #include <QPointer>
+#include <QProcess>
 #include <QThread>
+#include <QTimer>
 #include <QtTest>
 
 #include <functional>
 #include <new>
+#include <thread>
 #include <utility>
 
 using json = nlohmann::json;
@@ -65,11 +70,152 @@ public:
     }
 };
 
+class RequestContextTool final : public QSocTool
+{
+public:
+    QString getName() const override { return QStringLiteral("request_context"); }
+    QString getDescription() const override { return QStringLiteral("Request context probe"); }
+    json    getParametersSchema() const override { return {{"type", "object"}}; }
+    QString execute(const json &) override
+    {
+        const auto options = imageAttachmentOptions();
+        effort             = options.reasoningEffort;
+        action();
+        return options.stop.stop_requested() && currentCallContext()->isCancellationRequested()
+                   ? QStringLiteral("cancelled")
+                   : QStringLiteral("active");
+    }
+    QString               effort;
+    std::function<void()> action;
+};
+
+class ProcessWaitTool final : public QSocTool
+{
+public:
+    QString getName() const override { return QStringLiteral("process_wait"); }
+    QString getDescription() const override { return QStringLiteral("Generated process wait"); }
+    json    getParametersSchema() const override { return {{"type", "object"}}; }
+    QString execute(const json &) override
+    {
+        auto *context = currentCallContext();
+        if (context->isCancellationRequested())
+            return QStringLiteral("cancelled before start");
+        QProcess process;
+        auto     environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("QSOC_TEST_PROCESS_WAIT"), QStringLiteral("1"));
+        process.setProcessEnvironment(environment);
+        QEventLoop loop;
+        QTimer     deadline;
+        deadline.setSingleShot(true);
+        QElapsedTimer elapsed;
+        std::jthread  worker;
+        connect(context, &QSocToolCallContext::cancellationRequested, &loop, [&] {
+            ++signalCount;
+            process.kill();
+        });
+        connect(&process, &QProcess::finished, &loop, &QEventLoop::quit);
+        connect(&process, &QProcess::errorOccurred, &loop, &QEventLoop::quit);
+        connect(&deadline, &QTimer::timeout, &loop, [&] { process.kill(); });
+        connect(&process, &QProcess::started, &loop, [&] {
+            elapsed.start();
+            deadline.start(2000);
+            if (crossThread) {
+                worker = std::jthread([stop = stop] {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                    stop->request_stop();
+                });
+            } else {
+                QTimer::singleShot(40, &loop, [this] { stop->request_stop(); });
+            }
+        });
+        process.start(QCoreApplication::applicationFilePath(), {QStringLiteral("processWaitChild")});
+        loop.exec();
+        elapsedMs = elapsed.isValid() ? elapsed.elapsed() : -1;
+        return context->isCancellationRequested() && process.state() == QProcess::NotRunning
+                   ? QStringLiteral("cancelled")
+                   : QStringLiteral("failed");
+    }
+    std::stop_source *stop        = nullptr;
+    bool              crossThread = false;
+    int               signalCount = 0;
+    qint64            elapsedMs   = -1;
+};
+
 class TestToolRegistryLifecycle : public QObject
 {
     Q_OBJECT
 
 private slots:
+    void processWaitChild()
+    {
+        if (qEnvironmentVariableIntValue("QSOC_TEST_PROCESS_WAIT") == 1)
+            QTest::qWait(10000);
+    }
+
+    void parentStopWakesProcessWait_data()
+    {
+        QTest::addColumn<bool>("crossThread");
+        QTest::newRow("same-thread") << false;
+        QTest::newRow("cross-thread") << true;
+    }
+
+    void parentStopWakesProcessWait()
+    {
+        QFETCH(bool, crossThread);
+        std::stop_source stop;
+        ProcessWaitTool  tool;
+        tool.stop        = &stop;
+        tool.crossThread = crossThread;
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        QCOMPARE(
+            registry.executeTool("process_wait", {}, nullptr, {}, {}, "high", stop.get_token()),
+            QStringLiteral("cancelled"));
+        QCOMPARE(tool.signalCount, 1);
+        QVERIFY(tool.elapsedMs >= 0 && tool.elapsedMs < 1500);
+    }
+
+    void queuedParentStopDoesNotOutliveContext()
+    {
+        std::stop_source   stop;
+        RequestContextTool tool;
+        tool.action = [&] { stop.request_stop(); };
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        QCOMPARE(
+            registry.executeTool("request_context", {}, nullptr, {}, {}, "high", stop.get_token()),
+            QStringLiteral("cancelled"));
+        QCoreApplication::processEvents();
+        QCOMPARE(tool.effort, QStringLiteral("high"));
+    }
+
+    void imageRequestContextInheritsEffortAndCancellation_data()
+    {
+        QTest::addColumn<bool>("parentStop");
+        QTest::newRow("parent-stop") << true;
+        QTest::newRow("registry-stop") << false;
+    }
+
+    void imageRequestContextInheritsEffortAndCancellation()
+    {
+        QFETCH(bool, parentStop);
+        QSocToolRegistry   registry;
+        RequestContextTool tool;
+        QObject            owner;
+        std::stop_source   stop;
+        tool.action = [&] {
+            if (parentStop)
+                stop.request_stop();
+            else
+                registry.abortCalls(&owner);
+        };
+        registry.registerTool(&tool);
+        QCOMPARE(
+            registry.executeTool("request_context", {}, &owner, {}, {}, "high", stop.get_token()),
+            QStringLiteral("cancelled"));
+        QCOMPARE(tool.effort, QStringLiteral("high"));
+    }
+
     void nestedOutputKeepsItsOwnerAndStopsAfterCancellation()
     {
         QSocToolRegistry registry;

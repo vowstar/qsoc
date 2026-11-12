@@ -21,7 +21,17 @@ QSocToolCallContext::QSocToolCallContext(QObject *owner, QObject *fallbackScope)
 
 bool QSocToolCallContext::isCancellationRequested() const
 {
-    return cancellationRequested_;
+    return cancellationRequested_ || stopSource_.stop_requested();
+}
+
+void QSocToolCallContext::setRequestContext(const QString &effort, std::stop_token stop)
+{
+    reasoningEffort_ = effort;
+    parentStop_.emplace(stop, [this, source = stopSource_]() mutable {
+        /* Stop callbacks can release the context, so queue its notification first. */
+        QMetaObject::invokeMethod(this, [this] { requestCancellation(); }, Qt::QueuedConnection);
+        source.request_stop();
+    });
 }
 
 void QSocToolCallContext::requestCancellation()
@@ -29,9 +39,13 @@ void QSocToolCallContext::requestCancellation()
     if (cancellationRequested_) {
         return;
     }
-    cancellationRequested_ = true;
-    resultStatus_          = QSocToolResultStatus::Uncertain;
-    emit cancellationRequested();
+    const QPointer<QSocToolCallContext> guard(this);
+    auto                                source = stopSource_;
+    cancellationRequested_                     = true;
+    resultStatus_                              = QSocToolResultStatus::Uncertain;
+    source.request_stop();
+    if (guard)
+        emit guard->cancellationRequested();
 }
 
 void QSocToolCallContext::completeDeferred(const QString &result)
@@ -80,6 +94,29 @@ void QSocTool::abort() {}
 QSocToolCallContext *QSocTool::currentCallContext() const
 {
     return callContexts_.isEmpty() ? nullptr : callContexts_.constLast().data();
+}
+
+QSocImageAttach::Options QSocTool::imageAttachmentOptions() const
+{
+    QSocImageAttach::Options options;
+    if (const auto *context = currentCallContext()) {
+        options.stop            = context->stopToken();
+        options.reasoningEffort = context->reasoningEffort();
+    }
+    return options;
+}
+
+QString QSocTool::executeChildTool(QSocTool *tool, const json &arguments) const
+{
+    const QPointer<QSocTool> child(tool);
+    if (!child)
+        return QStringLiteral("Error: child tool is unavailable");
+    child->callContexts_.append(currentCallContext());
+    const auto restore = qScopeGuard([child] {
+        if (child)
+            child->callContexts_.removeLast();
+    });
+    return child->execute(arguments);
 }
 
 json QSocTool::getDefinition() const
@@ -271,7 +308,9 @@ QString QSocToolRegistry::executeTool(
     const json                               &arguments,
     QObject                                  *owner,
     std::function<void(const QString &)>      output,
-    std::function<void(QSocToolResultStatus)> outcome)
+    std::function<void(QSocToolResultStatus)> outcome,
+    const QString                            &reasoningEffort,
+    std::stop_token                           stop)
 {
     QPointer<QSocTool> tool = getTool(name);
     if (tool.isNull()) {
@@ -279,6 +318,7 @@ QString QSocToolRegistry::executeTool(
     }
 
     ActiveCall call(tool, owner, this, !ownsTool(name, tool));
+    call.context.setRequestContext(reasoningEffort, stop);
     if (output)
         connect(&call.context, &QSocToolCallContext::outputReady, &call.context, std::move(output));
     // cppcheck-suppress danglingLifetime
@@ -305,14 +345,18 @@ std::optional<QString> QSocToolRegistry::executeToolDeferred(
     QObject                                  *owner,
     std::function<void(const QString &)>      completed,
     std::function<void(const QString &)>      output,
-    std::function<void(QSocToolResultStatus)> outcome)
+    std::function<void(QSocToolResultStatus)> outcome,
+    const QString                            &reasoningEffort,
+    std::stop_token                           stop)
 {
     const QPointer<QSocTool> tool = getTool(name);
     if (!tool)
         return QString("Error: Tool '%1' not found").arg(name);
     if (!tool->supportsDeferred())
-        return executeTool(name, arguments, owner, std::move(output), std::move(outcome));
+        return executeTool(
+            name, arguments, owner, std::move(output), std::move(outcome), reasoningEffort, stop);
     auto *call = new ActiveCall(tool, owner, this, !ownsTool(name, tool));
+    call->context.setRequestContext(reasoningEffort, stop);
     call->setParent(this);
     call->context.canDefer_ = true;
     if (output)

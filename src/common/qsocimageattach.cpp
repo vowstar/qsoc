@@ -308,19 +308,67 @@ nlohmann::json attachmentPayload(const QString &text)
 
 namespace {
 
+QString encodedAttachment(
+    const QString    &sourceLabel,
+    const QByteArray &source,
+    const QSize      &sourceSize,
+    const QByteArray &encoded,
+    const char       *mime,
+    const QSize      &size,
+    int               tokens,
+    bool              resized,
+    const QString    &notes,
+    const Options    &options)
+{
+    const auto hash = [](const QByteArray &bytes) {
+        return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().toStdString();
+    };
+    nlohmann::json payload
+        = {{"mime", mime},
+           {"data", encoded.toBase64().toStdString()},
+           {"source_url", sourceLabel.toStdString()},
+           {"width", size.width()},
+           {"height", size.height()},
+           {"byte_size", encoded.size()},
+           {"est_tokens", tokens},
+           {"resized", resized},
+           {"source_width", sourceSize.width()},
+           {"source_height", sourceSize.height()},
+           {"source_sha256", hash(source)},
+           {"image_id", hash(encoded)},
+           {"preserve_source", options.preserveSource}};
+    if (!options.sourceId.isEmpty())
+        payload["source_id"] = options.sourceId.toStdString();
+    if (!options.viewId.isEmpty())
+        payload["view_id"] = options.viewId.toStdString();
+    QString visibleSource = sourceLabel;
+    visibleSource.replace(QChar(0x01), QStringLiteral("\\u0001"));
+    return QString("[image attached: %1x%2 ~%3 tokens (%4 KB %5) from %6%7]\n")
+               .arg(size.width())
+               .arg(size.height())
+               .arg(tokens)
+               .arg(encoded.size() / 1024)
+               .arg(QString::fromLatin1(mime), visibleSource, notes)
+           + wrapAttachmentPayload(payload);
+}
+
 /* What the `llm.vision_model` entry says about an image, empty when it cannot say. */
 QString describeWithVisionModel(
-    const QString &sourceLabel, const QString &mimeHint, const QByteArray &body, QLLMService *llm)
+    const QString    &sourceLabel,
+    const QString    &mimeHint,
+    const QByteArray &body,
+    QLLMService      *llm,
+    const Options    &options)
 {
     if (llm == nullptr || !llm->getModelConfig(llm->visionModel()).acceptsImage)
         return {};
     const std::unique_ptr<QLLMService> vision(llm->clone());
     vision->setCurrentModel(llm->visionModel());
     const nlohmann::json payload = attachmentPayload(
-        buildAttachmentResult(sourceLabel, mimeHint, body, vision.get()));
+        buildAttachmentResult(sourceLabel, mimeHint, body, vision.get(), false, options));
     if (!payload.is_object())
         return {};
-    const nlohmann::json content = nlohmann::json::array(
+    nlohmann::json content = nlohmann::json::array(
         {{{"type", "text"},
           {"text",
            "Describe this image for an engineer who cannot see it. Report all visible text and "
@@ -330,10 +378,16 @@ QString describeWithVisionModel(
            {{"url",
              "data:" + payload.value("mime", std::string()) + ";base64,"
                  + payload.value("data", std::string())}}}}});
+    if (options.preserveSource)
+        content[1]["image_url"]["detail"] = "high";
     nlohmann::json message;
     if (!QLLMService::extractAssistantMessage(
             vision->sendChatCompletion(
-                nlohmann::json::array({{{"role", "user"}, {"content", content}}})),
+                nlohmann::json::array({{{"role", "user"}, {"content", content}}}),
+                nlohmann::json::array(),
+                0.7,
+                options.stop,
+                options.reasoningEffort),
             &message)
         || !message.value("content", nlohmann::json()).is_string())
         return {};
@@ -349,8 +403,13 @@ QString buildAttachmentResult(
     const QString    &mimeHint,
     const QByteArray &body,
     QLLMService      *llm,
-    bool              previewRefused)
+    bool              previewRefused,
+    const Options    &options)
 {
+    if (options.stop.stop_requested())
+        return QStringLiteral("Error: image attachment cancelled");
+    if (options.sourceId.size() > 256 || options.viewId.size() > 256)
+        return QStringLiteral("Error: image source identity exceeds 256 characters");
     QString visibleSource = sourceLabel;
     visibleSource.replace(QChar(0x01), QStringLiteral("\\u0001"));
     /* Sniff dimensions without decoding pixels. Saves memory for the
@@ -394,13 +453,15 @@ QString buildAttachmentResult(
     };
 
     if (!accepts) {
-        const QString marker    = previewRefused ? displayOnlyMarker(sourceLabel, body) : QString();
-        QString       described = describeWithVisionModel(sourceLabel, mimeHint, body, llm);
+        const QString marker = previewRefused ? displayOnlyMarker(sourceLabel, body) : QString();
+        QString described    = describeWithVisionModel(sourceLabel, mimeHint, body, llm, options);
+        if (options.stop.stop_requested())
+            return QStringLiteral("Error: image attachment cancelled");
         described.replace(QChar(0x01), QStringLiteral("\\u0001"));
         const QString summary
             = !described.isEmpty()
-                  ? QStringLiteral("[image: %1 described by the vision model: %2]")
-                        .arg(visibleSource, described)
+                  ? QStringLiteral("[image: %1 described by the vision model %2: %3]")
+                        .arg(visibleSource, llm != nullptr ? llm->visionModel() : QString(), described)
                   : fallback(
                         marker.isEmpty() ? QStringLiteral("current model does not accept images")
                                          : QStringLiteral(
@@ -409,10 +470,41 @@ QString buildAttachmentResult(
         return marker.isEmpty() ? summary : summary + QLatin1Char('\n') + marker;
     }
 
+    QString sourceMime;
+    if (options.preserveSource) {
+        if (estTok > modelCfg.imageMaxTokens)
+            return fallback(
+                QStringLiteral("source image exceeds image_max_tokens; read a smaller region"));
+        if (modelCfg.imageMaxDimension > 0
+            && std::max(dims.width(), dims.height()) > modelCfg.imageMaxDimension)
+            return fallback(
+                QStringLiteral("source image exceeds image_max_dimension; read a smaller region"));
+        if (modelCfg.imageMaxBytes > 0 && body.size() > modelCfg.imageMaxBytes)
+            return fallback(
+                QStringLiteral("source image exceeds image_max_bytes; read a smaller region"));
+        sourceMime = detectMimeByMagic(body);
+        if (sourceMime.isEmpty())
+            return fallback(QStringLiteral("source image encoding is unsupported"));
+    }
+
     QImage decoded = reader.read();
     if (decoded.isNull()) {
         /* Header parsed but pixels are bad; do not pretend to inline. */
         return fallback(QStringLiteral("image decode failed"));
+    }
+
+    if (options.preserveSource) {
+        return encodedAttachment(
+            sourceLabel,
+            body,
+            dims,
+            body,
+            sourceMime.toLatin1().constData(),
+            dims,
+            estTok,
+            false,
+            QStringLiteral(", source preserved"),
+            options);
     }
 
     int  finalW    = dims.width();
@@ -482,9 +574,8 @@ QString buildAttachmentResult(
         }
     }
 
-    const QByteArray b64     = encoded.toBase64();
-    const char      *outMime = outboundMimeFor(encFormat);
-    QString          notes;
+    const char *outMime = outboundMimeFor(encFormat);
+    QString     notes;
     if (didResize) {
         notes += QStringLiteral(", resized");
     }
@@ -494,32 +585,17 @@ QString buildAttachmentResult(
     if (compressQuality > 0) {
         notes += QStringLiteral(" q=%1").arg(compressQuality);
     }
-    const QString summary = QString("[image attached: %1x%2 ~%3 tokens (%4 KB %5) from %6%7]")
-                                .arg(finalW)
-                                .arg(finalH)
-                                .arg(estTok)
-                                .arg(encoded.size() / 1024)
-                                .arg(QString::fromLatin1(outMime))
-                                .arg(visibleSource)
-                                .arg(notes);
-
-    nlohmann::json payload = {
-        {"mime", outMime},
-        {"data", b64.toStdString()},
-        {"source_url", sourceLabel.toStdString()},
-        {"width", finalW},
-        {"height", finalH},
-        {"byte_size", encoded.size()},
-        {"est_tokens", estTok},
-        {"resized", didResize},
-    };
-
-    QString result;
-    result.reserve(static_cast<int>(b64.size()) + 256);
-    result += summary;
-    result += QLatin1Char('\n');
-    result += wrapAttachmentPayload(payload);
-    return result;
+    return encodedAttachment(
+        sourceLabel,
+        body,
+        dims,
+        encoded,
+        outMime,
+        QSize(finalW, finalH),
+        estTok,
+        didResize,
+        notes,
+        options);
 }
 
 } // namespace QSocImageAttach

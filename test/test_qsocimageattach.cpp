@@ -4,12 +4,14 @@
 /* Magic-byte detection unit test. Image fixtures are generated at
  * runtime via QImage; nothing binary is committed to the repo. */
 
+#include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
 
 #include <QBuffer>
 #include <QByteArray>
 #include <QColor>
+#include <QCryptographicHash>
 #include <QImage>
 #include <QtTest>
 
@@ -31,6 +33,109 @@ class TestQSocImageAttach : public QObject
     Q_OBJECT
 
 private slots:
+    void preserveSource_data()
+    {
+        QTest::addColumn<QString>("limit");
+        for (const char *name : {"none", "dimension", "tokens", "bytes", "cancel"})
+            QTest::newRow(name) << QString::fromLatin1(name);
+    }
+
+    void preserveSource()
+    {
+        QFETCH(QString, limit);
+        const QByteArray source = encode(320, 192, QColor(Qt::cyan), "PNG");
+        QVERIFY(!source.isEmpty());
+        LLMModelConfig model;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = limit == "dimension" ? 100 : 4096;
+        model.imageMaxTokens    = limit == "tokens" ? 1 : 100000;
+        model.imageMaxBytes     = limit == "bytes" ? 32 : 0;
+        QLLMService llm;
+        llm.setModel(model);
+        std::stop_source stop;
+        if (limit == "cancel")
+            stop.request_stop();
+        QSocImageAttach::Options options;
+        options.preserveSource = true;
+        options.sourceId       = QStringLiteral("generated-document");
+        options.viewId         = QStringLiteral("page1-region1");
+        options.stop           = stop.get_token();
+        const QString result   = QSocImageAttach::buildAttachmentResult(
+            "runtime:generated-page", "image/png", source, &llm, false, options);
+        const auto payload = QSocImageAttach::attachmentPayload(result);
+        if (limit != "none") {
+            QVERIFY(!payload.is_object());
+            QVERIFY(result.contains(limit == "cancel" ? "cancelled" : "read a smaller region"));
+            return;
+        }
+        QVERIFY(payload.is_object());
+        QCOMPARE(payload.at("mime"), nlohmann::json("image/png"));
+        QCOMPARE(
+            QByteArray::fromBase64(QByteArray::fromStdString(payload.at("data").get<std::string>())),
+            source);
+        QCOMPARE(payload.at("source_id"), nlohmann::json("generated-document"));
+        QCOMPARE(payload.at("view_id"), nlohmann::json("page1-region1"));
+        QCOMPARE(payload.at("width"), nlohmann::json(320));
+        QCOMPARE(payload.at("height"), nlohmann::json(192));
+        QCOMPARE(payload.at("source_width"), payload.at("width"));
+        QCOMPARE(payload.at("source_height"), payload.at("height"));
+        QCOMPARE(payload.at("source_sha256"), payload.at("image_id"));
+        QCOMPARE(
+            payload.at("image_id"),
+            nlohmann::json(
+                QCryptographicHash::hash(source, QCryptographicHash::Sha256).toHex().toStdString()));
+        QVERIFY(payload.at("preserve_source").get<bool>());
+        QVERIFY(!payload.at("resized").get<bool>());
+    }
+
+    void ordinaryImagesKeepDefaultEncoding()
+    {
+        const QByteArray source = encode(320, 192, QColor(Qt::cyan), "PNG");
+        LLMModelConfig   model;
+        model.acceptsImage = true;
+        QLLMService llm;
+        llm.setModel(model);
+        const auto payload = QSocImageAttach::attachmentPayload(
+            QSocImageAttach::buildAttachmentResult(
+                "runtime:generated-page", "image/png", source, &llm));
+        QCOMPARE(payload.at("mime"), nlohmann::json("image/jpeg"));
+        QVERIFY(!payload.at("preserve_source").get<bool>());
+        QVERIFY(payload.at("source_sha256") != payload.at("image_id"));
+    }
+
+    void preserveSourceRejectsKnownLimitsBeforeDecode_data()
+    {
+        QTest::addColumn<QString>("limit");
+        QTest::newRow("dimension") << QStringLiteral("dimension");
+        QTest::newRow("tokens") << QStringLiteral("tokens");
+        QTest::newRow("bytes") << QStringLiteral("bytes");
+        QTest::newRow("accepted-header-still-validates-pixels") << QStringLiteral("none");
+    }
+
+    void preserveSourceRejectsKnownLimitsBeforeDecode()
+    {
+        QFETCH(QString, limit);
+        QByteArray source = encode(320, 192, QColor(Qt::cyan), "PNG");
+        QVERIFY(source.size() > 64);
+        source.truncate(source.size() / 2);
+        LLMModelConfig model;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = limit == "dimension" ? 100 : 4096;
+        model.imageMaxTokens    = limit == "tokens" ? 1 : 100000;
+        model.imageMaxBytes     = limit == "bytes" ? 32 : 0;
+        QLLMService llm;
+        llm.setModel(model);
+        QSocImageAttach::Options options;
+        options.preserveSource = true;
+        const auto result      = QSocImageAttach::buildAttachmentResult(
+            "runtime:generated-page", "image/png", source, &llm, false, options);
+        QVERIFY(!QSocImageAttach::attachmentPayload(result).is_object());
+        if (limit == "none")
+            QVERIFY(result.contains(QStringLiteral("image decode failed")));
+        else
+            QVERIFY(result.contains(QStringLiteral("image_max_%1").arg(limit)));
+    }
+
     void detectsPng()
     {
         const QByteArray bytes = encode(32, 32, QColor(Qt::red), "PNG");

@@ -183,7 +183,7 @@ QString QSocToolFileRead::execute(const json &arguments)
         return QString("Error: Cannot read file completely: %1").arg(filePath);
     }
 
-    const auto result = reader.result(filePath, llmService);
+    const auto result = reader.result(filePath, llmService, imageAttachmentOptions());
     if (pathContext && !result.fingerprint.isEmpty()) {
         pathContext->readState().recordSnapshot(filePath, result.fingerprint, result.complete);
     }

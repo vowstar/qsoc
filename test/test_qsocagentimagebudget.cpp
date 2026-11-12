@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QHostAddress>
 #include <QImage>
 #include <QScopeGuard>
@@ -35,13 +36,20 @@ public:
             currentCallContext()->setResultStatus(*forcedStatus);
         if (!rawOverride.isNull())
             return rawOverride;
-        if (imageService)
+        if (imageService) {
+            auto options           = imageAttachmentOptions();
+            capturedEffort         = options.reasoningEffort;
+            options.preserveSource = preserveSource;
+            options.sourceId       = QStringLiteral("generated-document");
+            options.viewId         = QStringLiteral("page1-region%1").arg(calls);
             return QSocImageAttach::buildAttachmentResult(
                 sourceLabel,
                 QStringLiteral("image/png"),
                 QByteArray::fromBase64(encoded),
                 imageService,
-                true);
+                true,
+                options);
+        }
         const json attachment
             = {{"mime", "image/png"},
                {"data", encoded.toStdString()},
@@ -57,13 +65,68 @@ public:
     QString                             sourceLabel;
     QLLMService                        *imageService = nullptr;
     std::optional<QSocToolResultStatus> forcedStatus;
-    int                                 tokens = 100;
-    int                                 calls  = 0;
+    int                                 tokens         = 100;
+    int                                 calls          = 0;
+    bool                                preserveSource = false;
+    QString                             capturedEffort;
 };
 
 class Endpoint final : public QObject
 {
 public:
+    static QByteArray messagesResponse(const json &message, bool streaming)
+    {
+        const bool tool   = message.contains("tool_calls");
+        json       blocks = json::array();
+        if (tool) {
+            for (const auto &call : message.at("tool_calls"))
+                blocks.push_back(
+                    {{"type", "tool_use"},
+                     {"id", call.at("id")},
+                     {"name", "generated_image"},
+                     {"input", json::object()}});
+        } else {
+            blocks.push_back({{"type", "text"}, {"text", "done"}});
+        }
+        json response
+            = {{"id", "generated-response"},
+               {"type", "message"},
+               {"role", "assistant"},
+               {"model", "image-wire-test"},
+               {"content", blocks},
+               {"stop_reason", tool ? "tool_use" : "end_turn"},
+               {"usage", {{"input_tokens", 100}, {"output_tokens", 1}}}};
+        if (!streaming)
+            return QByteArray::fromStdString(response.dump());
+        QByteArray body;
+        const auto event = [&body](const json &value) {
+            body += "event: " + QByteArray::fromStdString(value.at("type").get<std::string>())
+                    + "\ndata: " + QByteArray::fromStdString(value.dump()) + "\n\n";
+        };
+        response["content"]     = json::array();
+        response["stop_reason"] = nullptr;
+        event({{"type", "message_start"}, {"message", response}});
+        for (size_t i = 0; i < blocks.size(); ++i) {
+            json start = blocks[i];
+            if (!tool)
+                start["text"] = "";
+            event({{"type", "content_block_start"}, {"index", i}, {"content_block", start}});
+            event(
+                {{"type", "content_block_delta"},
+                 {"index", i},
+                 {"delta",
+                  tool ? json{{"type", "input_json_delta"}, {"partial_json", "{}"}}
+                       : json{{"type", "text_delta"}, {"text", "done"}}}});
+            event({{"type", "content_block_stop"}, {"index", i}});
+        }
+        event(
+            {{"type", "message_delta"},
+             {"delta", {{"stop_reason", tool ? "tool_use" : "end_turn"}}},
+             {"usage", {{"output_tokens", 1}}}});
+        event({{"type", "message_stop"}});
+        return body;
+    }
+
     Endpoint()
     {
         connect(&server, &QTcpServer::newConnection, this, [this] {
@@ -99,8 +162,9 @@ public:
                     = streaming
                           ? json{{"choices", json::array({{{"delta", message}, {"finish_reason", message.contains("tool_calls") ? "tool_calls" : "stop"}}})}}
                           : json{{"choices", json::array({{{"message", message}}})}};
-                QByteArray body = QByteArray::fromStdString(response.dump());
-                if (streaming)
+                QByteArray body = anthropic ? messagesResponse(message, streaming)
+                                            : QByteArray::fromStdString(response.dump());
+                if (streaming && !anthropic)
                     body = QByteArrayLiteral("data: ") + body
                            + QByteArrayLiteral("\n\ndata: [DONE]\n\n");
                 const QByteArray contentType = streaming ? QByteArrayLiteral("text/event-stream")
@@ -120,7 +184,8 @@ public:
     QTcpServer                      server;
     QHash<QTcpSocket *, QByteArray> buffers;
     QList<json>                     requests;
-    int                             count = 1;
+    int                             count     = 1;
+    bool                            anthropic = false;
 };
 
 QByteArray generatedImage(bool large)
@@ -146,6 +211,124 @@ class Test final : public QObject
 {
     Q_OBJECT
 private slots:
+    void preservedImagesReachProvider_data()
+    {
+        QTest::addColumn<bool>("anthropic");
+        QTest::addColumn<bool>("streaming");
+        QTest::newRow("openai-sync") << false << false;
+        QTest::newRow("openai-stream") << false << true;
+        QTest::newRow("anthropic-sync") << true << false;
+        QTest::newRow("anthropic-stream") << true << true;
+    }
+
+    void preservedImagesReachProvider()
+    {
+        QFETCH(bool, anthropic);
+        QFETCH(bool, streaming);
+        QTemporaryDir home;
+        QVERIFY(home.isValid());
+        const auto previous = qgetenv("QSOC_HOME");
+        qputenv("QSOC_HOME", home.path().toUtf8());
+        const auto restore = qScopeGuard([previous] {
+            if (previous.isNull())
+                qunsetenv("QSOC_HOME");
+            else
+                qputenv("QSOC_HOME", previous);
+        });
+        Endpoint   endpoint;
+        endpoint.anthropic = anthropic;
+        endpoint.count     = 2;
+        QVERIFY(endpoint.server.listen(QHostAddress::LocalHost));
+        LLMModelConfig model;
+        model.model             = QStringLiteral("image-wire-test");
+        model.url               = QStringLiteral("http://127.0.0.1:%1/v1/%2")
+                                      .arg(endpoint.server.serverPort())
+                                      .arg(anthropic ? "messages" : "chat/completions");
+        model.api               = anthropic ? LLMApi::AnthropicMessages : LLMApi::OpenAIChat;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = 2048;
+        QLLMService service;
+        service.setModel(model);
+        ImageTool tool;
+        tool.imageService       = &service;
+        tool.preserveSource     = true;
+        tool.sourceLabel        = QStringLiteral("runtime:generated-page");
+        tool.encoded            = generatedImage(true);
+        const QByteArray source = QByteArray::fromBase64(tool.encoded);
+        QVERIFY(!source.isEmpty());
+        const auto digest
+            = QCryptographicHash::hash(source, QCryptographicHash::Sha256).toHex().toStdString();
+        QSocToolRegistry registry;
+        registry.registerTool(&tool);
+        QSocAgentConfig config;
+        config.verbose              = false;
+        config.autoLoadMemory       = false;
+        config.memoryRecallEnabled  = false;
+        config.maxTurns             = 2;
+        config.maxRetries           = 0;
+        config.maxContextTokens     = 512000;
+        config.reservedOutputTokens = 0;
+        config.effortLevel          = QStringLiteral("high");
+        QSocAgent agent(nullptr, &service, &registry, config);
+        if (streaming) {
+            QSignalSpy completed(&agent, &QSocAgent::runComplete);
+            agent.runStream(QStringLiteral("inspect generated document regions"));
+            QVERIFY(completed.count() == 1 || completed.wait(15000));
+        } else {
+            QCOMPARE(
+                agent.run(QStringLiteral("inspect generated document regions")),
+                QStringLiteral("done"));
+        }
+        QCOMPARE(endpoint.requests.size(), 2);
+        QCOMPARE(tool.capturedEffort, QStringLiteral("high"));
+        const auto &request = endpoint.requests.back();
+        QCOMPARE(request.at("model"), json("image-wire-test"));
+        if (anthropic)
+            QCOMPARE(request.at("output_config").at("effort"), json("high"));
+        else
+            QCOMPARE(request.at("reasoning_effort"), json("high"));
+        int images = 0;
+        for (const auto &message : request.at("messages")) {
+            if (!message.contains("content") || !message.at("content").is_array())
+                continue;
+            const auto &content = message.at("content");
+            for (size_t i = 0; i < content.size(); ++i) {
+                const auto &part = content[i];
+                const auto  type = part.value("type", std::string());
+                if (type != (anthropic ? "image" : "image_url"))
+                    continue;
+                QVERIFY(i > 0);
+                QCOMPARE(content[i - 1].at("type"), json("text"));
+                const auto label = QString::fromStdString(
+                    content[i - 1].at("text").get<std::string>());
+                const auto identity = json::parse(
+                    label.mid(QStringLiteral("Image source: ").size()).toStdString());
+                QCOMPARE(identity.at("source_id"), json("generated-document"));
+                QCOMPARE(identity.at("view_id"), json("page1-region" + std::to_string(images + 1)));
+                QCOMPARE(identity.at("image_id"), json(digest));
+                QCOMPARE(identity.at("source_sha256"), json(digest));
+                QByteArray bytes;
+                if (anthropic) {
+                    QCOMPARE(part.at("source").at("media_type"), json("image/png"));
+                    bytes = QByteArray::fromBase64(
+                        QByteArray::fromStdString(part.at("source").at("data").get<std::string>()));
+                } else {
+                    QCOMPARE(part.at("image_url").at("detail"), json("high"));
+                    const auto url = QByteArray::fromStdString(
+                        part.at("image_url").at("url").get<std::string>());
+                    QVERIFY(url.startsWith("data:image/png;base64,"));
+                    bytes = QByteArray::fromBase64(url.mid(url.indexOf(',') + 1));
+                }
+                QCOMPARE(bytes, source);
+                QCOMPARE(QImage::fromData(bytes).size(), QSize(1024, 1024));
+                QCOMPARE(identity.at("width"), json(1024));
+                QCOMPARE(identity.at("height"), json(1024));
+                ++images;
+            }
+        }
+        QCOMPARE(images, 2);
+    }
+
     void attachmentResultTrust_data()
     {
         QTest::addColumn<QString>("mode");
@@ -324,7 +507,7 @@ private slots:
                 QVERIFY(text.contains(QStringLiteral("effect %1 recorded").arg(results + 1)));
                 if (text.contains(QStringLiteral("Image attachments omitted"))) {
                     omitted = true;
-                    QVERIFY(text.contains(QStringLiteral("No image artifact was saved")));
+                    QVERIFY(text.contains(QStringLiteral("not queued for the model")));
                     QVERIFY(text.contains(QStringLiteral("runtime:generated-image")));
                     QVERIFY(!message.contains("_qsoc_artifact_refs"));
                 }

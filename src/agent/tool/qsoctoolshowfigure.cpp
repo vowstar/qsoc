@@ -45,7 +45,12 @@ json QSocToolShowFigure::getParametersSchema() const
 
 namespace {
 
-QString showSvg(const QByteArray &source, const QString &label, bool inspect, QLLMService *llm)
+QString showSvg(
+    const QByteArray               &source,
+    const QString                  &label,
+    bool                            inspect,
+    QLLMService                    *llm,
+    const QSocImageAttach::Options &options)
 {
     QString error;
     if (QSocSvg::sanitize(source, false, &error).isEmpty())
@@ -55,7 +60,7 @@ QString showSvg(const QByteArray &source, const QString &label, bool inspect, QL
         if (png.isEmpty())
             return QStringLiteral("Error: SVG could not be drawn");
         return QSocImageAttach::buildAttachmentResult(
-            label, QStringLiteral("image/png"), png, llm, true);
+            label, QStringLiteral("image/png"), png, llm, true, options);
     }
     return QStringLiteral("Sent to the user's terminal: %1. The pixels were not sent to you.\n")
                .arg(label)
@@ -81,7 +86,8 @@ QString QSocToolShowFigure::execute(const json &arguments)
             QByteArray::fromStdString(arguments["svg"].get<std::string>()),
             title.isEmpty() ? QStringLiteral("svg") : title,
             inspect,
-            llm_);
+            llm_,
+            imageAttachmentOptions());
     }
     if (!arguments.contains("file_path") || !arguments["file_path"].is_string())
         return QStringLiteral("Error: file_path or svg is required");
@@ -89,14 +95,20 @@ QString QSocToolShowFigure::execute(const json &arguments)
         return QStringLiteral("Error: file reading is not available");
     const QString filePath = QString::fromStdString(arguments["file_path"].get<std::string>());
     const bool    isSvg    = filePath.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive);
-    const QString result   = reader_->execute(
+    const QString result   = executeChildTool(
+        reader_,
         {{"file_path", arguments["file_path"]},
          {"display_only", isSvg || !inspect},
          {"max_lines", kSvgMaxLines}});
     if (result.startsWith(QStringLiteral("Error:")))
         return result;
     if (isSvg)
-        return showSvg(result.toUtf8(), title.isEmpty() ? filePath : title, inspect, llm_);
+        return showSvg(
+            result.toUtf8(),
+            title.isEmpty() ? filePath : title,
+            inspect,
+            llm_,
+            imageAttachmentOptions());
 
     if (inspect)
         return result;

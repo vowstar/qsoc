@@ -4,6 +4,7 @@
 #ifndef QSOCTOOL_H
 #define QSOCTOOL_H
 
+#include "common/qsocimageattach.h"
 #include "common/qsoctoolresultstatus.h"
 
 #include <functional>
@@ -27,7 +28,9 @@ class QSocToolCallContext : public QObject
 public:
     explicit QSocToolCallContext(QObject *owner = nullptr);
 
-    bool isCancellationRequested() const;
+    bool            isCancellationRequested() const;
+    std::stop_token stopToken() const { return stopSource_.get_token(); }
+    QString         reasoningEffort() const { return reasoningEffort_; }
     /** @brief Scope shared by tool calls from the same execution owner. */
     QObject *executionScope() const { return scope_.data(); }
     bool     canDefer() const { return canDefer_; }
@@ -49,6 +52,7 @@ signals:
 private:
     QSocToolCallContext(QObject *owner, QObject *fallbackScope);
     void requestCancellation();
+    void setRequestContext(const QString &effort, std::stop_token stop);
 
     QPointer<QObject>                   owner_;
     QPointer<QObject>                   scope_;
@@ -57,6 +61,10 @@ private:
     bool                                deferred_              = false;
     bool                                completed_             = false;
     std::optional<QSocToolResultStatus> resultStatus_;
+    QString                             reasoningEffort_;
+    std::stop_source                    stopSource_;
+    /* Destroy the parent callback before the context's other members. */
+    std::optional<std::stop_callback<std::function<void()>>> parentStop_;
 
     friend class QSocToolRegistry;
 };
@@ -160,7 +168,9 @@ protected:
      *          re-entered while a nested event loop is running.
      * @return Current call context, or nullptr outside registry dispatch
      */
-    QSocToolCallContext *currentCallContext() const;
+    QSocToolCallContext     *currentCallContext() const;
+    QSocImageAttach::Options imageAttachmentOptions() const;
+    QString                  executeChildTool(QSocTool *tool, const json &arguments) const;
 
 private:
     QList<QPointer<QSocToolCallContext>> callContexts_;
@@ -259,16 +269,20 @@ public:
     QString executeTool(
         const QString                            &name,
         const json                               &arguments,
-        QObject                                  *owner   = nullptr,
-        std::function<void(const QString &)>      output  = {},
-        std::function<void(QSocToolResultStatus)> outcome = {});
+        QObject                                  *owner           = nullptr,
+        std::function<void(const QString &)>      output          = {},
+        std::function<void(QSocToolResultStatus)> outcome         = {},
+        const QString                            &reasoningEffort = {},
+        std::stop_token                           stop            = {});
     std::optional<QString> executeToolDeferred(
         const QString                            &name,
         const json                               &arguments,
         QObject                                  *owner,
         std::function<void(const QString &)>      completed,
-        std::function<void(const QString &)>      output  = {},
-        std::function<void(QSocToolResultStatus)> outcome = {});
+        std::function<void(const QString &)>      output          = {},
+        std::function<void(QSocToolResultStatus)> outcome         = {},
+        const QString                            &reasoningEffort = {},
+        std::stop_token                           stop            = {});
 
     /**
      * @brief Get the number of registered tools

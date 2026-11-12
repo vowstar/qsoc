@@ -151,8 +151,10 @@ private slots:
         buffer.open(QIODevice::WriteOnly);
         image.save(&buffer, "PNG");
 
-        const QString result = QSocImageAttach::buildAttachmentResult(
-            QStringLiteral("a.png"), QStringLiteral("image/png"), png, &service, true);
+        QSocImageAttach::Options options;
+        options.reasoningEffort = QStringLiteral("high");
+        const QString result    = QSocImageAttach::buildAttachmentResult(
+            QStringLiteral("a.png"), QStringLiteral("image/png"), png, &service, true, options);
         QCOMPARE(result.contains(QStringLiteral("A cyan square")), described);
         QCOMPARE(result.contains(QStringLiteral("does not accept images")), !described);
         QVERIFY(QSocImageAttach::attachmentPayload(result).value("display_only", false));
@@ -160,8 +162,54 @@ private slots:
         QCOMPARE(requests.size(), described ? 1 : 0);
         if (described) {
             QCOMPARE(requests[0].value("model", std::string()), std::string("eyes-served"));
+            QCOMPARE(requests[0].at("reasoning_effort"), json("high"));
+            QVERIFY(result.contains(QStringLiteral("vision model eyes")));
             QVERIFY(requests[0].dump().find("data:image/") != std::string::npos);
         }
+    }
+
+    void visionDescriptionCanBeCancelled()
+    {
+        QSocTestLlmMock mock;
+        QVERIFY(mock.start({{QStringLiteral("MOCK_HOLD"), QStringLiteral("eyes-served")}}));
+        const QString url = QStringLiteral("http://127.0.0.1:%1/v1/chat/completions").arg(mock.port);
+        ScopedConfig scope(
+            QStringLiteral(
+                "proxy:\n  type: none\nllm:\n  model: text\n  vision_model: eyes\n  models:\n"
+                "    text:\n      model: text-served\n      url: %1\n"
+                "    eyes:\n      model: eyes-served\n      url: %1\n"
+                "      timeout: 10000\n      modalities:\n        image: true\n")
+                .arg(url)
+                .toUtf8());
+        QSocConfig  config;
+        QLLMService service(nullptr, &config);
+        QImage      image(32, 32, QImage::Format_RGB32);
+        image.fill(Qt::cyan);
+        QByteArray png;
+        QBuffer    buffer(&png);
+        QVERIFY(buffer.open(QIODevice::WriteOnly));
+        QVERIFY(image.save(&buffer, "PNG"));
+        std::stop_source stop;
+        QTimer           timer;
+        timer.setInterval(10);
+        connect(&timer, &QTimer::timeout, this, [&] {
+            if (!mock.requests().isEmpty())
+                stop.request_stop();
+        });
+        timer.start();
+        QSocImageAttach::Options options;
+        options.stop            = stop.get_token();
+        options.reasoningEffort = QStringLiteral("high");
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const QString result = QSocImageAttach::buildAttachmentResult(
+            "runtime:generated-page", "image/png", png, &service, false, options);
+        QVERIFY(stop.stop_requested());
+        QVERIFY(elapsed.elapsed() < 3000);
+        QVERIFY(!result.contains(QStringLiteral("described by")));
+        QCOMPARE(mock.requests().size(), 1);
+        QCOMPARE(mock.requests().first().at("model"), json("eyes-served"));
+        QCOMPARE(service.getCurrentModelId(), QStringLiteral("text"));
     }
 
     void modelWithoutModalitiesBlockIsTextOnly()

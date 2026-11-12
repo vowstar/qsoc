@@ -2420,7 +2420,9 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                             owner->processStreamIteration();
                     },
                     publishOutput,
-                    recordOutcome);
+                    recordOutcome,
+                    owner->agentConfig.effortLevel,
+                    run->stopSource.get_token());
                 if (!current())
                     return false;
                 if (!result) {
@@ -2432,7 +2434,13 @@ bool QSocAgent::handleToolCalls(const json &toolCalls, const ActiveRunPtr &run)
                 rawResult = *result;
             } else {
                 rawResult = run->tools->executeTool(
-                    functionName, arguments, this, publishOutput, recordOutcome);
+                    functionName,
+                    arguments,
+                    this,
+                    publishOutput,
+                    recordOutcome,
+                    owner->agentConfig.effortLevel,
+                    run->stopSource.get_token());
             }
         }
         if (!current()) {
@@ -3508,12 +3516,20 @@ QString QSocAgent::extractImageAttachments(const QString &raw, QList<AttachmentS
                 spec.mime      = QString::fromStdString(payload.value("mime", std::string()));
                 spec.dataB64   = QString::fromStdString(payload.value("data", std::string()));
                 spec.sourceUrl = QString::fromStdString(payload.value("source_url", std::string()));
-                spec.width     = payload.value("width", 0);
-                spec.height    = payload.value("height", 0);
-                spec.byteSize  = payload.value("byte_size", 0);
-                spec.estTokens = payload.value("est_tokens", 0);
-                spec.resized   = payload.value("resized", false);
-                spec.displayOnly = payload.value("display_only", false);
+                spec.sourceId  = QString::fromStdString(payload.value("source_id", std::string()));
+                spec.viewId    = QString::fromStdString(payload.value("view_id", std::string()));
+                spec.imageId   = QString::fromStdString(payload.value("image_id", std::string()));
+                spec.sourceSha256 = QString::fromStdString(
+                    payload.value("source_sha256", std::string()));
+                spec.sourceWidth    = payload.value("source_width", 0);
+                spec.sourceHeight   = payload.value("source_height", 0);
+                spec.preserveSource = payload.value("preserve_source", false);
+                spec.width          = payload.value("width", 0);
+                spec.height         = payload.value("height", 0);
+                spec.byteSize       = payload.value("byte_size", 0);
+                spec.estTokens      = payload.value("est_tokens", 0);
+                spec.resized        = payload.value("resized", false);
+                spec.displayOnly    = payload.value("display_only", false);
                 if (spec.mime.startsWith(QStringLiteral("image/")) && !spec.dataB64.isEmpty()) {
                     out->append(spec);
                 }

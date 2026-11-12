@@ -1043,7 +1043,8 @@ QString QSocToolWebFetch::handleImageResponse(
     /* All image-encoding logic is shared with read_file's image branch;
      * the helper handles dimension sniff, capability gate, resize,
      * re-encode, and attachment marker construction in one place. */
-    return QSocImageAttach::buildAttachmentResult(sourceUrl, contentType, body, llmService);
+    return QSocImageAttach::buildAttachmentResult(
+        sourceUrl, contentType, body, llmService, false, imageAttachmentOptions());
 }
 
 #include "moc_qsoctoolweb.cpp"
