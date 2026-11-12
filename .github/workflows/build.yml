@@ -348,6 +348,11 @@ jobs:
         -DENABLE_CLANG_TIDY=OFF
         -DENABLE_DOXYGEN=OFF
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        ${{ matrix.shard == 'sim-1' && '-DSLANG_USE_MIMALLOC=ON' || '' }}
+
+    - name: Check allocator object copy
+      if: matrix.shard == 'sim-1'
+      run: cmake --build build --config ${{env.BUILD_TYPE}} --target mimalloc-obj-target
 
     - name: Build shard tests
       run: |
