@@ -1,0 +1,92 @@
+--- a/src/sftp.c
++++ b/src/sftp.c
+@@ -719,6 +719,39 @@
+  * SFTP API *
+  ********** */
+ 
++static void sftp_packet_flush(LIBSSH2_SFTP *sftp);
++
++static void sftp_handle_free(LIBSSH2_SFTP_HANDLE *handle, int shutting_down)
++{
++    LIBSSH2_SFTP *sftp = handle->sftp;
++    LIBSSH2_SESSION *session = sftp->channel->session;
++
++    ssh2_list_remove(&handle->node);
++    if(handle->handle_type == LIBSSH2_SFTP_HANDLE_DIR) {
++        if(handle->u.dir.names_left)
++            SSH2_FREE(session, handle->u.dir.names_packet);
++    }
++    else if(handle->handle_type == LIBSSH2_SFTP_HANDLE_FILE) {
++        if(handle->u.file.data)
++            SSH2_FREE(session, handle->u.file.data);
++    }
++    if(shutting_down) {
++        struct sftp_pipeline_chunk *chunk =
++            ssh2_list_first(&handle->packet_list);
++        while(chunk) {
++            struct sftp_pipeline_chunk *next = ssh2_list_next(&chunk->node);
++            ssh2_list_remove(&chunk->node);
++            SSH2_FREE(session, chunk);
++            chunk = next;
++        }
++    }
++    else
++        sftp_packetlist_flush(handle);
++    if(handle->close_packet)
++        SSH2_SAFEFREE(session, handle->close_packet);
++    SSH2_FREE(session, handle);
++}
++
+ LIBSSH2_CHANNEL_CLOSE_FUNC(sftp_dtor);
+ 
+ /*
+@@ -727,9 +760,13 @@
+ LIBSSH2_CHANNEL_CLOSE_FUNC(sftp_dtor)
+ {
+     LIBSSH2_SFTP *sftp = (LIBSSH2_SFTP *)(*channel_abstract);
++    LIBSSH2_SFTP_HANDLE *handle;
+ 
+     (void)session_abstract;
+     (void)channel;
++    while((handle = ssh2_list_first(&sftp->sftp_handles)) != NULL)
++        sftp_handle_free(handle, 1);
++    sftp_packet_flush(sftp);
+ 
+     /* Free the partial packet storage for sftp_packet_read */
+     if(sftp->partial_packet)
+@@ -1088,8 +1125,7 @@
+ 
+     sftp_packet_flush(sftp);
+ 
+-    /* TODO: We should consider walking over the sftp_handles list and kill
+-     * any remaining sftp handles ... */
++    /* Remaining handles belong to the channel close callback. */
+ 
+     rc = ssh2_channel_free(sftp->channel);
+ 
+@@ -2627,24 +2663,8 @@
+         }
+     }
+ 
+-    /* remove this handle from the parent's list */
+-    ssh2_list_remove(&handle->node);
+-
+-    if(handle->handle_type == LIBSSH2_SFTP_HANDLE_DIR) {
+-        if(handle->u.dir.names_left)
+-            SSH2_FREE(session, handle->u.dir.names_packet);
+-    }
+-    else if(handle->handle_type == LIBSSH2_SFTP_HANDLE_FILE) {
+-        if(handle->u.file.data)
+-            SSH2_FREE(session, handle->u.file.data);
+-    }
+-
+-    sftp_packetlist_flush(handle);
++    sftp_handle_free(handle, 0);
+     sftp->read_state = ssh2_NB_state_idle;
+-
+-    handle->close_state = ssh2_NB_state_idle;
+-
+-    SSH2_FREE(session, handle);
+ 
+     return rc;
+ }

@@ -11,8 +11,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <QByteArray>
 #include <QDeadlineTimer>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -110,6 +112,47 @@ public:
         const std::function<bool(const QByteArray &)> &sink,
         QString                                       *errorMessage = nullptr,
         const std::function<bool()>                   &cancelled    = {});
+
+    struct RangeResult
+    {
+        ReadEnd    end = ReadEnd::Error;
+        QByteArray data;
+    };
+
+    class ReadFile
+    {
+    public:
+        ~ReadFile();
+        ReadFile(const ReadFile &)            = delete;
+        ReadFile &operator=(const ReadFile &) = delete;
+        quint64   size() const { return m_size; }
+        bool      isOpen() const { return m_client && m_client->isOpen(); }
+        bool      hasModificationTime() const
+        {
+            return m_attributes.flags & LIBSSH2_SFTP_ATTR_ACMODTIME;
+        }
+        RangeResult readAt(
+            quint64                      offset,
+            qint64                       maxBytes,
+            QString                     *errorMessage = nullptr,
+            const std::function<bool()> &cancelled    = {});
+
+    private:
+        ReadFile(
+            QSocSftpClient                *client,
+            LIBSSH2_SFTP_HANDLE           *handle,
+            const LIBSSH2_SFTP_ATTRIBUTES &attributes);
+        QSocSftpClient         *m_client;
+        LIBSSH2_SFTP_HANDLE    *m_handle;
+        quint64                 m_size;
+        LIBSSH2_SFTP_ATTRIBUTES m_attributes;
+        friend class QSocSftpClient;
+    };
+
+    std::unique_ptr<ReadFile> openReadFile(
+        const QString               &path,
+        QString                     *errorMessage = nullptr,
+        const std::function<bool()> &cancelled    = {});
 
     /**
      * @brief Replace a remote file's content without ever unlinking it.
@@ -291,8 +334,17 @@ public:
         const std::function<bool()> &cancelled = {});
 
 private:
+    static constexpr int kCleanupMs = 2000;
+    LIBSSH2_SFTP_HANDLE *openReadHandle(const QString &path, QString *errorMessage);
+    bool                 readAttributes(
+        LIBSSH2_SFTP_HANDLE *handle, LIBSSH2_SFTP_ATTRIBUTES *attributes, QString *errorMessage);
+    void releaseReadFile(ReadFile *file);
     void synchronizeGeneration();
-
+    void releaseReadFiles(QDeadlineTimer deadline);
+    void invalidateReadFiles();
+    void drainRetiredReadFiles(QDeadlineTimer deadline);
+    enum class CloseResult { Closed, Released, Pending };
+    CloseResult drainCloseWithin(LIBSSH2_SFTP_HANDLE *handle, QDeadlineTimer deadline);
     /** @brief Outcome of one publish step. */
     enum class StepOutcome {
         Ok,      /**< The server confirmed it. */
@@ -345,7 +397,7 @@ private:
      *          I/O at all once the session is already unusable.
      * @return True when the SSH session may still be used.
      */
-    bool rebuildSubsystem();
+    bool rebuildSubsystem(QDeadlineTimer deadline = QDeadlineTimer(kCleanupMs));
 
     /** @brief Name why a wait gave up: a dead transport, or just slow. */
     QString waitFailureText(const QString &timeoutText) const;
@@ -399,6 +451,8 @@ private:
     std::function<void()>             m_dataPhaseObserver;
     std::function<void()>             m_createObserver;
     std::function<bool()>             m_cancelled;
+    QSet<ReadFile *>                  m_readFiles;
+    QList<LIBSSH2_SFTP_HANDLE *>      m_retiredReadFiles;
 };
 
 #endif // QSOCSFTPCLIENT_H

@@ -365,6 +365,7 @@ set(LIBSSH2_BUILD_DOCS       OFF       CACHE BOOL   "libssh2 no docs"         FO
 set(LIBSSH2_USE_PKGCONFIG    OFF       CACHE BOOL   "libssh2 no pkg-config"   FORCE)
 set(ENABLE_ZLIB_COMPRESSION  OFF       CACHE BOOL   "libssh2 no zlib"         FORCE)
 add_subdirectory(external/libssh2 EXCLUDE_FROM_ALL)
+include(cmake/libssh2/ownership.cmake)
 set(CMAKE_MODULE_PATH "${QSOC_MODULE_PATH}")
 target_compile_definitions(libssh2_static PRIVATE
     LIBSSH2_3DES_ENABLE

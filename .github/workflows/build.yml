@@ -272,13 +272,15 @@ jobs:
         QSOC_TEST_DEPS_REQUIRED: '1'
       run: |
         set -euo pipefail
-        log="$RUNNER_TEMP/sftp-peer.qtestlog"
-        ./test/test_qsocsftppeer -o "$log,txt" || { cat "$log"; exit 1; }
-        cat "$log"
-        if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
-          echo '::error::an SFTP peer contract was skipped'
-          exit 1
-        fi
+        for target in test_qsocsftppeer test_qsocsftpreadfile; do
+          log="$RUNNER_TEMP/$target.qtestlog"
+          ./test/"$target" -o "$log,txt" || { cat "$log"; exit 1; }
+          cat "$log"
+          if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
+            echo "::error::$target had a skipped contract"
+            exit 1
+          fi
+        done
 
     - name: Document reading contracts
       if: github.event_name == 'pull_request'
@@ -726,11 +728,13 @@ jobs:
         QSOC_TEST_DEPS_REQUIRED: '1'
       run: |
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
-        $log = Join-Path $env:RUNNER_TEMP 'sftp-peer.qtestlog'
-        & ./test/test_qsocsftppeer.exe -o "$log,txt"
-        $testExit = $LASTEXITCODE
-        Get-Content $log
-        if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '(^|\s)SKIP\s*:' -Quiet)) { throw 'SFTP peer contracts did not all run' }
+        foreach ($target in 'test_qsocsftppeer', 'test_qsocsftpreadfile') {
+          $log = Join-Path $env:RUNNER_TEMP "${target}.qtestlog"
+          & "./test/${target}.exe" -o "$log,txt"
+          $testExit = $LASTEXITCODE
+          Get-Content $log
+          if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '(^|\s)SKIP\s*:' -Quiet)) { throw "$target did not run all contracts" }
+        }
 
     - name: Document reading contracts
       if: github.event_name == 'pull_request'
@@ -924,13 +928,15 @@ jobs:
         QSOC_TEST_DEPS_REQUIRED: '1'
       run: |
         set -euo pipefail
-        log="$RUNNER_TEMP/sftp-peer.qtestlog"
-        ./test/test_qsocsftppeer -o "$log,txt" || { cat "$log"; exit 1; }
-        cat "$log"
-        if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
-          echo '::error::an SFTP peer contract was skipped'
-          exit 1
-        fi
+        for target in test_qsocsftppeer test_qsocsftpreadfile; do
+          log="$RUNNER_TEMP/$target.qtestlog"
+          ./test/"$target" -o "$log,txt" || { cat "$log"; exit 1; }
+          cat "$log"
+          if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
+            echo "::error::$target had a skipped contract"
+            exit 1
+          fi
+        done
 
     - name: Document reading contracts
       if: github.event_name == 'pull_request'

@@ -14,10 +14,6 @@ namespace {
 /* Slice length for one poll. */
 constexpr int kWaitMs = 200;
 
-/* Separate, smaller budget for close / unlink once an operation has spent
- * its own, so cleanup stays bounded instead of being skipped. */
-constexpr int kCleanupMs = 2000;
-
 /* Ceiling on one libssh2_sftp_write call. The library builds chunks for the
  * whole count before sending any and only advances its acked offset on a
  * matched STATUS, so an uncapped count makes the in-flight (and, after an
@@ -95,17 +91,24 @@ QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, QDeadlineTimer deadline
         ++m_client->m_operationsBegun;
         m_client->m_deadline = deadline;
         m_client->synchronizeGeneration();
+        if (!m_foreign) {
+            const QDeadlineTimer cleanupDeadline(kCleanupMs);
+            m_client->drainRetiredReadFiles(cleanupDeadline);
+            if (m_client->m_stranded)
+                (void) m_client->rebuildSubsystem(cleanupDeadline);
+        }
     }
 }
 
 QSocSftpClient::OpScope::~OpScope()
 {
     if (m_owner) {
+        const QDeadlineTimer cleanupDeadline(kCleanupMs);
+        if (!m_foreign)
+            m_client->drainRetiredReadFiles(cleanupDeadline);
         m_client->m_opActive = false;
-        /* No operation may hand control back while the subsystem is
-         * stranded: every handle it opened is closed by now, so this is the
-         * last point where the subsystem can still be released. */
-        (void) m_client->rebuildSubsystem();
+        if (!m_foreign)
+            (void) m_client->rebuildSubsystem(cleanupDeadline);
     }
 }
 
@@ -117,15 +120,6 @@ QSocSftpClient::QSocSftpClient(QSocSshSession &session)
 QSocSftpClient::~QSocSftpClient()
 {
     close();
-}
-
-void QSocSftpClient::synchronizeGeneration()
-{
-    if (m_generation == m_session.generation())
-        return;
-    m_sftp       = nullptr;
-    m_stranded   = false;
-    m_generation = m_session.generation();
 }
 
 void QSocSftpClient::setError(const QString &msg, QString *sink)
@@ -207,12 +201,19 @@ bool QSocSftpClient::wait()
     return true;
 }
 
-bool QSocSftpClient::rebuildSubsystem()
+bool QSocSftpClient::rebuildSubsystem(QDeadlineTimer deadline)
 {
     synchronizeGeneration();
-    if (!m_stranded) {
-        return m_session.isConnected();
+    if (!m_session.isConnected()) {
+        invalidateReadFiles();
+        m_retiredReadFiles.clear();
+        m_sftp     = nullptr;
+        m_stranded = false;
+        return false;
     }
+    if (!m_stranded)
+        return true;
+    releaseReadFiles(deadline);
     m_stranded = false;
     /* An unusable session cannot answer, so touching the socket here would
      * only spend a caller's budget proving what is already known. The
@@ -228,12 +229,11 @@ bool QSocSftpClient::rebuildSubsystem()
         return false;
     }
     LIBSSH2_SFTP *sftp = m_sftp;
-    /* Dropped either way: on success libssh2 freed it, and on failure it
-     * still owns state we must never re-enter. Only sftp_shutdown frees the
-     * struct, so an incomplete one leaks it along with any open handle. */
+    /* The channel callback releases the subsystem. An unfinished channel
+     * remains owned by the session and must never be re-entered here. */
     m_sftp = nullptr;
-    const QDeadlineTimer deadline(kCleanupMs);
-    int                  rc = 0;
+    m_retiredReadFiles.clear();
+    int rc = 0;
     while ((rc = libssh2_sftp_shutdown(sftp)) == LIBSSH2_ERROR_EAGAIN) {
         if (deadline.hasExpired()) {
             /* The channel could not be released, which is what a transport
@@ -285,25 +285,31 @@ QString QSocSftpClient::waitFailureText(const QString &timeoutText) const
 
 bool QSocSftpClient::drainClose(LIBSSH2_SFTP_HANDLE *handle)
 {
+    return drainCloseWithin(handle, QDeadlineTimer(kCleanupMs)) == CloseResult::Closed;
+}
+
+QSocSftpClient::CloseResult QSocSftpClient::drainCloseWithin(
+    LIBSSH2_SFTP_HANDLE *handle, QDeadlineTimer deadline)
+{
     if (handle == nullptr) {
-        return true;
+        return CloseResult::Closed;
     }
     /* Cleanup runs after the operation budget is gone, so it takes a fresh
      * small one of its own rather than inheriting an expired clock. Its
      * final code still matters: an unfinished close leaves a server-side
      * handle open and libssh2 mid-request. */
-    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs), &m_cleaning);
+    DeadlineOverride cleanup(&m_deadline, deadline, &m_cleaning);
     int              rc = 0;
     while ((rc = libssh2_sftp_close(handle)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
-            return false;
+            return CloseResult::Pending;
         }
     }
     if (rc != 0) {
         noteTransport(rc);
-        return false;
+        return CloseResult::Released;
     }
-    return true;
+    return CloseResult::Closed;
 }
 
 bool QSocSftpClient::closeDir(LIBSSH2_SFTP_HANDLE *handle)
@@ -392,6 +398,8 @@ bool QSocSftpClient::open(QString *errorMessage)
      * session that died, or on one stranded mid-request, hands every later
      * call a subsystem that cannot answer correctly. */
     if (m_session.rawSession() != nullptr && !m_session.isConnected()) {
+        invalidateReadFiles();
+        m_retiredReadFiles.clear();
         m_sftp = nullptr;
         setError(m_session.unusableText(), errorMessage);
         return false;
@@ -428,6 +436,8 @@ bool QSocSftpClient::open(QString *errorMessage)
 void QSocSftpClient::close()
 {
     synchronizeGeneration();
+    const QDeadlineTimer cleanupDeadline(kCleanupMs);
+    releaseReadFiles(cleanupDeadline);
     if (m_sftp == nullptr) {
         m_stranded = false;
         return;
@@ -439,7 +449,7 @@ void QSocSftpClient::close()
         m_stranded = false;
         return;
     }
-    DeadlineOverride cleanup(&m_deadline, QDeadlineTimer(kCleanupMs), &m_cleaning);
+    DeadlineOverride cleanup(&m_deadline, cleanupDeadline, &m_cleaning);
     int              rc = 0;
     while ((rc = libssh2_sftp_shutdown(m_sftp)) == LIBSSH2_ERROR_EAGAIN) {
         if (!wait()) {
@@ -447,6 +457,7 @@ void QSocSftpClient::close()
         }
     }
     m_sftp = nullptr;
+    m_retiredReadFiles.clear();
     if (rc != 0) {
         noteTransport(rc);
     }
@@ -510,30 +521,10 @@ QSocSftpClient::ReadResult QSocSftpClient::readStreamResult(
     };
     if (interrupted())
         return result;
-    if (!open(errorMessage)) {
+    LIBSSH2_SFTP_HANDLE *handle = openReadHandle(path, errorMessage);
+    if (!handle) {
         (void) interrupted();
         return result;
-    }
-    const QByteArray pathBytes = path.toUtf8();
-
-    LIBSSH2_SFTP_HANDLE *handle = nullptr;
-    while ((handle = libssh2_sftp_open(m_sftp, pathBytes.constData(), LIBSSH2_FXF_READ, 0))
-           == nullptr) {
-        const int err = libssh2_session_last_errno(m_session.rawSession());
-        if (err != LIBSSH2_ERROR_EAGAIN) {
-            noteTransport(err);
-            setError(
-                waitFailureText(QStringLiteral("SFTP open for read failed: %1").arg(path)),
-                errorMessage);
-            return result;
-        }
-        if (!wait()) {
-            setError(
-                waitFailureText(QStringLiteral("Timed out opening %1 for read").arg(path)),
-                errorMessage);
-            (void) interrupted();
-            return result;
-        }
     }
 
     char buffer[16384];

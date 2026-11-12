@@ -6,3 +6,5 @@ resource/report/layout.js binary
 
 # Preserve whitespace in the original upstream notices.
 resource/license/elkjs.txt -text -whitespace
+
+cmake/libssh2/sftp-dtor.patch text eol=lf -whitespace
