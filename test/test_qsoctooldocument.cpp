@@ -262,6 +262,197 @@ QByteArray geometryPdf()
     return bytes;
 }
 
+QByteArray mediaPng()
+{
+    QImage image(32, 24, QImage::Format_RGB32);
+    image.fill(QColor(180, 30, 40));
+    QPainter painter(&image);
+    painter.fillRect(QRect(16, 0, 16, 24), QColor(20, 140, 70));
+    painter.end();
+    QByteArray bytes;
+    QBuffer    buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    if (!image.save(&buffer, "PNG"))
+        qFatal("Cannot encode generated media");
+    return bytes;
+}
+
+QByteArray mediaNamespaces()
+{
+    return " xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+           " xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\""
+           " xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\""
+           " xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\""
+           " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+           " xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\""
+           " xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"";
+}
+
+QByteArray picture(
+    const QByteArray &prefix,
+    const QByteArray &id,
+    const QByteArray &relation,
+    const QString    &alt,
+    bool              crop     = false,
+    bool              external = false)
+{
+    const QByteArray tag = prefix + ':';
+    return '<' + tag + "pic><" + tag + "nvPicPr><" + tag + "cNvPr id=\"" + id
+           + "\" name=\"Generated image\" descr=\"" + alt.toHtmlEscaped().toUtf8() + "\"/><" + tag
+           + "cNvPicPr/></" + tag + "nvPicPr><" + tag
+           + "blipFill><a:blip r:" + (external ? "link" : "embed") + "=\"" + relation + "\"/>"
+           + (crop ? "<a:srcRect l=\"10000\" t=\"20000\" r=\"0\" b=\"0\"/>" : "")
+           + "<a:stretch><a:fillRect/></a:stretch></" + tag + "blipFill><" + tag
+           + "spPr>"
+             "<a:xfrm rot=\"60000\" flipH=\"1\"><a:off x=\"100\" y=\"200\"/><a:ext cx=\"3000\" "
+             "cy=\"4000\"/></a:xfrm>"
+             "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></"
+           + tag + "spPr></" + tag + "pic>";
+}
+
+QByteArray relationships(const QList<QByteArray> &items)
+{
+    return "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+           + items.join(QByteArray()) + "</Relationships>";
+}
+
+QByteArray relationship(
+    const QByteArray &id, const QByteArray &kind, const QByteArray &target, bool external = false)
+{
+    return "<Relationship Id=\"" + id
+           + "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/" + kind
+           + "\" Target=\"" + target + "\"" + (external ? " TargetMode=\"External\"" : "") + "/>";
+}
+
+QList<Member> officeMediaMembers(const QString &format, const QByteArray &png)
+{
+    QList<Member> members{
+        {"[Content_Types].xml",
+         "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+         "<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"svg\" "
+         "ContentType=\"image/svg+xml\"/></Types>"},
+        {"C.xml", "<decoy/>"}};
+    if (format == "docx") {
+        QByteArray body = "<w:document" + mediaNamespaces() + "><w:body>";
+        for (int index = 1; index <= 2; ++index)
+            body += "<w:p><w:r><w:t>Generated paragraph</w:t></w:r><w:r><w:drawing><wp:inline>"
+                    "<wp:docPr id=\""
+                    + QByteArray::number(index) + "\" name=\"Image\" descr=\"段落图\"/>"
+                    + picture(
+                        "pic",
+                        QByteArray::number(index),
+                        "img",
+                        QStringLiteral("中文图片"),
+                        index == 1)
+                    + "</wp:inline></w:drawing></w:r></w:p>";
+        for (const QByteArray &id :
+             {QByteArray("link"), QByteArray("missing"), QByteArray("escape"), QByteArray("vector")})
+            body += "<w:p><w:r><w:drawing><wp:inline>"
+                    + picture("pic", "10", id, QStringLiteral("引用"), false, id == "link")
+                    + "</wp:inline></w:drawing></w:r></w:p>";
+        body += "</w:body></w:document>";
+        members.append(Member{"word/document.xml", body});
+        members.append(
+            Member{
+                "word/_rels/document.xml.rels",
+                relationships(
+                    {relationship("img", "image", "media/picture%5B1%5D.png"),
+                     relationship("vector", "image", "media/vector.svg"),
+                     relationship("link", "image", "https://example.invalid/generated.png", true),
+                     relationship("escape", "image", "../../../outside.png"),
+                     relationship("header", "header", "header1.xml")})});
+        members.append(Member{"word/media/picture[1].png", png});
+        members.append(
+            Member{
+                "word/media/vector.svg",
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\"><rect "
+                "width=\"20\" height=\"10\" fill=\"red\"/></svg>"});
+        members.append(
+            Member{
+                "word/header1.xml",
+                "<w:hdr" + mediaNamespaces() + "><w:p>"
+                    + picture("pic", "20", "img", QStringLiteral("未遍历页眉")) + "</w:p></w:hdr>"});
+        members.append(
+            Member{
+                "word/_rels/header1.xml.rels",
+                relationships({relationship("img", "image", "media/picture%5B1%5D.png")})});
+    } else if (format == "pptx") {
+        members.append(
+            Member{
+                "ppt/presentation.xml",
+                "<p:presentation" + mediaNamespaces()
+                    + "><p:sldIdLst><p:sldId id=\"256\" "
+                      "r:id=\"slide\"/></p:sldIdLst></p:presentation>"});
+        members.append(
+            Member{
+                "ppt/_rels/presentation.xml.rels",
+                relationships({relationship("slide", "slide", "slides/slide1.xml")})});
+        members.append(
+            Member{
+                "ppt/slides/slide1.xml",
+                "<p:sld" + mediaNamespaces()
+                    + "><p:cSld><p:spTree><p:grpSp>"
+                      "<p:nvGrpSpPr><p:cNvPr id=\"9\" "
+                      "name=\"Group\"/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot=\"120000\"><a:chOff "
+                      "x=\"0\" y=\"0\"/></a:xfrm></p:grpSpPr>"
+                    + picture("p", "11", "img", QStringLiteral("裁切图片"), true)
+                    + picture("p", "12", "img", QStringLiteral("重用图片"))
+                    + "</p:grpSp></p:spTree></p:cSld></p:sld>"});
+        members.append(
+            Member{
+                "ppt/slides/_rels/slide1.xml.rels",
+                relationships({relationship("img", "image", "../media/shared.png")})});
+        members.append(Member{"ppt/media/shared.png", png});
+    } else {
+        members.append(
+            Member{
+                "xl/workbook.xml",
+                "<workbook" + mediaNamespaces()
+                    + "><sheets><sheet name=\"功率图\" sheetId=\"1\" "
+                      "r:id=\"sheet\"/></sheets></workbook>"});
+        members.append(
+            Member{
+                "xl/_rels/workbook.xml.rels",
+                relationships({relationship("sheet", "worksheet", "worksheets/sheet1.xml")})});
+        members.append(
+            Member{
+                "xl/worksheets/sheet1.xml",
+                "<worksheet" + mediaNamespaces()
+                    + "><sheetData><row><c "
+                      "r=\"A1\"><f>2+3</f><v>5</v></c></row></sheetData><drawing "
+                      "r:id=\"draw\"/></worksheet>"});
+        members.append(
+            Member{
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                relationships({relationship("draw", "drawing", "../drawings/drawing1.xml")})});
+        members.append(
+            Member{
+                "xl/drawings/drawing1.xml",
+                "<xdr:wsDr" + mediaNamespaces()
+                    + ">"
+                      "<xdr:twoCellAnchor><xdr:from><xdr:col>2</xdr:col><xdr:colOff>100</"
+                      "xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>200</xdr:rowOff></xdr:from>"
+                      "<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</"
+                      "xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+                    + picture("xdr", "1", "img", QStringLiteral("双格锚点"))
+                    + "</xdr:twoCellAnchor>"
+                      "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></"
+                      "xdr:from>"
+                    + picture("xdr", "2", "img", QStringLiteral("单格锚点"))
+                    + "</xdr:oneCellAnchor>"
+                      "<xdr:absoluteAnchor><xdr:pos x=\"500\" y=\"600\"/><xdr:ext cx=\"3000\" "
+                      "cy=\"4000\"/>"
+                    + picture("xdr", "3", "img", QStringLiteral("绝对锚点"))
+                    + "</xdr:absoluteAnchor></xdr:wsDr>"});
+        members.append(
+            Member{
+                "xl/drawings/_rels/drawing1.xml.rels",
+                relationships({relationship("img", "image", "../media/shared.png")})});
+        members.append(Member{"xl/media/shared.png", png});
+    }
+    return members;
+}
+
 class TestQSocToolDocument : public QObject
 {
     Q_OBJECT
@@ -333,6 +524,37 @@ private slots:
         QCOMPARE(linked["format"], json("docx"));
         QCOMPARE(linked["source_sha256"], data["source_sha256"]);
 #endif
+        LLMModelConfig model;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = 4096;
+        model.imageMaxTokens    = 100000;
+        QLLMService llm;
+        llm.setModel(model);
+        QSocToolDocumentRead mediaTool(nullptr, nullptr, &llm, &connection);
+        const auto           png = mediaPng();
+        for (const QString &format :
+             {QStringLiteral("docx"), QStringLiteral("pptx"), QStringLiteral("xlsx")}) {
+            const QString name = QStringLiteral("embedded.") + format;
+            QFile         document(fixture.workDir() + QLatin1Char('/') + name);
+            QVERIFY(document.open(QIODevice::WriteOnly));
+            const auto office = makeZip(officeMediaMembers(format, png));
+            QCOMPARE(document.write(office), office.size());
+            document.close();
+            const auto media
+                = result(mediaTool, {{"file_path", name.toStdString()}, {"mode", "media"}});
+            const auto &item = media.at("media")[0];
+            const auto  text = mediaTool.execute(
+                {{"file_path", name.toStdString()},
+                 {"mode", "media_image"},
+                 {"media_id", item.at("media_id")}});
+            const auto attachment = QSocImageAttach::attachmentPayload(text);
+            QVERIFY2(attachment.is_object(), qPrintable(text.left(500)));
+            QCOMPARE(
+                QByteArray::fromBase64(
+                    QByteArray::fromStdString(attachment.at("data").get<std::string>())),
+                png);
+            QCOMPARE(attachment.at("source_id"), media.at("source_sha256"));
+        }
         if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
             || QStandardPaths::findExecutable("pdftotext").isEmpty()
             || QStandardPaths::findExecutable("pdftoppm").isEmpty())
@@ -1014,6 +1236,174 @@ private slots:
         request["region"]["height"] = 0.1;
         request["target_long_edge"] = 1600;
         QVERIFY(tool.execute(request).contains("virtual page exceeds safe rendering limits"));
+    }
+
+    void officeMediaRetainsOccurrenceLocationsAndOriginalBytes()
+    {
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir    directory;
+        const QByteArray png = mediaPng();
+        LLMModelConfig   model;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = 4096;
+        model.imageMaxTokens    = 100000;
+        QLLMService llm;
+        llm.setModel(model);
+        QSocToolDocumentRead tool(nullptr, nullptr, &llm);
+        for (const QString &format :
+             {QStringLiteral("docx"), QStringLiteral("pptx"), QStringLiteral("xlsx")}) {
+            const auto path = save(
+                directory,
+                QStringLiteral("media.") + format,
+                makeZip(officeMediaMembers(format, png)));
+            const auto before = result(tool, {{"file_path", path.toStdString()}});
+            const auto catalog
+                = result(tool, {{"file_path", path.toStdString()}, {"mode", "media"}});
+            QCOMPARE(catalog.at("coverage").at("reference_scope"), json("selected_parts"));
+            const auto &media = catalog.at("media")[0];
+            QCOMPARE(
+                media.at("sha256"),
+                json(
+                    QCryptographicHash::hash(png, QCryptographicHash::Sha256).toHex().toStdString()));
+            QCOMPARE(media.at("bytes"), json(png.size()));
+            QCOMPARE(media.at("mime"), json("image/png"));
+            QCOMPARE(media.at("declared_content_type"), json("image/png"));
+            QCOMPARE(media.at("reference_count_in_selected_parts"), json(format == "xlsx" ? 3 : 2));
+            if (format == "docx") {
+                QCOMPARE(catalog.at("total_media"), json(2));
+                QCOMPARE(media.at("archive_part"), json("word/media/picture[1].png"));
+                QCOMPARE(media.at("occurrences")[0].at("paragraph"), json(1));
+                QCOMPARE(media.at("occurrences")[1].at("paragraph"), json(2));
+                QCOMPARE(
+                    media.at("occurrences")[0].at("alt_text"),
+                    json(QStringLiteral("中文图片").toStdString()));
+                QCOMPARE(catalog.at("external_relationships").size(), size_t(1));
+                QVERIFY(!catalog.at("external_relationships")[0].at("fetched").get<bool>());
+                QCOMPARE(catalog.at("unresolved_occurrences").size(), size_t(3));
+                const auto first = result(
+                    tool, {{"file_path", path.toStdString()}, {"mode", "media"}, {"max_media", 1}});
+                QCOMPARE(first.at("next_media_offset"), json(1));
+                const auto next = result(
+                    tool,
+                    {{"file_path", path.toStdString()},
+                     {"mode", "media"},
+                     {"media_offset", 1},
+                     {"max_media", 1}});
+                QCOMPARE(next.at("media")[0].at("archive_part"), json("word/media/vector.svg"));
+                const auto vector = result(
+                    tool,
+                    {{"file_path", path.toStdString()},
+                     {"mode", "media_image"},
+                     {"media_id", "word/media/vector.svg"}});
+                QVERIFY(!vector.at("media")[0].at("image_available").get<bool>());
+                QVERIFY(!QSocImageAttach::attachmentPayload(QString::fromStdString(vector.dump()))
+                             .is_object());
+            } else if (format == "pptx") {
+                const auto &occurrence = media.at("occurrences")[0];
+                QCOMPARE(occurrence.at("source_part"), json("ppt/slides/slide1.xml"));
+                QCOMPARE(occurrence.at("slide"), json(1));
+                QCOMPARE(occurrence.at("shape_id"), json("11"));
+                QCOMPARE(occurrence.at("group_depth"), json(1));
+                QVERIFY(!occurrence.at("group_transform_applied").get<bool>());
+                QCOMPARE(occurrence.at("raw_crop").at("l"), json("10000"));
+                QVERIFY(!occurrence.at("raw_geometry").empty());
+            } else {
+                const auto &occurrences = media.at("occurrences");
+                QCOMPARE(occurrences[0].at("sheet"), json(QStringLiteral("功率图").toStdString()));
+                QCOMPARE(occurrences[0].at("from_cell"), json("C2"));
+                QCOMPARE(occurrences[0].at("to_cell"), json("E4"));
+                QCOMPARE(occurrences[0].at("worksheet_drawing_relationship_id"), json("draw"));
+                QCOMPARE(occurrences[0].at("relationship_id"), json("img"));
+                QCOMPARE(occurrences[1].at("from_cell"), json("A1"));
+                QVERIFY(occurrences[2].at("from_cell").is_null());
+                QCOMPARE(occurrences[2].at("raw_anchor").at("kind"), json("absoluteAnchor"));
+                QVERIFY(
+                    QString::fromStdString(before.at("parts")[0].at("text").get<std::string>())
+                        .contains("A1\t5\tformula: 2+3"));
+            }
+            const auto attached = tool.execute(
+                {{"file_path", path.toStdString()},
+                 {"mode", "media_image"},
+                 {"media_id", media.at("media_id")},
+                 {"source_sha256", catalog.at("source_sha256")}});
+            const auto payload = QSocImageAttach::attachmentPayload(attached);
+            QVERIFY2(payload.is_object(), qPrintable(attached.left(500)));
+            QVERIFY(payload.at("preserve_source").get<bool>());
+            QCOMPARE(payload.at("source_id"), catalog.at("source_sha256"));
+            QCOMPARE(payload.at("image_id"), media.at("sha256"));
+            QCOMPARE(payload.at("width"), json(32));
+            QCOMPARE(payload.at("height"), json(24));
+            QCOMPARE(
+                QByteArray::fromBase64(
+                    QByteArray::fromStdString(payload.at("data").get<std::string>())),
+                png);
+            const auto after = result(tool, {{"file_path", path.toStdString()}});
+            QCOMPARE(after.at("parts"), before.at("parts"));
+            const auto stale
+                = QCryptographicHash::hash(QByteArray("different source"), QCryptographicHash::Sha256)
+                      .toHex();
+            QVERIFY(tool.execute({{"file_path", path.toStdString()},
+                                  {"mode", "media_image"},
+                                  {"media_id", media.at("media_id")},
+                                  {"source_sha256", stale.toStdString()}})
+                        .contains("source changed"));
+        }
+        model.imageMaxDimension = 8;
+        llm.setModel(model);
+        const auto limited = tool.execute(
+            {{"file_path", directory.filePath("media.pptx").toStdString()},
+             {"mode", "media_image"},
+             {"media_id", "ppt/media/shared.png"}});
+        QVERIFY(limited.contains("read a smaller region"));
+        QVERIFY(!QSocImageAttach::attachmentPayload(limited).is_object());
+    }
+
+    void officeMediaRejectsMalformedRelationshipsAndLimits()
+    {
+        QSocToolDocumentRead tool;
+        QVERIFY(tool.execute({{"file_path", "unused.docx"}, {"mode", "media_image"}})
+                    .contains("requires media_id"));
+        QVERIFY(tool.execute({{"file_path", "unused.pdf"}, {"mode", "media"}})
+                    .contains("Office files only"));
+        QVERIFY(tool.execute({{"file_path", "unused.docx"}, {"mode", "media"}, {"offset", 0}})
+                    .contains("do not use text offsets"));
+        QVERIFY(tool.execute({{"file_path", "unused.docx"}, {"mode", "media"}, {"max_media", 101}})
+                    .contains("Invalid media_offset"));
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir directory;
+        auto          wrongDrawing = officeMediaMembers("xlsx", mediaPng());
+        for (auto &member : wrongDrawing)
+            if (member.first == "xl/worksheets/_rels/sheet1.xml.rels")
+                member.second = relationships(
+                    {relationship("draw", "drawing", "../worksheets/sheet1.xml")});
+        const auto wrongPath = save(directory, "wrong-drawing.xlsx", makeZip(wrongDrawing));
+        const auto wrong = result(tool, {{"file_path", wrongPath.toStdString()}, {"mode", "media"}});
+        QVERIFY(wrong.at("media").empty());
+        QCOMPARE(
+            wrong.at("unresolved_occurrences")[0].at("status"),
+            json("unsupported_media_source_part"));
+        auto members = officeMediaMembers("docx", mediaPng());
+        for (auto &member : members)
+            if (member.first == "word/_rels/document.xml.rels")
+                member.second = relationships(
+                    {relationship("img", "image", "media/picture%5B1%5D.png"),
+                     relationship("img", "image", "media/vector.svg")});
+        const auto duplicate = save(directory, "duplicate.docx", makeZip(members));
+        QVERIFY(tool.execute({{"file_path", duplicate.toStdString()}, {"mode", "media"}})
+                    .contains("duplicate"));
+        members = officeMediaMembers("docx", mediaPng());
+        for (auto &member : members)
+            if (member.first == "word/document.xml") {
+                member.second = "<w:document" + mediaNamespaces() + "><w:body><w:p>";
+                for (int index = 0; index < 1025; ++index)
+                    member.second += picture("pic", QByteArray::number(index + 1), "img", QString());
+                member.second += "</w:p></w:body></w:document>";
+            }
+        const auto excessive = save(directory, "excessive.docx", makeZip(members));
+        QVERIFY(tool.execute({{"file_path", excessive.toStdString()}, {"mode", "media"}})
+                    .contains("1024 occurrences"));
     }
 
     void nativeBoxesAlignWithRotatedSourceGlyphs()

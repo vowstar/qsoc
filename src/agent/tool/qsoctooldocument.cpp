@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/tool/qsoctooldocument.h"
+#include "qsocofficemedia_p.h"
 
 #include "agent/qsocinputsnapshot.h"
 #include "agent/remote/qsocagentremote.h"
@@ -18,6 +19,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QMimeDatabase>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRectF>
@@ -205,6 +207,10 @@ struct Options
     int                   targetLongEdge = 0;
     int                   wordOffset     = 0;
     int                   maxWords       = 200;
+    int                   mediaOffset    = 0;
+    int                   maxMedia       = 50;
+    QString               mediaId;
+    QString               expectedSource;
 };
 
 bool integerOption(const json &arguments, const char *name, int minimum, int maximum, int *target)
@@ -276,12 +282,47 @@ QString checkOptions(const json &arguments, Options *options)
     }
     if (arguments.contains("mode")) {
         if (!arguments["mode"].is_string())
-            return QStringLiteral("mode must be text, image, list, or text_boxes");
+            return QStringLiteral(
+                "mode must be text, image, list, text_boxes, media, or media_image");
         options->mode = QString::fromStdString(arguments["mode"].get<std::string>());
     }
     if (options->mode != "text" && options->mode != "image" && options->mode != "list"
-        && options->mode != "text_boxes")
-        return QStringLiteral("mode must be text, image, list, or text_boxes");
+        && options->mode != "text_boxes" && options->mode != "media"
+        && options->mode != "media_image")
+        return QStringLiteral("mode must be text, image, list, text_boxes, media, or media_image");
+    const bool media = options->mode == "media" || options->mode == "media_image";
+    if (media) {
+        if (arguments.contains("offset") || arguments.contains("max_chars"))
+            return QStringLiteral("Office media modes do not use text offsets");
+        if (!integerOption(arguments, "media_offset", 0, 4096, &options->mediaOffset)
+            || !integerOption(arguments, "max_media", 1, 100, &options->maxMedia))
+            return QStringLiteral("Invalid media_offset (0 to 4096) or max_media (1 to 100)");
+        if (options->mode == "media_image") {
+            if (!arguments.contains("media_id") || !arguments["media_id"].is_string()
+                || arguments["media_id"].get_ref<const std::string &>().empty()
+                || arguments["media_id"].get_ref<const std::string &>().size() > 8192)
+                return QStringLiteral("media_image requires media_id from the media list");
+            if (arguments.contains("media_offset") || arguments.contains("max_media"))
+                return QStringLiteral(
+                    "media_image selects one media_id without media_offset/max_media");
+            options->mediaId = QString::fromStdString(arguments["media_id"].get<std::string>());
+        } else if (arguments.contains("media_id")) {
+            return QStringLiteral("media_id requires mode=media_image");
+        }
+    } else if (
+        arguments.contains("media_id") || arguments.contains("media_offset")
+        || arguments.contains("max_media")) {
+        return QStringLiteral("media selectors require an Office media mode");
+    }
+    if (arguments.contains("source_sha256")) {
+        if (options->mode != "media_image" || !arguments["source_sha256"].is_string())
+            return QStringLiteral("source_sha256 is an optional media_image source guard");
+        options->expectedSource = QString::fromStdString(
+            arguments["source_sha256"].get<std::string>());
+        static const QRegularExpression hash(QStringLiteral("^[0-9a-f]{64}$"));
+        if (!hash.match(options->expectedSource).hasMatch())
+            return QStringLiteral("source_sha256 must be a lowercase SHA-256 digest");
+    }
     if (options->mode == "text_boxes") {
         if (options->count != 1 || arguments.contains("offset") || arguments.contains("max_chars"))
             return QStringLiteral(
@@ -1057,10 +1098,15 @@ bool archiveEntries(QFile &file, QList<ZipEntry> *entries, QString *error)
 class OfficeArchive
 {
 public:
-    OfficeArchive(QString path, QList<ZipEntry> entries, QSocToolCallContext *context)
+    OfficeArchive(
+        QString              path,
+        QList<ZipEntry>      entries,
+        QSocToolCallContext *context,
+        QDeadlineTimer       deadline = QDeadlineTimer(QDeadlineTimer::Forever))
         : path_(std::move(path))
         , entries_(std::move(entries))
         , context_(context)
+        , deadline_(deadline)
     {}
 
     bool contains(const QString &name) const
@@ -1080,11 +1126,19 @@ public:
             *error = QStringLiteral("Office part is missing: %1").arg(name);
             return {};
         }
+        QString pattern;
+        for (const QChar ch : name) {
+            if (QStringLiteral("[]*?").contains(ch))
+                pattern += QLatin1Char('\\');
+            pattern += ch;
+        }
         const auto result = run(
             QStringLiteral("unzip"),
-            {QStringLiteral("-p"), path_, name},
+            {QStringLiteral("-p"), path_, pattern},
             qMin<qint64>(entry->size, kExtractBytes - extracted_),
-            context_);
+            context_,
+            false,
+            deadline_);
         extracted_ += result.bytes.size();
         if (!result.error.isEmpty())
             *error = result.error;
@@ -1098,6 +1152,7 @@ private:
     QList<ZipEntry>               entries_;
     QPointer<QSocToolCallContext> context_;
     qint64                        extracted_ = 0;
+    QDeadlineTimer                deadline_;
 };
 
 bool advance(QXmlStreamReader &xml)
@@ -1272,8 +1327,122 @@ TextSlice spreadsheetText(
     return text.result();
 }
 
+QString readOfficeMedia(
+    OfficeArchive                  &archive,
+    const QString                  &extension,
+    const QList<OfficePart>        &parts,
+    const Options                  &options,
+    const QString                  &source,
+    qint64                          sourceBytes,
+    QLLMService                    *llm,
+    QSocToolCallContext            *callContext,
+    const QSocImageAttach::Options &attachmentOptions,
+    QDeadlineTimer                  deadline)
+{
+    const QPointer<QSocToolCallContext> context(callContext);
+    const bool                          hadContext = context != nullptr;
+    const auto                          cancelled  = [context, hadContext, deadline] {
+        return deadline.hasExpired()
+               || (hadContext && (!context || context->isCancellationRequested()));
+    };
+    QSocOfficeMedia::Package package{
+        [&](const QString &name) { return archive.contains(name); },
+        [&](const QString &name, QString *error) { return archive.read(name, error); },
+        cancelled};
+    QList<QSocOfficeMedia::Part> selected;
+    const int last = qMin<qsizetype>(parts.size(), options.page + options.count - 1);
+    for (int i = options.page - 1; i < last; ++i)
+        selected.append({i + 1, parts[i].title, parts[i].path});
+    QString error;
+    auto    result = QSocOfficeMedia::discover(extension, selected, package, &error);
+    if (!error.isEmpty())
+        return QStringLiteral("Error: %1").arg(error);
+    auto all              = std::move(result["media"]);
+    result["format"]      = extension.toStdString();
+    result["total_parts"] = parts.size();
+    result["total_media"] = all.size();
+    result["unit"] = extension == "docx" ? "document" : extension == "xlsx" ? "worksheet" : "slide";
+    result["mode"] = options.mode.toStdString();
+    if (options.mode == "media")
+        result["media_offset"] = options.mediaOffset;
+    else
+        result["selected_media_id"] = options.mediaId.toStdString();
+    result["media"] = json::array();
+    const int end   = options.mode == "media_image"
+                          ? static_cast<int>(all.size())
+                          : qMin<int>(all.size(), options.mediaOffset + options.maxMedia);
+    const int start = options.mode == "media_image" ? 0 : options.mediaOffset;
+    for (int i = start; i < end; ++i) {
+        auto          media = all[i];
+        const QString part  = QString::fromStdString(media["archive_part"].get<std::string>());
+        if (options.mode == "media_image" && part != options.mediaId)
+            continue;
+        const auto bytes = archive.read(part, &error);
+        if (!error.isEmpty())
+            return QStringLiteral("Error: %1").arg(error);
+        const QString direct = QSocImageAttach::detectMimeByMagic(bytes);
+        const QString mime   = direct.isEmpty() ? QMimeDatabase().mimeTypeForData(bytes).name()
+                                                : direct;
+        media["sha256"]      = digest(bytes).toStdString();
+        media["bytes"]       = bytes.size();
+        media["mime"]        = mime.toStdString();
+        media["direct_image_candidate"] = !direct.isEmpty();
+        if (options.mode == "media_image") {
+            media["origin"]              = "original_embedded_bytes";
+            media["appearance_rendered"] = false;
+            if (direct.isEmpty()) {
+                media["image_available"] = false;
+                media["notice"]
+                    = "The original entry remains in the Office archive. This encoding is not "
+                      "supported for direct model image input. No conversion was performed.";
+                result["media"].push_back(media);
+                return QString::fromStdString(result.dump(2));
+            }
+            auto imageOptions           = attachmentOptions;
+            imageOptions.preserveSource = true;
+            imageOptions.viewId = QStringLiteral("office:media=%1").arg(digest(part.toUtf8()));
+            const json evidence
+                = {{"source", source.toStdString()},
+                   {"source_sha256", attachmentOptions.sourceId.toStdString()},
+                   {"source_bytes", sourceBytes},
+                   {"media", media},
+                   {"coverage", result["coverage"]},
+                   {"view_id", imageOptions.viewId.toStdString()},
+                   {"stage", "produced"}};
+            const auto serialized = evidence.dump();
+            if (serialized.size() > 1024 * 1024)
+                return QStringLiteral(
+                    "Error: Office media evidence exceeds 1 MiB. Select fewer parts");
+            return QStringLiteral("Office original embedded media\n")
+                   + QString::fromStdString(serialized) + QLatin1Char('\n')
+                   + QSocImageAttach::buildAttachmentResult(
+                       source + QStringLiteral("#part=") + part,
+                       mime,
+                       bytes,
+                       llm,
+                       true,
+                       imageOptions);
+        }
+        result["media"].push_back(std::move(media));
+    }
+    if (options.mode == "media_image")
+        return QStringLiteral(
+            "Error: media_id is not an embedded image in the selected Office parts");
+    if (end < static_cast<int>(all.size()))
+        result["next_media_offset"] = end;
+    if (last < parts.size())
+        result["next_page"] = last + 1;
+    return QString::fromStdString(result.dump(2));
+}
+
 QString readOffice(
-    QFile &file, const QString &extension, const Options &options, QSocToolCallContext *context)
+    QFile                          &file,
+    const QString                  &extension,
+    const Options                  &options,
+    QSocToolCallContext            *context,
+    QLLMService                    *llm,
+    const QSocImageAttach::Options &attachmentOptions,
+    const QString                  &source)
 {
     if (options.mode == "image")
         return QStringLiteral(
@@ -1282,9 +1451,12 @@ QString readOffice(
     QList<ZipEntry> entries;
     if (!archiveEntries(file, &entries, &error))
         return QStringLiteral("Error: %1").arg(error);
-    OfficeArchive     archive(file.fileName(), std::move(entries), context);
-    QList<OfficePart> parts;
-    QString           unit;
+    const bool           media    = options.mode == "media" || options.mode == "media_image";
+    const QDeadlineTimer deadline = media ? QDeadlineTimer(30000)
+                                          : QDeadlineTimer(QDeadlineTimer::Forever);
+    OfficeArchive        archive(file.fileName(), std::move(entries), context, deadline);
+    QList<OfficePart>    parts;
+    QString              unit;
     if (extension == QStringLiteral("docx")) {
         unit = QStringLiteral("document");
         parts.append({QStringLiteral("Document body"), QStringLiteral("word/document.xml")});
@@ -1299,6 +1471,18 @@ QString readOffice(
         return QStringLiteral("Error: %1").arg(error);
     if (parts.isEmpty() || options.page > parts.size())
         return QStringLiteral("Error: Requested Office part is out of range");
+    if (media)
+        return readOfficeMedia(
+            archive,
+            extension,
+            parts,
+            options,
+            source,
+            file.size(),
+            llm,
+            context,
+            attachmentOptions,
+            deadline);
     json result
         = {{"format", extension.toStdString()},
            {"unit", unit.toStdString()},
@@ -1368,7 +1552,9 @@ QString QSocToolDocumentRead::getDescription() const
         "mode=image renders one rotated CropBox PDF view; region plus target_long_edge rerenders "
         "a normalized view rectangle from the source. mode=text_boxes returns bounded native word "
         "boxes with separate word-index continuation. OCR is not performed. "
-        "Office supports text only. Optional dependencies: Poppler pdfinfo/pdftotext/pdftoppm for "
+        "Office media lists name original images and occurrence metadata. media_image explicitly "
+        "selects one original. Office page layout is not rendered. Optional dependencies: Poppler "
+        "pdfinfo/pdftotext/pdftoppm for "
         "PDF, unzip for Office. Inputs are limited to 32 MiB and Office expanded entries to 8 MiB "
         "each/64 MiB total. Remote files are read through SFTP into a private local snapshot; "
         "converters run locally without remote shell commands.");
@@ -1384,7 +1570,7 @@ json QSocToolDocumentRead::getParametersSchema() const
             {"description", "Document path on the bound workspace, relative or absolute"}}},
           {"mode",
            {{"type", "string"},
-            {"enum", {"text", "image", "list", "text_boxes"}},
+            {"enum", {"text", "image", "list", "text_boxes", "media", "media_image"}},
             {"description",
              "text by default; image renders one PDF page; text_boxes returns one PDF page of "
              "native word boxes; list shows parts"}}},
@@ -1442,6 +1628,27 @@ json QSocToolDocumentRead::getParametersSchema() const
             {"description",
              "text_boxes only: source words per window, default 200. Outside-view words are "
              "counted and omitted"}}},
+          {"media_offset",
+           {{"type", "integer"},
+            {"minimum", 0},
+            {"maximum", 4096},
+            {"description",
+             "Office media mode: first unique media entry in the selected parts, default 0"}}},
+          {"max_media",
+           {{"type", "integer"},
+            {"minimum", 1},
+            {"maximum", 100},
+            {"description", "Office media mode: entries per result, default 50"}}},
+          {"media_id",
+           {{"type", "string"},
+            {"maxLength", 8192},
+            {"description",
+             "Required by media_image: archive part from a media list. Reads original bytes "
+             "without occurrence crop/transform"}}},
+          {"source_sha256",
+           {{"type", "string"},
+            {"description",
+             "Optional media_image guard: require the source digest returned by the media list"}}},
           {"max_chars",
            {{"type", "integer"},
             {"minimum", 1},
@@ -1509,6 +1716,8 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         return QStringLiteral("Error: region is supported only for PDF image mode");
     if (options.mode == "text_boxes" && extension != "pdf")
         return QStringLiteral("Error: text_boxes is supported only for PDF");
+    if ((options.mode == "media" || options.mode == "media_image") && extension == "pdf")
+        return QStringLiteral("Error: media and media_image support Office files only");
     const QString canonical = remote_ ? path : QFileInfo(path).canonicalFilePath();
     const json    sourceKey
         = {{"transport", remote_ ? "sftp" : "local"},
@@ -1526,6 +1735,9 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         return QStringLiteral("Error: %1").arg(error);
     if (cancelled())
         return QStringLiteral("Error: Document read cancelled");
+    if (!options.expectedSource.isEmpty()
+        && options.expectedSource != QString::fromLatin1(snapshot->sha256()))
+        return QStringLiteral("Error: Office media source changed. List media again");
     QString              backend;
     const QDeadlineTimer conversionDeadline = options.mode == "text_boxes"
                                                   ? QDeadlineTimer(30000)
@@ -1565,7 +1777,7 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         QFile file(snapshot->path());
         if (!file.open(QIODevice::ReadOnly))
             return QStringLiteral("Error: Cannot open input snapshot");
-        output = readOffice(file, extension, options, context);
+        output = readOffice(file, extension, options, context, llm_, attachmentOptions, path);
     }
     if (output.startsWith(QLatin1Char('{'))) {
         auto result = json::parse(output.toStdString(), nullptr, false);
@@ -1608,6 +1820,11 @@ QString QSocToolDocumentRead::execute(const json &arguments)
                     result["cursor_unavailable"] = error.toStdString();
             }
             const auto serialized = result.dump(2);
+            if ((options.mode == "media" || options.mode == "media_image")
+                && serialized.size() > 1024 * 1024)
+                return QStringLiteral(
+                    "Error: Office media result exceeds 1 MiB. Select fewer parts or reduce "
+                    "max_media");
             if (options.mode == "text_boxes" && serialized.size() > kBoxResultBytes)
                 return QStringLiteral("Error: PDF word-box result exceeds 1 MiB. Reduce max_words");
             return QString::fromStdString(serialized);
