@@ -31,7 +31,7 @@ class QSocSshConfigParser;
 
 class QSocRemoteConnection;
 
-/** @brief Copy the probed host description into @p config for the prompt. */
+/** @brief Copy the current remote binding and host state into @p config. */
 void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *config);
 
 /**
@@ -62,7 +62,8 @@ struct AgentRemoteState
     QString                 workspace;          /* Remote absolute workspace path. */
     QString                 canonicalWorkspace; /* Host-resolved workspace identity. */
     QString                 workspaceTreeId;    /* Persistent random id stored in the root. */
-    QStringList             hostKeyNotices;     /* Unknown-key decisions to show the user. */
+    bool                    workspaceReadOnly = false;
+    QStringList             hostKeyNotices; /* Unknown-key decisions to show the user. */
 };
 
 /**
@@ -140,14 +141,18 @@ public:
      */
     void teardown();
 
-    QSocSshSession        *session() const { return m_session; }
-    QSocSftpClient        *sftp() const { return m_sftp; }
-    QSocRemotePathContext *path() { return &m_path; }
-    QString                target() const { return m_target; }
-    QString                endpointIdentity() const { return m_endpointIdentity; }
-    QString                workspace() const { return m_workspace; }
-    QString                canonicalWorkspace() const { return m_canonicalWorkspace; }
-    QString                workspaceTreeId() const { return m_workspaceTreeId; }
+    QSocSshSession              *session() const { return m_session; }
+    QSocSftpClient              *sftp() const { return m_sftp; }
+    QSocRemotePathContext       *path() { return &m_path; }
+    const QSocRemotePathContext *path() const { return &m_path; }
+    QString                      target() const { return m_target; }
+    QString                      endpointIdentity() const { return m_endpointIdentity; }
+    QString                      workspace() const { return m_workspace; }
+    QString                      canonicalWorkspace() const { return m_canonicalWorkspace; }
+    QString                      workspaceTreeId() const { return m_workspaceTreeId; }
+    bool                         workspaceReadOnly() const { return m_workspaceReadOnly; }
+    /** @brief Keep this binding read-only until an explicit new bind. */
+    void restrictToReadOnly();
 
     /** @brief Project files of the bound workspace, for the workspace stores. */
     QSocWorkspaceFs *workspaceFs();
@@ -532,6 +537,7 @@ private:
     int                                                           m_reconnectsUsed       = 0;
     bool                                                          m_lastReconnectKeptCwd = false;
     bool                                                          m_workspaceGit         = false;
+    bool                                                          m_workspaceReadOnly    = false;
 };
 
 /**
@@ -551,6 +557,7 @@ private:
  * @param deadline Absolute budget supplied to each hop and SFTP startup.
  * @param hostKeyConfirm Optional question for an unknown host key under
  *                       StrictHostKeyChecking ask; unset refuses the key.
+ * @param configParser Parsed SSH configuration; null loads the user's config.
  * @return True on success, false on any connect or SFTP failure.
  */
 bool connectAgentSshSession(
@@ -561,12 +568,14 @@ bool connectAgentSshSession(
     QSocSshSession::SecretCallback secretCallback = {},
     std::function<bool()>          abortProbe     = {},
     QDeadlineTimer                 deadline       = QDeadlineTimer(30000),
-    QSocSshSession::HostKeyConfirm hostKeyConfirm = {});
+    QSocSshSession::HostKeyConfirm hostKeyConfirm = {},
+    const QSocSshConfigParser     *configParser   = nullptr);
 
 /**
  * @brief Ensure and identify the workspace directory on the remote host.
- * @details Calls `mkdir -p` via SFTP, creates a random persistent tree marker
- *          when absent, and records both identities on @p state.
+ * @details Creates a persistent tree marker for a writable binding. A protocol
+ *          permission refusal binds an existing readable root read-only. That
+ *          binding keeps an absent tree marker absent and disables writes.
  *          The session and SFTP fields of @p state must already be open. The
  *          path context is seeded later, by
  *          `QSocRemoteConnection::adopt()`.
@@ -574,13 +583,15 @@ bool connectAgentSshSession(
  * @param state In/out state; reads sftp, writes workspace identities.
  * @param errorMessage Optional sink for failure detail.
  * @param deadline Absolute budget shared by every workspace operation.
+ * @param readOnly Preserve a previous read-only binding without attempting writes.
  * @return True on success.
  */
 bool prepareAgentRemoteWorkspace(
     const QString    &workspace,
     AgentRemoteState *state,
     QString          *errorMessage,
-    QDeadlineTimer    deadline = QDeadlineTimer(30000));
+    QDeadlineTimer    deadline = QDeadlineTimer(30000),
+    bool              readOnly = false);
 
 /**
  * @brief Build the remote-mode tool registry.

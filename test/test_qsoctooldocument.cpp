@@ -10,6 +10,9 @@
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
+#ifdef Q_OS_WIN
+#include "qsoc_test_sftp_peer.h"
+#endif
 
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -604,16 +607,43 @@ private:
     QFont cjkFont_;
 
 private slots:
+    void remoteDocumentUsesSftpAndPreservesItsSource_data()
+    {
+        QTest::addColumn<bool>("readOnly");
+        QTest::newRow("writable") << false;
+        QTest::newRow("read-only") << true;
+    }
+
     void remoteDocumentUsesSftpAndPreservesItsSource()
     {
+        QFETCH(bool, readOnly);
         if (QStandardPaths::findExecutable("unzip").isEmpty())
             QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+#ifdef Q_OS_WIN
+        QSocTestSftpPeer fixture;
+        if (!fixture.start(readOnly) && fixture.missing())
+            QSOC_TEST_MISSING_DEPENDENCY(fixture.error());
+        QVERIFY2(fixture.error().isEmpty(), qPrintable(fixture.error()));
+        const QString remoteRoot = fixture.canonicalDir();
+#else
         QSocTestSshd fixture;
-        fixture.setExtraConfig({QStringLiteral("ForceCommand internal-sftp")});
+        fixture.setExtraConfig(
+            {readOnly ? QStringLiteral("ForceCommand internal-sftp -R")
+                      : QStringLiteral("ForceCommand internal-sftp")});
         fixture.start();
         QSOC_REQUIRE_SSHD(fixture);
-        const QString    path  = fixture.workDir() + QStringLiteral("/document.docx");
-        const QByteArray bytes = makeZip({{"word/document.xml", wordBody()}});
+        const QString remoteRoot = fixture.workDir();
+#endif
+        QTemporaryDir shadow;
+        QVERIFY(shadow.isValid());
+        auto localWord = wordBody();
+        localWord.replace("100 MHz", "local shadow");
+        save(shadow, QStringLiteral("document.docx"), makeZip({{"word/document.xml", localWord}}));
+        const QString previous = QDir::currentPath();
+        QVERIFY(QDir::setCurrent(shadow.path()));
+        const auto       restore = qScopeGuard([&] { QDir::setCurrent(previous); });
+        const QString    path    = fixture.workDir() + QStringLiteral("/document.docx");
+        const QByteArray bytes   = makeZip({{"word/document.xml", wordBody()}});
         QFile            file(path);
         QVERIFY(file.open(QIODevice::WriteOnly));
         QCOMPARE(file.write(bytes), bytes.size());
@@ -624,20 +654,37 @@ private slots:
         const auto cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
         QString    error;
         QCOMPARE(
-            state.session->connectTo(fixture.hostConfig(fixture.port()), &error),
+            state.session->connectTo(fixture.hostConfig(), &error),
             QSocSshSession::ConnectStatus::Ok);
         state.endpointIdentity = state.session->hostKeyIdentity();
         state.targetKey        = QStringLiteral("loopback");
-        QVERIFY2(prepareAgentRemoteWorkspace(fixture.workDir(), &state, &error), qPrintable(error));
+        QVERIFY2(prepareAgentRemoteWorkspace(remoteRoot, &state, &error), qPrintable(error));
         QSocRemoteConnection connection;
+#ifdef Q_OS_WIN
+        connection.setHostProbe([](QSocSshSession *, const QString &) {
+            QSocMachine host;
+            host.kind = QSocMachine::Kind::Windows;
+            return host;
+        });
+#endif
         QVERIFY(connection.adopt(std::move(state)));
+#ifdef Q_OS_WIN
+        QCOMPARE(fixture.execRequests(), 0);
+#endif
+        QCOMPARE(connection.workspaceReadOnly(), readOnly);
+        const QString metadata = fixture.workDir() + QStringLiteral("/.qsoc-agent");
+        QCOMPARE(QFileInfo::exists(metadata), !readOnly);
+        if (readOnly) {
+            QVERIFY(connection.workspaceTreeId().isEmpty());
+            QVERIFY(connection.path()->writableDirs().isEmpty());
+        }
         std::unique_ptr<QSocToolRegistry> registry(
             buildAgentRemoteRegistry(nullptr, &connection, nullptr));
         auto *tool = dynamic_cast<QSocToolDocumentRead *>(
             registry->getTool(QStringLiteral("read_document")));
         QVERIFY(tool);
         const auto data = result(*tool, {{"file_path", "document.docx"}});
-        QCOMPARE(data["source"], json(path.toStdString()));
+        QCOMPARE(data["source"], json((remoteRoot + QStringLiteral("/document.docx")).toStdString()));
         QCOMPARE(data["source_bytes"], json(bytes.size()));
         QCOMPARE(
             data["source_sha256"],
@@ -673,7 +720,37 @@ private slots:
         QLLMService llm;
         llm.setModel(model);
         QSocToolDocumentRead mediaTool(nullptr, nullptr, &llm, &connection);
-        const auto           png = mediaPng();
+        QSocToolDocumentRead localImages(nullptr, nullptr, &llm);
+        const auto           imageParity = [](const QString &remoteText,
+                                              const QString &localText,
+                                              const QString &source,
+                                              const json    &hash,
+                                              bool           preserved) {
+            const auto remote = QSocImageAttach::attachmentPayload(remoteText);
+            const auto local  = QSocImageAttach::attachmentPayload(localText);
+            if (!remote.is_object() || !local.is_object())
+                return false;
+            const auto bytes = QByteArray::fromBase64(
+                QByteArray::fromStdString(remote.at("data").get<std::string>()));
+            const auto reference = QByteArray::fromBase64(
+                QByteArray::fromStdString(local.at("data").get<std::string>()));
+            const QImage image = QImage::fromData(bytes);
+            return !image.isNull() && bytes == reference && remote.at("source_id") == hash
+                   && remote.at("source_url") == json((source + "#page=2").toStdString())
+                   && remote.at("image_id")
+                          == json(
+                              QCryptographicHash::hash(bytes, QCryptographicHash::Sha256)
+                                  .toHex()
+                                  .toStdString())
+                   && remote.at("byte_size") == json(bytes.size())
+                   && remote.at("width") == json(image.width())
+                   && remote.at("height") == json(image.height())
+                   && remote.at("source_width") == local.at("source_width")
+                   && remote.at("source_height") == local.at("source_height")
+                   && remote.at("preserve_source") == json(preserved)
+                   && (!preserved || remote.at("source_sha256") == remote.at("image_id"));
+        };
+        const auto png = mediaPng();
         for (const QString &format :
              {QStringLiteral("docx"), QStringLiteral("pptx"), QStringLiteral("xlsx")}) {
             const QString name = QStringLiteral("embedded.") + format;
@@ -697,58 +774,178 @@ private slots:
                 png);
             QCOMPARE(attachment.at("source_id"), media.at("source_sha256"));
         }
-        if (!officeRendererExecutable().isEmpty()
-            && !QStandardPaths::findExecutable("pdfinfo").isEmpty()
-            && !QStandardPaths::findExecutable("pdftoppm").isEmpty()) {
-            for (const QString &format :
-                 {QStringLiteral("docx"), QStringLiteral("xlsx"), QStringLiteral("pptx")}) {
-                const QString name          = QStringLiteral("rendered.") + format;
-                const auto    renderedBytes = makeZip(renderedOfficeMembers(format));
-                QFile         input(fixture.workDir() + QLatin1Char('/') + name);
-                QVERIFY(input.open(QIODevice::WriteOnly));
-                QCOMPARE(input.write(renderedBytes), renderedBytes.size());
-                input.close();
-                const QString text = mediaTool.execute(
-                    {{"file_path", name.toStdString()},
-                     {"mode", "image"},
-                     {"renderer", "libreoffice"},
-                     {"page", 2}});
-                const auto attachment = QSocImageAttach::attachmentPayload(text);
-                QVERIFY2(attachment.is_object(), qPrintable(text.left(1500)));
-                const auto provenance = json::parse(text.section('\n', 0, 0).toStdString());
-                QCOMPARE(
-                    provenance.at("source"),
-                    json((fixture.workDir() + QLatin1Char('/') + name).toStdString()));
-                QCOMPARE(
-                    provenance.at("source_sha256"),
-                    json(
-                        QCryptographicHash::hash(renderedBytes, QCryptographicHash::Sha256)
-                            .toHex()
-                            .toStdString()));
-                QCOMPARE(provenance.at("derived_page"), json(2));
-                QVERIFY(attachment.at("preserve_source").get<bool>());
+        const bool renderer = !officeRendererExecutable().isEmpty()
+                              && !QStandardPaths::findExecutable("pdfinfo").isEmpty()
+                              && !QStandardPaths::findExecutable("pdftoppm").isEmpty();
+        if (!renderer)
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("LibreOffice and Poppler renderers"));
+        const json region = {{"x", 0.1}, {"y", 0.2}, {"width", 0.4}, {"height", 0.5}};
+        for (const QString &format :
+             {QStringLiteral("docx"), QStringLiteral("xlsx"), QStringLiteral("pptx")}) {
+            const QString name          = QStringLiteral("rendered.") + format;
+            const QString source        = fixture.workDir() + QLatin1Char('/') + name;
+            const QString remoteSource  = remoteRoot + QLatin1Char('/') + name;
+            const auto    renderedBytes = makeZip(renderedOfficeMembers(format));
+            QFile         input(source);
+            QVERIFY(input.open(QIODevice::WriteOnly));
+            QCOMPARE(input.write(renderedBytes), renderedBytes.size());
+            input.close();
+            const json hash   = QCryptographicHash::hash(renderedBytes, QCryptographicHash::Sha256)
+                                    .toHex()
+                                    .toStdString();
+            const auto native = result(*tool, {{"file_path", name.toStdString()}});
+            const auto local  = result(localTool, {{"file_path", source.toStdString()}});
+            QCOMPARE(native.at("source_sha256"), hash);
+            QCOMPARE(native.at("source"), json(remoteSource.toStdString()));
+            QCOMPARE(native.at("parts"), local.at("parts"));
+            QVERIFY(
+                QString::fromStdString(native.at("parts")[0].at("text").get<std::string>())
+                    .contains("Neutral"));
+            if (format == "xlsx") {
+                const auto text = QString::fromStdString(
+                    native.at("parts")[0].at("text").get<std::string>());
+                QVERIFY(text.contains("9999"));
+                QVERIFY(text.contains("formula: 2+3"));
             }
+            const auto listed = result(
+                *tool, {{"file_path", name.toStdString()}, {"mode", "list"}, {"page_count", 2}});
+            const auto localList = result(
+                localTool,
+                {{"file_path", source.toStdString()}, {"mode", "list"}, {"page_count", 2}});
+            QCOMPARE(listed.at("format"), json(format.toStdString()));
+            QCOMPARE(listed.at("source_sha256"), hash);
+            QCOMPARE(listed.at("total_parts"), localList.at("total_parts"));
+            QCOMPARE(listed.at("parts"), localList.at("parts"));
+            QVERIFY(!listed.at("parts").empty());
+            const QString text = mediaTool.execute(
+                {{"file_path", name.toStdString()},
+                 {"mode", "image"},
+                 {"renderer", "libreoffice"},
+                 {"page", 2}});
+            const auto attachment = QSocImageAttach::attachmentPayload(text);
+            QVERIFY2(attachment.is_object(), qPrintable(text.left(1500)));
+            const auto provenance = json::parse(text.section('\n', 0, 0).toStdString());
+            QCOMPARE(provenance.at("source"), json(remoteSource.toStdString()));
+            QCOMPARE(provenance.at("source_sha256"), hash);
+            QCOMPARE(provenance.at("derived_page"), json(2));
+            QVERIFY(attachment.at("preserve_source").get<bool>());
+            const json cropArgs
+                = {{"file_path", name.toStdString()},
+                   {"mode", "image"},
+                   {"renderer", "libreoffice"},
+                   {"page", 2},
+                   {"region", region},
+                   {"target_long_edge", 512}};
+            const QString crop      = mediaTool.execute(cropArgs);
+            auto          localArgs = cropArgs;
+            localArgs["file_path"]  = source.toStdString();
+            const QString localCrop = localImages.execute(localArgs);
+            QVERIFY2(
+                imageParity(crop, localCrop, remoteSource, hash, true), qPrintable(crop.left(1500)));
+            const auto cropped = QSocImageAttach::attachmentPayload(crop);
+            const int  edge = qMax(cropped.at("width").get<int>(), cropped.at("height").get<int>());
+            QVERIFY(edge >= 511 && edge <= 512);
+            const auto croppedProvenance = json::parse(crop.section('\n', 0, 0).toStdString());
+            QCOMPARE(croppedProvenance.at("source_sha256"), hash);
+            QCOMPARE(croppedProvenance.at("derived_page"), json(2));
+            QCOMPARE(croppedProvenance.at("view_kind"), json("office_derived_pdf"));
+            const auto unchanged = result(*tool, {{"file_path", name.toStdString()}});
+            QCOMPARE(unchanged.at("parts"), native.at("parts"));
+            QCOMPARE(unchanged.at("source_sha256"), hash);
         }
         if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
             || QStandardPaths::findExecutable("pdftotext").isEmpty()
             || QStandardPaths::findExecutable("pdftoppm").isEmpty())
             QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler native boxes"));
-        const QString pdfPath = fixture.workDir() + QStringLiteral("/native.pdf");
+        const QString pdfPath       = fixture.workDir() + QStringLiteral("/native.pdf");
+        const QString remotePdfPath = remoteRoot + QStringLiteral("/native.pdf");
         QFile         pdf(pdfPath);
         QVERIFY(pdf.open(QIODevice::WriteOnly));
         const QByteArray pdfBytes = geometryPdf();
         QCOMPARE(pdf.write(pdfBytes), pdfBytes.size());
         pdf.close();
+        const json pdfHash
+            = QCryptographicHash::hash(pdfBytes, QCryptographicHash::Sha256).toHex().toStdString();
+        const auto fullPdfText
+            = result(*tool, {{"file_path", "native.pdf"}, {"mode", "text"}, {"page_count", 2}});
+        const auto localPdfText = result(
+            localTool, {{"file_path", pdfPath.toStdString()}, {"mode", "text"}, {"page_count", 2}});
+        QCOMPARE(fullPdfText.at("source"), json(remotePdfPath.toStdString()));
+        QCOMPARE(fullPdfText.at("source_sha256"), pdfHash);
+        QCOMPARE(fullPdfText.at("parts"), localPdfText.at("parts"));
+        const auto pagedPdfText = result(
+            *tool,
+            {{"file_path", "native.pdf"}, {"mode", "text"}, {"page_count", 2}, {"max_chars", 5}});
+        QCOMPARE(pagedPdfText.at("parts").size(), size_t(2));
+        QCOMPARE(pagedPdfText.at("next_page"), json(3));
+        QCOMPARE(pagedPdfText.at("source_identity"), fullPdfText.at("source_identity"));
+        QCOMPARE(pagedPdfText.at("text_stream").at("offset_unit"), json("utf16"));
+        for (int page = 1; page <= 2; ++page) {
+            const auto &part = pagedPdfText.at("parts")[page - 1];
+            QCOMPARE(part.at("page"), json(page));
+            QCOMPARE(part.at("offset"), json(0));
+            QCOMPARE(part.at("next_offset"), json(5));
+            QVERIFY(part.at("truncated").get<bool>());
+            const auto continued = result(
+                *tool,
+                {{"file_path", "native.pdf"},
+                 {"mode", "text"},
+                 {"cursor", part.at("next_cursor")},
+                 {"max_chars", 10000}});
+            QCOMPARE(continued.at("parts").size(), size_t(1));
+            QCOMPARE(continued.at("source_identity"), fullPdfText.at("source_identity"));
+            QCOMPARE(continued.at("source_sha256"), pdfHash);
+            QCOMPARE(continued.at("text_stream"), pagedPdfText.at("text_stream"));
+            const auto &remaining = continued.at("parts")[0];
+            QCOMPARE(remaining.at("page"), json(page));
+            QCOMPARE(remaining.at("offset"), part.at("next_offset"));
+            QVERIFY(!remaining.at("truncated").get<bool>());
+            QVERIFY(!remaining.contains("next_cursor"));
+            QCOMPARE(
+                json(part.at("text").get<std::string>() + remaining.at("text").get<std::string>()),
+                localPdfText.at("parts")[page - 1].at("text"));
+        }
+        const auto listedPdf = result(*tool, {{"file_path", "native.pdf"}, {"mode", "list"}});
+        QCOMPARE(listedPdf.at("total_pages"), json(5));
+        QCOMPARE(listedPdf.at("source_sha256"), pdfHash);
+        QCOMPARE(listedPdf.at("source"), json(remotePdfPath.toStdString()));
+        for (bool cropped : {false, true}) {
+            json request = {{"file_path", "native.pdf"}, {"mode", "image"}, {"page", 2}};
+            if (cropped) {
+                request["region"]           = region;
+                request["target_long_edge"] = 512;
+            }
+            const QString remote = mediaTool.execute(request);
+            request["file_path"] = pdfPath.toStdString();
+            const QString local  = localImages.execute(request);
+            QVERIFY2(
+                imageParity(remote, local, remotePdfPath, pdfHash, cropped),
+                qPrintable(remote.left(1500)));
+            const auto attachment = QSocImageAttach::attachmentPayload(remote);
+            if (cropped) {
+                const int edge
+                    = qMax(attachment.at("width").get<int>(), attachment.at("height").get<int>());
+                QVERIFY(edge >= 511 && edge <= 512);
+            } else {
+                QCOMPARE(attachment.at("source_width"), json(1067));
+                QCOMPARE(attachment.at("source_height"), json(1600));
+            }
+        }
         const auto boxes = result(
             *tool,
             {{"file_path", "native.pdf"}, {"mode", "text_boxes"}, {"page", 2}, {"max_words", 2}});
-        QCOMPARE(boxes.at("source"), json(pdfPath.toStdString()));
+        QCOMPARE(boxes.at("source"), json(remotePdfPath.toStdString()));
         QCOMPARE(
             boxes.at("source_sha256"),
             json(
                 QCryptographicHash::hash(pdfBytes, QCryptographicHash::Sha256).toHex().toStdString()));
         QCOMPARE(boxes.at("parts")[0].at("geometry").at("rotation_degrees"), json(90));
         QVERIFY(!QString::fromStdString(boxes.dump()).contains(QStringLiteral("qsoc-input-")));
+        QCOMPARE(connection.workspaceReadOnly(), readOnly);
+        QCOMPARE(QFileInfo::exists(metadata), !readOnly);
+#ifdef Q_OS_WIN
+        QCOMPARE(fixture.execRequests(), 0);
+#endif
     }
 
     void initTestCase()

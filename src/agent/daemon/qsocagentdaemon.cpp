@@ -212,6 +212,7 @@ private:
             {"plan_mode", runtime_->planMode()},
             {"cwd", runtime_->workingDirectory()},
             {"remote", runtime_->remoteTarget()},
+            {"remote_read_only", runtime_->remoteWorkspaceReadOnly()},
             {"session_id", runtime_->sessionId()},
             {"resume_command", runtime_->resumeCommand()}};
         result.insert("commands", QJsonArray::fromStringList(runtime_->availableCommands()));

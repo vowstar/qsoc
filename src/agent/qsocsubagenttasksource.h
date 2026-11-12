@@ -272,6 +272,7 @@ public:
         QString endpoint;  /* the SSH target behind the alias, or `local` */
         QString workspace; /* workspace root */
         QString model;     /* the model the call named, empty when omitted */
+        bool    readOnly = false;
     };
 
     /** @brief Record where a run executes. No-op for unknown ids. */
@@ -300,8 +301,9 @@ public:
         QString model;       /* the model the call named */
         QString historyFile; /* QSocSession jsonl of the child history */
         QString definition;  /* agent definition the child was built from */
-        bool    legacy = false;
-        int     todoId = 0;
+        bool    legacy   = false;
+        bool    readOnly = false;
+        int     todoId   = 0;
         QString planId;
     };
 

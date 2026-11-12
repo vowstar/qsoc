@@ -63,7 +63,7 @@ private:
 QString makeTempPath(const QString &finalPath)
 {
     const QFileInfo info(finalPath);
-    return info.absolutePath() + QStringLiteral("/.qsoc-write-")
+    return info.path() + QStringLiteral("/.qsoc-write-")
            + QUuid::createUuid().toString(QUuid::Id128) + QStringLiteral("-") + info.fileName();
 }
 
@@ -94,6 +94,7 @@ QSocSftpClient::OpScope::OpScope(QSocSftpClient *client, QDeadlineTimer deadline
         m_client->m_reentered            = m_foreign;
         ++m_client->m_operationsBegun;
         m_client->m_deadline = deadline;
+        m_client->synchronizeGeneration();
     }
 }
 
@@ -110,11 +111,21 @@ QSocSftpClient::OpScope::~OpScope()
 
 QSocSftpClient::QSocSftpClient(QSocSshSession &session)
     : m_session(session)
+    , m_generation(session.generation())
 {}
 
 QSocSftpClient::~QSocSftpClient()
 {
     close();
+}
+
+void QSocSftpClient::synchronizeGeneration()
+{
+    if (m_generation == m_session.generation())
+        return;
+    m_sftp       = nullptr;
+    m_stranded   = false;
+    m_generation = m_session.generation();
 }
 
 void QSocSftpClient::setError(const QString &msg, QString *sink)
@@ -198,6 +209,7 @@ bool QSocSftpClient::wait()
 
 bool QSocSftpClient::rebuildSubsystem()
 {
+    synchronizeGeneration();
     if (!m_stranded) {
         return m_session.isConnected();
     }
@@ -371,6 +383,7 @@ QSocSftpClient::StepOutcome QSocSftpClient::renameStep(const QByteArray &from, c
 
 bool QSocSftpClient::open(QString *errorMessage)
 {
+    synchronizeGeneration();
     if (m_reentered) {
         setError(QStringLiteral("SSH session is busy with another operation"), errorMessage);
         return false;
@@ -414,6 +427,7 @@ bool QSocSftpClient::open(QString *errorMessage)
 
 void QSocSftpClient::close()
 {
+    synchronizeGeneration();
     if (m_sftp == nullptr) {
         m_stranded = false;
         return;
@@ -585,7 +599,7 @@ bool QSocSftpClient::writeFile(const QString &path, const QByteArray &content, Q
     }
 
     const QFileInfo finalInfo(path);
-    if (!mkdirP(finalInfo.absolutePath(), errorMessage)) {
+    if (!mkdirP(finalInfo.path(), errorMessage)) {
         return false;
     }
 
@@ -840,8 +854,11 @@ QSocSftpClient::CreateOutcome QSocSftpClient::createFileIfAbsent(
     return CreateOutcome::Failed;
 }
 
-bool QSocSftpClient::mkdirP(const QString &path, QString *errorMessage)
+bool QSocSftpClient::mkdirP(const QString &path, QString *errorMessage, bool *permissionDenied)
 {
+    if (permissionDenied != nullptr) {
+        *permissionDenied = false;
+    }
     OpScope scope(this, m_opBudgetMs);
     if (!open(errorMessage)) {
         return false;
@@ -851,8 +868,8 @@ bool QSocSftpClient::mkdirP(const QString &path, QString *errorMessage)
     }
 
     /* Walk ancestors, mkdir each rung. */
-    QStringList parts = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-    QString     cumulative;
+    QStringList parts      = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString     cumulative = path.startsWith(QLatin1Char('/')) ? QString() : QStringLiteral(".");
     for (const QString &seg : parts) {
         cumulative += QLatin1Char('/');
         cumulative += seg;
@@ -872,7 +889,13 @@ bool QSocSftpClient::mkdirP(const QString &path, QString *errorMessage)
                 setError(m_session.unusableText(), errorMessage);
                 return false;
             }
-            const unsigned long sftpErr = libssh2_sftp_last_error(m_sftp);
+            const unsigned long sftpErr = rc == LIBSSH2_ERROR_SFTP_PROTOCOL
+                                              ? libssh2_sftp_last_error(m_sftp)
+                                              : 0;
+            if (permissionDenied != nullptr && rc == LIBSSH2_ERROR_SFTP_PROTOCOL) {
+                *permissionDenied = sftpErr == LIBSSH2_FX_PERMISSION_DENIED
+                                    || sftpErr == LIBSSH2_FX_WRITE_PROTECT;
+            }
             if (sftpErr != LIBSSH2_FX_FILE_ALREADY_EXISTS
                 && sftpErr != LIBSSH2_FX_FAILURE /* many servers map EEXIST to FAILURE */) {
                 setError(
@@ -975,8 +998,8 @@ QList<QSocSftpClient::Entry> QSocSftpClient::listDir(
                 entry.size = static_cast<qint64>(attrs.filesize);
             }
             if ((attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) != 0) {
-                entry.isDirectory = (attrs.permissions & LIBSSH2_SFTP_S_IFDIR) != 0;
-                entry.isSymlink   = (attrs.permissions & LIBSSH2_SFTP_S_IFLNK) != 0;
+                entry.isDirectory = LIBSSH2_SFTP_S_ISDIR(attrs.permissions);
+                entry.isSymlink   = LIBSSH2_SFTP_S_ISLNK(attrs.permissions);
             }
             entries.push_back(entry);
             if (limit > 0 && entries.size() >= limit) {

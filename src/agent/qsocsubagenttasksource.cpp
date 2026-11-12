@@ -159,6 +159,11 @@ bool readHistoricalRun(
     run->endpoint         = obj.value(QStringLiteral("endpoint")).toString(run->host);
     run->workspace        = obj.value(QStringLiteral("workspace")).toString();
     run->model            = obj.value(QStringLiteral("model")).toString();
+    if (obj.contains(QStringLiteral("read_only"))
+        && !obj.value(QStringLiteral("read_only")).isBool()) {
+        return false;
+    }
+    run->readOnly         = obj.value(QStringLiteral("read_only")).toBool();
     run->definition       = obj.value(QStringLiteral("definition")).toString(run->subagentType);
     run->legacy           = legacy;
     const QString history = obj.value(QStringLiteral("history_file")).toString();
@@ -1099,6 +1104,7 @@ void QSocSubAgentTaskSource::writeMeta(const RunState &run) const
     if (!run.dispatch.workspace.isEmpty()) {
         meta["workspace"] = run.dispatch.workspace;
     }
+    meta["read_only"] = run.dispatch.readOnly;
     if (!run.dispatch.model.isEmpty()) {
         meta["model"] = run.dispatch.model;
     }

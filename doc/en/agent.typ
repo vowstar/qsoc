@@ -152,6 +152,16 @@ it. `/local` inside the REPL returns to the local workspace. `--ssh`
 also accepts a catalog alias, and an `--ssh` run never changes the
 remembered binding (@agent-remote-connect).
 
+If the SFTP server explicitly refuses directory creation, QSoC can bind an
+existing readable directory as read-only, including `internal-sftp -R`.
+The status and prompt show read-only access. Reads, listings, searches and
+document tools still use the remote workspace. File changes, shell commands,
+background jobs and file rewind are disabled. No remote installation is needed.
+Existing invalid workspace metadata is an error. A root without metadata gets
+no persistent tree identity. Reconnects, resumed sessions and children on the
+same binding keep read-only access. A new `/ssh` connection checks permissions
+again and can restore write access.
+
 === Host Catalog
 <agent-host-catalog>
 

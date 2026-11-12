@@ -150,11 +150,14 @@ struct QSocAgentConfig
      * is active). When remoteMode is true the agent system prompt declares
      * the remote workspace and the tool registry swaps file/shell/path
      * implementations for SSH/SFTP-backed versions. */
-    bool        remoteMode = false;
-    QString     remoteName;       /* Profile name or raw "user@host:port". */
-    QString     remoteAlias;      /* The name the binding was made by. */
-    QString     remoteDisplay;    /* Human-readable target, no credentials. */
-    QString     remoteWorkspace;  /* Absolute remote workspace root. */
+    bool        remoteMode     = false;
+    bool        remoteReadOnly = false;
+    QString     remoteName;      /* Profile name or raw "user@host:port". */
+    QString     remoteAlias;     /* The name the binding was made by. */
+    QString     remoteDisplay;   /* Human-readable target, no credentials. */
+    QString     remoteWorkspace; /* Absolute remote workspace root. */
+    QString     remoteEndpointIdentity;
+    QString     remoteCanonicalWorkspace;
     QString     remoteWorkingDir; /* Absolute remote cwd (initially = workspace). */
     QStringList remoteWritableDirs;
     QSocMachine remoteMachine; /* What the host probe learned; Unknown when not bound. */

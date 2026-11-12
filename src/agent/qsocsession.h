@@ -68,6 +68,7 @@ public:
         QString     toolPresentation = QStringLiteral("direct");
         bool        planMode         = false;
         bool        remoteMode       = false;
+        bool        remoteReadOnly   = false;
         QString     remoteName;
         QString     remoteAlias; /* The name the user bound by; empty in older records. */
         QString     projectRoot;

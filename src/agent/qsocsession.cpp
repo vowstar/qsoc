@@ -187,6 +187,7 @@ bool validRunContext(const QSocSession::RunRecord &record)
     return record.contextPresent && !record.projectRoot.trimmed().isEmpty()
            && !record.workingDir.trimmed().isEmpty() && !record.modelId.trimmed().isEmpty()
            && record.remoteMode == !record.remoteName.trimmed().isEmpty()
+           && (!record.remoteReadOnly || record.remoteMode)
            && (record.toolPresentation == "direct" || record.toolPresentation == "catalog"
                || record.toolPresentation == "auto");
 }
@@ -212,6 +213,12 @@ bool parseRunContext(const nlohmann::json &line, QSocSession::RunRecord *record)
         if (!context["remote_alias"].is_string())
             return false;
         record->remoteAlias = QString::fromStdString(context["remote_alias"].get<std::string>());
+    }
+    if (context.contains("remote_read_only")) {
+        if (!context["remote_read_only"].is_boolean()) {
+            return false;
+        }
+        record->remoteReadOnly = context["remote_read_only"].get<bool>();
     }
     if (context.contains("tool_presentation")) {
         if (!context["tool_presentation"].is_string())
@@ -463,6 +470,7 @@ bool QSocSession::appendRun(const RunRecord &record)
             {"tool_presentation", record.toolPresentation.toStdString()},
             {"plan_mode", record.planMode},
             {"remote_mode", record.remoteMode},
+            {"remote_read_only", record.remoteReadOnly},
             {"remote_name", record.remoteName.toStdString()},
             {"remote_alias", record.remoteAlias.toStdString()},
             {"project_root", record.projectRoot.toStdString()},

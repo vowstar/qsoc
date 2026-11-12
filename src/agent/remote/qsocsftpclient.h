@@ -76,7 +76,10 @@ public:
     /** @brief Tear down SFTP subsystem; safe to call repeatedly. */
     void close();
 
-    bool isOpen() const { return m_sftp != nullptr; }
+    bool isOpen() const
+    {
+        return m_sftp && m_generation == m_session.generation() && m_session.isConnected();
+    }
 
     /**
      * @brief Read a remote file.
@@ -141,8 +144,12 @@ public:
     /** @brief Install a test observer immediately before create publication. */
     void setCreateObserver(std::function<void()> observer);
 
-    /** @brief Recursive mkdir. Equivalent to `mkdir -p`. */
-    bool mkdirP(const QString &path, QString *errorMessage = nullptr);
+    /**
+     * @brief Recursive mkdir. Equivalent to `mkdir -p`.
+     * @param permissionDenied True only for a protocol permission or write-protect refusal.
+     */
+    bool mkdirP(
+        const QString &path, QString *errorMessage = nullptr, bool *permissionDenied = nullptr);
 
     /** @brief Rename (or move) a remote path. */
     bool rename(const QString &oldPath, const QString &newPath, QString *errorMessage = nullptr);
@@ -284,6 +291,8 @@ public:
         const std::function<bool()> &cancelled = {});
 
 private:
+    void synchronizeGeneration();
+
     /** @brief Outcome of one publish step. */
     enum class StepOutcome {
         Ok,      /**< The server confirmed it. */
@@ -372,6 +381,7 @@ private:
     bool drainUnlink(const QByteArray &path);
 
     QSocSshSession &m_session;
+    quint64         m_generation = 0;
     LIBSSH2_SFTP   *m_sftp       = nullptr;
     int             m_opBudgetMs = 30000;
     QDeadlineTimer  m_deadline;

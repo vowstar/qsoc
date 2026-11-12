@@ -185,7 +185,9 @@ void Test::terminalRunStoresHistoryAndPlacement()
         id,
         {QStringLiteral("sim"),
          QStringLiteral("operator@sim.invalid:22"),
-         QStringLiteral("/work/tree")});
+         QStringLiteral("/work/tree"),
+         {},
+         true});
     source.start(id, []() {});
     source.markCompleted(id, QStringLiteral("done"));
 
@@ -193,6 +195,7 @@ void Test::terminalRunStoresHistoryAndPlacement()
     QCOMPARE(meta.value("host").toString(), QStringLiteral("sim"));
     QCOMPARE(meta.value("endpoint").toString(), QStringLiteral("operator@sim.invalid:22"));
     QCOMPARE(meta.value("workspace").toString(), QStringLiteral("/work/tree"));
+    QVERIFY(meta.value("read_only").toBool());
     const QString history = QDir(dir).filePath(meta.value("history_file").toString());
     QCOMPARE(QFileInfo(history).fileName(), id + QStringLiteral(".history.jsonl"));
     QCOMPARE(QSocSession::loadMessages(history), messages);
@@ -203,6 +206,7 @@ void Test::terminalRunStoresHistoryAndPlacement()
     QCOMPARE(run.workspace, QStringLiteral("/work/tree"));
     QCOMPARE(run.host, QStringLiteral("sim"));
     QCOMPARE(run.endpoint, QStringLiteral("operator@sim.invalid:22"));
+    QVERIFY(run.readOnly);
 }
 
 void Test::metaWriteDoesNotFollowLinks()

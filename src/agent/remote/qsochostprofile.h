@@ -59,6 +59,7 @@ struct QSocHostBinding
 {
     QString target;    /**< Alias or [user@]host[:port] as typed. Empty means local. */
     QString workspace; /**< Remote workspace the binding used. */
+    bool    readOnly = false;
 
     bool isLocal() const { return target.isEmpty(); }
 };

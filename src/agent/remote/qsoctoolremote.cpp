@@ -398,6 +398,11 @@ QSocRemoteJobStart startRemoteJob(
     start.record.monitor        = monitor;
     start.record.ownerId        = ownerId;
     start.record.maxOutputBytes = maxOutputBytes;
+    if (conn != nullptr && conn->workspaceReadOnly()) {
+        start.failure = QStringLiteral(
+            "the remote workspace is read-only; shell commands are disabled");
+        return start;
+    }
     reserveRemoteJob(conn, &start);
     if (!start.failure.isEmpty()) {
         return start;
@@ -456,6 +461,10 @@ QString runBoundRemoteShellEscape(
 {
     if (conn == nullptr || !conn->isUsable()) {
         return sessionRefusal(conn) + QLatin1Char('\n');
+    }
+    if (conn->workspaceReadOnly()) {
+        return QStringLiteral(
+            "Error: the remote workspace is read-only; shell commands are disabled\n");
     }
 
     constexpr int      kRemoteShellEscapeMs = 15 * 60 * 1000;
@@ -787,6 +796,10 @@ QString QSocToolRemoteShellBash::execute(const json &arguments)
     m_stopRequested = false;
     if (m_conn == nullptr || !m_conn->isUsable()) {
         return sessionRefusal(m_conn);
+    }
+    if (m_conn->workspaceReadOnly()) {
+        return QStringLiteral(
+            "Error: the remote workspace is read-only; shell commands are disabled");
     }
     if (!arguments.contains("command") || !arguments["command"].is_string()) {
         return QStringLiteral("Error: command is required");
@@ -1186,6 +1199,10 @@ QString QSocToolRemoteBashManage::execute(const json &arguments)
 {
     if (m_conn == nullptr || !m_conn->isUsable()) {
         return sessionRefusal(m_conn);
+    }
+    if (m_conn->workspaceReadOnly()) {
+        return QStringLiteral(
+            "Error: the remote workspace is read-only; shell commands are disabled");
     }
     if (!machineOffersExecTools(m_conn->host())) {
         return noExecutorRefusal(m_conn);

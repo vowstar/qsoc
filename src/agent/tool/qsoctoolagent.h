@@ -284,7 +284,8 @@ private:
         const QString                &host,
         const QString                &workspace,
         const std::optional<QString> &namedRoot,
-        QString                      *errorMessage);
+        QString                      *errorMessage,
+        const QString                &readOnlyWorkspace = QString());
 
     QLLMService                 *llmService_     = nullptr;
     QSocToolRegistry            *parentRegistry_ = nullptr;

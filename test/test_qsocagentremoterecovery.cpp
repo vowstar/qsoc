@@ -13,6 +13,11 @@
 #include <QTcpSocket>
 #include <QtTest>
 
+#ifdef Q_OS_UNIX
+#include <csignal>
+#include <sys/types.h>
+#endif
+
 /*
  * End-to-end recovery behaviour of the agent against a remote workspace whose
  * link dies. A loopback sshd stands in for the remote host and a controllable
@@ -351,7 +356,13 @@ void Test::stopAgent()
     if (m_agent.state() == QProcess::NotRunning) {
         return;
     }
+#ifdef Q_OS_UNIX
+    const auto pid = static_cast<pid_t>(m_agent.processId());
+    if (pid > 0)
+        ::kill(pid, SIGINT);
+#else
     m_agent.terminate();
+#endif
     if (!m_agent.waitForFinished(5000)) {
         m_agent.kill();
         m_agent.waitForFinished(3000);

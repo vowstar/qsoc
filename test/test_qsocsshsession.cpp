@@ -135,18 +135,21 @@ private slots:
             qPrintable(QStringLiteral("the test never reached the resolver failure exit: ") + err));
     }
 
-    /* Closed TCP port on localhost: connect() returns NetworkError, not a
-     * crash. Uses port 1 which is almost never served. */
     void testConnectToClosedPort()
     {
-        QSocSshSession    session;
+        QSocSshSession session;
+        QTcpServer     server;
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.errorString()));
+        const quint16 port = server.serverPort();
+        server.close();
         QSocSshHostConfig host;
         host.hostname      = QStringLiteral("127.0.0.1");
-        host.port          = 1;
+        host.port          = port;
         host.user          = QStringLiteral("nobody");
         host.strictHostKey = QSocSshHostConfig::StrictHostKey::No;
 
-        session.setTimeoutMs(2000);
+        // Windows can take more than two seconds to report a refused connection.
+        session.setTimeoutMs(5000);
         QString    err;
         const auto status = session.connectTo(host, &err);
         QCOMPARE(status, QSocSshSession::ConnectStatus::NetworkError);

@@ -38,8 +38,12 @@ void applyRemoteHostToConfig(const QSocRemoteConnection *conn, QSocAgentConfig *
     if (conn == nullptr || config == nullptr) {
         return;
     }
-    config->remoteMachine       = conn->host();
-    config->remoteGitRepository = conn->workspaceIsGitRepository();
+    config->remoteMachine            = conn->host();
+    config->remoteGitRepository      = conn->workspaceIsGitRepository();
+    config->remoteReadOnly           = conn->workspaceReadOnly();
+    config->remoteWritableDirs       = conn->path()->writableDirs();
+    config->remoteEndpointIdentity   = conn->endpointIdentity();
+    config->remoteCanonicalWorkspace = conn->canonicalWorkspace();
 }
 
 QList<QSocProjectRules::Read> loadAgentRemoteProjectRules(
@@ -190,8 +194,12 @@ bool resolveWorkspaceMetadataDir(
     const QString  &canonicalRoot,
     bool            create,
     QString        *metadataDir,
-    QString        *errorMessage)
+    QString        *errorMessage,
+    bool           *permissionDenied = nullptr)
 {
+    if (permissionDenied != nullptr) {
+        *permissionDenied = false;
+    }
     if (metadataDir != nullptr) {
         metadataDir->clear();
     }
@@ -214,7 +222,7 @@ bool resolveWorkspaceMetadataDir(
             }
             return false;
         }
-        if (!sftp->mkdirP(expected, &err)) {
+        if (!sftp->mkdirP(expected, &err, permissionDenied)) {
             if (errorMessage != nullptr) {
                 *errorMessage = err.isEmpty()
                                     ? QStringLiteral("remote workspace metadata cannot be created")
@@ -244,6 +252,16 @@ bool resolveWorkspaceMetadataDir(
     if (resolved != expected) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("remote workspace metadata changed identity");
+        }
+        return false;
+    }
+    QSocSftpClient::LinkStat info;
+    if (sftp->linkStat(resolved, &info, &err) != QSocSftpClient::Presence::Present
+        || !info.directory) {
+        if (errorMessage != nullptr) {
+            *errorMessage = err.isEmpty()
+                                ? QStringLiteral("remote workspace metadata is not a directory")
+                                : err;
         }
         return false;
     }
@@ -292,6 +310,24 @@ bool readWorkspaceTreeId(
     return true;
 }
 
+bool inspectReadOnlyWorkspace(
+    QSocSftpClient *sftp, const QString &canonicalRoot, QString *treeId, QString *errorMessage)
+{
+    treeId->clear();
+    const QString metadata = workspaceMetadataDir(canonicalRoot);
+    switch (sftp->linkPresence(metadata, errorMessage)) {
+    case QSocSftpClient::Presence::Absent:
+        return true;
+    case QSocSftpClient::Presence::Unknown:
+        return false;
+    case QSocSftpClient::Presence::Present:
+        break;
+    }
+    QString verified;
+    return resolveWorkspaceMetadataDir(sftp, canonicalRoot, false, &verified, errorMessage)
+           && readWorkspaceTreeId(sftp, workspaceTreeMarker(verified), treeId, errorMessage);
+}
+
 } // namespace
 
 bool connectAgentSshSession(
@@ -302,7 +338,8 @@ bool connectAgentSshSession(
     QSocSshSession::SecretCallback secretCallback,
     std::function<bool()>          abortProbe,
     QDeadlineTimer                 deadline,
-    QSocSshSession::HostKeyConfirm hostKeyConfirm)
+    QSocSshSession::HostKeyConfirm hostKeyConfirm,
+    const QSocSshConfigParser     *configParser)
 {
     if (state == nullptr) {
         if (errorMessage != nullptr) {
@@ -316,16 +353,16 @@ bool connectAgentSshSession(
         return false;
     }
 
-    /* Pull ~/.ssh/config (with Include chains) so aliases like r9pro
-     * resolve to the real HostName/Port/User/IdentityFile. */
-    QSocSshConfigParser configParser;
-    {
+    /* Resolve SSH aliases and their Include chains. */
+    QSocSshConfigParser defaultParser;
+    if (configParser == nullptr) {
         const QString cfg = QDir::homePath() + QStringLiteral("/.ssh/config");
         if (QFileInfo::exists(cfg)) {
-            configParser.parse(cfg);
+            defaultParser.parse(cfg);
         }
+        configParser = &defaultParser;
     }
-    const QSocSshHostConfig resolvedCfg = configParser.resolve(parsed.rawAlias);
+    const QSocSshHostConfig resolvedCfg = configParser->resolve(parsed.rawAlias);
     QString                 user        = parsed.user;
     QString                 hostname    = parsed.hostname;
     int                     port        = parsed.port;
@@ -376,7 +413,7 @@ bool connectAgentSshSession(
     /* Resolve a hop alias into a QSocSshHostConfig, filling in sensible
      * defaults when the alias is not in the config file. */
     auto hopConfig = [&](const QString &hopAlias) -> QSocSshHostConfig {
-        QSocSshHostConfig cfg = configParser.resolve(hopAlias);
+        QSocSshHostConfig cfg = configParser->resolve(hopAlias);
         if (!cfg.fromConfig) {
             cfg.hostname = hopAlias;
             cfg.port     = 22;
@@ -526,7 +563,8 @@ bool prepareAgentRemoteWorkspace(
     const QString    &workspace,
     AgentRemoteState *state,
     QString          *errorMessage,
-    QDeadlineTimer    deadline)
+    QDeadlineTimer    deadline,
+    bool              readOnly)
 {
     if (state == nullptr || state->sftp == nullptr) {
         if (errorMessage != nullptr) {
@@ -549,27 +587,70 @@ bool prepareAgentRemoteWorkspace(
     }
     return state->sftp->runWithin(deadline, [&] {
         QString err;
-        if (!state->sftp->mkdirP(workspace, &err)) {
+        bool    denied = false;
+        if (!readOnly && !state->sftp->mkdirP(workspace, &err, &denied)) {
+            if (denied) {
+                readOnly = true;
+            } else {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral("workspace mkdir failed: %1").arg(err);
+                }
+                return false;
+            }
+        }
+
+        QString                  canonicalWorkspace;
+        QSocSftpClient::LinkStat info;
+        if (state->sftp->canonicalize(workspace, &canonicalWorkspace, &err)
+                != QSocSftpClient::Canonical::Ok
+            || state->sftp->linkStat(canonicalWorkspace, &info, &err)
+                   != QSocSftpClient::Presence::Present
+            || !info.directory) {
             if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("workspace mkdir failed: %1").arg(err);
+                *errorMessage
+                    = QStringLiteral("workspace resolve failed: %1")
+                          .arg(err.isEmpty() ? QStringLiteral("not an existing directory") : err);
             }
             return false;
         }
 
-        QString canonicalWorkspace;
-        switch (state->sftp->canonicalize(workspace, &canonicalWorkspace, &err)) {
-        case QSocSftpClient::Canonical::Ok:
-            break;
-        case QSocSftpClient::Canonical::Unresolvable:
-        case QSocSftpClient::Canonical::Unknown:
-            if (errorMessage != nullptr) {
-                *errorMessage = QStringLiteral("workspace resolve failed: %1").arg(err);
+        const auto bindReadOnly = [&] {
+            err.clear();
+            state->sftp->listDir(canonicalWorkspace, 1, &err);
+            if (!err.isEmpty()) {
+                if (errorMessage != nullptr) {
+                    *errorMessage
+                        = QStringLiteral("read-only workspace cannot be listed: %1").arg(err);
+                }
+                return false;
             }
-            return false;
+            QString treeId;
+            if (!inspectReadOnlyWorkspace(state->sftp, canonicalWorkspace, &treeId, &err)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage
+                        = QStringLiteral("workspace metadata verification failed: %1").arg(err);
+                }
+                return false;
+            }
+            state->workspace          = workspace;
+            state->canonicalWorkspace = canonicalWorkspace;
+            state->workspaceTreeId    = treeId;
+            state->workspaceReadOnly  = true;
+            if (errorMessage != nullptr) {
+                errorMessage->clear();
+            }
+            return true;
+        };
+        if (readOnly) {
+            return bindReadOnly();
         }
 
         QString metadataDir;
-        if (!resolveWorkspaceMetadataDir(state->sftp, canonicalWorkspace, true, &metadataDir, &err)) {
+        if (!resolveWorkspaceMetadataDir(
+                state->sftp, canonicalWorkspace, true, &metadataDir, &err, &denied)) {
+            if (denied) {
+                return bindReadOnly();
+            }
             if (errorMessage != nullptr) {
                 *errorMessage
                     = QStringLiteral("workspace metadata verification failed: %1").arg(err);
@@ -612,6 +693,10 @@ bool prepareAgentRemoteWorkspace(
         state->workspace          = workspace;
         state->canonicalWorkspace = canonicalWorkspace;
         state->workspaceTreeId    = workspaceTreeId;
+        state->workspaceReadOnly  = false;
+        if (errorMessage != nullptr) {
+            errorMessage->clear();
+        }
         return true;
     });
 }
@@ -641,6 +726,7 @@ void discardAgentRemoteState(AgentRemoteState *state)
     state->workspace.clear();
     state->canonicalWorkspace.clear();
     state->workspaceTreeId.clear();
+    state->workspaceReadOnly = false;
     state->hostKeyNotices.clear();
 }
 
@@ -660,27 +746,34 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(new QSocToolShowFigure(parent, remoteRead, llm));
     registry->registerTool(new QSocToolDocumentRead(parent, nullptr, llm, conn));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
-    registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
-    registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));
+    if (!conn->workspaceReadOnly()) {
+        registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
+        registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));
+    }
     registry->registerTool(new QSocToolRemotePath(parent, conn, pathCtx));
-    if (machineOffersExecTools(conn->host())) {
+    if (!conn->workspaceReadOnly() && machineOffersExecTools(conn->host())) {
         registry->registerTool(new QSocToolRemoteShellBash(parent, conn, pathCtx));
         registry->registerTool(new QSocToolRemoteBashManage(parent, conn, pathCtx));
     }
     QSocWorkspaceFs *fs = conn->workspaceFs();
     registry->registerTool(new QSocToolGrep(parent, fs));
     registry->registerTool(new QSocToolTodoList(parent, fs));
-    registry->registerTool(new QSocToolTodoAdd(parent, fs));
-    registry->registerTool(new QSocToolTodoUpdate(parent, fs));
-    registry->registerTool(new QSocToolTodoDelete(parent, fs));
+    if (!conn->workspaceReadOnly()) {
+        registry->registerTool(new QSocToolTodoAdd(parent, fs));
+        registry->registerTool(new QSocToolTodoUpdate(parent, fs));
+        registry->registerTool(new QSocToolTodoDelete(parent, fs));
+    }
     const auto *localSkills = base != nullptr ? dynamic_cast<QSocToolSkillFind *>(
                                                     base->getTool(QStringLiteral("skill_find")))
                                               : nullptr;
     QSocProjectManager *localProject = localSkills != nullptr ? localSkills->getProjectManager()
                                                               : nullptr;
     registry->registerTool(new QSocToolSkillFind(parent, localProject, fs));
-    registry->registerTool(new QSocToolSkillCreate(parent, localProject, fs));
-    if (monitorSource != nullptr && machineOffersExecTools(conn->host())) {
+    if (!conn->workspaceReadOnly()) {
+        registry->registerTool(new QSocToolSkillCreate(parent, localProject, fs));
+    }
+    if (!conn->workspaceReadOnly() && monitorSource != nullptr
+        && machineOffersExecTools(conn->host())) {
         registry->registerTool(
             new QSocToolMonitor(parent, monitorSource, QSocMonitorTaskSource::RemoteSpec{conn}));
         registry->registerTool(new QSocToolMonitorStop(parent, monitorSource));
@@ -736,7 +829,7 @@ bool QSocRemoteConnection::isComplete(const AgentRemoteState &state)
 {
     return state.session != nullptr && state.sftp != nullptr && !state.endpointIdentity.isEmpty()
            && !state.workspace.isEmpty() && !state.canonicalWorkspace.isEmpty()
-           && !state.workspaceTreeId.isEmpty();
+           && (state.workspaceReadOnly || !state.workspaceTreeId.isEmpty());
 }
 
 bool QSocRemoteConnection::confirmDirectory(const QString &dir, const QDeadlineTimer *deadline) const
@@ -778,12 +871,13 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
      * directory and for the job ledger alike. The host belongs in it as much
      * as the path does: the same directory name on a different host is a
      * different directory, and a job id there names a different process. */
-    const bool        rebindsSameBinding = !m_workspace.isEmpty() && m_workspace == state.workspace
-                                           && m_target == state.targetKey
-                                           && m_endpointIdentity == state.endpointIdentity
-                                           && m_canonicalWorkspace == state.canonicalWorkspace
-                                           && m_workspaceTreeId == state.workspaceTreeId;
-    const QString     previousCwd        = rebindsSameBinding ? m_path.cwd() : QString();
+    const bool rebindsSameBinding = !m_workspace.isEmpty() && !m_workspaceTreeId.isEmpty()
+                                    && m_workspace == state.workspace && m_target == state.targetKey
+                                    && m_endpointIdentity == state.endpointIdentity
+                                    && m_canonicalWorkspace == state.canonicalWorkspace
+                                    && m_workspaceTreeId == state.workspaceTreeId
+                                    && m_workspaceReadOnly == state.workspaceReadOnly;
+    const QString     previousCwd = rebindsSameBinding ? m_path.cwd() : QString();
     const QStringList previousWritable = rebindsSameBinding ? m_path.writableDirs() : QStringList();
     const auto previousAnchors = rebindsSameBinding ? m_writableAnchors : QHash<QString, QString>();
     if (!rebindsSameBinding) {
@@ -798,6 +892,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
     m_workspace          = state.workspace;
     m_canonicalWorkspace = state.canonicalWorkspace;
     m_workspaceTreeId    = state.workspaceTreeId;
+    m_workspaceReadOnly  = state.workspaceReadOnly;
 
     state.session = nullptr;
     state.sftp    = nullptr;
@@ -807,6 +902,7 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
     state.workspace.clear();
     state.canonicalWorkspace.clear();
     state.workspaceTreeId.clear();
+    state.workspaceReadOnly = false;
 
     /* A fresh context, so every believed file content goes with the transport
      * that was observed producing it. The read-before-overwrite guard keys off
@@ -833,18 +929,26 @@ bool QSocRemoteConnection::adoptWithin(AgentRemoteState &&state, const QDeadline
         m_writableAnchors.clear();
         m_writableAnchors.insert(m_path.root(), m_canonicalWorkspace);
     }
+    if (m_workspaceReadOnly) {
+        m_path.setWritableDirs({});
+        m_writableAnchors.clear();
+    }
     const qint64 left = deadline == nullptr ? -1 : deadline->remainingTime();
     const int probeMs = left < 0
                             ? kHostProbeMs
                             : static_cast<int>(qMin<qint64>(qMax<qint64>(1, left), kHostProbeMs));
-    if (m_hostProbe) {
+    if (m_workspaceReadOnly) {
+        m_host            = QSocMachine{};
+        m_host.shellError = QStringLiteral("the remote workspace is read-only");
+    } else if (m_hostProbe) {
         m_host = m_hostProbe(m_session, m_shellPreference);
     } else {
         m_host = probeRemoteHost(m_session, m_sftp, m_shellPreference, probeMs);
         verifyRemoteShellRoot(m_session, &m_host, m_canonicalWorkspace, probeMs);
     }
     m_path.setHostStyle(m_host.kind == QSocMachine::Kind::Windows, m_host.rootFrom, m_host.rootTo);
-    m_workspaceGit = probeWorkspaceGit(m_session, m_host, m_path.root(), probeMs);
+    m_workspaceGit = !m_workspaceReadOnly
+                     && probeWorkspaceGit(m_session, m_host, m_path.root(), probeMs);
     ++m_generation;
     m_transportLink = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_watcher->kick();
@@ -899,6 +1003,7 @@ void QSocRemoteConnection::teardown()
     m_workspace.clear();
     m_canonicalWorkspace.clear();
     m_workspaceTreeId.clear();
+    m_workspaceReadOnly = false;
     m_transportLink.clear();
     m_writableAnchors.clear();
     m_host                 = QSocMachine{};
@@ -912,7 +1017,19 @@ QString QSocRemoteConnection::display() const
     if (m_target.isEmpty() || m_workspace.isEmpty()) {
         return {};
     }
-    return m_target + QStringLiteral(":") + m_workspace;
+    return m_target + QStringLiteral(":") + m_workspace
+           + (m_workspaceReadOnly ? QStringLiteral(" (read-only)") : QString());
+}
+
+void QSocRemoteConnection::restrictToReadOnly()
+{
+    m_workspaceReadOnly = true;
+    m_path.setWritableDirs({});
+    m_writableAnchors.clear();
+    m_jobs.clear();
+    m_host.shell      = {};
+    m_host.shellError = QStringLiteral("the remote workspace is read-only");
+    m_watcher->kick();
 }
 
 QSocWorkspaceFs *QSocRemoteConnection::workspaceFs()
@@ -979,6 +1096,12 @@ bool QSocRemoteConnection::canonicalWritableDirs(
 {
     dirs->clear();
     staleReason->clear();
+    if (m_workspaceReadOnly) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("the remote workspace is read-only");
+        }
+        return false;
+    }
     if (m_sftp == nullptr) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("remote SFTP client is not connected");
@@ -1011,7 +1134,7 @@ bool QSocRemoteConnection::verifyWorkspaceBinding(QString *canonicalRoot, QStrin
         return false;
     };
     if (m_sftp == nullptr || m_path.root().isEmpty() || m_canonicalWorkspace.isEmpty()
-        || m_workspaceTreeId.isEmpty()) {
+        || (!m_workspaceReadOnly && m_workspaceTreeId.isEmpty())) {
         return refuse(QStringLiteral("no verified remote workspace is bound"));
     }
     QString currentRoot;
@@ -1023,6 +1146,27 @@ bool QSocRemoteConnection::verifyWorkspaceBinding(QString *canonicalRoot, QStrin
     if (currentRoot != m_canonicalWorkspace) {
         return refuse(
             QStringLiteral("the remote workspace changed identity: %1").arg(m_path.root()));
+    }
+    if (m_workspaceReadOnly && m_workspaceTreeId.isEmpty()) {
+        QSocSftpClient::LinkStat info;
+        if (m_sftp->linkStat(currentRoot, &info, &err) != QSocSftpClient::Presence::Present
+            || !info.directory) {
+            return refuse(QStringLiteral("the remote workspace is not an existing directory"));
+        }
+        QString treeId;
+        if (!inspectReadOnlyWorkspace(m_sftp, m_canonicalWorkspace, &treeId, &err)
+            || !treeId.isEmpty()) {
+            return refuse(
+                err.isEmpty() ? QStringLiteral("the remote workspace metadata changed identity")
+                              : err);
+        }
+        if (canonicalRoot != nullptr) {
+            *canonicalRoot = currentRoot;
+        }
+        if (errorMessage != nullptr) {
+            errorMessage->clear();
+        }
+        return true;
     }
     QString metadataDir;
     if (!resolveWorkspaceMetadataDir(m_sftp, m_canonicalWorkspace, false, &metadataDir, &err)) {
@@ -1097,6 +1241,9 @@ bool QSocRemoteConnection::addWritableDirectory(
         }
         return false;
     };
+    if (m_workspaceReadOnly) {
+        return refuse(QStringLiteral("the remote workspace is read-only"));
+    }
     if (m_sftp == nullptr || m_path.root().isEmpty()) {
         return refuse(QStringLiteral("no remote workspace is bound"));
     }
@@ -1186,6 +1333,9 @@ bool QSocRemoteConnection::resolveWritablePath(
         }
         return false;
     };
+    if (m_workspaceReadOnly) {
+        return refuse(QStringLiteral("the remote workspace is read-only"));
+    }
     if (m_sftp == nullptr) {
         return refuse(QStringLiteral("remote SFTP client is not connected"));
     }
@@ -1242,6 +1392,9 @@ bool QSocRemoteConnection::resolveWritableEntry(
         }
         return false;
     };
+    if (m_workspaceReadOnly) {
+        return refuse(QStringLiteral("the remote workspace is read-only"));
+    }
     if (m_sftp == nullptr) {
         return refuse(QStringLiteral("remote SFTP client is not connected"));
     }
@@ -1391,6 +1544,13 @@ QSocRemoteConnection::ReconnectOutcome QSocRemoteConnection::reconnect(
             }
             continue;
         }
+        if (m_workspaceReadOnly && !fresh.workspaceReadOnly) {
+            discardAgentRemoteState(&fresh);
+            if (errorMessage != nullptr) {
+                *errorMessage = QStringLiteral("reconnect did not preserve the read-only binding");
+            }
+            continue;
+        }
         /* Only once a replacement exists: without this the previous session,
          * its SFTP channel and its whole ProxyJump chain are never freed. The
          * identity and the working directory stay on this object, which is
@@ -1502,7 +1662,8 @@ QSocFileHistory::LiveFileAccessor remoteLiveFileAccessor(QSocRemoteConnection *c
     };
     accessor.coversPath = [resolve](const QString &path) { return !resolve(path).isEmpty(); };
     accessor.tree       = [conn]() {
-        if (conn == nullptr || conn->target().isEmpty() || conn->workspace().isEmpty()) {
+        if (conn == nullptr || conn->workspaceReadOnly() || conn->target().isEmpty()
+            || conn->workspace().isEmpty()) {
             return QString();
         }
         if (conn->canonicalWorkspace().isEmpty() || conn->workspaceTreeId().isEmpty()) {
@@ -1567,6 +1728,9 @@ QString remoteWorkspaceRewindRefusal(QSocRemoteConnection *conn, int budgetMs)
      * this machine's disk and needs no probe. */
     if (conn == nullptr || conn->session() == nullptr) {
         return {};
+    }
+    if (conn->workspaceReadOnly()) {
+        return QStringLiteral("the remote workspace is read-only; file rewind is unavailable");
     }
     if (!conn->isUsable()) {
         /* A session that was never connected records no failure reason, and an

@@ -4,6 +4,7 @@
 #include "agent/protocol/qsocagentruntimeevent.h"
 #include "agent/qsocagent.h"
 #include "agent/qsocagentdefinitionregistry.h"
+#include "agent/qsocsession.h"
 #include "agent/qsoctool.h"
 #include "agent/remote/qsochostprofile.h"
 #include "agent/runtime/qsocagentruntime.h"
@@ -12,6 +13,8 @@
 #include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
 
+#include <QCryptographicHash>
+#include <QDataStream>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -21,6 +24,8 @@
 #include <QLocalSocket>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QScopeGuard>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -100,6 +105,41 @@ QByteArray slurp(const QString &path)
 {
     QFile file(path);
     return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+QByteArray makeReportDocument()
+{
+    const QByteArray name("word/document.xml");
+    const QByteArray text(
+        "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+        "<w:body><w:p><w:r><w:t>Clock specification: 125 MHz. Reset release: 3 cycles.</w:t>"
+        "</w:r></w:p></w:body></w:document>");
+    quint32 crc = 0xffffffffU;
+    for (const char ch : text) {
+        crc ^= static_cast<unsigned char>(ch);
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1U)));
+        }
+    }
+    crc = ~crc;
+    QByteArray  bytes;
+    QDataStream output(&bytes, QIODevice::WriteOnly);
+    output.setByteOrder(QDataStream::LittleEndian);
+    output << quint32(0x04034b50) << quint16(20) << quint16(0) << quint16(0) << quint16(0)
+           << quint16(0) << crc << quint32(text.size()) << quint32(text.size())
+           << quint16(name.size()) << quint16(0);
+    output.writeRawData(name.constData(), name.size());
+    output.writeRawData(text.constData(), text.size());
+    const quint32 directory = bytes.size();
+    output << quint32(0x02014b50) << quint16(20) << quint16(20) << quint16(0) << quint16(0)
+           << quint16(0) << quint16(0) << crc << quint32(text.size()) << quint32(text.size())
+           << quint16(name.size()) << quint16(0) << quint16(0) << quint16(0) << quint16(0)
+           << quint32(0) << quint32(0);
+    output.writeRawData(name.constData(), name.size());
+    const quint32 directorySize = bytes.size() - directory;
+    output << quint32(0x06054b50) << quint16(0) << quint16(0) << quint16(1) << quint16(1)
+           << directorySize << directory << quint16(0);
+    return bytes;
 }
 
 template<typename Predicate>
@@ -227,6 +267,9 @@ private slots:
     void remoteDefinitionsShadowLocalOnes();
     void localAndRemoteSkillsAreBothListed();
     void skillCreateScopesFollowTheBinding();
+    void readOnlyBindingIsVisibleAndRemembered();
+    void resumedReadOnlySessionStaysRestricted();
+    void readOnlyAgentReadsRemoteReportEndToEnd();
 
 private:
     static constexpr const char *kAlias = "menu-box";
@@ -381,6 +424,7 @@ private:
     }
 
     QSocTestSshd  m_fixture;
+    QSocTestSshd  m_readOnlyFixture;
     QTemporaryDir m_dir;
     QString       m_output;
     QString       m_pick;
@@ -393,6 +437,8 @@ void Test::initTestCase()
 {
     qRegisterMetaType<QSocAgentRuntimeEvent>("QSocAgentRuntimeEvent");
     m_fixture.start();
+    m_readOnlyFixture.setExtraConfig({QStringLiteral("ForceCommand internal-sftp -R")});
+    m_readOnlyFixture.start();
     QVERIFY(m_dir.isValid());
     for (const QString &dir :
          {home() + QStringLiteral("/.ssh"),
@@ -438,6 +484,14 @@ void Test::initTestCase()
     QVERIFY(spill(home() + QStringLiteral("/.ssh/config"), config));
     QFile::setPermissions(
         home() + QStringLiteral("/.ssh/config"), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    if (m_readOnlyFixture.state() == QSocTestSshd::State::Ready) {
+        const QString clientHome = root() + QStringLiteral("/readonly-client");
+        QVERIFY(m_readOnlyFixture.writeClientSshConfig(clientHome, QStringLiteral("read-only-box")));
+        QFile sshConfig(home() + QStringLiteral("/.ssh/config"));
+        QVERIFY(sshConfig.open(QIODevice::Append));
+        const QByteArray entry = slurp(clientHome + QStringLiteral("/.ssh/config"));
+        QCOMPARE(sshConfig.write(entry), entry.size());
+    }
 
     m_mockPort = pickFreePort();
     QVERIFY(spill(
@@ -468,9 +522,11 @@ void Test::initTestCase()
 void Test::cleanupTestCase()
 {
     m_fixture.stop();
+    m_readOnlyFixture.stop();
     /* QSOC_TEST_MAIN calls _exit(), so destructors would not clean up. */
     QVERIFY2(m_dir.remove(), qPrintable(m_dir.errorString()));
     QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
+    QVERIFY2(m_readOnlyFixture.removeRoot(), "the read-only fixture root could not be removed");
 }
 
 /* Counterexample: bare /ssh failed with "empty SSH target"; the menu of
@@ -903,6 +959,188 @@ void Test::skillCreateScopesFollowTheBinding()
     const QString listed = skills(session.get());
     QVERIFY2(listed.contains(QStringLiteral("- here [local]")), qPrintable(listed));
     QVERIFY2(listed.contains(QStringLiteral("- there [remote]")), qPrintable(listed));
+}
+
+void Test::readOnlyBindingIsVisibleAndRemembered()
+{
+    QSOC_REQUIRE_SSHD(m_readOnlyFixture);
+    const QString dir       = project(QStringLiteral("readonly-remembered"));
+    const QString workspace = m_readOnlyFixture.workDir();
+    {
+        auto session = runtime(dir);
+        m_pick       = workspace;
+        QString error;
+        QVERIFY2(
+            session->connectRemote({.target = QStringLiteral("read-only-box")}, &error),
+            qPrintable(error));
+        QVERIFY(session->isRemote());
+        QVERIFY(session->remoteWorkspaceReadOnly());
+        QVERIFY(session->agent()->getConfig().remoteReadOnly);
+        QVERIFY(session->agent()->getConfig().remoteWritableDirs.isEmpty());
+        QVERIFY(prompt(session.get()).contains(QStringLiteral("Access: read-only")));
+        QVERIFY(m_output.contains(QStringLiteral("read-only")));
+        QVERIFY(session->statusLinePayload()["remote"]["read_only"].get<bool>());
+        QVERIFY(remembered(dir).readOnly);
+        QCOMPARE(remembered(dir).workspace, workspace);
+        m_output.clear();
+        QVERIFY(session->executeCommand(QStringLiteral("/status")));
+        QVERIFY(m_output.contains(QStringLiteral("Access:   read-only")));
+    }
+    auto session = runtime(dir);
+    session->connectRememberedRemote();
+    QVERIFY(session->isRemote());
+    QVERIFY(session->remoteWorkspaceReadOnly());
+    QCOMPARE(session->remoteWorkspace(), workspace);
+    QVERIFY(!QFileInfo::exists(workspace + QStringLiteral("/.qsoc-agent")));
+}
+
+void Test::resumedReadOnlySessionStaysRestricted()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    const QString dir       = project(QStringLiteral("readonly-resume"));
+    const QString workspace = remote(QStringLiteral("readonly-resume"));
+    QVERIFY(QDir().mkpath(workspace));
+    QString savedId;
+    {
+        auto    session = runtime(dir);
+        QString error;
+        QVERIFY2(
+            session->connectRemote(
+                {.target    = QString::fromLatin1(kAlias),
+                 .workspace = workspace,
+                 .remember  = false,
+                 .readOnly  = true},
+                &error),
+            qPrintable(error));
+        QVERIFY(session->remoteWorkspaceReadOnly());
+        QVERIFY(session->openSession());
+        session->setMessages(json::array({{{"role", "user"}, {"content", "inspect report"}}}));
+        QVERIFY(session->persistNow());
+        const auto messages = session->agent()->getMessages();
+        savedId             = session->sessionId();
+        const auto  cfg     = session->agent()->getConfig();
+        QSocSession record(savedId, session->sessionPath(), QSocSession::StorageMode::Existing);
+        QSocSession::RunRecord
+            run{.runId            = QStringLiteral("readonly-run"),
+                .event            = QSocSession::RunEvent::Started,
+                .input            = QStringLiteral("inspect report"),
+                .messageCount     = static_cast<int>(messages.size()),
+                .historyDigest    = QSocSession::historyDigest(messages),
+                .inputReplaySafe  = true,
+                .contextPresent   = true,
+                .modelId          = QStringLiteral("mock"),
+                .effortLevel      = cfg.effortLevel,
+                .toolPresentation = cfg.toolPresentation,
+                .remoteMode       = true,
+                .remoteReadOnly   = true,
+                .remoteName       = cfg.remoteName,
+                .remoteAlias      = cfg.remoteAlias,
+                .projectRoot      = workspace,
+                .workingDir       = workspace};
+        QVERIFY(record.appendRun(run));
+        run.event = QSocSession::RunEvent::Completed;
+        QVERIFY(record.appendRun(run));
+    }
+    auto    session = runtime(dir);
+    QString error;
+    const QSocRemoteConnectRequest
+        request{.target = QString::fromLatin1(kAlias), .workspace = workspace, .remember = false};
+    QVERIFY2(session->connectRemote(request, &error), qPrintable(error));
+    QVERIFY(!session->remoteWorkspaceReadOnly());
+    QVERIFY2(session->openSessionById(savedId), qPrintable(session->lastError()));
+    QVERIFY(session->remoteWorkspaceReadOnly());
+    QVERIFY(!session->agent()->isToolAllowed(QStringLiteral("write_file")));
+    QVERIFY(!session->agent()->isToolAllowed(QStringLiteral("bash")));
+    const QString blocked = runTool(
+        session.get(),
+        QStringLiteral("write_file"),
+        {{"file_path", "blocked.txt"}, {"content", "changed"}});
+    QVERIFY2(blocked.contains(QStringLiteral("read-only")), qPrintable(blocked));
+    QVERIFY(!QFileInfo::exists(workspace + QStringLiteral("/blocked.txt")));
+    QVERIFY2(session->connectRemote(request, &error), qPrintable(error));
+    QVERIFY(!session->remoteWorkspaceReadOnly());
+    const QString written = runTool(
+        session.get(),
+        QStringLiteral("write_file"),
+        {{"file_path", "new.txt"}, {"content", "writable again"}});
+    QVERIFY2(!written.startsWith(QStringLiteral("Error:")), qPrintable(written));
+    QCOMPARE(slurp(workspace + QStringLiteral("/new.txt")), QByteArray("writable again"));
+}
+
+void Test::readOnlyAgentReadsRemoteReportEndToEnd()
+{
+    QSOC_REQUIRE_SSHD(m_readOnlyFixture);
+    if (QStandardPaths::findExecutable(QStringLiteral("unzip")).isEmpty()) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+    }
+    const QString qsoc = builtQsoc();
+    const QString mock = QString::fromUtf8(QSOC_MOCK_LLM_PATH);
+    if (qsoc.isEmpty() || !QFile::exists(mock)) {
+        QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("a built qsoc and qsoc_mock_llm"));
+    }
+    const QString dir       = project(QStringLiteral("readonly-report-agent"));
+    const QString workspace = m_readOnlyFixture.workDir() + QStringLiteral("/report-agent");
+    QVERIFY(QDir().mkpath(workspace));
+    const QByteArray document = makeReportDocument();
+    const QString    source   = workspace + QStringLiteral("/report.docx");
+    QVERIFY(spill(source, document));
+    QVERIFY(spill(dir + QStringLiteral("/report.docx"), QByteArray("wrong local source")));
+    const QString requestLog = root() + QStringLiteral("/readonly-report-requests.jsonl");
+    QProcess      mockLlm;
+    auto          environment = childEnvironment();
+    environment.insert(QStringLiteral("MOCK_TTL"), QStringLiteral("120"));
+    environment.insert(QStringLiteral("MOCK_REPLY"), QStringLiteral("READONLY_REPORT_DONE"));
+    environment.insert(QStringLiteral("MOCK_TOOL_NAME"), QStringLiteral("read_document"));
+    environment
+        .insert(QStringLiteral("MOCK_TOOL_ARGS"), QStringLiteral("{\"file_path\":\"report.docx\"}"));
+    environment.insert(QStringLiteral("MOCK_TOOL_MAX"), QStringLiteral("1"));
+    environment.insert(QStringLiteral("MOCK_REQUEST_LOG"), requestLog);
+    mockLlm.setProcessEnvironment(environment);
+    mockLlm.start(mock, {QString::number(m_mockPort), QStringLiteral("none")});
+    QVERIFY(mockLlm.waitForStarted(5000));
+    const auto stopMock = qScopeGuard([&] {
+        mockLlm.terminate();
+        if (!mockLlm.waitForFinished(3000)) {
+            mockLlm.kill();
+            mockLlm.waitForFinished(2000);
+        }
+    });
+    QVERIFY(waitFor(
+        [&] {
+            QTcpSocket probe;
+            probe.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(m_mockPort));
+            return probe.waitForConnected(200);
+        },
+        8000));
+    QProcess agent;
+    agent.setProcessEnvironment(childEnvironment());
+    agent.setWorkingDirectory(dir);
+    agent.start(
+        qsoc,
+        {QStringLiteral("agent"),
+         QStringLiteral("-d"),
+         dir,
+         QStringLiteral("--ssh"),
+         QStringLiteral("read-only-box"),
+         QStringLiteral("--workspace"),
+         workspace,
+         QStringLiteral("-q"),
+         QStringLiteral("Read the report and state its clock and reset values.")});
+    QVERIFY(agent.waitForStarted(10000));
+    QVERIFY2(agent.waitForFinished(120000), "read-only agent did not finish");
+    const QByteArray output = agent.readAllStandardOutput() + agent.readAllStandardError();
+    QCOMPARE(agent.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(agent.exitCode() == 0, output.constData());
+    QVERIFY2(output.contains("READONLY_REPORT_DONE"), output.constData());
+    const QByteArray wire = slurp(requestLog);
+    QVERIFY2(wire.contains("125 MHz"), wire.constData());
+    QVERIFY(wire.contains("3 cycles"));
+    QVERIFY(wire.contains(source.toUtf8()));
+    QVERIFY(wire.contains(QCryptographicHash::hash(document, QCryptographicHash::Sha256).toHex()));
+    QVERIFY(!wire.contains("wrong local source"));
+    QVERIFY(wire.contains("Access: read-only"));
+    QCOMPARE(slurp(source), document);
+    QVERIFY(!QFileInfo::exists(workspace + QStringLiteral("/.qsoc-agent")));
 }
 
 QSOC_TEST_MAIN(Test)

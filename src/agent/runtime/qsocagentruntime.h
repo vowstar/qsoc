@@ -89,6 +89,7 @@ struct QSocRemoteConnectRequest
     QString workspace;          /**< Explicit remote workspace (--ssh); empty resolves it. */
     bool    remember   = true;  /**< Remember the binding for this project. */
     bool    unattended = false; /**< No picker and no host key question. */
+    bool    readOnly   = false; /**< Preserve a previous read-only binding. */
 };
 
 /**
@@ -510,6 +511,7 @@ public:
     [[nodiscard]] QString remoteTarget() const;
     /** Remote workspace path, empty when local. */
     [[nodiscard]] QString remoteWorkspace() const;
+    [[nodiscard]] bool    remoteWorkspaceReadOnly() const;
 
     /**
      * @brief Change the working directory (the /cwd action).

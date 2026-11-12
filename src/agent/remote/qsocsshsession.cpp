@@ -1029,6 +1029,7 @@ void QSocSshSession::closeOwnedSocket()
 
 void QSocSshSession::clearConnection()
 {
+    ++m_generation;
     const bool hadOwnedHandles = m_session != nullptr || m_parentChannel != nullptr;
     bool       released        = true;
     if (m_session != nullptr) {

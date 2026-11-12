@@ -469,7 +469,8 @@ QSocHostBinding QSocHostBindingStore::load(const QString &storeDir, const QStrin
     }
     return {
         object.value(QStringLiteral("target")).toString(),
-        object.value(QStringLiteral("workspace")).toString()};
+        object.value(QStringLiteral("workspace")).toString(),
+        object.value(QStringLiteral("read_only")).toBool()};
 }
 
 bool QSocHostBindingStore::save(
@@ -496,7 +497,8 @@ bool QSocHostBindingStore::save(
     const QJsonObject object{
         {QStringLiteral("project"), canonicalProject(projectPath)},
         {QStringLiteral("target"), binding.target},
-        {QStringLiteral("workspace"), binding.workspace}};
+        {QStringLiteral("workspace"), binding.workspace},
+        {QStringLiteral("read_only"), binding.readOnly}};
     QSaveFile saver(path);
     if (!saver.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return fail(QStringLiteral("cannot open %1 for write").arg(path));

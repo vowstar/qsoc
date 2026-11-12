@@ -164,7 +164,8 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
     const QString                &host,
     const QString                &workspace,
     const std::optional<QString> &namedRoot,
-    QString                      *errorMessage)
+    QString                      *errorMessage,
+    const QString                &readOnlyWorkspace)
 {
     if (!QSocInterrupt::handlerReady()) {
         if (errorMessage != nullptr) {
@@ -186,10 +187,24 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         }
         return nullptr;
     }
-    const QString cacheKey = host + QLatin1Char('\n') + root;
+    bool                  readOnly      = !readOnlyWorkspace.isEmpty() && root == readOnlyWorkspace;
+    const QSocAgentConfig parentBinding = parentAgent_ != nullptr ? parentAgent_->getConfig()
+                                                                  : parentConfig_;
+    const auto            sameReadOnlyBinding =
+        [&parentBinding](const QString &endpoint, const QString &canonical) {
+            return parentBinding.remoteReadOnly && !parentBinding.remoteEndpointIdentity.isEmpty()
+                   && endpoint == parentBinding.remoteEndpointIdentity
+                   && canonical == parentBinding.remoteCanonicalWorkspace;
+        };
+    const QString cacheKey = host + QLatin1Char('\n') + root
+                             + (readOnly ? QStringLiteral("\nread-only")
+                                         : QStringLiteral("\nwrite"));
     const auto    cached   = hostCache_.find(cacheKey);
     if (cached != hostCache_.end()) {
         const std::shared_ptr<HostBinding> &binding = cached.value();
+        readOnly                                    = readOnly
+                                                      || sameReadOnlyBinding(
+                                                          binding->conn.endpointIdentity(), binding->conn.canonicalWorkspace());
         /* A cached registry is only worth reusing while its host can still
          * answer. Handing one back on a dead session gives every later
          * sibling a workspace that cannot serve a call, and the failure then
@@ -197,7 +212,7 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
          * is not enough: a host that went quiet without closing the
          * connection still reads as connected, so spend one bounded round
          * trip before reusing. */
-        if (binding->conn.isUsable()
+        if (readOnly == binding->conn.workspaceReadOnly() && binding->conn.isUsable()
             && remoteHostAnswers(binding->conn.sftp(), binding->conn.path()->root(), kHostProbeMs)) {
             return binding;
         }
@@ -218,8 +233,19 @@ std::shared_ptr<QSocToolAgent::HostBinding> QSocToolAgent::resolveHostBinding(
         })) {
         return nullptr;
     }
+    if (parentBinding.remoteReadOnly
+        && binding->state.endpointIdentity == parentBinding.remoteEndpointIdentity) {
+        QString canonicalRoot;
+        if (binding->state.sftp->canonicalize(root, &canonicalRoot, errorMessage)
+            != QSocSftpClient::Canonical::Ok) {
+            discardAgentRemoteState(&binding->state);
+            return nullptr;
+        }
+        readOnly = readOnly || sameReadOnlyBinding(binding->state.endpointIdentity, canonicalRoot);
+    }
     if ((namedRoot && !acceptNamedWorkspace(binding->state.sftp, root, *namedRoot, errorMessage))
-        || !prepareAgentRemoteWorkspace(root, &binding->state, errorMessage)) {
+        || !prepareAgentRemoteWorkspace(
+            root, &binding->state, errorMessage, QDeadlineTimer(30000), readOnly)) {
         discardAgentRemoteState(&binding->state);
         return nullptr;
     }
@@ -278,11 +304,12 @@ void QSocToolAgent::installBindingRecovery(QSocRemoteConnection *conn)
     /* The same two connect helpers resolveHostBinding used for the first bind,
      * reached the same way. reconnect() supplies the binding's own (target,
      * workspace), so there is no second connect path to keep in step. */
-    conn->setRebuilder([](const QString    &target,
-                          const QString    &workspace,
-                          AgentRemoteState *out,
-                          QString          *errorMessage,
-                          QDeadlineTimer    deadline) {
+    conn->setRebuilder([conn](
+                           const QString    &target,
+                           const QString    &workspace,
+                           AgentRemoteState *out,
+                           QString          *errorMessage,
+                           QDeadlineTimer    deadline) {
         AgentRemoteState fresh;
         if (!connectAgentSshSession(
                 target,
@@ -294,7 +321,8 @@ void QSocToolAgent::installBindingRecovery(QSocRemoteConnection *conn)
                 deadline)) {
             return false;
         }
-        if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage, deadline)) {
+        if (!prepareAgentRemoteWorkspace(
+                workspace, &fresh, errorMessage, deadline, conn->workspaceReadOnly())) {
             discardAgentRemoteState(&fresh);
             return false;
         }
@@ -613,11 +641,14 @@ void bindConfigToHost(QSocRemoteConnection *conn, const QString &alias, QSocAgen
  * remote declarations go, and the local skill listing of @p local returns. */
 void unbindConfigFromHost(const QSocAgentConfig &local, QSocAgentConfig *cfg)
 {
-    cfg->remoteMode = false;
+    cfg->remoteMode     = false;
+    cfg->remoteReadOnly = false;
     cfg->remoteName.clear();
     cfg->remoteAlias.clear();
     cfg->remoteDisplay.clear();
     cfg->remoteWorkspace.clear();
+    cfg->remoteEndpointIdentity.clear();
+    cfg->remoteCanonicalWorkspace.clear();
     cfg->remoteWorkingDir.clear();
     cfg->remoteWritableDirs.clear();
     cfg->remoteMachine       = QSocMachine{};
@@ -636,7 +667,9 @@ QSocSubAgentTaskSource::Dispatch placementOf(const QSocAgentConfig &cfg)
     return {
         cfg.remoteAlias.isEmpty() ? cfg.remoteName : cfg.remoteAlias,
         cfg.remoteName,
-        cfg.remoteWorkspace};
+        cfg.remoteWorkspace,
+        {},
+        cfg.remoteReadOnly};
 }
 
 /* JSON spelling of a terminal flavour. Deliberately not statusLine()'s words:
@@ -903,8 +936,10 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
         return QString::fromStdString(
             json{{"status", "error"}, {"error", planErr.toStdString()}}.dump());
     }
-    const QString &hostArg    = plan->host;
-    const bool     remoteHost = !hostArg.isEmpty() && hostArg != QStringLiteral("local");
+    const QString hostArg    = plan->host.isEmpty() && seed != nullptr && seed->dispatch.readOnly
+                                   ? seed->dispatch.host
+                                   : plan->host;
+    const bool    remoteHost = !hostArg.isEmpty() && hostArg != QStringLiteral("local");
     /* `local` while the main agent is remote: this machine's own tools. */
     const bool toLocal = hostArg == QStringLiteral("local") && effectiveConfig.remoteMode;
     if (isolation == QStringLiteral("worktree")
@@ -921,11 +956,20 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     if (remoteHost) {
         QString       hostErr;
         const QString workspace = seed != nullptr ? seed->dispatch.workspace : plan->workspace;
-        childHost               = resolveHostBinding(
+        QString       readOnlyWorkspace;
+        if (seed != nullptr && seed->dispatch.readOnly) {
+            readOnlyWorkspace = seed->dispatch.workspace;
+        } else if (
+            effectiveConfig.remoteReadOnly
+            && (hostArg == effectiveConfig.remoteAlias || hostArg == effectiveConfig.remoteName)) {
+            readOnlyWorkspace = effectiveConfig.remoteWorkspace;
+        }
+        childHost = resolveHostBinding(
             hostArg,
             workspace,
             seed == nullptr && plan->workspaceNamed ? plan->workspaceRoot : std::optional<QString>(),
-            &hostErr);
+            &hostErr,
+            readOnlyWorkspace);
         if (childHost == nullptr) {
             return QString::fromUtf8(
                 json{
@@ -1073,23 +1117,29 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
          * is one request from the parent, so it starts fresh here and bounds
          * this child's reconnects across its run. */
         auto budget = std::make_shared<int>(0);
-        child->setWorkspaceHealthProbe([boundHost, observed, budget]() -> QString {
-            QSocRemoteConnection *conn = &boundHost->conn;
-            const quint64         now  = conn->generation();
-            if (*observed != 0 && *observed != now) {
-                *observed = now;
-                return QStringLiteral(
-                           "The SSH link to %1 was replaced since this task last acted "
-                           "on it. Remote state has not been observed on the new link, "
-                           "so re-check it before acting.")
-                    .arg(conn->target());
-            }
-            const QString health = probeBindingHealth(conn, budget.get());
-            /* A reconnect inside the probe bumps the generation; adopt it so the
+        child->setWorkspaceHealthProbe(
+            [boundHost, observed, budget, guard = QPointer<QSocAgent>(child)]() -> QString {
+                QSocRemoteConnection *conn = &boundHost->conn;
+                if (guard && guard->getConfig().remoteReadOnly != conn->workspaceReadOnly()) {
+                    auto cfg = guard->getConfig();
+                    applyRemoteHostToConfig(conn, &cfg);
+                    guard->setConfig(cfg);
+                }
+                const quint64 now = conn->generation();
+                if (*observed != 0 && *observed != now) {
+                    *observed = now;
+                    return QStringLiteral(
+                               "The SSH link to %1 was replaced since this task last acted "
+                               "on it. Remote state has not been observed on the new link, "
+                               "so re-check it before acting.")
+                        .arg(conn->target());
+                }
+                const QString health = probeBindingHealth(conn, budget.get());
+                /* A reconnect inside the probe bumps the generation; adopt it so the
              * child's own recovery is not re-reported as a sibling's next turn. */
-            *observed = conn->generation();
-            return health;
-        });
+                *observed = conn->generation();
+                return health;
+            });
     } else if (!toLocal && parentAgent_ != nullptr && parentAgent_->hasWorkspaceHealthProbe()) {
         QPointer<QSocAgent> probeParent(parentAgent_);
         child->setWorkspaceHealthProbe([probeParent]() -> QString {
@@ -1662,7 +1712,8 @@ json QSocToolAgent::resumeRun(
         = {meta.host.isEmpty() ? QStringLiteral("local") : meta.host,
            meta.endpoint.isEmpty() ? QStringLiteral("local") : meta.endpoint,
            meta.workspace,
-           meta.model};
+           meta.model,
+           meta.readOnly};
     seed.notifyParent = sender != QSocAgentMailbox::userSender();
     /* The parent's binding serves the run only when it is the very endpoint and
      * workspace the run used; any other run goes back to its own alias. */

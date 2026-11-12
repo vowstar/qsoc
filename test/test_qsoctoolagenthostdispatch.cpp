@@ -29,6 +29,7 @@
 #include <QHostAddress>
 #include <QProcess>
 #include <QQueue>
+#include <QScopeGuard>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -247,6 +248,7 @@ private slots:
     void aNamedWorkspaceMustBeAProjectDirectory();
     void aDispatchedChildWritesItsHostsProjectMemory();
     void aDispatchedForkListsItsHostsSkills();
+    void readOnlyPolicyFollowsTheEndpointAndWorkspace();
 
 private:
     bool prepare();
@@ -1012,6 +1014,98 @@ void Test::aDispatchedForkListsItsHostsSkills()
     QVERIFY2(prompt.contains(QStringLiteral("Dispatch host skill sentinel")), qPrintable(prompt));
     QVERIFY(!prompt.contains(QStringLiteral("Parent skill sentinel")));
     QDir(m_workspace + QStringLiteral("/.qsoc")).removeRecursively();
+}
+
+void Test::readOnlyPolicyFollowsTheEndpointAndWorkspace()
+{
+    REQUIRE_DISPATCH_FIXTURE();
+    const QString workspace = m_fixture.workDir() + QStringLiteral("/readonly-parent");
+    const QString other     = m_fixture.workDir() + QStringLiteral("/other-project");
+    QVERIFY(QDir().mkpath(workspace));
+    QVERIFY(QDir().mkpath(other));
+    AgentRemoteState state;
+    const auto       cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+    QString          error;
+    QVERIFY2(
+        connectAgentSshSession(QString::fromLatin1(kAlias), nullptr, &state, &error),
+        qPrintable(error));
+    QVERIFY2(
+        prepareAgentRemoteWorkspace(workspace, &state, &error, QDeadlineTimer(3000), true),
+        qPrintable(error));
+    QSocRemoteConnection conn;
+    QVERIFY(conn.adopt(std::move(state)));
+    QVERIFY(conn.workspaceReadOnly());
+    MockLlm llm;
+    QVERIFY(llm.listen());
+    QVERIFY(writeLlmConfig(llm));
+    QSocConfig                  serviceConfig;
+    QLLMService                 service(nullptr, &serviceConfig);
+    QSocAgentDefinitionRegistry definitions;
+    definitions.registerBuiltins();
+    QSocSubAgentTaskSource tasks;
+    tasks.setTranscriptDir(m_dir.path() + QStringLiteral("/readonly-child-history"));
+    QSocToolRegistry                  base;
+    std::unique_ptr<QSocToolRegistry> registry(buildAgentRemoteRegistry(nullptr, &conn, &base));
+    QSocHostCatalog                   catalog;
+    catalog.load(QString(), m_project);
+    for (const QString &alias :
+         {QString::fromLatin1(kAlias),
+          QString::fromLatin1(kCatalogAlias),
+          QStringLiteral("other-project")}) {
+        QSocHostProfile profile;
+        profile.alias     = alias;
+        profile.target    = QString::fromLatin1(kAlias);
+        profile.workspace = alias == QStringLiteral("other-project") ? other : workspace;
+        QVERIFY(catalog.upsert(profile, true));
+    }
+    auto config             = parentOnItsOwnHost();
+    config.projectPath      = m_project;
+    config.remoteAlias      = QString::fromLatin1(kAlias);
+    config.remoteName       = conn.target();
+    config.remoteDisplay    = conn.display();
+    config.remoteWorkspace  = workspace;
+    config.remoteWorkingDir = workspace;
+    applyRemoteHostToConfig(&conn, &config);
+    QSocAgent     parent(nullptr, &service, registry.get(), config);
+    QSocToolAgent tool(nullptr, &service, &base, config, &definitions, &tasks);
+    tool.setParentAgent(&parent);
+    tool.setHostCatalog(&catalog);
+    base.registerTool(&tool);
+
+    auto args = spawnArgs();
+    args.erase("host");
+    llm.enqueueToolCall(
+        QStringLiteral("write_file"), {{"file_path", "blocked.txt"}, {"content", "changed"}});
+    llm.enqueueFinal(QStringLiteral("inherited read-only"));
+    auto response = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(response.value("status", std::string()), std::string("ok"));
+    QVERIFY(systemPromptOf(llm, 0).contains(QStringLiteral("Access: read-only")));
+    QVERIFY(llm.requestBody(1).contains("read-only"));
+    QVERIFY(!QFileInfo::exists(workspace + QStringLiteral("/blocked.txt")));
+
+    args["host"] = kCatalogAlias;
+    llm.enqueueToolCall(
+        QStringLiteral("write_file"), {{"file_path", "blocked-alias.txt"}, {"content", "changed"}});
+    llm.enqueueFinal(QStringLiteral("same endpoint read-only"));
+    response = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(response.value("status", std::string()), std::string("ok"));
+    QVERIFY(systemPromptOf(llm, 2).contains(QStringLiteral("Access: read-only")));
+    QVERIFY(llm.requestBody(3).contains("read-only"));
+    QVERIFY(!QFileInfo::exists(workspace + QStringLiteral("/blocked-alias.txt")));
+    QVERIFY(!QFileInfo::exists(workspace + QStringLiteral("/.qsoc-agent")));
+
+    args["host"] = "other-project";
+    llm.enqueueToolCall(
+        QStringLiteral("write_file"),
+        {{"file_path", "allowed.txt"}, {"content", "other workspace"}});
+    llm.enqueueFinal(QStringLiteral("different workspace writable"));
+    response = json::parse(tool.execute(args).toStdString());
+    QCOMPARE(response.value("status", std::string()), std::string("ok"));
+    QVERIFY(!systemPromptOf(llm, 4).contains(QStringLiteral("Access: read-only")));
+    QFile written(other + QStringLiteral("/allowed.txt"));
+    QVERIFY(written.open(QIODevice::ReadOnly));
+    QCOMPARE(written.readAll(), QByteArray("other workspace"));
+    QCOMPARE(llm.requestCount(), 6);
 }
 
 QSOC_TEST_MAIN(Test)

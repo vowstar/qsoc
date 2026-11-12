@@ -258,6 +258,28 @@ jobs:
         echo "--- all smoke tests passed ---"
 
     # This target includes the local and forced-SFTP document contracts.
+    - name: Build test SFTP peer
+      if: github.event_name == 'pull_request'
+      run: >-
+        python3 .github/scripts/build-test-sftp-peer.py
+        --cache "${{ runner.temp }}/qsoc-test-go"
+        --output "build/test/qsoc_test_sftp_peer"
+
+    - name: Portable SFTP peer contracts
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+      run: |
+        set -euo pipefail
+        log="$RUNNER_TEMP/sftp-peer.qtestlog"
+        ./test/test_qsocsftppeer -o "$log,txt" || { cat "$log"; exit 1; }
+        cat "$log"
+        if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
+          echo '::error::an SFTP peer contract was skipped'
+          exit 1
+        fi
+
     - name: Document reading contracts
       if: github.event_name == 'pull_request'
       env:
@@ -676,6 +698,40 @@ jobs:
           Remove-Item -Recurse -Force $TMPD -ErrorAction SilentlyContinue
         }
 
+    - name: SSH connection preflight
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      run: |
+        $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
+        & ./test/test_qsocremoteconnection.exe proxyJumpCyclesFailBeforeOpeningANetworkConnection -o ssh-cycle-preflight.txt,txt
+        $cycleExit = $LASTEXITCODE
+        Get-Content ssh-cycle-preflight.txt
+        if ($cycleExit -ne 0) { throw 'SSH cycle preflight failed' }
+        & ./test/test_qsocsshsession.exe testConnectToClosedPort -o ssh-closed-port-preflight.txt,txt
+        $closedPortExit = $LASTEXITCODE
+        Get-Content ssh-closed-port-preflight.txt
+        if ($closedPortExit -ne 0) { throw 'SSH closed-port preflight failed' }
+
+    - name: Build test SFTP peer
+      if: github.event_name == 'pull_request'
+      run: >-
+        python .github/scripts/build-test-sftp-peer.py
+        --cache "${{ runner.temp }}/qsoc-test-go"
+        --output "build/test/qsoc_test_sftp_peer.exe"
+
+    - name: Portable SFTP peer contracts
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+      run: |
+        $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
+        $log = Join-Path $env:RUNNER_TEMP 'sftp-peer.qtestlog'
+        & ./test/test_qsocsftppeer.exe -o "$log,txt"
+        $testExit = $LASTEXITCODE
+        Get-Content $log
+        if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '(^|\s)SKIP\s*:' -Quiet)) { throw 'SFTP peer contracts did not all run' }
+
     - name: Document reading contracts
       if: github.event_name == 'pull_request'
       working-directory: build
@@ -685,7 +741,7 @@ jobs:
       run: |
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH;$env:QSOC_TEST_OFFICE_DIR"
         $log = Join-Path $env:RUNNER_TEMP "document-contracts.qtestlog"
-        & ./test/test_qsoctooldocument.exe pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits -o "$log,txt"
+        & ./test/test_qsoctooldocument.exe remoteDocumentUsesSftpAndPreservesItsSource pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits -o "$log,txt"
         $testExit = $LASTEXITCODE
         Get-Content $log
         if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '^SKIP' -Quiet)) { throw "Document reading contracts did not all run" }
@@ -703,10 +759,8 @@ jobs:
         if ($probeExit -ne 0 -or ($probeLog -join "`n") -notmatch 'PASS') {
           throw "QtTest output did not reach the captured log"
         }
-        # The loopback sshd fixture and the remote job-control scripts are
-        # POSIX-only (sshd path lookup, the password database, /bin/sh on the
-        # target, POSIX signals), so Windows has no remote coverage. Excluded
-        # by name: letting them skip would look green.
+        # POSIX-only loopback and job-control suites remain excluded by name.
+        # Portable SFTP and remote document contracts run above on Windows.
         ctest -C ${{ env.BUILD_TYPE }} --output-on-failure --repeat until-pass:2 -E "test_qsocgui(licensedialog|buseditorwindow|schematicsnapshot|prccontrollergrouping|prcnetlist|moduleeditorwindow|moduleeditormodels|schematicwindow)$|test_qsocagenttool$|test_qsoccliparsegeneratereportunconnected|test_qsocagentremoterecovery|test_qsocagentruntimeremote|test_qsocremoteguardafterreconnect|test_qsocremotehostprobe|test_qsocremotetrust|test_qsocremoteworkspacetools|test_qsocremotewritabledirs|test_qsocsftp_loopback|test_qsocsftpstranded|test_qsocsshcrypto|test_qsocsshexecstatus|test_qsoctoolagentbindinglifetime|test_qsoctoolagenthostbindingrecovery|test_qsocremotejobscript|test_qsocremotejobwatcher|test_qsocremoteexecabort|test_qsocworkspacebinding" | Tee-Object -FilePath ctest.log
         exit $LASTEXITCODE
 
@@ -856,6 +910,28 @@ jobs:
         $QSOC module import -d "$TMPD" -l smoke_lib "$TMPD/smoke.v"
         echo "--- all smoke tests passed ---"
 
+    - name: Build test SFTP peer
+      if: github.event_name == 'pull_request'
+      run: >-
+        python3 .github/scripts/build-test-sftp-peer.py
+        --cache "${{ runner.temp }}/qsoc-test-go"
+        --output "build/test/qsoc_test_sftp_peer"
+
+    - name: Portable SFTP peer contracts
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+      run: |
+        set -euo pipefail
+        log="$RUNNER_TEMP/sftp-peer.qtestlog"
+        ./test/test_qsocsftppeer -o "$log,txt" || { cat "$log"; exit 1; }
+        cat "$log"
+        if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
+          echo '::error::an SFTP peer contract was skipped'
+          exit 1
+        fi
+
     - name: Document reading contracts
       if: github.event_name == 'pull_request'
       working-directory: build
@@ -865,7 +941,7 @@ jobs:
       run: |
         set -euo pipefail
         log="$RUNNER_TEMP/document-contracts.qtestlog"
-        ./test/test_qsoctooldocument pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation nativeBoxesBoundXmlAndJsonAndRejectAmbiguousGeometry pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits officeRendererCancellationKillsDescendantsAndRemovesProfile macProcessExitBeforeFinishedDelivery -o "$log,txt" || { cat "$log"; exit 1; }
+        ./test/test_qsoctooldocument remoteDocumentUsesSftpAndPreservesItsSource pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation nativeBoxesBoundXmlAndJsonAndRejectAmbiguousGeometry pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits officeRendererCancellationKillsDescendantsAndRemovesProfile macProcessExitBeforeFinishedDelivery -o "$log,txt" || { cat "$log"; exit 1; }
         cat "$log"
         if grep -q '^SKIP' "$log"; then
           echo '::error::a document contract was skipped'

@@ -201,7 +201,7 @@ QSocRemoteJobWatcher::Poll QSocRemoteJobWatcher::pollOnce()
         rearm();
         return Poll::Idle;
     }
-    if (m_conn->operationInFlight() || !m_conn->isUsable()) {
+    if (m_conn->workspaceReadOnly() || m_conn->operationInFlight() || !m_conn->isUsable()) {
         ++m_skipped;
         rearm();
         return Poll::Skipped;

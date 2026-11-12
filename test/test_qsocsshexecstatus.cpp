@@ -215,7 +215,8 @@ void Test::aChannelClosedWithoutAStatusIsNotACleanExit()
         QStringLiteral("touch %1; sleep 6; touch %2; exit 7").arg(started, finished), 30000);
     const qint64 elapsed = clock.elapsed();
 
-    QVERIFY2(QFile::exists(started), "the command never ran");
+    // Channel closure can arrive before the child creates its marker.
+    QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(started), 30000);
     QVERIFY2(
         !QFile::exists(finished),
         qPrintable(QStringLiteral(

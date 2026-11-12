@@ -217,6 +217,7 @@ public:
 
     /** @brief Raw libssh2 session handle. Valid only while isConnected(). */
     LIBSSH2_SESSION *rawSession() const { return m_session; }
+    quint64          generation() const { return m_generation; }
 
     /**
      * @brief Socket handle. Returns -1 when not connected.
@@ -387,6 +388,7 @@ private:
     bool tryPasswordPrompt(const QString &user, const QString &hostname, int port);
 
     LIBSSH2_SESSION      *m_session          = nullptr;
+    quint64               m_generation       = 0;
     qintptr               m_socket           = -1;
     Unusable              m_unusable         = Unusable::No;
     bool                  m_teardownReleased = true;

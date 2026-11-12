@@ -1138,6 +1138,7 @@ private slots:
             .effortLevel    = QStringLiteral("medium"),
             .planMode       = true,
             .remoteMode     = true,
+            .remoteReadOnly = true,
             .remoteName     = QStringLiteral("remote-b"),
             .projectRoot    = QStringLiteral("/workspace/updated-root"),
             .workingDir     = QStringLiteral("/workspace/updated"),
@@ -1156,6 +1157,7 @@ private slots:
         QCOMPARE(latest->effortLevel, QStringLiteral("medium"));
         QVERIFY(latest->planMode);
         QVERIFY(latest->remoteMode);
+        QVERIFY(latest->remoteReadOnly);
         QCOMPARE(latest->remoteName, QStringLiteral("remote-b"));
         QCOMPARE(latest->projectRoot, QStringLiteral("/workspace/updated-root"));
         QCOMPARE(latest->workingDir, QStringLiteral("/workspace/updated"));
@@ -1220,8 +1222,12 @@ private slots:
         emptyProjectRoot["project_root"] = "";
         json missingProjectRoot          = validContext;
         missingProjectRoot.erase("project_root");
-        json remoteMismatch           = validContext;
-        remoteMismatch["remote_mode"] = true;
+        json remoteMismatch                 = validContext;
+        remoteMismatch["remote_mode"]       = true;
+        json invalidReadOnly                = validContext;
+        invalidReadOnly["remote_read_only"] = "true";
+        json localReadOnly                  = validContext;
+        localReadOnly["remote_read_only"]   = true;
 
         const json malformedContexts = json::array(
             {missingField,
@@ -1229,7 +1235,9 @@ private slots:
              emptyDirectory,
              emptyProjectRoot,
              missingProjectRoot,
-             remoteMismatch});
+             remoteMismatch,
+             invalidReadOnly,
+             localReadOnly});
         for (const json &context : malformedContexts) {
             QTemporaryDir tempDir;
             QVERIFY(tempDir.isValid());

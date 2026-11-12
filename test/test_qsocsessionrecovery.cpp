@@ -110,6 +110,7 @@ void Test::executionContextMustMatch_data()
     QTest::newRow("effort") << QStringLiteral("effort");
     QTest::newRow("plan-mode") << QStringLiteral("plan-mode");
     QTest::newRow("remote-mode") << QStringLiteral("remote-mode");
+    QTest::newRow("remote-read-only") << QStringLiteral("remote-read-only");
     QTest::newRow("remote-name") << QStringLiteral("remote-name");
     QTest::newRow("project-root") << QStringLiteral("project-root");
     QTest::newRow("working-directory") << QStringLiteral("working-directory");
@@ -128,6 +129,8 @@ void Test::executionContextMustMatch()
     } else if (field == QStringLiteral("remote-mode")) {
         context.remoteMode = false;
         context.remoteName.clear();
+    } else if (field == QStringLiteral("remote-read-only")) {
+        context.remoteReadOnly = true;
     } else if (field == QStringLiteral("remote-name")) {
         context.remoteName = QStringLiteral("remote-b");
     } else if (field == QStringLiteral("project-root")) {

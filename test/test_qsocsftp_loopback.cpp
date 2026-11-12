@@ -93,6 +93,12 @@ private slots:
     void writeRefusesAnUnanchoredWritableRoot();
     void writeRefusesAWorkspaceRootThatRetargeted();
     void anExistingWorkspaceIdentityIsNeverReplaced();
+    void readOnlyBindingNeedsNoTreeMarker();
+    void readOnlyMetadataMustStayValid_data();
+    void readOnlyMetadataMustStayValid();
+    void readOnlyBindingKeepsAnExistingTreeMarker();
+    void readOnlyReconnectCannotGainWrites();
+    void onlyProtocolPermissionRefusalsAllowReadOnlyBinding();
     void workspaceIdentityRefusesSymlinkedMetadataBeforeWriting();
     void concurrentWorkspaceBindingAdoptsOneIdentity();
     void sameNamedWorkspaceReplacementGetsANewIdentity();
@@ -145,11 +151,12 @@ private:
         return true;
     }
 
-    bool connectRemoteState(AgentRemoteState *state, QString *error)
+    bool connectRemoteState(
+        AgentRemoteState *state, QString *error, const QSocTestSshd *fixture = nullptr)
     {
-        auto *session = new QSocSshSession();
-        if (session->connectTo(hostConfig(static_cast<quint16>(m_fixture.port())), error)
-            != QSocSshSession::ConnectStatus::Ok) {
+        const auto &server  = fixture != nullptr ? *fixture : m_fixture;
+        auto       *session = new QSocSshSession();
+        if (session->connectTo(server.hostConfig(), error) != QSocSshSession::ConnectStatus::Ok) {
             delete session;
             return false;
         }
@@ -201,17 +208,22 @@ private:
     }
 
     QSocTestSshd m_fixture;
+    QSocTestSshd m_readOnlyFixture;
 };
 
 void Test::initTestCase()
 {
     m_fixture.start();
+    m_readOnlyFixture.setExtraConfig({QStringLiteral("ForceCommand internal-sftp -R")});
+    m_readOnlyFixture.start();
 }
 
 void Test::cleanupTestCase()
 {
     m_fixture.stop();
+    m_readOnlyFixture.stop();
     QVERIFY2(m_fixture.removeRoot(), "the fixture root could not be removed");
+    QVERIFY2(m_readOnlyFixture.removeRoot(), "the read-only fixture root could not be removed");
 }
 
 void Test::releasesAuthenticationCallbackAfterConnect()
@@ -1701,6 +1713,262 @@ void Test::writeAndEditStillWorkOnAnOrdinaryPath()
         json{{"file_path", "sub/plain.sv"}, {"old_string", "module a;"}, {"new_string", "module b;"}});
     QCOMPARE(slurp(file), QByteArray("module b;\nendmodule\n"));
     QVERIFY2(!edited.startsWith(QStringLiteral("Error:")), qPrintable(edited));
+}
+
+void Test::readOnlyBindingNeedsNoTreeMarker()
+{
+    QSOC_REQUIRE_SSHD(m_readOnlyFixture);
+    const QString root    = m_readOnlyFixture.workDir() + QStringLiteral("/fresh");
+    const QString outside = m_readOnlyFixture.root() + QStringLiteral("/outside.txt");
+    QVERIFY(QDir().mkpath(root));
+    QVERIFY(
+        spill(root + QStringLiteral("/report.txt"), QByteArray("Clock specification: 125 MHz\n")));
+    QVERIFY(spill(outside, QByteArray("External reset specification: 3 cycles\n")));
+    QVERIFY(QFile::link(outside, root + QStringLiteral("/external.txt")));
+    QVERIFY(QFile::link(root + QStringLiteral("/absent.txt"), root + QStringLiteral("/broken.txt")));
+    AgentRemoteState state;
+    const auto       cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+    QString          error;
+    QVERIFY2(connectRemoteState(&state, &error, &m_readOnlyFixture), qPrintable(error));
+    bool denied = false;
+    QVERIFY(!state.sftp->mkdirP(root, &error, &denied));
+    QVERIFY(denied);
+    QVERIFY2(prepareAgentRemoteWorkspace(root, &state, &error), qPrintable(error));
+    QVERIFY(error.isEmpty());
+    QVERIFY(state.workspaceReadOnly);
+    QVERIFY(state.workspaceTreeId.isEmpty());
+    QSocRemoteConnection conn;
+    QVERIFY(conn.adopt(std::move(state)));
+    QVERIFY(conn.workspaceReadOnly());
+    QVERIFY(conn.path()->writableDirs().isEmpty());
+    QVERIFY(conn.workspaceTreeId().isEmpty());
+    std::unique_ptr<QSocToolRegistry> registry(buildAgentRemoteRegistry(nullptr, &conn, nullptr));
+    QVERIFY(registry->hasTool(QStringLiteral("read_document")));
+    QVERIFY(registry->hasTool(QStringLiteral("grep")));
+    for (const auto *name :
+         {"write_file",
+          "edit_file",
+          "bash",
+          "bash_manage",
+          "monitor",
+          "monitor_stop",
+          "todo_add",
+          "todo_update",
+          "todo_delete",
+          "skill_create"}) {
+        QVERIFY2(!registry->hasTool(QString::fromLatin1(name)), name);
+    }
+    const QString read
+        = registry->executeTool(QStringLiteral("read_file"), {{"file_path", "report.txt"}});
+    QVERIFY2(read.contains(QStringLiteral("125 MHz")), qPrintable(read));
+    const QString linked
+        = registry->executeTool(QStringLiteral("read_file"), {{"file_path", "external.txt"}});
+    QVERIFY2(linked.contains(QStringLiteral("3 cycles")), qPrintable(linked));
+    const QString broken
+        = registry->executeTool(QStringLiteral("read_file"), {{"file_path", "broken.txt"}});
+    QVERIFY2(broken.startsWith(QStringLiteral("Error:")), qPrintable(broken));
+    const QString listed = registry->executeTool(QStringLiteral("list_files"), json::object());
+    QVERIFY2(listed.contains(QStringLiteral("report.txt")), qPrintable(listed));
+    const auto remoteEntries = conn.sftp()->listDir(root, 100, &error);
+    QVERIFY(error.isEmpty());
+    bool regularSeen = false, linkSeen = false;
+    for (const auto &entry : remoteEntries) {
+        if (entry.name == QStringLiteral("report.txt")) {
+            QVERIFY(!entry.isDirectory);
+            QVERIFY(!entry.isSymlink);
+            regularSeen = true;
+        } else if (entry.name == QStringLiteral("external.txt")) {
+            QVERIFY(!entry.isDirectory);
+            QVERIFY(entry.isSymlink);
+            linkSeen = true;
+        }
+    }
+    QVERIFY(regularSeen);
+    QVERIFY(linkSeen);
+    const QString found = registry->executeTool(QStringLiteral("grep"), {{"pattern", "125 MHz"}});
+    QVERIFY2(found.contains(QStringLiteral("report.txt")), qPrintable(found));
+    QString canonical;
+    QVERIFY(!conn.resolveWritablePath(root + QStringLiteral("/report.txt"), &canonical, &error));
+    QVERIFY(error.contains(QStringLiteral("read-only")));
+    QVERIFY(!conn.resolveWritableEntry(root + QStringLiteral("/new.txt"), &canonical, &error));
+    QVERIFY(!conn.addWritableDirectory(m_readOnlyFixture.root(), &canonical, &error));
+    QSocToolRemoteFileWrite writer(nullptr, &conn, conn.path());
+    QVERIFY(writer.execute({{"file_path", "new.txt"}, {"content", "changed"}})
+                .contains(QStringLiteral("read-only")));
+    QSocToolRemoteFileEdit editor(nullptr, &conn, conn.path());
+    QVERIFY(
+        editor.execute({{"file_path", "report.txt"}, {"old_string", "125"}, {"new_string", "250"}})
+            .contains(QStringLiteral("read-only")));
+    QSocToolRemoteShellBash shell(nullptr, &conn, conn.path());
+    QVERIFY(shell.execute({{"command", "printf changed > new.txt"}})
+                .contains(QStringLiteral("read-only")));
+    QSocToolRemoteBashManage manage(nullptr, &conn, conn.path());
+    QVERIFY(manage.execute({{"action", "kill"}, {"job_id", "not-started"}})
+                .contains(QStringLiteral("read-only")));
+    QVERIFY(runBoundRemoteShellEscape(&conn, QStringLiteral("printf changed > new.txt"))
+                .contains(QStringLiteral("read-only")));
+    const auto job
+        = startRemoteJob(&conn, root, QStringLiteral("printf changed > new.txt"), false, {});
+    QVERIFY(job.failure.contains(QStringLiteral("read-only")));
+    const auto historyFiles = remoteLiveFileAccessor(&conn);
+    QVERIFY(historyFiles.tree().isEmpty());
+    QVERIFY(!historyFiles.coversPath(root + QStringLiteral("/report.txt")));
+    QVERIFY(!historyFiles.write(root + QStringLiteral("/new.txt"), QStringLiteral("changed")));
+    QVERIFY(!historyFiles.remove(root + QStringLiteral("/report.txt")));
+    QVERIFY(remoteWorkspaceRewindRefusal(&conn, 1000).contains(QStringLiteral("read-only")));
+    QVERIFY(!QFileInfo::exists(root + QStringLiteral("/.qsoc-agent")));
+    QVERIFY(!QFileInfo::exists(root + QStringLiteral("/new.txt")));
+    QCOMPARE(
+        slurp(root + QStringLiteral("/report.txt")), QByteArray("Clock specification: 125 MHz\n"));
+}
+
+void Test::readOnlyMetadataMustStayValid_data()
+{
+    QTest::addColumn<QString>("kind");
+    for (const char *kind :
+         {"metadata-file",
+          "metadata-link",
+          "metadata-broken",
+          "marker-missing",
+          "marker-empty",
+          "marker-invalid",
+          "marker-link",
+          "marker-broken"}) {
+        QTest::newRow(kind) << QString::fromLatin1(kind);
+    }
+}
+
+void Test::readOnlyMetadataMustStayValid()
+{
+    QSOC_REQUIRE_SSHD(m_readOnlyFixture);
+    QFETCH(QString, kind);
+    const QString root     = m_readOnlyFixture.workDir() + QLatin1Char('/') + kind;
+    const QString metadata = root + QStringLiteral("/.qsoc-agent");
+    const QString marker   = metadata + QStringLiteral("/tree-id");
+    QVERIFY(QDir().mkpath(root));
+    if (kind == QStringLiteral("metadata-file")) {
+        QVERIFY(spill(metadata, QByteArray("not a directory")));
+    } else if (kind == QStringLiteral("metadata-link") || kind == QStringLiteral("metadata-broken")) {
+        const QString target = root + QStringLiteral("/other");
+        if (kind == QStringLiteral("metadata-link")) {
+            QVERIFY(QDir().mkpath(target));
+        }
+        QVERIFY(QFile::link(target, metadata));
+    } else {
+        QVERIFY(QDir().mkpath(metadata));
+        if (kind == QStringLiteral("marker-empty")) {
+            QVERIFY(spill(marker, QByteArray()));
+        } else if (kind == QStringLiteral("marker-invalid")) {
+            QVERIFY(spill(marker, QByteArray("invalid identity")));
+        } else if (kind == QStringLiteral("marker-link") || kind == QStringLiteral("marker-broken")) {
+            const QString target = root + QStringLiteral("/other-id");
+            if (kind == QStringLiteral("marker-link")) {
+                QVERIFY(spill(target, QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8()));
+            }
+            QVERIFY(QFile::link(target, marker));
+        }
+    }
+    AgentRemoteState state;
+    const auto       cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+    QString          error;
+    QVERIFY2(connectRemoteState(&state, &error, &m_readOnlyFixture), qPrintable(error));
+    QVERIFY(!prepareAgentRemoteWorkspace(root, &state, &error));
+    QVERIFY2(!error.isEmpty(), qPrintable(kind));
+    QVERIFY(!state.workspaceReadOnly);
+    QVERIFY(state.workspace.isEmpty());
+    QVERIFY(state.workspaceTreeId.isEmpty());
+}
+
+void Test::readOnlyBindingKeepsAnExistingTreeMarker()
+{
+    QSOC_REQUIRE_SSHD(m_readOnlyFixture);
+    const QString    root   = m_readOnlyFixture.workDir() + QStringLiteral("/existing");
+    const QString    marker = root + QStringLiteral("/.qsoc-agent/tree-id");
+    const QByteArray id     = QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8();
+    QVERIFY(QDir().mkpath(QFileInfo(marker).absolutePath()));
+    QVERIFY(spill(marker, id));
+    AgentRemoteState state;
+    const auto       cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+    QString          error;
+    QVERIFY2(connectRemoteState(&state, &error, &m_readOnlyFixture), qPrintable(error));
+    QVERIFY2(prepareAgentRemoteWorkspace(root, &state, &error), qPrintable(error));
+    QVERIFY(state.workspaceReadOnly);
+    QCOMPARE(state.workspaceTreeId.toUtf8(), id);
+    QSocRemoteConnection conn;
+    QVERIFY(conn.adopt(std::move(state)));
+    QVERIFY(remoteLiveFileAccessor(&conn).tree().isEmpty());
+    QCOMPARE(slurp(marker), id);
+}
+
+void Test::readOnlyReconnectCannotGainWrites()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    const QString root = m_fixture.workDir() + QStringLiteral("/read-only-reconnect");
+    QVERIFY(QDir().mkpath(root));
+    AgentRemoteState state;
+    const auto       cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+    QString          error;
+    QVERIFY2(connectRemoteState(&state, &error), qPrintable(error));
+    QVERIFY2(
+        prepareAgentRemoteWorkspace(root, &state, &error, QDeadlineTimer(3000), true),
+        qPrintable(error));
+    QSocRemoteConnection conn;
+    QVERIFY(conn.adopt(std::move(state)));
+    conn.setRebuilder([&](const QString &,
+                          const QString    &workspace,
+                          AgentRemoteState *out,
+                          QString          *why,
+                          QDeadlineTimer    deadline) {
+        if (!connectRemoteState(out, why)) {
+            return false;
+        }
+        if (!prepareAgentRemoteWorkspace(workspace, out, why, deadline, conn.workspaceReadOnly())) {
+            discardAgentRemoteState(out);
+            return false;
+        }
+        return true;
+    });
+    conn.session()->disconnectFromHost();
+    QCOMPARE(conn.reconnect(&error), QSocRemoteConnection::ReconnectOutcome::Reconnected);
+    QVERIFY(conn.workspaceReadOnly());
+    QVERIFY(conn.path()->writableDirs().isEmpty());
+    QVERIFY(conn.workspaceTreeId().isEmpty());
+    QVERIFY(!QFileInfo::exists(root + QStringLiteral("/.qsoc-agent")));
+    conn.teardown();
+    state = AgentRemoteState{};
+    QVERIFY2(prepareWorkspaceState(&state, root, &error), qPrintable(error));
+    QVERIFY(!state.workspaceReadOnly);
+    QVERIFY(!state.workspaceTreeId.isEmpty());
+    QVERIFY(conn.adopt(std::move(state)));
+    QSocToolRemoteFileWrite writer(nullptr, &conn, conn.path());
+    const QString result = writer.execute({{"file_path", "new.txt"}, {"content", "writable again"}});
+    QVERIFY2(!result.startsWith(QStringLiteral("Error:")), qPrintable(result));
+    QCOMPARE(slurp(root + QStringLiteral("/new.txt")), QByteArray("writable again"));
+}
+
+void Test::onlyProtocolPermissionRefusalsAllowReadOnlyBinding()
+{
+    QSOC_REQUIRE_SSHD(m_fixture);
+    QSOC_REQUIRE_SSHD(m_readOnlyFixture);
+    AgentRemoteState state;
+    const auto       cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+    QString          error;
+    QVERIFY2(connectRemoteState(&state, &error), qPrintable(error));
+    bool denied = true;
+    QVERIFY2(state.sftp->mkdirP(m_fixture.workDir(), &error, &denied), qPrintable(error));
+    QVERIFY(!denied);
+    state.session->disconnectFromHost();
+    denied = true;
+    QVERIFY(!state.sftp->mkdirP(m_fixture.workDir(), &error, &denied));
+    QVERIFY(!denied);
+    QVERIFY(!prepareAgentRemoteWorkspace(m_fixture.workDir(), &state, &error));
+    QVERIFY(!state.workspaceReadOnly);
+    discardAgentRemoteState(&state);
+    QVERIFY2(connectRemoteState(&state, &error, &m_readOnlyFixture), qPrintable(error));
+    QVERIFY(!prepareAgentRemoteWorkspace(
+        m_readOnlyFixture.workDir() + QStringLiteral("/absent"), &state, &error));
+    QVERIFY(!state.workspaceReadOnly);
+    QVERIFY(state.workspace.isEmpty());
 }
 
 QSOC_TEST_MAIN(Test)

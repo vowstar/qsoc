@@ -471,6 +471,10 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         if (isRemote()) {
             emitOutput(QStringLiteral("  Remote:   %1\n").arg(remoteTarget()));
             emitOutput(QStringLiteral("  Workspace:%1\n").arg(remoteWorkspace()));
+            emitOutput(QStringLiteral("  Access:   %1\n")
+                           .arg(
+                               remoteWorkspaceReadOnly() ? QStringLiteral("read-only")
+                                                         : QStringLiteral("read/write")));
         } else {
             emitOutput(QStringLiteral("  Remote:   (local mode)\n"));
         }

@@ -263,7 +263,9 @@ bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QS
         discardAgentRemoteState(&staged);
         return fail(QStringLiteral("No remote workspace selected; nothing was connected."));
     }
-    if (remoteConnectCancelled() || !prepareAgentRemoteWorkspace(workspace, &staged, &failure)) {
+    if (remoteConnectCancelled()
+        || !prepareAgentRemoteWorkspace(
+            workspace, &staged, &failure, QDeadlineTimer(30000), request.readOnly)) {
         discardAgentRemoteState(&staged);
         return fail(d->cancelRequested ? QStringLiteral("SSH connection cancelled") : failure);
     }
@@ -279,6 +281,13 @@ bool QSocAgentRuntime::connectRemote(const QSocRemoteConnectRequest &request, QS
     d->remoteAlias = request.target.trimmed();
     installRemoteTools();
     loadRemoteProjectFiles();
+    if (d->remoteConn->workspaceReadOnly()) {
+        emitOutput(
+            QStringLiteral(
+                "Remote workspace is read-only; file changes, shell commands and file rewind are "
+                "disabled.\n"),
+            static_cast<int>(QSocAgentRuntimeStyle::Warning));
+    }
     if (request.remember) {
         rememberRemoteBinding(request.target);
     }
@@ -305,7 +314,13 @@ void QSocAgentRuntime::connectRememberedRemote()
         QStringLiteral("Auto-connecting %1\n").arg(binding.target),
         static_cast<int>(QSocAgentRuntimeStyle::Dim));
     QString error;
-    if (!connectRemote({.target = binding.target, .remember = false, .unattended = true}, &error)) {
+    if (!connectRemote(
+            {.target     = binding.target,
+             .workspace  = binding.readOnly ? binding.workspace : QString(),
+             .remember   = false,
+             .unattended = true,
+             .readOnly   = binding.readOnly},
+            &error)) {
         emitOutput(
             QStringLiteral("Auto-connect to %1 failed: %2. Staying local.\n")
                 .arg(binding.target, error),
@@ -365,7 +380,10 @@ void QSocAgentRuntime::rememberRemoteBinding(const QString &target)
     QString       error;
     if (!project.isEmpty()
         && !QSocHostBindingStore::save(
-            d->hostBindingDir, project, {target, d->remoteConn->workspace()}, &error)) {
+            d->hostBindingDir,
+            project,
+            {target, d->remoteConn->workspace(), d->remoteConn->workspaceReadOnly()},
+            &error)) {
         emitOutput(
             QStringLiteral("Could not remember the SSH binding: %1\n").arg(error),
             static_cast<int>(QSocAgentRuntimeStyle::Warning));
@@ -510,7 +528,8 @@ void QSocAgentRuntime::installRemoteTools()
                 deadline)) {
             return false;
         }
-        if (!prepareAgentRemoteWorkspace(workspace, &fresh, errorMessage, deadline)) {
+        if (!prepareAgentRemoteWorkspace(
+                workspace, &fresh, errorMessage, deadline, d->remoteConn->workspaceReadOnly())) {
             discardAgentRemoteState(&fresh);
             return false;
         }
@@ -597,12 +616,15 @@ void QSocAgentRuntime::disconnectRemote()
     d->remoteConn->teardown();
     d->memoryManager->setRemoteWorkspace({}, {});
     {
-        auto newCfg       = d->agent->getConfig();
-        newCfg.remoteMode = false;
+        auto newCfg           = d->agent->getConfig();
+        newCfg.remoteMode     = false;
+        newCfg.remoteReadOnly = false;
         newCfg.remoteName.clear();
         newCfg.remoteAlias.clear();
         newCfg.remoteDisplay.clear();
         newCfg.remoteWorkspace.clear();
+        newCfg.remoteEndpointIdentity.clear();
+        newCfg.remoteCanonicalWorkspace.clear();
         newCfg.remoteWorkingDir.clear();
         newCfg.remoteWritableDirs.clear();
         newCfg.remoteMachine       = QSocMachine{};
@@ -641,6 +663,11 @@ QString QSocAgentRuntime::remoteTarget() const
 QString QSocAgentRuntime::remoteWorkspace() const
 {
     return d->remoteConn->workspace();
+}
+
+bool QSocAgentRuntime::remoteWorkspaceReadOnly() const
+{
+    return isRemote() && d->remoteConn->workspaceReadOnly();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -961,7 +988,8 @@ nlohmann::json QSocAgentRuntime::statusLinePayload() const
     if (isRemote()) {
         payload["remote"]
             = {{"target", remoteTarget().toStdString()},
-               {"workspace", remoteWorkspace().toStdString()}};
+               {"workspace", remoteWorkspace().toStdString()},
+               {"read_only", remoteWorkspaceReadOnly()}};
     }
     return payload;
 }

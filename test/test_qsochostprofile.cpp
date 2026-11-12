@@ -211,11 +211,15 @@ private slots:
         QString error;
         QVERIFY2(
             QSocHostBindingStore::save(
-                store.path(), first.path(), {QStringLiteral("t1"), QStringLiteral("/w1")}, &error),
+                store.path(),
+                first.path(),
+                {QStringLiteral("t1"), QStringLiteral("/w1"), true},
+                &error),
             qPrintable(error));
         const QSocHostBinding loaded = QSocHostBindingStore::load(store.path(), first.path());
         QCOMPARE(loaded.target, QStringLiteral("t1"));
         QCOMPARE(loaded.workspace, QStringLiteral("/w1"));
+        QVERIFY(loaded.readOnly);
         QVERIFY(QSocHostBindingStore::load(store.path(), second.path()).isLocal());
 
         /* The binding lives in the store, never in the project tree. */

@@ -109,9 +109,14 @@ void QSocAgentRuntime::applyResumeBinding(const QSocWorkspaceBinding &recorded, 
 {
     if (choice == ResumeBinding::Rebind) {
         emitOutput(QStringLiteral("Connecting to %1 ...\n").arg(recorded.label()));
-        QString error;
+        QString    error;
+        const auto run = d->currentSession ? QSocSession::latestRun(d->currentSession->filePath())
+                                           : std::nullopt;
         if (connectRemote(
-                {.target = recorded.target, .workspace = recorded.workspace, .remember = false},
+                {.target    = recorded.target,
+                 .workspace = recorded.workspace,
+                 .remember  = false,
+                 .readOnly  = run && run->remoteReadOnly},
                 &error)) {
             d->resumeBindingChosen = true;
             return;

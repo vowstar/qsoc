@@ -707,6 +707,13 @@ QString QSocAgent::toolDenyReasonForRegistry(
     if (agentConfig.toolsDeny.contains(name)) {
         return QStringLiteral("denied by this agent's tool denylist");
     }
+    if (agentConfig.remoteMode && agentConfig.remoteReadOnly
+        && QSocToolRegistry::isWorkspaceBound(name) && name != QStringLiteral("path_context")) {
+        const QSocTool *tool = registry != nullptr ? registry->getTool(name) : nullptr;
+        if (tool == nullptr || !tool->isReadOnly() || name == QStringLiteral("bash")) {
+            return QStringLiteral("the remote workspace is read-only");
+        }
+    }
     /* Plan-mode gate: only read-only tools run. The shell passes here
      * (its per-command safety is LLM-judged at dispatch) and the spawn
      * tool passes (children inherit planMode and are read-only too); the
@@ -3188,11 +3195,17 @@ QString QSocAgent::remoteToolLines() const
             "The remote host has no usable shell (see Environment), so no tool runs commands "
             "there.\n");
     }
-    text += present(QStringLiteral("path_context"))
-                ? QStringLiteral(
-                      "Writes go to the workspace and the directories added with path_context; "
-                      "path_context(action=list) shows them.\n")
-                : QStringLiteral("Writes go to the workspace only.\n");
+    if (agentConfig.remoteReadOnly) {
+        text += QStringLiteral(
+            "The workspace is read-only. File changes, shell commands and file rewind are "
+            "disabled.\n");
+    } else {
+        text += present(QStringLiteral("path_context"))
+                    ? QStringLiteral(
+                          "Writes go to the workspace and the directories added with path_context; "
+                          "path_context(action=list) shows them.\n")
+                    : QStringLiteral("Writes go to the workspace only.\n");
+    }
     if (present(QStringLiteral("todo_list"))) {
         text += QStringLiteral(
             "The todo tools keep the list in the remote workspace .qsoc/todos.md.\n");
@@ -3285,6 +3298,11 @@ void QSocAgent::appendDynamicSystemSections(QString &prompt) const
     if (agentConfig.remoteMode) {
         QString remoteSection = QStringLiteral("\n# Remote Workspace\n");
         remoteSection += QStringLiteral("- Mode: SSH remote workspace\n");
+        if (agentConfig.remoteReadOnly) {
+            remoteSection += QStringLiteral(
+                "- Access: read-only. File changes, shell commands and file rewind are "
+                "disabled.\n");
+        }
         if (!agentConfig.remoteDisplay.isEmpty()) {
             remoteSection += QStringLiteral("- Target: ") + agentConfig.remoteDisplay
                              + QStringLiteral("\n");
@@ -3920,8 +3938,11 @@ void QSocAgent::setConfig(const QSocAgentConfig &config)
         return;
     }
     if (agentConfig.projectPath != config.projectPath || agentConfig.remoteMode != config.remoteMode
+        || agentConfig.remoteReadOnly != config.remoteReadOnly
         || agentConfig.remoteName != config.remoteName
         || agentConfig.remoteWorkspace != config.remoteWorkspace
+        || agentConfig.remoteEndpointIdentity != config.remoteEndpointIdentity
+        || agentConfig.remoteCanonicalWorkspace != config.remoteCanonicalWorkspace
         || agentConfig.remoteWorkingDir != config.remoteWorkingDir
         || agentConfig.remoteWritableDirs != config.remoteWritableDirs) {
         ++bindingRevision_;

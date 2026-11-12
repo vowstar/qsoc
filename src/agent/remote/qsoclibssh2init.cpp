@@ -5,9 +5,10 @@
 
 #include <libssh2.h>
 
+#include <QtGlobal>
+
 #ifdef Q_OS_WIN
 #include <winsock2.h>
-#include <QtGlobal>
 #endif
 
 #include <atomic>

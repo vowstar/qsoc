@@ -1477,6 +1477,7 @@ void QSocAgentRuntime::Private::applyRunContext(
     record.toolPresentation = config.toolPresentation;
     record.planMode         = config.planMode;
     record.remoteMode       = config.remoteMode;
+    record.remoteReadOnly   = config.remoteReadOnly;
     record.remoteName       = config.remoteName;
     record.remoteAlias      = config.remoteAlias;
     if (config.remoteMode) {
@@ -1758,8 +1759,17 @@ bool QSocAgentRuntime::openSessionInternal(const QString &sessionId, bool fresh)
         emit eventRaised(event);
     }
 
-    if (sessionExists)
+    if (sessionExists) {
+        const auto run = QSocSession::latestRun(sessionPath);
+        if (run && run->contextPresent && run->remoteMode && run->remoteReadOnly
+            && isLiveBinding(
+                {run->remoteAlias.isEmpty() ? run->remoteName : run->remoteAlias, run->projectRoot})
+            && !d->remoteConn->workspaceReadOnly()) {
+            d->remoteConn->restrictToReadOnly();
+            installRemoteTools();
+        }
         prepareRecovery();
+    }
     emit sessionChanged(id);
     return true;
 }

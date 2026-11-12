@@ -3,6 +3,7 @@
 
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsftpclient.h"
+#include "agent/remote/qsocsshconfigparser.h"
 #include "agent/remote/qsocsshsession.h"
 #include "qsoc_test.h"
 
@@ -63,23 +64,21 @@ private slots:
         QTemporaryDir home;
         QVERIFY(home.isValid());
         QVERIFY(QDir().mkpath(home.filePath(QStringLiteral(".ssh"))));
-        const QByteArray oldHome     = qgetenv("HOME");
-        const bool       hadHome     = qEnvironmentVariableIsSet("HOME");
-        const auto       restoreHome = qScopeGuard(
-            [&] { hadHome ? qputenv("HOME", oldHome) : qunsetenv("HOME"); });
-        QVERIFY(qputenv("HOME", home.path().toUtf8()));
 
         const auto rejects = [&](const QByteArray &config, const QString &target) {
             QFile file(home.filePath(QStringLiteral(".ssh/config")));
             QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
             QCOMPARE(file.write(config), static_cast<qint64>(config.size()));
             file.close();
+            QSocSshConfigParser parser;
+            QVERIFY(parser.parse(file.fileName()));
 
             AgentRemoteState state;
             QString          error;
             QElapsedTimer    elapsed;
             elapsed.start();
-            QVERIFY(!connectAgentSshSession(target, this, &state, &error));
+            QVERIFY(!connectAgentSshSession(
+                target, this, &state, &error, {}, {}, QDeadlineTimer(30000), {}, &parser));
             discardAgentRemoteState(&state);
             QVERIFY2(elapsed.elapsed() < 1000, qPrintable(QString::number(elapsed.elapsed())));
             QVERIFY2(error.contains(QStringLiteral("cycle"), Qt::CaseInsensitive), qPrintable(error));
@@ -437,6 +436,22 @@ private slots:
         QVERIFY(noWorkspace.session != nullptr);
         QVERIFY(noWorkspace.sftp != nullptr);
         discardAgentRemoteState(&noWorkspace);
+
+        AgentRemoteState noTreeId
+            = fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"));
+        noTreeId.workspaceTreeId.clear();
+        QVERIFY(!conn.adopt(std::move(noTreeId)));
+        QVERIFY(noTreeId.session != nullptr);
+        discardAgentRemoteState(&noTreeId);
+
+        AgentRemoteState noCanonical
+            = fakeTransport(&scratch, QStringLiteral("u@h:22"), QStringLiteral("/w"));
+        noCanonical.workspaceReadOnly = true;
+        noCanonical.workspaceTreeId.clear();
+        noCanonical.canonicalWorkspace.clear();
+        QVERIFY(!conn.adopt(std::move(noCanonical)));
+        QVERIFY(noCanonical.session != nullptr);
+        discardAgentRemoteState(&noCanonical);
         // cppcheck-suppress-end accessMoved
 
         QCOMPARE(conn.generation(), QSocRemoteConnection::Generation{0});

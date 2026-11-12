@@ -204,6 +204,7 @@ bool sameExecutionContext(
     return interrupted.modelId == current.modelId && interrupted.effortLevel == current.effortLevel
            && interrupted.planMode == current.planMode
            && interrupted.remoteMode == current.remoteMode
+           && interrupted.remoteReadOnly == current.remoteReadOnly
            && interrupted.remoteName == current.remoteName
            && interrupted.projectRoot == current.projectRoot
            && interrupted.workingDir == current.workingDir;
