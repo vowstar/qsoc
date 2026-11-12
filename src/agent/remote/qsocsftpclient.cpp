@@ -6,6 +6,7 @@
 #include "agent/remote/qsocsshsession.h"
 
 #include <QFileInfo>
+#include <QScopedValueRollback>
 #include <QUuid>
 
 namespace {
@@ -129,9 +130,17 @@ void QSocSftpClient::setOperationTimeoutMs(int timeoutMs)
     m_opBudgetMs = timeoutMs;
 }
 
-bool QSocSftpClient::runWithin(QDeadlineTimer deadline, const std::function<bool()> &operation)
+bool QSocSftpClient::runWithin(
+    QDeadlineTimer               deadline,
+    const std::function<bool()> &operation,
+    const std::function<bool()> &cancelled)
 {
     if (!operation) {
+        return false;
+    }
+    QScopedValueRollback<std::function<bool()>>
+        cancellation(m_cancelled, cancelled ? cancelled : m_cancelled);
+    if (m_cancelled && m_cancelled()) {
         return false;
     }
     if (m_opActive) {
@@ -167,7 +176,7 @@ bool QSocSftpClient::wait()
     if (m_deadline.hasExpired()) {
         return giveUp();
     }
-    if (!m_cleaning && m_session.abortRequested()) {
+    if (!m_cleaning && (m_session.abortRequested() || (m_cancelled && m_cancelled()))) {
         m_aborted = true;
         return giveUp();
     }
@@ -455,9 +464,41 @@ QByteArray QSocSftpClient::readFile(const QString &path, qint64 maxBytes, QStrin
 bool QSocSftpClient::readStream(
     const QString &path, const std::function<bool(const QByteArray &)> &sink, QString *errorMessage)
 {
+    const auto result = readStreamResult(path, sink, errorMessage);
+    if (result.end == ReadEnd::Cancelled)
+        setError(QStringLiteral("Interrupted by the user"), errorMessage);
+    return result.end == ReadEnd::Eof || result.end == ReadEnd::Stopped;
+}
+
+QSocSftpClient::ReadResult QSocSftpClient::readStreamResult(
+    const QString                                 &path,
+    const std::function<bool(const QByteArray &)> &sink,
+    QString                                       *errorMessage,
+    const std::function<bool()>                   &cancelled)
+{
     OpScope scope(this, m_opBudgetMs);
-    if (!open(errorMessage)) {
+    QScopedValueRollback<std::function<bool()>>
+               cancellation(m_cancelled, cancelled ? cancelled : m_cancelled);
+    ReadResult result;
+    const auto interrupted = [&] {
+        if (m_session.abortRequested() || (m_cancelled && m_cancelled())) {
+            m_aborted  = true;
+            result.end = ReadEnd::Cancelled;
+            setError(QStringLiteral("SFTP read cancelled"), errorMessage);
+            return true;
+        }
+        if (m_deadline.hasExpired()) {
+            result.end = ReadEnd::TimedOut;
+            setError(QStringLiteral("SFTP read deadline expired"), errorMessage);
+            return true;
+        }
         return false;
+    };
+    if (interrupted())
+        return result;
+    if (!open(errorMessage)) {
+        (void) interrupted();
+        return result;
     }
     const QByteArray pathBytes = path.toUtf8();
 
@@ -470,18 +511,20 @@ bool QSocSftpClient::readStream(
             setError(
                 waitFailureText(QStringLiteral("SFTP open for read failed: %1").arg(path)),
                 errorMessage);
-            return false;
+            return result;
         }
         if (!wait()) {
             setError(
                 waitFailureText(QStringLiteral("Timed out opening %1 for read").arg(path)),
                 errorMessage);
-            return false;
+            (void) interrupted();
+            return result;
         }
     }
 
     char buffer[16384];
     bool observed = false;
+    bool pending  = false;
     while (true) {
         if (!observed) {
             observed = true;
@@ -489,14 +532,24 @@ bool QSocSftpClient::readStream(
                 m_dataPhaseObserver();
             }
         }
+        if (interrupted()) {
+            if (pending)
+                m_stranded = true;
+            (void) drainClose(handle);
+            return result;
+        }
         const ssize_t nread = libssh2_sftp_read(handle, buffer, sizeof(buffer));
+        pending             = nread == LIBSSH2_ERROR_EAGAIN;
         if (nread > 0) {
+            result.bytes += nread;
             if (!sink(QByteArray(buffer, static_cast<qsizetype>(nread)))) {
+                result.end = ReadEnd::Stopped;
                 break;
             }
             continue;
         }
         if (nread == 0) {
+            result.end = ReadEnd::Eof;
             break;
         }
         if (nread == LIBSSH2_ERROR_EAGAIN) {
@@ -507,17 +560,21 @@ bool QSocSftpClient::readStream(
                 (void) rebuildSubsystem();
                 setError(
                     waitFailureText(QStringLiteral("Timed out reading %1").arg(path)), errorMessage);
-                return false;
+                (void) interrupted();
+                return result;
             }
             continue;
         }
         noteTransport(static_cast<int>(nread));
         setError(waitFailureText(QStringLiteral("SFTP read error on %1").arg(path)), errorMessage);
         (void) drainClose(handle);
-        return false;
+        return result;
     }
-    (void) drainClose(handle);
-    return true;
+    if (!drainClose(handle)) {
+        result.end = ReadEnd::Error;
+        setError(QStringLiteral("SFTP read handle could not be closed"), errorMessage);
+    }
+    return result;
 }
 
 bool QSocSftpClient::writeFile(const QString &path, const QByteArray &content, QString *errorMessage)

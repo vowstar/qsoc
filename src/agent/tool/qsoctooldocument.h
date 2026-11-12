@@ -8,6 +8,7 @@
 
 class QLLMService;
 class QSocPathContext;
+class QSocRemoteConnection;
 
 class QSocToolDocumentRead : public QSocTool
 {
@@ -15,7 +16,10 @@ class QSocToolDocumentRead : public QSocTool
 
 public:
     explicit QSocToolDocumentRead(
-        QObject *parent = nullptr, QSocPathContext *paths = nullptr, QLLMService *llm = nullptr);
+        QObject              *parent = nullptr,
+        QSocPathContext      *paths  = nullptr,
+        QLLMService          *llm    = nullptr,
+        QSocRemoteConnection *remote = nullptr);
 
     QString getName() const override;
     QString getDescription() const override;
@@ -26,6 +30,7 @@ public:
 private:
     QSocPathContext      *paths_ = nullptr;
     QPointer<QLLMService> llm_;
+    QSocRemoteConnection *remote_ = nullptr;
 };
 
 #endif

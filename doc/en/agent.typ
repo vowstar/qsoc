@@ -732,7 +732,7 @@ The agent provides the following tools through natural language:
   complete read from offset 0. A partial edit keeps that restriction. Both tools
   reject files changed since the read, locally and remotely.
 - *Waveforms*: `read_waveform` lists VCD signals and reads values and edges in a time window. This tool is local-only.
-- *Documents*: `read_document` reads PDF pages, DOCX paragraphs, XLSX cells and PPTX slides with source locations. PDF pages can also be rendered as images. This tool is local-only.
+- *Documents*: `read_document` reads PDF pages, DOCX paragraphs, XLSX cells and PPTX slides with source locations. PDF pages can also be rendered as images. Remote documents use SFTP and local converters.
 - *Shell*: `bash` (synchronous, or `background=true` for background jobs),
   `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. Both
   take the same parameters locally and on a remote host: `command`,
@@ -863,13 +863,15 @@ Waveform output is limited to 1 MiB, including metadata, initial values and even
 === Document Reading
 <agent-document-reading>
 
-`read_document` reads local PDF, DOCX, XLSX and PPTX files. `page` starts at 1. `page_count` defaults to 1 and accepts up to five parts. A part is a PDF page, an XLSX worksheet or a PPTX slide. DOCX has one document body. Results retain page numbers, archive part names, paragraph numbers or spreadsheet cell addresses. Worksheets and slides follow the document's stored order.
+`read_document` reads PDF, DOCX, XLSX and PPTX files from the bound workspace. Relative paths use its current directory. Absolute paths and readable symbolic links are accepted. Remote files are transferred through SFTP without remote shell commands. Converters read a private local snapshot that is removed after the call. Text and list results include the source path, snapshot SHA-256 and byte count. The digest identifies the copied bytes, not an atomic view of a file being modified.
+
+`page` starts at 1. `page_count` defaults to 1 and accepts up to five parts. A part is a PDF page, an XLSX worksheet or a PPTX slide. DOCX has one document body. Results retain page numbers, archive part names, paragraph numbers or spreadsheet cell addresses. Worksheets and slides follow the document's stored order.
 
 `mode` defaults to `text`. PDF text preserves column layout. Use `mode: image` to inspect one PDF page, including charts and scanned pages. The image uses the existing model capability and terminal preview pipeline. Empty text layers are reported. OCR is not performed. `mode: list` reports document metadata or the selected Office parts.
 
 `max_chars` defaults to 20000 per part and accepts up to 100000. A truncated text part returns `next_offset`; pass it as `offset` to continue that part. Office extraction returns body text and raw cell values. It does not render images, charts, page layout or date styles. Spreadsheet formulas include their stored value and expression. Formulas, macros and external links are never executed.
 
-PDF reading requires the optional Poppler programs `pdfinfo`, `pdftotext` and, for images, `pdftoppm`. Office reading requires `unzip`. A missing program produces an explicit dependency error. Inputs are limited to 32 MiB. Office archives allow at most 4096 entries, 8 MiB per expanded entry, 64 MiB of declared expanded data and 32 MiB of actual extraction per call. Unsafe paths, encrypted entries, DTDs and unsupported compression are rejected. Each converter has a 15-second deadline. Remote workspaces do not offer this tool.
+PDF reading requires the optional local Poppler programs `pdfinfo`, `pdftotext` and, for images, `pdftoppm`. Office reading requires local `unzip`. A missing program produces an explicit dependency error. Inputs are limited to 32 MiB while copying. Input transfer has a 30-second deadline and supports cancellation. Office archives allow at most 4096 entries, 8 MiB per expanded entry, 64 MiB of declared expanded data and 32 MiB of actual extraction per call. Unsafe paths, encrypted entries, DTDs and unsupported compression are rejected. Each converter has a 15-second deadline.
 
 Linux converters have a 768 MiB address-space limit. macOS samples their resident memory and physical footprint every 20 ms, stopping converters that exceed 768 MiB. The macOS check is sampled, so a converter can exceed the budget between checks.
 

@@ -17,6 +17,7 @@
 #include "agent/remote/qsocsshhostconfig.h"
 #include "agent/remote/qsocsshsession.h"
 #include "agent/remote/qsoctoolremote.h"
+#include "agent/tool/qsoctooldocument.h"
 #include "agent/tool/qsoctoolgrep.h"
 #include "agent/tool/qsoctoolmonitor.h"
 #include "agent/tool/qsoctoolskill.h"
@@ -657,6 +658,7 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     auto                  *remoteRead = new QSocToolRemoteFileRead(parent, conn, pathCtx, llm);
     registry->registerTool(remoteRead);
     registry->registerTool(new QSocToolShowFigure(parent, remoteRead, llm));
+    registry->registerTool(new QSocToolDocumentRead(parent, nullptr, llm, conn));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));
     registry->registerTool(new QSocToolRemoteFileEdit(parent, conn, pathCtx));

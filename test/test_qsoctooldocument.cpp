@@ -2,11 +2,15 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocagent.h"
+#include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsocsftpclient.h"
 #include "agent/tool/qsoctooldocument.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qsocimageattach.h"
+#include "qsoc_test_sshd.h"
 
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
 #include <QFile>
@@ -125,6 +129,56 @@ private:
     QFont pdfFont_;
 
 private slots:
+    void remoteDocumentUsesSftpAndPreservesItsSource()
+    {
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QSocTestSshd fixture;
+        fixture.setExtraConfig({QStringLiteral("ForceCommand internal-sftp")});
+        fixture.start();
+        QSOC_REQUIRE_SSHD(fixture);
+        const QString    path  = fixture.workDir() + QStringLiteral("/document.docx");
+        const QByteArray bytes = makeZip({{"word/document.xml", wordBody()}});
+        QFile            file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(bytes), bytes.size());
+        file.close();
+        AgentRemoteState state;
+        state.session      = new QSocSshSession;
+        state.sftp         = new QSocSftpClient(*state.session);
+        const auto cleanup = qScopeGuard([&] { discardAgentRemoteState(&state); });
+        QString    error;
+        QCOMPARE(
+            state.session->connectTo(fixture.hostConfig(fixture.port()), &error),
+            QSocSshSession::ConnectStatus::Ok);
+        state.endpointIdentity = state.session->hostKeyIdentity();
+        state.targetKey        = QStringLiteral("loopback");
+        QVERIFY2(prepareAgentRemoteWorkspace(fixture.workDir(), &state, &error), qPrintable(error));
+        QSocRemoteConnection connection;
+        QVERIFY(connection.adopt(std::move(state)));
+        std::unique_ptr<QSocToolRegistry> registry(
+            buildAgentRemoteRegistry(nullptr, &connection, nullptr));
+        auto *tool = dynamic_cast<QSocToolDocumentRead *>(
+            registry->getTool(QStringLiteral("read_document")));
+        QVERIFY(tool);
+        const auto data = result(*tool, {{"file_path", "document.docx"}});
+        QCOMPARE(data["source"], json(path.toStdString()));
+        QCOMPARE(data["source_bytes"], json(bytes.size()));
+        QCOMPARE(
+            data["source_sha256"],
+            json(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().toStdString()));
+        QVERIFY(data["parts"][0]["text"].get<std::string>().find("100 MHz") != std::string::npos);
+        QVERIFY(!QString::fromStdString(data.dump()).contains(QStringLiteral("qsoc-input-")));
+#ifndef Q_OS_WIN
+        const QString extensionless = fixture.workDir() + QStringLiteral("/content");
+        QVERIFY(QFile::rename(path, extensionless));
+        QVERIFY(QFile::link(extensionless, path));
+        const auto linked = result(*tool, {{"file_path", "document.docx"}});
+        QCOMPARE(linked["format"], json("docx"));
+        QCOMPARE(linked["source_sha256"], data["source_sha256"]);
+#endif
+    }
+
     void initTestCase()
     {
         const int id = QFontDatabase::addApplicationFont(

@@ -3,6 +3,9 @@
 
 #include "agent/tool/qsoctooldocument.h"
 
+#include "agent/qsocinputsnapshot.h"
+#include "agent/remote/qsocagentremote.h"
+#include "agent/remote/qsocsftpclient.h"
 #include "agent/tool/qsoctoolfilecore.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
@@ -267,7 +270,12 @@ json textPart(int page, const QString &title, const QString &source, const TextS
 }
 
 QString readPdf(
-    const QString &path, const Options &options, QLLMService *llm, QSocToolCallContext *context)
+    const QString                  &path,
+    const QString                  &source,
+    const Options                  &options,
+    QLLMService                    *llm,
+    QSocToolCallContext            *context,
+    const QSocImageAttach::Options &attachmentOptions)
 {
     const QPointer<QLLMService> model(llm);
     const auto                  info = run(QStringLiteral("pdfinfo"), {path}, 65536, context);
@@ -303,11 +311,12 @@ QString readPdf(
             return QStringLiteral("Error: %1").arg(image.error);
         return QStringLiteral("PDF page %1 of %2\n").arg(options.page).arg(total)
                + QSocImageAttach::buildAttachmentResult(
-                   QStringLiteral("%1#page=%2").arg(path).arg(options.page),
+                   QStringLiteral("%1#page=%2").arg(source).arg(options.page),
                    QStringLiteral("image/png"),
                    image.bytes,
                    model,
-                   true);
+                   true,
+                   attachmentOptions);
     }
     const int  last      = qMin(total, options.page + options.count - 1);
     const auto extracted = run(
@@ -721,10 +730,12 @@ QString readOffice(
 
 } // namespace
 
-QSocToolDocumentRead::QSocToolDocumentRead(QObject *parent, QSocPathContext *paths, QLLMService *llm)
+QSocToolDocumentRead::QSocToolDocumentRead(
+    QObject *parent, QSocPathContext *paths, QLLMService *llm, QSocRemoteConnection *remote)
     : QSocTool(parent)
     , paths_(paths)
     , llm_(llm)
+    , remote_(remote)
 {}
 
 QString QSocToolDocumentRead::getName() const
@@ -735,12 +746,13 @@ QString QSocToolDocumentRead::getName() const
 QString QSocToolDocumentRead::getDescription() const
 {
     return QStringLiteral(
-        "Read local PDF, DOCX, XLSX or PPTX documents with source locations. page/page_count "
+        "Read PDF, DOCX, XLSX or PPTX documents with source locations. page/page_count "
         "select PDF pages, spreadsheet sheets or presentation slides; DOCX has one document body. "
         "mode=image renders one PDF page for diagrams or scanned pages; OCR is not performed. "
         "Office supports text only. Optional dependencies: Poppler pdfinfo/pdftotext/pdftoppm for "
         "PDF, unzip for Office. Inputs are limited to 32 MiB and Office expanded entries to 8 MiB "
-        "each/64 MiB total. Not offered in remote workspaces.");
+        "each/64 MiB total. Remote files are read through SFTP into a private local snapshot; "
+        "converters run locally without remote shell commands.");
 }
 
 json QSocToolDocumentRead::getParametersSchema() const
@@ -750,7 +762,7 @@ json QSocToolDocumentRead::getParametersSchema() const
         {"properties",
          {{"file_path",
            {{"type", "string"},
-            {"description", "Local document path, relative to the working directory or absolute"}}},
+            {"description", "Document path on the bound workspace, relative or absolute"}}},
           {"mode",
            {{"type", "string"},
             {"enum", {"text", "image", "list"}},
@@ -787,7 +799,13 @@ QString QSocToolDocumentRead::execute(const json &arguments)
     const auto refusal = checkOptions(arguments, &options);
     if (!refusal.isEmpty())
         return QStringLiteral("Error: %1").arg(refusal);
-    QString base = paths_ ? paths_->getWorkingDir() : QString();
+    const QPointer<QSocToolCallContext> context(currentCallContext());
+    const bool                          hadContext = context != nullptr;
+    const auto                          cancelled  = [context, hadContext] {
+        return hadContext && (!context || context->isCancellationRequested());
+    };
+    const QDeadlineTimer inputDeadline(30000);
+    QString              base = paths_ ? paths_->getWorkingDir() : QString();
     if (base.isEmpty() && paths_)
         base = paths_->getProjectDir();
     if (base.isEmpty())
@@ -800,19 +818,63 @@ QString QSocToolDocumentRead::execute(const json &arguments)
 #else
     constexpr bool windows = false;
 #endif
-    const QString path = QSocToolFileCore::localPath(
-        QString::fromStdString(arguments["file_path"].get<std::string>()), base, home, windows);
-    QFile file(path);
-    if (!QFileInfo(path).isFile() || !file.open(QIODevice::ReadOnly))
-        return QStringLiteral("Error: Cannot read document: %1").arg(path);
-    if (file.size() > kInputBytes)
-        return QStringLiteral("Error: Document exceeds the 32 MiB input limit");
-    const QString extension = QFileInfo(path).suffix().toLower();
+    const QString requested = QString::fromStdString(arguments["file_path"].get<std::string>());
+    QString       path;
+    QString       error;
+    if (remote_) {
+        if (!remote_->sftp())
+            return QStringLiteral("Error: Remote SFTP input is not connected");
+        const bool resolved = remote_->sftp()->runWithin(
+            inputDeadline,
+            [&] {
+                remote_->learnHome(requested);
+                return remote_->sftp()
+                           ->canonicalize(remote_->path()->normalize(requested), &path, &error)
+                       == QSocSftpClient::Canonical::Ok;
+            },
+            cancelled);
+        if (!resolved) {
+            if (cancelled())
+                error = QStringLiteral("Document read cancelled");
+            else if (inputDeadline.hasExpired())
+                error = QStringLiteral("Document input deadline expired");
+            return QStringLiteral("Error: %1").arg(error);
+        }
+    } else {
+        path = QSocToolFileCore::localPath(requested, base, home, windows);
+    }
+    const QString extension = QFileInfo(requested).suffix().toLower();
+    if (extension != "pdf" && extension != "docx" && extension != "xlsx" && extension != "pptx")
+        return QStringLiteral("Error: read_document supports PDF, DOCX, XLSX and PPTX only");
+    auto snapshot
+        = remote_
+              ? QSocInputSnapshot::fromRemote(
+                    remote_->sftp(), path, kInputBytes, &error, cancelled, inputDeadline)
+              : QSocInputSnapshot::fromLocal(path, kInputBytes, &error, cancelled, inputDeadline);
+    if (!snapshot)
+        return QStringLiteral("Error: %1").arg(error);
+    QString output;
+    auto    attachmentOptions  = imageAttachmentOptions();
+    attachmentOptions.sourceId = QString::fromLatin1(snapshot->sha256());
+    attachmentOptions.viewId   = QStringLiteral("pdf:page=%1").arg(options.page);
     if (extension == "pdf")
-        return readPdf(path, options, llm_, currentCallContext());
-    if (extension == "docx" || extension == "xlsx" || extension == "pptx")
-        return readOffice(file, extension, options, currentCallContext());
-    return QStringLiteral("Error: read_document supports PDF, DOCX, XLSX and PPTX only");
+        output = readPdf(snapshot->path(), path, options, llm_, context, attachmentOptions);
+    else {
+        QFile file(snapshot->path());
+        if (!file.open(QIODevice::ReadOnly))
+            return QStringLiteral("Error: Cannot open input snapshot");
+        output = readOffice(file, extension, options, context);
+    }
+    if (output.startsWith(QLatin1Char('{'))) {
+        auto result = json::parse(output.toStdString(), nullptr, false);
+        if (result.is_object()) {
+            result["source"]        = path.toStdString();
+            result["source_sha256"] = snapshot->sha256().toStdString();
+            result["source_bytes"]  = snapshot->size();
+            return QString::fromStdString(result.dump(2));
+        }
+    }
+    return output;
 }
 
 #include "moc_qsoctooldocument.cpp"

@@ -95,6 +95,19 @@ public:
         const std::function<bool(const QByteArray &)> &sink,
         QString                                       *errorMessage = nullptr);
 
+    enum class ReadEnd : std::uint8_t { Eof, Stopped, Cancelled, TimedOut, Error };
+    struct ReadResult
+    {
+        ReadEnd end   = ReadEnd::Error;
+        qint64  bytes = 0;
+    };
+
+    ReadResult readStreamResult(
+        const QString                                 &path,
+        const std::function<bool(const QByteArray &)> &sink,
+        QString                                       *errorMessage = nullptr,
+        const std::function<bool()>                   &cancelled    = {});
+
     /**
      * @brief Replace a remote file's content without ever unlinking it.
      * @details Writes a temp file, renames any existing target aside, then
@@ -265,7 +278,10 @@ public:
      * @details Every nested operation consumes the same clock. Cleanup keeps
      *          its separate bounded window and restores this clock afterward.
      */
-    bool runWithin(QDeadlineTimer deadline, const std::function<bool()> &operation);
+    bool runWithin(
+        QDeadlineTimer               deadline,
+        const std::function<bool()> &operation,
+        const std::function<bool()> &cancelled = {});
 
 private:
     /** @brief Outcome of one publish step. */
@@ -372,6 +388,7 @@ private:
     std::function<void(PublishStage)> m_publishObserver;
     std::function<void()>             m_dataPhaseObserver;
     std::function<void()>             m_createObserver;
+    std::function<bool()>             m_cancelled;
 };
 
 #endif // QSOCSFTPCLIENT_H
