@@ -6,7 +6,9 @@
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/tool/qsoctooldocument.h"
 #include "agent/tool/qsoctoolpath.h"
+#include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
+#include "qsoc_test.h"
 #include "qsoc_test_sshd.h"
 
 #include <QBuffer>
@@ -17,13 +19,19 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
+#include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
 #include <QPdfWriter>
+#include <QProcess>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QtTest>
+
+#include <cmath>
+#include <cstdio>
+#include <limits>
 
 namespace {
 
@@ -98,6 +106,18 @@ json result(QSocToolDocumentRead &tool, const json &arguments)
     return json::parse(text.toStdString());
 }
 
+QString editedCursor(const json &cursor, const char *field, const json &value)
+{
+    const QByteArray encoded = QByteArray::fromStdString(cursor.get<std::string>()).mid(5);
+    auto             payload = json::parse(
+        QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding).toStdString());
+    payload[field] = value;
+    return QStringLiteral("doc1.")
+           + QString::fromLatin1(
+               QByteArray::fromStdString(payload.dump())
+                   .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
 QString createPdf(const QTemporaryDir &directory, const QFont &font)
 {
     const QString path = directory.filePath("sample.pdf");
@@ -121,12 +141,53 @@ QString createPdf(const QTemporaryDir &directory, const QFont &font)
     return path;
 }
 
+QByteArray geometryPdf()
+{
+    QList<QByteArray> objects{
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Count 5 /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R] "
+        "/MediaBox [0 0 400 300] /CropBox [40 60 340 260] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"};
+    for (int page = 0; page < 5; ++page) {
+        const int rotation = page < 4 ? page * 90 : 0;
+        objects.append(
+            QByteArray("<< /Type /Page /Parent 2 0 R /Rotate ") + QByteArray::number(rotation)
+            + (page == 4 ? " /UserUnit 2" : "")
+            + " /Resources << /Font << /F1 3 0 R >> >> /Contents "
+            + QByteArray::number(5 + page * 2) + " 0 R >>");
+        QByteArray drawing("0.9 0.95 1 rg 40 60 300 200 re f 0.2 w 0 0 0 RG\n");
+        for (int x = 40; x <= 340; x += 10)
+            drawing += QByteArray::number(x) + " 60 m " + QByteArray::number(x) + " 260 l S\n";
+        for (int y = 60; y <= 260; y += 10)
+            drawing += "40 " + QByteArray::number(y) + " m 340 " + QByteArray::number(y) + " l S\n";
+        drawing += "1 0 0 rg 60 80 30 20 re f 0 0 1 rg 280 220 40 15 re f\n"
+                   "0 0 0 rg BT /F1 6 Tf 80 160 Td (I l 1 O 0 -0.125 MHz) Tj ET\n";
+        objects.append(
+            "<< /Length " + QByteArray::number(drawing.size()) + " >>\nstream\n" + drawing
+            + "endstream");
+    }
+    QByteArray       bytes("%PDF-1.7\n");
+    QList<qsizetype> offsets;
+    for (qsizetype i = 0; i < objects.size(); ++i) {
+        offsets.append(bytes.size());
+        bytes += QByteArray::number(i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
+    }
+    const qsizetype xref = bytes.size();
+    bytes += "xref\n0 " + QByteArray::number(objects.size() + 1) + "\n0000000000 65535 f \n";
+    for (const auto offset : offsets)
+        bytes += QByteArray::number(offset).rightJustified(10, '0') + " 00000 n \n";
+    bytes += "trailer\n<< /Size " + QByteArray::number(objects.size() + 1)
+             + " /Root 1 0 R >>\nstartxref\n" + QByteArray::number(xref) + "\n%%EOF\n";
+    return bytes;
+}
+
 class TestQSocToolDocument : public QObject
 {
     Q_OBJECT
 
 private:
     QFont pdfFont_;
+    QFont cjkFont_;
 
 private slots:
     void remoteDocumentUsesSftpAndPreservesItsSource()
@@ -169,6 +230,20 @@ private slots:
             json(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().toStdString()));
         QVERIFY(data["parts"][0]["text"].get<std::string>().find("100 MHz") != std::string::npos);
         QVERIFY(!QString::fromStdString(data.dump()).contains(QStringLiteral("qsoc-input-")));
+        const auto first = result(*tool, {{"file_path", "document.docx"}, {"max_chars", 12}});
+        const auto next  = result(
+            *tool,
+            {{"file_path", "document.docx"},
+             {"cursor", first.at("parts")[0].at("next_cursor")},
+             {"max_chars", 12}});
+        QCOMPARE(next.at("parts")[0].at("offset"), json(12));
+        QCOMPARE(first.at("source_identity"), next.at("source_identity"));
+        QSocToolDocumentRead localTool;
+        QVERIFY(localTool
+                    .execute(
+                        {{"file_path", path.toStdString()},
+                         {"cursor", first.at("parts")[0].at("next_cursor")}})
+                    .contains("different source"));
 #ifndef Q_OS_WIN
         const QString extensionless = fixture.workDir() + QStringLiteral("/content");
         QVERIFY(QFile::rename(path, extensionless));
@@ -186,7 +261,14 @@ private slots:
         QVERIFY(id >= 0);
         const auto families = QFontDatabase::applicationFontFamilies(id);
         QVERIFY(!families.isEmpty());
-        pdfFont_ = QFont(families.first(), 12);
+        pdfFont_        = QFont(families.first(), 12);
+        const int cjkId = QFontDatabase::addApplicationFont(
+            QFINDTESTDATA("../resource/report/DroidSansFallback.ttf"));
+        QVERIFY(cjkId >= 0);
+        const auto cjkFamilies = QFontDatabase::applicationFontFamilies(cjkId);
+        QVERIFY(!cjkFamilies.isEmpty());
+        cjkFont_ = QFont(cjkFamilies.first(), 10);
+        cjkFont_.setFamilies({cjkFamilies.first(), families.first()});
     }
 
     void docxPreservesParagraphsAndTableText()
@@ -227,6 +309,174 @@ private slots:
         const auto next
             = result(tool, {{"file_path", path.toStdString()}, {"offset", 12}, {"max_chars", 12}});
         QVERIFY(first["parts"][0]["text"] != next["parts"][0]["text"]);
+    }
+
+    void textCursorPreservesUnicodeAndRejectsChangedSources()
+    {
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir    directory;
+        const QByteArray body
+            = QStringLiteral(
+                  "<doc><p><t>时钟😀 I l 1 −0.125 µA</t></p><p><t>Next paragraph.</t></p></doc>")
+                  .toUtf8();
+        const QByteArray     bytes = makeZip({{"word/document.xml", body}});
+        const auto           path  = save(directory, "cursor.docx", bytes);
+        QSocToolDocumentRead tool;
+        const auto           full     = result(tool, {{"file_path", path.toStdString()}});
+        const QString        expected = QString::fromStdString(
+            full.at("parts")[0].at("text").get<std::string>());
+        const auto first = result(tool, {{"file_path", path.toStdString()}, {"max_chars", 7}});
+        const auto firstCursor = first.at("parts")[0].at("next_cursor");
+        auto       current     = first;
+        QString    joined;
+        for (int iteration = 0; iteration < 100; ++iteration) {
+            const auto   &part  = current.at("parts")[0];
+            const QString chunk = QString::fromStdString(part.at("text").get<std::string>());
+            QCOMPARE(part.at("offset"), json(joined.size()));
+            QVERIFY(chunk.isEmpty() || !chunk.front().isLowSurrogate());
+            QVERIFY(chunk.isEmpty() || !chunk.back().isHighSurrogate());
+            joined += chunk;
+            if (!part.at("truncated").get<bool>()) {
+                QVERIFY(!part.contains("next_cursor"));
+                break;
+            }
+            QVERIFY(iteration < 99);
+            current = result(
+                tool,
+                {{"file_path", path.toStdString()},
+                 {"cursor", part.at("next_cursor")},
+                 {"max_chars", iteration % 2 == 0 ? 3 : 17}});
+            QCOMPARE(current.at("parts").size(), size_t(1));
+            QCOMPARE(current.at("source_identity"), first.at("source_identity"));
+        }
+        QCOMPARE(joined, expected);
+        const auto legacy = result(
+            tool,
+            {{"file_path", path.toStdString()},
+             {"offset", first.at("parts")[0].at("next_offset")},
+             {"max_chars", 9}});
+        const auto resumed = result(
+            tool,
+            {{"file_path", directory.filePath("./cursor.docx").toStdString()},
+             {"cursor", firstCursor},
+             {"max_chars", 9}});
+        QCOMPARE(resumed.at("parts"), legacy.at("parts"));
+        const auto duplicate = save(directory, "duplicate.docx", bytes);
+        QVERIFY(tool.execute({{"file_path", duplicate.toStdString()}, {"cursor", firstCursor}})
+                    .contains("different source"));
+        for (const char *field : {"stream", "backend", "format", "part"}) {
+            const auto refusal = tool.execute(
+                {{"file_path", path.toStdString()},
+                 {"cursor", editedCursor(firstCursor, field, "different").toStdString()}});
+            QVERIFY2(refusal.startsWith("Error:"), qPrintable(refusal));
+        }
+        for (const char *field : {"page", "page_count", "offset"}) {
+            const auto refusal = tool.execute(
+                {{"file_path", path.toStdString()}, {"cursor", firstCursor}, {field, 1}});
+            QVERIFY(refusal.contains("without page"));
+        }
+        for (const auto &cursor :
+             {json(""), json("doc1.%%%"), json("doc1.e30"), json(4), json(std::string(2049, 'x'))})
+            QVERIFY(tool.execute({{"file_path", path.toStdString()}, {"cursor", cursor}})
+                        .contains("Invalid document cursor"));
+        for (const auto &version : {json(1.0), json(true), json("1")})
+            QVERIFY(tool.execute({{"file_path", path.toStdString()},
+                                  {"cursor", editedCursor(firstCursor, "v", version).toStdString()}})
+                        .contains("Invalid document cursor"));
+        save(directory, "cursor.docx", makeZip({{"word/document.xml", wordBody()}}));
+        QVERIFY(tool.execute({{"file_path", path.toStdString()}, {"cursor", firstCursor}})
+                    .contains("source changed"));
+    }
+
+    void pdfTextCursorsResumeEachTruncatedPage()
+    {
+        if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
+            || QStandardPaths::findExecutable("pdftotext").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler"));
+        QTemporaryDir        directory;
+        const auto           path = createPdf(directory, pdfFont_);
+        QSocToolDocumentRead tool;
+        const auto full = result(tool, {{"file_path", path.toStdString()}, {"page_count", 2}});
+        const auto first
+            = result(tool, {{"file_path", path.toStdString()}, {"page_count", 2}, {"max_chars", 5}});
+        QCOMPARE(first.at("parts").size(), size_t(2));
+        QCOMPARE(first.at("next_page"), json(3));
+        const QString backend = QString::fromStdString(
+            first.at("text_stream").at("backend").get<std::string>());
+        QVERIFY(backend.startsWith("pdftotext version "));
+        QVERIFY(backend.contains(QString::fromLatin1(qVersion())));
+        QCOMPARE(first.at("text_stream").at("offset_unit"), json("utf16"));
+        for (int page = 1; page <= 2; ++page) {
+            auto    part = first.at("parts")[page - 1];
+            QString joined;
+            for (int iteration = 0; iteration < 30; ++iteration) {
+                QCOMPARE(part.at("page"), json(page));
+                QCOMPARE(part.at("offset"), json(joined.size()));
+                joined += QString::fromStdString(part.at("text").get<std::string>());
+                if (!part.at("truncated").get<bool>())
+                    break;
+                QVERIFY(iteration < 29);
+                const auto next = result(
+                    tool,
+                    {{"file_path", path.toStdString()},
+                     {"cursor", part.at("next_cursor")},
+                     {"max_chars", 7}});
+                QCOMPARE(next.at("parts").size(), size_t(1));
+                part = next.at("parts")[0];
+            }
+            QCOMPARE(
+                joined,
+                QString::fromStdString(full.at("parts")[page - 1].at("text").get<std::string>()));
+        }
+        const auto wrongPage = editedCursor(first.at("parts")[0].at("next_cursor"), "page", 2);
+        QVERIFY(
+            tool.execute({{"file_path", path.toStdString()}, {"cursor", wrongPage.toStdString()}})
+                .contains("different part"));
+    }
+
+    void pdfCursorChecksInstalledBackendVersion()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("This converter fixture needs a POSIX shell");
+#else
+        if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
+            || QStandardPaths::findExecutable("pdftotext").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler"));
+        QTemporaryDir        directory;
+        const auto           path = createPdf(directory, pdfFont_);
+        QSocToolDocumentRead tool;
+        const auto first = result(tool, {{"file_path", path.toStdString()}, {"max_chars", 5}});
+        QString    real  = QStandardPaths::findExecutable("pdftotext");
+        real.replace('\'', QStringLiteral("'\\''"));
+        const auto wrapper = [&](const QString &version) {
+            const auto program = save(
+                directory,
+                "pdftotext",
+                QStringLiteral(
+                    "#!/bin/sh\nif [ \"$1\" = \"-v\" ]; then\n printf '%s\\n' '%1' >&2\n exit "
+                    "0\nfi\nexec '%2' \"$@\"\n")
+                    .arg(version, real)
+                    .toUtf8());
+            return QFile::setPermissions(
+                program, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+        };
+        QVERIFY(wrapper(QStringLiteral("pdftotext version cursor-test-next")));
+        const auto oldPath = qgetenv("PATH");
+        const auto restore = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        qputenv("PATH", directory.path().toUtf8() + ':' + oldPath);
+        const auto cursor = first.at("parts")[0].at("next_cursor");
+        QVERIFY(tool.execute({{"file_path", path.toStdString()}, {"cursor", cursor}})
+                    .contains("extractor changed"));
+        QVERIFY(wrapper(QStringLiteral("unidentified extractor")));
+        const auto legacy = result(tool, {{"file_path", path.toStdString()}, {"max_chars", 5}});
+        QCOMPARE(legacy.at("parts")[0].at("text"), first.at("parts")[0].at("text"));
+        QVERIFY(legacy.contains("cursor_unavailable"));
+        QVERIFY(legacy.at("parts")[0].contains("next_offset"));
+        QVERIFY(!legacy.at("parts")[0].contains("next_cursor"));
+        QVERIFY(tool.execute({{"file_path", path.toStdString()}, {"cursor", cursor}})
+                    .contains("Cannot resume document cursor"));
+#endif
     }
 
     void converterCanCompleteAfterMemoryChecks()
@@ -481,6 +731,239 @@ private slots:
         QVERIFY(attachment["height"].get<int>() <= 1600);
     }
 
+    void pdfRegionsMatchSourceRender()
+    {
+        if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
+            || QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler"));
+        QTemporaryDir  directory;
+        const auto     bytes = geometryPdf();
+        const auto     path  = save(directory, "geometry.pdf", bytes);
+        LLMModelConfig model;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = 4096;
+        model.imageMaxTokens    = 100000;
+        QLLMService llm;
+        llm.setModel(model);
+        QSocToolDocumentRead tool(nullptr, nullptr, &llm);
+        const auto sourceHash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+        QSet<QString> views;
+        for (int page = 1; page <= 5; ++page) {
+            const QString text = tool.execute(
+                {{"file_path", path.toStdString()},
+                 {"mode", "image"},
+                 {"page", page},
+                 {"region", {{"x", 0.1}, {"y", 0.1}, {"width", 0.4}, {"height", 0.6}}},
+                 {"target_long_edge", 800}});
+            QVERIFY2(
+                text.startsWith(QStringLiteral("PDF page %1 of 5").arg(page)),
+                qPrintable(text.left(500)));
+            const auto evidence = json::parse(text.section('\n', 1, 1).toStdString());
+            const auto geometry = evidence.at("geometry");
+            QCOMPARE(evidence.at("stage"), json("produced"));
+            QCOMPARE(evidence.at("render_method"), json("source_rerender"));
+            QVERIFY(geometry.at("raw_transform").is_null());
+            QCOMPARE(geometry.at("rotation_degrees"), json(page < 5 ? (page - 1) * 90 : 0));
+            const auto attachment = QSocImageAttach::attachmentPayload(text);
+            QVERIFY2(attachment.is_object(), qPrintable(text.left(500)));
+            QVERIFY(attachment.at("preserve_source").get<bool>());
+            QCOMPARE(attachment.at("source_id"), json(sourceHash.toStdString()));
+            QCOMPARE(attachment.at("view_id"), evidence.at("view_id"));
+            views.insert(QString::fromStdString(attachment.at("view_id").get<std::string>()));
+            const QByteArray png = QByteArray::fromBase64(
+                QByteArray::fromStdString(attachment.at("data").get<std::string>()));
+            QCOMPARE(
+                attachment.at("image_id"),
+                json(
+                    QCryptographicHash::hash(png, QCryptographicHash::Sha256).toHex().toStdString()));
+            QCOMPARE(attachment.at("source_sha256"), attachment.at("image_id"));
+            const QImage actual    = QImage::fromData(png).convertToFormat(QImage::Format_RGB32);
+            const auto   viewport  = geometry.at("virtual_viewport");
+            const auto   rectangle = geometry.at("pixel_region");
+            const QRect  pixels(
+                rectangle.at("x").get<int>(),
+                rectangle.at("y").get<int>(),
+                rectangle.at("width").get<int>(),
+                rectangle.at("height").get<int>());
+            QCOMPARE(actual.size(), pixels.size());
+            QVERIFY(qMax(actual.width(), actual.height()) <= 800);
+            QVERIFY(qMax(actual.width(), actual.height()) >= 799);
+            QProcess reference;
+            reference.start(
+                QStandardPaths::findExecutable("pdftoppm"),
+                {"-f",
+                 QString::number(page),
+                 "-singlefile",
+                 "-cropbox",
+                 "-scale-dimension-before-rotation",
+                 "-scale-to-x",
+                 QString::number(viewport.at("width").get<int>()),
+                 "-scale-to-y",
+                 QString::number(viewport.at("height").get<int>()),
+                 "-png",
+                 path});
+            const bool finished = reference.waitForFinished(15000);
+            if (!finished) {
+                reference.kill();
+                reference.waitForFinished();
+            }
+            QVERIFY(finished);
+            QCOMPARE(reference.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(reference.exitCode(), 0);
+            const QImage full = QImage::fromData(reference.readAllStandardOutput())
+                                    .convertToFormat(QImage::Format_RGB32);
+            QCOMPARE(
+                full.size(),
+                QSize(viewport.at("width").get<int>(), viewport.at("height").get<int>()));
+            QCOMPARE(actual, full.copy(pixels));
+            const auto   forward   = geometry.at("view_norm_to_image");
+            const auto   inverse   = geometry.at("image_to_view_norm");
+            const auto   effective = geometry.at("effective_region");
+            const double mappedX   = forward[0].get<double>() * effective.at("x").get<double>()
+                                     + forward[2].get<double>();
+            const double mappedY   = forward[4].get<double>() * effective.at("y").get<double>()
+                                     + forward[5].get<double>();
+            QVERIFY(std::abs(mappedX) < 0.000001);
+            QVERIFY(std::abs(mappedY) < 0.000001);
+            QVERIFY(std::abs(inverse[2].get<double>() - effective.at("x").get<double>()) < 0.000001);
+            const auto overviewText = tool.execute(
+                {{"file_path", path.toStdString()}, {"page", page}, {"mode", "image"}});
+            const auto overview = QSocImageAttach::attachmentPayload(overviewText);
+            QVERIFY(overview.is_object());
+            QCOMPARE(overview.at("source_width"), json(page == 2 || page == 4 ? 1067 : 1600));
+            QCOMPARE(overview.at("source_height"), json(page == 2 || page == 4 ? 1600 : 1067));
+            QVERIFY(!overview.at("preserve_source").get<bool>());
+        }
+        QCOMPARE(views.size(), 5);
+        model.imageMaxDimension = 100;
+        llm.setModel(model);
+        const auto refused = tool.execute(
+            {{"file_path", path.toStdString()},
+             {"mode", "image"},
+             {"region", {{"x", 0.1}, {"y", 0.1}, {"width", 0.4}, {"height", 0.6}}},
+             {"target_long_edge", 800}});
+        QVERIFY(refused.contains("read a smaller region"));
+        QVERIFY(!QSocImageAttach::attachmentPayload(refused).is_object());
+    }
+
+    void pdfRegionRejectsInvalidOrExcessiveRequests()
+    {
+        QSocToolDocumentRead tool;
+        const json           region = {{"x", 0.1}, {"y", 0.1}, {"width", 0.4}, {"height", 0.6}};
+        const json           base
+            = {{"file_path", "unused.pdf"},
+               {"mode", "image"},
+               {"region", region},
+               {"target_long_edge", 800}};
+        QList<json> invalid;
+        for (const auto &replacement :
+             {json(-0.1),
+              json(1.1),
+              json("0.1"),
+              json(nullptr),
+              json(std::numeric_limits<double>::infinity()),
+              json(std::numeric_limits<double>::quiet_NaN())}) {
+            auto request           = base;
+            request["region"]["x"] = replacement;
+            invalid.append(request);
+        }
+        for (const char *name : {"width", "height"}) {
+            auto request            = base;
+            request["region"][name] = 0;
+            invalid.append(request);
+        }
+        for (const auto &replacement : {json(63), json(4097), json(800.5), json("800")}) {
+            auto request                = base;
+            request["target_long_edge"] = replacement;
+            invalid.append(request);
+        }
+        auto request = base;
+        request.erase("target_long_edge");
+        invalid.append(request);
+        request = base;
+        request.erase("region");
+        invalid.append(request);
+        request         = base;
+        request["mode"] = "text";
+        invalid.append(request);
+        request               = base;
+        request["page_count"] = 2;
+        invalid.append(request);
+        request                    = base;
+        request["region"]["width"] = 1;
+        invalid.append(request);
+        request              = base;
+        request["file_path"] = "unused.docx";
+        invalid.append(request);
+        for (const auto &arguments : invalid) {
+            const auto refusal = tool.execute(arguments);
+            QVERIFY2(
+                refusal.startsWith("Error: region") || refusal.startsWith("Error: target_long_edge"),
+                qPrintable(refusal));
+        }
+        if (QStandardPaths::findExecutable("pdfinfo").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("pdfinfo"));
+        QTemporaryDir directory;
+        request                     = base;
+        request["file_path"]        = save(directory, "geometry.pdf", geometryPdf()).toStdString();
+        request["region"]["width"]  = 0.00000001;
+        request["region"]["height"] = 0.00000001;
+        QVERIFY(tool.execute(request).contains("virtual page exceeds safe rendering limits"));
+        request["region"]["width"]  = 0.1;
+        request["region"]["height"] = 0.1;
+        request["target_long_edge"] = 1600;
+        QVERIFY(tool.execute(request).contains("virtual page exceeds safe rendering limits"));
+    }
+
+    void pdfFineTextRegionPreservesGeneratedPixels()
+    {
+        if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
+            || QStandardPaths::findExecutable("pdftoppm").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler"));
+        QTemporaryDir directory;
+        const QString path = directory.filePath("fine-text.pdf");
+        {
+            QPdfWriter pdf(path);
+            pdf.setResolution(72);
+            pdf.setPageSize(QPageSize(QPageSize::A4));
+            QPainter painter(&pdf);
+            QVERIFY(painter.isActive());
+            for (int size : {6, 8, 10}) {
+                QFont font = cjkFont_;
+                font.setPointSize(size);
+                painter.setFont(font);
+                painter
+                    .drawText(30, size * 12, QStringLiteral("时钟规格 I l 1 O 0 −0.125 µA Ω V₂ x²"));
+                painter.setPen(QPen(Qt::black, 0.2));
+                painter.drawLine(30, size * 12 + 4, 400, size * 12 + 4);
+            }
+        }
+        LLMModelConfig model;
+        model.acceptsImage      = true;
+        model.imageMaxDimension = 4096;
+        model.imageMaxTokens    = 100000;
+        QLLMService llm;
+        llm.setModel(model);
+        QSocToolDocumentRead tool(nullptr, nullptr, &llm);
+        const QString        text = tool.execute(
+            {{"file_path", path.toStdString()},
+             {"mode", "image"},
+             {"region", {{"x", 0}, {"y", 0}, {"width", 0.85}, {"height", 0.35}}},
+             {"target_long_edge", 1800}});
+        const auto attachment = QSocImageAttach::attachmentPayload(text);
+        QVERIFY2(attachment.is_object(), qPrintable(text.left(500)));
+        QVERIFY(attachment.at("preserve_source").get<bool>());
+        QCOMPARE(attachment.at("source_sha256"), attachment.at("image_id"));
+        const QByteArray png = QByteArray::fromBase64(
+            QByteArray::fromStdString(attachment.at("data").get<std::string>()));
+        QVERIFY(!QImage::fromData(png).isNull());
+        if (qEnvironmentVariableIsSet("QSOC_KEEP_DOCUMENT_FIXTURES")) {
+            save(directory, "fine-text-crop.png", png);
+            directory.setAutoRemove(false);
+            qInfo().noquote() << "Generated document fixture:" << directory.path();
+        }
+    }
+
     void pdfFilenameCannotForgeAdditionalImages()
     {
 #ifndef Q_OS_UNIX
@@ -558,5 +1041,16 @@ private slots:
 
 } // namespace
 
-QTEST_MAIN(TestQSocToolDocument)
+int main(int argc, char *argv[])
+{
+    const QGuiApplication application(argc, argv);
+    int                   result = 0;
+    {
+        TestQSocToolDocument testCase;
+        result = QTest::qExec(&testCase, argc, argv);
+    }
+    /* Bypass the QtNetwork global teardown failure. */
+    std::fflush(nullptr);
+    _exit(result ? 1 : 0);
+}
 #include "test_qsoctooldocument.moc"
