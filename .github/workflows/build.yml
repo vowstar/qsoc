@@ -105,7 +105,33 @@ jobs:
         poppler-utils
         python3
         python3-py7zr
+        unzip
         xvfb
+    - name: Install document renderer
+      if: github.event_name == 'pull_request'
+      run: |
+        set -euo pipefail
+        archive="$RUNNER_TEMP/LibreOffice_26.8.3_Linux_x86-64_deb.tar.gz"
+        curl --fail --location --retry 3 \
+          https://download.documentfoundation.org/libreoffice/stable/26.8.3/deb/x86_64/LibreOffice_26.8.3_Linux_x86-64_deb.tar.gz \
+          --output "$archive"
+        printf '%s  %s\n' e7cd3538e85818ff9dd9bb65386769fde927011242aace5a144989f4000dcabf "$archive" | sha256sum --check -
+        extracted="$RUNNER_TEMP/document-renderer"
+        mkdir -p "$extracted" "$RUNNER_TEMP/document-bin"
+        tar -xzf "$archive" -C "$extracted"
+        sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends "$extracted"/*/DEBS/*.deb
+        for program in /opt/libreoffice*/program/soffice; do
+          if [[ -x "$program" ]] && "$program" --version | grep -q '^LibreOffice 26\.8\.3'; then
+            ln -s "$program" "$RUNNER_TEMP/document-bin/libreoffice"
+            break
+          fi
+        done
+        "$RUNNER_TEMP/document-bin/libreoffice" --version
+        echo "$RUNNER_TEMP/document-bin" >> "$GITHUB_PATH"
+        pdfinfo -v
+        pdftotext -v
+        pdftoppm -v
+
     # Only pushes to main save the cache, so a pull request reads main's.
     - name: Compiler cache
       uses: hendrikmuhs/ccache-action@v1.2.24
@@ -231,7 +257,22 @@ jobs:
         $QSOC module import -d "$TMPD" -l smoke_lib "$TMPD/smoke.v"
         echo "--- all smoke tests passed ---"
 
-    # Every test without a ci-* shard label. The shards run in test-linux.
+    # This target includes the local and forced-SFTP document contracts.
+    - name: Document reading contracts
+      if: github.event_name == 'pull_request'
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+      run: |
+        set -o pipefail
+        xvfb-run -a ctest --test-dir build -C ${{env.BUILD_TYPE}} \
+          --verbose --no-tests=error -R '^test_qsoctooldocument$' \
+          2>&1 | tee document-tests.log
+        if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' document-tests.log; then
+          echo '::error::Document contracts must run without skips'
+          exit 1
+        fi
+
+    # Every remaining test without a ci-* shard label. The shards run in test-linux.
     - name: Unit Test
       if: github.event_name == 'pull_request'
       env:
@@ -242,7 +283,7 @@ jobs:
         set -o pipefail
         xvfb-run -a ctest --test-dir build -C ${{env.BUILD_TYPE}} \
           --output-on-failure --no-tests=error \
-          -LE '^ci-(sim-1|sim-2|formal)$' --repeat until-pass:2 \
+          -LE '^ci-(sim-1|sim-2|formal)$' -E '^test_qsoctooldocument$' --repeat until-pass:2 \
           2>&1 | tee ctest.log
 
     - name: Unit Test report
@@ -560,6 +601,23 @@ jobs:
         $null = Get-Item "$bin/pdftotext.exe", "$bin/pdfdetach.exe"
         $bin >> $env:GITHUB_PATH
 
+    - name: Install document renderer
+      if: github.event_name == 'pull_request'
+      run: |
+        $package = Join-Path $env:RUNNER_TEMP "LibreOffice_26.8.3_Win_x86-64.msi"
+        Invoke-WebRequest "https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" -OutFile $package
+        if ((Get-FileHash $package -Algorithm SHA256).Hash -ne "0e6918c273eabbdbbd800ee0dacbbf130a14c13c2e4cec861b06dd59e015bf94") {
+          throw "Office renderer checksum mismatch"
+        }
+        $installer = Start-Process msiexec.exe -ArgumentList "/i `"$package`" /qn /norestart" -Wait -PassThru
+        if ($installer.ExitCode -notin 0, 3010) { throw "Office renderer installation failed: $($installer.ExitCode)" }
+        $program = Join-Path $env:ProgramFiles "LibreOffice/program/soffice.com"
+        & $program --version
+        if ($LASTEXITCODE -ne 0) { throw "Office renderer version probe failed" }
+        "QSOC_TEST_OFFICE_DIR=$(Split-Path $program)" >> $env:GITHUB_ENV
+        Get-Command unzip | Select-Object Source
+        & unzip -v | Select-Object -First 2
+
     # The action recommends sccache over ccache for MSVC.
     - name: Compiler cache
       uses: hendrikmuhs/ccache-action@v1.2.24
@@ -617,6 +675,20 @@ jobs:
         } finally {
           Remove-Item -Recurse -Force $TMPD -ErrorAction SilentlyContinue
         }
+
+    - name: Document reading contracts
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH;$env:QSOC_TEST_OFFICE_DIR"
+        $log = Join-Path $env:RUNNER_TEMP "document-contracts.qtestlog"
+        & ./test/test_qsoctooldocument.exe pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits -o "$log,txt"
+        $testExit = $LASTEXITCODE
+        Get-Content $log
+        if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '^SKIP' -Quiet)) { throw "Document reading contracts did not all run" }
 
     - name: Full Test
       if: github.event_name == 'pull_request'
@@ -684,6 +756,33 @@ jobs:
 
     - name: Install tools
       run: brew install ninja pkg-config
+
+    - name: Install document renderer
+      if: github.event_name == 'pull_request'
+      run: |
+        set -euo pipefail
+        test "$(uname -m)" = arm64
+        brew install poppler
+        archive="$RUNNER_TEMP/LibreOffice_26.8.3_MacOS_aarch64.dmg"
+        curl --fail --location --retry 3 \
+          https://download.documentfoundation.org/libreoffice/stable/26.8.3/mac/aarch64/LibreOffice_26.8.3_MacOS_aarch64.dmg \
+          --output "$archive"
+        printf '%s  %s\n' de943203795e5057785f65515063e2db5eb60b0bb6d8e2534fec59e5cc5fb988 "$archive" | shasum --algorithm 256 --check -
+        volume="$RUNNER_TEMP/document-renderer-volume"
+        mkdir -p "$volume" "$RUNNER_TEMP/document-bin"
+        hdiutil attach "$archive" -nobrowse -mountpoint "$volume"
+        trap 'hdiutil detach "$volume"' EXIT
+        ditto "$volume/LibreOffice.app" "$RUNNER_TEMP/LibreOffice.app"
+        hdiutil detach "$volume"
+        trap - EXIT
+        printf '#!/bin/sh\nexec "%s/LibreOffice.app/Contents/MacOS/soffice" "$@"\n' "$RUNNER_TEMP" > "$RUNNER_TEMP/document-bin/libreoffice"
+        chmod +x "$RUNNER_TEMP/document-bin/libreoffice"
+        "$RUNNER_TEMP/document-bin/libreoffice" --version
+        echo "$RUNNER_TEMP/document-bin" >> "$GITHUB_PATH"
+        unzip -v
+        pdfinfo -v
+        pdftotext -v
+        pdftoppm -v
 
     # brew's ccache pulls in brew's fmt, which slang then finds and cannot
     # build against, so take the action's checksummed binary instead.
@@ -756,6 +855,40 @@ jobs:
         printf 'module smoke_mod(input clk, output [7:0] data);\nassign data = 8'\''hFF;\nendmodule\n' > "$TMPD/smoke.v"
         $QSOC module import -d "$TMPD" -l smoke_lib "$TMPD/smoke.v"
         echo "--- all smoke tests passed ---"
+
+    - name: Document reading contracts
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        set -euo pipefail
+        log="$RUNNER_TEMP/document-contracts.qtestlog"
+        ./test/test_qsoctooldocument pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation nativeBoxesBoundXmlAndJsonAndRejectAmbiguousGeometry pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits officeRendererCancellationKillsDescendantsAndRemovesProfile macProcessExitBeforeFinishedDelivery -o "$log,txt" || { cat "$log"; exit 1; }
+        cat "$log"
+        if grep -q '^SKIP' "$log"; then
+          echo '::error::a document contract was skipped'
+          exit 1
+        fi
+
+    - name: Repeat document renderer contracts
+      if: github.event_name == 'pull_request'
+      working-directory: build
+      env:
+        QSOC_TEST_DEPS_REQUIRED: '1'
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          log="$RUNNER_TEMP/document-repeat-$attempt.qtestlog"
+          ./test/test_qsoctooldocument macProcessExitBeforeFinishedDelivery officeRendererProducesBoundedDerivedPages officeRendererCancellationKillsDescendantsAndRemovesProfile -o "$log,txt" || { cat "$log"; exit 1; }
+          cat "$log"
+          if grep -q '^SKIP' "$log"; then
+            echo '::error::a repeated document contract was skipped'
+            exit 1
+          fi
+        done
 
     - name: Full Test
       if: github.event_name == 'pull_request'
@@ -917,3 +1050,60 @@ jobs:
 
     - name: Static Analysis (cppcheck)
       run: cmake --build build --target cppcheck
+
+  windows-openssh-spike:
+    name: Windows OpenSSH feasibility
+    if: github.event_name == 'pull_request'
+    runs-on: windows-2022
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: false
+    - name: Probe existing OpenSSH without a service
+      shell: pwsh
+      run: |
+        & .github/scripts/windows-openssh-spike.ps1 `
+          -ResultPath "$env:RUNNER_TEMP/qsoc-openssh-spike.json"
+    - name: Clean only the recorded probe processes and directory
+      if: always()
+      shell: pwsh
+      run: |
+        $statePath = "$env:RUNNER_TEMP/qsoc-openssh-spike.json.state"
+        if (Test-Path -LiteralPath $statePath) {
+          $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+          foreach ($child in $state.children) {
+            $process = Get-Process -Id $child.id -ErrorAction SilentlyContinue
+            if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq $child.ticks) {
+              $process.Kill($true)
+              if (!$process.WaitForExit(2000)) { throw 'Probe process cleanup failed' }
+            }
+          }
+          $directory = [IO.Path]::GetFullPath($state.directory)
+          $parent = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\', '/')
+          if ([IO.Path]::GetDirectoryName($directory) -ne $parent -or [IO.Path]::GetFileName($directory) -notmatch '^qsoc-openssh-[0-9a-f]{32}$') {
+            throw 'Probe directory cleanup guard failed'
+          }
+          if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
+          Remove-Item -LiteralPath $statePath -Force
+        }
+    - name: Report feasibility without claiming client acceptance
+      if: always()
+      shell: pwsh
+      run: |
+        $path = "$env:RUNNER_TEMP/qsoc-openssh-spike.json"
+        if (!(Test-Path -LiteralPath $path)) {
+          @{ status = 'unavailable'; reason = 'probe_did_not_finish'; cleanup_ok = $false } |
+            ConvertTo-Json | Set-Content -LiteralPath $path -Encoding utf8
+        }
+        $result = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        "Windows native OpenSSH feasibility: $($result.status), $($result.reason). This is not QSoC client acceptance." |
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: windows-openssh-feasibility
+        path: ${{ runner.temp }}/qsoc-openssh-spike.json
+        if-no-files-found: error

@@ -11,6 +11,7 @@
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
+#include "common/qsocprocesslimits.h"
 
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -25,11 +26,14 @@
 #include <QRectF>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
+#include <QUrl>
 #include <QXmlStreamReader>
 #include <QtEndian>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -40,6 +44,7 @@
 #endif
 
 #if defined(Q_OS_UNIX) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <signal.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #endif
@@ -72,24 +77,69 @@ CommandResult run(
     const QStringList   &arguments,
     qint64               limit,
     QSocToolCallContext *context,
-    bool                 mergeChannels = false,
-    QDeadlineTimer       deadline      = QDeadlineTimer(QDeadlineTimer::Forever))
+    bool                 mergeChannels   = false,
+    QDeadlineTimer       deadline        = QDeadlineTimer(QDeadlineTimer::Forever),
+    const QString       &officeDirectory = {})
 {
-    const QString executable = QStandardPaths::findExecutable(program);
+    const bool    officeRenderer = !officeDirectory.isEmpty();
+    const QString executable     = QStandardPaths::findExecutable(program);
     if (executable.isEmpty())
         return {{}, QStringLiteral("Missing optional dependency: %1").arg(program)};
     if (context && context->isCancellationRequested())
         return {{}, QStringLiteral("Document read cancelled")};
     if (deadline.hasExpired())
         return {{}, QStringLiteral("Document conversion deadline expired")};
-    QProcess process;
+    QSocProcessLimits processLimits;
+    QProcess          process;
+    if (officeRenderer && !processLimits.configure(process, kConverterMemoryBytes))
+        return {{}, QStringLiteral("Cannot configure Office renderer process limits")};
     if (mergeChannels)
         process.setProcessChannelMode(QProcess::MergedChannels);
-    auto environment = QProcessEnvironment::systemEnvironment();
+    QProcessEnvironment environment;
+    if (officeRenderer) {
+        for (const char *key :
+             {"PATH",
+              "SystemRoot",
+              "WINDIR",
+              "PATHEXT",
+              "COMSPEC",
+              "LANG",
+              "LC_CTYPE",
+              "FONTCONFIG_FILE",
+              "FONTCONFIG_PATH",
+              "XDG_DATA_DIRS"}) {
+            if (qEnvironmentVariableIsSet(key))
+                environment.insert(QString::fromLatin1(key), qEnvironmentVariable(key));
+        }
+        const QDir    directory(officeDirectory);
+        const QString home = directory.filePath(QStringLiteral("home"));
+        const QString temp = directory.filePath(QStringLiteral("tmp"));
+        for (const char *key : {"HOME", "USERPROFILE"})
+            environment.insert(QString::fromLatin1(key), home);
+        for (const char *key : {"TMPDIR", "TMP", "TEMP"})
+            environment.insert(QString::fromLatin1(key), temp);
+        environment.insert(QStringLiteral("XDG_CONFIG_HOME"), home + QStringLiteral("/config"));
+        environment.insert(QStringLiteral("XDG_CACHE_HOME"), home + QStringLiteral("/cache"));
+        environment.insert(QStringLiteral("XDG_DATA_HOME"), home + QStringLiteral("/data"));
+        environment.insert(QStringLiteral("APPDATA"), home + QStringLiteral("/appdata"));
+        environment.insert(QStringLiteral("LOCALAPPDATA"), home + QStringLiteral("/localdata"));
+        environment.insert(QStringLiteral("SAL_USE_VCLPLUGIN"), QStringLiteral("svp"));
+        environment.insert(QStringLiteral("SAL_DISABLE_OPENCL"), QStringLiteral("1"));
+    } else {
+        environment = QProcessEnvironment::systemEnvironment();
+    }
     environment.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
     process.setProcessEnvironment(environment);
 #if defined(Q_OS_UNIX) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    process.setChildProcessModifier([] {
+    process.setChildProcessModifier([officeRenderer] {
+        if (officeRenderer && ::setsid() < 0)
+            _exit(126);
+        if (officeRenderer) {
+            const rlimit file{kInputBytes, kInputBytes};
+            const rlimit core{0, 0};
+            if (setrlimit(RLIMIT_FSIZE, &file) != 0 || setrlimit(RLIMIT_CORE, &core) != 0)
+                _exit(126);
+        }
         const rlimit cpu{15, 15};
         if (setrlimit(RLIMIT_CPU, &cpu) != 0)
             _exit(126);
@@ -103,12 +153,21 @@ CommandResult run(
     QEventLoop loop;
     QTimer     timer;
     timer.setSingleShot(true);
+    timer.setTimerType(Qt::PreciseTimer);
     CommandResult result;
     QByteArray    diagnostics;
-    auto          stop = [&](const QString &error) {
+    qint64        processGroup = 0;
+    auto          killTree     = [&] {
+#if defined(Q_OS_UNIX) && QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        if (officeRenderer && processGroup > 0)
+            ::kill(-static_cast<pid_t>(processGroup), SIGKILL);
+#endif
+        process.kill();
+    };
+    auto stop = [&](const QString &error) {
         if (result.error.isEmpty())
             result.error = error;
-        process.kill();
+        killTree();
         if (process.state() == QProcess::NotRunning)
             loop.quit();
     };
@@ -121,19 +180,60 @@ CommandResult run(
     QObject::connect(&memoryTimer, &QTimer::timeout, &loop, [&] {
         if (process.state() != QProcess::Running)
             return;
-        rusage_info_v2 usage{};
-        if (proc_pid_rusage(
-                static_cast<int>(process.processId()),
-                RUSAGE_INFO_V2,
-                reinterpret_cast<rusage_info_t *>(&usage))
-            != 0) {
-            if (errno != ESRCH)
-                stop(QStringLiteral("Cannot inspect document converter memory"));
-            return;
+        std::array<pid_t, 129> members{};
+        int                    count = 1;
+        members[0]                   = static_cast<pid_t>(process.processId());
+        if (officeRenderer) {
+            errno = 0;
+            count = proc_listpgrppids(
+                static_cast<pid_t>(processGroup), members.data(), sizeof(members));
+            const int listError = errno;
+            if (count <= 0) {
+                if (process.waitForFinished(0) || process.state() == QProcess::NotRunning)
+                    return;
+                stop(QStringLiteral(
+                         "Cannot inspect the bounded Office renderer process group "
+                         "(members %1, errno %2)")
+                         .arg(count)
+                         .arg(listError));
+                return;
+            }
+            if (count >= static_cast<int>(members.size())) {
+                stop(QStringLiteral(
+                         "Office renderer process group exceeds 128 members "
+                         "(sampled %1)")
+                         .arg(count));
+                return;
+            }
         }
-        if (usage.ri_resident_size > kConverterMemoryBytes
-            || usage.ri_phys_footprint > kConverterMemoryBytes)
-            stop(QStringLiteral("Document converter exceeded its 768 MiB memory budget"));
+        quint64 resident = 0, footprint = 0;
+        for (int index = 0; index < count; ++index) {
+            const auto pid = members[static_cast<size_t>(index)];
+            if (pid <= 0)
+                continue;
+            errno = 0;
+            if (officeRenderer && ::getpgid(pid) != processGroup) {
+                if (errno == ESRCH)
+                    continue;
+                stop(QStringLiteral("Office renderer process group changed during inspection"));
+                return;
+            }
+            rusage_info_v2 usage{};
+            if (proc_pid_rusage(pid, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t *>(&usage))
+                != 0) {
+                if (errno == ESRCH)
+                    continue;
+                stop(QStringLiteral("Cannot inspect document converter memory"));
+                return;
+            }
+            if (usage.ri_resident_size > kConverterMemoryBytes - resident
+                || usage.ri_phys_footprint > kConverterMemoryBytes - footprint) {
+                stop(QStringLiteral("Document converter exceeded its 768 MiB memory budget"));
+                return;
+            }
+            resident += usage.ri_resident_size;
+            footprint += usage.ri_phys_footprint;
+        }
     });
 #endif
     auto drain = [&] {
@@ -150,7 +250,10 @@ CommandResult run(
     };
     QObject::connect(&process, &QProcess::readyReadStandardOutput, &loop, drain);
     QObject::connect(&process, &QProcess::readyReadStandardError, &loop, drain);
-    QObject::connect(&process, &QProcess::started, &loop, [&] { process.closeWriteChannel(); });
+    QObject::connect(&process, &QProcess::started, &loop, [&] {
+        processGroup = process.processId();
+        process.closeWriteChannel();
+    });
     if (context)
         QObject::connect(context, &QObject::destroyed, &loop, [&] {
             stop(QStringLiteral("Document read owner closed"));
@@ -185,6 +288,8 @@ CommandResult run(
     process.start(executable, arguments);
     if (process.state() != QProcess::NotRunning)
         loop.exec();
+    if (officeRenderer)
+        killTree();
     if (result.error.isEmpty()
         && (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)) {
         result.error = QStringLiteral("%1 failed (exit %2): %3")
@@ -211,6 +316,7 @@ struct Options
     int                   maxMedia       = 50;
     QString               mediaId;
     QString               expectedSource;
+    QString               renderer;
 };
 
 bool integerOption(const json &arguments, const char *name, int minimum, int maximum, int *target)
@@ -290,6 +396,14 @@ QString checkOptions(const json &arguments, Options *options)
         && options->mode != "text_boxes" && options->mode != "media"
         && options->mode != "media_image")
         return QStringLiteral("mode must be text, image, list, text_boxes, media, or media_image");
+    if (arguments.contains("renderer")) {
+        if (!arguments["renderer"].is_string() || arguments["renderer"] != "libreoffice"
+            || options->mode != "image" || options->count != 1 || arguments.contains("offset")
+            || arguments.contains("max_chars"))
+            return QStringLiteral(
+                "renderer=libreoffice requires mode=image, page_count=1 and no text offsets");
+        options->renderer = QStringLiteral("libreoffice");
+    }
     const bool media = options->mode == "media" || options->mode == "media_image";
     if (media) {
         if (arguments.contains("offset") || arguments.contains("max_chars"))
@@ -315,8 +429,10 @@ QString checkOptions(const json &arguments, Options *options)
         return QStringLiteral("media selectors require an Office media mode");
     }
     if (arguments.contains("source_sha256")) {
-        if (options->mode != "media_image" || !arguments["source_sha256"].is_string())
-            return QStringLiteral("source_sha256 is an optional media_image source guard");
+        if ((options->mode != "media_image" && options->renderer.isEmpty())
+            || !arguments["source_sha256"].is_string())
+            return QStringLiteral(
+                "source_sha256 requires media_image or rendered Office image mode");
         options->expectedSource = QString::fromStdString(
             arguments["source_sha256"].get<std::string>());
         static const QRegularExpression hash(QStringLiteral("^[0-9a-f]{64}$"));
@@ -851,7 +967,8 @@ QString readPdf(
     QSocToolCallContext            *callContext,
     const QSocImageAttach::Options &attachmentOptions,
     const QString                  &knownBackend,
-    QDeadlineTimer                  deadline)
+    QDeadlineTimer                  deadline,
+    QString                        *producedViewId = nullptr)
 {
     const QPointer<QLLMService>         model(llm);
     const QPointer<QSocToolCallContext> context(callContext);
@@ -902,8 +1019,13 @@ QString readPdf(
                 return QStringLiteral(
                     "Error: PDF region geometry or virtual page exceeds safe rendering limits; "
                     "request a larger region or lower target_long_edge");
-            const auto reference
-                = run(QStringLiteral("pdftoppm"), renderArguments, 16 * 1024 * 1024, context);
+            const auto reference = run(
+                QStringLiteral("pdftoppm"),
+                renderArguments,
+                16 * 1024 * 1024,
+                context,
+                false,
+                deadline);
             if (!reference.error.isEmpty())
                 return QStringLiteral("Error: %1").arg(reference.error);
             const auto  size     = imageSize(reference.bytes);
@@ -938,17 +1060,11 @@ QString readPdf(
                    "-png",
                    path};
             imageOptions.preserveSource = true;
-            imageOptions.viewId = QStringLiteral("pdf:page=%1:crop=%2")
-                                      .arg(options.page)
-                                      .arg(
-                                          QString::fromLatin1(
-                                              QCryptographicHash::hash(
-                                                  QByteArray::fromStdString(geometry.dump()),
-                                                  QCryptographicHash::Sha256)
-                                                  .toHex()));
+            imageOptions.viewId         = attachmentOptions.viewId + QStringLiteral(":crop=")
+                                          + digest(QByteArray::fromStdString(geometry.dump()));
         }
-        const auto image
-            = run(QStringLiteral("pdftoppm"), renderArguments, 16 * 1024 * 1024, context);
+        const auto image = run(
+            QStringLiteral("pdftoppm"), renderArguments, 16 * 1024 * 1024, context, false, deadline);
         if (!image.error.isEmpty())
             return QStringLiteral("Error: %1").arg(image.error);
         QString evidence;
@@ -964,6 +1080,8 @@ QString readPdf(
                    {"geometry", geometry}};
             evidence = QString::fromStdString(provenance.dump()) + QLatin1Char('\n');
         }
+        if (producedViewId)
+            *producedViewId = imageOptions.viewId;
         return QStringLiteral("PDF page %1 of %2\n").arg(options.page).arg(total) + evidence
                + QSocImageAttach::buildAttachmentResult(
                    QStringLiteral("%1#page=%2").arg(source).arg(options.page),
@@ -986,7 +1104,9 @@ QString readPdf(
          path,
          QStringLiteral("-")},
         2 * 1024 * 1024,
-        context);
+        context,
+        false,
+        deadline);
     if (!extracted.error.isEmpty())
         return QStringLiteral("Error: %1").arg(extracted.error);
     const auto texts = QString::fromUtf8(extracted.bytes).split(QChar::fromLatin1('\f'));
@@ -1116,6 +1236,8 @@ public:
         });
     }
 
+    const QList<ZipEntry> &entries() const { return entries_; }
+
     QByteArray read(const QString &name, QString *error)
     {
         const auto entry
@@ -1128,9 +1250,14 @@ public:
         }
         QString pattern;
         for (const QChar ch : name) {
-            if (QStringLiteral("[]*?").contains(ch))
-                pattern += QLatin1Char('\\');
-            pattern += ch;
+            if (ch == QLatin1Char('['))
+                pattern += QStringLiteral("[[]");
+            else if (ch == QLatin1Char('*'))
+                pattern += QStringLiteral("[*]");
+            else if (ch == QLatin1Char('?'))
+                pattern += QStringLiteral("[?]");
+            else
+                pattern += ch;
         }
         const auto result = run(
             QStringLiteral("unzip"),
@@ -1143,7 +1270,12 @@ public:
         if (!result.error.isEmpty())
             *error = result.error;
         else if (result.bytes.size() != entry->size)
-            *error = QStringLiteral("Expanded Office entry size differs from its ZIP directory");
+            *error
+                = QStringLiteral(
+                      "Expanded Office entry %1 has %2 bytes, expected %3 from its ZIP directory")
+                      .arg(name)
+                      .arg(result.bytes.size())
+                      .arg(entry->size);
         return result.bytes;
     }
 
@@ -1435,6 +1567,237 @@ QString readOfficeMedia(
     return QString::fromStdString(result.dump(2));
 }
 
+bool screenOfficeRenderer(OfficeArchive &archive, const QString &extension, QString *error)
+{
+    const QString main = extension == "docx"   ? QStringLiteral("word/document.xml")
+                         : extension == "xlsx" ? QStringLiteral("xl/workbook.xml")
+                                               : QStringLiteral("ppt/presentation.xml");
+    if (!archive.contains(main) || !archive.contains(QStringLiteral("[Content_Types].xml"))) {
+        *error = QStringLiteral("Office rendering requires a complete OOXML package");
+        return false;
+    }
+    for (const auto &entry : archive.entries()) {
+        const QString lower = entry.name.toLower();
+        if (lower.contains(QStringLiteral("vbaproject"))
+            || lower.contains(QStringLiteral("/embeddings/"))
+            || lower.contains(QStringLiteral("/activex/"))
+            || lower.startsWith(QStringLiteral("customui/"))
+            || lower.startsWith(QStringLiteral("basic/"))
+            || lower.startsWith(QStringLiteral("scripts/")) || lower == QStringLiteral("mimetype")
+            || lower.contains(QStringLiteral("/externallinks/"))
+            || lower == QStringLiteral("xl/connections.xml")) {
+            *error = QStringLiteral(
+                "Office rendering refuses macros, embedded objects and data connections");
+            return false;
+        }
+        if (!lower.endsWith(QStringLiteral(".xml")) && !lower.endsWith(QStringLiteral(".rels")))
+            continue;
+        const auto bytes = archive.read(entry.name, error);
+        if (!error->isEmpty())
+            return false;
+        QXmlStreamReader xml(bytes);
+        while (advance(xml)) {
+            if (!xml.isStartElement())
+                continue;
+            const auto name = xml.name();
+            if (name == QStringLiteral("Relationship")) {
+                const QString type
+                    = xml.attributes().value(QStringLiteral("Type")).toString().toLower();
+                const bool external = xml.attributes()
+                                          .value(QStringLiteral("TargetMode"))
+                                          .compare(QStringLiteral("External"), Qt::CaseInsensitive)
+                                      == 0;
+                if ((external && !type.endsWith(QStringLiteral("/image"))
+                     && !type.endsWith(QStringLiteral("/hyperlink")))
+                    || type.endsWith(QStringLiteral("/attachedtemplate"))
+                    || type.endsWith(QStringLiteral("/oleobject"))
+                    || type.endsWith(QStringLiteral("/control"))
+                    || type.endsWith(QStringLiteral("/afchunk")))
+                    xml.raiseError(QStringLiteral(
+                        "Active Office relationship is unsupported by the renderer"));
+            } else if (name == QStringLiteral("Override") || name == QStringLiteral("Default")) {
+                if (xml.attributes()
+                        .value(QStringLiteral("ContentType"))
+                        .contains(QStringLiteral("macroEnabled"), Qt::CaseInsensitive))
+                    xml.raiseError(QStringLiteral(
+                        "Macro-enabled Office content is unsupported by the renderer"));
+            } else if (
+                name == QStringLiteral("instrText") || name == QStringLiteral("f")
+                || name == QStringLiteral("definedName") || name == QStringLiteral("fldSimple")) {
+                QString formula = name == QStringLiteral("fldSimple")
+                                      ? xml.attributes()
+                                            .value(
+                                                QStringLiteral(
+                                                    "http://schemas.openxmlformats.org/"
+                                                    "wordprocessingml/2006/main"),
+                                                QStringLiteral("instr"))
+                                            .toString()
+                                            .toUpper()
+                                      : xml.readElementText().toUpper();
+                static const QRegularExpression strings(QStringLiteral("\"(?:[^\"]|\"\")*\""));
+                formula.remove(strings);
+                static const QRegularExpression activeFunction(QStringLiteral(
+                    "(?:^|[^A-Z0-9_])(?:_XLFN\\.|COM\\.MICROSOFT\\.)?(?:WEBSERVICE|DDE|RTD|IMAGE)"
+                    "\\s*\\("));
+                static const QRegularExpression activeField(
+                    QStringLiteral("^\\s*(?:DDE(?:AUTO)?|INCLUDETEXT|INCLUDEPICTURE)\\b"));
+                if (((name == QStringLiteral("instrText") || name == QStringLiteral("fldSimple"))
+                         ? activeField
+                         : activeFunction)
+                        .match(formula)
+                        .hasMatch())
+                    xml.raiseError(QStringLiteral(
+                        "Active Office field or formula is unsupported by the renderer"));
+            }
+        }
+        if (xml.hasError()) {
+            *error = QStringLiteral("Office renderer screening failed: %1").arg(xml.errorString());
+            return false;
+        }
+    }
+    return true;
+}
+
+QString renderOffice(
+    QFile                          &file,
+    const QString                  &extension,
+    const Options                  &options,
+    OfficeArchive                  &archive,
+    QSocToolCallContext            *context,
+    QLLMService                    *llm,
+    const QSocImageAttach::Options &attachmentOptions,
+    const QString                  &source,
+    QDeadlineTimer                  deadline)
+{
+    QString error;
+    if (!screenOfficeRenderer(archive, extension, &error))
+        return QStringLiteral("Error: %1").arg(error);
+    QString program;
+#ifdef Q_OS_WIN
+    const QStringList names{
+        QStringLiteral("soffice.com"), QStringLiteral("libreoffice"), QStringLiteral("soffice")};
+#else
+    const QStringList names{QStringLiteral("libreoffice"), QStringLiteral("soffice")};
+#endif
+    for (const auto &name : names) {
+        program = QStandardPaths::findExecutable(name);
+        if (!program.isEmpty())
+            break;
+    }
+    if (program.isEmpty())
+        return QStringLiteral(
+            "Error: Missing optional dependency: LibreOffice 25.2 or newer CLI "
+            "(libreoffice/soffice)");
+    QTemporaryDir temporary;
+    if (!temporary.isValid())
+        return QStringLiteral("Error: Cannot create an Office renderer directory");
+    const QString profile = temporary.filePath(QStringLiteral("profile"));
+    if (!QDir().mkpath(profile + QStringLiteral("/user"))
+        || !QDir().mkpath(temporary.filePath(QStringLiteral("home")))
+        || !QDir().mkpath(temporary.filePath(QStringLiteral("tmp"))))
+        return QStringLiteral("Error: Cannot create an Office renderer profile");
+    QFile            config(profile + QStringLiteral("/user/registrymodifications.xcu"));
+    const QByteArray settings = R"(<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry">
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting">
+<prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop>
+<prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop>
+<prop oor:name="DisableActiveContent" oor:op="fuse"><value>true</value></prop>
+<prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop>
+</item>
+<item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>2</value></prop></item>
+<item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>1</value></prop></item>
+</oor:items>)";
+    if (!config.open(QIODevice::WriteOnly) || config.write(settings) != settings.size())
+        return QStringLiteral("Error: Cannot write an Office renderer profile");
+    config.close();
+    const auto version = run(
+        program,
+        {QStringLiteral("-env:UserInstallation=")
+             + QUrl::fromLocalFile(profile).toString(QUrl::FullyEncoded),
+         QStringLiteral("--version")},
+        4096,
+        context,
+        true,
+        deadline,
+        temporary.path());
+    if (!version.error.isEmpty())
+        return QStringLiteral("Error: %1").arg(version.error);
+    const QString identity = QString::fromUtf8(version.bytes).trimmed();
+    static const QRegularExpression supported(QStringLiteral("^LibreOffice ([0-9]+)\\.([0-9]+)\\."));
+    const auto match = supported.match(identity);
+    if (!match.hasMatch() || identity.size() > 512)
+        return QStringLiteral("Error: Cannot identify the Office renderer version");
+    if (match.captured(1).toInt() < 25
+        || (match.captured(1).toInt() == 25 && match.captured(2).toInt() < 2))
+        return QStringLiteral("Error: Office rendering requires LibreOffice 25.2 or newer");
+    const QString input = temporary.filePath(QStringLiteral("source.") + extension);
+    if (!QFile::copy(file.fileName(), input))
+        return QStringLiteral("Error: Cannot stage the Office renderer input");
+    const auto rendered = run(
+        program,
+        {QStringLiteral("-env:UserInstallation=")
+             + QUrl::fromLocalFile(profile).toString(QUrl::FullyEncoded),
+         QStringLiteral("--headless"),
+         QStringLiteral("--nologo"),
+         QStringLiteral("--nodefault"),
+         QStringLiteral("--norestore"),
+         QStringLiteral("--convert-to"),
+         QStringLiteral("pdf"),
+         QStringLiteral("--outdir"),
+         temporary.path(),
+         input},
+        16384,
+        context,
+        false,
+        deadline,
+        temporary.path());
+    if (!rendered.error.isEmpty())
+        return QStringLiteral("Error: %1").arg(rendered.error);
+    QFile pdf(temporary.filePath(QStringLiteral("source.pdf")));
+    if (!pdf.open(QIODevice::ReadOnly) || pdf.size() <= 0 || pdf.size() > kInputBytes)
+        return QStringLiteral("Error: Office renderer did not produce a bounded PDF");
+    const QByteArray bytes = pdf.read(kInputBytes + 1);
+    if (bytes.size() != pdf.size() || !bytes.startsWith("%PDF-"))
+        return QStringLiteral("Error: Office renderer produced an invalid PDF");
+    const QString pdfHash       = digest(bytes);
+    auto          imageOptions  = attachmentOptions;
+    imageOptions.preserveSource = true;
+    imageOptions.viewId = QStringLiteral("office:pdf=%1:page=%2").arg(pdfHash).arg(options.page);
+    const auto backend
+        = run(QStringLiteral("pdftoppm"), {QStringLiteral("-v")}, 4096, context, true, deadline);
+    if (!backend.error.isEmpty())
+        return QStringLiteral("Error: %1").arg(backend.error);
+    const QString pdfBackend = QString::fromUtf8(backend.bytes).section('\n', 0, 0).simplified();
+    if (!pdfBackend.startsWith(QStringLiteral("pdftoppm version ")) || pdfBackend.size() > 200)
+        return QStringLiteral("Error: Cannot identify the derived PDF renderer version");
+    QString    producedViewId;
+    const auto image = readPdf(
+        pdf.fileName(), source, options, llm, context, imageOptions, {}, deadline, &producedViewId);
+    if (image.startsWith(QStringLiteral("Error:")))
+        return image;
+    const json provenance
+        = {{"stage", "produced"},
+           {"format", extension.toStdString()},
+           {"view_kind", "office_derived_pdf"},
+           {"source", source.toStdString()},
+           {"source_sha256", attachmentOptions.sourceId.toStdString()},
+           {"source_bytes", file.size()},
+           {"renderer", "libreoffice"},
+           {"renderer_version", identity.toStdString()},
+           {"pdf_renderer", pdfBackend.toStdString()},
+           {"derived_pdf_sha256", pdfHash.toStdString()},
+           {"derived_pdf_bytes", bytes.size()},
+           {"derived_page", options.page},
+           {"view_id", producedViewId.toStdString()},
+           {"notice",
+            "Derived layout uses local fonts and renderer evaluation. Page numbers are PDF pages, "
+            "not original XML parts. External link updates are disabled. Missing linked content, "
+            "substituted fonts, reflow and formula values can differ from the original. Native "
+            "text/media remain independent."}};
+    return QString::fromStdString(provenance.dump()) + QLatin1Char('\n') + image;
+}
+
 QString readOffice(
     QFile                          &file,
     const QString                  &extension,
@@ -1442,21 +1805,22 @@ QString readOffice(
     QSocToolCallContext            *context,
     QLLMService                    *llm,
     const QSocImageAttach::Options &attachmentOptions,
-    const QString                  &source)
+    const QString                  &source,
+    QDeadlineTimer                  deadline)
 {
-    if (options.mode == "image")
-        return QStringLiteral(
-            "Error: Office image rendering is unsupported; use mode=text or mode=list");
+    if (options.mode == "image" && options.renderer.isEmpty())
+        return QStringLiteral("Error: Office image mode requires explicit renderer=libreoffice");
     QString         error;
     QList<ZipEntry> entries;
     if (!archiveEntries(file, &entries, &error))
         return QStringLiteral("Error: %1").arg(error);
-    const bool           media    = options.mode == "media" || options.mode == "media_image";
-    const QDeadlineTimer deadline = media ? QDeadlineTimer(30000)
-                                          : QDeadlineTimer(QDeadlineTimer::Forever);
-    OfficeArchive        archive(file.fileName(), std::move(entries), context, deadline);
-    QList<OfficePart>    parts;
-    QString              unit;
+    const bool    media = options.mode == "media" || options.mode == "media_image";
+    OfficeArchive archive(file.fileName(), std::move(entries), context, deadline);
+    if (options.mode == "image")
+        return renderOffice(
+            file, extension, options, archive, context, llm, attachmentOptions, source, deadline);
+    QList<OfficePart> parts;
+    QString           unit;
     if (extension == QStringLiteral("docx")) {
         unit = QStringLiteral("document");
         parts.append({QStringLiteral("Document body"), QStringLiteral("word/document.xml")});
@@ -1553,7 +1917,10 @@ QString QSocToolDocumentRead::getDescription() const
         "a normalized view rectangle from the source. mode=text_boxes returns bounded native word "
         "boxes with separate word-index continuation. OCR is not performed. "
         "Office media lists name original images and occurrence metadata. media_image explicitly "
-        "selects one original. Office page layout is not rendered. Optional dependencies: Poppler "
+        "selects one original. Office mode=image requires explicit renderer=libreoffice (25.2+), "
+        "and selects derived PDF pages with source/derived digests. Native Office text never "
+        "recalculates formulas. Derived pages can reflow or evaluate differently. "
+        "Optional dependencies: Poppler "
         "pdfinfo/pdftotext/pdftoppm for "
         "PDF, unzip for Office. Inputs are limited to 32 MiB and Office expanded entries to 8 MiB "
         "each/64 MiB total. Remote files are read through SFTP into a private local snapshot; "
@@ -1572,21 +1939,31 @@ json QSocToolDocumentRead::getParametersSchema() const
            {{"type", "string"},
             {"enum", {"text", "image", "list", "text_boxes", "media", "media_image"}},
             {"description",
-             "text by default; image renders one PDF page; text_boxes returns one PDF page of "
+             "text by default; image renders one PDF page or an explicit derived Office page; "
+             "text_boxes returns one PDF page of "
              "native word boxes; list shows parts"}}},
           {"page",
            {{"type", "integer"},
             {"minimum", 1},
-            {"description", "First page, slide or worksheet (1-based, default 1); DOCX uses 1"}}},
+            {"description",
+             "First page, slide or worksheet (1-based, default 1); native DOCX uses 1. Office "
+             "renderer uses derived PDF pages"}}},
           {"page_count",
            {{"type", "integer"},
             {"minimum", 1},
             {"maximum", 5},
-            {"description", "Number of parts, default 1; PDF image and text_boxes require 1"}}},
+            {"description", "Number of parts, default 1; image and text_boxes require 1"}}},
+          {"renderer",
+           {{"type", "string"},
+            {"enum", {"libreoffice"}},
+            {"description",
+             "Office image only: explicitly render a derived PDF locally with an optional "
+             "installed LibreOffice. Page is a derived PDF page, not a worksheet or slide index"}}},
           {"region",
            {{"type", "object"},
             {"description",
-             "PDF image only: top-left normalized rectangle in the rotated CropBox view; requires "
+             "PDF or rendered Office image: top-left normalized rectangle in the rotated CropBox "
+             "view; requires "
              "target_long_edge"},
             {"properties",
              {{"x", {{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
@@ -1648,7 +2025,8 @@ json QSocToolDocumentRead::getParametersSchema() const
           {"source_sha256",
            {{"type", "string"},
             {"description",
-             "Optional media_image guard: require the source digest returned by the media list"}}},
+             "Optional media_image or rendered Office image guard: require the original source "
+             "digest"}}},
           {"max_chars",
            {{"type", "integer"},
             {"minimum", 1},
@@ -1670,7 +2048,7 @@ QString QSocToolDocumentRead::execute(const json &arguments)
     const auto                          cancelled  = [context, hadContext] {
         return hadContext && (!context || context->isCancellationRequested());
     };
-    const QDeadlineTimer inputDeadline(30000);
+    const QDeadlineTimer deadline(30000);
     QString              base = paths_ ? paths_->getWorkingDir() : QString();
     if (base.isEmpty() && paths_)
         base = paths_->getProjectDir();
@@ -1691,7 +2069,7 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         if (!remote_->sftp())
             return QStringLiteral("Error: Remote SFTP input is not connected");
         const bool resolved = remote_->sftp()->runWithin(
-            inputDeadline,
+            deadline,
             [&] {
                 remote_->learnHome(requested);
                 return remote_->sftp()
@@ -1702,7 +2080,7 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         if (!resolved) {
             if (cancelled())
                 error = QStringLiteral("Document read cancelled");
-            else if (inputDeadline.hasExpired())
+            else if (deadline.hasExpired())
                 error = QStringLiteral("Document input deadline expired");
             return QStringLiteral("Error: %1").arg(error);
         }
@@ -1712,8 +2090,10 @@ QString QSocToolDocumentRead::execute(const json &arguments)
     const QString extension = QFileInfo(requested).suffix().toLower();
     if (extension != "pdf" && extension != "docx" && extension != "xlsx" && extension != "pptx")
         return QStringLiteral("Error: read_document supports PDF, DOCX, XLSX and PPTX only");
-    if (options.region && extension != "pdf")
+    if (options.region && extension != "pdf" && options.renderer.isEmpty())
         return QStringLiteral("Error: region is supported only for PDF image mode");
+    if (!options.renderer.isEmpty() && extension == "pdf")
+        return QStringLiteral("Error: renderer applies only to Office image mode");
     if (options.mode == "text_boxes" && extension != "pdf")
         return QStringLiteral("Error: text_boxes is supported only for PDF");
     if ((options.mode == "media" || options.mode == "media_image") && extension == "pdf")
@@ -1727,21 +2107,17 @@ QString QSocToolDocumentRead::execute(const json &arguments)
                 .toStdString()}};
     const QString sourceIdentity = digest(QByteArray::fromStdString(sourceKey.dump()));
     auto          snapshot
-        = remote_
-              ? QSocInputSnapshot::fromRemote(
-                    remote_->sftp(), path, kInputBytes, &error, cancelled, inputDeadline)
-              : QSocInputSnapshot::fromLocal(path, kInputBytes, &error, cancelled, inputDeadline);
+        = remote_ ? QSocInputSnapshot::fromRemote(
+                        remote_->sftp(), path, kInputBytes, &error, cancelled, deadline)
+                  : QSocInputSnapshot::fromLocal(path, kInputBytes, &error, cancelled, deadline);
     if (!snapshot)
         return QStringLiteral("Error: %1").arg(error);
     if (cancelled())
         return QStringLiteral("Error: Document read cancelled");
     if (!options.expectedSource.isEmpty()
         && options.expectedSource != QString::fromLatin1(snapshot->sha256()))
-        return QStringLiteral("Error: Office media source changed. List media again");
-    QString              backend;
-    const QDeadlineTimer conversionDeadline = options.mode == "text_boxes"
-                                                  ? QDeadlineTimer(30000)
-                                                  : QDeadlineTimer(QDeadlineTimer::Forever);
+        return QStringLiteral("Error: Office source changed. Read the source again");
+    QString backend;
     if (options.cursor) {
         const auto &cursor = *options.cursor;
         if (cursor.at("source") != sourceIdentity.toStdString())
@@ -1752,7 +2128,7 @@ QString QSocToolDocumentRead::execute(const json &arguments)
         if (cursor.at("format") != extension.toStdString()
             || cursor.at("stream") != (options.mode == "text_boxes" ? kBoxStream : kTextStream))
             return QStringLiteral("Error: Document cursor belongs to a different text stream");
-        backend = extractorBackend(extension, context, &error, conversionDeadline);
+        backend = extractorBackend(extension, context, &error, deadline);
         if (backend.isEmpty())
             return QStringLiteral("Error: Cannot resume document cursor: %1").arg(error);
         if (cursor.at("backend") != backend.toStdString())
@@ -1765,20 +2141,16 @@ QString QSocToolDocumentRead::execute(const json &arguments)
     attachmentOptions.viewId   = QStringLiteral("pdf:page=%1").arg(options.page);
     if (extension == "pdf")
         output = readPdf(
-            snapshot->path(),
-            path,
-            options,
-            llm_,
-            context,
-            attachmentOptions,
-            backend,
-            conversionDeadline);
+            snapshot->path(), path, options, llm_, context, attachmentOptions, backend, deadline);
     else {
         QFile file(snapshot->path());
         if (!file.open(QIODevice::ReadOnly))
             return QStringLiteral("Error: Cannot open input snapshot");
-        output = readOffice(file, extension, options, context, llm_, attachmentOptions, path);
+        output
+            = readOffice(file, extension, options, context, llm_, attachmentOptions, path, deadline);
     }
+    if (options.mode != "image" && options.mode != "media_image" && deadline.hasExpired())
+        return QStringLiteral("Error: Document read deadline expired");
     if (output.startsWith(QLatin1Char('{'))) {
         auto result = json::parse(output.toStdString(), nullptr, false);
         if (result.is_object()) {
@@ -1811,9 +2183,11 @@ QString QSocToolDocumentRead::execute(const json &arguments)
                 if (cancelled())
                     return QStringLiteral("Error: Document read cancelled");
                 if (truncated && backend.isEmpty())
-                    backend = extractorBackend(extension, context, &error);
+                    backend = extractorBackend(extension, context, &error, deadline);
                 if (cancelled())
                     return QStringLiteral("Error: Document read cancelled");
+                if (deadline.hasExpired())
+                    return QStringLiteral("Error: Document read deadline expired");
                 if (!backend.isEmpty())
                     addCursors(&result, sourceIdentity, snapshot->sha256(), backend);
                 else if (truncated)

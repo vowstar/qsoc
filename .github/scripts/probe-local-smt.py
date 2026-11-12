@@ -85,6 +85,10 @@ def replies(stream, ids):
 
 
 def main(endpoint, program=None):
+    with connect(endpoint) as ready:
+        greeting = receive(ready)
+        if greeting.get("daemon") != "qsoc-agentd" or greeting.get("protocol") != 1:
+            raise RuntimeError("Unexpected daemon greeting")
     if program:
         for arguments, source, status in (
                 ([], "(assert true)", "sat"),
@@ -96,7 +100,8 @@ def main(endpoint, program=None):
             result = json.loads(completed.stdout)
             if (completed.returncode != 0 or result.get("execution") != "completed"
                     or result.get("solver_status") != status):
-                raise RuntimeError(f"Packaged SMT CLI failed: {result}, {completed.stderr!r}")
+                raise RuntimeError(f"Packaged SMT CLI failed for {arguments}: "
+                                   f"{result}, {completed.stderr!r}")
         print("Packaged owned and connected SMT CLI passed", flush=True)
     request = {"smtlib": "(declare-const x Int)(assert (= x 1))",
                "mode": "check", "timeout_ms": 10000}

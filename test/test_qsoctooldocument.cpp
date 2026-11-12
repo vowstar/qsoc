@@ -15,23 +15,34 @@
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QHash>
 #include <QImage>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTimer>
+#include <QUrl>
 #include <QtTest>
 
 #include <cmath>
 #include <cstdio>
 #include <limits>
+
+#ifdef Q_OS_MACOS
+#include <cerrno>
+#include <libproc.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -324,6 +335,121 @@ QByteArray relationship(
            + "\" Target=\"" + target + "\"" + (external ? " TargetMode=\"External\"" : "") + "/>";
 }
 
+QList<Member> renderedOfficeMembers(const QString &format)
+{
+    const QByteArray root = format == "docx"   ? QByteArray("word/document.xml")
+                            : format == "xlsx" ? QByteArray("xl/workbook.xml")
+                                               : QByteArray("ppt/presentation.xml");
+    const QByteArray contentType
+        = format == "docx"
+              ? QByteArray(
+                    "application/"
+                    "vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml")
+          : format == "xlsx"
+              ? QByteArray(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml")
+              : QByteArray(
+                    "application/"
+                    "vnd.openxmlformats-officedocument.presentationml.presentation.main+xml");
+    QByteArray types
+        = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+          "<Default Extension=\"rels\" "
+          "ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+          "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+          "<Override PartName=\"/"
+          + root + "\" ContentType=\"" + contentType + "\"/>";
+    QList<Member> members{
+        {"_rels/.rels", relationships({relationship("office", "officeDocument", root)})}};
+    if (format == "docx") {
+        members.append(
+            Member{
+                root,
+                "<w:document" + mediaNamespaces()
+                    + "><w:body>"
+                      "<w:p><w:r><w:t>Neutral Writer Page 1 中文</w:t></w:r></w:p>"
+                      "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"
+                      "<w:p><w:r><w:t>Neutral Writer Page 2</w:t></w:r></w:p>"
+                      "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/></w:sectPr>"
+                      "</w:body></w:document>"});
+    } else if (format == "xlsx") {
+        members.append(
+            Member{
+                root,
+                "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+                "<sheets><sheet name=\"Neutral1\" sheetId=\"1\" r:id=\"s1\"/>"
+                "<sheet name=\"Neutral2\" sheetId=\"2\" r:id=\"s2\"/></sheets>"
+                "<calcPr calcMode=\"auto\" fullCalcOnLoad=\"1\"/></workbook>"});
+        members.append(
+            Member{
+                "xl/_rels/workbook.xml.rels",
+                relationships(
+                    {relationship("s1", "worksheet", "worksheets/sheet1.xml"),
+                     relationship("s2", "worksheet", "worksheets/sheet2.xml")})});
+        for (int i = 1; i <= 2; ++i) {
+            const QByteArray name = "xl/worksheets/sheet" + QByteArray::number(i) + ".xml";
+            types += "<Override PartName=\"/" + name
+                     + "\" "
+                       "ContentType=\"application/"
+                       "vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>";
+            members.append(
+                Member{
+                    name,
+                    "<worksheet "
+                    "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+                    "<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Neutral Calc Sheet "
+                        + QByteArray::number(i)
+                        + "</t></is></c></row>"
+                          "<row r=\"2\"><c r=\"A2\"><f>2+3</f><v>9999</v></c></row></sheetData>"
+                          "<pageMargins left=\"0.5\" right=\"0.5\" top=\"0.5\" bottom=\"0.5\" "
+                          "header=\"0.2\" footer=\"0.2\"/>"
+                          "<pageSetup paperSize=\"9\" orientation=\"portrait\"/></worksheet>"});
+        }
+    } else {
+        members.append(
+            Member{
+                root,
+                "<p:presentation" + mediaNamespaces()
+                    + "><p:sldIdLst><p:sldId id=\"256\" r:id=\"s1\"/><p:sldId id=\"257\" "
+                      "r:id=\"s2\"/></p:sldIdLst>"
+                      "<p:sldSz cx=\"9144000\" cy=\"6858000\"/><p:notesSz cx=\"6858000\" "
+                      "cy=\"9144000\"/>"
+                      "</p:presentation>"});
+        members.append(
+            Member{
+                "ppt/_rels/presentation.xml.rels",
+                relationships(
+                    {relationship("s1", "slide", "slides/slide1.xml"),
+                     relationship("s2", "slide", "slides/slide2.xml")})});
+        for (int i = 1; i <= 2; ++i) {
+            const QByteArray name = "ppt/slides/slide" + QByteArray::number(i) + ".xml";
+            types += "<Override PartName=\"/" + name
+                     + "\" "
+                       "ContentType=\"application/"
+                       "vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>";
+            members.append(
+                Member{
+                    name,
+                    "<p:sld" + mediaNamespaces()
+                        + "><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" "
+                          "name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
+                          "<p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Neutral "
+                          "text\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
+                          "<p:spPr><a:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"6400800\" "
+                          "cy=\"1828800\"/></a:xfrm>"
+                          "<a:prstGeom "
+                          "prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/"
+                          "><a:lstStyle/>"
+                          "<a:p><a:r><a:rPr lang=\"en-US\" sz=\"2400\"/><a:t>Neutral Impress Slide "
+                        + QByteArray::number(i)
+                        + "</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"});
+        }
+    }
+    types += "</Types>";
+    members.append(Member{"[Content_Types].xml", types});
+    return members;
+}
+
 QList<Member> officeMediaMembers(const QString &format, const QByteArray &png)
 {
     QList<Member> members{
@@ -453,6 +579,22 @@ QList<Member> officeMediaMembers(const QString &format, const QByteArray &png)
     return members;
 }
 
+QString officeRendererExecutable()
+{
+#ifdef Q_OS_WIN
+    const QStringList names{
+        QStringLiteral("soffice.com"), QStringLiteral("libreoffice"), QStringLiteral("soffice")};
+#else
+    const QStringList names{QStringLiteral("libreoffice"), QStringLiteral("soffice")};
+#endif
+    for (const auto &name : names) {
+        const QString program = QStandardPaths::findExecutable(name);
+        if (!program.isEmpty())
+            return program;
+    }
+    return {};
+}
+
 class TestQSocToolDocument : public QObject
 {
     Q_OBJECT
@@ -554,6 +696,38 @@ private slots:
                     QByteArray::fromStdString(attachment.at("data").get<std::string>())),
                 png);
             QCOMPARE(attachment.at("source_id"), media.at("source_sha256"));
+        }
+        if (!officeRendererExecutable().isEmpty()
+            && !QStandardPaths::findExecutable("pdfinfo").isEmpty()
+            && !QStandardPaths::findExecutable("pdftoppm").isEmpty()) {
+            for (const QString &format :
+                 {QStringLiteral("docx"), QStringLiteral("xlsx"), QStringLiteral("pptx")}) {
+                const QString name          = QStringLiteral("rendered.") + format;
+                const auto    renderedBytes = makeZip(renderedOfficeMembers(format));
+                QFile         input(fixture.workDir() + QLatin1Char('/') + name);
+                QVERIFY(input.open(QIODevice::WriteOnly));
+                QCOMPARE(input.write(renderedBytes), renderedBytes.size());
+                input.close();
+                const QString text = mediaTool.execute(
+                    {{"file_path", name.toStdString()},
+                     {"mode", "image"},
+                     {"renderer", "libreoffice"},
+                     {"page", 2}});
+                const auto attachment = QSocImageAttach::attachmentPayload(text);
+                QVERIFY2(attachment.is_object(), qPrintable(text.left(1500)));
+                const auto provenance = json::parse(text.section('\n', 0, 0).toStdString());
+                QCOMPARE(
+                    provenance.at("source"),
+                    json((fixture.workDir() + QLatin1Char('/') + name).toStdString()));
+                QCOMPARE(
+                    provenance.at("source_sha256"),
+                    json(
+                        QCryptographicHash::hash(renderedBytes, QCryptographicHash::Sha256)
+                            .toHex()
+                            .toStdString()));
+                QCOMPARE(provenance.at("derived_page"), json(2));
+                QVERIFY(attachment.at("preserve_source").get<bool>());
+            }
         }
         if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
             || QStandardPaths::findExecutable("pdftotext").isEmpty()
@@ -1238,6 +1412,343 @@ private slots:
         QVERIFY(tool.execute(request).contains("virtual page exceeds safe rendering limits"));
     }
 
+    void converterStepsShareOneDocumentDeadline()
+    {
+#ifdef Q_OS_UNIX
+        const QString unzip  = QStandardPaths::findExecutable("unzip");
+        const QString python = QStandardPaths::findExecutable("python3");
+        if (unzip.isEmpty() || python.isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip and python3"));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path
+            = save(directory, "deadline.xlsx", makeZip(renderedOfficeMembers("xlsx")));
+        const QString log     = directory.filePath("steps.log");
+        const auto    literal = [](const QString &value) {
+            return QByteArray::fromStdString(json(value.toStdString()).dump());
+        };
+        const QByteArray wrapper = "#!" + python.toUtf8()
+                                   + "\nimport os,sys,time\n"
+                                     "with open("
+                                   + literal(log)
+                                   + ",'a') as log: log.write('step\\n')\n"
+                                     "time.sleep(11)\nos.execv("
+                                   + literal(unzip) + ",[" + literal(unzip) + "]+sys.argv[1:])\n";
+        const QString    program = save(directory, "unzip", wrapper);
+        QVERIFY(
+            QFile::setPermissions(program, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+        const auto previous = qgetenv("PATH");
+        const auto restore  = qScopeGuard([&] {
+            if (previous.isNull())
+                qunsetenv("PATH");
+            else
+                qputenv("PATH", previous);
+        });
+        qputenv("PATH", directory.path().toUtf8() + ':' + previous);
+        QSocToolDocumentRead tool;
+        QElapsedTimer        elapsed;
+        elapsed.start();
+        const QString response = tool.execute({{ "file_path", path.toStdString() }});
+        QVERIFY2(
+            response.startsWith("Error:") && response.contains("deadline", Qt::CaseInsensitive),
+            qPrintable(response));
+        QVERIFY(elapsed.elapsed() >= 29000);
+        QVERIFY(elapsed.elapsed() < 36000);
+        QFile steps(log);
+        QVERIFY(steps.open(QIODevice::ReadOnly));
+        QCOMPARE(steps.readAll().count('\n'), 3);
+#else
+        QSKIP("Generated delayed converter requires Unix");
+#endif
+    }
+
+#ifdef Q_OS_MACOS
+    void macProcessExitBeforeFinishedDelivery()
+    {
+        int pendingExits = 0, emptyGroups = 0;
+        for (int iteration = 0; iteration < 16; ++iteration) {
+            QProcess process;
+            process.setChildProcessModifier([] {
+                if (::setsid() < 0)
+                    _exit(126);
+            });
+            process.start(QStringLiteral("/usr/bin/true"));
+            QVERIFY(process.waitForStarted(5000));
+            const auto group = static_cast<pid_t>(process.processId());
+            QTest::qSleep(50);
+            const bool pending = process.state() == QProcess::Running;
+            pid_t      members[2]{};
+            errno                = 0;
+            const int  count     = proc_listpgrppids(group, members, sizeof(members));
+            const int  listError = errno;
+            const bool confirmed = process.waitForFinished(0);
+            if (pending && confirmed) {
+                ++pendingExits;
+                if (count == 0) {
+                    ++emptyGroups;
+                    qInfo() << "Finished notification pending: members" << count << "errno"
+                            << listError;
+                }
+            }
+            if (process.state() != QProcess::NotRunning)
+                QVERIFY(process.waitForFinished(5000));
+            QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+            QCOMPARE(process.exitCode(), 0);
+        }
+        qInfo() << "Short-lived CLI exit windows:" << pendingExits
+                << "empty groups:" << emptyGroups;
+        QVERIFY(pendingExits > 0);
+        QVERIFY(emptyGroups > 0);
+        QProcess live;
+        live.setChildProcessModifier([] {
+            if (::setsid() < 0)
+                _exit(126);
+        });
+        live.start(QStringLiteral("/bin/sleep"), {QStringLiteral("5")});
+        QVERIFY(live.waitForStarted(5000));
+        const auto cleanup = qScopeGuard([&] {
+            live.kill();
+            live.waitForFinished(5000);
+        });
+        pid_t      member[2]{};
+        const int  count
+            = proc_listpgrppids(static_cast<pid_t>(live.processId()), member, sizeof(member));
+        QVERIFY(count > 0 && count <= 2);
+        QVERIFY(!live.waitForFinished(0));
+        QCOMPARE(live.state(), QProcess::Running);
+    }
+#endif
+
+    void officeRendererRequiresExplicitChoiceAndScreensActiveContent()
+    {
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QSocToolDocumentRead tool;
+        const QString path = save(directory, "neutral.docx", makeZip(renderedOfficeMembers("docx")));
+        QVERIFY(tool.execute({{"file_path", path.toStdString()}, {"mode", "image"}})
+                    .contains("explicit renderer"));
+        for (const json &options :
+             {json{{"mode", "text"}, {"renderer", "libreoffice"}},
+              json{{"mode", "image"}, {"renderer", "unknown"}},
+              json{{"mode", "image"}, {"renderer", "libreoffice"}, {"page_count", 2}},
+              json{{"mode", "image"}, {"renderer", "libreoffice"}, {"offset", 0}}}) {
+            auto args         = options;
+            args["file_path"] = path.toStdString();
+            QVERIFY(tool.execute(args).startsWith("Error:"));
+        }
+        auto active = renderedOfficeMembers("docx");
+        active.append(Member{"word/vbaProject.bin", QByteArray("Generated macro marker")});
+        const QString macro         = save(directory, "active.docx", makeZip(active));
+        const QString macroResponse = tool.execute(
+            {{"file_path", macro.toStdString()}, {"mode", "image"}, {"renderer", "libreoffice"}});
+        QVERIFY2(macroResponse.contains("refuses macros"), qPrintable(macroResponse));
+        active = renderedOfficeMembers("docx");
+        active.append(
+            Member{
+                "word/_rels/document.xml.rels",
+                relationships({relationship(
+                    "template", "attachedTemplate", "file:///generated-template.dotx", true)})});
+        const QString linked = save(directory, "template.docx", makeZip(active));
+        QVERIFY(tool.execute({{"file_path", linked.toStdString()},
+                              {"mode", "image"},
+                              {"renderer", "libreoffice"}})
+                    .contains("Active Office relationship"));
+        active = renderedOfficeMembers("docx");
+        for (auto &member : active) {
+            if (member.first == "_rels/.rels")
+                member.second = relationships({relationship(
+                    "outside", "officeDocument", "file:///generated-outside.docx", true)});
+        }
+        const QString externalMain = save(directory, "external-main.docx", makeZip(active));
+        QVERIFY(tool.execute({{"file_path", externalMain.toStdString()},
+                              {"mode", "image"},
+                              {"renderer", "libreoffice"}})
+                    .contains("Active Office relationship"));
+        const auto original = result(tool, {{"file_path", path.toStdString()}});
+        QVERIFY(
+            original.at("parts")[0].at("text").get<std::string>().find("Neutral Writer")
+            != std::string::npos);
+    }
+
+    void officeRendererCancellationKillsDescendantsAndRemovesProfile()
+    {
+#ifdef Q_OS_UNIX
+        const QString unzip = QStandardPaths::findExecutable("unzip");
+        if (unzip.isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QHash<QByteArray, QByteArray> original;
+        for (const QByteArray &key :
+             {QByteArray("PATH"),
+              QByteArray("QSOC_RENDER_CANARY"),
+              QByteArray("LD_PRELOAD"),
+              QByteArray("DYLD_INSERT_LIBRARIES")})
+            original.insert(key, qgetenv(key.constData()));
+        const auto restore = qScopeGuard([&] {
+            for (auto it = original.cbegin(); it != original.cend(); ++it) {
+                if (it.value().isNull())
+                    qunsetenv(it.key().constData());
+                else
+                    qputenv(it.key().constData(), it.value());
+            }
+        });
+        auto       quoted  = [](QString value) {
+            value.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+            return (QLatin1Char('\'') + value + QLatin1Char('\'')).toUtf8();
+        };
+        const QByteArray prefix     = "#!/bin/sh\nprobe=" + quoted(directory.path()) + "\n";
+        const QString    executable = save(
+            directory,
+            "libreoffice",
+            prefix
+                + "printf '%s\\n' \"${QSOC_RENDER_CANARY-unset}\" \"${LD_PRELOAD+present}\" "
+                  "\"${DYLD_INSERT_LIBRARIES+present}\" \"$HOME\" \"$TMPDIR\" > "
+                  "\"$probe/renderer-env\"\n"
+                  "for arg do\n"
+                  "  case \"$arg\" in\n"
+                  "    -env:UserInstallation=*) printf '%s' \"${arg#*=}\" > \"$probe/profile-url\" "
+                  ";;\n"
+                  "    --version) echo 'LibreOffice 25.2.7 RuntimeFixture'; exit 0 ;;\n"
+                  "  esac\n"
+                  "done\n"
+                  "(sleep 2; printf survived > \"$probe/late-marker\") &\n"
+                  "printf started > \"$probe/started\"\n"
+                  "wait\n");
+        const QString unzipWrapper = save(
+            directory,
+            "unzip",
+            prefix + "printf '%s' \"$QSOC_RENDER_CANARY\" > \"$probe/unzip-canary\"\nexec "
+                + quoted(unzip) + " \"$@\"\n");
+        for (const QString &program : {executable, unzipWrapper})
+            QVERIFY(
+                QFile::setPermissions(
+                    program, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+        const QByteArray canary = QByteArray::number(QRandomGenerator::global()->generate64());
+        qputenv("PATH", directory.path().toUtf8() + ':' + original.value("PATH"));
+        qputenv("QSOC_RENDER_CANARY", canary);
+        qputenv("LD_PRELOAD", "");
+        qputenv("DYLD_INSERT_LIBRARIES", "");
+        const QString path = save(directory, "neutral.docx", makeZip(renderedOfficeMembers("docx")));
+        QSocToolDocumentRead tool;
+        QSocToolRegistry     registry;
+        registry.registerTool(&tool);
+        QObject owner;
+        QTimer  cancel;
+        cancel.setInterval(10);
+        connect(&cancel, &QTimer::timeout, &owner, [&] {
+            if (QFile::exists(directory.filePath("started")))
+                registry.abortCalls(&owner);
+        });
+        cancel.start();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const QString response = registry.executeTool(
+            "read_document",
+            {{"file_path", path.toStdString()}, {"mode", "image"}, {"renderer", "libreoffice"}},
+            &owner);
+        cancel.stop();
+        QVERIFY2(response.contains("cancel", Qt::CaseInsensitive), qPrintable(response));
+        QVERIFY(elapsed.elapsed() < 2000);
+        QFile profileFile(directory.filePath("profile-url"));
+        QVERIFY(profileFile.open(QIODevice::ReadOnly));
+        const QString profile = QUrl(QString::fromUtf8(profileFile.readAll())).toLocalFile();
+        QVERIFY(!profile.isEmpty());
+        QVERIFY(!QFile::exists(profile));
+        QFile rendererEnvironment(directory.filePath("renderer-env"));
+        QVERIFY(rendererEnvironment.open(QIODevice::ReadOnly));
+        const auto fields = rendererEnvironment.readAll().split('\n');
+        QVERIFY(fields.size() >= 5);
+        QCOMPARE(fields[0], QByteArray("unset"));
+        QVERIFY(fields[1].isEmpty());
+        QVERIFY(fields[2].isEmpty());
+        const QDir privateDirectory = QFileInfo(profile).dir();
+        QCOMPARE(QString::fromUtf8(fields[3]), privateDirectory.filePath("home"));
+        QCOMPARE(QString::fromUtf8(fields[4]), privateDirectory.filePath("tmp"));
+        QFile unzipCanary(directory.filePath("unzip-canary"));
+        QVERIFY(unzipCanary.open(QIODevice::ReadOnly));
+        QCOMPARE(unzipCanary.readAll(), canary);
+        QTest::qWait(2200);
+        QVERIFY(!QFile::exists(directory.filePath("late-marker")));
+#else
+        QSKIP("Generated process group probe requires Unix");
+#endif
+    }
+
+    void officeRendererProducesBoundedDerivedPages()
+    {
+        if (officeRendererExecutable().isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(
+                QStringLiteral("LibreOffice (libreoffice/soffice.com/soffice)"));
+        for (const QString &dependency :
+             {QStringLiteral("unzip"), QStringLiteral("pdfinfo"), QStringLiteral("pdftoppm")})
+            if (QStandardPaths::findExecutable(dependency).isEmpty())
+                QSOC_TEST_MISSING_DEPENDENCY(
+                    QStringLiteral("Office renderer dependency: %1").arg(dependency));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        LLMModelConfig config;
+        config.acceptsImage      = true;
+        config.imageMaxDimension = 4096;
+        config.imageMaxTokens    = 100000;
+        QLLMService llm;
+        llm.setModel(config);
+        QSocToolDocumentRead tool(nullptr, nullptr, &llm);
+        for (const QString &format :
+             {QStringLiteral("docx"), QStringLiteral("xlsx"), QStringLiteral("pptx")}) {
+            const auto    bytes  = makeZip(renderedOfficeMembers(format));
+            const QString path   = save(directory, "rendered." + format, bytes);
+            const auto    before = result(tool, {{"file_path", path.toStdString()}});
+            const QString text   = tool.execute(
+                {{"file_path", path.toStdString()},
+                 {"mode", "image"},
+                 {"renderer", "libreoffice"},
+                 {"page", 2},
+                 {"region", {{"x", 0}, {"y", 0}, {"width", 1}, {"height", 0.5}}},
+                 {"target_long_edge", 1200}});
+            const auto attachment = QSocImageAttach::attachmentPayload(text);
+            QVERIFY2(attachment.is_object(), qPrintable(text.left(1500)));
+            QVERIFY(attachment.at("preserve_source").get<bool>());
+            const auto provenance = json::parse(text.section('\n', 0, 0).toStdString());
+            qInfo().noquote() << "Office renderer:" << format
+                              << QString::fromStdString(
+                                     provenance.at("renderer_version").get<std::string>());
+            QCOMPARE(provenance.at("format"), json(format.toStdString()));
+            QCOMPARE(
+                provenance.at("source_sha256"),
+                json(
+                    QString::fromLatin1(
+                        QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())
+                        .toStdString()));
+            QCOMPARE(provenance.at("derived_page"), json(2));
+            QVERIFY(provenance.at("derived_pdf_bytes").get<int>() > 0);
+            QCOMPARE(provenance.at("derived_pdf_sha256").get<std::string>().size(), size_t(64));
+            QVERIFY(attachment.at("view_id").get<std::string>().starts_with("office:pdf="));
+            QCOMPARE(attachment.at("source_id"), provenance.at("source_sha256"));
+            QCOMPARE(attachment.at("view_id"), provenance.at("view_id"));
+            const auto png = QByteArray::fromBase64(
+                QByteArray::fromStdString(attachment.at("data").get<std::string>()));
+            QVERIFY(!QImage::fromData(png).isNull());
+            const auto after = result(tool, {{"file_path", path.toStdString()}});
+            QCOMPARE(before, after);
+            if (format == "xlsx") {
+                QVERIFY(
+                    before.at("parts")[0].at("text").get<std::string>().find("9999")
+                    != std::string::npos);
+                QVERIFY(
+                    before.at("parts")[0].at("text").get<std::string>().find("2+3")
+                    != std::string::npos);
+            }
+            QVERIFY(tool.execute({{"file_path", path.toStdString()},
+                                  {"mode", "image"},
+                                  {"renderer", "libreoffice"},
+                                  {"page", 9999}})
+                        .contains("out of range"));
+        }
+    }
+
     void officeMediaRetainsOccurrenceLocationsAndOriginalBytes()
     {
         if (QStandardPaths::findExecutable("unzip").isEmpty())
@@ -1357,6 +1868,33 @@ private slots:
              {"media_id", "ppt/media/shared.png"}});
         QVERIFY(limited.contains("read a smaller region"));
         QVERIFY(!QSocImageAttach::attachmentPayload(limited).is_object());
+    }
+
+    void officeMediaMemberPatternsAreLiteral()
+    {
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir    directory;
+        const QByteArray png     = mediaPng();
+        auto             members = officeMediaMembers("docx", png);
+        for (auto &member : members) {
+            member.first.replace("picture[1].png", "picture[*?1].png");
+            if (member.first.endsWith(".xml") || member.first.endsWith(".rels"))
+                member.second.replace("picture%5B1%5D.png", "picture%5B%2A%3F1%5D.png");
+        }
+        QByteArray shadow         = png;
+        shadow[shadow.size() - 1] = static_cast<char>(shadow.back() ^ 1);
+        members.append(Member{"word/media/picture1.png", shadow});
+        const auto           path = save(directory, "literal-members.docx", makeZip(members));
+        QSocToolDocumentRead tool;
+        const auto  catalog = result(tool, {{"file_path", path.toStdString()}, {"mode", "media"}});
+        const auto &media   = catalog.at("media")[0];
+        QCOMPARE(media.at("archive_part"), json("word/media/picture[*?1].png"));
+        QCOMPARE(media.at("bytes"), json(png.size()));
+        QCOMPARE(
+            media.at("sha256"),
+            json(QCryptographicHash::hash(png, QCryptographicHash::Sha256).toHex().toStdString()));
+        QCOMPARE(media.at("reference_count_in_selected_parts"), json(2));
     }
 
     void officeMediaRejectsMalformedRelationshipsAndLimits()
