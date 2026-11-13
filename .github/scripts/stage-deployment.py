@@ -15,6 +15,24 @@ import sys
 PROGRAMS = ("qsoc", "qsoc-gui", "qsoc-agentd", "qsoc-smt-worker", "qsoc-wave-worker")
 
 
+def stage_appdir_icon(destination):
+    icon = destination / ".DirIcon"
+    icon.unlink(missing_ok=True)
+    subprocess.run(
+        [
+            "rsvg-convert",
+            "-w",
+            "256",
+            "-h",
+            "256",
+            "-o",
+            str(icon),
+            str(destination / "usr/share/icons/hicolor/scalable/apps/qsoc.svg"),
+        ],
+        check=True,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=pathlib.Path)
@@ -57,6 +75,7 @@ def main():
                         *[value for name in PROGRAMS for value in
                           ("--executable", str(destination / "usr/bin" / name))],
                         "--plugin", "qt"], env=environment, check=True)
+        stage_appdir_icon(destination)
         entry = destination / "AppRun"
         entry.unlink(missing_ok=True)
         shutil.copy2(source / ".github/scripts/AppRun", entry)

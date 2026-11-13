@@ -40,6 +40,27 @@ def read_pe_subsystem(program):
         return struct.unpack_from("<H", optional, 68)[0]
 
 
+def verify_appdir_icon(appdir):
+    icon = appdir / ".DirIcon"
+    if not icon.is_file():
+        raise RuntimeError("The AppDir is missing its .DirIcon file")
+    if icon.is_symlink() and (
+        pathlib.Path(os.readlink(icon)).is_absolute()
+        or not icon.resolve().is_relative_to(appdir.resolve())
+    ):
+        raise RuntimeError("The AppDir icon must resolve inside the package")
+    with icon.open("rb") as source:
+        header = source.read(33)
+    if (
+        len(header) != 33
+        or header[:8] != b"\x89PNG\r\n\x1a\n"
+        or struct.unpack_from(">I", header, 8)[0] != 13
+        or header[12:16] != b"IHDR"
+        or struct.unpack_from(">II", header, 16) != (256, 256)
+    ):
+        raise RuntimeError("The AppDir icon must be a 256x256 PNG")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=pathlib.Path)
@@ -92,6 +113,8 @@ def main():
     entry = directory.parent.parent / "AppRun" if sys.platform.startswith("linux") else None
     if entry and not entry.is_file():
         raise RuntimeError("The package is missing its AppRun entry point")
+    if entry:
+        verify_appdir_icon(entry.parent)
     temporary_root = None if os.name == "nt" else "/tmp"
     with tempfile.TemporaryDirectory(prefix="test_qsoc_deployment_", dir=temporary_root) as working:
         for name in ("config", "cache", "data", "runtime"):

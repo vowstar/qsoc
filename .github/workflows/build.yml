@@ -88,6 +88,7 @@ jobs:
         libgl1-mesa-dev
         libglu1-mesa-dev
         libicu-dev
+        librsvg2-bin
         libx11-xcb-dev
         libxcb-{icccm4,image0,keysyms1,randr0,render-util0,shape0,sync1,xfixes0,xinerama0,xkb1}
         libxi-dev
@@ -222,6 +223,7 @@ jobs:
 
     - name: Stage deployment
       run: |
+        python3 .github/scripts/test-stage-deployment.py
         DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
         mkdir -p "$RUNNER_TEMP/deployment-tools"
         curl --fail --location --retry 3 \
