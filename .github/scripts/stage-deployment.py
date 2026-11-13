@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 
-PROGRAMS = ("qsoc", "qsoc-gui", "qsoc-agentd", "qsoc-smt-worker")
+PROGRAMS = ("qsoc", "qsoc-gui", "qsoc-agentd", "qsoc-smt-worker", "qsoc-wave-worker")
 
 
 def main():
@@ -70,8 +70,9 @@ def main():
     licenses.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source / "external/z3/LICENSE.txt", licenses / "z3.txt")
     shutil.copy2(source / "external/tiktoken/LICENSE", licenses / "tiktoken.txt")
-    for name in ("droid-fonts.txt", "elkjs.txt", "elkjs-sources.txt"):
+    for name in ("droid-fonts.txt", "elkjs.txt", "elkjs-sources.txt", "libfst.txt"):
         shutil.copy2(source / "resource/license" / name, licenses / name)
+    shutil.copy2(source / "external/zlib/LICENSE", licenses / "zlib.txt")
     if sys.platform == "darwin":
         subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(bundle)], check=True)
 

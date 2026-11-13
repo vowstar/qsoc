@@ -423,6 +423,36 @@ message(STATUS "Use local lexbor library: ${LEXBOR_LIBRARIES}")
 
 add_subdirectory(cmake/prcm EXCLUDE_FROM_ALL)
 
+enable_language(C)
+option(QSOC_USE_BUNDLED_ZLIB "Use the bundled zlib" OFF)
+if(NOT QSOC_USE_BUNDLED_ZLIB)
+    find_package(ZLIB 1.4 QUIET)
+endif()
+if(ZLIB_FOUND AND NOT QSOC_USE_BUNDLED_ZLIB)
+    set(QSOC_ZLIB_TARGET ZLIB::ZLIB)
+else()
+    set(ZLIB_BUILD_SHARED OFF CACHE BOOL "zlib no shared" FORCE)
+    set(ZLIB_BUILD_STATIC ON CACHE BOOL "zlib static" FORCE)
+    set(ZLIB_BUILD_TESTING OFF CACHE BOOL "zlib no tests" FORCE)
+    set(ZLIB_INSTALL OFF CACHE BOOL "zlib no install" FORCE)
+    add_subdirectory(external/zlib EXCLUDE_FROM_ALL)
+    set(QSOC_ZLIB_TARGET ZLIB::ZLIBSTATIC)
+endif()
+add_library(qsoc_fst STATIC
+    external/libfst/fstapi.c
+    external/libfst/fastlz.c
+    external/libfst/lz4.c
+)
+target_include_directories(qsoc_fst PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/external/libfst")
+target_link_libraries(qsoc_fst PUBLIC ${QSOC_ZLIB_TARGET})
+if(NOT WIN32)
+    target_compile_definitions(qsoc_fst PRIVATE _FILE_OFFSET_BITS=64 _POSIX_C_SOURCE=200809L)
+    if(APPLE)
+        target_compile_definitions(qsoc_fst PRIVATE _DARWIN_C_SOURCE)
+    endif()
+    target_link_libraries(qsoc_fst PUBLIC m)
+endif()
+
 file(GLOB_RECURSE PROJECT_CPP_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.cpp")
 file(GLOB_RECURSE PROJECT_H_FILES   RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "src/*.h")
 file(GLOB_RECURSE PROJECT_QRC_FILES RELATIVE "${CMAKE_CURRENT_LIST_DIR}" "resource/*.qrc")
@@ -454,6 +484,12 @@ if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(qsoc_smt PUBLIC -fexperimental-library)
 endif()
 
+add_library(qsoc_waveform STATIC
+    src/agent/waveform/qsocfstclient.cpp
+    src/agent/waveform/qsocfstclient.h
+)
+target_link_libraries(qsoc_waveform PUBLIC qsoc_platform)
+
 set(QSOC_PROTOCOL_FILES ${PROJECT_CPP_FILES} ${PROJECT_H_FILES})
 list(FILTER QSOC_PROTOCOL_FILES INCLUDE REGEX "src/agent/protocol/.*")
 add_library(qsoc_agent_protocol STATIC ${QSOC_PROTOCOL_FILES})
@@ -477,10 +513,10 @@ add_library(qsoc_common STATIC ${QSOC_COMMON_CPP} ${QSOC_COMMON_HEADERS})
 
 set(QSOC_AGENT_CPP "${PROJECT_CPP_FILES}")
 list(FILTER QSOC_AGENT_CPP INCLUDE REGEX "src/agent/.*")
-list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/(daemon|protocol|client)/.*")
+list(FILTER QSOC_AGENT_CPP EXCLUDE REGEX "src/agent/(daemon|protocol|client|waveform)/.*")
 set(QSOC_AGENT_HEADERS "${PROJECT_H_FILES}")
 list(FILTER QSOC_AGENT_HEADERS INCLUDE REGEX "src/agent/.*")
-list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/(daemon|protocol|client)/.*")
+list(FILTER QSOC_AGENT_HEADERS EXCLUDE REGEX "src/agent/(daemon|protocol|client|waveform)/.*")
 
 include(GenerateExportHeader)
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
@@ -539,7 +575,7 @@ if(WIN32)
 endif()
 
 
-target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_agent_client qsoc_smt)
+target_link_libraries(qsoc_agent PUBLIC qsoc_common qsoc_agent_protocol qsoc_agent_client qsoc_smt qsoc_waveform)
 target_include_directories(qsoc_agent SYSTEM PUBLIC "${LIBSSH2_INCLUDE_DIRS}" "${LEXBOR_INCLUDE_DIRS}")
 target_link_libraries(qsoc_agent PUBLIC ${LIBSSH2_LIBRARIES} ${LEXBOR_LIBRARIES})
 target_compile_definitions(qsoc_agent PUBLIC LEXBOR_STATIC)
@@ -577,6 +613,16 @@ add_executable(qsoc-smt-worker
 )
 target_link_libraries(qsoc-smt-worker PRIVATE qsoc_smt libz3)
 install(TARGETS qsoc-smt-worker RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+add_executable(qsoc-wave-worker
+    src/waveworker.cpp
+    src/agent/waveform/qsocfstworker.cpp
+    src/agent/waveform/qsocfstworker.h
+    src/agent/waveform/qsocfstwrapper.cpp
+    src/agent/waveform/qsocfstwrapper.h
+)
+target_link_libraries(qsoc-wave-worker PRIVATE qsoc_platform qsoc_fst)
+install(TARGETS qsoc-wave-worker RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 set(CMAKE_AUTOUIC_SEARCH_PATHS
     "${CMAKE_CURRENT_LIST_DIR}/ui"
@@ -701,7 +747,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} PRIVATE
     qsoc_cli
 )
-add_dependencies(${PROJECT_NAME} qsoc-smt-worker qsoc-agentd qsoc-gui)
+add_dependencies(${PROJECT_NAME} qsoc-smt-worker qsoc-wave-worker qsoc-agentd qsoc-gui)
 
 target_link_libraries(qsoc-gui PRIVATE qsoc_gui)
 set_target_properties(qsoc-gui PROPERTIES
@@ -813,8 +859,11 @@ install(FILES external/tiktoken/LICENSE
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc"
     RENAME tiktoken.txt)
 install(FILES resource/license/droid-fonts.txt resource/license/elkjs.txt
-    resource/license/elkjs-sources.txt
+    resource/license/elkjs-sources.txt resource/license/libfst.txt
     DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc")
+install(FILES external/zlib/LICENSE
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/qsoc"
+    RENAME zlib.txt)
 
 if(UNIX AND NOT APPLE)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resource/qsoc.desktop"
@@ -895,6 +944,7 @@ if(CPPCHECK_COMMAND)
             --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
             -I${CMAKE_CURRENT_SOURCE_DIR}/src
             -I${CMAKE_CURRENT_SOURCE_DIR}/test
+            -I${CMAKE_CURRENT_SOURCE_DIR}/external/libfst
             -I${CMAKE_BINARY_DIR}
             -I${CMAKE_BINARY_DIR}/qsoc_tui_autogen/include
             -I${CMAKE_BINARY_DIR}/qsoc_cli_autogen/include

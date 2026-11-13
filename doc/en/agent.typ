@@ -741,7 +741,7 @@ The agent provides the following tools through natural language:
   permits `edit_file`. Overwriting an existing file with `write_file` requires a
   complete read from offset 0. A partial edit keeps that restriction. Both tools
   reject files changed since the read, locally and remotely.
-- *Waveforms*: `read_waveform` lists VCD signals and reads values and edges in a time window. This tool is local-only.
+- *Waveforms*: `read_waveform` lists VCD/FST signals and reads values and edges in a time window, locally or through SFTP.
 - *Documents*: `read_document` reads PDF pages, DOCX paragraphs, XLSX cells and PPTX slides with source locations. PDF pages can also be rendered as images. Remote documents use SFTP and local converters.
 - *Shell*: `bash` (synchronous, or `background=true` for background jobs),
   `bash_manage` to inspect, tail, wait for, or stop backgrounded jobs. Both
@@ -860,15 +860,27 @@ Other file tool paths follow one rule on every machine:
 === Waveform Reading
 <agent-waveform-reading>
 
-`read_waveform` reads a local VCD file without loading the whole waveform into memory. Omit `signals` to list up to 200 hierarchical signal names. Use the returned `next_signal_offset` as `signal_offset` to continue the list.
+`read_waveform` reads local or SFTP VCD and FST files. Remote reads require SFTP access and do not require remote execution. Omit `signals` to list up to 200 hierarchical signal names. Use the returned `next_signal_offset` as `signal_offset` to continue the list.
 
 Pass `signals` as one to 32 names or glob patterns. `start_time` and `end_time` select an inclusive window in the file's raw timescale ticks. The result includes the values at the start, value changes, rising and falling edges, and the file's timescale. An unknown initial value is `null`. `max_events` defaults to 200 and accepts up to 2000.
 
 Indexed names retain their declared ranges. Use a listed full name, or its base name when exactly one signal matches.
 
-The scanner reads at most 128 MiB or five seconds per call. `truncated` and `window_complete` state whether the requested window was fully read. Narrow the selection or provide a smaller waveform when a scan or output limit is reached. FST and analog waveform formats are unsupported. Remote workspaces do not offer this tool.
+The scanner checks a 128 MiB input budget and a five second work limit between reads. Remote transport waits use the connection I/O timeouts and can extend elapsed time. `truncated` and `window_complete` state whether the requested window was fully read. A limited query returns `next_cursor`. Pass it as `cursor` with the same `file_path` to continue. The cursor retains signal selection, time limits and changes at the same tick. `max_events` can change between calls. Repeated selection or time parameters must match the original query.
+
+`values_at_start_complete` states whether all changes at the inclusive start have been read. Until then, later pages can update `values_at_start`. `scan_bytes` counts bytes read during this call. `scan_offset` reports the consumed VCD position or the end of the last FST range. FST reads can seek backward. `limit_reason` distinguishes scan, event and output limits.
+
+Each tool retains one continuation. Each returned cursor is consumed once. Starting another query or listing signals from the same execution owner replaces it. Another owner receives `busy` until the continuation finishes or expires. It expires after five idle minutes or when its execution owner exits. Run cancellation and detected source changes discard it. A stale or expired cursor returns `cursor_expired`. Changed source identity or attributes return `source_changed`. Local opening and continuation checks compare the file handle with the path. SFTP queries retain fixed read-only handles and check their size and modification time when supplied by the server. Replacing or closing the remote connection discards the cursor. These checks do not create an atomic filesystem snapshot; equal-size rewrites within a timestamp interval can escape SFTP metadata checks. Cursors cannot transfer between execution owners. Analog waveform formats are unsupported.
+
+Completed VCD queries retain selected-signal checkpoints for up to five idle minutes. The same execution owner can reuse them with the same file and signal request. Other owners and different signal requests read cold. Checkpoints cover only the prefix already scanned, with at most 256 entries and 8 MiB of identifier and value bytes. This payload limit excludes container overhead and process memory. Cancellation, expiry and detected source changes discard the checkpoints. Each SFTP connection retains at most one completed waveform cache. A new cold query can reclaim it before opening its source. Active continuations keep their fixed handles. Growth invalidates an existing cursor; a fresh query scans the updated file cold. The reader does not follow a growing file.
+
+FST decoding runs in a child process with a 768 MiB memory limit and a 64 MiB hierarchy temporary-file limit. At most two FST workers can remain active, including paused queries and completed caches. A new task can reclaim a completed idle worker. Completed windows retain the reader for up to five idle minutes. The same owner, file and signal request can reuse it for a new window. Pausing retains the parser state. Cancellation, expiry and owner-thread exit release it. If FST metadata exceeds a work quantum, `metadata_complete` remains false until a later page finishes the hierarchy.
+
+FST files without embedded hierarchy require a companion at the complete source path with `.hier` appended. The companion uses the same 64 MiB hierarchy limit. Embedded hierarchy takes precedence. Detected changes to a companion used by the query discard its continuation.
 
 Waveform output is limited to 1 MiB, including metadata, initial values and events.
+
+Whole-file gzip-wrapped FST uses streaming preparation. A cold query can scan the entire compressed stream before metadata is ready. Preparation and random reads retain their state across cursor pages. The reader verifies the wrapper CRC and size before completing the signal list or time window. Checkpoints remain in the worker process. The reader writes no complete expanded waveform. A bounded VC directory and a recent-window inflater checkpoint avoid prefix replay on cache hits. Earlier windows and evicted checkpoints can require replay. Sections that share a tick can require a forward scan through the complete tied range. The completed result includes `cache.reader_reused`. Wrapped results also report per-window `wrapper_cold_rewinds`, `wrapper_checkpoint_hits` and `wrapper_inflated_bytes` as decimal strings.
 
 === Document Reading
 <agent-document-reading>

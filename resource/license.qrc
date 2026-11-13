@@ -21,6 +21,7 @@
         <file alias="json.txt">../external/json/LICENSE.MIT</file>
         <file alias="lexbor-notice.txt">../external/lexbor/NOTICE</file>
         <file alias="lexbor.txt">../external/lexbor/LICENSE</file>
+        <file alias="libfst.txt">license/libfst.txt</file>
         <file alias="lgpl-2.1.txt">license/lgpl-2.1.txt</file>
         <file alias="lgpl-3.0.txt">license/lgpl-3.0.txt</file>
         <file alias="libssh2.txt">../external/libssh2/COPYING</file>
@@ -41,5 +42,6 @@
         <file alias="uvm-core.txt">../external/uvm-core/LICENSE.txt</file>
         <file alias="yaml.txt">../external/yaml/LICENSE</file>
         <file alias="z3.txt">../external/z3/LICENSE.txt</file>
+        <file alias="zlib.txt">../external/zlib/LICENSE</file>
     </qresource>
 </RCC>

@@ -17,7 +17,23 @@ QSocToolCallContext::QSocToolCallContext(QObject *owner)
 QSocToolCallContext::QSocToolCallContext(QObject *owner, QObject *fallbackScope)
     : owner_(owner)
     , scope_(owner != nullptr ? owner : fallbackScope)
+    , registry_(qobject_cast<QSocToolRegistry *>(fallbackScope))
 {}
+
+QMetaObject::Connection QSocToolCallContext::retainCancellation(
+    QObject *receiver, std::function<void()> callback) const
+{
+    if (!registry_ || !receiver || !callback)
+        return {};
+    return connect(
+        registry_,
+        &QSocToolRegistry::callsAborted,
+        receiver,
+        [owner = owner_, callback = std::move(callback)](QObject *cancelledOwner, bool all) {
+            if (all || (owner && owner == cancelledOwner))
+                callback();
+        });
+}
 
 bool QSocToolCallContext::isCancellationRequested() const
 {
@@ -27,6 +43,7 @@ bool QSocToolCallContext::isCancellationRequested() const
 void QSocToolCallContext::setRequestContext(const QString &effort, std::stop_token stop)
 {
     reasoningEffort_ = effort;
+    parentToken_     = stop;
     parentStop_.emplace(stop, [this, source = stopSource_]() mutable {
         /* Stop callbacks can release the context, so queue its notification first. */
         QMetaObject::invokeMethod(this, [this] { requestCancellation(); }, Qt::QueuedConnection);
@@ -423,6 +440,7 @@ QStringList QSocToolRegistry::toolNames() const
 
 void QSocToolRegistry::abortAll()
 {
+    const QPointer<QSocToolRegistry>     guard(this);
     QList<QPointer<QSocTool>>            tools = tools_.values();
     QList<QPointer<QSocToolCallContext>> contexts;
     for (ActiveCall *call : std::as_const(activeCalls_)) {
@@ -446,6 +464,8 @@ void QSocToolRegistry::abortAll()
         seen.insert(current);
         current->abort();
     }
+    if (guard)
+        emit guard->callsAborted(nullptr, true);
 }
 
 void QSocToolRegistry::abortCalls(QObject *owner)
@@ -454,6 +474,7 @@ void QSocToolRegistry::abortCalls(QObject *owner)
         return;
     }
 
+    const QPointer<QSocToolRegistry>     guard(this);
     const QPointer<QSocToolRegistry>     base = fallback_;
     QList<QPointer<QSocToolCallContext>> contexts;
     for (ActiveCall *call : std::as_const(activeCalls_)) {
@@ -468,6 +489,8 @@ void QSocToolRegistry::abortCalls(QObject *owner)
     }
     if (base)
         base->abortCalls(owner);
+    if (guard)
+        emit guard->callsAborted(owner, false);
 }
 
 #include "moc_qsoctool.cpp"

@@ -95,6 +95,7 @@
           # Disable optional slang dependencies that need network access.
           cmakeFlags = [
             "-DCMAKE_BUILD_TYPE=Release"
+            "-DQSOC_USE_BUNDLED_ZLIB=ON"
             "-DSLANG_USE_MIMALLOC=OFF"
             "-DSLANG_INCLUDE_TESTS=OFF"
           ];

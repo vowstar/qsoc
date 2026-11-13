@@ -1,0 +1,45 @@
+{
+  "pin": "8f60a7e89556497faffb6e9e4922a1f5a5281569",
+  "files": {
+    "src/fstapi.c": {
+      "bytes": 249407,
+      "sha256": "a0a930468721091587347763d0e6816730ceb1228ee24c0b9af3dbb8acca8eca",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/fstapi.c"
+    },
+    "src/fstapi.h": {
+      "bytes": 19734,
+      "sha256": "521f6e00a4c0f138ba13fa592acb59ee45d649bfef1e52fcd62d3226b0b8a59a",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/fstapi.h"
+    },
+    "src/fastlz.c": {
+      "bytes": 13665,
+      "sha256": "4293e2f1c39cd68188ace9b0223841959edf18a607be2e32ae03536c40149470",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/fastlz.c"
+    },
+    "src/fastlz.h": {
+      "bytes": 3359,
+      "sha256": "d2b6ca9c0f4b5cdd0855d90695e3b7e0da70203ac93119971020e46bb0b68039",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/fastlz.h"
+    },
+    "src/lz4.c": {
+      "bytes": 118145,
+      "sha256": "9396f7de527bc8435de9c7569fb7998e56545a84b4f3c2d808c0235c01774539",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/lz4.c"
+    },
+    "src/lz4.h": {
+      "bytes": 46014,
+      "sha256": "26b82efc53d1570f3b54eef02e9c4764c1ad374ff03cac04e2ced5ea4d4c552f",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/lz4.h"
+    },
+    "LICENSE": {
+      "bytes": 3895,
+      "sha256": "07871cf8ce65c7aa351b42c189d09d62a5bc536404205470b97b6da7ac864309",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/LICENSE"
+    },
+    "src/fst_win_unistd.h": {
+      "bytes": 1593,
+      "sha256": "15ec1054e9c5fa8118060ca5b5dab0bbb2d4879c43b53c9457cb416fce97b19f",
+      "url": "https://github.com/gtkwave/libfst/blob/8f60a7e89556497faffb6e9e4922a1f5a5281569/src/fst_win_unistd.h"
+    }
+  }
+}

@@ -266,7 +266,7 @@ QSocSftpClient::RangeResult QSocSftpClient::ReadFile::readAt(
             return failure();
         }
         const auto count = libssh2_sftp_read(
-            m_handle, result.data.data() + received, qMin<qint64>(16384, wanted - received));
+            m_handle, result.data.data() + received, qMin<qint64>(65536, wanted - received));
         pending = count == LIBSSH2_ERROR_EAGAIN;
         if (count > 0) {
             received += count;

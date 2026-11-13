@@ -18,6 +18,8 @@
 
 using json = nlohmann::json;
 
+class QSocToolRegistry;
+
 /**
  * @brief Cancellation state for one tool invocation
  */
@@ -28,9 +30,12 @@ class QSocToolCallContext : public QObject
 public:
     explicit QSocToolCallContext(QObject *owner = nullptr);
 
-    bool            isCancellationRequested() const;
-    std::stop_token stopToken() const { return stopSource_.get_token(); }
-    QString         reasoningEffort() const { return reasoningEffort_; }
+    bool                    isCancellationRequested() const;
+    std::stop_token         stopToken() const { return stopSource_.get_token(); }
+    std::stop_token         parentStopToken() const { return parentToken_; }
+    QString                 reasoningEffort() const { return reasoningEffort_; }
+    QMetaObject::Connection retainCancellation(
+        QObject *receiver, std::function<void()> callback) const;
     /** @brief Scope shared by tool calls from the same execution owner. */
     QObject *executionScope() const { return scope_.data(); }
     bool     canDefer() const { return canDefer_; }
@@ -63,6 +68,8 @@ private:
     std::optional<QSocToolResultStatus> resultStatus_;
     QString                             reasoningEffort_;
     std::stop_source                    stopSource_;
+    std::stop_token                     parentToken_;
+    QPointer<QSocToolRegistry>          registry_;
     /* Destroy the parent callback before the context's other members. */
     std::optional<std::stop_callback<std::function<void()>>> parentStop_;
 
@@ -313,6 +320,9 @@ public:
      * @param owner Owner passed to executeTool()
      */
     void abortCalls(QObject *owner);
+
+signals:
+    void callsAborted(QObject *owner, bool all);
 
 private:
     struct ActiveCall : QObject

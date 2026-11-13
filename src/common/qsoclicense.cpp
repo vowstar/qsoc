@@ -36,6 +36,7 @@ const QList<QSocLicense::Component> &QSocLicense::components()
          "https://github.com/lexbor/lexbor",
          {"lexbor.txt", "lexbor-notice.txt"},
          {}},
+        {"libfst", "MIT AND BSD-2-Clause", "https://github.com/gtkwave/libfst", {"libfst.txt"}, {}},
         {"libssh2", "BSD-3-Clause", "https://github.com/libssh2/libssh2", {"libssh2.txt"}, {}},
         {"linux-runtime",
          "Various, see text",
@@ -81,6 +82,7 @@ const QList<QSocLicense::Component> &QSocLicense::components()
          {}},
         {"yaml", "MIT", "https://github.com/jbeder/yaml-cpp", {"yaml.txt"}, {}},
         {"z3", "MIT", "https://github.com/Z3Prover/z3", {"z3.txt"}, {}},
+        {"zlib", "Zlib", "https://zlib.net", {"zlib.txt"}, {}},
     };
     return list;
 }

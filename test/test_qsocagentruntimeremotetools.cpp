@@ -87,7 +87,7 @@ bool localOnly(const QString &name)
         if (name.startsWith(QLatin1String(family)))
             return true;
     }
-    return name == QStringLiteral("lsp") || name == QStringLiteral("read_waveform");
+    return name == QStringLiteral("lsp");
 }
 
 /* Workspace tools a host without a usable shell does not get. */

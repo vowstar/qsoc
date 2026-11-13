@@ -110,6 +110,7 @@ jobs:
           -DCMAKE_PREFIX_PATH=/opt/qt/${{ env.QT_VERSION }}/gcc_64 \
           -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
           -DFETCHCONTENT_SOURCE_DIR_FMT="$PWD/external/fmt" \
+          -DQSOC_USE_BUNDLED_ZLIB=ON \
           -DSLANG_USE_MIMALLOC=OFF \
           -DSLANG_INCLUDE_TESTS=OFF \
           -DENABLE_CLANG_TIDY=OFF \
@@ -159,7 +160,7 @@ jobs:
           --linuxdeploy ./linuxdeploy-x86_64.AppImage
         find AppDir/usr/lib -type f -name '*.so*' \
           -exec patchelf --set-rpath '$ORIGIN' --force-rpath {} \; 2>/dev/null || true
-        for bin in qsoc qsoc-gui qsoc-agentd qsoc-smt-worker; do
+        for bin in qsoc qsoc-gui qsoc-agentd qsoc-smt-worker qsoc-wave-worker; do
           patchelf --set-rpath '$ORIGIN/../lib' --force-rpath "AppDir/usr/bin/$bin"
         done
         python3.9 .github/scripts/verify-deployment.py AppDir/usr/bin \
@@ -203,6 +204,7 @@ jobs:
       run: >-
         cmake -B build -G Ninja
         -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DQSOC_USE_BUNDLED_ZLIB=ON
         -DSLANG_USE_MIMALLOC=OFF
         -DENABLE_CLANG_TIDY=OFF
         -DENABLE_DOXYGEN=OFF
@@ -251,6 +253,7 @@ jobs:
         cmake -B build -G Ninja
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+        -DQSOC_USE_BUNDLED_ZLIB=ON
         -DSLANG_USE_MIMALLOC=OFF
         -DENABLE_CLANG_TIDY=OFF
         -DENABLE_DOXYGEN=OFF

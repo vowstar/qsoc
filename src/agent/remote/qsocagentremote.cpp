@@ -22,6 +22,7 @@
 #include "agent/tool/qsoctoolmonitor.h"
 #include "agent/tool/qsoctoolskill.h"
 #include "agent/tool/qsoctooltodo.h"
+#include "agent/tool/qsoctoolwaveform.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -745,6 +746,7 @@ QSocToolRegistry *buildAgentRemoteRegistry(
     registry->registerTool(remoteRead);
     registry->registerTool(new QSocToolShowFigure(parent, remoteRead, llm));
     registry->registerTool(new QSocToolDocumentRead(parent, nullptr, llm, conn));
+    registry->registerTool(new QSocToolWaveformRead(parent, nullptr, conn));
     registry->registerTool(new QSocToolRemoteFileList(parent, conn, pathCtx));
     if (!conn->workspaceReadOnly()) {
         registry->registerTool(new QSocToolRemoteFileWrite(parent, conn, pathCtx));

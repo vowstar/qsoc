@@ -48,7 +48,7 @@ def main():
     args = parser.parse_args()
     directory = args.directory.resolve()
     suffix = ".exe" if sys.platform == "win32" else ""
-    programs = ["qsoc", "qsoc-gui", "qsoc-agentd", "qsoc-smt-worker"]
+    programs = ["qsoc", "qsoc-gui", "qsoc-agentd", "qsoc-smt-worker", "qsoc-wave-worker"]
     for name in programs:
         program = directory / (name + suffix)
         if not program.is_file() or not os.access(program, os.X_OK):
@@ -118,6 +118,17 @@ def main():
                       flush=True)
                 raise
             print((version.stdout + version.stderr).decode(errors="replace"), flush=True)
+        try:
+            waveform = subprocess.run([str(directory / ("qsoc-wave-worker" + suffix)), "--probe"],
+                                      cwd=working, env=environment, check=True, timeout=15,
+                                      stdin=subprocess.DEVNULL, capture_output=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            print(((error.stdout or b"") + (error.stderr or b"")).decode(errors="replace"),
+                  flush=True)
+            raise
+        if waveform.stdout.strip() != b"FST probe passed":
+            raise RuntimeError("The packaged FST worker failed its round-trip probe")
+        print(waveform.stdout.decode().strip(), flush=True)
         cli = entry or directory / ("qsoc" + suffix)
         subprocess.run([str(cli), "project", "create", "-d", working, "reports"],
                        cwd=working, env=environment, check=True, timeout=20)

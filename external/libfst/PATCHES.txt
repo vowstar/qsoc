@@ -1,0 +1,29 @@
+libfst 8f60a7e89556497faffb6e9e4922a1f5a5281569
+
+The original copyright and license notices are retained.
+
+Local changes in fstapi.c, fst_win_unistd.h and the additive fstinput.h:
+* Add a portable, fixed-size read_at input ABI to the reader.
+* Add an optional fixed hierarchy input through a separate additive entry.
+* Stage external raw hierarchy through the same private quota factory.
+* Route reader seeks, reads and integer decoding through that ABI.
+* Use 4 KiB metadata refills and bounded bulk copies through a 64 KiB cache.
+* Preserve the existing filename API for upstream callers.
+* Share native Windows mapping, temporary-file and CRT branches across MSVC and MinGW.
+* Use 64-bit native Windows seek/truncate offsets and mapped-view offset words.
+* Use integer constant expressions for fixed varint buffers.
+* Use desktop CRT declarations in the MSVC shim and keep added CRT aliases private.
+* Bound callback hierarchy names, varints and EOF handling.
+* Expose read-only geometry validation for callback buffer sizes.
+* Retain a bounded sparse VC directory during the existing input initialization.
+* Reuse indexed section offsets for time windows and point-value cache misses.
+* Recheck point-value cache end ticks and walk every adjacent shared-tick section.
+* Validate callback block lengths during the existing input initialization.
+* Retain callback input errors.
+* Apply the callback reader time-range end inside event traversal.
+* Mark malformed early traversal exits and retain normal fixed-input EOF.
+* Mark traversal failures even when the upstream return value is one.
+* Decode gzip and LZ4 hierarchy through a quota-limited temporary factory.
+* Reject whole-file wrappers at the native callback entry.
+
+FastLZ and LZ4 remain unmodified. Writer data encoding is unchanged.
