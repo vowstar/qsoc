@@ -109,11 +109,14 @@ jobs:
         xvfb
     - name: Install document renderer
       if: github.event_name == 'pull_request'
+      timeout-minutes: 45
       run: |
         set -euo pipefail
         archive="$RUNNER_TEMP/LibreOffice_26.8.3_Linux_x86-64_deb.tar.gz"
-        curl --fail --location --retry 3 \
-          https://download.documentfoundation.org/libreoffice/stable/26.8.3/deb/x86_64/LibreOffice_26.8.3_Linux_x86-64_deb.tar.gz \
+        curl --version
+        curl --fail --location --retry 3 --retry-all-errors \
+          --connect-timeout 30 --max-time 1800 --retry-max-time 120 --speed-limit 1024 --speed-time 60 \
+          https://ftp.osuosl.org/pub/tdf/libreoffice/stable/26.8.3/deb/x86_64/LibreOffice_26.8.3_Linux_x86-64_deb.tar.gz \
           --output "$archive"
         printf '%s  %s\n' e7cd3538e85818ff9dd9bb65386769fde927011242aace5a144989f4000dcabf "$archive" | sha256sum --check -
         extracted="$RUNNER_TEMP/document-renderer"
@@ -644,13 +647,13 @@ jobs:
 
     - name: Install document renderer
       if: github.event_name == 'pull_request'
-      timeout-minutes: 20
+      timeout-minutes: 45
       run: |
         $package = Join-Path $env:RUNNER_TEMP "LibreOffice_26.8.3_Win_x86-64.msi"
         curl.exe --version
         curl.exe --fail --location --retry 3 --retry-all-errors `
-          --connect-timeout 30 --max-time 300 --retry-max-time 600 `
-          "https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" --output $package
+          --connect-timeout 30 --max-time 1800 --retry-max-time 120 --speed-limit 1024 --speed-time 60 `
+          "https://ftp.osuosl.org/pub/tdf/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" --output $package
         if ($LASTEXITCODE -ne 0) { throw "Office renderer download failed: $LASTEXITCODE" }
         if ((Get-FileHash $package -Algorithm SHA256).Hash -ne "0e6918c273eabbdbbd800ee0dacbbf130a14c13c2e4cec861b06dd59e015bf94") {
           throw "Office renderer checksum mismatch"
@@ -857,13 +860,16 @@ jobs:
 
     - name: Install document renderer
       if: github.event_name == 'pull_request'
+      timeout-minutes: 45
       run: |
         set -euo pipefail
         test "$(uname -m)" = arm64
         brew install poppler
         archive="$RUNNER_TEMP/LibreOffice_26.8.3_MacOS_aarch64.dmg"
-        curl --fail --location --retry 3 \
-          https://download.documentfoundation.org/libreoffice/stable/26.8.3/mac/aarch64/LibreOffice_26.8.3_MacOS_aarch64.dmg \
+        curl --version
+        curl --fail --location --retry 3 --retry-all-errors \
+          --connect-timeout 30 --max-time 1800 --retry-max-time 120 --speed-limit 1024 --speed-time 60 \
+          https://ftp.osuosl.org/pub/tdf/libreoffice/stable/26.8.3/mac/aarch64/LibreOffice_26.8.3_MacOS_aarch64.dmg \
           --output "$archive"
         printf '%s  %s\n' de943203795e5057785f65515063e2db5eb60b0bb6d8e2534fec59e5cc5fb988 "$archive" | shasum --algorithm 256 --check -
         volume="$RUNNER_TEMP/document-renderer-volume"
