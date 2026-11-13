@@ -334,12 +334,14 @@ private slots:
         endpoint.hold = true;
         QVERIFY(endpoint.listen(QHostAddress::LocalHost));
         QLLMService service;
-        auto        model = endpoint.model();
-        model.timeout     = 50;
-        service.setModel(model);
+        service.setModel(endpoint.model());
+        QSignalSpy chunk(&service, &QLLMService::streamChunk);
+        QSignalSpy complete(&service, &QLLMService::streamComplete);
         QSignalSpy error(&service, &QLLMService::streamError);
         service.sendChatCompletionStream(payload()["messages"]);
+        QTRY_COMPARE(chunk.size(), 1);
         QTRY_COMPARE_WITH_TIMEOUT(error.size(), 1, 3000);
+        QCOMPARE(complete.size(), 0);
         const auto result = service.requestDiagnostics()["stream"];
         QCOMPARE(result["outcomes"]["timed_out"].get<int>(), 1);
         QCOMPARE(result["cache_read"]["missing"].get<int>(), 1);
