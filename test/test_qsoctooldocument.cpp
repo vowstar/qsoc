@@ -5,6 +5,7 @@
 #include "agent/remote/qsocagentremote.h"
 #include "agent/remote/qsocsftpclient.h"
 #include "agent/tool/qsoctooldocument.h"
+#include "agent/tool/qsoctooloutputread.h"
 #include "agent/tool/qsoctoolpath.h"
 #include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
@@ -231,18 +232,28 @@ void saveBoxOverlay(
     save(directory, name, bytes);
 }
 
-QByteArray geometryPdf()
+QByteArray geometryPdf(bool mixedBoxes = false)
 {
     QList<QByteArray> objects{
         "<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Count 5 /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R] "
         "/MediaBox [0 0 400 300] /CropBox [40 60 340 260] >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"};
+    if (mixedBoxes)
+        objects[1].replace(
+            "/MediaBox [0 0 400 300] /CropBox [40 60 340 260]",
+            "/MediaBox [-120 -80 480 360] /CropBox [-60 -30 340 270]");
+    const QList<QByteArray> overrides{
+        {},
+        " /MediaBox [0 0 700 500] /CropBox [50 40 650 440]",
+        " /MediaBox [-240 -160 760 640] /CropBox [-100 -60 500 340]",
+        " /MediaBox [0 0 400 800] /CropBox [10 20 310 720]",
+        {}};
     for (int page = 0; page < 5; ++page) {
         const int rotation = page < 4 ? page * 90 : 0;
         objects.append(
             QByteArray("<< /Type /Page /Parent 2 0 R /Rotate ") + QByteArray::number(rotation)
-            + (page == 4 ? " /UserUnit 2" : "")
+            + (page == 4 ? " /UserUnit 2" : "") + (mixedBoxes ? overrides.at(page) : QByteArray())
             + " /Resources << /Font << /F1 3 0 R >> >> /Contents "
             + QByteArray::number(5 + page * 2) + " 0 R >>");
         QByteArray drawing("0.9 0.95 1 rg 40 60 300 200 re f 0.2 w 0.85 0.85 0.85 RG\n");
@@ -1083,6 +1094,110 @@ private slots:
                     .contains("source changed"));
     }
 
+    void documentCursorSurvivesOuterArtifactTruncation()
+    {
+        if (QStandardPaths::findExecutable("unzip").isEmpty())
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("unzip"));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto previous = qgetenv("QSOC_HOME");
+        qputenv("QSOC_HOME", directory.path().toUtf8());
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull())
+                qunsetenv("QSOC_HOME");
+            else
+                qputenv("QSOC_HOME", previous);
+        });
+        QString    body;
+        for (int index = 0; index < 2000; ++index)
+            body += QStringLiteral("时钟😀 µA Ω V₂ x² −0.125 MHz %1\n").arg(index);
+        const auto bytes = makeZip(
+            {{"word/document.xml", "<doc><p><t>" + body.toUtf8() + "</t></p></doc>"}});
+        const auto           path = save(directory, "artifact-cursor.docx", bytes);
+        QSocToolDocumentRead tool;
+        QSocToolOutputRead   reader(nullptr);
+        QSocToolRegistry     registry;
+        registry.registerTool(&tool);
+        registry.registerTool(&reader);
+        QSocAgentConfig config;
+        config.verbose              = false;
+        config.autoLoadMemory       = false;
+        config.memoryRecallEnabled  = false;
+        config.memoryExtractEnabled = false;
+        config.memoryDreamEnabled   = false;
+        QSocAgent agent(nullptr, nullptr, &registry, config);
+        QVERIFY(agent.bindToolResultStore(directory.filePath("artifacts"), "document-cursor"));
+        const auto full = result(tool, {{"file_path", path.toStdString()}, {"max_chars", 100000}});
+        QVERIFY(!full.at("parts")[0].at("truncated").get<bool>());
+        const auto raw = registry.executeTool(
+            "read_document", {{"file_path", path.toStdString()}, {"max_chars", 20000}}, &agent);
+        const auto first = json::parse(raw.toStdString(), nullptr, false);
+        QVERIFY(first.is_object());
+        QVERIFY(first.at("parts")[0].at("truncated").get<bool>());
+        QVERIFY(first.at("parts")[0].contains("next_cursor"));
+        QCOMPARE(agent.toolResultBudgetTokens(), qint64(4096));
+        QVERIFY(agent.estimateTokens(raw) > agent.toolResultBudgetTokens());
+        QVERIFY(raw.toUtf8().size() < config.toolArtifactBytes);
+        const auto bounded = agent.boundText(raw, "ok", "read_document");
+        QVERIFY(bounded.view != raw);
+        QVERIFY(agent.estimateTokens(bounded.view) <= agent.toolResultBudgetTokens());
+        QCOMPARE(bounded.refs.size(), size_t(1));
+        const auto &reference = bounded.refs[0];
+        const auto  id        = reference.at("artifact_id").get<std::string>();
+        QVERIFY(!id.empty());
+        QVERIFY(bounded.view.contains(QString::fromStdString(id)));
+        QCOMPARE(reference.at("completion"), json("ok"));
+        QCOMPARE(reference.at("captured_bytes"), json(raw.toUtf8().size()));
+        QCOMPARE(
+            reference.at("sha256"),
+            json(
+                QCryptographicHash::hash(raw.toUtf8(), QCryptographicHash::Sha256)
+                    .toHex()
+                    .toStdString()));
+        QByteArray restored;
+        qint64     offset = 0;
+        for (int page = 0; page < 100; ++page) {
+            const auto reply = registry.executeTool(
+                "tool_output_read",
+                {{"artifact_id", id}, {"offset", offset}, {"limit", 4096}},
+                &agent);
+            const auto data = json::parse(reply.toStdString(), nullptr, false);
+            QVERIFY2(data.is_object(), qPrintable(reply));
+            QCOMPARE(data.at("offset"), json(offset));
+            QCOMPARE(data.at("artifact_id"), reference.at("artifact_id"));
+            QCOMPARE(data.at("sha256"), reference.at("sha256"));
+            QCOMPARE(data.at("completion"), json("ok"));
+            restored += QByteArray::fromStdString(data.at("text").get<std::string>());
+            const auto next = data.at("next_offset").get<qint64>();
+            QCOMPARE(next, qint64(restored.size()));
+            if (data.at("eof").get<bool>())
+                break;
+            QVERIFY(next > offset);
+            QVERIFY(page < 99);
+            offset = next;
+        }
+        QCOMPARE(restored, raw.toUtf8());
+        auto current = json::parse(restored.toStdString());
+        QCOMPARE(current.at("source_identity"), full.at("source_identity"));
+        QCOMPARE(current.at("source_sha256"), full.at("source_sha256"));
+        QCOMPARE(current.at("parts")[0].at("next_cursor"), first.at("parts")[0].at("next_cursor"));
+        QString joined;
+        for (int window = 0; window < 100; ++window) {
+            const auto &part = current.at("parts")[0];
+            QCOMPARE(part.at("offset"), json(joined.size()));
+            joined += QString::fromStdString(part.at("text").get<std::string>());
+            if (!part.at("truncated").get<bool>())
+                break;
+            QVERIFY(window < 99);
+            current = result(
+                tool,
+                {{"file_path", path.toStdString()},
+                 {"cursor", part.at("next_cursor")},
+                 {"max_chars", 4093}});
+        }
+        QCOMPARE(joined, QString::fromStdString(full.at("parts")[0].at("text").get<std::string>()));
+    }
+
     void pdfTextCursorsResumeEachTruncatedPage()
     {
         if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
@@ -1425,13 +1540,21 @@ private slots:
         QVERIFY(attachment["height"].get<int>() <= 1600);
     }
 
+    void pdfRegionsMatchSourceRender_data()
+    {
+        QTest::addColumn<bool>("mixedBoxes");
+        QTest::newRow("inherited-crop") << false;
+        QTest::newRow("negative-and-mixed-boxes") << true;
+    }
+
     void pdfRegionsMatchSourceRender()
     {
+        QFETCH(bool, mixedBoxes);
         if (QStandardPaths::findExecutable("pdfinfo").isEmpty()
             || QStandardPaths::findExecutable("pdftoppm").isEmpty())
             QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler"));
         QTemporaryDir  directory;
-        const auto     bytes = geometryPdf();
+        const auto     bytes = geometryPdf(mixedBoxes);
         const auto     path  = save(directory, "geometry.pdf", bytes);
         LLMModelConfig model;
         model.acceptsImage      = true;
@@ -1441,6 +1564,18 @@ private slots:
         llm.setModel(model);
         QSocToolDocumentRead tool(nullptr, nullptr, &llm);
         const auto sourceHash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+        const QList<QRectF> cropBoxes{
+            {-60, -30, 400, 300},
+            {50, 40, 600, 400},
+            {-100, -60, 600, 400},
+            {10, 20, 300, 700},
+            {-60, -30, 400, 300}};
+        const QList<QRectF> mediaBoxes{
+            {-120, -80, 600, 440},
+            {0, 0, 700, 500},
+            {-240, -160, 1000, 800},
+            {0, 0, 400, 800},
+            {-120, -80, 600, 440}};
         QSet<QString> views;
         for (int page = 1; page <= 5; ++page) {
             const QString text = tool.execute(
@@ -1458,6 +1593,17 @@ private slots:
             QCOMPARE(evidence.at("render_method"), json("source_rerender"));
             QVERIFY(geometry.at("raw_transform").is_null());
             QCOMPARE(geometry.at("rotation_degrees"), json(page < 5 ? (page - 1) * 90 : 0));
+            const QRectF cropBox  = mixedBoxes ? cropBoxes.at(page - 1) : QRectF(40, 60, 300, 200);
+            const QRectF mediaBox = mixedBoxes ? mediaBoxes.at(page - 1) : QRectF(0, 0, 400, 300);
+            for (const auto &entry :
+                 {qMakePair("backend_reported_crop_box", cropBox),
+                  qMakePair("backend_reported_media_box", mediaBox)}) {
+                const auto box = geometry.at(entry.first);
+                QCOMPARE(box.at("x"), json(entry.second.x()));
+                QCOMPARE(box.at("y"), json(entry.second.y()));
+                QCOMPARE(box.at("width"), json(entry.second.width()));
+                QCOMPARE(box.at("height"), json(entry.second.height()));
+            }
             const auto attachment = QSocImageAttach::attachmentPayload(text);
             QVERIFY2(attachment.is_object(), qPrintable(text.left(500)));
             QVERIFY(attachment.at("preserve_source").get<bool>());
@@ -1524,8 +1670,14 @@ private slots:
                 {{"file_path", path.toStdString()}, {"page", page}, {"mode", "image"}});
             const auto overview = QSocImageAttach::attachmentPayload(overviewText);
             QVERIFY(overview.is_object());
-            QCOMPARE(overview.at("source_width"), json(page == 2 || page == 4 ? 1067 : 1600));
-            QCOMPARE(overview.at("source_height"), json(page == 2 || page == 4 ? 1600 : 1067));
+            const qreal longest = qMax(cropBox.width(), cropBox.height());
+            QSize       overviewSize(
+                static_cast<int>(std::ceil(1600 * cropBox.width() / longest)),
+                static_cast<int>(std::ceil(1600 * cropBox.height() / longest)));
+            if (page == 2 || page == 4)
+                overviewSize.transpose();
+            QCOMPARE(overview.at("source_width"), json(overviewSize.width()));
+            QCOMPARE(overview.at("source_height"), json(overviewSize.height()));
             QVERIFY(!overview.at("preserve_source").get<bool>());
         }
         QCOMPARE(views.size(), 5);

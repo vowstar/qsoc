@@ -3,6 +3,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsoctool.h"
+#include "agent/tool/qsoctooldocument.h"
 #include "common/qllmservice.h"
 #include "common/qsocimageattach.h"
 #include "qsoc_test.h"
@@ -10,10 +11,12 @@
 #include <algorithm>
 #include <QBuffer>
 #include <QCryptographicHash>
+#include <QFile>
 #include <QHostAddress>
 #include <QImage>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -83,8 +86,9 @@ public:
                 blocks.push_back(
                     {{"type", "tool_use"},
                      {"id", call.at("id")},
-                     {"name", "generated_image"},
-                     {"input", json::object()}});
+                     {"name", call.at("function").at("name")},
+                     {"input",
+                      json::parse(call.at("function").at("arguments").get<std::string>())}});
         } else {
             blocks.push_back({{"type", "text"}, {"text", "done"}});
         }
@@ -108,15 +112,18 @@ public:
         event({{"type", "message_start"}, {"message", response}});
         for (size_t i = 0; i < blocks.size(); ++i) {
             json start = blocks[i];
-            if (!tool)
+            if (tool)
+                start["input"] = json::object();
+            else
                 start["text"] = "";
             event({{"type", "content_block_start"}, {"index", i}, {"content_block", start}});
             event(
                 {{"type", "content_block_delta"},
                  {"index", i},
                  {"delta",
-                  tool ? json{{"type", "input_json_delta"}, {"partial_json", "{}"}}
-                       : json{{"type", "text_delta"}, {"text", "done"}}}});
+                  tool
+                      ? json{{"type", "input_json_delta"}, {"partial_json", blocks[i].at("input").dump()}}
+                      : json{{"type", "text_delta"}, {"text", "done"}}}});
             event({{"type", "content_block_stop"}, {"index", i}});
         }
         event(
@@ -154,7 +161,8 @@ public:
                             {{"index", i},
                              {"id", "call_" + std::to_string(i)},
                              {"type", "function"},
-                             {"function", {{"name", "generated_image"}, {"arguments", "{}"}}}});
+                             {"function",
+                              {{"name", toolName}, {"arguments", toolArguments.dump()}}}});
                     message = {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", calls}};
                 }
                 const bool streaming = requests.back().value("stream", false);
@@ -184,8 +192,10 @@ public:
     QTcpServer                      server;
     QHash<QTcpSocket *, QByteArray> buffers;
     QList<json>                     requests;
-    int                             count     = 1;
-    bool                            anthropic = false;
+    int                             count         = 1;
+    bool                            anthropic     = false;
+    std::string                     toolName      = "generated_image";
+    json                            toolArguments = json::object();
 };
 
 QByteArray generatedImage(bool large)
@@ -207,6 +217,35 @@ QByteArray generatedImage(bool large)
     return bytes.toBase64();
 }
 
+QByteArray generatedPdf()
+{
+    QByteArray grid = "0.1 0.3 0.7 RG 0.5 w\n";
+    for (int x = 40; x <= 340; x += 10)
+        grid += QByteArray::number(x) + " 60 m " + QByteArray::number(x) + " 260 l S\n";
+    for (int y = 60; y <= 260; y += 10)
+        grid += "40 " + QByteArray::number(y) + " m 340 " + QByteArray::number(y) + " l S\n";
+    grid += "0.8 0.2 0.1 rg 80 100 43 71 re f\n";
+    const QList<QByteArray> objects{
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] "
+        "/CropBox [40 60 340 260] /Rotate 90 /Resources << >> /Contents 4 0 R >>",
+        "<< /Length " + QByteArray::number(grid.size()) + " >>\nstream\n" + grid + "endstream"};
+    QByteArray       pdf = "%PDF-1.4\n";
+    QList<qsizetype> offsets{0};
+    for (qsizetype index = 0; index < objects.size(); ++index) {
+        offsets.append(pdf.size());
+        pdf += QByteArray::number(index + 1) + " 0 obj\n" + objects[index] + "\nendobj\n";
+    }
+    const qsizetype xref = pdf.size();
+    pdf += "xref\n0 5\n0000000000 65535 f \n";
+    for (qsizetype index = 1; index < offsets.size(); ++index)
+        pdf += QByteArray::number(offsets[index]).rightJustified(10, '0') + " 00000 n \n";
+    pdf += "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n" + QByteArray::number(xref)
+           + "\n%%EOF\n";
+    return pdf;
+}
+
 class Test final : public QObject
 {
     Q_OBJECT
@@ -215,16 +254,26 @@ private slots:
     {
         QTest::addColumn<bool>("anthropic");
         QTest::addColumn<bool>("streaming");
-        QTest::newRow("openai-sync") << false << false;
-        QTest::newRow("openai-stream") << false << true;
-        QTest::newRow("anthropic-sync") << true << false;
-        QTest::newRow("anthropic-stream") << true << true;
+        QTest::addColumn<bool>("document");
+        QTest::newRow("openai-sync") << false << false << false;
+        QTest::newRow("openai-stream") << false << true << false;
+        QTest::newRow("anthropic-sync") << true << false << false;
+        QTest::newRow("anthropic-stream") << true << true << false;
+        QTest::newRow("pdf-openai-sync") << false << false << true;
+        QTest::newRow("pdf-openai-stream") << false << true << true;
+        QTest::newRow("pdf-anthropic-sync") << true << false << true;
+        QTest::newRow("pdf-anthropic-stream") << true << true << true;
     }
 
     void preservedImagesReachProvider()
     {
         QFETCH(bool, anthropic);
         QFETCH(bool, streaming);
+        QFETCH(bool, document);
+        if (document
+            && (QStandardPaths::findExecutable("pdfinfo").isEmpty()
+                || QStandardPaths::findExecutable("pdftoppm").isEmpty()))
+            QSOC_TEST_MISSING_DEPENDENCY(QStringLiteral("Poppler PDF image tools"));
         QTemporaryDir home;
         QVERIFY(home.isValid());
         const auto previous = qgetenv("QSOC_HOME");
@@ -237,7 +286,7 @@ private slots:
         });
         Endpoint   endpoint;
         endpoint.anthropic = anthropic;
-        endpoint.count     = 2;
+        endpoint.count     = document ? 1 : 2;
         QVERIFY(endpoint.server.listen(QHostAddress::LocalHost));
         LLMModelConfig model;
         model.model             = QStringLiteral("image-wire-test");
@@ -250,16 +299,53 @@ private slots:
         QLLMService service;
         service.setModel(model);
         ImageTool tool;
-        tool.imageService       = &service;
-        tool.preserveSource     = true;
-        tool.sourceLabel        = QStringLiteral("runtime:generated-page");
-        tool.encoded            = generatedImage(true);
-        const QByteArray source = QByteArray::fromBase64(tool.encoded);
+        tool.imageService             = &service;
+        tool.preserveSource           = true;
+        tool.sourceLabel              = QStringLiteral("runtime:generated-page");
+        tool.encoded                  = generatedImage(true);
+        QByteArray           source   = QByteArray::fromBase64(tool.encoded);
+        QString              sourceId = QStringLiteral("generated-document");
+        QString              viewId;
+        QSocToolDocumentRead documentTool(nullptr, nullptr, &service);
+        if (document) {
+            const QByteArray pdf = generatedPdf();
+            QFile            file(home.filePath(QStringLiteral("region.pdf")));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(pdf), pdf.size());
+            file.close();
+            endpoint.toolName = "read_document";
+            endpoint.toolArguments
+                = {{"file_path", file.fileName().toStdString()},
+                   {"mode", "image"},
+                   {"page", 1},
+                   {"region", {{"x", 0.1}, {"y", 0.2}, {"width", 0.4}, {"height", 0.6}}},
+                   {"target_long_edge", 800}};
+            const QString produced = documentTool.execute(endpoint.toolArguments);
+            const auto    payload  = QSocImageAttach::attachmentPayload(produced);
+            QVERIFY2(payload.is_object(), qPrintable(produced.left(1000)));
+            QVERIFY(payload.at("preserve_source").get<bool>());
+            QCOMPARE(payload.at("mime"), json("image/png"));
+            sourceId = QString::fromLatin1(
+                QCryptographicHash::hash(pdf, QCryptographicHash::Sha256).toHex());
+            QCOMPARE(payload.at("source_id"), json(sourceId.toStdString()));
+            viewId = QString::fromStdString(payload.at("view_id").get<std::string>());
+            QVERIFY(viewId.startsWith(QStringLiteral("pdf:page=1:crop=")));
+            source = QByteArray::fromBase64(
+                QByteArray::fromStdString(payload.at("data").get<std::string>()));
+        }
         QVERIFY(!source.isEmpty());
+        const QSize sourceSize = QImage::fromData(source).size();
+        QVERIFY(!sourceSize.isEmpty());
+        if (document)
+            QVERIFY(
+                qMax(sourceSize.width(), sourceSize.height()) >= 799
+                && qMax(sourceSize.width(), sourceSize.height()) <= 800);
+        else
+            QCOMPARE(sourceSize, QSize(1024, 1024));
         const auto digest
             = QCryptographicHash::hash(source, QCryptographicHash::Sha256).toHex().toStdString();
         QSocToolRegistry registry;
-        registry.registerTool(&tool);
+        registry.registerTool(document ? static_cast<QSocTool *>(&documentTool) : &tool);
         QSocAgentConfig config;
         config.verbose              = false;
         config.autoLoadMemory       = false;
@@ -280,7 +366,8 @@ private slots:
                 QStringLiteral("done"));
         }
         QCOMPARE(endpoint.requests.size(), 2);
-        QCOMPARE(tool.capturedEffort, QStringLiteral("high"));
+        if (!document)
+            QCOMPARE(tool.capturedEffort, QStringLiteral("high"));
         const auto &request = endpoint.requests.back();
         QCOMPARE(request.at("model"), json("image-wire-test"));
         if (anthropic)
@@ -303,8 +390,12 @@ private slots:
                     content[i - 1].at("text").get<std::string>());
                 const auto identity = json::parse(
                     label.mid(QStringLiteral("Image source: ").size()).toStdString());
-                QCOMPARE(identity.at("source_id"), json("generated-document"));
-                QCOMPARE(identity.at("view_id"), json("page1-region" + std::to_string(images + 1)));
+                QCOMPARE(identity.at("source_id"), json(sourceId.toStdString()));
+                QCOMPARE(
+                    identity.at("view_id"),
+                    document ? json(viewId.toStdString())
+                             : json("page1-region" + std::to_string(images + 1)));
+                QVERIFY(identity.at("preserve_source").get<bool>());
                 QCOMPARE(identity.at("image_id"), json(digest));
                 QCOMPARE(identity.at("source_sha256"), json(digest));
                 QByteArray bytes;
@@ -320,13 +411,13 @@ private slots:
                     bytes = QByteArray::fromBase64(url.mid(url.indexOf(',') + 1));
                 }
                 QCOMPARE(bytes, source);
-                QCOMPARE(QImage::fromData(bytes).size(), QSize(1024, 1024));
-                QCOMPARE(identity.at("width"), json(1024));
-                QCOMPARE(identity.at("height"), json(1024));
+                QCOMPARE(QImage::fromData(bytes).size(), sourceSize);
+                QCOMPARE(identity.at("width"), json(sourceSize.width()));
+                QCOMPARE(identity.at("height"), json(sourceSize.height()));
                 ++images;
             }
         }
-        QCOMPARE(images, 2);
+        QCOMPARE(images, document ? 1 : 2);
     }
 
     void attachmentResultTrust_data()

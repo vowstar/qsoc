@@ -309,7 +309,7 @@ jobs:
       run: |
         set -o pipefail
         xvfb-run -a ctest --test-dir build -C ${{env.BUILD_TYPE}} \
-          --verbose --no-tests=error -R '^test_qsoctooldocument$' \
+          --verbose --no-tests=error -R '^(test_qsoctooldocument|test_qsocagentimagebudget)$' \
           2>&1 | tee document-tests.log
         if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' document-tests.log; then
           echo '::error::Document contracts must run without skips'
@@ -785,10 +785,16 @@ jobs:
       run: |
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH;$env:QSOC_TEST_OFFICE_DIR"
         $log = Join-Path $env:RUNNER_TEMP "document-contracts.qtestlog"
-        & ./test/test_qsoctooldocument.exe remoteDocumentUsesSftpAndPreservesItsSource pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits -o "$log,txt"
+        & ./test/test_qsoctooldocument.exe remoteDocumentUsesSftpAndPreservesItsSource pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender documentCursorSurvivesOuterArtifactTruncation pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits -o "$log,txt"
         $testExit = $LASTEXITCODE
         Get-Content $log
         if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '^SKIP' -Quiet)) { throw "Document reading contracts did not all run" }
+
+        $log = Join-Path $env:RUNNER_TEMP "document-image-delivery.qtestlog"
+        & ./test/test_qsocagentimagebudget.exe preservedImagesReachProvider -o "$log,txt"
+        $testExit = $LASTEXITCODE
+        Get-Content $log
+        if ($testExit -ne 0 -or (Select-String -Path $log -Pattern '(^|\s)SKIP\s*:' -Quiet)) { throw "Document image delivery contracts did not all run" }
 
     - name: Full Test
       if: github.event_name == 'pull_request'
@@ -1010,10 +1016,18 @@ jobs:
       run: |
         set -euo pipefail
         log="$RUNNER_TEMP/document-contracts.qtestlog"
-        ./test/test_qsoctooldocument remoteDocumentUsesSftpAndPreservesItsSource pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation nativeBoxesBoundXmlAndJsonAndRejectAmbiguousGeometry pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits officeRendererCancellationKillsDescendantsAndRemovesProfile macProcessExitBeforeFinishedDelivery -o "$log,txt" || { cat "$log"; exit 1; }
+        ./test/test_qsoctooldocument remoteDocumentUsesSftpAndPreservesItsSource pdfPageTextAndEmptyTextLayer pdfPageImageUsesAttachmentPipeline pdfRegionsMatchSourceRender documentCursorSurvivesOuterArtifactTruncation pdfRegionRejectsInvalidOrExcessiveRequests nativeBoxesAlignWithRotatedSourceGlyphs nativeBoxesKeepChineseSymbolsAndIndependentContinuation nativeBoxesBoundXmlAndJsonAndRejectAmbiguousGeometry pdfFineTextRegionPreservesGeneratedPixels officeRendererRequiresExplicitChoiceAndScreensActiveContent officeRendererProducesBoundedDerivedPages officeMediaRetainsOccurrenceLocationsAndOriginalBytes officeMediaMemberPatternsAreLiteral officeMediaRejectsMalformedRelationshipsAndLimits officeRendererCancellationKillsDescendantsAndRemovesProfile macProcessExitBeforeFinishedDelivery -o "$log,txt" || { cat "$log"; exit 1; }
         cat "$log"
         if grep -q '^SKIP' "$log"; then
           echo '::error::a document contract was skipped'
+          exit 1
+        fi
+
+        log="$RUNNER_TEMP/document-image-delivery.qtestlog"
+        ./test/test_qsocagentimagebudget preservedImagesReachProvider -o "$log,txt" || { cat "$log"; exit 1; }
+        cat "$log"
+        if grep -Eq '(^|[[:space:]])SKIP[[:space:]]*:' "$log"; then
+          echo '::error::a document image delivery contract was skipped'
           exit 1
         fi
 
