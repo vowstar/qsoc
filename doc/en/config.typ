@@ -287,9 +287,9 @@ the Anthropic API or a vLLM or SGLang server. `url` is the full
     table.header([Item], [Behavior]),
     table.hline(),
     [Headers],
-    [`anthropic-version: 2023-06-01` on every request. The key goes in
-     `Authorization: Bearer`, which vLLM and SGLang accept. The
-     Anthropic API needs `auth_header: x-api-key`],
+    [`anthropic-version: 2023-06-01` on every request. The default is
+     `Authorization: Bearer`. Set `auth_header: x-api-key` to send the
+     raw key in that header],
     [`max_tokens`],
     [`max_output_tokens` when set. Otherwise the context window minus
      the request size, counted as one token per byte of the request body
@@ -315,6 +315,11 @@ the Anthropic API or a vLLM or SGLang server. `url` is the full
   caption: [ANTHROPIC MESSAGES API],
   kind: table,
 )
+
+For the Anthropic API, use a key scoped to the intended workspace.
+QSoC has no configuration field for the `anthropic-workspace-id` header
+required by unscoped keys. See the
+#link("https://platform.claude.com/docs/en/manage-claude/authentication#select-a-workspace")[workspace authentication documentation].
 
 ```yaml
 llm:

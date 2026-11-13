@@ -966,7 +966,6 @@ endmodule
 ```
 
 === Diagram Output
-<soc-net-clock-diagram>
 <primitive-reports>
 `generate verilog` writes `<module>.html` and `<module>.pdf` into `output/<top>/doc/` for each clock, reset, or power controller. Open either file directly. QSoC no longer emits `.typ` diagram sources.
 
