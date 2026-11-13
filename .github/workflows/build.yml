@@ -644,9 +644,14 @@ jobs:
 
     - name: Install document renderer
       if: github.event_name == 'pull_request'
+      timeout-minutes: 20
       run: |
         $package = Join-Path $env:RUNNER_TEMP "LibreOffice_26.8.3_Win_x86-64.msi"
-        Invoke-WebRequest "https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" -OutFile $package
+        curl.exe --version
+        curl.exe --fail --location --retry 3 --retry-all-errors `
+          --connect-timeout 30 --max-time 300 --retry-max-time 600 `
+          "https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" --output $package
+        if ($LASTEXITCODE -ne 0) { throw "Office renderer download failed: $LASTEXITCODE" }
         if ((Get-FileHash $package -Algorithm SHA256).Hash -ne "0e6918c273eabbdbbd800ee0dacbbf130a14c13c2e4cec861b06dd59e015bf94") {
           throw "Office renderer checksum mismatch"
         }
@@ -810,6 +815,7 @@ jobs:
       env:
         QSOC_BIN_DIR: ${{ github.workspace }}/build
       run: |
+        if (-Not (Test-Path build -PathType Container)) { Write-Host "build directory not created"; exit 0 }
         $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
         cd build
         $listing = "Testing/Temporary/LastTestsFailed.log"
