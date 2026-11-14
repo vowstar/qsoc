@@ -462,6 +462,31 @@ applies in both places:
   kind: table,
 )
 
+Each `llm.models.<id>.proxy` overrides the top-level proxy for that
+model's requests, including streaming, background requests, and token
+counting. Switching models or cloning a service preserves this choice.
+An explicit proxy connection failure fails the request without a direct
+connection fallback.
+
+```yaml
+proxy:
+  type: http
+  host: 127.0.0.1
+  port: 7890
+
+llm:
+  model: primary
+  models:
+    primary:
+      url: https://api.example/v1/chat/completions
+      proxy: socks5://127.0.0.1:1080
+    inherited:
+      url: https://api.example/v1/chat/completions
+    local:
+      url: http://127.0.0.1:8000/v1/chat/completions
+      proxy: none
+```
+
 Example combining the tiers:
 
 ```yaml

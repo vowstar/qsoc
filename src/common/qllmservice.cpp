@@ -493,7 +493,6 @@ void QLLMService::setConfig(QSocConfig *config)
 {
     this->config = config;
     loadConfigSettings();
-    setupNetworkProxy();
 }
 
 QSocConfig *QLLMService::getConfig()
@@ -621,7 +620,7 @@ void QLLMService::sendRequestAsync(
     }
     if (observation)
         observation->posted();
-    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    QNetworkReply *reply = postRequest(endpoint, request, payload);
     if (reply == nullptr) {
         LLMResponse response;
         response.success      = false;
@@ -808,6 +807,9 @@ std::optional<LLMModelConfig> QLLMService::parseModelEntry(const QString &id, co
         if (node["url"]) {
             modelCfg.url = QString::fromStdString(node["url"].as<std::string>());
         }
+        if (node["proxy"] && !node["proxy"].IsNull()) {
+            modelCfg.proxy = QString::fromStdString(node["proxy"].as<std::string>());
+        }
         if (node["api"]) {
             const QString name = QString::fromStdString(node["api"].as<std::string>());
             const auto    api  = llmApiFromName(name);
@@ -979,11 +981,28 @@ void QLLMService::setupNetworkProxy()
     if (!networkManager) {
         return;
     }
-    /* Honour the qsoc-wide spec; per-endpoint LLM `proxy:` overrides
-     * are applied per-request when an endpoint carries one. The system
-     * bootstrap is owned by main.cpp / QSocProxy so DefaultProxy still
-     * resolves to the env / libproxy proxy when nothing is configured. */
     QSocProxy::apply(networkManager, QSocProxy::fromLegacyConfig(config));
+}
+
+QNetworkReply *QLLMService::postRequest(
+    const LLMModelConfig &endpoint, const QNetworkRequest &request, const json &payload)
+{
+    const auto proxy = QSocProxy::resolve(endpoint.proxy, QSocProxy::fromLegacyConfig(config));
+    QNetworkAccessManager *manager = nullptr;
+    const auto             managers
+        = findChildren<QNetworkAccessManager *>(QString(), Qt::FindDirectChildrenOnly);
+    for (auto *candidate : managers) {
+        if (candidate->proxy() == proxy) {
+            manager = candidate;
+            break;
+        }
+    }
+    /* Qt may connect queued replies later, so each manager keeps its proxy. */
+    if (manager == nullptr) {
+        manager = new QNetworkAccessManager(this);
+        QSocProxy::apply(manager, proxy);
+    }
+    return manager->post(request, QByteArray::fromStdString(payload.dump()));
 }
 
 QNetworkRequest QLLMService::prepareRequest(const LLMModelConfig &endpoint) const
@@ -1218,9 +1237,8 @@ std::optional<qint64> QLLMService::countTokens(
         return std::nullopt;
     }
     const QPointer<QLLMService> owner(this);
-    const int      timeout = endpoint.timeout > 0 ? qMin(endpoint.timeout, 10000) : 10000;
-    QNetworkReply *networkReply
-        = networkManager->post(request, QByteArray::fromStdString(body.dump()));
+    const int               timeout = endpoint.timeout > 0 ? qMin(endpoint.timeout, 10000) : 10000;
+    QNetworkReply          *networkReply = postRequest(endpoint, request, body);
     const NetworkWaitResult wait
         = waitForNetworkReply(networkReply, timeout, stopToken, endpoint.responseLimits);
     QPointer<QNetworkReply> reply = wait.reply;
@@ -1289,8 +1307,7 @@ LLMResponse QLLMService::sendRequestToEndpoint(
     }
     if (observation)
         observation->posted();
-    QNetworkReply *networkReply
-        = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    QNetworkReply *networkReply = postRequest(endpoint, request, payload);
     observeReply(networkReply, observation);
     const auto wait
         = waitForNetworkReply(networkReply, endpoint.timeout, {}, endpoint.responseLimits);
@@ -1398,7 +1415,7 @@ void QLLMService::sendChatCompletionStream(
     }
     if (observation)
         observation->posted();
-    QNetworkReply *reply = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    QNetworkReply *reply = postRequest(endpoint, request, payload);
     if (reply == nullptr) {
         emit streamError(QStringLiteral("Network request failed to start"));
         return;
@@ -2297,8 +2314,7 @@ json QLLMService::sendChatCompletionTo(
     }
     if (observation)
         observation->posted();
-    QNetworkReply *networkReply
-        = networkManager->post(request, QByteArray::fromStdString(payload.dump()));
+    QNetworkReply *networkReply = postRequest(endpoint, request, payload);
     observeReply(networkReply, observation);
     const NetworkWaitResult wait
         = waitForNetworkReply(networkReply, endpoint.timeout, stopToken, endpoint.responseLimits);

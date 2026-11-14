@@ -51,6 +51,7 @@ struct LLMModelConfig
     QString name;  /* Display name (defaults to id) */
     QString model; /* Name sent on the wire (defaults to id) */
     QString url;   /* Endpoint URL of the selected API */
+    QString proxy; /* Empty / system inherits the global proxy; none connects directly. */
     LLMApi  api = LLMApi::OpenAIChat;
     QString key; /* API key (empty = no auth) */
     /* Auth header name. Empty or "Authorization" sends "Bearer <key>";
@@ -446,6 +447,9 @@ private:
      * @return Configured network request
      */
     QNetworkRequest prepareRequest(const LLMModelConfig &endpoint) const;
+
+    QNetworkReply *postRequest(
+        const LLMModelConfig &endpoint, const QNetworkRequest &request, const json &payload);
 
     /**
      * @brief Build the request payload for one prompt
