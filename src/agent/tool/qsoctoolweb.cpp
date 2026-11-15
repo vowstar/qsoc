@@ -52,7 +52,7 @@ QSocToolWebSearch::QSocToolWebSearch(QObject *parent, QSocConfig *config)
     : QSocTool(parent)
     , config(config)
 {
-    networkManager = new QNetworkAccessManager(this);
+    networkManager = new QSocProxy::NetworkAccessManager(this);
     setupProxy();
 }
 
@@ -275,7 +275,7 @@ QSocToolWebFetch::QSocToolWebFetch(QObject *parent, QSocConfig *config, QLLMServ
     , config(config)
     , llmService(llm)
 {
-    networkManager = new QNetworkAccessManager(this);
+    networkManager = new QSocProxy::NetworkAccessManager(this);
     setupProxy();
 }
 

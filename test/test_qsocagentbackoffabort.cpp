@@ -1433,6 +1433,42 @@ private slots:
         }
     }
 
+    void synchronousRequestFailureIsAnError_data()
+    {
+        QTest::addColumn<bool>("invalidProxy");
+        QTest::newRow("proxy") << true;
+        QTest::newRow("http") << false;
+    }
+
+    void synchronousRequestFailureIsAnError()
+    {
+        QFETCH(bool, invalidProxy);
+        MockServer server;
+        QVERIFY(server.listen());
+        server.enqueueError(400);
+        QLLMService service;
+        configureService(service, server);
+        if (invalidProxy) {
+            auto endpoint  = service.getCurrentModelConfig();
+            endpoint.proxy = "http://";
+            service.setModel(endpoint);
+        }
+        QSocToolRegistry registry;
+        QSocAgentConfig  config = testConfig();
+        config.maxTurns         = 1;
+        QSocAgent  agent(nullptr, &service, &registry, config);
+        QSignalSpy failed(&agent, &QSocAgent::runError);
+        QSignalSpy completed(&agent, &QSocAgent::runComplete);
+        const auto result = agent.run(QStringLiteral("answer once"));
+        QCOMPARE(failed.size(), 1);
+        QCOMPARE(completed.size(), 0);
+        QCOMPARE(failed.first().first().toString(), result);
+        QVERIFY(!agent.isRunning());
+        QCOMPARE(server.requestCount(), invalidProxy ? 0 : 1);
+        if (invalidProxy)
+            QVERIFY(result.contains("Invalid proxy configuration:"));
+    }
+
     void synchronousAgentPreservesEffort_data()
     {
         QTest::addColumn<QString>("effort");

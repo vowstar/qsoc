@@ -489,7 +489,7 @@ QString llmApiName(LLMApi api)
 
 QLLMService::QLLMService(QObject *parent, QSocConfig *config)
     : QObject(parent)
-    , networkManager(new QNetworkAccessManager(this))
+    , networkManager(new QSocProxy::NetworkAccessManager(this))
     , config(config)
 {
     loadConfigSettings();
@@ -1078,18 +1078,19 @@ QNetworkReply *QLLMService::postRequest(
     const LLMModelConfig &endpoint, const QNetworkRequest &request, const json &payload)
 {
     const auto proxy = QSocProxy::resolve(endpoint.proxy, QSocProxy::fromLegacyConfig(config));
-    QNetworkAccessManager *manager = nullptr;
-    const auto             managers
+    QSocProxy::NetworkAccessManager *manager = nullptr;
+    const auto                       managers
         = findChildren<QNetworkAccessManager *>(QString(), Qt::FindDirectChildrenOnly);
     for (auto *candidate : managers) {
-        if (candidate->proxy() == proxy) {
-            manager = candidate;
+        auto *configured = dynamic_cast<QSocProxy::NetworkAccessManager *>(candidate);
+        if (configured != nullptr && configured->configuration() == proxy) {
+            manager = configured;
             break;
         }
     }
     /* Qt may connect queued replies later, so each manager keeps its proxy. */
     if (manager == nullptr) {
-        manager = new QNetworkAccessManager(this);
+        manager = new QSocProxy::NetworkAccessManager(this);
         QSocProxy::apply(manager, proxy);
     }
     return manager->post(request, QByteArray::fromStdString(payload.dump()));

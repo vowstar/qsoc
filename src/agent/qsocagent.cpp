@@ -958,7 +958,7 @@ QString QSocAgent::run(const QString &userQuery)
             return QStringLiteral("[Agent aborted]");
         }
 
-        if (result == IterationResult::Complete) {
+        if (result == IterationResult::Complete || result == IterationResult::Error) {
             QString finalText;
             if (!owner->messages.empty()) {
                 auto lastMessage = owner->messages.back();
@@ -970,6 +970,12 @@ QString QSocAgent::run(const QString &userQuery)
                 }
             } else {
                 finalText = QStringLiteral("[Agent completed without final message]");
+            }
+            if (result == IterationResult::Error) {
+                owner->finishSynchronousRun(run, RunOutcome::Error);
+                if (owner)
+                    emit owner->runError(finalText);
+                return finalText;
             }
             const bool goalQueued = owner->maybeQueueGoalContinuation(run);
             action                = checkpoint();
@@ -1943,14 +1949,14 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
         QString errorMsg = QString::fromStdString(response["error"].get<std::string>());
         QSocConsole::warn() << "LLM error:" << errorMsg;
         addMessage("assistant", QString("Error: %1").arg(errorMsg));
-        return IterationResult::Complete;
+        return IterationResult::Error;
     }
 
     /* Extract assistant message */
     if (!response.contains("choices") || response["choices"].empty()) {
         QSocConsole::warn() << "Invalid LLM response: no choices";
         addMessage("assistant", "Error: Invalid response from LLM");
-        return IterationResult::Complete;
+        return IterationResult::Error;
     }
 
     owner->requestUsage_.complete(run->requestGeneration, response.value("usage", json::object()));

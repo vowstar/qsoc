@@ -489,6 +489,16 @@ model's requests, including streaming, background requests, and token
 counting. Switching models or cloning a service preserves this choice.
 An explicit proxy connection failure fails the request without a direct
 connection fallback.
+Invalid proxy settings reject the request before any connection is opened.
+They never fall back to the system proxy or a direct connection. This also
+applies to MCP HTTP servers and web tools. Unsupported schemes, missing hosts,
+invalid ports, URL paths other than `/`, queries, and fragments are rejected.
+Use `http://` or `socks5://` for proxy URLs. HTTPS destinations use an HTTP
+proxy's CONNECT tunnel; `https://` is not a supported proxy URL scheme.
+Omitted ports default to 8080 for HTTP and 1080 for SOCKS5. The nested global
+block defaults an omitted host to `127.0.0.1`; an explicitly empty host or
+port is an error. An invalid global proxy or an unreadable or malformed
+configuration file blocks requests even when a model or MCP override is set.
 
 ```yaml
 proxy:

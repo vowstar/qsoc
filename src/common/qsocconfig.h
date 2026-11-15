@@ -108,6 +108,8 @@ public slots:
      */
     QMap<QString, QString> getAllValues() const;
 
+    bool hasLoadErrors() const { return loadErrors_; }
+
     /**
      * @brief Get a YAML node by dot-separated path
      * @details Traverses loaded config files to find a deep YAML node.
@@ -150,6 +152,7 @@ private:
 
     /* Configuration values map */
     QMap<QString, QString> configValues;
+    bool                   loadErrors_ = false;
 
     /**
      * @brief Load configuration from environment variables.

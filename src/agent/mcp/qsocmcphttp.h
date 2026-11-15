@@ -4,6 +4,8 @@
 #ifndef QSOCMCPHTTP_H
 #define QSOCMCPHTTP_H
 
+#include "common/qsocproxy.h"
+
 #include "agent/mcp/qsocmcptransport.h"
 #include "common/qsocmcptypes.h"
 
@@ -66,7 +68,7 @@ private:
     QNetworkReply *senderReply();
 
     McpServerConfig                    config_;
-    QNetworkAccessManager             *manager_ = nullptr;
+    QSocProxy::NetworkAccessManager   *manager_ = nullptr;
     QHash<QNetworkReply *, ReplyState> replies_;
     QByteArray                         sessionId_;
     quint64                            lifecycleGeneration_ = 0;

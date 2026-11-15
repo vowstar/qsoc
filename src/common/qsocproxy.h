@@ -4,10 +4,10 @@
 #ifndef QSOCPROXY_H
 #define QSOCPROXY_H
 
+#include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QString>
 
-class QNetworkAccessManager;
 class QSocConfig;
 
 /**
@@ -29,6 +29,29 @@ class QSocConfig;
  */
 namespace QSocProxy {
 
+struct Configuration
+{
+    QNetworkProxy proxy;
+    QString       error;
+
+    bool operator==(const Configuration &) const = default;
+};
+
+class NetworkAccessManager : public QNetworkAccessManager
+{
+public:
+    explicit NetworkAccessManager(QObject *parent = nullptr);
+    void                 setConfiguration(const Configuration &configuration);
+    const Configuration &configuration() const;
+
+protected:
+    QNetworkReply *createRequest(
+        Operation operation, const QNetworkRequest &request, QIODevice *outgoingData) override;
+
+private:
+    Configuration configuration_;
+};
+
 /**
  * @brief Bootstrap QNetworkProxyFactory once so DefaultProxy resolves
  *        to the system / environment proxy.
@@ -41,42 +64,42 @@ void ensureSystemBootstrap();
  *          (e.g. an MCP HTTP transport spawned by a factory) read this
  *          when their per-target spec is empty / "system".
  */
-void setQsocWideDefault(const QNetworkProxy &proxy);
+void setQsocWideDefault(const Configuration &proxy);
 
 /**
  * @brief Current qsoc-wide fallback. Returns DefaultProxy until set.
  */
-QNetworkProxy qsocWideDefault();
+Configuration qsocWideDefault();
 
 /**
  * @brief Parse a flat string spec into a QNetworkProxy.
  * @details Returns QNetworkProxy::DefaultProxy when the spec is empty,
  *          "system", or "default". Returns NoProxy for "none", "off",
  *          "direct". Otherwise expects an http:// or socks5:// URL.
- *          Unparseable input yields DefaultProxy and logs a warning.
+ *          Invalid input retains an error and prevents network requests.
  */
-QNetworkProxy parse(const QString &spec);
+Configuration parse(const QString &spec);
 
 /**
  * @brief Parse the legacy nested `proxy.{type,host,port,user,password}`
  *        block from QSocConfig. Returns DefaultProxy if absent or "system".
  */
-QNetworkProxy fromLegacyConfig(const QSocConfig *config);
+Configuration fromLegacyConfig(const QSocConfig *config);
 
 /**
  * @brief Resolve a per-target spec over a qsoc-wide fallback.
- * @details Per-target wins unless it is empty / "system" / "default",
+ * @details An invalid global configuration always rejects requests.
+ *          Otherwise per-target wins unless it is empty / "system" / "default",
  *          in which case the fallback applies. The fallback itself may
  *          be DefaultProxy, in which case the system bootstrap kicks in.
  */
-QNetworkProxy resolve(const QString &perTarget, const QNetworkProxy &qsocWide);
+Configuration resolve(const QString &perTarget, const Configuration &qsocWide);
 
 /**
  * @brief Apply a resolved proxy to a manager.
- * @details Convenience wrapper around `manager->setProxy(proxy)` so call
- *          sites read consistently.
+ * @details Invalid configurations fail requests before opening a connection.
  */
-void apply(QNetworkAccessManager *manager, const QNetworkProxy &proxy);
+void apply(NetworkAccessManager *manager, const Configuration &proxy);
 
 } // namespace QSocProxy
 

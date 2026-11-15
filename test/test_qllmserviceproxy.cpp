@@ -354,6 +354,67 @@ private slots:
         QCOMPARE(global.requests.size(), 0);
     }
 
+    void invalidProxyBlocksEveryRequest_data()
+    {
+        QTest::addColumn<bool>("globalInvalid");
+        QTest::newRow("model") << false;
+        QTest::newRow("global") << true;
+    }
+
+    void invalidProxyBlocksEveryRequest()
+    {
+        QFETCH(bool, globalInvalid);
+        Peer origin, global;
+        QVERIFY(origin.listen());
+        QVERIFY(global.listen());
+        QSocConfig config;
+        config.setValue("proxy.type", globalInvalid ? "invalid" : "http");
+        config.setValue("proxy.host", "127.0.0.1");
+        config.setValue("proxy.port", QString::number(global.port()));
+        LLMModelConfig endpoint;
+        endpoint.url     = origin.url();
+        endpoint.proxy   = globalInvalid ? QString() : QStringLiteral("http://");
+        endpoint.timeout = 1000;
+        QLLMService service(nullptr, &config);
+        service.setModel(endpoint);
+        const auto text = service.sendRequest("probe");
+        QVERIFY(!text.success);
+        QVERIFY(text.errorMessage.contains("Invalid proxy configuration:"));
+        bool done = false;
+        service.sendRequestAsync("probe", [&](const LLMResponse &response) {
+            QVERIFY(!response.success);
+            QVERIFY(response.errorMessage.contains("Invalid proxy configuration:"));
+            done = true;
+        });
+        QTRY_VERIFY(done);
+        QVERIFY(service.sendChatCompletion(messages).contains("error"));
+        for (const auto api : {LLMApi::OpenAIChat, LLMApi::AnthropicMessages}) {
+            endpoint.api = api;
+            service.setModel(endpoint);
+            QVERIFY(service.sendChatCompletionTo(endpoint, messages, json::array(), 0.2, {}, {})
+                        .contains("error"));
+            QSignalSpy complete(&service, &QLLMService::streamComplete);
+            QSignalSpy failed(&service, &QLLMService::streamError);
+            service.sendChatCompletionStream(messages);
+            QTRY_COMPARE(failed.size(), 1);
+            QCOMPARE(complete.size(), 0);
+            QVERIFY(failed.first().first().toString().contains("Invalid proxy configuration:"));
+            endpoint.tokenizer = endpoint.url + "/count_tokens";
+            QString error;
+            QVERIFY(!service.countTokens(endpoint, messages, json::array(), {}, {}, &error));
+            QVERIFY(error.contains("Invalid proxy configuration:"));
+        }
+        QCOMPARE(origin.requests.size(), 0);
+        QCOMPARE(global.requests.size(), 0);
+        config.setValue("proxy.type", "http");
+        endpoint.api   = LLMApi::OpenAIChat;
+        endpoint.proxy = "none";
+        service.setModel(endpoint);
+        QVERIFY(service.sendRequest("probe").success);
+        QCOMPARE(origin.requests.size(), 1);
+        QCOMPARE(global.requests.size(), 0);
+    }
+
     void httpsUsesConnect()
     {
         Peer global, model;

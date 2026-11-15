@@ -265,7 +265,7 @@ void QSocMcpHttpTransport::start()
     }
     setState(State::Starting);
     if (manager_ == nullptr) {
-        manager_ = new QNetworkAccessManager(this);
+        manager_ = new QSocProxy::NetworkAccessManager(this);
     }
     QSocProxy::apply(manager_, QSocProxy::resolve(config_.proxy, QSocProxy::qsocWideDefault()));
     setState(State::Running);

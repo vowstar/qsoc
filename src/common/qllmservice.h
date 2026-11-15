@@ -4,6 +4,8 @@
 #ifndef QLLMSERVICE_H
 #define QLLMSERVICE_H
 
+#include "common/qsocproxy.h"
+
 #include "common/qllmdiagnostics.h"
 #include "common/qllmresponselimits.h"
 #include "common/qsocconfig.h"
@@ -429,13 +431,13 @@ private:
     struct StreamState;
     using StreamStatePtr = std::shared_ptr<StreamState>;
 
-    QPointer<QNetworkAccessManager> networkManager;
-    QSocConfig                     *config = nullptr;
-    std::optional<LLMModelConfig>   active;
-    QMap<QString, LLMModelConfig>   modelConfigs;
-    QString                         defaultModelId;
-    QString                         visionModelId;
-    QString                         currentModelId;
+    QPointer<QSocProxy::NetworkAccessManager> networkManager;
+    QSocConfig                               *config = nullptr;
+    std::optional<LLMModelConfig>             active;
+    QMap<QString, LLMModelConfig>             modelConfigs;
+    QString                                   defaultModelId;
+    QString                                   visionModelId;
+    QString                                   currentModelId;
 
     /**
      * @brief Load configuration settings from config

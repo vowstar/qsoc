@@ -52,6 +52,7 @@ void QSocConfig::loadConfig()
 {
     /* Clear existing configuration */
     configValues.clear();
+    loadErrors_ = false;
 
     /* Seed user config template if missing, so first-run users have a
      * commented starting point at ~/.config/qsoc/qsoc.yml. */
@@ -154,14 +155,19 @@ void QSocConfig::loadFromYamlFile(const QString &filePath, bool override)
                                 }
                             }
                         } catch (const YAML::Exception &e) {
+                            loadErrors_ = true;
                             QSocConsole::warn()
                                 << "Failed to parse nested config item:" << e.what();
                         }
                     }
                 }
             }
+        } else if (!config.IsNull()) {
+            loadErrors_ = true;
+            QSocConsole::warn() << "Configuration must be a mapping:" << filePath;
         }
     } catch (const YAML::Exception &e) {
+        loadErrors_ = true;
         QSocConsole::warn() << "Failed to load config from" << filePath << ":" << e.what();
     }
 }

@@ -856,7 +856,13 @@ private:
 
     enum class CheckpointAction : std::uint8_t { Continue, Restart, Terminal };
 
-    enum class IterationResult : std::uint8_t { Continue, Complete, RestartPreparation, Stopped };
+    enum class IterationResult : std::uint8_t {
+        Continue,
+        Complete,
+        Error,
+        RestartPreparation,
+        Stopped
+    };
 
     struct ActiveRun
     {

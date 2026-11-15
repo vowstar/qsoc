@@ -4,6 +4,8 @@
 #ifndef QSOCTOOLWEB_H
 #define QSOCTOOLWEB_H
 
+#include "common/qsocproxy.h"
+
 #include "agent/qsoctool.h"
 #include "common/qllmservice.h"
 #include "common/qsocconfig.h"
@@ -33,8 +35,8 @@ public:
     void    abort() override;
 
 private:
-    QSocConfig            *config         = nullptr;
-    QNetworkAccessManager *networkManager = nullptr;
+    QSocConfig                      *config         = nullptr;
+    QSocProxy::NetworkAccessManager *networkManager = nullptr;
     /* In-flight synchronous waits. Tool instances are shared across
      * concurrent sub-agents, so a single slot would be trampled when
      * two fetches/searches overlap (one nested in the other's loop).
@@ -94,9 +96,9 @@ public:
         const QString &sourceUrl, const QString &contentType, const QByteArray &body);
 
 private:
-    QSocConfig            *config = nullptr;
-    QPointer<QLLMService>  llmService;
-    QNetworkAccessManager *networkManager = nullptr;
+    QSocConfig                      *config = nullptr;
+    QPointer<QLLMService>            llmService;
+    QSocProxy::NetworkAccessManager *networkManager = nullptr;
     /* In-flight synchronous waits. Tool instances are shared across
      * concurrent sub-agents, so a single slot would be trampled when
      * two fetches/searches overlap (one nested in the other's loop).
