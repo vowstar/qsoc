@@ -208,7 +208,9 @@ private:
     {
         QJsonObject result{
             {"model", runtime_->currentModelId()},
+            {"model_name", runtime_->currentModelName()},
             {"effort", runtime_->effortLevel()},
+            {"effort_levels", QJsonArray::fromStringList(runtime_->availableEffortLevels())},
             {"plan_mode", runtime_->planMode()},
             {"cwd", runtime_->workingDirectory()},
             {"remote", runtime_->remoteTarget()},
@@ -787,9 +789,12 @@ private:
         }
 
         if (method == QStringLiteral("effort")) {
-            runtime_->setEffortLevel(params.value(QStringLiteral("level")).toString());
+            const bool ok = runtime_->setEffortLevel(
+                params.value(QStringLiteral("level")).toString());
             QJsonObject result;
-            result.insert(QStringLiteral("ok"), true);
+            result.insert(QStringLiteral("ok"), ok);
+            if (!ok)
+                result.insert(QStringLiteral("error"), runtime_->lastError());
             sendReply(id, result);
             return;
         }

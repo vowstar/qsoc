@@ -283,18 +283,17 @@ private slots:
             json expected = {{"messages", messages}, {"stream", path == 3}};
             if (variant == 2 && path != 0) {
                 expected["reasoning_effort"] = "high";
-                expected["reasoning"]        = {{"effort", "high"}};
             } else {
                 expected["temperature"] = 0.37;
             }
             if (variant) {
                 expected["model"]                = "wire-model";
                 expected["chat_template_kwargs"] = {{"clear_thinking", false}};
+                expected["max_tokens"]           = 123;
                 if (path < 2) {
                     expected["response_format"] = {{"type", "json_object"}};
                 } else {
-                    expected["tools"]      = tools;
-                    expected["max_tokens"] = 123;
+                    expected["tools"] = tools;
                 }
             }
             if (path == 3) {
@@ -560,7 +559,9 @@ private slots:
     {
         CaptureServer server;
         QVERIFY(server.listen());
-        ScopedConfig scope(twoEntriesOneServedModel(server.url()));
+        ScopedConfig scope(
+            twoEntriesOneServedModel(server.url())
+            + QByteArrayLiteral("      effort: max\n      effort_levels: [low, high, max]\n"));
 
         QSocConfig  config;
         QLLMService llm(nullptr, &config);
@@ -568,11 +569,13 @@ private slots:
 
         QLLMService *child = llm.clone(nullptr);
         QCOMPARE(child->getCurrentModelId(), QStringLiteral("flash-b"));
+        QCOMPARE(child->getCurrentModelConfig().effortLevels, QStringList({"low", "high", "max"}));
         QVERIFY(child->sendRequest(QStringLiteral("hi")).success);
         delete child;
 
         QCOMPARE(server.requestCount(), 1);
         QCOMPARE(wireModel(server.request(0)), QStringLiteral("served-model"));
+        QCOMPARE(server.request(0).at("reasoning_effort").get<std::string>(), std::string("max"));
     }
 };
 

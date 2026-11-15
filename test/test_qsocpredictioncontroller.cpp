@@ -264,9 +264,9 @@ private slots:
             }
         } else {
             QCOMPARE(high.contains("reasoning_effort"), reasoning);
+            QVERIFY(!high.contains("reasoning"));
             if (reasoning) {
                 QCOMPARE(high["reasoning_effort"].get<std::string>(), std::string("high"));
-                QCOMPARE(high["reasoning"]["effort"].get<std::string>(), std::string("high"));
             }
         }
         QCOMPARE(high.contains("temperature"), !reasoning);

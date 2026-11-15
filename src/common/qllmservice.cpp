@@ -109,7 +109,6 @@ void applyReasoningEffort(json &payload, const QString &effort)
 {
     if (!effort.isEmpty()) {
         payload["reasoning_effort"] = effort.toStdString();
-        payload["reasoning"]        = {{"effort", effort.toStdString()}};
         payload.erase("temperature");
     }
 }
@@ -145,6 +144,34 @@ json buildOpenAIChatRequest(
     if (stream) {
         payload["stream_options"] = {{"include_usage", true}};
     }
+    return payload;
+}
+
+json buildChatRequest(
+    const LLMModelConfig         &endpoint,
+    const json                   &messages,
+    const json                   &tools,
+    double                        temperature,
+    const std::optional<QString> &requestedEffort,
+    bool                          stream,
+    bool                          jsonMode = false)
+{
+    const QString effort = endpoint.reasoning ? LLMModelConfig::normalizeEffort(
+                                                    requestedEffort.value_or(endpoint.effort))
+                                              : QString();
+    if (const QString error = endpoint.effortError(effort); !error.isEmpty())
+        return {{"error", error.toStdString()}};
+    if (endpoint.api == LLMApi::AnthropicMessages) {
+        QLLMAnthropic::RequestOptions options;
+        options.temperature = temperature;
+        options.effort      = effort;
+        options.stream      = stream;
+        options.jsonMode    = jsonMode;
+        return QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
+    }
+    json payload = buildOpenAIChatRequest(messages, tools, endpoint, temperature, effort, stream);
+    if (jsonMode)
+        payload["response_format"] = {{"type", "json_object"}};
     return payload;
 }
 
@@ -407,6 +434,37 @@ NetworkWaitResult waitForNetworkReply(
 
 } // namespace
 
+QString LLMModelConfig::normalizeEffort(const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    return normalized == QStringLiteral("off") ? QString() : normalized;
+}
+
+QStringList LLMModelConfig::availableEffortLevels() const
+{
+    if (!reasoning)
+        return {QStringLiteral("off")};
+    if (!effortLevels.isEmpty())
+        return effortLevels;
+    QStringList   levels     = {"off", "low", "medium", "high"};
+    const QString configured = normalizeEffort(effort);
+    if (!configured.isEmpty() && !levels.contains(configured))
+        levels.append(configured);
+    return levels;
+}
+
+QString LLMModelConfig::effortError(const QString &value) const
+{
+    if (effortLevels.isEmpty())
+        return {};
+    const QString normalized = normalizeEffort(value);
+    const QString level      = normalized.isEmpty() ? QStringLiteral("off") : normalized;
+    if (effortLevels.contains(level))
+        return {};
+    return QStringLiteral("Model %1 does not support effort %2. Choose: %3.")
+        .arg(id, level, effortLevels.join(QStringLiteral(", ")));
+}
+
 std::optional<LLMApi> llmApiFromName(const QString &name)
 {
     for (const auto &[api, spelling] : apiNames()) {
@@ -585,7 +643,7 @@ void QLLMService::sendRequestAsync(
     const QString                            &systemPrompt,
     double                                    temperature,
     bool                                      jsonMode,
-    const QString                            &reasoningEffort)
+    const std::optional<QString>             &reasoningEffort)
 {
     if (!hasEndpoint()) {
         LLMResponse response;
@@ -603,6 +661,14 @@ void QLLMService::sendRequestAsync(
     QNetworkRequest request = prepareRequest(endpoint);
     json            payload
         = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint, reasoningEffort);
+    if (payload.contains("error")) {
+        LLMResponse response;
+        response.success      = false;
+        response.errorMessage = QString::fromStdString(payload.at("error").get<std::string>());
+        if (callback)
+            callback(response);
+        return;
+    }
 
     const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Text, endpoint.url, payload);
     auto       failed      = qScopeGuard([&] {
@@ -861,11 +927,35 @@ std::optional<LLMModelConfig> QLLMService::parseModelEntry(const QString &id, co
             }
         }
         if (node["effort"]) {
-            modelCfg.effort    = QString::fromStdString(node["effort"].as<std::string>());
+            modelCfg.effort = LLMModelConfig::normalizeEffort(
+                QString::fromStdString(node["effort"].as<std::string>()));
             modelCfg.effortSet = true;
         }
         if (node["reasoning"]) {
             modelCfg.reasoning = node["reasoning"].as<bool>();
+        }
+        if (const auto levels = node["effort_levels"]; levels) {
+            if (!levels.IsSequence() || levels.size() == 0) {
+                QSocConsole::warn()
+                    << "Skipping model" << id << ": effort_levels must be a non-empty list";
+                return std::nullopt;
+            }
+            static const QRegularExpression effortName(QStringLiteral("^[a-z][a-z0-9_-]*$"));
+            for (const auto &value : levels) {
+                const QString level
+                    = QString::fromStdString(value.as<std::string>()).trimmed().toLower();
+                if (!effortName.match(level).hasMatch() || modelCfg.effortLevels.contains(level)
+                    || (!modelCfg.reasoning && level != QStringLiteral("off"))) {
+                    QSocConsole::warn() << "Skipping model" << id << ": invalid effort_levels";
+                    return std::nullopt;
+                }
+                modelCfg.effortLevels.append(level);
+            }
+            if (!modelCfg.effortError(modelCfg.effort).isEmpty()) {
+                QSocConsole::warn()
+                    << "Skipping model" << id << ": effort must be included in effort_levels";
+                return std::nullopt;
+            }
         }
         if (node["chat_template_kwargs"] && node["chat_template_kwargs"].IsMap()) {
             modelCfg.chatTemplateKwargs = yamlToJson(node["chat_template_kwargs"]);
@@ -1033,14 +1123,13 @@ QNetworkRequest QLLMService::prepareRequest(const LLMModelConfig &endpoint) cons
 }
 
 json QLLMService::buildRequestPayload(
-    const QString        &prompt,
-    const QString        &systemPrompt,
-    double                temperature,
-    bool                  jsonMode,
-    const LLMModelConfig &endpoint,
-    const QString        &reasoningEffort)
+    const QString                &prompt,
+    const QString                &systemPrompt,
+    double                        temperature,
+    bool                          jsonMode,
+    const LLMModelConfig         &endpoint,
+    const std::optional<QString> &reasoningEffort)
 {
-    const QString effort = endpoint.reasoning ? reasoningEffort : QString();
     /* Build messages array (OpenAI Chat Completions format) */
     json messages = json::array();
 
@@ -1058,20 +1147,8 @@ json QLLMService::buildRequestPayload(
     userMessage["content"] = prompt.toStdString();
     messages.push_back(userMessage);
 
-    if (endpoint.api == LLMApi::AnthropicMessages) {
-        QLLMAnthropic::RequestOptions options;
-        options.temperature = temperature;
-        options.jsonMode    = jsonMode;
-        options.effort      = effort;
-        return QLLMAnthropic::buildRequest(messages, json::array(), endpoint, options);
-    }
-
-    json payload = buildOpenAIRequest(messages, endpoint, temperature, effort);
-    if (jsonMode) {
-        payload["response_format"] = {{"type", "json_object"}};
-    }
-
-    return payload;
+    return buildChatRequest(
+        endpoint, messages, json::array(), temperature, reasoningEffort, false, jsonMode);
 }
 
 LLMResponse QLLMService::parseResponse(
@@ -1197,6 +1274,11 @@ std::optional<qint64> QLLMService::countTokens(
         *error = QStringLiteral("Invalid LLM response limits");
         return std::nullopt;
     }
+    if (const QString invalid = endpoint.effortError(endpoint.reasoning ? effort : QString());
+        !invalid.isEmpty()) {
+        *error = invalid;
+        return std::nullopt;
+    }
     const QUrl target(countUrl(endpoint));
     if (!target.isValid() || target.host().isEmpty()) {
         *error = QStringLiteral("no count endpoint");
@@ -1211,9 +1293,7 @@ std::optional<qint64> QLLMService::countTokens(
     json body = json::object();
     if (anthropic) {
         request.setRawHeader("anthropic-version", QLLMAnthropic::apiVersion);
-        QLLMAnthropic::RequestOptions options;
-        options.effort   = effort;
-        const json whole = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
+        const json whole = buildChatRequest(endpoint, messages, tools, 0.2, effort, false);
         for (const char *field :
              {"model", "system", "messages", "tools", "tool_choice", "thinking"}) {
             if (whole.contains(field)) {
@@ -1292,6 +1372,12 @@ LLMResponse QLLMService::sendRequestToEndpoint(
 {
     QNetworkRequest request = prepareRequest(endpoint);
     json payload = buildRequestPayload(prompt, systemPrompt, temperature, jsonMode, endpoint);
+    if (payload.contains("error")) {
+        LLMResponse response;
+        response.success      = false;
+        response.errorMessage = QString::fromStdString(payload.at("error").get<std::string>());
+        return response;
+    }
 
     const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Text, endpoint.url, payload);
     auto       failed      = qScopeGuard([&] {
@@ -1365,7 +1451,10 @@ void QLLMService::abortStream()
 }
 
 void QLLMService::sendChatCompletionStream(
-    const json &messages, const json &tools, double temperature, const QString &reasoningEffort)
+    const json                   &messages,
+    const json                   &tools,
+    double                        temperature,
+    const std::optional<QString> &reasoningEffort)
 {
     if (!hasEndpoint()) {
         emit streamError(
@@ -1388,19 +1477,12 @@ void QLLMService::sendChatCompletionStream(
     const LLMModelConfig endpoint = *active;
     QNetworkRequest      request  = prepareRequest(endpoint);
 
-    const QString effort    = endpoint.reasoning ? reasoningEffort : QString();
-    const bool    anthropic = endpoint.api == LLMApi::AnthropicMessages;
-
-    /* Build payload with streaming enabled */
-    json payload;
-    if (anthropic) {
-        QLLMAnthropic::RequestOptions options;
-        options.temperature = temperature;
-        options.effort      = effort;
-        options.stream      = true;
-        payload             = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
-    } else {
-        payload = buildOpenAIChatRequest(messages, tools, endpoint, temperature, effort, true);
+    const bool anthropic = endpoint.api == LLMApi::AnthropicMessages;
+    const json payload
+        = buildChatRequest(endpoint, messages, tools, temperature, reasoningEffort, true);
+    if (payload.contains("error")) {
+        emit streamError(QString::fromStdString(payload.at("error").get<std::string>()));
+        return;
     }
 
     const auto observation
@@ -1425,7 +1507,7 @@ void QLLMService::sendChatCompletionStream(
     auto state           = std::make_shared<StreamState>();
     state->observation   = observation;
     state->reply         = reply;
-    state->reasoningMode = !effort.isEmpty();
+    state->reasoningMode = payload.contains("reasoning_effort") || payload.contains("thinking");
     state->limits        = endpoint.responseLimits;
     reply->setReadBufferSize(64 * 1024);
     state->generation = generation;
@@ -2256,11 +2338,11 @@ json QLLMService::sendChatCompletion(const json &messages, const json &tools, do
 }
 
 json QLLMService::sendChatCompletion(
-    const json     &messages,
-    const json     &tools,
-    double          temperature,
-    std::stop_token stopToken,
-    const QString  &reasoningEffort)
+    const json                   &messages,
+    const json                   &tools,
+    double                        temperature,
+    std::stop_token               stopToken,
+    const std::optional<QString> &reasoningEffort)
 {
     if (stopToken.stop_requested()) {
         return {{"error", "Request cancelled"}};
@@ -2273,12 +2355,12 @@ json QLLMService::sendChatCompletion(
 }
 
 json QLLMService::sendChatCompletionTo(
-    LLMModelConfig  endpoint,
-    const json     &messages,
-    const json     &tools,
-    double          temperature,
-    std::stop_token stopToken,
-    const QString  &reasoningEffort)
+    LLMModelConfig                endpoint,
+    const json                   &messages,
+    const json                   &tools,
+    double                        temperature,
+    std::stop_token               stopToken,
+    const std::optional<QString> &reasoningEffort)
 {
     if (!endpoint.responseLimits.valid())
         return {{"error", "Invalid LLM response limits"}};
@@ -2290,19 +2372,11 @@ json QLLMService::sendChatCompletionTo(
 
     QNetworkRequest request = prepareRequest(endpoint);
 
-    const QString effort    = endpoint.reasoning ? reasoningEffort : QString();
-    const bool    anthropic = endpoint.api == LLMApi::AnthropicMessages;
-
-    /* Build payload with messages and tools */
-    json payload;
-    if (anthropic) {
-        QLLMAnthropic::RequestOptions options;
-        options.temperature = temperature;
-        options.effort      = effort;
-        payload             = QLLMAnthropic::buildRequest(messages, tools, endpoint, options);
-    } else {
-        payload = buildOpenAIChatRequest(messages, tools, endpoint, temperature, effort, false);
-    }
+    const bool anthropic = endpoint.api == LLMApi::AnthropicMessages;
+    const json payload
+        = buildChatRequest(endpoint, messages, tools, temperature, reasoningEffort, false);
+    if (payload.contains("error"))
+        return payload;
 
     const auto observation = diagnostics_.begin(QLLMDiagnostics::Kind::Chat, endpoint.url, payload);
     auto       failed      = qScopeGuard([&] {

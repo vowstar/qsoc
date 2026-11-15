@@ -43,7 +43,7 @@ struct QSocAgentConfig
     /* The frontend charts numeric tables under the answer. */
     bool tableCharts = false;
 
-    /* Reasoning effort level: empty=off, "low", "medium", "high" */
+    /* Reasoning effort accepted by the model; empty omits the parameter. */
     QString effortLevel;
 
     /* Project instructions (AGENTS.md / AGENTS.local.md) */

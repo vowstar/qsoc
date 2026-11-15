@@ -37,7 +37,7 @@ struct QSocAgentRuntimeOptions
     int maxTurns = 0;
     /** Override temperature; negative = config default. */
     double temperature = -1.0;
-    /** Override reasoning effort; empty = default, "off"/"low"/"medium"/"high". */
+    /** Override reasoning effort; empty uses the configured default. */
     QString effortLevel;
     /** Override tool presentation: direct | catalog | auto. */
     QString toolPresentation;

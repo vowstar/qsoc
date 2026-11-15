@@ -152,6 +152,7 @@ bool QSocCliWorker::runAgentClientLoop(
     QTimer      resourceDeadline;
     resourceDeadline.setSingleShot(true);
     QString               resumeHint;
+    QStringList           effortLevels{"off", "low", "medium", "high"};
     bool                  queryStreamed = false;
     QSocAgentInputHistory inputHistory;
     QStringList           history;
@@ -239,10 +240,15 @@ bool QSocCliWorker::runAgentClientLoop(
         }
         if (state.contains("resume_command"))
             resumeHint = state.value("resume_command").toString();
-        const QString model = state.value("model").toString();
+        const QString model = state.value("model_name").toString(state.value("model").toString());
         focus.setMainTitle(QStringLiteral("QSoC Agent · ") + model);
         statusBarWidget.setModel(model);
         statusBarWidget.setEffortLevel(state.value("effort").toString());
+        if (state.value("effort_levels").isArray()) {
+            effortLevels.clear();
+            for (const auto &value : state.value("effort_levels").toArray())
+                effortLevels.append(value.toString());
+        }
         planMode = state.value("plan_mode").toBool();
         statusBarWidget.setPlanMode(planMode);
         const QString remote = state.value("remote").toString();
@@ -454,11 +460,23 @@ bool QSocCliWorker::runAgentClientLoop(
                         QString::fromStdString(event.json["input"].get<std::string>()));
                 compositor.render();
                 break;
-            case QSocAgentRuntimeEvent::Kind::ModelChanged:
-                focus.setMainTitle(QStringLiteral("QSoC Agent · ") + event.text);
-                statusBarWidget.setModel(event.text);
+            case QSocAgentRuntimeEvent::Kind::ModelChanged: {
+                const QString label = event.secondary.isEmpty() ? event.text : event.secondary;
+                focus.setMainTitle(QStringLiteral("QSoC Agent · ") + label);
+                statusBarWidget.setModel(label);
+                if (event.json.is_object() && event.json.contains("effort_levels")
+                    && event.json.at("effort_levels").is_array()) {
+                    effortLevels.clear();
+                    for (const auto &value : event.json.at("effort_levels")) {
+                        if (value.is_string())
+                            effortLevels.append(QString::fromStdString(value.get<std::string>()));
+                    }
+                    statusBarWidget.setEffortLevel(
+                        QString::fromStdString(event.json.value("effort", std::string())));
+                }
                 compositor.render();
                 break;
+            }
             case QSocAgentRuntimeEvent::Kind::EffortChanged:
                 statusBarWidget.setEffortLevel(event.text);
                 compositor.render();
@@ -615,17 +633,26 @@ bool QSocCliWorker::runAgentClientLoop(
         inputWidget.setCursorPos(inputMonitor.getCursorPos());
         completionTimer.stop();
         const QString prefix = text.left(inputMonitor.getCursorPos());
-        if (prefix.startsWith('/') && !prefix.contains(QRegularExpression("\\s"))) {
+        const bool    effortCompletion
+            = prefix.startsWith(QStringLiteral("/effort "), Qt::CaseInsensitive);
+        if (effortCompletion
+            || (prefix.startsWith('/') && !prefix.contains(QRegularExpression("\\s")))) {
             fileCompletion  = false;
             completionStart = 0;
             QStringList matches;
-            for (const auto &name : commandNames)
+            QStringList candidates = commandNames;
+            if (effortCompletion) {
+                candidates.clear();
+                for (const auto &level : effortLevels)
+                    candidates.append(QStringLiteral("/effort ") + level);
+            }
+            for (const auto &name : candidates)
                 if (name.startsWith(prefix, Qt::CaseInsensitive))
                     matches.append(name);
             if (matches.size() == 1 && matches.first() == prefix)
                 matches.clear();
             auto &popup = compositor.completionPopup();
-            popup.setTitle("Commands");
+            popup.setTitle(effortCompletion ? "Reasoning effort" : "Commands");
             popup.setItems(matches);
             popup.setVisible(!matches.isEmpty());
             inputMonitor.setSubmitBlocked(!matches.isEmpty());

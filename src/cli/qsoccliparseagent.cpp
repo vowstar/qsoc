@@ -37,7 +37,8 @@ bool QSocCliWorker::parseAgent(const QStringList &appArguments)
          QCoreApplication::translate("main", "Tool presentation: direct, catalog, or auto."),
          "mode"},
         {"effort",
-         QCoreApplication::translate("main", "Reasoning effort level (low/medium/high)."),
+         QCoreApplication::translate(
+             "main", "Reasoning effort level supported by the selected model."),
          "level"},
         {"resume",
          QCoreApplication::translate(

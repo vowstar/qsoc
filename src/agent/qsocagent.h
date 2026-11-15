@@ -444,7 +444,7 @@ public:
 
     /**
      * @brief Set the reasoning effort level
-     * @param level Effort level: empty/off, "low", "medium", "high"
+     * @param level Model effort value; empty omits the parameter
      */
     void setEffortLevel(const QString &level);
 

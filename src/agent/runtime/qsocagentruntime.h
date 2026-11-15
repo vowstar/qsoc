@@ -537,7 +537,9 @@ public:
     /** Available model ids. */
     [[nodiscard]] QStringList availableModels() const;
     /** Current model id (empty = default). */
-    [[nodiscard]] QString currentModelId() const;
+    [[nodiscard]] QString     currentModelId() const;
+    [[nodiscard]] QString     currentModelName() const;
+    [[nodiscard]] QStringList availableEffortLevels() const;
     /**
      * @brief Switch the active model.
      * @details Updates the agent context budget and effort, and persists
@@ -548,7 +550,7 @@ public:
     /** Current reasoning effort ("off" when empty). */
     [[nodiscard]] QString effortLevel() const;
     /** Set reasoning effort; empty string means off. */
-    void setEffortLevel(const QString &level);
+    bool setEffortLevel(const QString &level);
 
     /** Toggle plan mode. */
     void               setPlanMode(bool enabled);

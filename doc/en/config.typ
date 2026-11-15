@@ -204,11 +204,14 @@ qsoc leaves requests disabled until then.
      Maximum bytes is 536870912, calls 65536, and depth 256.
      An exceeded limit ends the request before tools run],
     [`max_output_tokens`],
-    [Reply cap; `0` defers to the backend (`anthropic-messages`: see
+    [Reply cap for text and chat requests; `0` defers to the backend (`anthropic-messages`: see
      @llm-anthropic)],
     [`effort`],
-    [Effort applied when this entry is selected: `low`, `medium`, `high`;
-     empty means off],
+    [Default effort when this entry is selected. Empty or `off` omits
+     the effort parameter],
+    [`effort_levels`],
+    [Optional ordered list of accepted effort values. Drives the menu,
+     completion, and request validation. The default must be in this list],
     [`reasoning`],
     [`false` marks a model without reasoning: no effort is sent, whatever
      `effort` or `/effort` says. Default `true`],
@@ -246,6 +249,7 @@ llm:
       context: 131072
       max_output_tokens: 32768
       effort: high
+      effort_levels: [low, high, max]
     omni:
       name: Omni
       model: vendor-omni-2026
@@ -340,6 +344,24 @@ llm:
       context: 200000
       max_output_tokens: 64000
 ```
+
+`effort_levels` describes the model at this endpoint. QSoC does not infer
+levels from the model name or query the provider for them. Values are sent
+unchanged after whitespace and case normalization. Empty lists, duplicates,
+and defaults outside the list make the entry unavailable. A model with
+`reasoning: false` can declare only `[off]`.
+
+Without `effort_levels`, request values remain unrestricted. The menu
+offers `off`, `low`, `medium`, and `high`, plus the configured default if
+it is another value. With a list, unsupported efforts fail before a network
+request, including background work and token counting.
+
+Requests without an explicit effort use the model's `effort` default.
+An explicitly empty effort omits the parameter instead.
+
+Use `off` only to omit the effort parameter. It does not force the provider
+to disable thinking. Omit `off` from the list when that choice is not valid
+for the model. The existing `api` field selects the request encoding.
 
 === Token Counting
 <llm-token-counting>

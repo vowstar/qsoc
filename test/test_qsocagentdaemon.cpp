@@ -384,6 +384,57 @@ private slots:
         QVERIFY(daemon.waitForFinished(5000));
     }
 
+    void modelEffortMetadataAndValidationOverTheSocket()
+    {
+        QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_effort_rpc_XXXXXX"));
+        QVERIFY(fixture.isValid());
+        QFile file(fixture.filePath(QStringLiteral(".qsoc.yml")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(
+            "llm:\n"
+            "  model: strict\n"
+            "  models:\n"
+            "    strict:\n"
+            "      name: Test Model\n"
+            "      url: http://127.0.0.1:9/v1/messages\n"
+            "      effort: high\n"
+            "      effort_levels: [high, max]\n");
+        file.close();
+        const QString socketPath = fixture.filePath(QStringLiteral("agent.sock"));
+        QProcess      daemon;
+        daemon.setProcessEnvironment(isolatedEnvironment(fixture.path()));
+        daemon.setWorkingDirectory(fixture.path());
+        daemon.start(m_daemonPath, {"--socket", socketPath});
+        QVERIFY(daemon.waitForStarted(5000));
+        QVERIFY(waitForSocket(socketPath, 5000));
+        DaemonClient client(socketPath);
+        QVERIFY(client.connected());
+        QVERIFY(!client.receive().isEmpty());
+        client.send(
+            {{"id", 1},
+             {"method", "open"},
+             {"params", QJsonObject{{"project_directory", fixture.path()}}}});
+        const auto opened = client.waitForReply(1).value("result").toObject();
+        QVERIFY(opened.value("ok").toBool());
+        const auto snapshot = opened.value("snapshot").toObject();
+        QCOMPARE(snapshot.value("model").toString(), QStringLiteral("strict"));
+        QCOMPARE(snapshot.value("model_name").toString(), QStringLiteral("Test Model"));
+        QCOMPARE(snapshot.value("effort_levels").toArray(), QJsonArray({"high", "max"}));
+        client.send({{"id", 2}, {"method", "effort"}, {"params", QJsonObject{{"level", "off"}}}});
+        const auto invalid = client.waitForReply(2).value("result").toObject();
+        QVERIFY(!invalid.value("ok").toBool(true));
+        QVERIFY(invalid.value("error").toString().contains("high, max"));
+        client.send({{"id", 3}, {"method", "effort"}, {"params", QJsonObject{{"level", "max"}}}});
+        QVERIFY(client.waitForReply(3).value("result").toObject().value("ok").toBool());
+        client.send({{"id", 4}, {"method", "status"}});
+        QCOMPARE(
+            client.waitForReply(4).value("result").toObject().value("effort").toString(),
+            QStringLiteral("max"));
+        client.send({{"id", 5}, {"method", "shutdown"}});
+        QVERIFY(!client.waitForReply(5).isEmpty());
+        QVERIFY(daemon.waitForFinished(5000));
+    }
+
     void openTurnLifecycleOverTheSocket()
     {
         QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/agentd_life_XXXXXX"));

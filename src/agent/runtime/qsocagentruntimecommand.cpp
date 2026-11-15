@@ -266,7 +266,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         emitOutput(QStringLiteral(
             "Commands\n"
             "  /help /status /context /cost /cache /compact /clear\n"
-            "  /model [id] /effort [off|low|medium|high] /plan\n"
+            "  /model [id] /effort [level] /plan\n"
             "  /resume [id] /rewind /branch [name] /rename <title> /diff /btw <question>\n"
             "  /memory /goal /agents /agents-history /mcp /loop\n"
             "  /cwd [path] /project [path] /ssh [target] /local\n"
@@ -283,9 +283,14 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         if (selected.isEmpty() && d->menu) {
             const auto  models = availableModels();
             QList<bool> marked;
-            for (const auto &model : models)
+            QStringList labels, descriptions;
+            for (const auto &model : models) {
                 marked.append(model == currentModelId());
-            const int index = d->menu(QStringLiteral("Model Selection"), models, {}, marked);
+                const auto entry = d->llmService->getModelConfig(model);
+                labels.append(entry.name);
+                descriptions.append(entry.name == model ? QString() : model);
+            }
+            const int index = d->menu(QStringLiteral("Model"), labels, descriptions, marked);
             if (index >= 0 && index < models.size())
                 selected = models[index];
         }
@@ -297,7 +302,7 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
         return true;
     }
     if (cmd == QStringLiteral("/effort")) {
-        const QStringList levels   = {"off", "low", "medium", "high"};
+        const QStringList levels   = availableEffortLevels();
         QString           selected = rest.toLower();
         if (selected.isEmpty() && d->menu) {
             QList<bool> marked;
@@ -307,10 +312,11 @@ bool QSocAgentRuntime::executeCommand(const QString &input)
             if (index >= 0 && index < levels.size())
                 selected = levels[index];
         }
-        if (levels.contains(selected))
-            setEffortLevel(selected == "off" ? QString() : selected);
-        else if (!selected.isEmpty())
-            emitOutput(QStringLiteral("Expected off, low, medium, or high.\n"));
+        if (!selected.isEmpty())
+            setEffortLevel(selected);
+        else if (!d->menu)
+            emitOutput(
+                QStringLiteral("Effort: %1\nAvailable: %2\n").arg(effortLevel(), levels.join(", ")));
         return true;
     }
     if (cmd == QStringLiteral("/resume")) {

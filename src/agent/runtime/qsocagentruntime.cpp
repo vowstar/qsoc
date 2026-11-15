@@ -809,9 +809,14 @@ bool QSocAgentRuntime::applyOptionsToConfig(const QSocAgentRuntimeOptions &optio
             if (modelCfg.contextTokens > 0 && options.maxContextTokens <= 0) {
                 config.maxContextTokens = modelCfg.contextTokens;
             }
-            if (!modelCfg.effort.isEmpty() && options.effortLevel.isEmpty()) {
+            if (modelCfg.effortSet && options.effortLevel.isEmpty()) {
                 config.effortLevel = modelCfg.effort;
             }
+            config.effortLevel = modelCfg.reasoning
+                                     ? LLMModelConfig::normalizeEffort(config.effortLevel)
+                                     : QString();
+            if (const QString error = modelCfg.effortError(config.effortLevel); !error.isEmpty())
+                d->lastErrorText = error;
         }
     }
 

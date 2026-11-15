@@ -308,8 +308,9 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# =============================================================================\n";
     out << "# LLM Configuration\n";
     out << "# =============================================================================\n";
-    out << "# All LLM providers use OpenAI Chat Completions format.\n";
+    out << "# api selects openai-chat (default) or anthropic-messages.\n";
     out << "# Declare each model under llm.models and pick one with llm.model.\n\n";
+    out << "# Optional effort_levels lists the effort values accepted by a model.\n";
 
     out << "# llm:\n";
     out << "#   model: deepseek-pro\n";
@@ -318,7 +319,7 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "#       name: DeepSeek Pro\n";
     out << "#       model: deepseek-v4-pro    # name sent to the server (default: key)\n";
     out << "#       url: https://api.deepseek.com/chat/completions\n";
-    out << "#       key: sk-xxx\n";
+    out << "#       key: \"\"\n";
     out << "#       timeout: 30000\n";
     out << "#       context: 131072\n";
     out << "#       max_output_tokens: 8192  # 0 or omit = API default\n\n";

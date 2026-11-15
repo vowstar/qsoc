@@ -758,6 +758,95 @@ private slots:
         QVERIFY(runtime.messages().empty());
     }
 
+    void modelMenusUseNamesAndDeclaredEfforts()
+    {
+        QTemporaryDir fixture(QDir::tempPath() + QStringLiteral("/test_qsoc_effort_XXXXXX"));
+        QVERIFY(fixture.isValid());
+        QFile file(fixture.filePath(QStringLiteral(".qsoc.yml")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(
+            "llm:\n"
+            "  model: strict\n"
+            "  models:\n"
+            "    strict:\n"
+            "      name: Model A\n"
+            "      url: http://127.0.0.1:9/v1/messages\n"
+            "      effort: max\n"
+            "      effort_levels: [low, high, max]\n"
+            "    other:\n"
+            "      name: Model B\n"
+            "      url: http://127.0.0.1:9/v1/messages\n"
+            "      effort: off\n"
+            "      effort_levels: [off, low]\n"
+            "agent: {effort: high, task_estimates: false}\n");
+        file.close();
+        QSocAgentRuntimeOptions options;
+        options.projectDirectory = fixture.path();
+        QSocAgentRuntime runtime(options);
+        QVERIFY(runtime.lastError().isEmpty());
+        QCOMPARE(runtime.currentModelName(), QStringLiteral("Model A"));
+        QCOMPARE(runtime.effortLevel(), QStringLiteral("max"));
+        QStringList shown, hints;
+        QList<bool> marked;
+        runtime.setMenuHandler([&](const QString &,
+                                   const QStringList &items,
+                                   const QStringList &descriptions,
+                                   const QList<bool> &selected) {
+            shown  = items;
+            hints  = descriptions;
+            marked = selected;
+            return items.indexOf(QStringLiteral("low"));
+        });
+        QVERIFY(runtime.executeCommand(QStringLiteral("/effort")));
+        QCOMPARE(shown, QStringList({"low", "high", "max"}));
+        QCOMPARE(marked, QList<bool>({false, false, true}));
+        QCOMPARE(runtime.effortLevel(), QStringLiteral("low"));
+        QVERIFY(!runtime.setEffortLevel(QStringLiteral("medium")));
+        QVERIFY(runtime.lastError().contains("low, high, max"));
+        QCOMPARE(runtime.effortLevel(), QStringLiteral("low"));
+        QVERIFY(runtime.executeCommand(QStringLiteral("/effort max")));
+        QCOMPARE(runtime.effortLevel(), QStringLiteral("max"));
+        QVERIFY(runtime.lastError().isEmpty());
+
+        runtime.setMenuHandler([&](const QString &,
+                                   const QStringList &items,
+                                   const QStringList &descriptions,
+                                   const QList<bool> &) {
+            shown = items;
+            hints = descriptions;
+            return items.indexOf(QStringLiteral("Model B"));
+        });
+        QSignalSpy events(&runtime, &QSocAgentRuntime::eventRaised);
+        QVERIFY(runtime.executeCommand(QStringLiteral("/model")));
+        QVERIFY(shown.contains(QStringLiteral("Model A")));
+        QCOMPARE(hints.at(shown.indexOf(QStringLiteral("Model B"))), QStringLiteral("other"));
+        QCOMPARE(runtime.currentModelId(), QStringLiteral("other"));
+        QCOMPARE(runtime.currentModelName(), QStringLiteral("Model B"));
+        QCOMPARE(runtime.availableEffortLevels(), QStringList({"off", "low"}));
+        QCOMPARE(runtime.effortLevel(), QStringLiteral("off"));
+        QVERIFY(!runtime.setEffortLevel(QStringLiteral("max")));
+        bool changed = false;
+        for (const auto &arguments : events) {
+            const auto event = arguments.first().value<QSocAgentRuntimeEvent>();
+            if (event.kind != QSocAgentRuntimeEvent::Kind::ModelChanged)
+                continue;
+            QCOMPARE(event.text, QStringLiteral("other"));
+            QCOMPARE(event.secondary, QStringLiteral("Model B"));
+            QCOMPARE(event.json.at("effort_levels"), json::array({"off", "low"}));
+            QCOMPARE(event.json.at("effort").get<std::string>(), std::string("off"));
+            changed = true;
+        }
+        QVERIFY(changed);
+
+        options.effortLevel = QStringLiteral("off");
+        QSocAgentRuntime off(options);
+        QVERIFY(off.lastError().isEmpty());
+        QCOMPARE(off.effortLevel(), QStringLiteral("off"));
+        options.effortLevel = QStringLiteral("high");
+        QSocAgentRuntime invalid(options);
+        QVERIFY(invalid.lastError().contains("does not support effort high"));
+    }
+
 private:
     static void writeMockConfig(quint16 port)
     {

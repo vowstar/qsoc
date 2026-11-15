@@ -857,6 +857,17 @@ QString QSocAgentRuntime::currentModelId() const
     return d->llmService->getCurrentModelId();
 }
 
+QString QSocAgentRuntime::currentModelName() const
+{
+    const auto model = d->llmService->getCurrentModelConfig();
+    return model.name.isEmpty() ? currentModelId() : model.name;
+}
+
+QStringList QSocAgentRuntime::availableEffortLevels() const
+{
+    return d->llmService->getCurrentModelConfig().availableEffortLevels();
+}
+
 bool QSocAgentRuntime::setCurrentModel(const QString &modelId)
 {
     if (!d->llmService->setCurrentModel(modelId)) {
@@ -868,9 +879,10 @@ bool QSocAgentRuntime::setCurrentModel(const QString &modelId)
     if (cfg.contextTokens > 0) {
         agentCfg.maxContextTokens = cfg.contextTokens;
     }
-    agentCfg.effortLevel = cfg.effort;
+    agentCfg.effortLevel = cfg.reasoning ? cfg.effort : QString();
     agentCfg.modelId     = modelId;
     d->agent->setConfig(agentCfg);
+    d->lastErrorText.clear();
     d->agent->resetTokenCounting();
 
     /* Persist model selection to the effective config file. */
@@ -890,9 +902,13 @@ bool QSocAgentRuntime::setCurrentModel(const QString &modelId)
     }
 
     QSocAgentRuntimeEvent event;
-    event.kind = QSocAgentRuntimeEvent::Kind::ModelChanged;
-    event.text = modelId;
-    event.at   = QDateTime::currentDateTimeUtc();
+    event.kind      = QSocAgentRuntimeEvent::Kind::ModelChanged;
+    event.text      = modelId;
+    event.secondary = currentModelName();
+    event.json      = {{"effort", effortLevel().toStdString()}, {"effort_levels", json::array()}};
+    for (const auto &level : availableEffortLevels())
+        event.json["effort_levels"].push_back(level.toStdString());
+    event.at = QDateTime::currentDateTimeUtc();
     emit eventRaised(event);
     wireSessionTools();
     emit statusChanged();
@@ -905,19 +921,25 @@ QString QSocAgentRuntime::effortLevel() const
     return level.isEmpty() ? QStringLiteral("off") : level;
 }
 
-void QSocAgentRuntime::setEffortLevel(const QString &level)
+bool QSocAgentRuntime::setEffortLevel(const QString &level)
 {
-    QString normalized = level.toLower().trimmed();
-    if (normalized == QStringLiteral("off")) {
-        normalized.clear();
+    const QString normalized = LLMModelConfig::normalizeEffort(level);
+    const QString selected   = normalized.isEmpty() ? QStringLiteral("off") : normalized;
+    const auto    levels     = availableEffortLevels();
+    if (!levels.contains(selected)) {
+        d->lastErrorText = QStringLiteral("Expected one of: %1.").arg(levels.join(", "));
+        emitOutput(d->lastErrorText + QLatin1Char('\n'));
+        return false;
     }
     d->agent->setEffortLevel(normalized);
+    d->lastErrorText.clear();
     QSocAgentRuntimeEvent event;
     event.kind = QSocAgentRuntimeEvent::Kind::EffortChanged;
     event.text = normalized.isEmpty() ? QStringLiteral("off") : normalized;
     event.at   = QDateTime::currentDateTimeUtc();
     emit eventRaised(event);
     emit statusChanged();
+    return true;
 }
 
 void QSocAgentRuntime::setPlanMode(bool enabled)

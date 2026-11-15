@@ -20,6 +20,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 
 using json = nlohmann::json;
@@ -61,7 +62,8 @@ struct LLMModelConfig
     int                contextTokens   = 128000; /* Context window size */
     int                maxOutputTokens = 0;      /* Max output tokens (0 = API default) */
     QLLMResponseLimits responseLimits;
-    QString            effort;            /* Default effort: empty/off, "low", "medium", "high" */
+    QString            effort;            /* Default effort; empty omits the parameter */
+    QStringList        effortLevels;      /* Empty keeps legacy, unrestricted requests */
     bool               effortSet = false; /* The entry names an effort, even an empty one */
     bool               reasoning = true;  /* False: the model cannot reason, effort is never sent */
     /* Sent as chat_template_kwargs on openai-chat requests when not empty. */
@@ -82,6 +84,10 @@ struct LLMModelConfig
     /* Provider hint for the token-cost formula; the request payload
      * still uses the OpenAI-compatible image_url shape regardless. */
     QString imageProviderHint;
+
+    static QString normalizeEffort(const QString &value);
+    QStringList    availableEffortLevels() const;
+    QString        effortError(const QString &value) const;
 };
 
 /**
@@ -156,20 +162,20 @@ public:
      * @return Validated response, or an error object
      */
     json sendChatCompletion(
-        const json     &messages,
-        const json     &tools,
-        double          temperature,
-        std::stop_token stopToken,
-        const QString  &reasoningEffort = QString());
+        const json                   &messages,
+        const json                   &tools,
+        double                        temperature,
+        std::stop_token               stopToken,
+        const std::optional<QString> &reasoningEffort = std::nullopt);
 
     /** @brief Send with a captured endpoint without changing the selected model. */
     json sendChatCompletionTo(
-        LLMModelConfig  endpoint,
-        const json     &messages,
-        const json     &tools,
-        double          temperature,
-        std::stop_token stopToken,
-        const QString  &reasoningEffort);
+        LLMModelConfig                endpoint,
+        const json                   &messages,
+        const json                   &tools,
+        double                        temperature,
+        std::stop_token               stopToken,
+        const std::optional<QString> &reasoningEffort);
 
     /**
      * @brief Count endpoint of a model entry, empty when it has none.
@@ -307,9 +313,9 @@ public slots:
         const std::function<void(LLMResponse &)> &callback,
         const QString                            &systemPrompt
         = "You are a helpful assistant that provides accurate and informative responses.",
-        double         temperature     = 0.2,
-        bool           jsonMode        = false,
-        const QString &reasoningEffort = QString());
+        double                        temperature     = 0.2,
+        bool                          jsonMode        = false,
+        const std::optional<QString> &reasoningEffort = std::nullopt);
 
     /* Utility methods */
 
@@ -355,10 +361,10 @@ public slots:
      * @param temperature Temperature parameter (0.0-1.0)
      */
     void sendChatCompletionStream(
-        const json    &messages,
-        const json    &tools           = json::array(),
-        double         temperature     = 0.2,
-        const QString &reasoningEffort = QString());
+        const json                   &messages,
+        const json                   &tools           = json::array(),
+        double                        temperature     = 0.2,
+        const std::optional<QString> &reasoningEffort = std::nullopt);
 
     /**
      * @brief Abort the current streaming request
@@ -461,12 +467,12 @@ private:
      * @return JSON payload for the request
      */
     static json buildRequestPayload(
-        const QString        &prompt,
-        const QString        &systemPrompt,
-        double                temperature,
-        bool                  jsonMode,
-        const LLMModelConfig &endpoint,
-        const QString        &reasoningEffort = QString());
+        const QString                &prompt,
+        const QString                &systemPrompt,
+        double                        temperature,
+        bool                          jsonMode,
+        const LLMModelConfig         &endpoint,
+        const std::optional<QString> &reasoningEffort = std::nullopt);
 
     /**
      * @brief Parse the API response

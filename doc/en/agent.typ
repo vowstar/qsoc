@@ -23,7 +23,7 @@ LLM tool calling to execute multi-step workflows through natural language.
      or is interrupted],
     [`--temperature <n>`], [LLM temperature 0.0--1.0 (default: 0.2)],
     [`--no-stream`], [Disable streaming output],
-    [`--effort <level>`], [Reasoning effort: low, medium, high],
+    [`--effort <level>`], [Reasoning effort accepted by the selected model],
     [`--resume [id]`],
     [Resume a session by id prefix, title, or branch; pick from list if
      omitted. A short title is auto-generated after the first turn (see
@@ -372,7 +372,7 @@ The following commands are available during an interactive session:
      directory reached through a symlink is judged by where it really is and
      refused when that is outside the workspace root.],
     [`/diff`], [Review file edits turn-by-turn],
-    [`/effort [level]`], [Show or set effort (off/low/medium/high)],
+    [`/effort [level]`], [Show or set effort from the model's allowed levels],
     [`/local`],
     [Leave SSH remote mode and return to local workspace. The remembered
      binding stays, so the next `/ssh <same target>` or the next interactive
@@ -1145,10 +1145,14 @@ Input replay waits for confirmation when pre-tool hooks are configured, because 
 The `--effort` option and the `/effort` command set the reasoning effort
 sent to the current model as `reasoning_effort`, or as
 `output_config.effort` with adaptive thinking for an `anthropic-messages`
-entry. `off` sends nothing.
+entry. `off` omits the effort parameter; the provider may still think.
+The model's `effort_levels` controls the menu, argument completion, and
+accepted values. Unsupported values fail locally without changing the
+selected effort. Older entries without this field keep unrestricted request
+values and offer their configured default in the menu.
 Switching models with `/model` resets the level to that entry's `effort`
-default. To pair a fast model with a reasoning model, declare both under
-`llm.models` and switch between them.
+default and refreshes the available levels. The menu and status bar show
+the model's `name`; configuration references and `/model <id>` use its key.
 
 The receiving side always reads reasoning from the SSE stream, regardless of
 the `--effort` setting. The first non-empty field of `reasoning_content`,

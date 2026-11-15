@@ -1458,10 +1458,9 @@ private slots:
         const json body = json::parse(server.requestBody(0).toStdString());
         QCOMPARE(body.contains("temperature"), effort.isEmpty());
         QCOMPARE(body.contains("reasoning_effort"), !effort.isEmpty());
-        QCOMPARE(body.contains("reasoning"), !effort.isEmpty());
+        QVERIFY(!body.contains("reasoning"));
         if (!effort.isEmpty()) {
             QCOMPARE(body.at("reasoning_effort").get<std::string>(), effort.toStdString());
-            QCOMPARE(body.at("reasoning").at("effort").get<std::string>(), effort.toStdString());
         }
     }
 
@@ -1540,7 +1539,6 @@ private slots:
         QCOMPARE(temporaryServer.requestCount(), explicitModel ? 0 : 1);
         const json body = json::parse(summaryServer.requestBody(0).toStdString());
         QVERIFY(body.contains("reasoning_effort"));
-        QVERIFY(body.contains("reasoning"));
         QCOMPARE(
             body.at("model").get<std::string>(),
             explicitModel ? std::string("test-model") : std::string("temporary-model"));
@@ -1558,7 +1556,7 @@ private slots:
             QSocRequestUsage::estimateRequest(summaryRequest) + body.at("max_tokens").get<int>()
             <= (explicitModel ? 4096 : 131072));
         QCOMPARE(body.at("reasoning_effort").get<std::string>(), std::string("high"));
-        QCOMPARE(body.at("reasoning").at("effort").get<std::string>(), std::string("high"));
+        QVERIFY(!body.contains("reasoning"));
         QVERIFY(!body.contains("temperature"));
         QCOMPARE(service.getCurrentModelConfig().url, changeWhileRunning ? next.url : temporary.url);
         QCOMPARE(
