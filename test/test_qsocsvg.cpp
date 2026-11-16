@@ -16,10 +16,11 @@ QByteArray sanitized(const QByteArray &source, bool light = false)
     return QSocSvg::sanitize(source, light, &error);
 }
 
-QImage draw(const QByteArray &source, QString *error = nullptr)
+QImage draw(const QByteArray &source, QString *error = nullptr, bool opaque = false)
 {
     QProcess process;
-    process.start(QStringLiteral(QSOC_BINARY_PATH), {"--svg-raster", "dark", "32"});
+    process
+        .start(QStringLiteral(QSOC_BINARY_PATH), {"--svg-raster", opaque ? "opaque" : "dark", "32"});
     process.write(source);
     process.closeWriteChannel();
     process.waitForFinished(20000);
@@ -52,6 +53,10 @@ private slots:
     void rejectsBadDocuments();
     void helperDrawsTextAtCellScale();
     void helperRejectsInvalidInput();
+    void helperReadsLargePipe();
+    void standardDoctypeIsRemoved();
+    void modelDrawingResolvesPhysicalCoordinates();
+    void modelDrawingKeepsLargerFigures();
 };
 
 void Test::keepsDrawingElements()
@@ -147,6 +152,62 @@ void Test::helperRejectsInvalidInput()
     QString error;
     QVERIFY(draw("<not-svg/>", &error).isNull());
     QVERIFY(!error.isEmpty());
+}
+
+void Test::helperReadsLargePipe()
+{
+    QByteArray source = "<svg viewBox=\"0 0 100 50\">";
+    for (int i = 0; i < 4000; ++i)
+        source += "<path d=\"M0 0 L100 50\" stroke=\"red\"/>";
+    source += "</svg>";
+    QVERIFY(source.size() > 128 * 1024);
+    QString      error;
+    const QImage image = draw(source, &error);
+    QVERIFY2(!image.isNull(), qPrintable(error));
+    QCOMPARE(image.size(), QSize(200, 100));
+    QVERIFY(paintedPixels(image, image.rect()) > 0);
+    QVERIFY(draw(QByteArray(QSocSvg::kMaxSourceBytes + 1, ' '), &error).isNull());
+    QVERIFY(error.contains(QStringLiteral("256 KiB")));
+}
+
+void Test::standardDoctypeIsRemoved()
+{
+    const QByteArray declaration = "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" "
+                                   "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\"";
+    const QByteArray svg    = "<svg viewBox=\"0 0 20 10\"><rect width=\"20\" height=\"10\"/></svg>";
+    const QByteArray output = sanitized(declaration + ">" + svg);
+    QVERIFY(!output.isEmpty());
+    QVERIFY(!output.contains("DOCTYPE"));
+    QVERIFY(!output.contains("svg11.dtd"));
+    QVERIFY(!draw(declaration + ">" + svg).isNull());
+    QVERIFY(sanitized(declaration + " [<!ENTITY x SYSTEM \"file:///example.invalid\">]>" + svg)
+                .isEmpty());
+    QVERIFY(sanitized("<!DOCTYPE svg SYSTEM \"http://example.invalid/a.dtd\">" + svg).isEmpty());
+}
+
+void Test::modelDrawingResolvesPhysicalCoordinates()
+{
+    QString      error;
+    const QImage image = draw(
+        "<svg width=\"25.4mm\" height=\"15.24mm\" viewBox=\"0 0 25.4 15.24\">"
+        "<path d=\"M1 1 L24 14\" stroke=\"red\" stroke-width=\"0.1\"/></svg>",
+        &error,
+        true);
+    QVERIFY2(!image.isNull(), qPrintable(error));
+    QCOMPARE(image.width(), 1568);
+    QVERIFY(image.height() >= 940 && image.height() <= 941);
+    QCOMPARE(QColor(image.pixel(0, 0)), QColor(Qt::white));
+}
+
+void Test::modelDrawingKeepsLargerFigures()
+{
+    QString      error;
+    const QImage image = draw(
+        "<svg viewBox=\"0 0 1000 500\"><rect width=\"1000\" height=\"500\" fill=\"red\"/></svg>",
+        &error,
+        true);
+    QVERIFY2(!image.isNull(), qPrintable(error));
+    QCOMPARE(image.size(), QSize(2000, 1000));
 }
 
 } // namespace

@@ -647,6 +647,11 @@ folds to one line, and `Tab` on the focused block shows it again. `var(--fg)`, `
 embedded documents, and external references are not drawn. A figure that cannot
 be drawn keeps its source.
 
+The standard SVG 1.1 document declaration is removed before drawing.
+Other DTDs and entity declarations are rejected. SVG source is limited to
+256 KiB. Model inspection draws SVG on white and enlarges small figures to
+1568 pixels on their long edge. Larger figures retain the 4096-pixel limit.
+
 `read_file` on an `.svg` file returns its source and, on a model with image
 input, its drawing. `llm.vision_model` names an `llm.models` entry that describes
 images for a selected model without image input. Unset, that model gets only the

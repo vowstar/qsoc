@@ -159,9 +159,15 @@ int helperMain(int argc, char *argv[])
     QFile input;
     if (!input.open(stdin, QIODevice::ReadOnly))
         return fail(QStringLiteral("cannot read SVG"));
+    QByteArray source;
+    while (source.size() <= QSocSvg::kMaxSourceBytes) {
+        const QByteArray chunk = input.read(QSocSvg::kMaxSourceBytes + 1 - source.size());
+        if (chunk.isEmpty())
+            break;
+        source += chunk;
+    }
     QString          error;
-    const QByteArray svg
-        = QSocSvg::sanitize(input.read(QSocSvg::kMaxSourceBytes + 1), light, &error);
+    const QByteArray svg = QSocSvg::sanitize(source, light, &error);
     if (svg.isEmpty())
         return fail(error);
     QSvgRenderer renderer(svg);
@@ -173,6 +179,8 @@ int helperMain(int argc, char *argv[])
     if (units.isEmpty())
         return fail(QStringLiteral("SVG has no size"));
     QSizeF pixels = units * (cellH / kUnitsPerRow);
+    if (opaque && std::max(pixels.width(), pixels.height()) < 1568)
+        pixels.scale(1568, 1568, Qt::KeepAspectRatio);
     if (std::max(pixels.width(), pixels.height()) > kMaxEdgePx)
         pixels.scale(kMaxEdgePx, kMaxEdgePx, Qt::KeepAspectRatio);
     QImage image(

@@ -113,8 +113,20 @@ QByteArray sanitize(const QByteArray &source, bool lightBackground, QString *err
     bool             inStyle = false;
     while (!reader.atEnd()) {
         reader.readNext();
-        if (reader.isDTD())
-            return fail(QStringLiteral("SVG must not declare a DTD"));
+        if (reader.isDTD()) {
+            const bool standard = reader.dtdName() == QLatin1String("svg")
+                                  && reader.dtdPublicId()
+                                         == QLatin1String("-//W3C//DTD SVG 1.1//EN")
+                                  && reader.dtdSystemId()
+                                         == QLatin1String(
+                                             "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd")
+                                  && !reader.text().contains(QLatin1Char('['))
+                                  && reader.entityDeclarations().isEmpty()
+                                  && reader.notationDeclarations().isEmpty();
+            if (!standard)
+                return fail(QStringLiteral("SVG must not declare a DTD"));
+            continue;
+        }
         if (reader.isStartElement()) {
             const QString name = reader.name().toString();
             if (inStyle)
