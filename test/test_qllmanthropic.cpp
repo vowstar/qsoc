@@ -3,6 +3,7 @@
 
 #include "agent/qsocagent.h"
 #include "agent/qsoctool.h"
+#include "agent/tool/qsoctoolsendmessage.h"
 #include "common/qllmanthropic.h"
 #include "qsoc_test.h"
 #include "qsoc_test_llm.h"
@@ -240,6 +241,99 @@ private slots:
         QCOMPARE(high["thinking"], json({{"type", "adaptive"}}));
         QCOMPARE(high["output_config"], json({{"effort", "high"}}));
         QVERIFY(!high.contains("temperature"));
+    }
+
+    void invalidToolSchemasStopBeforeNetworking_data()
+    {
+        QTest::addColumn<QByteArray>("schemaText");
+        for (const char *keyword : {"oneOf", "allOf", "anyOf"}) {
+            const json schema = {{"type", "object"}, {keyword, json::array({{{"type", "object"}}})}};
+            QTest::newRow(keyword) << QByteArray::fromStdString(schema.dump());
+        }
+        QTest::newRow("array-root") << QByteArray(R"({"type":"array"})");
+        QTest::newRow("null-schema") << QByteArray("null");
+    }
+
+    void invalidToolSchemasStopBeforeNetworking()
+    {
+        QFETCH(QByteArray, schemaText);
+        Mock mock;
+        QVERIFY(mock.start({}));
+        QLLMService service;
+        service.setModel(mock.model());
+        const json messages = json::array({{{"role", "user"}, {"content", "hello"}}});
+        const json tools    = json::array(
+            {{{"type", "function"},
+              {"function",
+               {{"name", "external_tool"},
+                {"parameters", json::parse(schemaText.toStdString())}}}}});
+        const json response = service.sendChatCompletion(messages, tools);
+        QVERIFY(response.contains("error"));
+        QVERIFY(response.at("error").get<std::string>().find("external_tool") != std::string::npos);
+        QString streamFailure;
+        connect(&service, &QLLMService::streamError, this, [&](const QString &error) {
+            streamFailure = error;
+        });
+        service.sendChatCompletionStream(messages, tools);
+        QVERIFY(streamFailure.contains(QStringLiteral("external_tool")));
+        QString countFailure;
+        QVERIFY(!service.countTokens(mock.model(), messages, tools, {}, {}, &countFailure));
+        QVERIFY(countFailure.contains(QStringLiteral("external_tool")));
+        QVERIFY(mock.requests().isEmpty());
+    }
+
+    void nestedSchemaAndCountOptionsSurvive()
+    {
+        Mock mock;
+        QVERIFY(mock.start({}));
+        QLLMService    service;
+        LLMModelConfig model     = mock.model();
+        model.reasoning          = true;
+        model.effort             = QStringLiteral("high");
+        model.chatTemplateKwargs = {{"enable_thinking", true}};
+        service.setModel(model);
+        const json messages = json::array({{{"role", "user"}, {"content", "hello"}}});
+        const json schema
+            = {{"type", "object"},
+               {"properties",
+                {{"value",
+                  {{"oneOf", json::array({{{"type", "string"}}, {{"type", "integer"}}})}}}}}};
+        const json tools = json::array(
+            {{{"type", "function"},
+              {"function", {{"name", "nested_tool"}, {"parameters", schema}}}}});
+        const json response = service.sendChatCompletion(messages, tools);
+        QVERIFY2(!response.contains("error"), response.dump().c_str());
+        QString error;
+        QVERIFY2(
+            service.countTokens(model, messages, tools, model.effort, {}, &error),
+            qPrintable(error));
+        const auto requests = mock.requests();
+        QCOMPARE(requests.size(), 2);
+        for (const json &request : requests) {
+            QCOMPARE(request.at("tools").at(0).at("input_schema"), schema);
+            QCOMPARE(request.at("thinking"), json({{"type", "adaptive"}}));
+            QCOMPARE(request.at("output_config"), json({{"effort", "high"}}));
+            QVERIFY(!request.contains("chat_template_kwargs"));
+        }
+        QVERIFY(!requests.back().contains("max_tokens"));
+        QVERIFY(!requests.back().contains("stream"));
+    }
+
+    void malformedToolDefinitionsAreRejected()
+    {
+        const json messages = json::array({{{"role", "user"}, {"content", "hello"}}});
+        for (const json &tools :
+             {json::object(),
+              json::array({nullptr}),
+              json::array({{{"type", "function"}, {"function", nullptr}}})})
+            QVERIFY(build(messages, tools).contains("error"));
+        for (const std::string &name :
+             {std::string(), std::string("invalid.name"), std::string(129, 'a')}) {
+            const json tools = json::array(
+                {{{"type", "function"},
+                  {"function", {{"name", name}, {"parameters", {{"type", "object"}}}}}}});
+            QVERIFY(build(messages, tools).contains("error"));
+        }
     }
 
     void maxTokensFollowsConfigOrContext()
@@ -484,7 +578,8 @@ private slots:
             thinking += c;
         });
         QSocToolRegistry registry;
-        QSocAgentConfig  config;
+        registry.registerTool(new QSocToolSendMessage(&registry, nullptr));
+        QSocAgentConfig config;
         config.autoLoadMemory      = false;
         config.memoryRecallEnabled = false;
         config.maxRetries          = 0;
@@ -582,8 +677,24 @@ private slots:
         QVERIFY2(reply.success, qPrintable(reply.errorMessage));
         QCOMPARE(reply.content, QStringLiteral("DONE"));
 
+        bool        asyncDone = false;
+        LLMResponse asyncReply;
+        service.sendRequestAsync(
+            QStringLiteral("predict"),
+            [&](const LLMResponse &value) {
+                asyncReply = value;
+                asyncDone  = true;
+            },
+            QStringLiteral("sys"),
+            0.3,
+            false,
+            QStringLiteral("high"));
+        QTRY_VERIFY_WITH_TIMEOUT(asyncDone, 15000);
+        QVERIFY2(asyncReply.success, qPrintable(asyncReply.errorMessage));
+        QCOMPARE(asyncReply.content, QStringLiteral("DONE"));
+
         const QList<json> requests = mock.requests();
-        QCOMPARE(requests.size(), 2);
+        QCOMPARE(requests.size(), 3);
         QCOMPARE(requests[0]["system"][0]["text"].get<std::string>(), std::string("rules"));
         QVERIFY(!requests[0].contains("thinking"));
         QVERIFY(requests[0].contains("temperature"));
@@ -591,6 +702,9 @@ private slots:
         QCOMPARE(requests[1]["system"].size(), size_t(2));
         QVERIFY(
             requests[1]["system"][1]["text"].get<std::string>().find("JSON") != std::string::npos);
+        QCOMPARE(requests[2].at("thinking"), json({{"type", "adaptive"}}));
+        QCOMPARE(requests[2].at("output_config"), json({{"effort", "high"}}));
+        QVERIFY(!requests[2].contains("temperature"));
     }
 
     void configSelectsApi()

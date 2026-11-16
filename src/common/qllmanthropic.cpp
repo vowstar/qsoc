@@ -334,15 +334,33 @@ json buildRequest(
     if (!system.empty()) {
         body["system"] = system;
     }
-    if (tools.is_array() && !tools.empty()) {
+    if (!tools.is_array())
+        return {{"error", "Messages tools must be an array"}};
+    if (!tools.empty()) {
         json converted = json::array();
         for (const json &tool : tools) {
-            const json function = tool.value("function", json::object());
-            json       schema   = function.value("parameters", json());
-            if (!schema.is_object()) {
-                schema = {{"type", "object"}, {"properties", json::object()}};
+            if (!tool.is_object() || stringField(tool, "type") != "function"
+                || !tool.contains("function") || !tool.at("function").is_object())
+                return {{"error", "Messages tools must contain function definitions"}};
+            const json       &function = tool.at("function");
+            const std::string name     = stringField(function, "name");
+            if (name.empty() || name.size() > 128
+                || name.find_first_not_of(
+                       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+                       != std::string::npos)
+                return {{"error", "Messages tool names require 1-128 letters, digits, _ or -"}};
+            const json schema = function.value(
+                "parameters", json{{"type", "object"}, {"properties", json::object()}});
+            if (!schema.is_object() || stringField(schema, "type") != "object")
+                return {{"error", "Messages tool " + name + ": input_schema must have type object"}};
+            for (const char *keyword : {"oneOf", "allOf", "anyOf"}) {
+                if (schema.contains(keyword))
+                    return {
+                        {"error",
+                         "Messages tool " + name + ": input_schema does not support " + keyword
+                             + " at the top level"}};
             }
-            json entry = {{"name", stringField(function, "name")}, {"input_schema", schema}};
+            json entry = {{"name", name}, {"input_schema", schema}};
             if (!stringField(function, "description").empty()) {
                 entry["description"] = stringField(function, "description");
             }

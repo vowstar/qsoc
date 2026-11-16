@@ -22,23 +22,17 @@ QString QSocToolSendMessage::getName() const
 QString QSocToolSendMessage::getDescription() const
 {
     return QSocToolAgentMessage::getDescription()
-           + QStringLiteral(" The legacy task_id/message form only accepts running children.");
+           + QStringLiteral(
+               " Provide target, message and message_id together. Alternatively, the legacy "
+               "form accepts only task_id and message for a running child. Do not mix forms.");
 }
 
 json QSocToolSendMessage::getParametersSchema() const
 {
-    json schema                     = QSocToolAgentMessage::getParametersSchema();
-    schema["properties"]["task_id"] = {{"type", "string"}};
-    const json peer                 = schema;
-    const json legacy
-        = {{"type", "object"},
-           {"properties", {{"task_id", {{"type", "string"}}}, {"message", {{"type", "string"}}}}},
-           {"required", {"task_id", "message"}},
-           {"additionalProperties", false}};
+    json schema = QSocToolAgentMessage::getParametersSchema();
+    schema["properties"]["task_id"]
+        = {{"type", "string"}, {"description", "Legacy child address, used only with message."}};
     schema["required"] = json::array({"message"});
-    json peerBranch    = peer;
-    peerBranch["properties"].erase("task_id");
-    schema["oneOf"] = json::array({peerBranch, legacy});
     return schema;
 }
 

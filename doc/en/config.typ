@@ -320,6 +320,11 @@ the Anthropic API or a vLLM or SGLang server. `url` is the full
   kind: table,
 )
 
+Tool parameters must use an object schema without top-level `oneOf`, `allOf`,
+or `anyOf`. Nested alternatives are preserved. An incompatible tool reports
+its name before chat or token-count requests are sent. Use `catalog` tool
+presentation when an external tool cannot provide a compatible schema.
+
 For the Anthropic API, use a key scoped to the intended workspace.
 QSoC has no configuration field for the `anthropic-workspace-id` header
 required by unscoped keys. See the

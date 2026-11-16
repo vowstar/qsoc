@@ -771,6 +771,24 @@ void respondAnthropicMessages(QTcpSocket *socket, const QJsonObject &request, bo
  * MOCK_TOKENIZE picks the reply for both: ok, 404, 500, 429, html or hold
  * (never answers). MOCK_TOKENIZE_COUNT fixes the count; otherwise bytes / 4.
  */
+bool rejectMessagesTools(QTcpSocket *socket, const QJsonObject &request)
+{
+    for (const auto &tool : request.value("tools").toArray()) {
+        const QJsonObject schema = tool.toObject().value("input_schema").toObject();
+        if (schema.value("type").toString() == QStringLiteral("object") && !schema.contains("oneOf")
+            && !schema.contains("allOf") && !schema.contains("anyOf"))
+            continue;
+        respondFailure(
+            socket,
+            Wire::Anthropic,
+            400,
+            QStringLiteral("input_schema requires an object without top-level composition"),
+            QStringLiteral("invalid_request_error"));
+        return true;
+    }
+    return false;
+}
+
 void respondTokenize(
     QTcpSocket *socket, const QByteArray &head, const QByteArray &body, bool anthropic = false)
 {
@@ -780,7 +798,10 @@ void respondTokenize(
     if (lowered.contains("\nauthorization:") || lowered.contains("\nx-api-key:")) {
         ++hits[counter + "_auth"];
     }
-    appendRequestLog(parseBody(body));
+    const QJsonObject request = parseBody(body);
+    appendRequestLog(request);
+    if (anthropic && rejectMessagesTools(socket, request))
+        return;
     const QByteArray mode = config.tokenize;
     if (mode == "hold") {
         return;
@@ -890,6 +911,8 @@ void serve(QTcpSocket *socket, Connection *connection)
         } else if (path.startsWith("/v1/messages")) {
             const QJsonObject request = parseBody(body.left(contentLength));
             appendRequestLog(request);
+            if (rejectMessagesTools(socket, request))
+                return;
             if (wire != Wire::Anthropic) {
                 respondFailure(
                     socket,

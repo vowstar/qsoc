@@ -438,11 +438,18 @@ private slots:
         const json &body = bodies.front();
         for (const auto &[key, value] : body.items()) {
             QVERIFY2(
-                QStringList({"model", "system", "messages", "tools", "tool_choice", "thinking"})
+                QStringList({"model",
+                             "system",
+                             "messages",
+                             "tools",
+                             "tool_choice",
+                             "thinking",
+                             "output_config"})
                     .contains(QString::fromStdString(key)),
                 key.c_str());
         }
         QCOMPARE(body.value("model", std::string()), std::string("lab-served"));
+        QCOMPARE(body.at("output_config"), json({{"effort", "high"}}));
         for (const char *field : {"system", "messages", "tools", "thinking"}) {
             QVERIFY2(body.contains(field), field);
         }

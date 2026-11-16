@@ -35,6 +35,24 @@ private slots:
         QVERIFY(schema["properties"].contains("task_id"));
         QVERIFY(schema["properties"].contains("message"));
         QVERIFY(schema["required"].is_array());
+        for (const char *keyword : {"oneOf", "allOf", "anyOf"})
+            QVERIFY(!schema.contains(keyword));
+    }
+
+    void testMixedAddressFormsRejected()
+    {
+        QSocSubAgentTaskSource src;
+        QSocToolSendMessage    tool(this, &src);
+        const json             result = json::parse(tool.execute({{"target", "peer"},
+                                                                  {"task_id", "child"},
+                                                                  {"message", "hello"},
+                                                                  {"message_id", "request-1"}})
+                                                        .toStdString());
+        QCOMPARE(result.at("error"), json("ambiguous_target"));
+        const json extra = json::parse(
+            tool.execute({{"task_id", "child"}, {"message", "hello"}, {"message_id", "request-1"}})
+                .toStdString());
+        QCOMPARE(extra.at("error"), json("unknown_argument"));
     }
 
     void testMissingFieldsReturnError()

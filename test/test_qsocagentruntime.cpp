@@ -10,6 +10,7 @@
 #include "agent/qsoctool.h"
 #include "agent/runtime/qsocagentruntime.h"
 #include "agent/tool/qsoctoolshell.h"
+#include "common/qllmanthropic.h"
 #include "common/qllmservice.h"
 #include "common/qsocmessageauthority.h"
 #include "common/qsoctaskregistry.h"
@@ -308,6 +309,21 @@ private slots:
         QSocAgentRuntime runtime(options);
         QVERIFY(runtime.agent() != nullptr);
         QVERIFY(runtime.toolRegistry() != nullptr);
+        const json definitions = runtime.toolRegistry()->getToolDefinitions();
+        QVERIFY(!definitions.empty());
+        for (const json &tool : definitions) {
+            const json       &schema = tool.at("function").at("parameters");
+            const std::string name   = tool.at("function").at("name");
+            QCOMPARE(schema.at("type"), json("object"));
+            for (const char *keyword : {"oneOf", "anyOf", "allOf"})
+                QVERIFY2(!schema.contains(keyword), name.c_str());
+        }
+        LLMModelConfig messagesModel;
+        messagesModel.model = QStringLiteral("mock");
+        const json request  = QLLMAnthropic::buildRequest(
+            json::array({{{"role", "user"}, {"content", "hello"}}}), definitions, messagesModel, {});
+        QVERIFY(!request.contains("error"));
+        QCOMPARE(request.at("tools").size(), definitions.size());
         QVERIFY(runtime.llmService() != nullptr);
         QVERIFY(runtime.projectManager() != nullptr);
         QVERIFY(runtime.memoryManager() != nullptr);

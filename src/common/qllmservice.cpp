@@ -1295,8 +1295,12 @@ std::optional<qint64> QLLMService::countTokens(
     if (anthropic) {
         request.setRawHeader("anthropic-version", QLLMAnthropic::apiVersion);
         const json whole = buildChatRequest(endpoint, messages, tools, 0.2, effort, false);
+        if (whole.contains("error")) {
+            *error = QString::fromStdString(whole.at("error").get<std::string>());
+            return std::nullopt;
+        }
         for (const char *field :
-             {"model", "system", "messages", "tools", "tool_choice", "thinking"}) {
+             {"model", "system", "messages", "tools", "tool_choice", "thinking", "output_config"}) {
             if (whole.contains(field)) {
                 body[field] = whole.at(field);
             }
@@ -1310,7 +1314,8 @@ std::optional<qint64> QLLMService::countTokens(
             body["tools"] = tools;
         }
     }
-    if (endpoint.chatTemplateKwargs.is_object() && !endpoint.chatTemplateKwargs.empty()) {
+    if (!anthropic && endpoint.chatTemplateKwargs.is_object()
+        && !endpoint.chatTemplateKwargs.empty()) {
         body["chat_template_kwargs"] = endpoint.chatTemplateKwargs;
     }
     if (networkManager.isNull()) {
