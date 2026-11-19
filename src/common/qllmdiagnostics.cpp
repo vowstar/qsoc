@@ -203,7 +203,8 @@ const json &field(const json &object, const char *key)
 
 std::optional<Prefix> prefix(const QString &route, const json &payload, const QByteArray &key)
 {
-    const auto messages = payload.find("messages");
+    const char *items    = payload.contains("input") ? "input" : "messages";
+    const auto  messages = payload.find(items);
     if (messages == payload.end() || !messages->is_array()
         || messages->size() > static_cast<std::size_t>(maximumMessages)
         || route.size() > maximumBytes / 4)
@@ -222,7 +223,7 @@ std::optional<Prefix> prefix(const QString &route, const json &payload, const QB
     result.tools = hash(field(payload, "tools"));
     QMessageAuthenticationCode optionsHash(QCryptographicHash::Sha256, key);
     for (auto it = payload.begin(); it != payload.end(); ++it) {
-        if (it.key() != "messages" && it.key() != "system" && it.key() != "tools"
+        if (it.key() != items && it.key() != "system" && it.key() != "tools"
             && it.key() != "model") {
             optionsHash.addData(digest(QByteArray::fromStdString(it.key()), key));
             optionsHash.addData(hash(it.value()));

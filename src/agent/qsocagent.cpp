@@ -2016,8 +2016,11 @@ QSocAgent::IterationResult QSocAgent::processIteration(const ActiveRunPtr &run)
             }
         }
 
-        /* Add to history */
-        addMessage("assistant", content);
+        if (!compactionCommitting_) {
+            message["role"] = "assistant";
+            messages.push_back(std::move(message));
+            ++historyRevision_;
+        }
 
         return IterationResult::Complete;
     }

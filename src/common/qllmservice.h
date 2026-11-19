@@ -31,8 +31,9 @@ using json = nlohmann::json;
  * @brief Wire API of a model entry, chosen by its `api` key.
  */
 enum class LLMApi : std::uint8_t {
-    OpenAIChat,       /* "openai-chat": Chat Completions, the default */
-    AnthropicMessages /* "anthropic-messages": Messages */
+    OpenAIChat,        /* "openai-chat": Chat Completions, the default */
+    AnthropicMessages, /* "anthropic-messages": Messages */
+    OpenAIResponses    /* "openai-responses": Responses */
 };
 
 /**
@@ -106,9 +107,8 @@ struct LLMResponse
 
 /**
  * @brief The QLLMService class provides a unified interface for LLM API services
- * @details Callers speak the OpenAI Chat Completions format. Entries with
- *          `api: anthropic-messages` are translated to and from the
- *          Anthropic Messages API on the wire.
+ * @details Callers speak the OpenAI Chat Completions format. The selected protocol handles
+ *          request and response conversion at the network boundary.
  */
 class QLLMService : public QObject
 {
@@ -182,7 +182,7 @@ public:
     /**
      * @brief Count endpoint of a model entry, empty when it has none.
      * @details A tokenizer URL, or `url` + `/count_tokens` for `auto` on the
-     *          Messages API.
+     *          Messages API, or `url` + `/input_tokens` for Responses.
      */
     static QString countUrl(const LLMModelConfig &endpoint);
 
@@ -485,6 +485,7 @@ private:
     static LLMResponse parseResponse(
         QNetworkReply                     *reply,
         LLMApi                             api,
+        const QString                     &replayRoute,
         const QByteArray                  &body,
         const QLLMResponseLimits          &limits,
         const QString                     &limitError,
@@ -521,6 +522,8 @@ private:
         const QPointer<QLLMService> &owner, const StreamStatePtr &state);
     static ParseResult parseStreamLine(
         const QPointer<QLLMService> &owner, const StreamStatePtr &state, const QByteArray &line);
+    static ParseResult parseResponsesEvent(
+        const QPointer<QLLMService> &owner, const StreamStatePtr &state, const json &event);
     static ParseResult parseAnthropicEvent(
         const QPointer<QLLMService> &owner, const StreamStatePtr &state, const json &event);
     static json buildStreamResponse(const StreamStatePtr &state);

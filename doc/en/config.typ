@@ -105,8 +105,7 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
 
 == LLM Configuration
 <llm-config>
-Each model is an entry under `llm.models` and speaks the OpenAI Chat
-Completions API or the Anthropic Messages API, chosen by its `api` field.
+Each model is an entry under `llm.models` and selects a wire protocol with its `api` field. QSoC supports Chat Completions, Responses and Anthropic Messages.
 `llm.model` names the entry in use, and `/model` switches between entries
 and writes the choice back.
 
@@ -142,7 +141,7 @@ behind two URLs is two entries with the same `model`.
 
 A provider can expose more than one API protocol. Configure each endpoint as a separate entry, using the same wire model when comparing protocols. Select the entry with `/model`.
 
-DeepSeek supports both Chat Completions and Messages. The Messages URL below is the complete HTTP endpoint, including `/v1/messages`.
+DeepSeek supports function calls over Chat Completions and also exposes Responses and Messages endpoints. The Messages URL below is the complete HTTP endpoint, including `/v1/messages`.
 
 ```yaml
 llm:
@@ -188,8 +187,7 @@ qsoc leaves requests disabled until then.
      publish theirs; Ollama serves
      `http://localhost:11434/v1/chat/completions`],
     [`api`],
-    [Wire API: `openai-chat` (default) or `anthropic-messages`, see
-     @llm-anthropic],
+    [Wire protocol. Choose `openai-chat` (default), `openai-responses` (@llm-responses) or `anthropic-messages` (@llm-anthropic)],
     [`key`], [API key; empty for keyless local services],
     [`auth_header`],
     [Auth header name. Empty or `Authorization` sends
@@ -276,6 +274,27 @@ picks the server, the request body carries `vendor-omni-2026` either way.
 Only `omni-lab` requests carry `chat_template_kwargs`. Which keys a template
 reads depends on the model; `clear_thinking: false`, for example, asks some
 thinking templates to keep earlier reasoning in the prompt.
+
+=== OpenAI Responses API
+<llm-responses>
+Use `api: openai-responses` with the full Responses endpoint. GPT-6.2 Astra and Sol require this protocol for function calls. QSoC runs its registered tools and sends each result with its call ID.
+
+```yaml
+llm:
+  models:
+    gpt-6.2-astra:
+      api: openai-responses
+      url: https://api.openai.com/v1/responses
+      key: ""
+      effort: medium
+      context: 1050000
+      modalities:
+        image: true
+```
+
+Set `key` to your project API key. Reasoning models omit `temperature` and send the selected effort in `reasoning.effort`. QSoC sends `store: false` and keeps the conversation in its local session. For the same endpoint and model it replays the output items in order, including encrypted reasoning and message phases. A tool call runs only after the response completes and its arguments pass validation.
+
+See the #link("https://developers.openai.com/api/docs/guides/migrate-to-responses")[OpenAI migration guide] and the #link("https://api-docs.deepseek.com/guides/responses_api/")[DeepSeek protocol compatibility table].
 
 === Anthropic Messages API
 <llm-anthropic>
@@ -382,7 +401,7 @@ Content added after that response is counted locally. The status bar and
     table.hline(),
     [`auto`],
     [The o200k tokenizer (default). With `api: anthropic-messages`, also
-     the `count_tokens` endpoint at `url` + `/count_tokens`],
+     the `count_tokens` endpoint at `url` + `/count_tokens`. With `api: openai-responses`, the endpoint at `url` + `/input_tokens`],
     [`o200k`], [The o200k tokenizer],
     [`bytes`], [One token per four UTF-8 bytes],
     [URL], [The o200k tokenizer, plus the count endpoint at that URL],
@@ -397,7 +416,7 @@ the status bar reaches the threshold.
 
 A URL value names a count endpoint for the same served model: a vLLM or
 SGLang `/tokenize` endpoint, or a Messages `count_tokens` endpoint with
-`api: anthropic-messages`. qsoc asks a count endpoint only when the local
+`api: anthropic-messages`, or a Responses `input_tokens` endpoint with `api: openai-responses`. qsoc asks a count endpoint only when the local
 count cannot tell whether a threshold is crossed. The request carries the
 same model, messages and tools as the chat request, and on the Messages API
 also its system prompt and thinking settings. If the endpoint fails, or its count disagrees with the

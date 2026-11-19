@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/qsocagent.h"
 #include "common/qllmservice.h"
 #include "qsoc_test.h"
 
+#include <QBuffer>
 #include <QElapsedTimer>
 #include <QHostAddress>
+#include <QImage>
 #include <QNetworkReply>
 #include <QQueue>
 #include <QTcpServer>
@@ -53,7 +56,8 @@ public:
 
     void enqueue(const MockResponse &response) { responses_.enqueue(response); }
 
-    int requestCount() const { return requestCount_; }
+    int  requestCount() const { return requestCount_; }
+    json lastRequest() const { return lastRequest_; }
 
     bool eofSent(int responseIndex) const
     {
@@ -118,6 +122,8 @@ private:
             return;
         }
 
+        lastRequest_
+            = json::parse(buffer.mid(headerEnd + 4, contentLength).toStdString(), nullptr, false);
         buffers_.remove(socket);
         ++requestCount_;
         if (responses_.isEmpty()) {
@@ -228,7 +234,8 @@ private:
     QPointer<QTcpSocket>            splitSocket_;
     QByteArray                      splitRemainder_;
     int                             splitResponseIndex_ = -1;
-    int                             requestCount_       = 0;
+    json                            lastRequest_;
+    int                             requestCount_ = 0;
 };
 
 MockResponse streamResponse(const QString &content, bool includeDone, int eofDelayMs = 0)
@@ -1220,6 +1227,216 @@ private slots:
                 {QStringLiteral("No LLM endpoint configured"),
                  QStringLiteral("[HTTP 0] Network reply destroyed")}));
         QVERIFY(events.completed.isEmpty());
+    }
+
+    void responsesToolRoundTrip()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        auto       endpoint = endpointFor(server);
+        const auto api      = llmApiFromName(QStringLiteral("openai-responses"));
+        QVERIFY(api.has_value());
+        endpoint.api             = *api;
+        endpoint.effort          = QStringLiteral("medium");
+        endpoint.maxOutputTokens = 1024;
+        QLLMService llm;
+        llm.setModel(endpoint);
+        StreamEvents events;
+        recordStreamEvents(&llm, &events);
+
+        const std::string id = QUuid::createUuid().toString().toStdString();
+        const json        reasoning
+            = {{"type", "reasoning"},
+               {"summary", json::array()},
+               {"encrypted_content", QUuid::createUuid().toString().toStdString()}};
+        const json note
+            = {{"type", "message"},
+               {"role", "assistant"},
+               {"phase", "commentary"},
+               {"content", json::array({{{"type", "output_text"}, {"text", "Checking."}}})}};
+        const json call
+            = {{"type", "function_call"},
+               {"id", "item"},
+               {"call_id", id},
+               {"name", "lookup"},
+               {"arguments", "{}"},
+               {"status", "completed"}};
+        const json items = json::array({reasoning, note, call});
+        const json completed
+            = {{"status", "completed"},
+               {"output", items},
+               {"usage",
+                {{"input_tokens", 18},
+                 {"output_tokens", 9},
+                 {"input_tokens_details", {{"cached_tokens", 4}}}}}};
+        const json finalMessage
+            = {{"type", "message"},
+               {"role", "assistant"},
+               {"phase", "final_answer"},
+               {"content", json::array({{{"type", "output_text"}, {"text", "Done."}}})}};
+        const json finalReply = {{"status", "completed"}, {"output", json::array({finalMessage})}};
+        const json tool
+            = {{"type", "function"},
+               {"function", {{"name", "lookup"}, {"parameters", {{"type", "object"}}}}}};
+        const json tools   = json::array({tool});
+        json       history = json::array(
+            {{{"role", "system"}, {"content", "Use the supplied tools."}},
+             {{"role", "user"}, {"content", "Check."}}});
+        json start         = call;
+        start["arguments"] = "";
+        start["status"]    = "in_progress";
+        QByteArray stream;
+        for (const auto &event : json::array(
+                 {{{"type", "response.output_text.delta"}, {"delta", "Checking."}},
+                  {{"type", "response.output_item.added"}, {"output_index", 2}, {"item", start}},
+                  {{"type", "response.function_call_arguments.delta"},
+                   {"output_index", 2},
+                   {"delta", "{}"}},
+                  {{"type", "response.completed"}, {"response", completed}}}))
+            stream += multilineEvent(event, "\n");
+        server.enqueue({QByteArrayLiteral("text/event-stream"), stream});
+        llm.sendChatCompletionStream(history, tools);
+        QVERIFY(waitUntil([&] { return !events.completed.empty() || !events.errors.empty(); }));
+        QVERIFY2(events.errors.empty(), qPrintable(events.errors.join(' ')));
+        QCOMPARE(events.content.join(""), QStringLiteral("Checking."));
+        QCOMPARE(events.completed.size(), 1);
+        const json first = server.lastRequest();
+        QCOMPARE(first.at("input"), history);
+        QCOMPARE(first.at("model"), json(endpoint.model.toStdString()));
+        QCOMPARE(first.at("store"), json(false));
+        QCOMPARE(first.at("stream"), json(true));
+        QCOMPARE(first.at("reasoning").at("effort"), json("medium"));
+        QCOMPARE(first.at("max_output_tokens"), json(1024));
+        QVERIFY(!first.contains("temperature") && !first.contains("messages"));
+        QCOMPARE(first.at("tools").at(0).at("name"), json("lookup"));
+        QCOMPARE(first.at("tools").at(0).at("strict"), json(false));
+        const json result = events.completed.front();
+        QCOMPARE(result.at("usage").at("prompt_tokens_details").at("cached_tokens"), json(4));
+        const json assistant = result.at("choices").at(0).at("message");
+        QCOMPARE(assistant.at("tool_calls").at(0).at("id"), json(id));
+        history.push_back(assistant);
+
+        QImage image(2, 2, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        QBuffer buffer;
+        QVERIFY(buffer.open(QIODevice::WriteOnly));
+        QVERIFY(image.save(&buffer, "PNG"));
+        const std::string url = "data:image/png;base64," + buffer.data().toBase64().toStdString();
+        history.push_back(
+            {{"role", "tool"},
+             {"tool_call_id", id},
+             {"content",
+              json::array(
+                  {{{"type", "image_url"}, {"image_url", {{"url", url}, {"detail", "low"}}}}})}});
+        const MockResponse reply{
+            QByteArrayLiteral("application/json"), QByteArray::fromStdString(finalReply.dump())};
+        server.enqueue(reply);
+        const json second = llm.sendChatCompletion(history, tools);
+        QCOMPARE(second.at("choices").at(0).at("message").at("content"), json("Done."));
+        const json input = server.lastRequest().at("input");
+        for (std::size_t i = 0; i < items.size(); ++i)
+            QCOMPARE(input.at(i + 2), items.at(i));
+        const json output = input.back();
+        QCOMPARE(output.at("type"), json("function_call_output"));
+        QCOMPARE(output.at("call_id"), json(id));
+        QCOMPARE(output.at("output").at(0).at("image_url"), json(url));
+
+        server.enqueue(
+            {QByteArrayLiteral("application/json"), QByteArrayLiteral("{\"input_tokens\":38}")});
+        QString    error;
+        const auto count = llm.countTokens(endpoint, history, tools, endpoint.effort, {}, &error);
+        QVERIFY2(count.has_value(), qPrintable(error));
+        QCOMPARE(*count, 38);
+        QCOMPARE(server.lastRequest().at("input"), input);
+        QVERIFY(!server.lastRequest().contains("stream"));
+
+        endpoint.model += QStringLiteral("-other");
+        llm.setModel(endpoint);
+        server.enqueue(reply);
+        const json switched = llm.sendChatCompletion(history, tools);
+        QVERIFY(!switched.contains("error"));
+        const json changed = server.lastRequest().at("input");
+        QCOMPARE(changed.at(2).at("role"), json("assistant"));
+        QCOMPARE(changed.at(3).at("call_id"), json(id));
+        QVERIFY(changed.dump().find("encrypted_content") == std::string::npos);
+
+        server.enqueue(reply);
+        const auto plain = llm.sendRequest(QStringLiteral("Return JSON."), {}, 0.2, true);
+        QVERIFY(plain.success);
+        QCOMPARE(plain.content, QStringLiteral("Done."));
+        QCOMPARE(server.lastRequest().at("text").at("format").at("type"), json("json_object"));
+        server.enqueue(reply);
+        bool asyncDone = false;
+        llm.sendRequestAsync(QStringLiteral("Check."), [&](const LLMResponse &answer) {
+            asyncDone = answer.success && answer.content == QStringLiteral("Done.");
+        });
+        QVERIFY(waitUntil([&] { return asyncDone; }));
+    }
+
+    void responsesHistoryKeepsFinalPhase()
+    {
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        auto endpoint = endpointFor(server);
+        endpoint.api  = LLMApi::OpenAIResponses;
+        QLLMService llm;
+        llm.setModel(endpoint);
+        const json item
+            = {{"type", "message"},
+               {"role", "assistant"},
+               {"phase", "final_answer"},
+               {"content", json::array({{{"type", "output_text"}, {"text", "Done"}}})}};
+        const json reply = {{"status", "completed"}, {"output", json::array({item})}};
+        const MockResponse
+            answer{QByteArrayLiteral("application/json"), QByteArray::fromStdString(reply.dump())};
+        server.enqueue(answer);
+        server.enqueue(answer);
+        QSocToolRegistry registry;
+        QSocAgentConfig  config;
+        config.autoLoadMemory = false;
+        QSocAgent agent(nullptr, &llm, &registry, config);
+        QCOMPARE(agent.run(QStringLiteral("First")), QStringLiteral("Done"));
+        QCOMPARE(agent.run(QStringLiteral("Second")), QStringLiteral("Done"));
+        const auto input = server.lastRequest().at("input");
+        QVERIFY(std::find(input.begin(), input.end(), item) != input.end());
+    }
+
+    void responsesInterruptedStream_data()
+    {
+        QTest::addColumn<QByteArray>("end");
+        QTest::newRow("early-eof") << QByteArray();
+        QTest::newRow("chat-sentinel") << QByteArray("data: [DONE]\n\n");
+        QTest::newRow("provider-error")
+            << multilineEvent({{"type", "error"}, {"message", "unavailable"}}, "\n");
+        QTest::newRow("incomplete") << multilineEvent(
+            {{"type", "response.incomplete"},
+             {"response",
+              {{"status", "incomplete"},
+               {"incomplete_details", {{"reason", "max_output_tokens"}}}}}},
+            "\n");
+    }
+
+    void responsesInterruptedStream()
+    {
+        QFETCH(QByteArray, end);
+        MockHttpServer server;
+        QVERIFY(server.listen());
+        const json partial
+            = {{"type", "response.output_item.added"},
+               {"output_index", 0},
+               {"item", {{"type", "function_call"}, {"name", "lookup"}, {"call_id", "one"}}}};
+        server.enqueue(
+            {QByteArrayLiteral("text/event-stream"), multilineEvent(partial, "\n") + end});
+        QLLMService llm;
+        auto        endpoint = endpointFor(server);
+        endpoint.api         = LLMApi::OpenAIResponses;
+        llm.setModel(endpoint);
+        StreamEvents events;
+        recordStreamEvents(&llm, &events);
+        llm.sendChatCompletionStream(json::array(), json::array());
+        QVERIFY(waitUntil([&] { return !events.errors.empty() || !events.completed.empty(); }));
+        QCOMPARE(events.errors.size(), 1);
+        QVERIFY(events.completed.empty());
     }
 
     void multilineSseEvents_data()

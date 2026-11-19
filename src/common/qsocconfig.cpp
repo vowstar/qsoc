@@ -314,7 +314,7 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
     out << "# =============================================================================\n";
     out << "# LLM Configuration\n";
     out << "# =============================================================================\n";
-    out << "# api selects openai-chat (default) or anthropic-messages.\n";
+    out << "# api selects openai-chat (default), openai-responses or anthropic-messages.\n";
     out << "# Declare each model under llm.models and pick one with llm.model.\n\n";
     out << "# Optional effort_levels lists the effort values accepted by a model.\n";
 
@@ -332,6 +332,7 @@ bool QSocConfig::createTemplateConfig(const QString &filePath)
 
     out << "# Common endpoints:\n";
     out << "# - DeepSeek:  https://api.deepseek.com/chat/completions\n";
+    out << "# - OpenAI Responses: https://api.openai.com/v1/responses\n";
     out << "# - OpenAI:    https://api.openai.com/v1/chat/completions\n";
     out << "# - Groq:      https://api.groq.com/openai/v1/chat/completions\n";
     out << "# - Ollama:    http://localhost:11434/v1/chat/completions\n\n";
