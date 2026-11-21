@@ -47,7 +47,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QScopedValueRollback>
-#include <QStandardPaths>
 
 #include <yaml-cpp/yaml.h>
 
@@ -491,8 +490,7 @@ void QSocAgentRuntime::reloadAgentDefinitions()
         defs->removeByScope(scope);
     }
     defs->registerBuiltins();
-    const QString userDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
-                            + QStringLiteral("/agents");
+    const QString userDir = QDir(QSocPaths::userRoot()).filePath(QStringLiteral("agents"));
     const QString project = d->projectManager->getProjectPath();
     defs->scanFromDisk(
         userDir,

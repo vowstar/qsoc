@@ -2215,7 +2215,7 @@ for remote file tools; `path_context` can add more
 
 After a successful `/ssh`, the target and workspace are remembered for
 this project in the user's local data directory
-(`~/.local/share/QSoC/host-bindings/` on Linux), never in the project
+(`~/.local/share/qsoc/host-bindings/` on Linux), never in the project
 tree. `/local` keeps the binding. The next interactive `qsoc agent` in
 the project prints `Auto-connecting <target>` and reconnects without
 showing the browser or asking about an unknown host key. If that fails,

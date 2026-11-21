@@ -5,6 +5,8 @@
 #include "agent/qsoctoolcatalog.h"
 #include "common/qsocmessageauthority.h"
 
+#include <QDir>
+
 namespace {
 QString filePathFromCall(const json &call)
 {
@@ -39,6 +41,23 @@ QString filePathFromCall(const json &call)
     return {};
 }
 } // namespace
+
+QSet<QString> QSocContextRestoreBuilder::pathsUnder(const QStringList &paths, const QStringList &dirs)
+{
+    QSet<QString> result;
+    for (const QString &dir : dirs) {
+        if (dir.isEmpty()) {
+            continue;
+        }
+        const QString prefix = QDir::cleanPath(dir) + QLatin1Char('/');
+        for (const QString &path : paths) {
+            if (path.startsWith(prefix)) {
+                result.insert(path);
+            }
+        }
+    }
+    return result;
+}
 
 QSet<QString> QSocContextRestoreBuilder::recentFilePaths(const json &history)
 {

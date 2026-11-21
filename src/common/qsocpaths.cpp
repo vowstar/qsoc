@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QSet>
+#include <QStandardPaths>
 
 namespace QSocPaths {
 
@@ -48,6 +49,65 @@ QString systemRoot()
 #else
     return QStringLiteral("/etc/qsoc");
 #endif
+}
+
+QString dataRoot()
+{
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    return base.isEmpty() ? QString() : QDir(base).filePath(QStringLiteral("qsoc"));
+}
+
+namespace {
+
+void moveEntries(const QString &legacyDir, const QString &root, const QStringList &names)
+{
+    if (legacyDir.isEmpty() || root.isEmpty() || !QFileInfo(legacyDir).isDir()) {
+        return;
+    }
+    for (const QString &name : names) {
+        const QString source = QDir(legacyDir).filePath(name);
+        const QString target = QDir(root).filePath(name);
+        /* Also skips every entry when both roots are one directory, as on a
+         * case-insensitive file system. */
+        if (!QFileInfo::exists(source) || QFileInfo::exists(target) || !QDir().mkpath(root)) {
+            continue;
+        }
+        QDir().rename(source, target);
+    }
+    QDir().rmdir(legacyDir);
+}
+
+} // namespace
+
+void migrateLegacyRoots(
+    const QString &legacyConfig,
+    const QString &legacyData,
+    const QString &configDir,
+    const QString &dataDir)
+{
+    moveEntries(
+        legacyConfig,
+        configDir,
+        {QStringLiteral("history.jsonl"), QStringLiteral("host.yml"), QStringLiteral("agents")});
+    moveEntries(
+        legacyData,
+        dataDir,
+        {QStringLiteral("host-bindings"),
+         QStringLiteral("recovery-claims"),
+         QStringLiteral("tool-artifacts")});
+}
+
+void migrateLegacyRoots()
+{
+    const auto legacy = [](QStandardPaths::StandardLocation location) {
+        const QString base = QStandardPaths::writableLocation(location);
+        return base.isEmpty() ? QString() : QDir(base).filePath(QStringLiteral("QSoC"));
+    };
+    migrateLegacyRoots(
+        legacy(QStandardPaths::GenericConfigLocation),
+        legacy(QStandardPaths::GenericDataLocation),
+        userRoot(),
+        dataRoot());
 }
 
 QStringList resourceDirs(const QString &subdir, const QString &projectPath)

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/qsocsession.h"
+#include "common/qsocpaths.h"
 #include "qsoc_test.h"
 
 #include <cstdlib>
@@ -878,8 +879,7 @@ private slots:
             QStandardPaths::setTestModeEnabled(false);
         });
 
-        const QString dataRoot = QStandardPaths::writableLocation(
-            QStandardPaths::AppLocalDataLocation);
+        const QString dataRoot = QSocPaths::dataRoot();
         QVERIFY(!dataRoot.isEmpty());
 
         QVERIFY(!QSocSession::hasRecoveryClaim(runId));

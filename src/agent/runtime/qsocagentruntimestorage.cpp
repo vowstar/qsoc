@@ -17,7 +17,6 @@
 #include <limits>
 #include <QDir>
 #include <QFile>
-#include <QStandardPaths>
 #include <QTextStream>
 
 void QSocAgentRuntime::wireSessionTools()
@@ -127,16 +126,11 @@ void QSocAgentRuntime::wireContextRestore()
         /* Exclusions: qsoc memory files (already re-injected per turn by
          * recall) and files still present in the kept window. */
         QSet<QString> excluded;
-        const QString userMem
-            = QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
-                  .filePath(QStringLiteral("memory"));
-        const QString projMem = d->memoryManager != nullptr ? d->memoryManager->projectMemoryDir()
-                                                            : QString();
-        for (const QString &path : inputs.candidatePaths) {
-            if (path.startsWith(userMem) || (!projMem.isEmpty() && path.startsWith(projMem))) {
-                excluded.insert(path);
-            }
+        QStringList   memoryDirs;
+        if (d->memoryManager != nullptr) {
+            memoryDirs << d->memoryManager->userMemoryDir() << d->memoryManager->projectMemoryDir();
         }
+        excluded.unite(QSocContextRestoreBuilder::pathsUnder(inputs.candidatePaths, memoryDirs));
         excluded.unite(QSocContextRestoreBuilder::recentFilePaths(recentTail));
         inputs.excludedPaths = excluded;
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
+#include "agent/remote/qsochostprofile.h"
+#include "cli/qsocagentinputhistory.h"
 #include "common/qsocpaths.h"
 #include "qsoc_test.h"
 
@@ -30,6 +32,12 @@ private slots:
 
     void systemRoot_platformSpecific();
 
+    void dataRoot_honorsXdgDataHome();
+    void userFilesUseLowercaseRoots();
+    void migrateLegacyRoots_movesKnownEntries();
+    void migrateLegacyRoots_keepsExistingTargets();
+    void migrateLegacyRoots_sameDirectoryIsNoop();
+
     void resourceDirs_orderAndContents();
     void resourceDirs_emptySubdirReturnsRoots();
     void resourceDirs_dedupesIdenticalRoots();
@@ -48,7 +56,27 @@ private:
     QByteArray savedXdg;
     bool       hadQsocHome = false;
     bool       hadXdg      = false;
+    QByteArray savedXdgData;
+    bool       hadXdgData = false;
 };
+
+namespace {
+
+void writeFile(const QString &path, const QByteArray &data)
+{
+    QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(data), data.size());
+}
+
+QByteArray readFile(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+} // namespace
 
 void TestQSocPaths::init()
 {
@@ -60,14 +88,23 @@ void TestQSocPaths::init()
     if (hadXdg) {
         savedXdg = qgetenv("XDG_CONFIG_HOME");
     }
+    hadXdgData = qEnvironmentVariableIsSet("XDG_DATA_HOME");
+    if (hadXdgData) {
+        savedXdgData = qgetenv("XDG_DATA_HOME");
+    }
     qunsetenv("QSOC_HOME");
     qunsetenv("XDG_CONFIG_HOME");
+    qunsetenv("XDG_DATA_HOME");
 }
 
 void TestQSocPaths::cleanup()
 {
     qunsetenv("QSOC_HOME");
     qunsetenv("XDG_CONFIG_HOME");
+    qunsetenv("XDG_DATA_HOME");
+    if (hadXdgData) {
+        qputenv("XDG_DATA_HOME", savedXdgData);
+    }
     if (hadQsocHome) {
         qputenv("QSOC_HOME", savedQsocHome);
     }
@@ -122,6 +159,91 @@ void TestQSocPaths::systemRoot_platformSpecific()
     QVERIFY(root.endsWith("/qsoc"));
     QVERIFY(root.contains("ProgramData", Qt::CaseInsensitive));
 #endif
+}
+
+void TestQSocPaths::dataRoot_honorsXdgDataHome()
+{
+#if defined(Q_OS_LINUX)
+    qputenv("XDG_DATA_HOME", "/tmp/xdg-data-test");
+    QCOMPARE(QSocPaths::dataRoot(), QString("/tmp/xdg-data-test/qsoc"));
+#endif
+    QVERIFY(QSocPaths::dataRoot().endsWith("/qsoc"));
+}
+
+void TestQSocPaths::userFilesUseLowercaseRoots()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    qputenv("XDG_CONFIG_HOME", QFile::encodeName(home.filePath("config")));
+    qputenv("XDG_DATA_HOME", QFile::encodeName(home.filePath("data")));
+
+    QSocAgentInputHistory history;
+    history.append(QStringLiteral("hello"), home.path(), QString());
+    QVERIFY(QFileInfo::exists(QDir(QSocPaths::userRoot()).filePath("history.jsonl")));
+    QCOMPARE(
+        QSocHostBindingStore::defaultDir(), QDir(QSocPaths::dataRoot()).filePath("host-bindings"));
+    QVERIFY(QSocPaths::userRoot().startsWith(home.path()));
+}
+
+void TestQSocPaths::migrateLegacyRoots_movesKnownEntries()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QDir    base(root.path());
+    const QString oldConfig = base.filePath("old-config");
+    const QString oldData   = base.filePath("old-data");
+    const QString newConfig = base.filePath("config/qsoc");
+    const QString newData   = base.filePath("data/qsoc");
+    writeFile(oldConfig + "/history.jsonl", "h");
+    writeFile(oldConfig + "/host.yml", "y");
+    writeFile(oldConfig + "/agents/a.md", "a");
+    writeFile(oldConfig + "/unrelated.txt", "u");
+    writeFile(oldData + "/host-bindings/b", "b");
+    writeFile(oldData + "/recovery-claims/c", "c");
+    writeFile(oldData + "/tool-artifacts/t", "t");
+
+    QSocPaths::migrateLegacyRoots(oldConfig, oldData, newConfig, newData);
+
+    QCOMPARE(readFile(newConfig + "/history.jsonl"), QByteArray("h"));
+    QCOMPARE(readFile(newConfig + "/host.yml"), QByteArray("y"));
+    QCOMPARE(readFile(newConfig + "/agents/a.md"), QByteArray("a"));
+    QCOMPARE(readFile(newData + "/host-bindings/b"), QByteArray("b"));
+    QCOMPARE(readFile(newData + "/recovery-claims/c"), QByteArray("c"));
+    QCOMPARE(readFile(newData + "/tool-artifacts/t"), QByteArray("t"));
+    QVERIFY(!QFileInfo::exists(newConfig + "/unrelated.txt"));
+    QCOMPARE(readFile(oldConfig + "/unrelated.txt"), QByteArray("u"));
+    QVERIFY(!QFileInfo::exists(oldData));
+
+    QSocPaths::migrateLegacyRoots(oldConfig, oldData, newConfig, newData);
+    QCOMPARE(readFile(newConfig + "/history.jsonl"), QByteArray("h"));
+}
+
+void TestQSocPaths::migrateLegacyRoots_keepsExistingTargets()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QDir    base(root.path());
+    const QString oldConfig = base.filePath("old-config");
+    const QString newConfig = base.filePath("config/qsoc");
+    writeFile(oldConfig + "/history.jsonl", "old");
+    writeFile(newConfig + "/history.jsonl", "new");
+
+    QSocPaths::migrateLegacyRoots(oldConfig, QString(), newConfig, QString());
+
+    QCOMPARE(readFile(newConfig + "/history.jsonl"), QByteArray("new"));
+    QCOMPARE(readFile(oldConfig + "/history.jsonl"), QByteArray("old"));
+}
+
+void TestQSocPaths::migrateLegacyRoots_sameDirectoryIsNoop()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString shared = QDir(root.path()).filePath("data");
+    writeFile(shared + "/host-bindings/b", "b");
+
+    QSocPaths::migrateLegacyRoots(QString(), shared, QString(), shared);
+
+    QCOMPARE(readFile(shared + "/host-bindings/b"), QByteArray("b"));
 }
 
 void TestQSocPaths::resourceDirs_orderAndContents()

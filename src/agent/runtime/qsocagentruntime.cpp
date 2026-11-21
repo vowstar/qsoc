@@ -99,7 +99,6 @@
 #include <QLockFile>
 #include <QScopeGuard>
 #include <QSocketNotifier>
-#include <QStandardPaths>
 #include <QTimer>
 
 #include <yaml-cpp/yaml.h>
@@ -976,8 +975,7 @@ void QSocAgentRuntime::registerTools()
     /* Host catalog. */
     d->hostCatalog = new QSocHostCatalog(this);
     {
-        const QString userHostDir = QStandardPaths::writableLocation(
-            QStandardPaths::AppConfigLocation);
+        const QString userHostDir = QSocPaths::userRoot();
         const QString projectRoot = d->projectManager->getProjectPath();
         d->hostCatalog->load(userHostDir, projectRoot);
     }

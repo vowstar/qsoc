@@ -46,6 +46,24 @@ QString userRoot();
 /** System-level root, platform-native. */
 QString systemRoot();
 
+/** User data root: <generic data location>/qsoc ($XDG_DATA_HOME on Linux). */
+QString dataRoot();
+
+/**
+ * @brief Move files that releases up to 2.15.0 kept in the Qt application
+ *        name directory ("QSoC") into userRoot() and dataRoot().
+ * @details Each known entry moves only when its target does not exist yet.
+ *          An emptied legacy directory is removed. Safe on every start.
+ */
+void migrateLegacyRoots();
+
+/** Same as migrateLegacyRoots(), with every directory given explicitly. */
+void migrateLegacyRoots(
+    const QString &legacyConfig,
+    const QString &legacyData,
+    const QString &configDir,
+    const QString &dataDir);
+
 /**
  * @brief Ordered list of candidate directories for a named subdir.
  * @details Returns non-empty entries in priority order (high → low),

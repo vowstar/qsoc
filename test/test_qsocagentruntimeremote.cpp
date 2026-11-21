@@ -374,7 +374,7 @@ private:
     bool rememberForBinaries(const QString &projectDir, const QString &workspace) const
     {
         return QSocHostBindingStore::save(
-            dataHome() + QStringLiteral("/QSoC/host-bindings"),
+            dataHome() + QStringLiteral("/qsoc/host-bindings"),
             projectDir,
             {QString::fromLatin1(kAlias), workspace});
     }

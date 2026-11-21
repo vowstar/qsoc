@@ -3,6 +3,7 @@
 
 #include "common/config.h"
 #include "common/qsocconsole.h"
+#include "common/qsocpaths.h"
 #include "common/qsocproxy.h"
 #include "common/qstatictranslator.h"
 #include "gui/mainwindow/mainwindow.h"
@@ -38,8 +39,8 @@ int main(int argc, char *argv[])
     int result = 0;
     {
         const QApplication app(argc, argv);
-        /* The same name as the CLI keeps settings and data paths shared. */
         QCoreApplication::setApplicationName(QStringLiteral("QSoC"));
+        QSocPaths::migrateLegacyRoots();
         QCoreApplication::setApplicationVersion(QStringLiteral(QSOC_VERSION));
         QGuiApplication::setDesktopFileName(QStringLiteral("qsoc"));
         QApplication::setWindowIcon(QIcon(QStringLiteral(":/qsoc.svg")));
