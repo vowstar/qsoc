@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 #include "cli/qsocagentinputhistory.h"
+#include "common/qsocpaths.h"
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -8,7 +9,6 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
-#include <QStandardPaths>
 
 namespace {
 const QRegularExpression chip(QStringLiteral(R"(\[Pasted text #(\d+)(?: \+\d+ lines)?\])"));
@@ -16,8 +16,7 @@ constexpr qint64         maxBytes = 2 * 1024 * 1024;
 } // namespace
 QString QSocAgentInputHistory::path()
 {
-    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
-        .filePath("history.jsonl");
+    return QDir(QSocPaths::userRoot()).filePath("history.jsonl");
 }
 QString QSocAgentInputHistory::paste(const QString &text)
 {

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/remote/qsochostprofile.h"
+#include "common/qsocpaths.h"
 
 #include <yaml-cpp/yaml.h>
 
@@ -13,7 +14,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
-#include <QStandardPaths>
 
 namespace {
 
@@ -441,7 +441,7 @@ QString canonicalProject(const QString &projectPath)
 
 QString QSocHostBindingStore::defaultDir()
 {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    const QString base = QSocPaths::dataRoot();
     return base.isEmpty() ? QString() : QDir(base).filePath(QStringLiteral("host-bindings"));
 }
 

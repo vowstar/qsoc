@@ -15,6 +15,7 @@
 #include "common/qsocconsole.h"
 #include "common/qsocinterrupt.h"
 #include "common/qsoclocalendpoint.h"
+#include "common/qsocpaths.h"
 #include "common/qsocprocessowner.h"
 #include "common/qsocproxy.h"
 #include "common/qsocwinconsole.h"
@@ -41,6 +42,7 @@ int main(int argc, char *argv[])
     QSocWinConsole::bootstrap();
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("QSoC"));
+    QSocPaths::migrateLegacyRoots();
     QCoreApplication::setApplicationVersion(QStringLiteral(QSOC_VERSION));
     QSocConsole::install();
     QSocProxy::ensureSystemBootstrap();

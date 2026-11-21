@@ -3,6 +3,7 @@
 
 #include "cli/qsoccliworker.h"
 #include "common/qsocconsole.h"
+#include "common/qsocpaths.h"
 #include "common/qsocproxy.h"
 #include "common/qsocsibling.h"
 #include "common/qsocwinconsole.h"
@@ -97,6 +98,7 @@ int main(int argc, char *argv[])
     int result = 0;
     {
         const QCoreApplication app(argc, argv);
+        QSocPaths::migrateLegacyRoots();
         if (const int guiIndex = guiArgument(argc, argv)) {
             result = launchGui(argc, argv, guiIndex);
         } else {

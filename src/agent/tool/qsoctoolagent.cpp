@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 Huang Rui <vowstar@gmail.com>
 
 #include "agent/tool/qsoctoolagent.h"
-#include <QStandardPaths>
 #include <QUuid>
 
 #include "agent/qsocagent.h"
@@ -23,6 +22,7 @@
 #include "agent/tool/qsoctooltodo.h"
 #include "common/qllmservice.h"
 #include "common/qsocinterrupt.h"
+#include "common/qsocpaths.h"
 #include "common/qsocprojectmanager.h"
 #include <limits>
 
@@ -33,7 +33,6 @@
 #include <QFileInfo>
 #include <QPointer>
 #include <QProcess>
-#include <QStandardPaths>
 #include <QTimer>
 
 QSocToolAgent::QSocToolAgent(
@@ -1198,8 +1197,7 @@ QString QSocToolAgent::spawn(const json &arguments, const ResumeSeed *seed)
     if (parentAgent_ && parentAgent_->toolResultStore()) {
         const QString artifactOwner = QUuid::createUuid().toString(QUuid::Id128);
         const QString artifactDirectory
-            = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
-                  .filePath(QStringLiteral("tool-artifacts/") + artifactOwner);
+            = QDir(QSocPaths::dataRoot()).filePath(QStringLiteral("tool-artifacts/") + artifactOwner);
         QString artifactError;
         bool    artifactsReady = bool(child->toolResultStore());
         if (!parentAgent_->toolResultStore()->isTemporary())

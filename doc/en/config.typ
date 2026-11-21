@@ -40,11 +40,25 @@ system-level root follows platform conventions.
 )
 
 Config files live at `<root>/qsoc.yml` in every layer, except the project
-layer which uses the legacy `<projectPath>/.qsoc.yml` filename. Skills and
-memory live at `<root>/skills/` and `<root>/memory/` respectively.
+layer which uses the legacy `<projectPath>/.qsoc.yml` filename. Skills live
+at `<root>/skills/` in every layer. Memory lives at `<root>/memory/` in the
+project and user layers only.
 
 `$XDG_CONFIG_HOME` is honored on every platform: if set, the user root
-becomes `$XDG_CONFIG_HOME/qsoc` instead of `~/.config/qsoc`.
+becomes `$XDG_CONFIG_HOME/qsoc` instead of `~/.config/qsoc`. The user root
+also holds the prompt history (`history.jsonl`), the user host catalog
+(`host.yml`), and user sub-agent definitions (`agents/`).
+
+State that is not configuration lives in the user data root: `qsoc` under
+the platform data directory, which is `~/.local/share/qsoc` on Linux
+(`$XDG_DATA_HOME/qsoc` when set), `~/Library/Application Support/qsoc` on
+macOS, and `%LOCALAPPDATA%\qsoc` on Windows. It holds remembered remote
+workspaces (`host-bindings/`), sub-agent tool output (`tool-artifacts/`),
+and recovery claims (`recovery-claims/`).
+
+Releases up to 2.15.0 kept these files in directories named `QSoC`, such as
+`~/.config/QSoC` and `~/.local/share/QSoC` on Linux. QSoC moves them to the
+roots above on start when the new location does not have them yet.
 
 Same-name skills in higher layers shadow lower ones. Listings and
 `skill_find` with the default `scope: "all"` show the effective (unshadowed)
@@ -82,7 +96,7 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
     align: (auto, left),
     table.header([Variable], [Sets],),
     table.hline(),
-    [`QSOC_HOME`], [Environment root searched for `qsoc.yml`, skills, and memory],
+    [`QSOC_HOME`], [Environment root searched for `qsoc.yml` and skills],
     [`QSOC_LLM_MODEL`], [`llm.model`],
     [`QSOC_AGENT_TEMPERATURE`], [`agent.temperature`],
     [`QSOC_AGENT_MAX_TOKENS`], [`agent.max_tokens`],
@@ -98,6 +112,7 @@ configuration keys, so an invented name such as `QSOC_AGENT_EFFORT` is ignored.
     [`QSOC_NO_TABLE_CHARTS`], [Stops charts under numeric tables when set to any value],
     [`QSOC_IMAGE_PROTOCOL`], [Selects the image preview: `kitty`, `iterm2`, `sixel`, `cells`, or `none`],
     [`XDG_CONFIG_HOME`], [Moves the user configuration root off `~/.config`],
+    [`XDG_DATA_HOME`], [Moves the user data root off `~/.local/share` on Linux],
   )],
   caption: [ENVIRONMENT VARIABLES],
   kind: table,

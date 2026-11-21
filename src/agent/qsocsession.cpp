@@ -5,6 +5,7 @@
 #include "common/qsocmessageauthority.h"
 
 #include "agent/qsocprivatefile.h"
+#include "common/qsocpaths.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -14,7 +15,6 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
-#include <QStandardPaths>
 #include <QTextStream>
 #include <QUuid>
 
@@ -39,7 +39,7 @@ bool validRecoveryClaimId(const QString &runId)
 
 QString recoveryClaimDir()
 {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    const QString base = QSocPaths::dataRoot();
     return base.isEmpty() ? QString() : QDir(base).filePath(QStringLiteral("recovery-claims"));
 }
 

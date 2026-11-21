@@ -138,6 +138,9 @@ public:
 
     static QSet<QString> recentFilePaths(const json &history);
 
+    /** @brief Paths inside any non-empty directory of @p dirs. */
+    static QSet<QString> pathsUnder(const QStringList &paths, const QStringList &dirs);
+
     /** @brief Build the restore payload from injected inputs. */
     static QSocContextRestore build(const Inputs &inputs);
 

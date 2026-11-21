@@ -37,6 +37,22 @@ class Test : public QObject
     }
 
 private slots:
+    void pathsUnderMatchesWholeDirectories()
+    {
+        const QStringList paths{
+            QStringLiteral("/home/u/.config/qsoc/memory/MEMORY.md"),
+            QStringLiteral("/home/u/.config/qsoc/memory2/x.md"),
+            QStringLiteral("/p/.qsoc/memory/topic.md"),
+            QStringLiteral("/p/src/top.v"),
+        };
+        const QSet<QString> got = QSocContextRestoreBuilder::pathsUnder(
+            paths,
+            {QStringLiteral("/home/u/.config/qsoc/memory"),
+             QStringLiteral("/p/.qsoc/memory/"),
+             QString()});
+        QCOMPARE(got, QSet<QString>({paths.at(0), paths.at(2)}));
+    }
+
     void recentFileCalls_data()
     {
         QTest::addColumn<QString>("name");
